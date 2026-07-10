@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Auto-reconnect on server restart -->
+    <record id="ir_cron_whatsapp_auto_reconnect" model="ir.cron">
+        <field name="name">WhatsApp: Auto Reconnect Sessions</field>
+        <field name="model_id" ref="model_whatsapp_session"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_auto_reconnect()</field>
+        <field name="interval_number">5</field>
+        <field name="interval_type">minutes</field>
+        <field name="active">True</field>
+    </record>
+
+    <!-- Health check — sync in-memory status to DB -->
+    <record id="ir_cron_whatsapp_health_check" model="ir.cron">
+        <field name="name">WhatsApp: Health Check</field>
+        <field name="model_id" ref="model_whatsapp_session"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_health_check()</field>
+        <field name="interval_number">2</field>
+        <field name="interval_type">minutes</field>
+        <field name="active">True</field>
+    </record>
+
+</odoo>

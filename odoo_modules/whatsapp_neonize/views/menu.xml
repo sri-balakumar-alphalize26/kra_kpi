@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Root Menu - visible to WhatsApp users -->
+    <menuitem id="menu_whatsapp_root"
+              name="WhatsApp"
+              web_icon="whatsapp_neonize,static/description/icon.png"
+              groups="group_whatsapp_user"
+              sequence="100"/>
+
+    <!-- Sessions -->
+    <menuitem id="menu_whatsapp_sessions"
+              name="Sessions"
+              parent="menu_whatsapp_root"
+              action="action_whatsapp_session"
+              groups="group_whatsapp_user"
+              sequence="10"/>
+
+    <!-- Messages -->
+    <menuitem id="menu_whatsapp_messages"
+              name="Messages"
+              parent="menu_whatsapp_root"
+              action="action_whatsapp_message"
+              groups="group_whatsapp_user"
+              sequence="20"/>
+
+    <!-- Send Message (full page form) -->
+    <menuitem id="menu_whatsapp_send"
+              name="Send Message"
+              parent="menu_whatsapp_root"
+              action="action_whatsapp_send_form"
+              groups="group_whatsapp_user"
+              sequence="30"/>
+
+    <!-- Configuration -->
+    <menuitem id="menu_whatsapp_config"
+              name="Configuration"
+              parent="menu_whatsapp_root"
+              groups="group_whatsapp_manager"
+              sequence="90"/>
+
+    <menuitem id="menu_whatsapp_config_sessions"
+              name="Sessions"
+              parent="menu_whatsapp_config"
+              action="action_whatsapp_session"
+              groups="group_whatsapp_manager"
+              sequence="10"/>
+
+    <menuitem id="menu_whatsapp_config_settings"
+              name="Settings"
+              parent="menu_whatsapp_config"
+              action="action_whatsapp_config_server"
+              groups="group_whatsapp_manager"
+              sequence="20"/>
+
+</odoo>

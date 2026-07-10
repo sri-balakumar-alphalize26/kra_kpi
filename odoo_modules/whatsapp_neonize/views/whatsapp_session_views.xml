@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============ SESSION FORM VIEW ============ -->
+    <record id="view_whatsapp_session_form" model="ir.ui.view">
+        <field name="name">whatsapp.session.form</field>
+        <field name="model">whatsapp.session</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_connect"
+                            string="Connect WhatsApp"
+                            type="object"
+                            class="btn-primary"
+                            invisible="status == 'connected'"/>
+                    <button name="action_send_message_wizard"
+                            string="Send Message"
+                            type="object"
+                            class="btn-primary"
+                            invisible="status != 'connected'"/>
+                    <button name="action_disconnect"
+                            string="Disconnect"
+                            type="object"
+                            class="btn-danger"
+                            invisible="status != 'connected'"/>
+                    <button name="action_refresh_status"
+                            string="Refresh Status"
+                            type="object"
+                            class="btn-secondary"/>
+                    <field name="status" widget="statusbar"
+                           statusbar_visible="disconnected,waiting_qr,connected"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_messages"
+                                type="object"
+                                class="oe_stat_button"
+                                icon="fa-comments">
+                            <field name="message_count"
+                                   widget="statinfo"
+                                   string="Messages"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1>
+                            <field name="name"
+                                   placeholder="e.g. Company WhatsApp"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Connection">
+                            <field name="phone_number"/>
+                            <field name="auto_reconnect"/>
+                            <field name="db_path"
+                                   groups="base.group_no_one"/>
+                        </group>
+                        <group string="Settings">
+                            <field name="company_id"
+                                   groups="base.group_multi_company"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                    </group>
+
+                    <!-- QR Code Section — Odoo 19: invisible is a Python expression -->
+                    <div invisible="status != 'waiting_qr'"
+                         class="text-center mt-4 mb-4 p-4"
+                         style="background: #f8f9fa; border-radius: 12px;
+                                border: 2px dashed #28a745;">
+                        <h2 style="color: #28a745;">
+                            Scan QR Code with WhatsApp
+                        </h2>
+                        <p class="text-muted" style="font-size: 16px;">
+                            Open WhatsApp on your phone
+                            <b>Settings</b> →
+                            <b>Linked Devices</b> →
+                            <b>Link a Device</b>
+                        </p>
+                        <div class="d-flex justify-content-center mt-3 mb-3">
+                            <field name="qr_image" widget="image"
+                                   style="max-width: 300px; max-height: 300px;
+                                          border: 3px solid #28a745;
+                                          border-radius: 12px;
+                                          padding: 10px;
+                                          background: white;"/>
+                        </div>
+                        <field name="qr_last_update" invisible="1"/>
+                        <p class="text-muted">
+                            <em>Click <b>Refresh Status</b> after scanning the QR code.</em>
+                        </p>
+                        <p class="text-muted" style="font-size: 12px;">
+                            QR code refreshes every ~30 seconds.
+                            Click Connect again if it expires.
+                        </p>
+                    </div>
+
+                    <!-- Connected Banner -->
+                    <div invisible="status != 'connected'"
+                         class="alert alert-success text-center mt-4"
+                         role="status"
+                         style="font-size: 18px; border-radius: 12px;">
+                        <b>WhatsApp Connected Successfully!</b>
+                        <br/>
+                        <span class="text-muted">
+                            You can now send and receive messages.
+                        </span>
+                    </div>
+
+                    <!-- Error Banner -->
+                    <div invisible="status != 'error'"
+                         class="alert alert-danger text-center mt-4"
+                         role="alert">
+                        <b>Connection Error</b>
+                        <br/>
+                        <field name="error_message" readonly="1"/>
+                    </div>
+
+                    <notebook>
+                        <page string="Messages" name="messages">
+                            <field name="message_ids" readonly="1">
+                                <list>
+                                    <field name="create_date" string="Time"/>
+                                    <field name="direction"/>
+                                    <field name="phone"/>
+                                    <field name="partner_id"/>
+                                    <field name="message"/>
+                                    <field name="status" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Technical"
+                              groups="base.group_no_one">
+                            <group>
+                                <field name="db_path"/>
+                                <field name="error_message"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============ SESSION LIST VIEW ============ -->
+    <record id="view_whatsapp_session_list" model="ir.ui.view">
+        <field name="name">whatsapp.session.list</field>
+        <field name="model">whatsapp.session</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="phone_number"/>
+                <field name="company_id"
+                       groups="base.group_multi_company"
+                       optional="hide"/>
+                <field name="auto_reconnect"/>
+                <field name="status" widget="badge"/>
+                <field name="message_count" string="Messages"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ============ SESSION ACTION ============ -->
+    <record id="action_whatsapp_session" model="ir.actions.act_window">
+        <field name="name">WhatsApp Sessions</field>
+        <field name="res_model">whatsapp.session</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first WhatsApp Session
+            </p>
+            <p>
+                Click the button to create a session, then scan the
+                QR code with your WhatsApp app to connect.
+            </p>
+        </field>
+    </record>
+
+</odoo>

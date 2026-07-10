@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_whatsapp_send_message_wizard_form" model="ir.ui.view">
+        <field name="name">whatsapp.send.message.wizard.form</field>
+        <field name="model">whatsapp.send.message.wizard</field>
+        <field name="arch" type="xml">
+            <form>
+                <group>
+                    <group>
+                        <field name="session_id" required="1"/>
+                        <field name="partner_id"/>
+                        <field name="phone"/>
+                    </group>
+                    <group>
+                        <field name="attachment"
+                               filename="attachment_name"/>
+                        <field name="attachment_name" invisible="1"/>
+                        <field name="res_model" invisible="1"/>
+                        <field name="res_id" invisible="1"/>
+                    </group>
+                </group>
+                <group>
+                    <field name="message"
+                           placeholder="Type your message here..."
+                           nolabel="1" colspan="2"/>
+                </group>
+                <div class="oe_right mt-3 mb-3">
+                    <button name="action_send"
+                            string="📩 Send Message"
+                            type="object"
+                            class="btn-primary btn-lg"/>
+                    <button name="action_send_report"
+                            string="📎 Send Report"
+                            type="object"
+                            class="btn-secondary btn-lg ms-2"
+                            invisible="not res_model"/>
+                </div>
+                <footer>
+                    <button name="action_send"
+                            string="Send Message"
+                            type="object"
+                            class="btn-primary"/>
+                    <button name="action_send_report"
+                            string="Send Report"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="not res_model"/>
+                    <button string="Cancel"
+                            class="btn-secondary"
+                            special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- Action for menu: opens as full page -->
+    <record id="action_whatsapp_send_form" model="ir.actions.act_window">
+        <field name="name">Send WhatsApp Message</field>
+        <field name="res_model">whatsapp.send.message.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">current</field>
+        <field name="context">{'wizard_from_menu': True}</field>
+    </record>
+
+    <!-- Action for popup: opens as dialog (used from buttons) -->
+    <record id="action_whatsapp_send_wizard" model="ir.actions.act_window">
+        <field name="name">Send WhatsApp Message</field>
+        <field name="res_model">whatsapp.send.message.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+</odoo>

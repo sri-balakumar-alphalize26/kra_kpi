@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============ WHATSAPP CONFIG FORM ============ -->
+    <record id="view_whatsapp_config_form" model="ir.ui.view">
+        <field name="name">whatsapp.config.form</field>
+        <field name="model">whatsapp.config</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <field name="company_id"
+                               groups="base.group_multi_company"/>
+                    </group>
+
+                    <separator string="📱 Owner Notification Numbers"/>
+                    <p class="text-muted">
+                        Add phone numbers (with country code, no + sign) to receive
+                        business notifications via WhatsApp.
+                    </p>
+                    <field name="owner_number_ids">
+                        <list editable="bottom">
+                            <field name="sequence" widget="handle"/>
+                            <field name="name" placeholder="e.g. Owner / Manager"/>
+                            <field name="phone" placeholder="e.g. 919944080209"/>
+                            <field name="active"/>
+                        </list>
+                    </field>
+
+                    <separator string="🏪 POS Notification Settings"/>
+                    <group>
+                        <group>
+                            <field name="pos_notify_enabled"/>
+                            <field name="pos_notify_owners"
+                                   invisible="not pos_notify_enabled"/>
+                            <field name="pos_notify_customer"
+                                   invisible="not pos_notify_enabled"/>
+                        </group>
+                        <group>
+                            <field name="pos_session_id"
+                                   invisible="not pos_notify_enabled"
+                                   domain="[('status', '=', 'connected')]"/>
+                        </group>
+                    </group>
+
+                    <separator string="💬 Order Message"
+                               invisible="not pos_notify_enabled"/>
+                    <group invisible="not pos_notify_enabled">
+                        <group>
+                            <field name="pos_message_mode" widget="radio"/>
+                        </group>
+                        <group string="Text" invisible="pos_message_mode != 'simple'">
+                            <field name="pos_msg_header"/>
+                            <field name="pos_msg_footer"/>
+                        </group>
+                    </group>
+                    <group invisible="not pos_notify_enabled or pos_message_mode != 'simple'">
+                        <group string="What to include">
+                            <field name="pos_show_order_number"/>
+                            <field name="pos_show_date"/>
+                            <field name="pos_show_pos_name"/>
+                            <field name="pos_show_items"/>
+                            <field name="pos_show_subtotal"/>
+                            <field name="pos_show_tax"/>
+                            <field name="pos_show_total"/>
+                            <field name="pos_show_paid"/>
+                            <field name="pos_show_customer"/>
+                        </group>
+                        <group string="Live Preview">
+                            <field name="pos_message_preview" nolabel="1" readonly="1"
+                                   style="white-space: pre-wrap; background:#f6f6f6; padding:12px; border-radius:8px;"/>
+                        </group>
+                    </group>
+                    <group invisible="not pos_notify_enabled or pos_message_mode != 'advanced'">
+                        <field name="pos_message_template" nolabel="1"
+                               placeholder="Message template for POS orders..."/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============ WHATSAPP CONFIG ACTION ============ -->
+    <!-- Server action to get/create config and open it -->
+    <record id="action_whatsapp_config_server" model="ir.actions.server">
+        <field name="name">WhatsApp Settings</field>
+        <field name="model_id" ref="model_whatsapp_config"/>
+        <field name="state">code</field>
+        <field name="code">
+config = env['whatsapp.config'].sudo().get_config()
+action = {
+    'type': 'ir.actions.act_window',
+    'name': 'WhatsApp Settings',
+    'res_model': 'whatsapp.config',
+    'view_mode': 'form',
+    'res_id': config.id,
+    'target': 'current',
+    'context': {'form_view_initial_mode': 'edit'},
+}
+        </field>
+    </record>
+
+    <!-- ============ WHATSAPP CONFIG LIST ============ -->
+    <record id="view_whatsapp_config_list" model="ir.ui.view">
+        <field name="name">whatsapp.config.list</field>
+        <field name="model">whatsapp.config</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="company_id"/>
+                <field name="pos_notify_enabled"/>
+                <field name="pos_notify_owners"/>
+                <field name="pos_notify_customer"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_whatsapp_config" model="ir.actions.act_window">
+        <field name="name">WhatsApp Settings</field>
+        <field name="res_model">whatsapp.config</field>
+        <field name="view_mode">list,form</field>
+        <field name="target">current</field>
+    </record>
+
+    <!-- ============ OWNER NUMBERS LIST ============ -->
+    <record id="view_whatsapp_owner_number_list" model="ir.ui.view">
+        <field name="name">whatsapp.owner.number.list</field>
+        <field name="model">whatsapp.owner.number</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="phone"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+</odoo>
