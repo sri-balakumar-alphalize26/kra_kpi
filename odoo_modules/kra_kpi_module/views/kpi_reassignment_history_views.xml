@@ -1,0 +1,79 @@
+<odoo>
+    <!-- list View for Reassignment History -->
+    <record id="view_kpi_reassignment_history_list" model="ir.ui.view">
+        <field name="name">kpi.reassignment.history.list</field>
+        <field name="model">kpi.reassignment.history</field>
+        <field name="arch" type="xml">
+            <list string="Reassignment History" create="false" edit="false">
+                <field name="reassignment_date"/>
+                <field name="kpi_id"/>
+                <field name="previous_assignee_name"/>
+                <field name="new_assignee_name"/>
+                <field name="reassigned_by_name"/>
+                <field name="previous_state"/>
+                <field name="time_spent_display"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Form View for Reassignment History -->
+    <record id="view_kpi_reassignment_history_form" model="ir.ui.view">
+        <field name="name">kpi.reassignment.history.form</field>
+        <field name="model">kpi.reassignment.history</field>
+        <field name="arch" type="xml">
+            <form string="Reassignment History" create="false" edit="false">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="kpi_id" readonly="1"/>
+                            <field name="reassignment_date" readonly="1"/>
+                            <field name="reassigned_by_name" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="previous_assignee_name" readonly="1"/>
+                            <field name="new_assignee_name" readonly="1"/>
+                            <field name="previous_state" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group>
+                            <field name="time_spent_display" readonly="1"/>
+                            <field name="was_paused" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="pause_reason" readonly="1" invisible="not was_paused"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="reassignment_reason" readonly="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Action for Reassignment History -->
+    <record id="action_kpi_reassignment_history" model="ir.actions.act_window">
+        <field name="name">KPI Reassignment History</field>
+        <field name="res_model">kpi.reassignment.history</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No reassignment history found
+            </p>
+            <p>
+                This view shows the complete history of all KPI task reassignments.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu Item (Under KRA/KPI Reports) -->
+    <menuitem id="menu_kpi_reassignment_history"
+              name="Reassignment History"
+              parent="menu_kra_root"
+              action="action_kpi_reassignment_history"
+              sequence="40"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+</odoo>

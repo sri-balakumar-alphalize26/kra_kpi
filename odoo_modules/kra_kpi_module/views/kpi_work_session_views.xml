@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <!-- ============================================================
+             Client action for the Developer Workday Report OWL screen.
+             ============================================================ -->
+        <record id="action_kpi_developer_summary" model="ir.actions.client">
+            <field name="name">Developer Workday Report</field>
+            <field name="tag">kpi_developer_summary</field>
+        </record>
+
+        <!-- ============================================================
+             Backend list / form view for workday sessions (admin debug).
+             ============================================================ -->
+        <record id="view_kpi_work_session_list" model="ir.ui.view">
+            <field name="name">kpi.work.session.list</field>
+            <field name="model">kpi.work.session</field>
+            <field name="arch" type="xml">
+                <list string="Workday Sessions" default_order="session_date desc, login_at desc">
+                    <field name="session_date"/>
+                    <field name="user_id"/>
+                    <field name="login_at"/>
+                    <field name="logout_at"/>
+                    <field name="state" widget="badge"
+                           decoration-success="state == 'closed'"
+                           decoration-warning="state == 'open'"/>
+                    <field name="productive_seconds" widget="float_time"/>
+                    <field name="presence_seconds" widget="float_time"/>
+                    <field name="task_count"/>
+                    <field name="auto_closed"/>
+                </list>
+            </field>
+        </record>
+
+        <record id="view_kpi_work_session_form" model="ir.ui.view">
+            <field name="name">kpi.work.session.form</field>
+            <field name="model">kpi.work.session</field>
+            <field name="arch" type="xml">
+                <form string="Workday Session">
+                    <sheet>
+                        <group>
+                            <group>
+                                <field name="user_id" readonly="1"/>
+                                <field name="session_date" readonly="1"/>
+                                <field name="login_at" readonly="1"/>
+                                <field name="logout_at" readonly="1"/>
+                                <field name="state"/>
+                                <field name="auto_closed"/>
+                            </group>
+                            <group>
+                                <field name="productive_seconds" widget="float_time" readonly="1"/>
+                                <field name="presence_seconds" widget="float_time" readonly="1"/>
+                                <field name="task_count" readonly="1"/>
+                            </group>
+                        </group>
+                        <group string="Note">
+                            <field name="note" nolabel="1"/>
+                        </group>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <record id="view_kpi_work_session_search" model="ir.ui.view">
+            <field name="name">kpi.work.session.search</field>
+            <field name="model">kpi.work.session</field>
+            <field name="arch" type="xml">
+                <search>
+                    <field name="user_id"/>
+                    <field name="session_date"/>
+                    <filter string="Open" name="filter_open" domain="[('state','=','open')]"/>
+                    <filter string="Closed" name="filter_closed" domain="[('state','=','closed')]"/>
+                    <filter string="Auto-closed" name="filter_auto" domain="[('auto_closed','=',True)]"/>
+                    <filter string="Today" name="filter_today" domain="[('session_date','=',context_today().strftime('%Y-%m-%d'))]"/>
+                </search>
+            </field>
+        </record>
+
+        <record id="action_kpi_work_session" model="ir.actions.act_window">
+            <field name="name">Workday Sessions</field>
+            <field name="res_model">kpi.work.session</field>
+            <field name="view_mode">list,form</field>
+            <field name="search_view_id" ref="view_kpi_work_session_search"/>
+        </record>
+
+        <!-- ============================================================
+             Menu entries.
+             ============================================================ -->
+        <menuitem id="menu_kpi_developer_summary"
+                  name="Developer Workday Report"
+                  parent="menu_kra_root"
+                  sequence="50"
+                  action="action_kpi_developer_summary"
+                  groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+        <menuitem id="menu_kpi_work_session_admin"
+                  name="Workday Sessions"
+                  parent="menu_kpi_settings"
+                  sequence="20"
+                  action="action_kpi_work_session"
+                  groups="base.group_system"/>
+
+    </data>
+</odoo>

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- KPI Record Rules: Employees see PUBLISHED KPIs where they're primary assignee OR a contributor.
+         Unpublished tasks live in the admin's Client Task Queue and are hidden from devs. -->
+    <record id="kpi_employee_own_tasks_rule" model="ir.rule">
+        <field name="name">Employee: Own or Contributing KPI Tasks (published only)</field>
+        <field name="model_id" ref="model_kra_kpi"/>
+        <field name="domain_force">['&amp;', ('published', '=', True), '|', ('user_id', '=', user.id), ('contributor_ids', 'in', [user.id])]</field>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Manager/Admin: Full access to all KPIs -->
+    <record id="kpi_manager_all_access_rule" model="ir.rule">
+        <field name="name">Manager/Admin: All KPI Access</field>
+        <field name="model_id" ref="model_kra_kpi"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('base.group_system'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <!-- KRA Access: Employees can view all KRAs (read-only) -->
+    <record id="kra_employee_read_all_rule" model="ir.rule">
+        <field name="name">Employee: Read All KRAs</field>
+        <field name="model_id" ref="model_kra_master"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Manager/Admin: Full KRA Access -->
+    <record id="kra_manager_all_access_rule" model="ir.rule">
+        <field name="name">Manager/Admin: All KRA Access</field>
+        <field name="model_id" ref="model_kra_master"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('base.group_system'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <!-- Progress Updates: Employees see only their own updates -->
+    <record id="progress_employee_own_rule" model="ir.rule">
+        <field name="name">Employee: Own Progress Updates</field>
+        <field name="model_id" ref="model_kpi_progress"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Progress Updates: Managers see all updates -->
+    <record id="progress_manager_all_rule" model="ir.rule">
+        <field name="name">Manager: All Progress Updates</field>
+        <field name="model_id" ref="model_kpi_progress"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('base.group_system'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <!-- Workday Sessions: developers see only their OWN sessions. -->
+    <record id="kpi_work_session_developer_own_rule" model="ir.rule">
+        <field name="name">Developer: Own Workday Sessions Only</field>
+        <field name="model_id" ref="model_kpi_work_session"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_developer'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Workday Sessions: coordinator/owner see ALL sessions. -->
+    <record id="kpi_work_session_coord_owner_all_rule" model="ir.rule">
+        <field name="name">Coordinator / Owner: All Workday Sessions</field>
+        <field name="model_id" ref="model_kpi_work_session"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_admin')), (4, ref('group_kra_owner')), (4, ref('base.group_system'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+</odoo>

@@ -1,0 +1,25 @@
+/* Ensure KPI Performance Report page is scrollable */
+.o_kpi_performance_report {
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow-y: auto !important;
+    display: block !important;
+}
+
+/* Fix scroll in Unit Report also */
+.o_kpi_unit_report {
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow-y: auto !important;
+    display: block !important;
+}
+
+/* Ensure Odoo page container allows vertical scrolling */
+.o_action_manager {
+    overflow-y: auto !important;
+}
+
+.o_content {
+    overflow-y: auto !important;
+    height: auto !important;
+}

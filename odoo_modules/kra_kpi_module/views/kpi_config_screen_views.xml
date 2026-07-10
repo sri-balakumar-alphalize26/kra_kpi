@@ -1,0 +1,168 @@
+<odoo>
+
+    
+    <!-- CONNECTION MENU → ACTION -->
+    <!-- Child menu removed so top-level menu navigates directly without dropdown. -->
+
+    <!-- LIST VIEW -->
+    <record id="view_kpi_config_screen_list" model="ir.ui.view">
+        <field name="name">kpi.config.screen.list</field>
+        <field name="model">kpi.config.screen</field>
+        <field name="arch" type="xml">
+            <list string="KPI Config Screens">
+                <field name="name"/>
+                <field name="url"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- FORM VIEW -->
+    <record id="view_kpi_config_screen_form" model="ir.ui.view">
+        <field name="name">kpi.config.screen.form</field>
+        <field name="model">kpi.config.screen</field>
+        <field name="arch" type="xml">
+            <form string="KPI Config Screen">
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="url"/>
+                        <field name="active"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============================================ -->
+    <!-- ✅ UPDATED: KPI FORM VIEW - NOW INCLUDES RELATED LINKS -->
+    <!-- ============================================ -->
+    <record id="view_kra_kpi_form" model="ir.ui.view">
+        <field name="name">kra.kpi.form</field>
+        <field name="model">kra.kpi</field>
+        <field name="arch" type="xml">
+            <form string="KPI">
+                <sheet>
+                    <group>
+                        <group string="Basic Information">
+                            <field name="name"/>
+                            <field name="kra_id"/>
+                            <field name="priority"/>
+                            <label for="estimate_hours" string="Estimated Time"/>
+                            <div class="o_row">
+                                <field name="estimate_hours" class="oe_inline" style="width: 60px;"/>
+                                <span class="oe_inline">hrs</span>
+                                <field name="estimate_minutes" class="oe_inline" style="width: 60px;"/>
+                                <span class="oe_inline">min</span>
+                            </div>
+                            <field name="points"/>
+                        </group>
+                        
+                        <group string="Assignment">
+                            <field name="user_id"/>
+                            <field name="user_group_id"/>
+                        </group>
+                    </group>
+                    
+                    <group>
+                        <group string="Configuration">
+                            <field name="action_config_id"/>
+                            <field name="next_kpi_id"/>
+                            <field name="warehouse_id"/>
+                            <field name="deadline"/>
+                            <field name="reminder_days"/>
+                        </group>
+                        
+                        <group string="File Attachment">
+                            <field name="file_name"/>
+                            <field name="uploaded_file" filename="file_name"/>
+                        </group>
+                    </group>
+                    
+                    <notebook>
+                        <page string="Description &amp; Guidelines">
+                            <div class="row mt-3">
+                                <div class="col-12">
+                                    <div class="o_form_label fw-bold" style="font-size: 14px; margin-bottom: 8px;">KPI Description</div>
+                                    <field name="description" nolabel="1" placeholder="Enter KPI description..." widget="text" style="min-height: 100px;"/>
+                                </div>
+                            </div>
+                            
+                            <div class="row mt-4">
+                                <div class="col-12">
+                                    <div class="o_form_label fw-bold" style="font-size: 14px; margin-bottom: 8px;">Checklist</div>
+                                    <field name="checklist" nolabel="1" placeholder="Enter checklist items..." widget="text" style="min-height: 80px;"/>
+                                </div>
+                            </div>
+                            
+                            <div class="row mt-4">
+                                <div class="col-12">
+                                    <div class="o_form_label fw-bold" style="font-size: 14px; margin-bottom: 8px;">Guidelines</div>
+                                    <field name="guidelines" nolabel="1" placeholder="Enter guidelines..." widget="text" style="min-height: 80px;"/>
+                                </div>
+                            </div>
+                        </page>
+                        
+                        <!-- ✅ UPDATED: Related Links Page with better spacing -->
+                        <page string="Related Links">
+                            <div class="row mt-3">
+                                <div class="col-12">
+                                    <div class="o_form_label fw-bold" style="font-size: 16px; margin-bottom: 12px;">Related Links</div>
+                                    <p class="text-muted" style="font-size: 13px; margin-bottom: 12px;">Add reference links, documentation URLs, or related resources</p>
+                                    
+                                    <field name="related_links" nolabel="1" widget="text" 
+                                           placeholder='["https://example.com", "https://docs.example.com"]' 
+                                           style="min-height: 120px; font-family: monospace; font-size: 13px;"/>
+                                </div>
+                            </div>
+                        </page>
+                        
+                        <page string="Additional Settings">
+                            <group>
+                                <group string="Flags">
+                                    <field name="is_mandatory"/>
+                                    <field name="auto_assign"/>
+                                    <field name="auto_estimated"/>
+                                    <field name="is_permanent"/>
+                                </group>
+                                <group string="Review Settings">
+                                    <field name="service_kpi"/>
+                                    <field name="is_meeting"/>
+                                    <field name="is_manager_review_needed"/>
+                                    <field name="is_customer_review_needed"/>
+                                </group>
+                            </group>
+                        </page>
+                    </notebook>
+                    
+                    <!-- Hidden fields - won't show in edit view but remain functional -->
+                    <field name="progress_ids" invisible="1"/>
+                    <field name="progress_count" invisible="1"/>
+                    <field name="task_state" invisible="1"/>
+                    <field name="timer_total_seconds" invisible="1"/>
+                    <field name="timer_start_datetime" invisible="1"/>
+                    <field name="paused_reason" invisible="1"/>
+                    <field name="active" invisible="1"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- KPI list VIEW -->
+    <record id="view_kra_kpi_list" model="ir.ui.view">
+        <field name="name">kra.kpi.list</field>
+        <field name="model">kra.kpi</field>
+        <field name="arch" type="xml">
+            <list string="KPIs">
+                <field name="name"/>
+                <field name="kra_id"/>
+                <field name="priority"/>
+                <field name="user_id"/>
+                <field name="estimate"/>
+                <field name="points"/>
+                <field name="deadline"/>
+            </list>
+        </field>
+    </record>
+
+</odoo>

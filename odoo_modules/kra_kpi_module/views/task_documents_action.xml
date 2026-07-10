@@ -1,0 +1,6 @@
+<odoo>
+    <record id="action_task_documents" model="ir.actions.client">
+        <field name="name">Task Related Documents</field>
+        <field name="tag">task_documents_view</field>
+    </record>
+</odoo>

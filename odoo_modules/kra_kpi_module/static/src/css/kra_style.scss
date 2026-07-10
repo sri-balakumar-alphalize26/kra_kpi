@@ -1,0 +1,1354 @@
+/* =========================================================
+   BLUE SKY BACKGROUND - Apply to main dashboard
+   USING #66b0ff COLOR
+   ========================================================= */
+
+.o_kra_dashboard {
+    min-height: 100vh;
+    background: radial-gradient(ellipse at 30% 45%, rgba(102, 176, 255, 0.45) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 55%, rgba(102, 176, 255, 0.35) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 15%, rgba(102, 176, 255, 0.25) 0%, transparent 50%),
+                linear-gradient(120deg, #e6f2ff 0%, #cce5ff 100%) !important;
+    animation: waveFlow 13s ease infinite;
+    background-size: 200% 200%;
+    padding: 24px;
+    
+    /* SCOPED: Change delete icon color only in dashboard */
+    .fa-trash,
+    .text-danger {
+        color: #6c757d !important;
+    }
+
+    .fa-trash:hover,
+    .text-danger:hover {
+        color: #dc3545 !important;
+        cursor: pointer;
+    }
+}
+
+@keyframes waveFlow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* Also apply to KRA form pages */
+.o_kra_form {
+    height: 100vh;
+    overflow-y: auto !important;
+    overflow-x: hidden;
+    background: radial-gradient(circle at 20% 50%, rgba(168, 237, 234, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(254, 214, 227, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 40% 20%, rgba(169, 225, 255, 0.2) 0%, transparent 50%),
+                linear-gradient(135deg, #f5f7fa 0%, #e8f5e9 100%);
+    animation: softFloat 12s ease infinite;
+    
+    &::-webkit-scrollbar {
+        width: 12px;
+    }
+    
+    &::-webkit-scrollbar-track {
+        background: rgba(232, 232, 232, 0.5);
+        border-radius: 10px;
+    }
+    
+    &::-webkit-scrollbar-thumb {
+        background: rgba(168, 168, 168, 0.6);
+        border-radius: 10px;
+        border: 2px solid rgba(232, 232, 232, 0.5);
+    }
+    
+    &::-webkit-scrollbar-thumb:hover {
+        background: rgba(138, 138, 138, 0.8);
+    }
+    
+    scrollbar-width: thin;
+    scrollbar-color: rgba(168, 168, 168, 0.6) rgba(232, 232, 232, 0.5);
+    scroll-behavior: smooth;
+}
+
+/* Apply to KPI form pages */
+.o_kpi_form {
+    height: 100vh;
+    overflow-y: auto !important;
+    overflow-x: hidden;
+    background: radial-gradient(circle at 20% 50%, rgba(168, 237, 234, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(254, 214, 227, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 40% 20%, rgba(169, 225, 255, 0.2) 0%, transparent 50%),
+                linear-gradient(135deg, #f5f7fa 0%, #e8f5e9 100%);
+    animation: softFloat 12s ease infinite;
+    
+    &::-webkit-scrollbar {
+        width: 12px;
+    }
+    
+    &::-webkit-scrollbar-track {
+        background: rgba(232, 232, 232, 0.5);
+        border-radius: 10px;
+    }
+    
+    &::-webkit-scrollbar-thumb {
+        background: rgba(168, 168, 168, 0.6);
+        border-radius: 10px;
+        border: 2px solid rgba(232, 232, 232, 0.5);
+    }
+    
+    &::-webkit-scrollbar-thumb:hover {
+        background: rgba(138, 138, 138, 0.8);
+    }
+    
+    scrollbar-width: thin;
+    scrollbar-color: rgba(168, 168, 168, 0.6) rgba(232, 232, 232, 0.5);
+    scroll-behavior: smooth;
+}
+
+/* =========================================================
+   REST OF YOUR EXISTING CSS BELOW - NOW SCOPED
+   ========================================================= */
+
+.kra-dashboard-container {
+    padding: 24px;
+}
+
+.o_kra_dashboard {
+    .header-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+        }
+    }
+
+    .button-group button {
+        background: #0057a4;
+        color: white;
+        font-size: 14px;
+        border-radius: 6px;
+        border: none;
+        padding: 8px 20px;
+        margin-left: 10px;
+        cursor: pointer;
+    }
+
+    .btn-create-kra {
+        background: #28a745; /* green */
+    }
+
+    .btn-create-kpi {
+        background: #007bff; /* blue */
+    }
+
+    .loading {
+        font-size: 16px;
+        color: #444;
+        padding: 20px;
+    }
+}
+
+/* TREE LAYOUT */
+.kra-tree {
+    margin-top: 15px;
+    font-size: 15px;
+    line-height: 26px;
+}
+
+/* Node container */
+.tree-node {
+    display: flex;
+    align-items: center;
+    cursor: default;
+    padding: 2px 4px;
+}
+
+/* KRA folder icon - with pointer cursor for expand/collapse */
+.kra-icon {
+    margin-right: 5px;
+    color: #007bff;
+    font-size: 16px;
+    cursor: pointer;
+    transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.kra-icon:hover {
+    transform: scale(1.15);
+    color: #0056b3;
+}
+
+/* KPI document icon */
+.kpi-icon {
+    margin-right: 5px;
+    color: #0095f6;
+    font-size: 16px;
+}
+
+/* Expand collapse icon - also with pointer cursor */
+.toggle-icon {
+    margin-right: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    user-select: none;
+    transition: transform 0.15s ease;
+}
+
+.toggle-icon:hover {
+    transform: scale(1.2);
+}
+
+.node-label {
+    font-size: 15px;
+}
+
+.kra-create-page {
+    width: 500px;
+    margin: 30px auto;
+    background: #fff;
+    padding: 25px;
+    border-radius: 8px;
+    box-shadow: 0 0 12px rgba(0,0,0,0.1);
+    
+    .title {
+        font-size: 22px;
+        margin-bottom: 20px;
+        font-weight: 600;
+    }
+
+    .form-group {
+        margin-bottom: 18px;
+        display: flex;
+        flex-direction: column;
+        
+        label {
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+        
+        input,
+        textarea,
+        select {
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+        }
+    }
+
+    .checkbox-group {
+        display: flex;
+        align-items: center;
+    }
+
+    .form-buttons {
+        margin-top: 20px;
+        display: flex;
+        gap: 10px;
+    }
+
+    /* SCOPED buttons only for this form */
+    .btn {
+        padding: 8px 18px;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+
+    .btn-primary {
+        background: #007bff;
+        color: #fff;
+    }
+
+    .btn-secondary {
+        background: #777;
+        color: #fff;
+    }
+}
+
+/* =========================================================
+   KPI ACTION BOARD - MAIN SCROLLBAR (GREY)
+   ========================================================= */
+
+.o_kpi_action_wrapper {
+    min-height: 100vh;
+    height: auto;
+    overflow-y: auto;
+    overflow-x: auto;
+    background: radial-gradient(circle at 20% 50%, rgba(168, 237, 234, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(254, 214, 227, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 40% 20%, rgba(169, 225, 255, 0.2) 0%, transparent 50%),
+                linear-gradient(135deg, #f5f7fa 0%, #e8f5e9 100%);
+    animation: softFloat 12s ease infinite;
+    padding-bottom: 50px;
+    
+    &::-webkit-scrollbar {
+        width: 14px;
+        height: 14px;
+    }
+    
+    &::-webkit-scrollbar-track {
+        background: rgba(232, 232, 232, 0.5);
+        border-radius: 10px;
+    }
+    
+    &::-webkit-scrollbar-thumb {
+        background: rgba(168, 168, 168, 0.6);
+        border-radius: 10px;
+        border: 3px solid rgba(232, 232, 232, 0.5);
+    }
+    
+    &::-webkit-scrollbar-thumb:hover {
+        background: rgba(138, 138, 138, 0.8);
+        border: 2px solid rgba(232, 232, 232, 0.5);
+    }
+    
+    scrollbar-width: thin;
+    scrollbar-color: rgba(168, 168, 168, 0.6) rgba(232, 232, 232, 0.5);
+    
+    &:focus {
+        outline: none;
+    }
+}
+
+/* =========================================================
+   MINIMAL CLEAN THEME FOR KPI ACTION BOARD
+   Matches Odoo UI colors, NOT dark theme
+   ========================================================= */
+
+.o_kpi_action {
+    background: transparent !important;
+    padding: 24px;
+    min-height: 100%;
+    /* Constrain to viewport so the page itself doesn't scroll;
+       horizontal scroll happens INSIDE the kanban row instead. */
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+
+    /* Kanban row scrolls horizontally on screens where 8 columns don't fit.
+       NOTE: do NOT set min-width: max-content here — that would expand the row to fit
+       its full content, eliminating the overflow and breaking the scrollbar. We want
+       the row constrained to its parent's width and the INNER content to overflow. */
+    .row {
+        width: 100%;
+        max-width: 100%;
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        /* Slim scrollbar styling so it's visible but not intrusive */
+        scrollbar-width: thin;
+        scrollbar-color: rgba(180, 160, 130, 0.6) transparent;
+        padding-bottom: 8px;
+        &::-webkit-scrollbar {
+            height: 10px;
+        }
+        &::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.04);
+            border-radius: 5px;
+        }
+        &::-webkit-scrollbar-thumb {
+            background: rgba(180, 160, 130, 0.6);
+            border-radius: 5px;
+        }
+        &::-webkit-scrollbar-thumb:hover {
+            background: rgba(180, 160, 130, 0.9);
+        }
+    }
+
+    /* Mirror scrollbar at the TOP of the kanban — synced with the row via JS.
+       Lets admin scroll horizontally without going to the bottom of the page. */
+    .kpi-scrolltop {
+        overflow-x: auto;
+        overflow-y: hidden;
+        height: 14px;
+        margin-bottom: 6px;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(180, 160, 130, 0.6) transparent;
+        &::-webkit-scrollbar {
+            height: 10px;
+        }
+        &::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.04);
+            border-radius: 5px;
+        }
+        &::-webkit-scrollbar-thumb {
+            background: rgba(180, 160, 130, 0.6);
+            border-radius: 5px;
+        }
+        &::-webkit-scrollbar-thumb:hover {
+            background: rgba(180, 160, 130, 0.9);
+        }
+        .kpi-scrolltop-inner {
+            height: 1px;
+        }
+    }
+}
+
+/* ----- Column Cards (Minimal) ----- */
+/* Reduced min-width from 280px to 215px so 8 kanban columns fit on a 1920px monitor
+   (8 × 215 = 1720px + gaps ≈ 1820px). On smaller screens horizontal scroll still works. */
+.kpi-column-card {
+    background: rgba(248, 249, 250, 0.8);
+    backdrop-filter: blur(10px);
+    border-radius: 8px;
+    border: 1px solid rgba(225, 225, 225, 0.5);
+    transition: 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 400px;
+    min-width: 215px;
+}
+
+/* ----- Column Headers (same color for all) ----- */
+/* ----- Column Headers (same color for all) ----- */
+/* ===== Progress History timeline (KPI Details Part C) ===== */
+.timeline {
+    position: relative;
+    padding-left: 22px;
+}
+.timeline::before {
+    content: "";
+    position: absolute;
+    left: 7px; top: 4px; bottom: 4px;
+    width: 2px;
+    background: #e2e8f0;
+}
+.timeline-entry {
+    position: relative;
+    padding: 0 0 16px 4px;
+    border-radius: 6px;
+}
+.timeline-entry::before {
+    content: "";
+    position: absolute;
+    left: -19px; top: 4px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #3b82f6;
+    box-shadow: 0 0 0 3px #fff;
+}
+.timeline-summary {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+/* Brief highlight when a file's "View note" jumps to its history entry (Part D). */
+.kpi-flash { animation: kpiFlash 1.6s ease; }
+@keyframes kpiFlash {
+    0%   { background: #fff9c4; }
+    100% { background: transparent; }
+}
+
+.kpi-header {
+    background: #cbb799 !important;
+    color: #000000 !important;
+    padding: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    border-radius: 8px 8px 0 0;
+    text-align: center;
+    flex-shrink: 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    text-shadow: none;
+    /* Keep the lane label + count visible while the page scrolls. */
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
+
+/* Per-lane header accents so the eye maps header → lane instantly
+   (cards already carry per-lane colors; headers used to all be beige). */
+.kpi-self_pending        .kpi-header { background: #8b5cf6 !important; color: #fff !important; }
+.kpi-regular             .kpi-header { background: #3b82f6 !important; color: #fff !important; }
+.kpi-important           .kpi-header { background: #7c3aed !important; color: #fff !important; }
+.kpi-urgent              .kpi-header { background: #f59e0b !important; color: #111 !important; }
+.kpi-in_progress         .kpi-header { background: #d97706 !important; color: #fff !important; }
+.kpi-paused              .kpi-header { background: #ea580c !important; color: #fff !important; }
+.kpi-partially_completed .kpi-header { background: #eab308 !important; color: #111 !important; }
+.kpi-awaiting_client     .kpi-header { background: #0ea5e9 !important; color: #fff !important; }
+.kpi-completed           .kpi-header { background: #22c55e !important; color: #fff !important; }
+
+/* ----- Scrollable Task List ----- */
+.kpi-task-list {
+    max-height: 65vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px;
+    flex: 1;
+    scroll-behavior: smooth;
+    
+    &::-webkit-scrollbar {
+        width: 10px;
+    }
+    
+    &::-webkit-scrollbar-track {
+        background: rgba(232, 232, 232, 0.5);
+        border-radius: 8px;
+        margin: 4px;
+    }
+    
+    &::-webkit-scrollbar-thumb {
+        background: rgba(168, 168, 168, 0.6);
+        border-radius: 8px;
+        border: 2px solid rgba(232, 232, 232, 0.5);
+    }
+    
+    &::-webkit-scrollbar-thumb:hover {
+        background: rgba(138, 138, 138, 0.8);
+        border: 1px solid rgba(232, 232, 232, 0.5);
+    }
+    
+    scrollbar-width: thin;
+    scrollbar-color: rgba(168, 168, 168, 0.6) rgba(232, 232, 232, 0.5);
+    
+    &:focus {
+        outline: none;
+    }
+}
+
+/* =========================================================
+   PREMIUM CRYSTAL GLOW TASK CARDS WITH ANIMATIONS
+   ========================================================= */
+
+.kpi-task {
+    border-radius: 12px !important;
+    padding: 14px !important;
+    margin-bottom: 14px !important;
+    position: relative;
+    overflow: hidden;
+    border: 1.5px solid rgba(255, 255, 255, 0.3) !important;
+    box-shadow: 
+        0 4px 15px rgba(0, 0, 0, 0.08),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    backdrop-filter: blur(10px);
+    animation: fadeIn 0.4s ease-out;
+    
+    &::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+        transform: rotate(45deg);
+        transition: all 0.6s ease;
+        opacity: 0;
+    }
+
+    &:hover {
+        transform: translateY(-5px) scale(1.02);
+        box-shadow: 
+            0 8px 25px rgba(0, 0, 0, 0.12),
+            0 4px 10px rgba(0, 0, 0, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+        
+        &::before {
+            opacity: 1;
+            animation: shimmer 1.5s ease-in-out infinite;
+        }
+    }
+    
+    /* Text styling for better contrast */
+    .fw-bold {
+        color: #1a1a1a !important;
+        font-weight: 600 !important;
+        text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+    }
+
+    .text-muted {
+        color: #4a4a4a !important;
+        font-size: 13px;
+    }
+
+    .text-primary {
+        color: #000000 !important;
+        cursor: pointer;
+        transition: color 0.3s ease;
+        font-weight: 600 !important;
+        
+        &:hover {
+            color: #000000 !important;
+            text-decoration: underline;
+        }
+    }
+
+    .text-success {
+        color: #155724 !important;
+        font-weight: 500;
+        
+        &.small {
+            animation: pulse 2s ease-in-out infinite;
+        }
+    }
+    
+    /* Premium button styling - SCOPED to kpi-task */
+    button {
+        border: none !important;
+        padding: 6px 14px !important;
+        border-radius: 8px !important;
+        font-size: 12px !important;
+        font-weight: 500 !important;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+        
+        &::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        &:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+            
+            &::before {
+                width: 300px;
+                height: 300px;
+            }
+        }
+
+        &:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
+        }
+        
+        &.btn-primary {
+            background: linear-gradient(135deg, #0370ec 0%, #c9d9eb 100%) !important;
+            color: #000000 !important;
+            
+            &:hover {
+                background: linear-gradient(135deg, #0056b3 0%, #bfd3ea 100%) !important;
+            }
+        }
+
+        &.btn-warning {
+            background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%) !important;
+            color: #000 !important;
+            
+            &:hover {
+                background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%) !important;
+            }
+        }
+
+        &.btn-success {
+            background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%) !important;
+            color: #fff !important;
+            
+            &:hover {
+                background: linear-gradient(135deg, #1e7e34 0%, #155724 100%) !important;
+            }
+        }
+
+        &.btn-danger {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
+            color: #fff !important;
+            
+            &:hover {
+                background: linear-gradient(135deg, #c82333 0%, #bd2130 100%) !important;
+            }
+        }
+
+        &.btn-secondary {
+            background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%) !important;
+            color: #fff !important;
+            
+            &:hover {
+                background: linear-gradient(135deg, #5a6268 0%, #495057 100%) !important;
+            }
+        }
+    }
+}
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
+    100% { transform: translateX(100%) translateY(100%) rotate(45deg); }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+/* Regular Column - Crystal Sky Blue */
+.kpi-regular .kpi-task {
+    background: linear-gradient(135deg, 
+        rgba(135, 206, 250, 0.4) 0%, 
+        rgba(211, 229, 242, 0.5) 100%) !important;
+    border-color: rgba(135, 206, 250, 0.5) !important;
+    box-shadow: 
+        0 4px 15px rgba(135, 206, 250, 0.25),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+    
+    &:hover {
+        background: linear-gradient(135deg, 
+            rgba(135, 206, 250, 0.55) 0%, 
+            rgba(209, 230, 244, 0.65) 100%) !important;
+        box-shadow: 
+            0 8px 25px rgba(135, 206, 250, 0.4),
+            0 0 20px rgba(135, 206, 250, 0.3),
+            inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    }
+}
+
+/* Important Column - Crystal Violet */
+.kpi-important .kpi-task {
+    background: linear-gradient(135deg, 
+        rgba(96, 96, 241, 0.4) 0%, 
+        rgba(221, 221, 255, 0.5) 100%) !important;
+    border-color: rgba(200, 200, 250, 0.5) !important;
+    box-shadow: 
+        0 4px 15px rgba(230, 230, 250, 0.25),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+    
+    &:hover {
+        background: linear-gradient(135deg, 
+            rgba(83, 83, 240, 0.55) 0%, 
+            rgba(221, 221, 255, 0.65) 100%) !important;
+        box-shadow: 
+            0 8px 25px rgba(230, 230, 250, 0.4),
+            0 0 20px rgba(200, 200, 250, 0.3),
+            inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    }
+}
+
+/* Urgent Column - Crystal Yellow */
+.kpi-urgent .kpi-task {
+    background: linear-gradient(135deg, 
+        rgba(244, 240, 28, 0.947) 0%, 
+        rgba(217, 217, 207, 0.45) 100%) !important;
+    border-color: rgba(253, 246, 63, 0.5) !important;
+    box-shadow: 
+        0 4px 15px rgba(251, 248, 219, 0.841),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+    
+    &:hover {
+        background: linear-gradient(135deg, 
+            rgba(239, 217, 16, 0.937) 0%, 
+            rgba(195, 193, 163, 0.6) 100%) !important;
+        box-shadow: 
+            0 8px 25px rgba(242, 235, 41, 0.4),
+            0 0 20px rgba(238, 244, 206, 0.922),
+            inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    }
+}
+
+/* In Progress Column - Crystal Gold */
+.kpi-in_progress .kpi-task {
+    background: linear-gradient(135deg, 
+        rgba(236, 236, 31, 0.4) 0%, 
+        rgba(255, 255, 240, 0.5) 100%) !important;
+    border-color: rgba(255, 255, 150, 0.5) !important;
+    box-shadow: 
+        0 4px 15px rgba(255, 255, 200, 0.25),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+    
+    &:hover {
+        background: linear-gradient(135deg, 
+            rgba(236, 236, 35, 0.55) 0%, 
+            rgba(255, 255, 240, 0.65) 100%) !important;
+        box-shadow: 
+            0 8px 25px rgba(255, 255, 200, 0.4),
+            0 0 20px rgba(255, 255, 150, 0.3),
+            inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    }
+}
+
+/* Paused Column - Crystal Orange */
+.kpi-paused .kpi-task {
+    background: linear-gradient(135deg, 
+        rgba(255, 152, 0, 0.35) 0%, 
+        rgba(255, 179, 71, 0.45) 100%) !important;
+    border-color: rgba(255, 152, 0, 0.5) !important;
+    box-shadow: 
+        0 4px 15px rgba(255, 152, 0, 0.25),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+    
+    &:hover {
+        background: linear-gradient(135deg, 
+            rgba(255, 152, 0, 0.5) 0%, 
+            rgba(255, 179, 71, 0.6) 100%) !important;
+        box-shadow: 
+            0 8px 25px rgba(255, 152, 0, 0.4),
+            0 0 20px rgba(255, 152, 0, 0.35),
+            inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    }
+}
+
+/* Completed Column - Crystal Mint */
+.kpi-completed .kpi-task {
+    background: linear-gradient(135deg, 
+        rgba(144, 238, 144, 0.4) 0%, 
+        rgba(176, 255, 176, 0.5) 100%) !important;
+    border-color: rgba(144, 238, 144, 0.5) !important;
+    box-shadow: 
+        0 4px 15px rgba(144, 238, 144, 0.25),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+    
+    &:hover {
+        background: linear-gradient(135deg, 
+            rgba(144, 238, 144, 0.55) 0%, 
+            rgba(176, 255, 176, 0.65) 100%) !important;
+        box-shadow: 
+            0 8px 25px rgba(144, 238, 144, 0.4),
+            0 0 20px rgba(144, 238, 144, 0.3),
+            inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    }
+}
+
+/* ----- Mobile ----- */
+@media (max-width: 992px) {
+    .o_kpi_action .row {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+    }
+    
+    .o_kpi_action_wrapper {
+        height: auto;
+        min-height: 100vh;
+    }
+    
+    .kpi-task-list {
+        max-height: 50vh;
+    }
+    
+    .kpi-column-card {
+        min-height: 300px;
+    }
+}
+
+.o-kpi-card {
+    margin-bottom: 30px;
+}
+/* Add these styles to your kra_style.scss file */
+
+/* Partially Completed Column - Crystal Amber */
+.kpi-partially_completed .kpi-task {
+    background: linear-gradient(135deg, 
+        rgba(255, 193, 7, 0.35) 0%, 
+        rgba(255, 224, 130, 0.45) 100%) !important;
+    border-color: rgba(255, 193, 7, 0.5) !important;
+    box-shadow: 
+        0 4px 15px rgba(255, 193, 7, 0.25),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+    
+    &:hover {
+        background: linear-gradient(135deg, 
+            rgba(255, 193, 7, 0.5) 0%, 
+            rgba(255, 224, 130, 0.6) 100%) !important;
+        box-shadow: 
+            0 8px 25px rgba(255, 193, 7, 0.4),
+            0 0 20px rgba(255, 193, 7, 0.3),
+            inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    }
+}
+/* Badge styling for awaiting approval */
+.badge.bg-warning {
+    background-color: #ffc107 !important;
+    color: #000 !important;
+    font-weight: 600;
+}
+
+/* Approval button styling */
+.kpi-task .btn-success {
+    background-color: #28a745;
+    border-color: #28a745;
+}
+
+.kpi-task .btn-success:hover {
+    background-color: #218838;
+    border-color: #1e7e34;
+}
+
+.kpi-task .btn-danger {
+    background-color: #dc3545;
+    border-color: #dc3545;
+}
+
+.kpi-task .btn-danger:hover {
+    background-color: #c82333;
+    border-color: #bd2130;
+}
+
+/* Modal header colors */
+.modal-header.bg-success {
+    background-color: #28a745 !important;
+}
+
+.modal-header.bg-danger {
+    background-color: #dc3545 !important;
+}
+
+.btn-close-white {
+    filter: brightness(0) invert(1);
+}
+
+/* Alert boxes in modals */
+.alert-success {
+    background-color: #d4edda;
+    border-color: #c3e6cb;
+    color: #155724;
+}
+
+.alert-warning {
+    background-color: #fff3cd;
+    border-color: #ffeaa7;
+    color: #856404;
+}
+
+/* Completion info in cards */
+.text-success.small {
+    font-weight: 600;
+}
+.alphalize-watermark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 600px;
+    height: 600px;
+    background-image: url('/kra_kpi_module/static/src/img/alphalize_logo.png');
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: 0.15; /* Slightly more visible */
+    pointer-events: none;
+    z-index: 1;
+    
+    /* ✅ ALTERNATIVE: Make it grayscale and increase contrast */
+    filter: grayscale(100%) 
+            contrast(150%) 
+            brightness(1.2)
+            drop-shadow(0 0 1px rgba(0, 0, 0, 0.5));
+    
+    /* Blend mode to remove white */
+    mix-blend-mode: multiply;
+}
+/* =========================================================
+   TASK DOCUMENTS - ADVANCED FILTER STYLES
+   Add this to your kra_style.scss file
+   ========================================================= */
+
+/* ================================
+   TASK DOCUMENTS WRAPPER
+   ================================ */
+.o_task_documents_wrapper {
+    min-height: 100vh;
+    background: radial-gradient(circle at 20% 50%, rgba(168, 237, 234, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(254, 214, 227, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 40% 20%, rgba(169, 225, 255, 0.2) 0%, transparent 50%),
+                linear-gradient(135deg, #f5f7fa 0%, #e8f5e9 100%);
+    animation: softFloat 12s ease infinite;
+    
+    &::-webkit-scrollbar {
+        width: 12px;
+    }
+    
+    &::-webkit-scrollbar-track {
+        background: rgba(232, 232, 232, 0.5);
+        border-radius: 10px;
+    }
+    
+    &::-webkit-scrollbar-thumb {
+        background: rgba(168, 168, 168, 0.6);
+        border-radius: 10px;
+        border: 2px solid rgba(232, 232, 232, 0.5);
+    }
+    
+    &::-webkit-scrollbar-thumb:hover {
+        background: rgba(138, 138, 138, 0.8);
+    }
+    
+    scrollbar-width: thin;
+    scrollbar-color: rgba(168, 168, 168, 0.6) rgba(232, 232, 232, 0.5);
+    scroll-behavior: smooth;
+}
+
+/* ================================
+   FILTER BAR CARD
+   ================================ */
+.task-filter-bar {
+    border-radius: 0.75rem !important;
+    transition: all 0.3s ease;
+    
+    &:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
+    }
+}
+
+/* ================================
+   SEARCH INPUT
+   ================================ */
+.search-input-wrapper {
+    .search-input {
+        transition: all 0.2s ease;
+        background-color: #ffffff;
+        
+        &:focus {
+            border-color: #6366f1 !important;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15) !important;
+            outline: none;
+        }
+        
+        &::placeholder {
+            color: #9ca3af;
+            font-size: 0.9rem;
+        }
+    }
+    
+    .search-icon {
+        transition: color 0.2s ease;
+    }
+    
+    &:focus-within .search-icon {
+        color: #6366f1 !important;
+    }
+    
+    .clear-search-btn {
+        opacity: 0.6;
+        transition: opacity 0.2s ease;
+        
+        &:hover {
+            opacity: 1;
+            color: #ef4444 !important;
+        }
+    }
+}
+
+/* ================================
+   FILTER DROPDOWNS
+   ================================ */
+.filter-label {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.filter-select {
+    transition: all 0.2s ease;
+    cursor: pointer;
+    background-color: #ffffff;
+    
+    &:focus {
+        border-color: #6366f1 !important;
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15) !important;
+        outline: none;
+    }
+    
+    &:hover {
+        border-color: #9ca3af;
+    }
+}
+
+/* ================================
+   ACTIVE FILTER TAGS
+   ================================ */
+.active-filters {
+    min-height: 32px;
+}
+
+.filter-tag {
+    animation: tagAppear 0.2s ease;
+    transition: all 0.2s ease;
+    
+    &:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    
+    button {
+        transition: all 0.15s ease;
+        text-decoration: none !important;
+        
+        &:hover {
+            transform: scale(1.2);
+        }
+    }
+}
+
+@keyframes tagAppear {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* ================================
+   CLEAR ALL BUTTON
+   ================================ */
+.clear-all-btn {
+    transition: all 0.2s ease;
+    
+    &:hover {
+        background-color: #f3f4f6 !important;
+        border-color: #9ca3af !important;
+        color: #374151 !important;
+    }
+    
+    &:active {
+        transform: scale(0.98);
+    }
+}
+
+/* ================================
+   RESULTS COUNT BADGE
+   ================================ */
+.task-count-badge {
+    border-radius: 9999px;
+    transition: all 0.3s ease;
+    
+    strong {
+        color: #111827;
+    }
+}
+
+/* ================================
+   TASK TABLE
+   ================================ */
+.task-table-card {
+    border-radius: 0.75rem !important;
+    overflow: hidden;
+    
+    .table {
+        margin-bottom: 0;
+        
+        thead {
+            th {
+                border-top: none;
+                padding: 1rem;
+                font-size: 0.85rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+        }
+        
+        tbody {
+            tr.task-row {
+                transition: background-color 0.15s ease;
+                
+                &:hover {
+                    background-color: #f9fafb !important;
+                }
+                
+                td {
+                    padding: 1rem;
+                    vertical-align: middle;
+                }
+            }
+        }
+    }
+}
+
+/* ================================
+   VIEW BUTTON
+   ================================ */
+.view-btn {
+    transition: all 0.2s ease !important;
+    
+    &:hover {
+        background-color: #1f2937 !important;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    
+    &:active {
+        transform: translateY(0);
+    }
+}
+
+/* ================================
+   DOCUMENT BADGES
+   ================================ */
+.doc-badge {
+    transition: all 0.2s ease;
+    
+    &:hover {
+        background-color: #f3f4f6 !important;
+        transform: translateY(-1px);
+    }
+}
+
+/* ================================
+   PRIORITY BADGES
+   ================================ */
+.priority-badge-urgent {
+    animation: pulseUrgent 2s infinite;
+}
+
+.priority-badge-important {
+    animation: pulseImportant 3s infinite;
+}
+
+@keyframes pulseUrgent {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+    }
+}
+
+@keyframes pulseImportant {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 0 3px rgba(245, 158, 11, 0);
+    }
+}
+
+/* ================================
+   SEARCH HIGHLIGHT
+   ================================ */
+.search-highlight {
+    background-color: #fef08a !important;
+    padding: 0 2px;
+    border-radius: 2px;
+    font-weight: inherit;
+}
+
+/* ================================
+   NO RESULTS STATE
+   ================================ */
+.alert.no-results {
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ================================
+   LOADING SPINNER
+   ================================ */
+.o_task_documents_wrapper .spinner-border {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-width: 3px;
+}
+
+/* ================================
+   RESPONSIVE ADJUSTMENTS
+   ================================ */
+@media (max-width: 768px) {
+    .task-filter-bar {
+        .row.g-2 > div {
+            margin-bottom: 0.5rem;
+        }
+    }
+    
+    .active-filters {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 0.5rem !important;
+    }
+    
+    .filter-tag {
+        font-size: 0.75rem !important;
+    }
+    
+    .task-table-card {
+        .table {
+            font-size: 0.85rem;
+            
+            thead th {
+                padding: 0.75rem 0.5rem;
+                font-size: 0.75rem;
+            }
+            
+            tbody td {
+                padding: 0.75rem 0.5rem;
+            }
+        }
+    }
+    
+    .view-btn {
+        padding: 0.35rem 0.75rem !important;
+        font-size: 0.8rem !important;
+    }
+}
+
+@media (max-width: 576px) {
+    .o_task_documents_wrapper {
+        padding: 1rem !important;
+    }
+    
+    .task-filter-bar .card-body {
+        padding: 1rem !important;
+    }
+    
+    .d-flex.justify-content-between.align-items-center.mb-3 {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 1rem;
+        
+        h2 {
+            font-size: 1.25rem !important;
+        }
+    }
+}
+
+/* ================================
+   DARK MODE SUPPORT (Optional)
+   ================================ */
+@media (prefers-color-scheme: dark) {
+    /* Add dark mode styles if needed */
+}
+
+/* ================================
+   ANIMATION UTILITIES
+   ================================ */
+@keyframes softFloat {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* Smooth transitions for filter state changes */
+.task-row {
+    animation: rowAppear 0.2s ease;
+}
+
+@keyframes rowAppear {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}

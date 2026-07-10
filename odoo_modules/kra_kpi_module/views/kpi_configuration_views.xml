@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="action_kpi_configuration" model="ir.actions.client">
+            <field name="name">Configuration</field>
+            <field name="tag">kpi_configuration</field>
+        </record>
+        <menuitem id="menu_kpi_configuration" name="Configuration" parent="menu_kpi_settings"
+                  sequence="5" action="action_kpi_configuration"
+                  groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+    </data>
+</odoo>

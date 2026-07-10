@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="0">
+        <!-- Part C: pause a developer's running task when their board heartbeat
+             goes stale (tab closed / idle) beyond company.away_after_minutes.
+             The pause is recorded as NON-productive 'away' time (kpi.break.log). -->
+        <record id="ir_cron_kpi_auto_away" model="ir.cron">
+            <field name="name">KPI: Auto-Away idle developers</field>
+            <field name="model_id" ref="model_kpi_work_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_auto_away()</field>
+            <field name="interval_number">2</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

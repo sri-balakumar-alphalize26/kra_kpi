@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- KPI Unit Report Client Action -->
+    <record id="action_kpi_unit_report" model="ir.actions.client">
+        <field name="name">KPI Unit Report</field>
+        <field name="tag">kpi_unit_report</field>
+    </record>
+
+    <!-- KPI Performance Report Client Action -->
+    <record id="action_kpi_performance_report" model="ir.actions.client">
+        <field name="name">KPI Performance Report</field>
+        <field name="tag">kpi_performance_report</field>
+    </record>
+
+    <!-- KRA Report Client Action -->
+    <record id="action_kpi_kra_report" model="ir.actions.client">
+        <field name="name">KRA Report</field>
+        <field name="tag">kpi_kra_report</field>
+    </record>
+
+    <!-- Menu Items for Reports: Only Managers/Admin -->
+    <menuitem id="menu_kpi_reports"
+              name="KPI Reports"
+              parent="menu_kra_root"
+              sequence="40"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+    <menuitem id="menu_kpi_unit_report"
+              name="KPI Unit Report"
+              parent="menu_kpi_reports"
+              action="action_kpi_unit_report"
+              sequence="10"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+    <menuitem id="menu_kpi_performance_report"
+              name="KPI Performance Report"
+              parent="menu_kpi_reports"
+              action="action_kpi_performance_report"
+              sequence="20"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+    <!-- KRA Report Menu Item -->
+    <menuitem id="menu_kpi_kra_report"
+              name="KRA Report"
+              parent="menu_kpi_reports"
+              action="action_kpi_kra_report"
+              sequence="25"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+    <!-- kpi_reports_views.xml - UPDATE Employee Salary Master views -->
+
+    <record id="view_kpi_employee_salary_config_list" model="ir.ui.view">
+        <field name="name">kpi.employee.salary.config.list</field>
+        <field name="model">kpi.employee.salary.config</field>
+        <field name="arch" type="xml">
+            <list string="Employee Salary Configuration" editable="bottom">
+                <field name="employee_id"/>
+                <field name="salary" class="text-end"/>
+                <field name="working_days" class="text-end"/>
+                <field name="attendance_hours_per_day" class="text-end"/>
+                <field name="available_hours" readonly="1" optional="show" class="text-end"/>
+                <field name="available_units" readonly="1" optional="show" class="text-end"/>
+                <field name="unit_cost" readonly="1" optional="show" class="text-end"/>
+                <field name="last_updated" readonly="1" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_kpi_employee_salary_config_form" model="ir.ui.view">
+        <field name="name">kpi.employee.salary.config.form</field>
+        <field name="model">kpi.employee.salary.config</field>
+        <field name="arch" type="xml">
+            <form string="Employee Salary Configuration">
+                <sheet>
+                    <group>
+                        <group string="Basic Information">
+                            <field name="employee_id"/>
+                            <field name="salary"/>
+                            <field name="working_days"/>
+                            <field name="attendance_hours_per_day"/>
+                        </group>
+                        <group string="Calculated Values (Auto)">
+                            <field name="available_hours" readonly="1"/>
+                            <field name="available_units" readonly="1"/>
+                            <field name="unit_cost" readonly="1"/>
+                            <field name="last_updated" readonly="1"/>
+                        </group>
+                    </group>
+                    
+                    <notebook>
+                        <page string="Formula Reference">
+                            <group>
+                                <div class="alert alert-info">
+                                    <h4>📊 Calculation Formulas</h4>
+                                    <ul>
+                                        <li><strong>Available Hours</strong> = Working Days × Attendance Hours/Day</li>
+                                        <li><strong>Available Units</strong> = Available Hours × 100</li>
+                                        <li><strong>Unit Cost</strong> = Salary / Available Units</li>
+                                        <li><strong>Note:</strong> 1 unit = 0.01 hours (100 units = 1 hour)</li>
+                                    </ul>
+                                    
+                                    <h5 class="mt-3">Example:</h5>
+                                    <ul>
+                                        <li>Salary: ₹20,000</li>
+                                        <li>Working Days: 25</li>
+                                        <li>Attendance Hours/Day: 8</li>
+                                        <li>Available Hours: 25 × 8 = 200 hours</li>
+                                        <li>Available Units: 200 × 100 = 20,000 units</li>
+                                        <li>Unit Cost: 20,000 / 20,000 = ₹1 per unit</li>
+                                    </ul>
+                                </div>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_kpi_employee_salary_config" model="ir.actions.act_window">
+        <field name="name">Employee Salary Master</field>
+        <field name="res_model">kpi.employee.salary.config</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_kpi_employee_salary"
+            name="Employee Salary Master"
+            parent="menu_kpi_reports"
+            action="action_kpi_employee_salary_config"
+            sequence="5"
+            groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+    <!-- KPI Attention Report Client Action -->
+    <record id="action_kpi_attention_report" model="ir.actions.client">
+        <field name="name">KPI Attention Report</field>
+        <field name="tag">kpi_attention_report</field>
+    </record>
+
+    <!-- Menu Item for KPI Attention Report -->
+    <menuitem id="menu_kpi_attention_report"
+              name="KPI Attention Report"
+              parent="menu_kpi_reports"
+              action="action_kpi_attention_report"
+              sequence="30"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+    <!-- ============================================================ -->
+    <!-- Client Invoice (Admin) — Generate + edit billing per client    -->
+    <!-- ============================================================ -->
+    <record id="action_kpi_client_invoice_admin" model="ir.actions.client">
+        <field name="name">Client Invoices</field>
+        <field name="tag">kpi_client_invoice_admin</field>
+    </record>
+
+    <menuitem id="menu_kpi_client_invoice_admin"
+              name="Client Invoices"
+              parent="menu_kpi_reports"
+              action="action_kpi_client_invoice_admin"
+              sequence="35"
+              groups="kra_kpi_module.group_kra_owner,kra_kpi_module.group_kra_admin,base.group_system"/>
+
+    <!-- ============================================================ -->
+    <!-- Completion Certificate (Admin) — Per-KPI client deliverables  -->
+    <!-- ============================================================ -->
+    <record id="action_kpi_completion_certificate" model="ir.actions.client">
+        <field name="name">Completion Certificates</field>
+        <field name="tag">kpi_completion_certificate</field>
+    </record>
+
+    <menuitem id="menu_kpi_completion_certificate"
+              name="Completion Certificates"
+              parent="menu_kpi_reports"
+              action="action_kpi_completion_certificate"
+              sequence="40"
+              groups="kra_kpi_module.group_kra_admin,base.group_system"/>
+
+    <!-- ============================================================ -->
+    <!-- Requirements / Updates / Bug Reports Upload (3 menus)         -->
+    <!-- ============================================================ -->
+    <record id="action_kpi_upload_requirements" model="ir.actions.client">
+        <field name="name">Upload Requirements</field>
+        <field name="tag">kpi_upload_requirements</field>
+    </record>
+
+    <record id="action_kpi_upload_updates" model="ir.actions.client">
+        <field name="name">Upload Updates</field>
+        <field name="tag">kpi_upload_updates</field>
+    </record>
+
+    <record id="action_kpi_upload_bug_reports" model="ir.actions.client">
+        <field name="name">Upload Bug Reports</field>
+        <field name="tag">kpi_upload_bug_reports</field>
+    </record>
+
+    <!-- Admin upload menus (under KRA / KPI root) -->
+    <menuitem id="menu_kpi_upload_requirements"
+              name="Upload Requirements"
+              parent="menu_kra_root"
+              action="action_kpi_upload_requirements"
+              sequence="15"
+              groups="kra_kpi_module.group_kra_admin,base.group_system"/>
+
+    <menuitem id="menu_kpi_upload_updates"
+              name="Upload Updates"
+              parent="menu_kra_root"
+              action="action_kpi_upload_updates"
+              sequence="16"
+              groups="kra_kpi_module.group_kra_admin,base.group_system"/>
+
+    <menuitem id="menu_kpi_upload_bug_reports"
+              name="Upload Bug Reports"
+              parent="menu_kra_root"
+              action="action_kpi_upload_bug_reports"
+              sequence="17"
+              groups="kra_kpi_module.group_kra_admin,base.group_system"/>
+
+    <!-- Client Portal root — declared early because the child menus below
+         (Upload Requirements / Updates / Bug Reports) reference it as parent
+         and Odoo loads records in document order on a fresh install. -->
+    <menuitem id="menu_kpi_client_portal_root"
+              name="Client Portal"
+              sequence="5"
+              groups="kra_kpi_module.group_kra_client"/>
+
+    <!-- Client-portal bulk-import menus (under Client Portal) — same actions, restricted to clients.
+         When a client submits via these screens, tasks land in admin's Pending Queue. -->
+    <menuitem id="menu_kpi_client_upload_requirements"
+              name="Upload Requirements"
+              parent="menu_kpi_client_portal_root"
+              action="action_kpi_upload_requirements"
+              sequence="20"
+              groups="kra_kpi_module.group_kra_client"/>
+
+    <menuitem id="menu_kpi_client_upload_updates"
+              name="Upload Updates"
+              parent="menu_kpi_client_portal_root"
+              action="action_kpi_upload_updates"
+              sequence="21"
+              groups="kra_kpi_module.group_kra_client"/>
+
+    <menuitem id="menu_kpi_client_upload_bug_reports"
+              name="Upload Bug Reports"
+              parent="menu_kpi_client_portal_root"
+              action="action_kpi_upload_bug_reports"
+              sequence="22"
+              groups="kra_kpi_module.group_kra_client"/>
+
+    <!-- Admin: Client Task Queue — review submissions before publishing to the team -->
+    <record id="action_kpi_pending_queue" model="ir.actions.client">
+        <field name="name">Client Task Queue</field>
+        <field name="tag">kpi_pending_queue</field>
+    </record>
+
+    <menuitem id="menu_kpi_pending_queue"
+              name="Client Task Queue"
+              parent="menu_kra_root"
+              action="action_kpi_pending_queue"
+              sequence="13"
+              groups="kra_kpi_module.group_kra_admin,base.group_system"/>
+
+    <!-- Generate Client Files (in our format) -->
+    <record id="action_kpi_client_workspace" model="ir.actions.client">
+        <field name="name">Generate Client Files</field>
+        <field name="tag">kpi_client_workspace</field>
+    </record>
+
+    <menuitem id="menu_kpi_client_workspace"
+              name="Generate Client Files"
+              parent="menu_kra_root"
+              action="action_kpi_client_workspace"
+              sequence="14"
+              groups="kra_kpi_module.group_kra_admin,base.group_system"/>
+
+    <!-- Owner Dashboard — per-client certified tasks + invoice gateway (Owner role) -->
+    <record id="action_kpi_owner_dashboard" model="ir.actions.client">
+        <field name="name">Owner Dashboard</field>
+        <field name="tag">kpi_owner_dashboard</field>
+    </record>
+
+    <menuitem id="menu_kpi_owner_dashboard"
+              name="Owner Dashboard"
+              parent="menu_kra_root"
+              action="action_kpi_owner_dashboard"
+              sequence="9"
+              groups="kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- Project Completion Check -->
+    <record id="action_kpi_project_completion" model="ir.actions.client">
+        <field name="name">Project Completion Check</field>
+        <field name="tag">kpi_project_completion</field>
+    </record>
+
+    <menuitem id="menu_kpi_project_completion"
+              name="Project Completion Check"
+              parent="menu_kpi_reports"
+              action="action_kpi_project_completion"
+              sequence="45"
+              groups="kra_kpi_module.group_kra_admin,base.group_system"/>
+
+    <!-- ============================================================ -->
+    <!-- Client Portal — read-only invoice access for client users     -->
+    <!-- ============================================================ -->
+    <record id="action_kpi_client_invoice_portal" model="ir.actions.client">
+        <field name="name">My Invoices</field>
+        <field name="tag">kpi_client_invoice_portal</field>
+    </record>
+
+    <record id="action_kpi_client_dashboard" model="ir.actions.client">
+        <field name="name">My Dashboard</field>
+        <field name="tag">kpi_client_dashboard</field>
+    </record>
+
+    <!-- menu_kpi_client_portal_root is declared above (before its first child reference). -->
+
+    <!-- Dashboard is the primary entry point — tasks, approvals, add new -->
+    <menuitem id="menu_kpi_client_dashboard"
+              name="My Dashboard"
+              parent="menu_kpi_client_portal_root"
+              sequence="5"
+              action="action_kpi_client_dashboard"
+              groups="kra_kpi_module.group_kra_client"/>
+
+    <!-- Completions — admin-created tasks awaiting client review and sign-off -->
+    <record id="action_kpi_client_completions" model="ir.actions.client">
+        <field name="name">Completions</field>
+        <field name="tag">kpi_client_completions</field>
+    </record>
+
+    <menuitem id="menu_kpi_client_completions"
+              name="Completions"
+              parent="menu_kpi_client_portal_root"
+              sequence="10"
+              action="action_kpi_client_completions"
+              groups="kra_kpi_module.group_kra_client"/>
+
+    <!-- "My Invoices" menu intentionally removed from the Client Portal.
+         Clients flow through the Completions menu instead. Admin action is still defined above
+         in case it's needed elsewhere. -->
+</odoo>

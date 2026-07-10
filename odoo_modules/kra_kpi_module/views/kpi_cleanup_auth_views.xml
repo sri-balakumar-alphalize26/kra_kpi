@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- ============================================ -->
+    <!-- PASSWORD AUTHENTICATION POPUP -->
+    <!-- ============================================ -->
+    <record id="view_kpi_cleanup_auth_form" model="ir.ui.view">
+        <field name="name">kpi.cleanup.auth.form</field>
+        <field name="model">kpi.cleanup.auth</field>
+        <field name="arch" type="xml">
+            <form string="Data Cleanup Authentication">
+                <div class="alert alert-warning" role="alert">
+                    <h4>🔒 Authentication Required</h4>
+                    <p>Please enter the Data Cleanup password to access this section.</p>
+                    <p class="text-muted">If you don't know the password, contact your System Administrator.</p>
+                </div>
+                
+                <group>
+                    <field name="password" placeholder="Enter password..." password="True"/>
+                </group>
+                
+                <footer>
+                    <button string="Authenticate" 
+                            type="object" 
+                            name="action_authenticate" 
+                            class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- ✅ Authentication Action - Opens as POPUP -->
+    <record id="action_kpi_cleanup_auth" model="ir.actions.act_window">
+        <field name="name">Data Cleanup Authentication</field>
+        <field name="res_model">kpi.cleanup.auth</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="view_id" ref="view_kpi_cleanup_auth_form"/>
+    </record>
+
+    <!-- ============================================ -->
+    <!-- PASSWORD CHANGE WIZARD -->
+    <!-- ============================================ -->
+    <record id="view_kpi_cleanup_change_password_form" model="ir.ui.view">
+        <field name="name">kpi.cleanup.change.password.form</field>
+        <field name="model">kpi.cleanup.change.password</field>
+        <field name="arch" type="xml">
+            <form string="Change Data Cleanup Password">
+                <div class="alert alert-info" role="alert">
+                    <h4>🔐 Change Password</h4>
+                    <p>Change the password for accessing Data Cleanup section.</p>
+                    <p><strong>Password Requirements:</strong></p>
+                    <ul>
+                        <li>Minimum 6 characters</li>
+                        <li>Use a strong, unique password</li>
+                        <li>Don't share with unauthorized users</li>
+                    </ul>
+                </div>
+                
+                <group>
+                    <field name="current_password" placeholder="Enter current password..." password="True"/>
+                    <field name="new_password" placeholder="Enter new password..." password="True"/>
+                    <field name="confirm_password" placeholder="Confirm new password..." password="True"/>
+                </group>
+                
+                <footer>
+                    <button string="Change Password" 
+                            type="object" 
+                            name="action_change_password" 
+                            class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- Change Password Action -->
+    <record id="action_kpi_cleanup_change_password" model="ir.actions.act_window">
+        <field name="name">Change Data Cleanup Password</field>
+        <field name="res_model">kpi.cleanup.change.password</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <!-- ============================================ -->
+    <!-- PASSWORD CONFIG (Admin Only) -->
+    <!-- ============================================ -->
+    <record id="view_kpi_cleanup_password_config_form" model="ir.ui.view">
+        <field name="name">kpi.cleanup.password.config.form</field>
+        <field name="model">kpi.cleanup.password.config</field>
+        <field name="arch" type="xml">
+            <form string="Data Cleanup Password Configuration" create="false" delete="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>🔐 Data Cleanup Password Settings</h1>
+                    </div>
+                    
+                    <div class="alert alert-warning" role="alert">
+                        <h4>⚠️ Security Information</h4>
+                        <p>For security reasons, please change the default password immediately.</p>
+                        <p>This password protects access to the Data Cleanup section which can permanently delete data.</p>
+                    </div>
+                    
+                    <group>
+                        <group string="Password Information">
+                            <field name="last_changed_date" readonly="1"/>
+                            <field name="last_changed_by" readonly="1"/>
+                        </group>
+                    </group>
+                    
+                    <div class="mt-3">
+                        <button name="%(action_kpi_cleanup_change_password)d" 
+                                string="Change Password" 
+                                type="action" 
+                                class="btn-primary"/>
+                    </div>
+                    
+                    <notebook>
+                        <page string="Security Notes">
+                            <group>
+                                <div class="alert alert-info">
+                                    <h4>📋 Password Management Guidelines</h4>
+                                    <ul>
+                                        <li><strong>Who can change:</strong> Only System Administrators</li>
+                                        <li><strong>Password storage:</strong> Encrypted using SHA-256 hashing</li>
+                                        <li><strong>If forgotten:</strong> Contact your System Administrator to reset</li>
+                                        <li><strong>Minimum length:</strong> 6 characters</li>
+                                        <li><strong>Recommendation:</strong> Use a strong, unique password</li>
+                                    </ul>
+                                    
+                                    <h5 class="mt-3">🔒 What This Password Protects:</h5>
+                                    <p>This password controls access to the Data Cleanup section, which allows:</p>
+                                    <ul>
+                                        <li>Deleting all KPI data</li>
+                                        <li>Selective data cleanup</li>
+                                        <li>Removing old records</li>
+                                    </ul>
+                                    <p class="text-danger"><strong>These operations cannot be undone!</strong></p>
+                                </div>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ❌ REMOVED: Moved to kpi_cleanup_password_action.xml to avoid duplicate -->
+</odoo>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- KRA Employee Report Client Action -->
+    <record id="action_kpi_employee_report" model="ir.actions.client">
+        <field name="name">KRA Employee Report</field>
+        <field name="tag">kpi_employee_report</field>
+    </record>
+
+    <!-- Menu Item for KRA Employee Report -->
+    <menuitem id="menu_kpi_employee_report"
+              name="KRA Employee Report"
+              parent="menu_kpi_reports"
+              action="action_kpi_employee_report"
+              sequence="35"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+</odoo>

@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="kpi_create_templates" xml:space="preserve">
+
+    <t t-name="KpiCreate">
+        <div class="o_kpi_form p-4">
+
+            <h3 class="fw-bold mb-3">Create KPI</h3>
+
+            <div class="card p-3">
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">KPI Name</label>
+                    <input type="text"
+                           class="form-control"
+                           t-model="state.name"/>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label fw-bold">File Name</label>
+                    <input type="text" class="form-control" t-model="state.file_name"/>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Upload File</label>
+                    <input type="file" class="form-control" t-on-change="handleFileUpload"/>
+                </div>
+
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Select KRA</label>
+                    <select class="form-select" t-model="state.kra_id">
+                        <option value="">Select KRA</option>
+                        <t t-foreach="state.kra_list" t-as="k" t-key="k.id">
+                            <option t-att-value="k.id" t-esc="k.name"/>
+                        </t>
+                    </select>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Unit</label>
+                            <input type="text" class="form-control" placeholder="Nos / Hours / Tasks" t-model="state.unit"/>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Estimate</label>
+                            <input type="number" class="form-control" t-model="state.estimate"/>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Priority</label>
+                            <select class="form-select" t-model="state.priority">
+                                <option t-att-value="'regular'">Regular</option>
+                                <option t-att-value="'important'">Important</option>
+                                <option t-att-value="'urgent'">Urgent</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">User Group</label>
+                            <select class="form-select" t-model="state.user_group_id">
+                                <option value="">Select User Group</option>
+                                <t t-foreach="state.groups" t-as="g" t-key="g.id">
+                                    <option t-att-value="g.id" t-esc="g.name"/>
+                                </t>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Assignee</label>
+                            <select class="form-select" t-model="state.user_id">
+                                <option value="">Select Assignee</option>
+                                <t t-foreach="state.users" t-as="u" t-key="u.id">
+                                    <option t-att-value="u.id" t-esc="u.name"/>
+                                </t>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Actions</label>
+                            <select class="form-select" t-model="state.action_config_id">
+                                <option value="">Select Action</option>
+                                <t t-foreach="state.action_config_list" t-as="act" t-key="act.id">
+                                    <option t-att-value="act.id" t-esc="act.name"/>
+                                </t>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Next KPI</label>
+                            <select class="form-select" t-model="state.next_kpi_id">
+                                <option value="">Select Next KPI</option>
+                                <t t-foreach="state.kpi_list" t-as="kp" t-key="kp.id">
+                                    <option t-att-value="kp.id" t-esc="kp.name"/>
+                                </t>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Warehouse</label>
+                            <div class="d-flex">
+                                <select class="form-select" t-model="state.warehouse_id">
+                                    <option value="">Select Warehouse</option>
+                                    <t t-foreach="state.warehouse_list" t-as="w" t-key="w.id">
+                                        <option t-att-value="w.id" t-esc="w.name"/>
+                                    </t>
+                                </select>
+
+                                <!-- ADD Warehouse -->
+                                <button class="btn btn-outline-primary ms-2"
+                                        t-on-click="createWarehouseForm">
+                                    +
+                                </button>
+                            </div>
+
+                        </div>
+
+
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Points</label>
+                            <input type="number" class="form-control" t-model="state.points"/>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">KPI Description</label>
+                    <textarea class="form-control" rows="3" t-model="state.description"></textarea>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label">Checklist</label>
+                            <textarea class="form-control" rows="2" t-model="state.checklist"></textarea>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Guidelines</label>
+                            <textarea class="form-control" rows="2" t-model="state.guidelines"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label">Deadline</label>
+                            <input type="date" class="form-control" t-model="state.deadline"/>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Reminder Days</label>
+                            <input type="number" class="form-control" t-model="state.reminder_days"/>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Flags</label>
+                            <div class="d-flex flex-wrap">
+                                <label class="me-3"><input type="checkbox" t-model="state.is_mandatory"/> Is Mandatory</label>
+                                <label class="me-3"><input type="checkbox" t-model="state.auto_assign"/> Auto Assign</label>
+                                <label class="me-3"><input type="checkbox" t-model="state.auto_estimated"/> Auto Estimated</label>
+                                <label class="me-3"><input type="checkbox" t-model="state.is_permanent"/> Is Permanent</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-end">
+                    <button class="btn btn-light me-2"
+                            t-on-click="cancel">
+                        Cancel
+                    </button>
+
+                    <button class="btn btn-primary"
+                            t-on-click="save">
+                        Save
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </t>
+
+</templates>

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="kra_create_templates" xml:space="preserve">
+    <t t-name="KraCreate">
+        <div class="o_kra_form p-4">
+
+            <h3 class="fw-bold mb-3">Create KRA</h3>
+
+            <div class="card p-3">
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">KRA Name</label>
+                    <input type="text"
+                           class="form-control"
+                           t-model="state.name"/>
+                </div>
+
+                <div class="form-check mb-3">
+                    <input type="checkbox"
+                           id="checkSub"
+                           t-model="state.is_sub"
+                           class="form-check-input"/>
+                    <label class="form-check-label" for="checkSub">
+                        Is Sub-KRA?
+                    </label>
+                </div>
+
+                <t t-if="state.is_sub">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Parent KRA</label>
+                        <select class="form-select" t-model="state.parent_id">
+                            <option value="">Select Parent</option>
+                            <t t-foreach="state.kra_list" t-as="k" t-key="k.id">
+                                <option t-att-value="k.id" t-esc="k.name"/>
+                            </t>
+                        </select>
+                    </div>
+                </t>
+
+                <div class="d-flex justify-content-end">
+                    <button class="btn btn-light me-2"
+                            t-on-click="cancel">
+                        Cancel
+                    </button>
+                    <button class="btn btn-primary"
+                            t-on-click="save">
+                        Save
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </t>
+</templates>

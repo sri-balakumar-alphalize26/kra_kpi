@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+
+    <!-- Tree View -->
+    <record id="view_kra_warehouse_list" model="ir.ui.view">
+        <field name="name">kra.warehouse.list</field>
+        <field name="model">kra.warehouse</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="phone"/>
+                <field name="transaction_number"/>
+                <field name="address"/>
+                <field name="company"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_kra_warehouse_form" model="ir.ui.view">
+        <field name="name">kra.warehouse.form</field>
+        <field name="model">kra.warehouse</field>
+        <field name="arch" type="xml">
+            <form string="Warehouse">
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <field name="phone"/>
+                        <field name="transaction_number"/>
+                        <field name="address"/>
+                        <field name="company"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_kra_warehouse" model="ir.actions.act_window">
+        <field name="name">Warehouse</field>
+        <field name="res_model">kra.warehouse</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+</odoo>

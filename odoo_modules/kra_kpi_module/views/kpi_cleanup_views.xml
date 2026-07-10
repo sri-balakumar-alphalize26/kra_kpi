@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Form View -->
+    <record id="view_kpi_cleanup_form" model="ir.ui.view">
+        <field name="name">kpi.data.cleanup.form</field>
+        <field name="model">kpi.data.cleanup</field>
+        <field name="arch" type="xml">
+            <form string="KPI Data Cleanup">
+                <header>
+                    <button name="action_execute_cleanup" 
+                            type="object" 
+                            string="Execute Cleanup" 
+                            class="oe_highlight"
+                            invisible="state != 'draft'"
+                            confirm="⚠️ WARNING: This will permanently delete data! Are you sure you want to proceed?"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,in_progress,completed"/>
+                </header>
+                <sheet>
+                    <!-- Backup Warning Banner -->
+                    <div class="alert alert-danger" role="alert" 
+                         invisible="has_recent_backup or days_since_backup == 999">
+                        <h4>⚠️ NO RECENT BACKUP FOUND!</h4>
+                        <p>Last backup was <strong><field name="days_since_backup"/> days ago</strong> 
+                           on <field name="last_backup_date"/>.</p>
+                        <p>It is <strong>highly recommended</strong> to create a backup before cleanup!</p>
+                    </div>
+                    
+                    <div class="alert alert-danger" role="alert" 
+                         invisible="days_since_backup != 999">
+                        <h4>⚠️ NO BACKUP EXISTS!</h4>
+                        <p>No backups have been created yet.</p>
+                        <p>Creating a backup before cleanup is <strong>MANDATORY</strong>!</p>
+                    </div>
+                    
+                    <div class="alert alert-success" role="alert" 
+                         invisible="not has_recent_backup">
+                        <h4>✓ Recent Backup Available</h4>
+                        <p>Last backup: <field name="last_backup_date"/> 
+                           (<field name="days_since_backup"/> days ago)</p>
+                    </div>
+                    
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="e.g., Monthly Data Cleanup" required="1"/>
+                        </h1>
+                    </div>
+                    
+                    <group>
+                        <group string="Cleanup Settings">
+                            <field name="cleanup_type" widget="radio"/>
+                            <field name="cleanup_date" readonly="1" invisible="state == 'draft'"/>
+                        </group>
+                        <group string="Backup Safety">
+                            <field name="create_backup_before"/>
+                            <field name="force_cleanup_without_backup" 
+                                   invisible="has_recent_backup or state != 'draft'"/>
+                        </group>
+                    </group>
+                    
+                    <notebook>
+                        <page string="Cleanup Options" invisible="state != 'draft'">
+                            <!-- Selective Cleanup Options -->
+                            <group string="What to Delete?" invisible="cleanup_type != 'selective'">
+                                <group>
+                                    <field name="clean_kras"/>
+                                    <field name="clean_kpis"/>
+                                    <field name="clean_progress"/>
+                                    <field name="clean_manuals"/>
+                                </group>
+                                <group>
+                                    <field name="clean_github"/>
+                                    <field name="clean_reassignments"/>
+                                    <field name="clean_reports"/>
+                                </group>
+                            </group>
+                            
+                            <!-- Old Data Options -->
+                            <group string="Old Data Cleanup Settings" invisible="cleanup_type != 'old_data'">
+                                <group>
+                                    <field name="days_old"/>
+                                    <field name="only_completed"/>
+                                </group>
+                                <group>
+                                    <field name="clean_kpis"/>
+                                    <field name="clean_progress"/>
+                                    <field name="clean_reassignments"/>
+                                </group>
+                            </group>
+                            
+                            <!-- Clean All Warning -->
+                            <div class="alert alert-danger" role="alert" invisible="cleanup_type != 'clean_all'">
+                                <h4>⚠️ CLEAN ALL DATA</h4>
+                                <p>This will delete <strong>ALL</strong> KPI data including:</p>
+                                <ul>
+                                    <li>All KRAs and Sub-KRAs</li>
+                                    <li>All KPI Tasks</li>
+                                    <li>All Progress Updates</li>
+                                    <li>All User Manuals</li>
+                                    <li>All GitHub Links</li>
+                                    <li>All Reassignment History</li>
+                                    <li>All Report Configurations</li>
+                                    <li>All Attachments and Files</li>
+                                </ul>
+                                <p><strong>This action cannot be undone!</strong></p>
+                            </div>
+                            
+                            <!-- Information -->
+                            <div class="alert alert-info" role="alert">
+                                <h4>Information</h4>
+                                <ul>
+                                    <li><strong>Clean All Data:</strong> Permanently delete everything</li>
+                                    <li><strong>Selective Cleanup:</strong> Choose specific data types to delete</li>
+                                    <li><strong>Clean Old Data Only:</strong> Delete data older than specified days</li>
+                                </ul>
+                                <p><strong>Safety Tips:</strong></p>
+                                <ul>
+                                    <li>Always create a backup before cleanup</li>
+                                    <li>For old data cleanup, completed/cancelled tasks are safer to delete</li>
+                                    <li>Test with selective cleanup before using clean all</li>
+                                </ul>
+                            </div>
+                        </page>
+                        
+                        <page string="Cleanup Results" invisible="state == 'draft'">
+                            <group>
+                                <group string="Deleted Records">
+                                    <field name="kras_deleted" readonly="1"/>
+                                    <field name="kpis_deleted" readonly="1"/>
+                                    <field name="progress_deleted" readonly="1"/>
+                                    <field name="manuals_deleted" readonly="1"/>
+                                </group>
+                                <group string="Other Deletions">
+                                    <field name="github_deleted" readonly="1"/>
+                                    <field name="reassignments_deleted" readonly="1"/>
+                                    <field name="reports_deleted" readonly="1"/>
+                                </group>
+                            </group>
+                            
+                            <group>
+                                <group string="Execution Details">
+                                    <field name="executed_by" readonly="1"/>
+                                    <field name="backup_created_id" readonly="1"/>
+                                </group>
+                            </group>
+                        </page>
+                        
+                        <page string="Notes">
+                            <field name="notes" placeholder="Add any notes about this cleanup..."/>
+                        </page>
+                        
+                        <page string="Error Log" invisible="not error_log">
+                            <field name="error_log" readonly="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- List View -->
+    <record id="view_kpi_cleanup_list" model="ir.ui.view">
+        <field name="name">kpi.data.cleanup.list</field>
+        <field name="model">kpi.data.cleanup</field>
+        <field name="arch" type="xml">
+            <list string="Data Cleanup History" 
+                  decoration-success="state=='completed'" 
+                  decoration-danger="state=='failed'"
+                  create="true"
+                  edit="false"
+                  delete="true">
+                <field name="name"/>
+                <field name="cleanup_date"/>
+                <field name="cleanup_type"/>
+                <field name="executed_by"/>
+                <field name="kpis_deleted"/>
+                <field name="progress_deleted"/>
+                <field name="state" widget="badge" 
+                       decoration-info="state=='draft'" 
+                       decoration-warning="state=='in_progress'"
+                       decoration-success="state=='completed'"
+                       decoration-danger="state=='failed'"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Search View -->
+    <record id="view_kpi_cleanup_search" model="ir.ui.view">
+        <field name="name">kpi.data.cleanup.search</field>
+        <field name="model">kpi.data.cleanup</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_kpi_cleanup" model="ir.actions.act_window">
+        <field name="name">Data Cleanup</field>
+        <field name="res_model">kpi.data.cleanup</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create a data cleanup task
+            </p>
+            <p>
+                Clean up old or unwanted KPI data. You can choose to delete all data,
+                select specific data types, or clean only old completed tasks.
+            </p>
+            <p class="text-danger">
+                <strong>⚠️ Warning:</strong> Always create a backup before cleanup!
+            </p>
+        </field>
+    </record>
+
+    <!-- ❌ REMOVED: Menu moved to menu.xml with AUTH action -->
+
+</odoo>

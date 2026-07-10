@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Root Menu: Visible to developers and admins; client portal users do NOT see this. -->
+    <menuitem id="menu_kra_root"
+              name="KRA / KPI"
+              sequence="10"
+              groups="kra_kpi_module.group_kra_developer"/>
+    
+    <!-- KRA/KPI Master: Only Managers and Admin -->
+    <menuitem id="menu_kra_master_screen"
+              parent="menu_kra_root"
+              name="KRA / KPI Master"
+              action="kra_kpi_module.action_kra_dashboard"
+              sequence="10"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+    
+    <!-- KPI Configuration: Only Managers and Admin -->
+    <menuitem id="menu_kpi_config_screens"
+              name="KPI Configuration"
+              parent="menu_kra_root"
+              sequence="20"
+              action="action_kpi_config_screen"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+    
+    <!-- KPI Actions: Developers + admins. Clients explicitly excluded. -->
+    <menuitem id="menu_kpi_action_screen"
+              parent="menu_kra_root"
+              name="KPI Actions"
+              action="kra_kpi_module.action_kpi_action_screen"
+              sequence="30"
+              groups="kra_kpi_module.group_kra_developer"/>
+
+    <!-- Task Related Documents: Developers + admins. -->
+    <menuitem id="menu_task_documents"
+              parent="menu_kra_root"
+              name="Task Related Documents"
+              action="kra_kpi_module.action_task_documents"
+              sequence="35"
+              groups="kra_kpi_module.group_kra_developer"/>
+
+    <!-- WhatsApp Connect: shortcut to the WhatsApp Sessions form so
+         coordinators / owners can reconnect without hunting through the
+         WhatsApp and Email app menu.  Reuses the action defined by the
+         whatsapp_neonize addon. -->
+    <menuitem id="menu_kpi_whatsapp_connect"
+              parent="menu_kra_root"
+              name="WhatsApp Connect"
+              action="whatsapp_neonize.action_whatsapp_session"
+              sequence="40"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+    
+    <!-- ✅ FIXED: Data Cleanup now opens AUTH popup first -->
+    <menuitem id="menu_kpi_cleanup"
+              name="Data Cleanup"
+              parent="menu_kra_root"
+              action="action_kpi_cleanup_auth"
+              sequence="60"
+              groups="base.group_system"/>
+    
+    <!-- ✅ Settings Menu (Only System Admin) -->
+    <menuitem id="menu_kpi_settings"
+              name="Settings"
+              parent="menu_kra_root"
+              sequence="100"
+              groups="base.group_system"/>
+
+</odoo>

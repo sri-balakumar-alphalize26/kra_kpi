@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="kra_kpi_dashboard_templates" xml:space="preserve">
+    <t t-name="Dashboard">
+        <div class="o_kra_dashboard p-3">
+
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="fw-bold">KRA / KPI Master</h2>
+
+                <!-- Action Buttons -->
+                <div>
+                    <button class="btn btn-primary me-2"
+                            t-on-click="openKraForm">
+                        KRA +
+                    </button>
+
+                    <button class="btn btn-secondary"
+                            t-on-click="openKpiForm">
+                        KPI +
+                    </button>
+                </div>
+            </div>
+
+            <!-- KRA Tree Component -->
+            <KraTree />
+        </div>
+    </t>
+</templates>

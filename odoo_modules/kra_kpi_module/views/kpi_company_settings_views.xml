@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Client action for the Company Branding OWL screen. -->
+        <record id="action_kpi_company_settings" model="ir.actions.client">
+            <field name="name">Company Branding</field>
+            <field name="tag">kpi_company_settings</field>
+        </record>
+
+        <!-- Menu under KRA / KPI → Settings. -->
+        <menuitem id="menu_kpi_company_settings"
+                  name="Company Branding"
+                  parent="menu_kpi_settings"
+                  sequence="10"
+                  action="action_kpi_company_settings"
+                  groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+    </data>
+</odoo>

@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- List View -->
+    <record id="view_kpi_backup_list" model="ir.ui.view">
+        <field name="name">kpi.backup.list</field>
+        <field name="model">kpi.backup</field>
+        <field name="arch" type="xml">
+            <list string="KPI Backups" 
+                decoration-success="state=='completed'" 
+                decoration-danger="state=='failed'"
+                create="true"
+                edit="true"
+                delete="true">
+                <field name="name"/>
+                <field name="backup_date"/>
+                <field name="backup_type"/>
+                <field name="backup_size" widget="float"/>
+                <field name="kra_count"/>
+                <field name="kpi_count"/>
+                <field name="attachment_count"/>
+                <field name="links_count"/>
+                <field name="state" widget="badge" 
+                    decoration-info="state=='draft'" 
+                    decoration-warning="state=='in_progress'"
+                    decoration-success="state=='completed'"
+                    decoration-danger="state=='failed'"/>
+                <field name="is_restored" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_kpi_backup_form" model="ir.ui.view">
+        <field name="name">kpi.backup.form</field>
+        <field name="model">kpi.backup</field>
+        <field name="arch" type="xml">
+            <form string="KPI Backup">
+                <header>
+                    <button name="action_create_backup" 
+                            type="object" 
+                            string="Create Backup" 
+                            class="oe_highlight"
+                            invisible="state != 'draft'"
+                            confirm="This will create a complete backup of all selected KPI data. Continue?"/>
+                    <button name="action_restore_backup" 
+                            type="object" 
+                            string="Restore Backup" 
+                            class="oe_highlight"
+                            invisible="state != 'completed' or not backup_file"
+                            confirm="WARNING: This will restore all data from this backup. Existing data may be affected. Continue?"/>
+                    <button name="action_download_backup" 
+                            type="object" 
+                            string="Download Backup" 
+                            invisible="not backup_file"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,in_progress,completed"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <div class="oe_stat_button">
+                            <span class="o_stat_text">
+                                <span class="o_stat_value"><field name="kra_count"/></span>
+                                <span class="o_stat_text_label">KRAs</span>
+                            </span>
+                        </div>
+                        <div class="oe_stat_button">
+                            <span class="o_stat_text">
+                                <span class="o_stat_value"><field name="kpi_count"/></span>
+                                <span class="o_stat_text_label">KPIs</span>
+                            </span>
+                        </div>
+                        <div class="oe_stat_button">
+                            <span class="o_stat_text">
+                                <span class="o_stat_value"><field name="attachment_count"/></span>
+                                <span class="o_stat_text_label">Attachments</span>
+                            </span>
+                        </div>
+                        <div class="oe_stat_button">
+                            <span class="o_stat_text">
+                                <span class="o_stat_value"><field name="links_count"/></span>
+                                <span class="o_stat_text_label">Links</span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="e.g., Monthly Backup - January 2026" required="1"/>
+                        </h1>
+                    </div>
+                    
+                    <group>
+                        <group string="Backup Information">
+                            <field name="backup_date" readonly="1"/>
+                            <field name="backup_type" widget="radio"/>
+                            <field name="backup_filename" readonly="1" invisible="not backup_filename"/>
+                            <field name="backup_size" readonly="1" invisible="not backup_file"/>
+                        </group>
+                        <group string="Incremental Backup Info" invisible="backup_type != 'incremental'">
+                            <field name="reference_date" 
+                                readonly="state != 'draft'"
+                                help="Records modified after this date will be included in the backup"/>
+                            <field name="last_full_backup_id" readonly="1"/>
+                            <field name="last_full_backup_date" readonly="1"/>
+                        </group>
+                        <group string="Restore Information" invisible="not is_restored">
+                            <field name="is_restored" readonly="1"/>
+                            <field name="restored_date" readonly="1"/>
+                            <field name="restored_by" readonly="1"/>
+                        </group>
+                    </group>
+                    
+                    <notebook>
+                        <page string="Backup Options" invisible="state != 'draft'">
+                            <group string="What to Backup?">
+                                <group>
+                                    <field name="include_kra"/>
+                                    <field name="include_kpi"/>
+                                    <field name="include_progress"/>
+                                    <field name="include_manuals"/>
+                                </group>
+                                <group>
+                                    <field name="include_github"/>
+                                    <field name="include_reassignments"/>
+                                    <field name="include_reports"/>
+                                    <field name="include_attachments"/>
+                                </group>
+                            </group>
+                            
+                            <div class="alert alert-info" role="alert">
+                                <h4>Backup Information</h4>
+                                <ul>
+                                    <li><strong>Full Backup:</strong> Complete copy of all data (500+ MB)</li>
+                                    <li><strong>Incremental Backup:</strong> Only changes since last backup (10-50 MB)</li>
+                                    <li><strong>KRAs:</strong> All KRA hierarchies and structures</li>
+                                    <li><strong>KPIs:</strong> All KPI tasks with metadata, descriptions, checklists</li>
+                                    <li><strong>Progress Updates:</strong> All employee progress submissions</li>
+                                    <li><strong>User Manuals:</strong> All uploaded documentation</li>
+                                    <li><strong>GitHub Links:</strong> All repository links and branches</li>
+                                    <li><strong>Reassignment History:</strong> Complete audit trail</li>
+                                    <li><strong>Reports Config:</strong> Employee salary and report settings</li>
+                                    <li><strong>All Attachments:</strong> Binary files (images, PDFs, ZIPs, etc.)</li>
+                                    <li><strong>Links Catalog:</strong> Organized list of all links in txt and csv format</li>
+                                </ul>
+                            </div>
+                        </page>
+                        
+                        <page string="Backup File" invisible="not backup_file">
+                            <group>
+                                <field name="backup_file" filename="backup_filename" widget="binary"/>
+                            </group>
+                        </page>
+                        
+                        <page string="Notes">
+                            <field name="notes" placeholder="Add any notes about this backup..."/>
+                        </page>
+                        
+                        <page string="Error Log" invisible="not error_log">
+                            <field name="error_log" readonly="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Search View - MINIMAL TEST -->
+    <record id="view_kpi_backup_search" model="ir.ui.view">
+        <field name="name">kpi.backup.search</field>
+        <field name="model">kpi.backup</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_kpi_backup" model="ir.actions.act_window">
+        <field name="name">KPI Backup &amp; Restore</field>
+        <field name="res_model">kpi.backup</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first KPI backup
+            </p>
+            <p>
+                Back up all your KPI data including tasks, attachments, progress updates, 
+                user manuals, GitHub links, and more. You can restore any backup at any time.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu Item -->
+    <menuitem id="menu_kpi_backup"
+              name="Backup &amp; Restore"
+              parent="menu_kra_root"
+              action="action_kpi_backup"
+              sequence="50"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+    <!-- Scheduled Action for Auto Backup (Optional) -->
+    <record id="ir_cron_kpi_auto_backup" model="ir.cron">
+        <field name="name">KPI: Auto Backup (Weekly)</field>
+        <field name="model_id" ref="model_kpi_backup"/>
+        <field name="state">code</field>
+        <field name="code">model.create_auto_backup()</field>
+        <field name="interval_number">7</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="False"/>
+    </record>
+
+</odoo>

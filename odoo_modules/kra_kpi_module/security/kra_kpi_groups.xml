@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Developer: regular users who can log time on their own/contributing KPIs.
+             Implies base.group_user (internal user). -->
+        <record id="group_kra_developer" model="res.groups">
+            <field name="name">KRA / KPI Developer</field>
+            <field name="comment">Developers who log time on their own/contributing KPIs.</field>
+            <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+        </record>
+
+        <!-- Client portal: read-only view of own client's invoices and KPI list.
+             Implies Portal (not Internal User) so clients don't see Discuss /
+             Contacts / Dashboards / Apps / etc. — only what's explicitly granted
+             to them via the Client Portal menu. -->
+        <record id="group_kra_client" model="res.groups">
+            <field name="name">KRA / KPI Client (Portal)</field>
+            <field name="comment">Client-side portal users — sees only finalized invoices and own-KRA KPIs (read-only).</field>
+            <field name="implied_ids" eval="[(6, 0, [ref('base.group_portal')])]"/>
+        </record>
+
+        <!-- Coordinator: full operational management — manages KRAs/KPIs and approvals. Implies Developer.
+             XML id stays 'group_kra_admin' for back-compat with existing ACL rows and record rules;
+             only the display name changes. -->
+        <record id="group_kra_admin" model="res.groups">
+            <field name="name">KRA / KPI Coordinator</field>
+            <field name="comment">Coordinator (formerly Manager): operational management of KRAs, KPIs and task approvals. Does NOT necessarily handle invoicing.</field>
+            <field name="implied_ids" eval="[(4, ref('kra_kpi_module.group_kra_developer'))]"/>
+        </record>
+
+        <!-- Owner: business / financial role. Sees signed-off completion certificates grouped by
+             client and generates invoices. Implies Admin so Owner can also operate as needed. -->
+        <record id="group_kra_owner" model="res.groups">
+            <field name="name">KRA / KPI Owner (Business)</field>
+            <field name="comment">Owner / financial role: sees certified tasks by client and generates invoices.</field>
+            <field name="implied_ids" eval="[(4, ref('kra_kpi_module.group_kra_admin'))]"/>
+        </record>
+
+        <!-- Back-compat alias: legacy ACL rows and views still reference group_kra_manager.
+             Implying Coordinator (group_kra_admin) keeps existing users functional. -->
+        <record id="group_kra_manager" model="res.groups">
+            <field name="name">KRA / KPI Manager (deprecated; use Coordinator)</field>
+            <field name="comment">Deprecated. Use 'KRA / KPI Coordinator' instead. Implies Coordinator for back-compat.</field>
+            <field name="implied_ids" eval="[(4, ref('kra_kpi_module.group_kra_admin'))]"/>
+        </record>
+    </data>
+</odoo>

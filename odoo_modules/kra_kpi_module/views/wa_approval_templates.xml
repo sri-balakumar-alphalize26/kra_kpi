@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <!-- ============================================================
+             Shared CSS + page shell.  We deliberately do NOT inherit
+             website.layout — the page must work in plain mobile browsers
+             without the website module being installed.
+             ============================================================ -->
+        <template id="wa_approval_layout" name="WA Approval Layout">
+            <html lang="en">
+                <head>
+                    <meta charset="utf-8"/>
+                    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                    <title t-esc="page_title or 'Task Approval'"/>
+                    <style>
+                        * { box-sizing: border-box; }
+                        body {
+                            margin: 0;
+                            padding: 16px;
+                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                                         Roboto, "Helvetica Neue", Arial, sans-serif;
+                            background: #f1f3f5;
+                            color: #212529;
+                            -webkit-text-size-adjust: 100%;
+                        }
+                        .wa-card {
+                            max-width: 560px;
+                            margin: 24px auto;
+                            background: #fff;
+                            border-radius: 14px;
+                            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+                            padding: 24px 20px;
+                        }
+                        .wa-title  { font-size: 22px; font-weight: 700; margin: 0 0 6px; line-height: 1.25; }
+                        .wa-meta   { font-size: 13px; color: #6c757d; margin: 0 0 14px; }
+                        .wa-badge  {
+                            display: inline-block; padding: 3px 9px; margin: 0 6px 6px 0;
+                            border-radius: 999px; background: #e9ecef; color: #212529;
+                            font-size: 12px; font-weight: 600;
+                        }
+                        .wa-desc {
+                            background: #f8f9fa; border-radius: 10px; padding: 12px 14px;
+                            margin: 12px 0 18px; font-size: 14px; white-space: pre-wrap;
+                            border-left: 3px solid #adb5bd;
+                        }
+                        .wa-field {
+                            display: block; width: 100%; margin: 8px 0 14px;
+                            padding: 12px 14px; border: 1px solid #ced4da;
+                            border-radius: 10px; font-size: 16px; background: #fff;
+                        }
+                        .wa-field:focus { outline: none; border-color: #0d6efd; box-shadow: 0 0 0 3px rgba(13,110,253,0.15); }
+                        .wa-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+                        @media (min-width: 480px) { .wa-grid { grid-template-columns: 1fr 1fr; } }
+                        .wa-btn {
+                            display: flex; align-items: center; justify-content: center;
+                            min-height: 56px; border: 0; border-radius: 12px;
+                            font-size: 17px; font-weight: 700; color: #fff;
+                            padding: 12px; cursor: pointer;
+                            text-decoration: none;
+                        }
+                        .wa-btn:active  { transform: translateY(1px); }
+                        .wa-btn[disabled] { opacity: 0.6; cursor: not-allowed; }
+                        .wa-conf {
+                            margin-top: 16px; padding: 18px 16px; border-radius: 12px;
+                            color: #fff; text-align: center; font-size: 18px; font-weight: 700;
+                        }
+                        .wa-sub  { font-weight: 500; font-size: 14px; opacity: 0.92; margin-top: 6px; }
+                        .wa-footer { text-align: center; color: #adb5bd; font-size: 12px; margin-top: 18px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="wa-card">
+                        <t t-out="0"/>
+                    </div>
+                    <div class="wa-footer">Powered by KRA / KPI Workflow</div>
+                </body>
+            </html>
+        </template>
+
+        <!-- ============================================================
+             Main decision page: shown when a client opens the link.
+             ============================================================ -->
+        <template id="wa_approval_page" name="WA Approval Page">
+            <t t-call="kra_kpi_module.wa_approval_layout">
+                <t t-set="stage" t-value="stage or 'pre'"/>
+                <t t-set="is_final" t-value="stage == 'final'"/>
+                <t t-set="page_title"
+                   t-value="('Final Sign-Off — ' if is_final else 'Task Approval — ') + (task.name or '')"/>
+                <h1 class="wa-title" t-esc="task.name or 'Task'"/>
+                <div class="wa-meta">
+                    <t t-if="task.external_ref">Ref <b t-esc="task.external_ref"/> · </t>
+                    Project <b t-esc="task.kra_id.name or '—'"/>
+                </div>
+                <div>
+                    <span t-if="is_final" class="wa-badge"
+                          style="background:#d1e7dd; color:#0f5132;">FINAL SIGN-OFF</span>
+                    <span t-if="not is_final" class="wa-badge">Pre-Approval</span>
+                    <span class="wa-badge">Priority: <t t-esc="(task.priority or 'regular').title()"/></span>
+                    <span class="wa-badge">Deadline: <t t-esc="task.deadline or 'not set'"/></span>
+                    <span t-if="task.estimate_hours or task.estimate_minutes" class="wa-badge">
+                        Estimate: <t t-esc="task.estimate_hours or 0"/>h <t t-esc="task.estimate_minutes or 0"/>m
+                    </span>
+                </div>
+                <p t-if="is_final" class="wa-meta" style="margin-top:12px;">
+                    The coordinator has approved this work and it's ready for your sign-off.
+                    Approving generates the invoice.
+                </p>
+                <div t-if="task.description" class="wa-desc">
+                    <t t-esc="task.description[:280]"/>
+                    <t t-if="len(task.description or '') &gt; 280">…</t>
+                </div>
+
+                <form id="wa-decide-form" method="POST" t-attf-action="/kpi/wa/{{token}}/decide">
+                    <input class="wa-field" type="text" name="partner_name"
+                           placeholder="Your name" required="required" maxlength="120"/>
+                    <textarea class="wa-field" name="feedback" rows="2"
+                              placeholder="Comment (optional — required for Reject / Clarify)"></textarea>
+
+                    <div class="wa-grid">
+                        <button class="wa-btn" type="submit" name="action" value="approve"
+                                t-attf-style="background: {{colors['approve']}}">
+                            <t t-if="is_final">✓  Approve &amp; Sign</t>
+                            <t t-if="not is_final">✓  Approve</t>
+                        </button>
+                        <button class="wa-btn" type="submit" name="action" value="reject"
+                                t-attf-style="background: {{colors['reject']}}">
+                            <t t-if="is_final">✕  Reject (Rework)</t>
+                            <t t-if="not is_final">✕  Reject</t>
+                        </button>
+                        <button t-if="not is_final" class="wa-btn" type="submit" name="action" value="hold"
+                                t-attf-style="background: {{colors['hold']}}; color: #212529;">
+                            ⏸  Hold
+                        </button>
+                        <button class="wa-btn" type="submit" name="action" value="clarify"
+                                t-attf-style="background: {{colors['clarify']}}">
+                            💬  Clarify
+                        </button>
+                    </div>
+                </form>
+            </t>
+        </template>
+
+        <!-- ============================================================
+             Confirmation page after a successful decision.
+             ============================================================ -->
+        <template id="wa_approval_confirmed" name="WA Approval Confirmed">
+            <t t-call="kra_kpi_module.wa_approval_layout">
+                <t t-set="page_title" t-value="'Decision Saved'"/>
+                <h1 class="wa-title" t-esc="task.name or 'Task'"/>
+                <div class="wa-meta">
+                    Ref <b t-esc="task.external_ref or '—'"/> · Project <b t-esc="task.kra_id.name or '—'"/>
+                </div>
+                <div class="wa-conf" t-attf-style="background: {{decision_color}}">
+                    <t t-esc="decision_label"/>
+                    <div class="wa-sub" t-if="partner_name">by <t t-esc="partner_name"/></div>
+                </div>
+                <p style="text-align:center; color:#6c757d; margin-top: 18px;">
+                    Thanks — your decision has been recorded.<br/>
+                    You can close this tab.
+                </p>
+            </t>
+        </template>
+
+        <!-- ============================================================
+             Already-decided page (token used).
+             ============================================================ -->
+        <template id="wa_approval_already_decided" name="WA Approval Already Decided">
+            <t t-call="kra_kpi_module.wa_approval_layout">
+                <t t-set="page_title" t-value="'Already Decided'"/>
+                <h1 class="wa-title" t-esc="task.name or 'Task'"/>
+                <div class="wa-conf" t-attf-style="background: {{decision_color}}">
+                    Already <t t-esc="decision_label"/>
+                </div>
+                <p style="text-align:center; color:#6c757d; margin-top: 18px;">
+                    This task was already decided.<br/>
+                    Reach out to the team if you need this revised.
+                </p>
+            </t>
+        </template>
+
+        <!-- ============================================================
+             Expired / invalid token.
+             ============================================================ -->
+        <template id="wa_approval_expired" name="WA Approval Expired">
+            <t t-call="kra_kpi_module.wa_approval_layout">
+                <t t-set="page_title" t-value="'Link Expired'"/>
+                <h1 class="wa-title">Link Expired</h1>
+                <p class="wa-meta">
+                    This approval link can no longer be used.
+                </p>
+                <p t-if="reason" style="background:#f8f9fa; padding:12px; border-radius:10px;
+                       border-left: 3px solid #dc3545; font-size:14px;">
+                    <t t-esc="reason"/>
+                </p>
+                <p style="text-align:center; color:#6c757d; margin-top: 18px;">
+                    Please ask the team to send a fresh link.
+                </p>
+            </t>
+        </template>
+
+    </data>
+</odoo>
