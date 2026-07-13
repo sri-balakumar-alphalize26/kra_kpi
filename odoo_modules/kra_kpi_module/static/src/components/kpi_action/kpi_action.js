@@ -3,6 +3,7 @@
 import { Component, xml, useState, onWillStart, onMounted, onWillUnmount, useRef } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { rpc } from "@web/core/network/rpc";
+import { useService } from "@web/core/utils/hooks";
 import { session } from "@web/session";
 import { uploadWithProgress } from "@kra_kpi_module/utils/upload_with_progress";
 
@@ -1133,6 +1134,35 @@ export class KpiAction extends Component {
                         </t>
                     </div>
 
+                    <!-- Custom "Leave the board?" confirm (replaces native window.confirm) -->
+                    <t t-if="state.showLeaveModal">
+                        <div class="modal-backdrop fade show" style="z-index: 2000;"></div>
+                        <div class="modal d-block" tabindex="-1" style="z-index: 2001;">
+                            <div class="modal-dialog modal-dialog-centered" style="max-width: 420px;">
+                                <div class="modal-content border-0 shadow-lg" style="border-radius: 16px; overflow: hidden;">
+                                    <div class="modal-body text-center p-4">
+                                        <div style="font-size: 44px; line-height: 1;">🚪</div>
+                                        <h4 class="fw-bold mt-3 mb-2">Leave the board?</h4>
+                                        <p class="text-muted mb-0" style="font-size: 14px; line-height: 1.5;">
+                                            Your running task will <b>pause</b> and you'll need to
+                                            re-enter your <b>PIN</b> to continue working.</p>
+                                    </div>
+                                    <div class="modal-footer border-0 justify-content-center pb-4 pt-0" style="gap: 10px;">
+                                        <button class="btn btn-light px-4" style="border-radius: 10px; min-width: 110px;"
+                                                t-att-disabled="state.leaving"
+                                                t-on-click="() => this.cancelLeaveBoard()">Stay</button>
+                                        <button class="btn btn-danger px-4" style="border-radius: 10px; min-width: 110px;"
+                                                t-att-disabled="state.leaving"
+                                                t-on-click="() => this.confirmLeaveBoard()">
+                                            <t t-if="state.leaving">Pausing…</t>
+                                            <t t-else="">Leave &amp; Pause</t>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+
                     <!-- Modal Container -->
                     <div id="modalContainer"></div>
                 </div>
@@ -1149,6 +1179,9 @@ export class KpiAction extends Component {
     }
 
     setup() {
+        // Action service — used to bounce back to the PIN gate when the device
+        // gets un-paired (auto-away) so an unpaired board is never shown.
+        this.actionService = useService("action");
         this.state = useState({
             view: 'list',
             detailKpiId: null,
@@ -1172,6 +1205,8 @@ export class KpiAction extends Component {
                 status: '',
             },
             progressUpdates: [],
+            showLeaveModal: false,   // custom "Leave the board?" confirm (Back)
+            leaving: false,          // busy state while pausing on leave
             showRejectionModal: false,
             rejectedTasks: [],
             seenRejectionIds: [],  // 🆕 NEW: Track which rejected tasks we've already shown
@@ -1324,6 +1359,11 @@ export class KpiAction extends Component {
         this.kpiKanbanRow = useRef('kpiKanbanRow');
 
         onMounted(() => {
+            // Guard: if this device is not paired (e.g. auto-away un-paired it and
+            // the user hit browser-Back to a cached board), bounce to the PIN gate
+            // immediately so an unpaired board is never usable.
+            this._bounceToGateIfUnpaired();
+
             // Read the workday session state (DOES NOT create one).  This
             // drives whether we render the green Start Workday button or the
             // red End Workday button in the header.
@@ -1380,15 +1420,35 @@ export class KpiAction extends Component {
             this.liveStatusInterval = setInterval(() => {
                 if (this.state.view === 'list') { this.loadLiveStatus(); }
             }, 30000);
-            // Warn before closing the tab while a task is running (it will auto-pause).
+            // Warn before closing OR reloading the tab (Ctrl+W / tab close)
+            // whenever the developer is working — a task is running OR their
+            // workday is open. The browser shows its native "Leave site?"
+            // confirm; on leave we also fire an away beacon so the task pauses
+            // immediately (server-side) instead of waiting for the cron.
             this._beforeUnloadHandler = (e) => {
-                if (this.getActiveTask()) {
+                if (this.getActiveTask() || this.state.workdayOpen) {
+                    this._sendLeaveBeacon();
                     e.preventDefault();
                     e.returnValue = '';
                     return '';
                 }
             };
             window.addEventListener('beforeunload', this._beforeUnloadHandler);
+
+            // Intercept the browser Back button / Backspace: show a confirm and,
+            // on leave, fire the away beacon + let navigation proceed to the gate.
+            // We push a dummy history entry so a Back press triggers popstate here
+            // instead of silently leaving the board.
+            this._pairingBack = true;
+            try { window.history.pushState({ kpiBoard: true }, ""); } catch (e2) {}
+            this._popstateHandler = () => {
+                if (!(this.getActiveTask() || this.state.workdayOpen)) return; // not working → allow
+                // Re-arm the dummy entry so we stay on the board until the user
+                // decides in OUR modal (no native window.confirm).
+                try { window.history.pushState({ kpiBoard: true }, ""); } catch (e3) {}
+                this.state.showLeaveModal = true;
+            };
+            window.addEventListener('popstate', this._popstateHandler);
         });
 
         // 🆕 NEW: Cleanup intervals when component is destroyed
@@ -1410,6 +1470,15 @@ export class KpiAction extends Component {
             }
             if (this._beforeUnloadHandler) {
                 window.removeEventListener('beforeunload', this._beforeUnloadHandler);
+            }
+            if (this._popstateHandler) {
+                window.removeEventListener('popstate', this._popstateHandler);
+            }
+            // If the board unmounts while the developer was working (e.g. an
+            // in-SPA navigation away that popstate didn't already handle), send
+            // the away beacon so the task pauses immediately.
+            if (this._pairingBack && (this.getActiveTask() || this.state.workdayOpen)) {
+                this._sendLeaveBeacon();
             }
             if (this._scrollResizeHandler) {
                 window.removeEventListener('resize', this._scrollResizeHandler);
@@ -3387,12 +3456,69 @@ export class KpiAction extends Component {
     async sendHeartbeat() {
         try {
             const res = await rpc('/kpi_action/heartbeat', {});
+            // Un-paired (auto-away) → fall back to the PIN gate. Do this first so
+            // we never keep showing a board the device is no longer paired to.
+            if (res && res.paired === false) {
+                this._goToGate();
+                return;
+            }
             if (res && res.was_away && res.awayed_task_id) {
                 this._showAwayReturnNudge(res.awayed_task_id, res.awayed_task_name || 'your task');
                 await this.refresh();
                 await this.loadLiveStatus();
             }
         } catch (e) { /* offline / non-fatal */ }
+    }
+
+    // Awaited "I'm leaving the board" for the Back path — pauses the task
+    // (away) + un-pairs + app push. We wait so the pause commits before we
+    // navigate away.
+    async _leaveAway() {
+        try { await rpc('/kpi_action/leave', {}); } catch (e) { /* non-fatal */ }
+    }
+
+    // Custom "Leave the board?" modal — OK confirms.
+    async confirmLeaveBoard() {
+        this.state.leaving = true;
+        try {
+            await this._leaveAway();        // pause + un-pair before we navigate
+        } finally {
+            this.state.leaving = false;
+            this.state.showLeaveModal = false;
+            this._pairingBack = false;
+            window.history.back();          // now actually leave (→ PIN gate)
+        }
+    }
+
+    // Cancel — stay on the board (history already re-armed in the popstate handler).
+    cancelLeaveBoard() {
+        this.state.showLeaveModal = false;
+    }
+
+    // Fire-and-forget variant for real tab close/reload (beforeunload), where an
+    // awaited rpc is impossible. sendBeacon is delivered even as the page unloads.
+    _sendLeaveBeacon() {
+        try {
+            if (navigator && navigator.sendBeacon) {
+                navigator.sendBeacon('/kpi_action/leave_beacon', new Blob([], { type: 'text/plain' }));
+            }
+        } catch (e) { /* non-fatal */ }
+    }
+
+    // Redirect to the PIN gate, clearing history so browser-Back can't return.
+    _goToGate() {
+        try {
+            this.actionService.doAction("kra_kpi_module.action_kpi_action_gate", { clearBreadcrumbs: true });
+        } catch (e) { /* non-fatal */ }
+    }
+
+    // On mount / back-navigation: verify the device is still paired; if not,
+    // bounce to the gate. Prevents viewing a cached board after an un-pair.
+    async _bounceToGateIfUnpaired() {
+        try {
+            const res = await rpc("/kpi_pair/status", {});
+            if (res && res.paired === false) this._goToGate();
+        } catch (e) { /* if the check fails, leave the board as-is */ }
     }
 
     _showAwayReturnNudge(taskId, taskName) {

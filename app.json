@@ -6,10 +6,8 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "ios": {
-      "supportsTablet": true
-    },
     "android": {
+      "package": "com.alphalize.krakpi",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -17,11 +15,28 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       }
     },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.alphalize.krakpi"
+    },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-web-browser"
-    ]
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#1E40AF"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c2b2bb46-279b-48ce-b697-5fbb5fec5a45"
+      }
+    },
+    "owner": "vacihe"
   }
 }

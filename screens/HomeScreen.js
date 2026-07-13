@@ -38,6 +38,7 @@ const QUICK = [
   { label: 'Upload Requirements', lib: 'mc', name: 'file-document',    dest: 'upload:requirement', adminOnly: true },
   { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true },
   { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true },
+  { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true },
 ];
 
 function Icon({ lib, name, size, color }) {

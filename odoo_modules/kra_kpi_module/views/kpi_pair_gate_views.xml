@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- PIN gate shown before the KPI Action Board. If the device is already
+         paired it forwards straight to the board; otherwise it asks for the
+         mobile-generated PIN. -->
+    <record id="action_kpi_action_gate" model="ir.actions.client">
+        <field name="name">KPI Action Board</field>
+        <field name="tag">kra_kpi_actions_gate</field>
+    </record>
+</odoo>

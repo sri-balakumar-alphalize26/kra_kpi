@@ -249,7 +249,10 @@ class KpiWorkSession(models.Model):
         if was_away:
             vals['awayed_task_id'] = False
         sess.sudo().write(vals)
-        return {'status': True, 'was_away': was_away,
+        # Tell the web board whether the device is still paired — if auto-away
+        # un-paired it, the board falls back to the PIN gate.
+        paired = self.env['kpi.pair'].sudo().is_paired(user)
+        return {'status': True, 'was_away': was_away, 'paired': paired,
                 'awayed_task_id': awayed_id, 'awayed_task_name': awayed_name}
 
     @api.model
@@ -328,30 +331,62 @@ class KpiWorkSession(models.Model):
             ('last_heartbeat', '!=', False),
             ('last_heartbeat', '<', cutoff),
         ])
-        Log = self.env['kpi.time.log'].sudo()
         for s in stale:
             try:
-                active_log = Log.search([('user_id', '=', s.user_id.id), ('is_active', '=', True)], limit=1)
-                task = active_log.kpi_id if active_log else False
-                if not task or task.task_state != 'in_progress':
-                    continue
-                task.with_user(s.user_id).pause_task(reason='Away (auto)', reason_code='away')
-                s.sudo().write({'awayed_task_id': task.id})
-                _logger.info("auto-away: paused task %s for user %s (idle > %s min)",
-                             task.id, s.user_id.id, minutes)
-                # Tell the developer (WhatsApp) their task was paused while they were away.
-                try:
-                    task.with_user(s.user_id)._notify(
-                        'task_auto_away',
-                        dev=s.user_id.name,
-                        ref=task.external_ref or task.name,
-                        name=task.name,
-                        time=fields.Datetime.now().strftime('%H:%M'),
-                    )
-                except Exception:
-                    pass  # never let a notification failure break the cron
+                self._away_now(s.user_id, source='cron')
             except Exception as exc:
                 _logger.warning("auto-away failed for session %s: %s", s.id, exc)
+
+    @api.model
+    def _away_now(self, user, source='cron'):
+        """Put `user` into 'away': pause their running task (non-productive),
+        record it on the open session for one-click Resume, un-pair the device
+        (→ PIN gate on web / PIN screen on app), and notify (→ app push).
+
+        Shared by the auto-away cron AND the on-demand /kpi_action/leave route
+        (fired when the developer closes/leaves the board). Idempotent — a no-op
+        when there is no in-progress task. Never raises."""
+        today = fields.Date.context_today(self)
+        sess = self.sudo().search([
+            ('user_id', '=', user.id),
+            ('session_date', '=', today),
+            ('state', '=', 'open'),
+        ], limit=1)
+        if not sess:
+            return False
+        Log = self.env['kpi.time.log'].sudo()
+        active_log = Log.search([('user_id', '=', user.id), ('is_active', '=', True)], limit=1)
+        task = active_log.kpi_id if active_log else False
+        if not task or task.task_state != 'in_progress':
+            # Still un-pair on an explicit leave so the device must re-pair, even
+            # if nothing was actively running.
+            if source != 'cron':
+                try:
+                    self.env['kpi.pair'].sudo()._unpair(user, mode='resume')
+                except Exception:
+                    pass
+            return False
+        task.with_user(user).pause_task(reason='Away (auto)', reason_code='away')
+        sess.sudo().write({'awayed_task_id': task.id})
+        # Un-pair: the developer "went away" → web board + app fall back to the
+        # PIN gate; next pairing reads as 'resume' → "continue working".
+        try:
+            self.env['kpi.pair'].sudo()._unpair(user, mode='resume')
+        except Exception:
+            pass
+        _logger.info("away(%s): paused task %s for user %s", source, task.id, user.id)
+        # Notify the developer (WhatsApp + app push) that their task was paused.
+        try:
+            task.with_user(user)._notify(
+                'task_auto_away',
+                dev=user.name,
+                ref=task.external_ref or task.name,
+                name=task.name,
+                time=fields.Datetime.now().strftime('%H:%M'),
+            )
+        except Exception:
+            pass  # never let a notification failure break the flow
+        return True
 
     # ------------------------------------------------------------------ #
     # End-of-day                                                         #

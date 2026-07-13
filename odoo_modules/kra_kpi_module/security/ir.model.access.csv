@@ -75,3 +75,11 @@ access_kpi_notification_admin,kpi.notification.admin,model_kpi_notification,base
 access_kpi_notification_owner,kpi.notification.owner,model_kpi_notification,kra_kpi_module.group_kra_owner,1,1,0,0
 access_kpi_notification_coord,kpi.notification.coord,model_kpi_notification,kra_kpi_module.group_kra_admin,1,1,0,0
 access_kpi_notification_developer,kpi.notification.developer,model_kpi_notification,kra_kpi_module.group_kra_developer,1,1,0,0
+access_kpi_push_token_admin,kpi.push.token.admin,model_kpi_push_token,base.group_system,1,1,1,1
+access_kpi_push_token_owner,kpi.push.token.owner,model_kpi_push_token,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_push_token_coord,kpi.push.token.coord,model_kpi_push_token,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_push_token_developer,kpi.push.token.developer,model_kpi_push_token,kra_kpi_module.group_kra_developer,1,1,1,1
+access_kpi_pair_admin,kpi.pair.admin,model_kpi_pair,base.group_system,1,1,1,1
+access_kpi_pair_owner,kpi.pair.owner,model_kpi_pair,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_pair_coord,kpi.pair.coord,model_kpi_pair,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_pair_developer,kpi.pair.developer,model_kpi_pair,kra_kpi_module.group_kra_developer,1,1,1,1

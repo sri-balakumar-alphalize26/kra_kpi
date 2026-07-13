@@ -1,4 +1,19 @@
-from odoo import fields, models
+from odoo import api, fields, models
+
+# Typical local mobile-number length per ISO country code (excluding the dial
+# code). Auto-fills the length when a country is chosen; still editable.
+# Adapted from pos_loyalty_card's COUNTRY_MOBILE_LENGTH.
+COUNTRY_MOBILE_LENGTH = {
+    'IN': 10, 'US': 10, 'CA': 10, 'GB': 10, 'IE': 9, 'AU': 9, 'NZ': 9,
+    'AE': 9, 'SA': 9, 'QA': 8, 'KW': 8, 'OM': 8, 'BH': 8, 'JO': 9,
+    'DE': 10, 'FR': 9, 'IT': 10, 'ES': 9, 'NL': 9, 'BE': 9, 'CH': 9,
+    'SE': 9, 'NO': 8, 'DK': 8, 'FI': 9, 'PT': 9, 'AT': 10, 'PL': 9,
+    'SG': 8, 'MY': 9, 'ID': 10, 'PH': 10, 'TH': 9, 'VN': 9, 'KR': 10,
+    'JP': 10, 'CN': 11, 'HK': 8, 'TW': 9,
+    'PK': 10, 'BD': 10, 'LK': 9, 'NP': 10,
+    'ZA': 9, 'NG': 10, 'KE': 9, 'EG': 10, 'TR': 10, 'RU': 10, 'BR': 11,
+    'MX': 10,
+}
 
 
 class ResCompany(models.Model):
@@ -16,3 +31,38 @@ class ResCompany(models.Model):
         help="Extra WhatsApp numbers (comma-separated) that receive the note when a "
              "developer taps the 🚨 Urgent button in the Pause dialog. The owner is "
              "always included in addition to these.")
+
+    # --- Country / mobile-number format (drives the Configuration screen) --- #
+    kpi_country_id = fields.Many2one(
+        'res.country', string='KPI Mobile Country',
+        default=lambda self: self.env.company.country_id,
+        help="Country whose dial code and typical mobile length apply to all "
+             "WhatsApp numbers entered on the KRA/KPI Configuration screen.")
+    kpi_country_dial_code = fields.Char(
+        string='KPI Dial Code', compute='_compute_kpi_dial_code', store=True,
+        help="Dial code derived from the selected country (e.g. 91 for India, "
+             "968 for Oman).")
+    kpi_mobile_length = fields.Integer(
+        string='KPI Mobile Length', default=10,
+        help="Number of local digits a mobile number must have (excluding the "
+             "dial code). Auto-filled from the country but editable.")
+
+    @api.depends('kpi_country_id')
+    def _compute_kpi_dial_code(self):
+        for rec in self:
+            code = rec.kpi_country_id.phone_code if rec.kpi_country_id else False
+            rec.kpi_country_dial_code = str(code) if code else '91'
+
+    @api.onchange('kpi_country_id')
+    def _onchange_kpi_country_id(self):
+        """Auto-fill the mobile length from the chosen country (still editable)."""
+        if self.kpi_country_id and self.kpi_country_id.code:
+            self.kpi_mobile_length = COUNTRY_MOBILE_LENGTH.get(
+                self.kpi_country_id.code, self.kpi_mobile_length or 10)
+
+    def _kpi_mobile_cfg(self):
+        """Return (dial_digits, local_length) for this company's KPI numbers."""
+        self.ensure_one()
+        dial = ''.join(filter(str.isdigit, self.kpi_country_dial_code or '')) or (
+            str(self.country_id.phone_code) if self.country_id else '91')
+        return dial, (self.kpi_mobile_length or 10)

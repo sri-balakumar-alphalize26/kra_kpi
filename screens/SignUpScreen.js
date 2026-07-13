@@ -4,25 +4,43 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Image, Alert,
-  KeyboardAvoidingView, Platform, ActivityIndicator, StatusBar as RNStatusBar,
+  KeyboardAvoidingView, Platform, ActivityIndicator, Modal, FlatList,
+  StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Svg, { Path } from 'react-native-svg';
 import { COLORS } from '../theme';
 import GoogleIcon from '../components/GoogleIcon';
+import { COUNTRIES, DEFAULT_COUNTRY, toLocalDigits } from '../utils/countryMobile';
 
 const TOP = (RNStatusBar.currentHeight || 0) + 14;
 
 export default function SignUpScreen({ onDone, goLogin }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState('');           // local digits only
+  const [country, setCountry] = useState(DEFAULT_COUNTRY);
+  const [pickCountry, setPickCountry] = useState(false); // country picker modal
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [showPw2, setShowPw2] = useState(false);
   const [agree, setAgree] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Phone is valid when it has exactly the country's local length.
+  const phoneComplete = phone.length === country.length;
+  const phoneInvalid = phone.length > 0 && !phoneComplete;
+
+  function onPhoneChange(t) {
+    setPhone(toLocalDigits(t, country));
+  }
+  function chooseCountry(c) {
+    setCountry(c);
+    setPickCountry(false);
+    // Re-cap the existing number to the new country's length.
+    setPhone((p) => toLocalDigits(p, c));
+  }
 
   function finish(displayName, mail) {
     onDone && onDone({ name: displayName, email: mail });
@@ -72,13 +90,27 @@ export default function SignUpScreen({ onDone, goLogin }) {
             />
           </View>
 
-          <View style={s.field}>
-            <Text style={s.fIcon}>📱</Text>
+          {/* Phone with country selector + dial code + digit cap */}
+          <View style={[s.field, phoneInvalid && s.fieldError, { paddingHorizontal: 8 }]}>
+            <TouchableOpacity style={s.ccBtn} onPress={() => setPickCountry(true)} activeOpacity={0.8}>
+              <Text style={s.ccCode}>+{country.dial}</Text>
+              <Text style={s.ccCaret}>▾</Text>
+            </TouchableOpacity>
+            <View style={s.ccDivider} />
             <TextInput
-              style={s.input} placeholder="Phone Number" placeholderTextColor={COLORS.faint}
-              keyboardType="phone-pad" value={phone} onChangeText={setPhone}
+              style={[s.input, { paddingLeft: 8 }]}
+              placeholder={`${country.length}-digit number`}
+              placeholderTextColor={COLORS.faint}
+              keyboardType="phone-pad"
+              maxLength={country.length}
+              value={phone}
+              onChangeText={onPhoneChange}
             />
+            {phoneComplete && <Text style={s.okTick}>✓</Text>}
           </View>
+          {phoneInvalid && (
+            <Text style={s.errHint}>Enter {country.length} digits for {country.name}</Text>
+          )}
 
           <View style={s.field}>
             <Text style={s.fIcon}>🔒</Text>
@@ -141,6 +173,35 @@ export default function SignUpScreen({ onDone, goLogin }) {
           </View>
         </View>
       </ScrollView>
+
+      {/* Country picker */}
+      <Modal visible={pickCountry} transparent animationType="slide" onRequestClose={() => setPickCountry(false)}>
+        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setPickCountry(false)}>
+          <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle}>Select country</Text>
+              <TouchableOpacity onPress={() => setPickCountry(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={s.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={COUNTRIES}
+              keyExtractor={(c) => c.code}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => {
+                const on = item.code === country.code;
+                return (
+                  <TouchableOpacity style={[s.ccRow, on && s.ccRowOn]} onPress={() => chooseCountry(item)} activeOpacity={0.8}>
+                    <Text style={s.ccRowName}>{item.name}</Text>
+                    <Text style={s.ccRowMeta}>+{item.dial} · {item.length} digits</Text>
+                    {on && <Text style={s.ccRowTick}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -164,6 +225,33 @@ const s = StyleSheet.create({
   fIcon: { fontSize: 16, marginRight: 10 },
   input: { flex: 1, fontSize: 15.5, color: COLORS.ink, height: '100%' },
   eye: { fontSize: 18 },
+  fieldError: { borderColor: COLORS.red },
+
+  // Country selector inside the phone field
+  ccBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, height: '100%' },
+  ccCode: { fontSize: 15.5, fontWeight: '800', color: COLORS.navy },
+  ccCaret: { fontSize: 11, color: COLORS.muted, marginLeft: 4 },
+  ccDivider: { width: 1, height: 26, backgroundColor: COLORS.line },
+  okTick: { color: COLORS.green, fontSize: 16, fontWeight: '900', marginLeft: 6 },
+  errHint: { color: COLORS.red, fontSize: 12.5, marginTop: -8, marginBottom: 12, marginLeft: 6 },
+
+  // Country picker modal
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
+  modalSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '75%', paddingBottom: 20 },
+  modalHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: COLORS.line,
+  },
+  modalTitle: { fontSize: 17, fontWeight: '800', color: COLORS.navy },
+  modalClose: { fontSize: 18, color: COLORS.muted, fontWeight: '700' },
+  ccRow: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#F1F4F9',
+  },
+  ccRowOn: { backgroundColor: '#F0F5FF' },
+  ccRowName: { flex: 1, fontSize: 15, color: COLORS.ink, fontWeight: '600' },
+  ccRowMeta: { fontSize: 12.5, color: COLORS.muted, marginRight: 8 },
+  ccRowTick: { color: COLORS.primary, fontSize: 15, fontWeight: '900' },
 
   termsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2, marginBottom: 18 },
   box: {

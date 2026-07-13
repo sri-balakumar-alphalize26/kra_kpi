@@ -38,6 +38,11 @@ class WhatsAppConfigKpi(models.Model):
     notify_task_auto_away        = fields.Boolean(default=True, string='Notify: Task Auto-Paused (Away)',
         help='WhatsApp the developer when the idle/auto-away cron pauses their running task (tab closed or board idle). Default ON.')
 
+    # Master switch for the mobile push (Expo) banner sent alongside the in-app
+    # notification feed on assignment/upload events. Default ON.
+    kpi_push_enabled             = fields.Boolean(default=True, string='Mobile Push Notifications',
+        help='Send a phone banner (via Expo push) to recipients\' registered devices on task assignment / upload events. Independent of the WhatsApp toggles.')
+
     # Token plumbing for the public client-approval page.
     kpi_token_secret = fields.Char(
         string='KPI Token Secret',

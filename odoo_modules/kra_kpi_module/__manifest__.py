@@ -20,6 +20,7 @@
         "views/wa_approval_templates.xml",
         "views/client_action.xml",
         "views/kpi_action_screen.xml",
+        "views/kpi_pair_gate_views.xml",
         "views/kpi_config_screen_views.xml",
         'views/kra_warehouse_views.xml',
         "views/kpi_action_detail.xml",
@@ -78,6 +79,7 @@
             "kra_kpi_module/static/src/components/kpi_developer_summary/kpi_developer_summary.js",
             "kra_kpi_module/static/src/components/kpi_company_settings/kpi_company_settings.js",
             "kra_kpi_module/static/src/components/kpi_configuration/kpi_configuration.js",
+            "kra_kpi_module/static/src/components/kpi_pair_gate/kpi_pair_gate.js",
             "kra_kpi_module/static/src/components/kpi_task_approval/kpi_task_approval.js",
 
             "kra_kpi_module/static/src/img/alphalize_logo.png",

@@ -110,4 +110,29 @@
         <field name="perm_create" eval="False"/>
         <field name="perm_unlink" eval="False"/>
     </record>
+
+    <!-- Push tokens: a user only sees/manages their own device tokens.
+         The register/unregister routes use sudo(); this scopes direct ORM. -->
+    <record id="kpi_push_token_own_rule" model="ir.rule">
+        <field name="name">User: Own Push Tokens Only</field>
+        <field name="model_id" ref="model_kpi_push_token"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_developer')), (4, ref('group_kra_admin')), (4, ref('group_kra_owner'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <!-- Pairing PINs: a user only sees/manages their own pairing records. -->
+    <record id="kpi_pair_own_rule" model="ir.rule">
+        <field name="name">User: Own Pairing PINs Only</field>
+        <field name="model_id" ref="model_kpi_pair"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_developer')), (4, ref('group_kra_admin')), (4, ref('group_kra_owner'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
 </odoo>

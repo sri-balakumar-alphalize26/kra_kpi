@@ -5,8 +5,41 @@ import logging
 import base64
 import mimetypes
 import pytz
+import re
 
 _logger = logging.getLogger(__name__)
+
+
+def normalize_wa(number, dial, length):
+    """Normalize a WhatsApp number to bare `<dial><local>` digits.
+
+    Lenient (never rejects): strips non-digits, drops a leading trunk 0, and
+    prefixes the dial code when the number is exactly `length` local digits.
+    Numbers that already include the dial code (or don't match the expected
+    length) are returned as digits-only, unchanged in structure. Matches how
+    kpi_notify consumes bare-digit numbers.
+    """
+    if not number:
+        return ''
+    digits = re.sub(r'\D', '', str(number))
+    if not digits:
+        return ''
+    dial = re.sub(r'\D', '', str(dial or '')) or '91'
+    try:
+        length = int(length) or 10
+    except (TypeError, ValueError):
+        length = 10
+    # Already prefixed with the dial code at the expected total length.
+    if digits.startswith(dial) and len(digits) == len(dial) + length:
+        return digits
+    # Leading trunk 0 + local length → replace 0 with dial code.
+    if digits.startswith('0') and len(digits) == length + 1:
+        return dial + digits[1:]
+    # Plain local-length number → prefix the dial code.
+    if len(digits) == length:
+        return dial + digits
+    # Anything else: leave the digits as-is (don't corrupt existing data).
+    return digits
 
 
 def convert_to_user_tz(datetime_obj, user=None):
@@ -336,6 +369,29 @@ class KraKpiAPI(http.Controller):
         and tells the board if a task was auto-paused while the developer was gone."""
         return request.env['kpi.work.session'].sudo().touch_heartbeat(user=request.env.user)
 
+    @http.route('/kpi_action/leave', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_action_leave(self, **params):
+        """Awaited by the board on a confirmed Back navigation: immediately put
+        the developer into 'away' (pause running task + un-pair + notify) BEFORE
+        the page navigates, so the pause is guaranteed to commit. JSON so the
+        board can `await rpc('/kpi_action/leave')`."""
+        try:
+            request.env['kpi.work.session'].sudo()._away_now(request.env.user, source='leave')
+        except Exception as exc:
+            _logger.warning("kpi_action/leave failed: %s", exc)
+        return {'status': True}
+
+    @http.route('/kpi_action/leave_beacon', type='http', auth='user', methods=['POST'], csrf=False)
+    def kpi_action_leave_beacon(self, **params):
+        """Fired via navigator.sendBeacon on a real tab close/reload (beforeunload),
+        where an awaited rpc is impossible. Same effect as /kpi_action/leave.
+        type='http' so sendBeacon (same-origin, sends the session cookie) works."""
+        try:
+            request.env['kpi.work.session'].sudo()._away_now(request.env.user, source='leave')
+        except Exception as exc:
+            _logger.warning("kpi_action/leave_beacon failed: %s", exc)
+        return request.make_response('ok', headers=[('Content-Type', 'text/plain')])
+
     @http.route('/kpi_action/live_status', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_action_live_status(self, **params):
         """Live activity strip data: running task, active break, day anchors."""
@@ -511,6 +567,86 @@ class KraKpiAPI(http.Controller):
             ('is_read', '=', False),
         ])
         return {'status': True, 'unread_count': unread_count}
+
+    # ================================================================== #
+    # Mobile push tokens (kpi.push.token)                                 #
+    # ================================================================== #
+    @http.route('/kpi_push/register', type='json', auth='user', methods=['POST'], csrf=False)
+    def register_push_token(self, **params):
+        """Register (or refresh) the caller's Expo push token for this device."""
+        current_user = request.env.user
+        token = (params.get('token') or '').strip()
+        if not token:
+            return {'status': False, 'error': 'missing token'}
+        platform = params.get('platform')
+        device = params.get('device')
+        request.env['kpi.push.token'].sudo().upsert(current_user, token, platform, device)
+        _logger.info("push/register user=%s(%s) platform=%s token=%s...",
+                     current_user.login, current_user.id, platform, token[:24])
+        return {'status': True}
+
+    @http.route('/kpi_push/unregister', type='json', auth='user', methods=['POST'], csrf=False)
+    def unregister_push_token(self, **params):
+        """Deactivate a token (called on logout so a shared device stops
+        receiving the previous user's notifications)."""
+        token = (params.get('token') or '').strip()
+        if token:
+            request.env['kpi.push.token'].sudo().deactivate(token)
+            _logger.info("push/unregister token=%s...", token[:24])
+        return {'status': True}
+
+    # ================================================================== #
+    # Device pairing (kpi.pair) — app generates a PIN, web enters it       #
+    # ================================================================== #
+    @http.route('/kpi_pair/generate', type='json', auth='user', methods=['POST'], csrf=False)
+    def pair_generate(self, **params):
+        """App calls this to get a fresh, short-lived pairing PIN."""
+        res = request.env['kpi.pair'].sudo().generate_for(request.env.user)
+        _logger.info("pair/generate user=%s(%s) mode=%s",
+                     request.env.user.login, request.env.user.id, res.get('mode'))
+        return {'status': True, 'expires_at': res.get('expires_at'),
+                'pin': res.get('pin'), 'mode': res.get('mode')}
+
+    @http.route('/kpi_pair/status', type='json', auth='user', methods=['POST'], csrf=False)
+    def pair_status(self, **params):
+        """App polls this to learn when the web has entered the PIN."""
+        res = request.env['kpi.pair'].sudo().status_for(request.env.user)
+        return {'status': True, 'state': res.get('state'),
+                'paired': res.get('paired'), 'mode': res.get('mode')}
+
+    @http.route('/kpi_pair/verify', type='json', auth='user', methods=['POST'], csrf=False)
+    def pair_verify(self, **params):
+        """Web gate calls this. On a valid PIN → pair + open the workday.
+
+        Blocks pairing from a MOBILE browser: work-timing must happen on a
+        computer (where 'tab open' is a fair proxy). A phone User-Agent is
+        rejected WITHOUT consuming the PIN, so a later attempt from the
+        computer with the same PIN still works. (UA is spoofable by a technical
+        user forcing desktop mode — this is a deterrent, not a hard lock.)"""
+        try:
+            ua = request.httprequest.user_agent.string if request.httprequest.user_agent else ''
+        except Exception:
+            ua = ''
+        if self._is_mobile_ua(ua):
+            _logger.info("pair/verify REJECTED (mobile UA) user=%s(%s)",
+                         request.env.user.login, request.env.user.id)
+            return {'status': True, 'ok': False, 'reason': 'mobile'}
+        res = request.env['kpi.pair'].sudo().verify(request.env.user, params.get('pin'))
+        _logger.info("pair/verify user=%s(%s) ok=%s",
+                     request.env.user.login, request.env.user.id, res.get('ok'))
+        return {'status': True, 'ok': bool(res.get('ok'))}
+
+    def _is_mobile_ua(self, ua):
+        """True if the User-Agent looks like a phone (NOT a desktop/tablet).
+        iPad/tablets are treated as desktop (they can do real work)."""
+        if not ua:
+            return False
+        u = ua.lower()
+        if 'ipad' in u or 'tablet' in u:
+            return False
+        return bool(re.search(
+            r'android.*mobile|iphone|ipod|windows phone|blackberry|opera mini|iemobile|mobile safari',
+            u))
 
     # ================================================================== #
     # Developer self-created tasks — "Pending Review" lane                #
@@ -728,17 +864,46 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         if not params.get('user_id'):
             return {'status': False, 'message': 'user_id missing'}
-        num = (params.get('wa_number') or '').strip() or False
+        dial, length = request.env.company._kpi_mobile_cfg()
+        num = normalize_wa(params.get('wa_number') or '', dial, length) or False
         request.env['res.users'].sudo().browse(int(params['user_id'])).kpi_wa_number = num
-        return {'status': True}
+        return {'status': True, 'wa_number': num or ''}
 
     # ---- Global config: Away-after-minutes + Urgent recipients (Configuration screen) ---- #
     @http.route('/kpi_config/get', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_get(self, **params):
         c = request.env.company
+        dial, length = c._kpi_mobile_cfg()
+        # Countries that have a dial code, for the picker (id, name, +code).
+        countries = request.env['res.country'].sudo().search(
+            [('phone_code', '!=', 0)], order='name')
         return {'status': True,
                 'away_after_minutes': c.away_after_minutes,
-                'urgent_recipients': c.kpi_urgent_recipients or ''}
+                'urgent_recipients': c.kpi_urgent_recipients or '',
+                'country_id': c.kpi_country_id.id if c.kpi_country_id else False,
+                'country_dial_code': dial,
+                'mobile_length': length,
+                'countries': [
+                    {'id': co.id, 'name': co.name, 'code': co.code or '',
+                     'phone_code': co.phone_code}
+                    for co in countries]}
+
+    @http.route('/kpi_config/set_country', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_country(self, **params):
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        cid = params.get('country_id')
+        c = request.env.company.sudo()
+        c.kpi_country_id = int(cid) if cid else False
+        # Auto-fill the local length from the country map (onchange doesn't run
+        # on a bare write, so mirror its logic here).
+        from ..models.res_company_kpi import COUNTRY_MOBILE_LENGTH
+        code = c.kpi_country_id.code if c.kpi_country_id else None
+        if code and code in COUNTRY_MOBILE_LENGTH:
+            c.kpi_mobile_length = COUNTRY_MOBILE_LENGTH[code]
+        dial, length = c._kpi_mobile_cfg()
+        return {'status': True, 'dial': dial, 'mobile_length': length}
 
     @http.route('/kpi_config/set_away', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_set_away(self, **params):
@@ -753,8 +918,13 @@ class KraKpiAPI(http.Controller):
         user = request.env.user
         if not self._is_kra_admin(user):
             return {'status': False, 'message': 'Not authorized'}
-        request.env.company.sudo().kpi_urgent_recipients = (params.get('recipients') or '').strip() or False
-        return {'status': True}
+        # Normalize each comma-separated entry to <dial><local> digits.
+        dial, length = request.env.company._kpi_mobile_cfg()
+        raw = (params.get('recipients') or '').strip()
+        parts = [normalize_wa(p, dial, length) for p in re.split(r'[,\n;]+', raw) if p.strip()]
+        cleaned = ', '.join([p for p in parts if p])
+        request.env.company.sudo().kpi_urgent_recipients = cleaned or False
+        return {'status': True, 'recipients': cleaned}
 
     @http.route('/kra_kpi/get_kpi_detail', type='json', auth='user', methods=['POST'], csrf=False)
     def get_kpi_detail(self, **params):

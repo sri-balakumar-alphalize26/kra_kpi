@@ -9,12 +9,18 @@ Responsibilities:
   * Log every attempt (success or failure) to kpi.action.log.
 """
 
+import json
 import logging
 import re
 
 import pytz
+import requests
 
 from odoo import api, fields, models
+
+# Expo push service endpoint. The app registers an Expo push token; we POST
+# here and Expo relays to FCM (Android) / APNs (iOS).
+_EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
 
 def _fmt_ist(dt, fmt='%d/%m %H:%M'):
@@ -49,6 +55,7 @@ _PERSIST_EVENTS = {
     'task_assigned',
     'reassigned',
     'self_task_submitted',
+    'task_auto_away',   # web went idle/asleep → task auto-paused → tell the dev's phone
 }
 
 # Short human labels for the in-app notification title (the body reuses the
@@ -58,6 +65,7 @@ _NOTIF_TITLES = {
     'task_assigned':       'New task assigned',
     'reassigned':          'Task reassigned',
     'self_task_submitted': 'Task submitted for review',
+    'task_auto_away':      'Task paused — you went away',
 }
 
 
@@ -397,6 +405,13 @@ class KpiNotify(models.Model):
                     "in-app notify persisted: kpi=%s event=%s recipients=%s rows=%s",
                     self.id, event, len(notif_recipients), len(created),
                 )
+                # Mobile push banner to the same recipients' registered devices.
+                self._send_push(
+                    event,
+                    _NOTIF_TITLES.get(event, event.replace('_', ' ').title()),
+                    body,
+                    [r['user_id'] for r in notif_recipients if r.get('user_id')],
+                )
             except Exception as exc:
                 self._log_action(
                     'notification_failed',
@@ -656,6 +671,72 @@ class KpiNotify(models.Model):
                 _add(u, 'developer')
 
         return out
+
+    def _send_push(self, event, title, body, user_ids):
+        """Send an Expo push banner to the recipients' registered devices.
+
+        Best-effort: never raises (a push failure must not block the task
+        write). Gated by the `kpi_push_enabled` config toggle. Deactivates any
+        token Expo reports as DeviceNotRegistered.
+        """
+        try:
+            config = self.env['whatsapp.config'].sudo().get_config()
+            if not getattr(config, 'kpi_push_enabled', True):
+                return
+            tokens = self.env['kpi.push.token'].sudo().tokens_for_users(user_ids)
+            if not tokens:
+                return
+            # First line of the body is the most banner-friendly summary; keep
+            # the push body short.
+            short = (body or '').strip().split('\n')
+            short_body = next((ln for ln in short if ln.strip()), title)
+            if len(short_body) > 160:
+                short_body = short_body[:157] + '...'
+
+            messages = [{
+                'to': tok,
+                'title': title,
+                'body': short_body,
+                'data': {'kpi_id': self.id, 'event': event},
+                'sound': 'default',
+                'channelId': 'default',
+            } for tok in tokens]
+
+            # Expo accepts up to 100 messages per request.
+            for i in range(0, len(messages), 100):
+                batch = messages[i:i + 100]
+                resp = requests.post(
+                    _EXPO_PUSH_URL,
+                    data=json.dumps(batch),
+                    headers={
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    },
+                    timeout=10,
+                )
+                self._handle_push_receipts(batch, resp)
+
+            self._log_action('push_sent', payload={
+                'event': event, 'channel': 'expo', 'devices': len(tokens)})
+        except Exception as exc:
+            try:
+                self._log_action('push_failed',
+                                 payload={'event': event, 'error': str(exc)},
+                                 success=False)
+            except Exception:
+                pass
+
+    def _handle_push_receipts(self, batch, resp):
+        """Deactivate tokens Expo reports as DeviceNotRegistered."""
+        try:
+            data = resp.json().get('data') or []
+        except Exception:
+            return
+        for msg, ticket in zip(batch, data):
+            if isinstance(ticket, dict) and ticket.get('status') == 'error':
+                err = (ticket.get('details') or {}).get('error')
+                if err == 'DeviceNotRegistered':
+                    self.env['kpi.push.token'].sudo().deactivate(msg.get('to'))
 
     def _format_message(self, event, ctx):
         """Build the WhatsApp text body for an event from the template dict."""
