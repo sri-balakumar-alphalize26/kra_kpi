@@ -39,6 +39,28 @@ def _fmt_ist(dt, fmt='%d/%m %H:%M'):
 _logger = logging.getLogger(__name__)
 
 
+# Events that also get persisted as browsable in-app notifications
+# (kpi.notification rows). Deliberately limited to assignment + upload/creation
+# events — start/pause/complete/approval lifecycle noise is left out of the feed.
+# `task_created` covers both single new tasks and the bulk requirement/update/bug
+# uploads (each uploaded row is a kra.kpi.create → task_created).
+_PERSIST_EVENTS = {
+    'task_created',
+    'task_assigned',
+    'reassigned',
+    'self_task_submitted',
+}
+
+# Short human labels for the in-app notification title (the body reuses the
+# full WhatsApp message text).
+_NOTIF_TITLES = {
+    'task_created':        'New task added',
+    'task_assigned':       'New task assigned',
+    'reassigned':          'Task reassigned',
+    'self_task_submitted': 'Task submitted for review',
+}
+
+
 # Map event-name → whatsapp.config toggle field.
 _EVENT_TO_TOGGLE = {
     'task_created':              'notify_task_created',
@@ -351,16 +373,47 @@ class KpiNotify(models.Model):
             )
             return
 
+        body = self._format_message(event, ctx)
+
+        # Persist a browsable in-app notification per recipient user for the
+        # curated assignment/upload events. This runs BEFORE the WhatsApp toggle
+        # / phone-recipient early-returns below on purpose: the app feed must be
+        # populated even when the WhatsApp channel is muted (config toggle) OR no
+        # recipient has a phone number. We resolve recipients via
+        # `_notif_recipient_users` (keyed on user_id, phone-independent) rather
+        # than the phone-deduped `recipients` list, so an admin/developer without
+        # a phone still sees the notification. Scoping (admins → all events,
+        # developer → own tasks) is inherited from the `_EVENT_RECIPIENTS` matrix.
+        if body and event in _PERSIST_EVENTS:
+            try:
+                notif_recipients = self._notif_recipient_users(
+                    _EVENT_RECIPIENTS.get(event, ()))
+                created = self.env['kpi.notification'].sudo().create_for_recipients(
+                    self, event,
+                    _NOTIF_TITLES.get(event, event.replace('_', ' ').title()),
+                    body, notif_recipients,
+                )
+                _logger.info(
+                    "in-app notify persisted: kpi=%s event=%s recipients=%s rows=%s",
+                    self.id, event, len(notif_recipients), len(created),
+                )
+            except Exception as exc:
+                self._log_action(
+                    'notification_failed',
+                    payload={'event': event, 'error': f'persist: {exc}'},
+                    success=False,
+                )
+
+        # --- WhatsApp + bus.bus channel (phone-gated, toggle-gated) ---------- #
         toggle = _EVENT_TO_TOGGLE.get(event)
         if toggle and not getattr(config, toggle, True):
-            # Event muted via whatsapp.config — skip silently.
+            # Event muted via whatsapp.config — skip the WhatsApp/bus send.
             return
 
         recipients = self._resolve_recipients(_EVENT_RECIPIENTS.get(event, ()), event=event)
         if not recipients:
             return
 
-        body = self._format_message(event, ctx)
         if not body:
             return
 
@@ -562,6 +615,45 @@ class KpiNotify(models.Model):
                 raw = raw.strip()
                 if raw:
                     _add(raw, role='urgent')
+
+        return out
+
+    def _notif_recipient_users(self, roles):
+        """Resolve role names → [{user_id, role}] for the in-app feed.
+
+        This deliberately mirrors the role→user mapping in `_resolve_recipients`
+        but keys on `user_id` ONLY and does NOT require a phone number. The
+        WhatsApp path drops recipients with no phone (and the bot's own number);
+        the persistent notification feed must not — an admin/coordinator/developer
+        without a phone still needs to see the notification in the app. Ad-hoc
+        phone-only roles (urgent_extra) are intentionally excluded — they have no
+        user account to show a feed to.
+        """
+        self.ensure_one()
+        out = []
+        seen = set()
+
+        def _add(user, role):
+            if user and user.id not in seen:
+                seen.add(user.id)
+                out.append({'user_id': user.id, 'role': role})
+
+        if 'owner' in roles:
+            grp = self.env.ref('kra_kpi_module.group_kra_owner', raise_if_not_found=False)
+            if grp:
+                for u in grp.user_ids:
+                    _add(u, 'owner')
+
+        if 'coordinator' in roles:
+            grp = self.env.ref('kra_kpi_module.group_kra_admin', raise_if_not_found=False)
+            if grp:
+                for u in grp.user_ids:
+                    _add(u, 'coordinator')
+
+        if 'developer' in roles:
+            _add(self.user_id, 'developer')
+            for u in (self.contributor_ids or []):
+                _add(u, 'developer')
 
         return out
 

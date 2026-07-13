@@ -15,6 +15,7 @@ import TabBar from '../components/TabBar';
 import { createLogger } from '../api/logger';
 import { getConnection } from '../api/session';
 import { jsonRpc } from '../api/odooApi';
+import { fetchUnreadCount } from '../services/notifications';
 
 // 369-brand colors (sampled from the logo): steel blue letters + orange arrow.
 const BRAND_BLUE = '#2E86C7';
@@ -164,6 +165,23 @@ function HomeTab({ name, onOpen }) {
     })();
   }, []);
 
+  // Unread notification count for the bell badge. Refetched every time Home
+  // mounts (it re-mounts on return from a sub-screen), so opening the feed and
+  // coming back reflects the newly-read state.
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const n = await fetchUnreadCount();
+        if (alive) setUnread(n || 0);
+      } catch (e) {
+        log.warn('unread count failed', e?.message);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMounted, setDrawerMounted] = useState(false); // keep Modal up during close anim
   const drawerAnim = useRef(new Animated.Value(0)).current;   // 0 closed → 1 open
@@ -224,9 +242,13 @@ function HomeTab({ name, onOpen }) {
           <Ionicons name="menu" size={28} color={COLORS.navy} />
         </TouchableOpacity>
         <Image source={require('../assets/logo369.png')} style={s.logo} resizeMode="contain" />
-        <TouchableOpacity hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+        <TouchableOpacity onPress={() => onOpen('notifications')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Ionicons name="notifications-outline" size={26} color={COLORS.navy} />
-          <View style={s.badge}><Text style={s.badgeTxt}>5</Text></View>
+          {unread > 0 && (
+            <View style={s.badge}>
+              <Text style={s.badgeTxt}>{unread > 99 ? '99+' : unread}</Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
 

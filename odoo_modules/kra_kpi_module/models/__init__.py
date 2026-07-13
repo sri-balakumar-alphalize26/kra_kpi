@@ -29,3 +29,4 @@ from . import kpi_wa_conversation
 from . import kpi_inbound_patch
 from . import kpi_work_session
 from . import kpi_notification_queue
+from . import kpi_notification

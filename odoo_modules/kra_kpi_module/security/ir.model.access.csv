@@ -71,3 +71,7 @@ access_kpi_work_session_developer,kpi.work.session.developer,model_kpi_work_sess
 access_kpi_notification_queue_admin,kpi.notification.queue.admin,model_kpi_notification_queue,base.group_system,1,1,1,1
 access_kpi_notification_queue_owner,kpi.notification.queue.owner,model_kpi_notification_queue,kra_kpi_module.group_kra_owner,1,0,0,0
 access_kpi_notification_queue_coord,kpi.notification.queue.coord,model_kpi_notification_queue,kra_kpi_module.group_kra_admin,1,0,0,0
+access_kpi_notification_admin,kpi.notification.admin,model_kpi_notification,base.group_system,1,1,1,1
+access_kpi_notification_owner,kpi.notification.owner,model_kpi_notification,kra_kpi_module.group_kra_owner,1,1,0,0
+access_kpi_notification_coord,kpi.notification.coord,model_kpi_notification,kra_kpi_module.group_kra_admin,1,1,0,0
+access_kpi_notification_developer,kpi.notification.developer,model_kpi_notification,kra_kpi_module.group_kra_developer,1,1,0,0

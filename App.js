@@ -11,6 +11,7 @@ import KraKpiDashboard from './screens/KraKpiDashboard';
 import KpiActionBoard from './screens/KpiActionBoard';
 import UploadAmendments from './screens/UploadAmendments';
 import OwnerDashboard from './screens/OwnerDashboard';
+import NotificationsScreen from './screens/NotificationsScreen';
 import * as session from './api/session';
 import { createLogger } from './api/logger';
 
@@ -32,6 +33,7 @@ function AppInner() {
   const [screen, setScreen] = useState('login');    // login (welcome) | connect
   const [user, setUser] = useState(null);
   const [appScreen, setAppScreen] = useState('home'); // post-login: home | dashboard | actionboard
+  const [focusTaskId, setFocusTaskId] = useState(null); // task to scroll-to + pulse on the board
 
   // Restore a remembered session so the app can skip login on relaunch.
   useEffect(() => {
@@ -59,6 +61,7 @@ function AppInner() {
     setUser(null);
     setScreen('login');
     setAppScreen('home');
+    setFocusTaskId(null);
   };
 
   // Splash keeps showing until both the animation and the session read finish.
@@ -66,13 +69,18 @@ function AppInner() {
 
   if (user) {
     log.info('render post-login screen', { appScreen });
-    const home = () => setAppScreen('home');
+    // Returning home clears any pending task-focus so it can't re-pulse later.
+    const home = () => { setAppScreen('home'); setFocusTaskId(null); };
+    // open(dest, param): param is an optional payload (e.g. a task id to focus).
+    const open = (dest, param) => { log.info('open', dest, param); setFocusTaskId(param ?? null); setAppScreen(dest); };
     if (appScreen === 'dashboard')
       return <KraKpiDashboard onBack={home} />;
     if (appScreen === 'actionboard')
-      return <KpiActionBoard onBack={home} />;
+      return <KpiActionBoard onBack={home} focusTaskId={focusTaskId} onFocusHandled={() => setFocusTaskId(null)} />;
     if (appScreen === 'owner')
       return <OwnerDashboard onBack={home} />;
+    if (appScreen === 'notifications')
+      return <NotificationsScreen onBack={home} onOpen={open} />;
     // Upload screens share one component, differing only by docType.
     if (appScreen.startsWith('upload:'))
       return <UploadAmendments onBack={home} docType={appScreen.split(':')[1]} />;
@@ -80,7 +88,7 @@ function AppInner() {
       <HomeScreen
         user={user}
         onLogout={logout}
-        onOpen={(dest) => { log.info('open', dest); setAppScreen(dest); }}
+        onOpen={open}
       />
     );
   }

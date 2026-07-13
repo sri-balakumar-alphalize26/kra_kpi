@@ -431,6 +431,88 @@ class KraKpiAPI(http.Controller):
         }
 
     # ================================================================== #
+    # In-app notifications feed (kpi.notification)                        #
+    # ================================================================== #
+    # Rows are written per-recipient by the _notify dispatcher, so a user's
+    # feed is simply the rows addressed to them: admins/owner/coordinator get
+    # rows for every assignment/upload event; a developer only gets rows for
+    # their own tasks. Scoping is therefore just user_id == current user — no
+    # role branching needed here.
+
+    @http.route('/kpi_notifications/get', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_notifications(self, **params):
+        """Return the caller's notification feed + unread count."""
+        current_user = request.env.user
+        limit = int(params.get('limit') or 50)
+        offset = int(params.get('offset') or 0)
+        only_unread = bool(params.get('only_unread'))
+
+        Notif = request.env['kpi.notification'].sudo()
+        base_domain = [('user_id', '=', current_user.id)]
+        domain = base_domain + ([('is_read', '=', False)] if only_unread else [])
+
+        recs = Notif.search(domain, limit=limit, offset=offset)
+        unread_count = Notif.search_count(base_domain + [('is_read', '=', False)])
+        _logger.info(
+            "notifications/get user=%s(%s) returned=%s unread=%s only_unread=%s",
+            current_user.login, current_user.id, len(recs), unread_count, only_unread,
+        )
+
+        def map_rec(n):
+            return {
+                'id': n.id,
+                'kpi_id': n.kpi_id.id if n.kpi_id else False,
+                'kpi_name': n.kpi_id.name if n.kpi_id else "",
+                'event': n.event or "",
+                'title': n.title or "",
+                'body': n.body or "",
+                'role': n.role or "",
+                'is_read': n.is_read,
+                'created_at': convert_to_user_tz(n.create_date) if n.create_date else "",
+            }
+
+        return {
+            'status': True,
+            'items': [map_rec(n) for n in recs],
+            'unread_count': unread_count,
+        }
+
+    @http.route('/kpi_notifications/mark_read', type='json', auth='user', methods=['POST'], csrf=False)
+    def mark_notifications_read(self, **params):
+        """Mark the caller's notifications read. Omit `ids` to mark all read."""
+        current_user = request.env.user
+        ids = params.get('ids')
+
+        Notif = request.env['kpi.notification'].sudo()
+        base_domain = [('user_id', '=', current_user.id)]
+        domain = base_domain + [('is_read', '=', False)]
+        if ids:
+            # Restrict to the caller's own rows even if foreign ids are passed.
+            domain = domain + [('id', 'in', [int(i) for i in ids])]
+
+        recs = Notif.search(domain)
+        if recs:
+            recs.write({'is_read': True, 'read_at': fields.Datetime.now()})
+
+        unread_count = Notif.search_count(base_domain + [('is_read', '=', False)])
+        _logger.info(
+            "notifications/mark_read user=%s(%s) marked=%s ids=%s unread_now=%s",
+            current_user.login, current_user.id, len(recs),
+            ('all' if not ids else ids), unread_count,
+        )
+        return {'status': True, 'unread_count': unread_count}
+
+    @http.route('/kpi_notifications/unread_count', type='json', auth='user', methods=['POST'], csrf=False)
+    def notifications_unread_count(self, **params):
+        """Cheap badge poll — just the caller's unread count."""
+        current_user = request.env.user
+        unread_count = request.env['kpi.notification'].sudo().search_count([
+            ('user_id', '=', current_user.id),
+            ('is_read', '=', False),
+        ])
+        return {'status': True, 'unread_count': unread_count}
+
+    # ================================================================== #
     # Developer self-created tasks — "Pending Review" lane                #
     # ================================================================== #
     def _is_kra_admin(self, user):

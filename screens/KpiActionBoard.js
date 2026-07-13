@@ -3,10 +3,10 @@
 // Important, Urgent, In Progress, Paused, …), each with a count badge and its
 // cards stacked vertically. Each card exposes the state-appropriate actions
 // (Start / Resume / Complete / Pause / Reassign).
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Dimensions,
-  ActivityIndicator, Alert, Modal, StatusBar as RNStatusBar,
+  ActivityIndicator, Alert, Modal, StatusBar as RNStatusBar, Animated, Easing,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -91,7 +91,7 @@ function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
   );
 }
 
-function TaskCard({ task, onAction, busyId, nowMs, isAdmin }) {
+function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const busy = busyId === task.id;
   const st = task.task_state;
@@ -104,8 +104,50 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin }) {
   const canComplete = ['in_progress', 'paused', 'hold', 'rework'].includes(st);
   const canPause = st === 'in_progress';
 
+  // One-shot highlight + heartbeat when this card is the notification target.
+  // `beat` drives BOTH the scale (heartbeat) and a highlight-overlay opacity.
+  // Both are native-driver-safe (transform scale + opacity); we never animate
+  // borderColor/backgroundColor directly.
+  const beat = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!pulse) return;
+    beat.setValue(0);
+    // One heartbeat = a big thump + a small thump (rise-fall-rise-fall).
+    const oneBeat = () => Animated.sequence([
+      Animated.timing(beat, { toValue: 1, duration: 180, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(beat, { toValue: 0.35, duration: 160, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(beat, { toValue: 0.85, duration: 160, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(beat, { toValue: 0.2, duration: 200, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]);
+    // Run the heartbeat twice (short gap between), then hold and release.
+    Animated.sequence([
+      oneBeat(),
+      Animated.delay(240),
+      oneBeat(),
+      Animated.timing(beat, { toValue: 0.5, duration: 160, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.delay(450),
+      Animated.timing(beat, { toValue: 0, duration: 450, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+    ]).start();
+  }, [pulse, beat]);
+
+  // scale: 1 → ~1.06 at the beat peak.
+  const scale = beat.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] });
+  // highlight wash opacity — kept light so the contrasting tint + ring pop the
+  // card without hiding its (dark) text/buttons.
+  const washOpacity = beat.interpolate({ inputRange: [0, 1], outputRange: [0, 0.22] });
+
   return (
+    <Animated.View
+      style={{ transform: [{ scale }] }}
+      onLayout={onMeasure ? (e) => onMeasure(e.nativeEvent.layout.y) : undefined}
+    >
     <View style={s.card}>
+      {/* Notification-focus highlight — a contrasting wash + ring that fades in
+          with the heartbeat, then out. Sits above the card bg, below content. */}
+      <Animated.View
+        pointerEvents="none"
+        style={[s.focusWash, { opacity: washOpacity }]}
+      />
       {/* Colored priority accent bar */}
       <View style={[s.accent, { backgroundColor: p.fg }]} />
 
@@ -162,6 +204,32 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin }) {
         </View>
       </View>
     </View>
+    </Animated.View>
+  );
+}
+
+// A lane column that fades + slides up on mount, staggered by its index so the
+// columns cascade in left-to-right when the board first renders. Plays once.
+// Keeps the lane's onLayout (used to record its x-offset for scroll-to-focus).
+function AnimatedLane({ index, style, onLayout, children }) {
+  const enter = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(enter, {
+      toValue: 1,
+      duration: 380,
+      delay: index * 80,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [enter, index]);
+  const animStyle = {
+    opacity: enter,
+    transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [22, 0] }) }],
+  };
+  return (
+    <Animated.View style={[style, animStyle]} onLayout={onLayout}>
+      {children}
+    </Animated.View>
   );
 }
 
@@ -201,7 +269,7 @@ function FilterDropdown({ label, open, onToggle, options, selected, getKey, getL
   );
 }
 
-export default function KpiActionBoard({ onBack }) {
+export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) {
   const [raw, setRaw] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isMock, setIsMock] = useState(false);
@@ -211,6 +279,14 @@ export default function KpiActionBoard({ onBack }) {
   const [search, setSearch] = useState('');
   const [busyId, setBusyId] = useState(null);
   const [nowMs, setNowMs] = useState(() => 0); // live-timer clock; set on mount
+
+  // ── Notification focus: scroll-to + heartbeat a specific task's card ──────
+  const [pulseId, setPulseId] = useState(null);   // task id currently pulsing
+  const boardRef = useRef(null);                   // horizontal lanes ScrollView
+  const laneRefs = useRef({});                     // laneKey → vertical ScrollView ref
+  const laneX = useRef({});                        // laneKey → x offset in the board
+  const cardY = useRef({});                        // taskId → y offset within its lane
+  const handledFocusRef = useRef(null);            // last focusTaskId acted on (idempotency vs polls)
 
   // Reassign modal
   const [reassignFor, setReassignFor] = useState(null);
@@ -321,6 +397,55 @@ export default function KpiActionBoard({ onBack }) {
   }, [raw, search, filterAssignee, filterPriority, filterStatus]);
 
   const lanes = useMemo(() => groupIntoLanes(filtered), [filtered]);
+
+  // ── Notification focus effect ────────────────────────────────────────────
+  // When App passes a focusTaskId (from a notification tap): clear filters so
+  // the card is guaranteed rendered, scroll the board to the card's lane and
+  // the lane to the card, then fire a one-shot heartbeat. Runs once per id —
+  // guarded so the 20s silent poll (which mutates `raw`) can't restart it.
+  useEffect(() => {
+    if (!focusTaskId) return;
+    if (handledFocusRef.current === focusTaskId) return;
+    const task = raw.find((t) => t.id === focusTaskId);
+    if (!task) {
+      // Not on this board (stale/reassigned-away, or still loading). If the
+      // load finished and it's genuinely absent, give up so we don't hang.
+      if (!loading) { handledFocusRef.current = focusTaskId; onFocusHandled && onFocusHandled(); }
+      return;
+    }
+    handledFocusRef.current = focusTaskId;
+
+    // 1. Clear every filter so the target card can't be hidden.
+    setSearch('');
+    setFilterAssignee(null);
+    setFilterPriority(null);
+    setFilterStatus(null);
+    setOpenFilter(null);
+
+    const laneKey = laneForTask(task);
+
+    // 2. Scroll after layout settles (filters just changed → re-render + measure).
+    const t1 = setTimeout(() => {
+      const x = laneX.current[laneKey];
+      if (boardRef.current && typeof x === 'number') {
+        boardRef.current.scrollTo({ x: Math.max(0, x - 8), animated: true });
+      }
+      const laneRef = laneRefs.current[laneKey];
+      const y = cardY.current[focusTaskId];
+      if (laneRef && typeof y === 'number') {
+        laneRef.scrollTo({ y: Math.max(0, y - 8), animated: true });
+      }
+    }, 260);
+
+    // 3. Trigger the heartbeat + highlight on the card, then release.
+    const t2 = setTimeout(() => setPulseId(focusTaskId), 420);
+    const t3 = setTimeout(() => {
+      setPulseId(null);
+      onFocusHandled && onFocusHandled();
+    }, 3400);
+
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [focusTaskId, raw, loading, onFocusHandled]);
 
   const totalTasks = raw.length;
   const shownTasks = filtered.length;
@@ -669,16 +794,22 @@ export default function KpiActionBoard({ onBack }) {
         </View>
       ) : (
         <ScrollView
+          ref={boardRef}
           horizontal
           showsHorizontalScrollIndicator
           style={s.board}
           contentContainerStyle={s.boardRow}
           directionalLockEnabled
         >
-          {LANES.map((l) => {
+          {LANES.map((l, i) => {
             const items = lanes[l.key] || [];
             return (
-              <View key={l.key} style={s.lane}>
+              <AnimatedLane
+                key={l.key}
+                index={i}
+                style={s.lane}
+                onLayout={(e) => { laneX.current[l.key] = e.nativeEvent.layout.x; }}
+              >
                 {/* Colored lane header */}
                 <View style={[s.laneHead, { backgroundColor: l.color }]}>
                   <Text style={s.laneTitle} numberOfLines={1}>{l.label}</Text>
@@ -688,6 +819,7 @@ export default function KpiActionBoard({ onBack }) {
                     nestedScrollEnabled lets this scroll up/down inside the
                     horizontal board ScrollView (required on Android). */}
                 <ScrollView
+                  ref={(r) => { laneRefs.current[l.key] = r; }}
                   style={s.laneBody}
                   contentContainerStyle={{ padding: 10, paddingBottom: 24 }}
                   nestedScrollEnabled
@@ -700,11 +832,20 @@ export default function KpiActionBoard({ onBack }) {
                     </View>
                   ) : (
                     items.map((t) => (
-                      <TaskCard key={t.id} task={t} onAction={runAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} />
+                      <TaskCard
+                        key={t.id}
+                        task={t}
+                        onAction={runAction}
+                        busyId={busyId}
+                        nowMs={nowMs}
+                        isAdmin={isAdmin}
+                        pulse={pulseId === t.id}
+                        onMeasure={(y) => { cardY.current[t.id] = y; }}
+                      />
                     ))
                   )}
                 </ScrollView>
-              </View>
+              </AnimatedLane>
             );
           })}
         </ScrollView>
@@ -1218,6 +1359,16 @@ const s = StyleSheet.create({
   card: {
     backgroundColor: '#fff', borderRadius: 14, marginBottom: 12, overflow: 'hidden',
     flexDirection: 'row', ...SHADOW,
+  },
+  // Notification-focus highlight overlay: a contrasting wash + ring that the
+  // heartbeat fades in then out. Absolute-fills the card, sits under content
+  // (pointerEvents none) so buttons stay tappable.
+  focusWash: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: COLORS.primary,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
   },
   accent: { width: 5 },
   cardBody: { flex: 1, padding: 13 },
