@@ -143,15 +143,18 @@ export async function callKw(baseUrl, model, method, args = [], kwargs = {}) {
 // return { result: ... }. Relies on the session cookie from authenticate().
 // `timeout` overrides the default 10s window (e.g. AI suggestions / bulk writes
 // that legitimately take longer).
-export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS) {
+export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS, db = null) {
   const base = normalizeUrl(baseUrl);
   log.info('jsonRpc →', path, log.redact(params));
+  // Pre-login (public) routes have no session cookie yet, so on a multi-db
+  // server the DB must be named explicitly via the X-Odoo-Database header.
+  const headers = db ? { ...JSONRPC_HEADERS, 'X-Odoo-Database': db } : JSONRPC_HEADERS;
   let res;
   try {
     res = await axios.post(
       `${base}${path}`,
       jsonrpcBody(params),
-      { headers: JSONRPC_HEADERS, timeout, withCredentials: true }
+      { headers, timeout, withCredentials: true }
     );
   } catch (err) {
     log.error('jsonRpc ✗ network/http error', path, err?.message);

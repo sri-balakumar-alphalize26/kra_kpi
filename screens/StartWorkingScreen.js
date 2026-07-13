@@ -36,23 +36,37 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
   const [expiresAt, setExpiresAt] = useState(null);
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(() => 0);
+  const [cooldownUntil, setCooldownUntil] = useState(0); // regen cooldown end (ms)
   const pollRef = useRef(null);
+  const genSeq = useRef(0);                               // latest-generate-wins guard
   const onPairedRef = useRef(onPaired);
   useEffect(() => { onPairedRef.current = onPaired; }, [onPaired]);
 
+  // Generate a PIN. Race-safe: if a newer makePin() call started while this one
+  // was in flight, its (older, now server-expired) result is discarded so the
+  // displayed PIN is always the current server one.
   const makePin = useCallback(async () => {
+    const seq = ++genSeq.current;
     setLoading(true);
     try {
       const res = await generatePin();
+      if (seq !== genSeq.current) return;   // superseded → ignore stale result
       setPin(res.pin);
       setMode(res.mode || 'start');
       setExpiresAt(res.expires_at);
     } catch (e) {
       log.warn('generatePin failed', e?.message);
     } finally {
-      setLoading(false);
+      if (seq === genSeq.current) setLoading(false);
     }
   }, []);
+
+  // Manual "Regenerate" → 10s cooldown so it can't be spammed.
+  const onRegen = useCallback(() => {
+    if (Date.now() < cooldownUntil) return;
+    setCooldownUntil(Date.now() + 10000);
+    makePin();
+  }, [cooldownUntil, makePin]);
 
   // On mount: generate the first PIN.
   useEffect(() => {
@@ -83,11 +97,23 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
   }, []);
 
   const resume = mode === 'resume';
+  const cooldownLeft = Math.max(0, Math.ceil((cooldownUntil - nowMs) / 1000));
 
   const left = secondsLeft(expiresAt, nowMs);
   const expired = left === 0;
   const mm = left != null ? String(Math.floor(left / 60)).padStart(1, '0') : null;
   const ss = left != null ? String(left % 60).padStart(2, '0') : null;
+
+  // Auto-regenerate the moment the PIN expires (once per cycle) so the user
+  // never has to tap Regenerate. The race guard in makePin keeps it consistent.
+  const autoRegenRef = useRef(false);
+  useEffect(() => {
+    if (expired && expiresAt && !loading) {
+      if (!autoRegenRef.current) { autoRegenRef.current = true; makePin(); }
+    } else if (!expired) {
+      autoRegenRef.current = false;   // fresh PIN → arm for the next expiry
+    }
+  }, [expired, expiresAt, loading, makePin]);
 
   return (
     <View style={s.root}>
@@ -136,7 +162,7 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
                 <Text style={s.expiry}>Expires in {mm}:{ss}</Text>
               )}
               {expired && (
-                <Text style={[s.expiry, { color: COLORS.red }]}>PIN expired — regenerate below</Text>
+                <Text style={[s.expiry, { color: COLORS.amber }]}>Refreshing PIN…</Text>
               )}
             </>
           )}
@@ -154,9 +180,16 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
               {' '}web browser and enter this PIN. It won't work if opened on this phone.</Text>
           </View>
 
-          <TouchableOpacity style={s.regenBtn} onPress={makePin} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={[s.regenBtn, cooldownLeft > 0 && { opacity: 0.5 }]}
+            onPress={onRegen}
+            disabled={cooldownLeft > 0}
+            activeOpacity={0.85}
+          >
             <Ionicons name="refresh" size={16} color={COLORS.muted} />
-            <Text style={s.regenTxt}>Regenerate PIN</Text>
+            <Text style={s.regenTxt}>
+              {cooldownLeft > 0 ? `Regenerate in ${cooldownLeft}s` : 'Regenerate PIN'}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>

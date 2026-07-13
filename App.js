@@ -15,6 +15,7 @@ import OwnerDashboard from './screens/OwnerDashboard';
 import NotificationsScreen from './screens/NotificationsScreen';
 import ConfigurationScreen from './screens/ConfigurationScreen';
 import StartWorkingScreen from './screens/StartWorkingScreen';
+import AppLoginScreen from './screens/AppLoginScreen';
 import * as session from './api/session';
 import { getConnection } from './api/session';
 import { jsonRpc } from './api/odooApi';
@@ -53,6 +54,8 @@ function AppInner() {
   const [focusTaskId, setFocusTaskId] = useState(null); // task to scroll-to + pulse on the board
   const [devLocked, setDevLocked] = useState(false);  // this user is a developer who must pair
   const [devPaired, setDevPaired] = useState(false);  // developer's device is currently paired
+  const [provisioned, setProvisioned] = useState(false); // device set up (server URL saved)
+  const [forceSetup, setForceSetup] = useState(false);   // show Odoo device-setup over the app login
 
   const pushTokenRef = useRef(null);       // this device's Expo token (for logout unregister)
   const pendingTapRef = useRef(null);      // kpi_id from a tap that arrived before login/restore
@@ -76,9 +79,11 @@ function AppInner() {
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
 
-  // Restore a remembered session so the app can skip login on relaunch.
+  // Restore a remembered session + device-setup state on relaunch.
   useEffect(() => {
     (async () => {
+      const conn = await session.getConnection();
+      setProvisioned(!!(conn && conn.serverUrl));   // device already set up?
       const saved = await session.getSession();
       if (saved) setUser(saved);
       setRestoring(false);
@@ -258,15 +263,28 @@ function AppInner() {
     );
   }
 
-  // Welcome screen is the base; the Connect (URL/DB/login) form slides up over it
-  // as a bottom sheet with the welcome blurred behind it.
+  // Not logged in. Once the device is set up (server URL saved), the PRIMARY
+  // login is mobile# + password. The Odoo device-setup login stays reachable
+  // via "Admin / device setup" (and on a fresh install) so no one is locked out.
+  if (provisioned && !forceSetup) {
+    return (
+      <AppLoginScreen
+        onLogin={(u) => { setForceSetup(false); setUser(u); }}
+        onNeedSetup={() => { setForceSetup(true); setScreen('connect'); }}
+      />
+    );
+  }
+
+  // Fresh install / forced setup: welcome + the Connect (URL/DB/Odoo login) sheet.
+  // A successful connect only PROVISIONS the device (saves the server/DB); it does
+  // NOT log a user in. The app then shows the mobile-number (non-Odoo) login page.
   return (
     <>
       <LoginScreen goConnect={() => setScreen('connect')} />
       <ConnectScreen
         visible={screen === 'connect'}
-        onLogin={setUser}
-        goBack={() => setScreen('login')}
+        onLogin={() => { setProvisioned(true); setForceSetup(false); setScreen('login'); }}
+        goBack={() => { setScreen('login'); setForceSetup(false); }}
       />
     </>
   );

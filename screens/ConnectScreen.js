@@ -155,17 +155,11 @@ export default function ConnectScreen({ onLogin, goBack, visible = true }) {
         return;
       }
       await session.saveConnection({ serverUrl: base, db: selectedDb });
-      const user = {
-        name: result.name || result.username || username.trim(),
-        username: result.username || username.trim(),
-        email: result.username || '',
-        uid: result.uid,
-        db: selectedDb,
-        serverUrl: base,
-      };
-      await session.saveSession(user);
-      log.info('login success — session saved', { uid: user.uid, name: user.name });
-      onLogin(user);
+      // Device-setup ONLY: the Odoo login just points the app at the server and
+      // provisions it. We do NOT log this Odoo user in — after setup the app
+      // shows the mobile-number (non-Odoo) login page, not Home.
+      log.info('device provisioned — returning to app login', { serverUrl: base, db: selectedDb });
+      onLogin();
     } catch (err) {
       // Modern Odoo throws AccessDenied for wrong credentials — show that under
       // the username field, not the Server URL field.

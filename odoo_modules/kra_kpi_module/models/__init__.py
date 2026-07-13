@@ -32,3 +32,4 @@ from . import kpi_notification_queue
 from . import kpi_notification
 from . import kpi_push_token
 from . import kpi_pair
+from . import kpi_app_otp

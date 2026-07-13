@@ -37,6 +37,7 @@
         "views/kpi_work_session_views.xml",
         "views/kpi_company_settings_views.xml",
         "views/kpi_configuration_views.xml",
+        "views/kpi_user_access_views.xml",
         "views/kpi_task_approval_views.xml",
     ],
 
@@ -80,6 +81,7 @@
             "kra_kpi_module/static/src/components/kpi_company_settings/kpi_company_settings.js",
             "kra_kpi_module/static/src/components/kpi_configuration/kpi_configuration.js",
             "kra_kpi_module/static/src/components/kpi_pair_gate/kpi_pair_gate.js",
+            "kra_kpi_module/static/src/components/kpi_user_access/kpi_user_access.js",
             "kra_kpi_module/static/src/components/kpi_task_approval/kpi_task_approval.js",
 
             "kra_kpi_module/static/src/img/alphalize_logo.png",

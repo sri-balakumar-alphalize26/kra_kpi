@@ -83,3 +83,4 @@ access_kpi_pair_admin,kpi.pair.admin,model_kpi_pair,base.group_system,1,1,1,1
 access_kpi_pair_owner,kpi.pair.owner,model_kpi_pair,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_pair_coord,kpi.pair.coord,model_kpi_pair,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_pair_developer,kpi.pair.developer,model_kpi_pair,kra_kpi_module.group_kra_developer,1,1,1,1
+access_kpi_app_otp_admin,kpi.app.otp.admin,model_kpi_app_otp,base.group_system,1,1,1,1

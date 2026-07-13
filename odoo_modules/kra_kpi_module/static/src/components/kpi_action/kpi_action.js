@@ -1134,35 +1134,6 @@ export class KpiAction extends Component {
                         </t>
                     </div>
 
-                    <!-- Custom "Leave the board?" confirm (replaces native window.confirm) -->
-                    <t t-if="state.showLeaveModal">
-                        <div class="modal-backdrop fade show" style="z-index: 2000;"></div>
-                        <div class="modal d-block" tabindex="-1" style="z-index: 2001;">
-                            <div class="modal-dialog modal-dialog-centered" style="max-width: 420px;">
-                                <div class="modal-content border-0 shadow-lg" style="border-radius: 16px; overflow: hidden;">
-                                    <div class="modal-body text-center p-4">
-                                        <div style="font-size: 44px; line-height: 1;">🚪</div>
-                                        <h4 class="fw-bold mt-3 mb-2">Leave the board?</h4>
-                                        <p class="text-muted mb-0" style="font-size: 14px; line-height: 1.5;">
-                                            Your running task will <b>pause</b> and you'll need to
-                                            re-enter your <b>PIN</b> to continue working.</p>
-                                    </div>
-                                    <div class="modal-footer border-0 justify-content-center pb-4 pt-0" style="gap: 10px;">
-                                        <button class="btn btn-light px-4" style="border-radius: 10px; min-width: 110px;"
-                                                t-att-disabled="state.leaving"
-                                                t-on-click="() => this.cancelLeaveBoard()">Stay</button>
-                                        <button class="btn btn-danger px-4" style="border-radius: 10px; min-width: 110px;"
-                                                t-att-disabled="state.leaving"
-                                                t-on-click="() => this.confirmLeaveBoard()">
-                                            <t t-if="state.leaving">Pausing…</t>
-                                            <t t-else="">Leave &amp; Pause</t>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </t>
-
                     <!-- Modal Container -->
                     <div id="modalContainer"></div>
                 </div>
@@ -1205,8 +1176,6 @@ export class KpiAction extends Component {
                 status: '',
             },
             progressUpdates: [],
-            showLeaveModal: false,   // custom "Leave the board?" confirm (Back)
-            leaving: false,          // busy state while pausing on leave
             showRejectionModal: false,
             rejectedTasks: [],
             seenRejectionIds: [],  // 🆕 NEW: Track which rejected tasks we've already shown
@@ -1420,35 +1389,23 @@ export class KpiAction extends Component {
             this.liveStatusInterval = setInterval(() => {
                 if (this.state.view === 'list') { this.loadLiveStatus(); }
             }, 30000);
-            // Warn before closing OR reloading the tab (Ctrl+W / tab close)
-            // whenever the developer is working — a task is running OR their
-            // workday is open. The browser shows its native "Leave site?"
-            // confirm; on leave we also fire an away beacon so the task pauses
-            // immediately (server-side) instead of waiting for the cron.
+            // Warn before CLOSING or RELOADING the tab (browser's native "Leave
+            // site?"). We flag `_unloading` so onWillUnmount can tell a full page
+            // unload (reload/close) apart from an in-app navigation (Back): a
+            // reload must NOT pause/un-pair (you stay working after refresh),
+            // while Back should pause. On real close the away-cron pauses the
+            // task later via the stale heartbeat.
+            this._unloading = false;
             this._beforeUnloadHandler = (e) => {
+                this._unloading = true;
+                setTimeout(() => { this._unloading = false; }, 3000); // cancelled reload → clear
                 if (this.getActiveTask() || this.state.workdayOpen) {
-                    this._sendLeaveBeacon();
                     e.preventDefault();
                     e.returnValue = '';
                     return '';
                 }
             };
             window.addEventListener('beforeunload', this._beforeUnloadHandler);
-
-            // Intercept the browser Back button / Backspace: show a confirm and,
-            // on leave, fire the away beacon + let navigation proceed to the gate.
-            // We push a dummy history entry so a Back press triggers popstate here
-            // instead of silently leaving the board.
-            this._pairingBack = true;
-            try { window.history.pushState({ kpiBoard: true }, ""); } catch (e2) {}
-            this._popstateHandler = () => {
-                if (!(this.getActiveTask() || this.state.workdayOpen)) return; // not working → allow
-                // Re-arm the dummy entry so we stay on the board until the user
-                // decides in OUR modal (no native window.confirm).
-                try { window.history.pushState({ kpiBoard: true }, ""); } catch (e3) {}
-                this.state.showLeaveModal = true;
-            };
-            window.addEventListener('popstate', this._popstateHandler);
         });
 
         // 🆕 NEW: Cleanup intervals when component is destroyed
@@ -1471,13 +1428,11 @@ export class KpiAction extends Component {
             if (this._beforeUnloadHandler) {
                 window.removeEventListener('beforeunload', this._beforeUnloadHandler);
             }
-            if (this._popstateHandler) {
-                window.removeEventListener('popstate', this._popstateHandler);
-            }
-            // If the board unmounts while the developer was working (e.g. an
-            // in-SPA navigation away that popstate didn't already handle), send
-            // the away beacon so the task pauses immediately.
-            if (this._pairingBack && (this.getActiveTask() || this.state.workdayOpen)) {
+            // The board is unmounting. If this is an IN-APP navigation (Back /
+            // menu) — NOT a page reload/close (`_unloading`) — the developer is
+            // leaving the working surface, so pause + un-pair immediately.
+            // A reload keeps `_unloading` true → we skip → you stay working.
+            if (!this._unloading && (this.getActiveTask() || this.state.workdayOpen)) {
                 this._sendLeaveBeacon();
             }
             if (this._scrollResizeHandler) {
@@ -3470,33 +3425,9 @@ export class KpiAction extends Component {
         } catch (e) { /* offline / non-fatal */ }
     }
 
-    // Awaited "I'm leaving the board" for the Back path — pauses the task
-    // (away) + un-pairs + app push. We wait so the pause commits before we
-    // navigate away.
-    async _leaveAway() {
-        try { await rpc('/kpi_action/leave', {}); } catch (e) { /* non-fatal */ }
-    }
-
-    // Custom "Leave the board?" modal — OK confirms.
-    async confirmLeaveBoard() {
-        this.state.leaving = true;
-        try {
-            await this._leaveAway();        // pause + un-pair before we navigate
-        } finally {
-            this.state.leaving = false;
-            this.state.showLeaveModal = false;
-            this._pairingBack = false;
-            window.history.back();          // now actually leave (→ PIN gate)
-        }
-    }
-
-    // Cancel — stay on the board (history already re-armed in the popstate handler).
-    cancelLeaveBoard() {
-        this.state.showLeaveModal = false;
-    }
-
-    // Fire-and-forget variant for real tab close/reload (beforeunload), where an
-    // awaited rpc is impossible. sendBeacon is delivered even as the page unloads.
+    // Fire-and-forget "I'm leaving the board" (in-app Back / menu navigation) →
+    // server pauses the task (away) + un-pairs + app push. sendBeacon is
+    // delivered even as the component tears down.
     _sendLeaveBeacon() {
         try {
             if (navigator && navigator.sendBeacon) {

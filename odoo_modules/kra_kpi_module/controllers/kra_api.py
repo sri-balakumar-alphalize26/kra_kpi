@@ -4,6 +4,7 @@ import json
 import logging
 import base64
 import mimetypes
+import os
 import pytz
 import re
 
@@ -593,6 +594,329 @@ class KraKpiAPI(http.Controller):
         if token:
             request.env['kpi.push.token'].sudo().deactivate(token)
             _logger.info("push/unregister token=%s...", token[:24])
+        return {'status': True}
+
+    # ================================================================== #
+    # Mobile-app login (mobile# + app password) — "Login Management"       #
+    # ================================================================== #
+    def _find_app_user(self, mobile):
+        """Find a res.users by their app login mobile number (digits-compared)."""
+        digits = re.sub(r'\D', '', mobile or '')
+        if not digits or len(digits) < 4:
+            return request.env['res.users'].sudo().browse()
+        # Match on the last 8+ digits to tolerate country-code differences.
+        users = request.env['res.users'].sudo().search([('kpi_mobile_number', '!=', False)])
+        for u in users:
+            if re.sub(r'\D', '', u.kpi_mobile_number or '').endswith(digits[-8:]):
+                return u
+        return request.env['res.users'].sudo().browse()
+
+    @http.route('/kpi_app/config', type='json', auth='public', methods=['POST'], csrf=False)
+    def app_config(self, **params):
+        """Public: the mobile app fetches the company's country dial code + local
+        mobile length (from the Configuration screen) so every number field in the
+        app shows the same +code and allows the same number of digits."""
+        company = request.env.company or request.env['res.company'].sudo().search([], limit=1, order='id')
+        dial, length = company.sudo()._kpi_mobile_cfg()
+        return {'status': True, 'dial': dial or '91', 'mobile_length': length or 10}
+
+    @http.route('/kpi_app/login_check', type='json', auth='public', methods=['POST'], csrf=False)
+    def app_login_check(self, **params):
+        """Mobile-first login: given a number, return its state so the app knows
+        whether to ask for a password (ready), start onboarding/OTP (needs_setup),
+        or show 'contact admin' (unknown/disabled)."""
+        user = self._find_app_user(params.get('mobile'))
+        if not user:
+            return {'status': True, 'state': 'unknown'}
+        return {'status': True, 'state': user._app_login_state(), 'name': user.name}
+
+    @http.route('/kpi_app/login', type='json', auth='public', methods=['POST'], csrf=False)
+    def app_login(self, **params):
+        """Verify mobile#+app-password, then trusted server-side login for the
+        mapped Odoo user (no Odoo password needed). Blocks disabled users."""
+        user = self._find_app_user(params.get('mobile'))
+        pw = params.get('password') or ''
+        if not user or not user.kpi_app_login_enabled or not user._check_app_password(pw):
+            return {'status': False, 'error': 'Invalid mobile number or password.'}
+        # Trusted login: finalize the session as this user (mirrors Odoo's own
+        # /web/session/authenticate finalize step, minus the password check we
+        # already did ourselves).
+        try:
+            request.session['pre_login'] = user.login
+            request.session['pre_uid'] = user.id
+            request.session.finalize(request.env)
+            request.session.db = request.db
+            request._save_session(request.env)
+        except Exception as exc:
+            _logger.error("app_login finalize failed: %s", exc)
+            return {'status': False, 'error': 'Login failed. Please try again.'}
+        user.sudo().write({
+            'kpi_last_app_login': fields.Datetime.now(),
+            'kpi_last_device': (params.get('device') or '')[:120],
+        })
+        _logger.info("app_login ok user=%s(%s) device=%s", user.login, user.id, params.get('device'))
+        return {'status': True, 'uid': user.id, 'name': user.name,
+                'login': user.login, 'must_change': user.kpi_app_must_change_password}
+
+    @http.route('/kpi_app/set_password', type='json', auth='user', methods=['POST'], csrf=False)
+    def app_set_password(self, **params):
+        """The logged-in user sets their own app password (first-login forced
+        change). Replaces the hash → the old/default password stops working."""
+        new = (params.get('new_password') or '').strip()
+        if len(new) < 4:
+            return {'status': False, 'error': 'Password must be at least 4 characters.'}
+        request.env.user.sudo()._set_app_password(new)
+        return {'status': True}
+
+    def _send_wa_otp(self, user, code):
+        """Send the OTP code to the user's WhatsApp via the connected session,
+        using the (editable) company template."""
+        company = request.env.company
+        template = company.kpi_otp_template()
+        try:
+            minutes = request.env['kpi.app.otp'].sudo().ttl_minutes()
+        except Exception:
+            minutes = 5
+        body = template.format(
+            app=company.name or 'the app',
+            name=user.name or 'there',
+            code=code,
+            minutes=minutes,
+        )
+        phone = (user.kpi_wa_number or user.kpi_mobile_number
+                 or (user.partner_id.mobile or user.partner_id.phone) or '')
+        if not phone:
+            return False
+        session = request.env['whatsapp.session'].sudo().search([('status', '=', 'connected')], limit=1)
+        if not session:
+            _logger.warning("otp: no connected WhatsApp session")
+            return False
+        try:
+            session.send_message(phone, body)
+            return True
+        except Exception as exc:
+            _logger.warning("otp WhatsApp send failed: %s", exc)
+            return False
+
+    @http.route('/kpi_app/otp/request', type='json', auth='public', methods=['POST'], csrf=False)
+    def app_otp_request(self, **params):
+        """Send a password-reset OTP to the user's WhatsApp. Generic response
+        (never reveals whether the number exists or the code)."""
+        user = self._find_app_user(params.get('mobile'))
+        if user and user.kpi_app_login_enabled:
+            try:
+                code = request.env['kpi.app.otp'].sudo().issue(user)
+                sent = self._send_wa_otp(user, code)
+                _logger.info("otp/request user=%s(%s) sent=%s", user.login, user.id, sent)
+                return {'status': True, 'sent': bool(sent)}
+            except Exception as exc:
+                _logger.warning("otp/request failed: %s", exc)
+        # Generic OK so we don't leak which numbers are registered.
+        return {'status': True, 'sent': False}
+
+    @http.route('/kpi_app/otp/verify', type='json', auth='public', methods=['POST'], csrf=False)
+    def app_otp_verify(self, **params):
+        """Verify the code + set the new password, then log the user in."""
+        user = self._find_app_user(params.get('mobile'))
+        new = (params.get('new_password') or '').strip()
+        if not user or not user.kpi_app_login_enabled:
+            return {'status': False, 'error': 'Invalid request.'}
+        if len(new) < 4:
+            return {'status': False, 'error': 'Password must be at least 4 characters.'}
+        if not request.env['kpi.app.otp'].sudo().verify(user, params.get('code')):
+            return {'status': False, 'error': 'Incorrect or expired code.'}
+        user.sudo()._set_app_password(new)   # replaces hash → old password dead
+        # Log them straight in (trusted) so they land in the app after reset.
+        try:
+            request.session['pre_login'] = user.login
+            request.session['pre_uid'] = user.id
+            request.session.finalize(request.env)
+            request.session.db = request.db
+            request._save_session(request.env)
+            user.sudo().write({
+                'kpi_last_app_login': fields.Datetime.now(),
+                'kpi_last_device': (params.get('device') or '')[:120],
+            })
+        except Exception as exc:
+            _logger.error("otp/verify finalize failed: %s", exc)
+            # Password was still set; the app can just log in normally.
+            return {'status': True, 'logged_in': False}
+        return {'status': True, 'logged_in': True, 'uid': user.id,
+                'name': user.name, 'login': user.login}
+
+    # ================================================================== #
+    # Login Management (Non-odoo) — admin manages app-login credentials    #
+    # ================================================================== #
+    @http.route('/kpi_user_access/get', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_get(self, **params):
+        """Admin: list internal users' app-login state + the OTP sender number."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        users = request.env['res.users'].sudo().search(
+            [('share', '=', False), ('active', '=', True)], order='name')
+        # The WhatsApp server that sends the reset codes (latest session record).
+        sess = request.env['whatsapp.session'].sudo().search([], limit=1, order='id desc')
+        from ..models.res_company_kpi import DEFAULT_OTP_TEMPLATE
+        dial, length = request.env.company._kpi_mobile_cfg()
+        try:
+            otp_minutes = request.env['kpi.app.otp'].sudo().ttl_minutes()
+        except Exception:
+            otp_minutes = 5
+        return {
+            'status': True,
+            'connected_number': (sess.phone_number or '') if sess else '',
+            'wa_session_id': sess.id if sess else 0,
+            'wa_state': sess.status if sess else 'none',
+            'wa_phone': (sess.phone_number or '') if sess else '',
+            'otp_template': request.env.company.kpi_otp_message_template or DEFAULT_OTP_TEMPLATE,
+            'otp_default': DEFAULT_OTP_TEMPLATE,
+            'dial': dial or '',
+            'mobile_length': length or 10,
+            'app_name': request.env.company.name or 'the app',
+            'otp_minutes': otp_minutes,
+            'users': [{
+                'id': u.id, 'name': u.name, 'login': u.login,
+                'mobile': u.kpi_mobile_number or '',
+                'enabled': u.kpi_app_login_enabled,
+                'last_login': convert_to_user_tz(u.kpi_last_app_login) if u.kpi_last_app_login else '',
+                'last_device': u.kpi_last_device or '',
+                'has_password': bool(u.kpi_app_password_hash),
+            } for u in users],
+        }
+
+    @http.route('/kpi_user_access/set_mobile', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_set_mobile(self, **params):
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        uid = int(params.get('user_id'))
+        mobile = re.sub(r'\D', '', params.get('mobile') or '') or False
+        request.env['res.users'].sudo().browse(uid).kpi_mobile_number = mobile
+        return {'status': True, 'mobile': mobile or ''}
+
+    @http.route('/kpi_user_access/toggle_login', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_toggle(self, **params):
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        uid = int(params.get('user_id'))
+        request.env['res.users'].sudo().browse(uid).kpi_app_login_enabled = bool(params.get('enabled'))
+        return {'status': True}
+
+    @http.route('/kpi_user_access/reset_password', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_reset_password(self, **params):
+        """Reset a user's app password. Optional {password} sets a unique initial
+        password; otherwise the default '1111'. Either way forces a change on next
+        login (must_change=True)."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        user = request.env['res.users'].sudo().browse(int(params.get('user_id')))
+        custom = (params.get('password') or '').strip()
+        if custom:
+            user.write({
+                'kpi_app_password_hash': user._crypt_context().hash(custom),
+                'kpi_app_must_change_password': True,
+            })
+        else:
+            user._seed_default_app_password()
+        return {'status': True}
+
+    @http.route('/kpi_user_access/set_sender', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_set_sender(self, **params):
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        request.env.company.sudo().kpi_wa_sender_number = (params.get('number') or '').strip() or False
+        return {'status': True}
+
+    @http.route('/kpi_user_access/set_otp_message', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_set_otp_message(self, **params):
+        """Save the editable OTP WhatsApp template (empty → falls back to default)."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        request.env.company.sudo().kpi_otp_message_template = (params.get('template') or '').strip() or False
+        return {'status': True}
+
+    # ================================================================== #
+    # WhatsApp server (Neonize) — connect / status / delete from the       #
+    # Login Management page. The connected session sends the reset codes.  #
+    # ================================================================== #
+    @http.route('/kpi_wa_server/connect', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_server_connect(self, **params):
+        """Start (or restart) the WhatsApp connection → a QR appears to scan.
+        Reuses the single session record (the module allows one active session)."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        Session = request.env['whatsapp.session'].sudo()
+        session = Session.search([], limit=1, order='id desc')
+        if not session:
+            session = Session.create({'name': 'KRA/KPI WhatsApp'})
+        try:
+            session.action_connect()
+        except Exception as exc:
+            _logger.error("wa_server connect failed: %s", exc)
+            return {'status': False, 'message': str(exc)}
+        return {'status': True, 'session_id': session.id, 'state': session.status}
+
+    @http.route('/kpi_wa_server/status', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_server_status(self, **params):
+        """Poll the WhatsApp connection: state + QR (while scanning) + phone."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        Session = request.env['whatsapp.session'].sudo()
+        sid = params.get('session_id')
+        session = Session.browse(int(sid)) if sid else Session.search([], limit=1, order='id desc')
+        if not session or not session.exists():
+            return {'status': True, 'state': 'none'}
+        qr = ''
+        if session.status == 'waiting_qr' and session.qr_image:
+            qr = session.qr_image.decode() if isinstance(session.qr_image, bytes) else session.qr_image
+        return {
+            'status': True,
+            'session_id': session.id,
+            'state': session.status,             # disconnected|waiting_qr|connected|error
+            'phone_number': session.phone_number or '',
+            'qr_image': qr or '',                # base64 PNG (no data: prefix)
+            'error': session.error_message or '',
+        }
+
+    @http.route('/kpi_wa_server/delete', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_server_delete(self, **params):
+        """Fully delete the WhatsApp connection — here AND inside Neonize:
+        log the device out of WhatsApp, stop the client, remove the Odoo record,
+        and delete the on-disk session credentials file (which the module's own
+        unlink() leaves behind)."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        Session = request.env['whatsapp.session'].sudo()
+        sid = params.get('session_id')
+        session = Session.browse(int(sid)) if sid else Session.search([], limit=1, order='id desc')
+        if not session or not session.exists():
+            return {'status': True}
+        db_path = session.db_path
+        # 1) Best-effort logout so WhatsApp also drops this linked device.
+        try:
+            from odoo.addons.whatsapp_neonize.models.whatsapp_session import _wa_clients
+            client = _wa_clients.get(session.id)
+            if client is not None:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # 2) Stop the live client + remove the Odoo record (unlink also stops it).
+        try:
+            session.unlink()
+        except Exception as exc:
+            _logger.error("wa_server delete unlink failed: %s", exc)
+            return {'status': False, 'message': str(exc)}
+        # 3) Delete the Neonize session file (+ SQLite side files) so the
+        #    connection is truly gone from Neonize, not just from Odoo.
+        if db_path:
+            for p in (db_path, db_path + '-journal', db_path + '-wal', db_path + '-shm'):
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except Exception:
+                    pass
         return {'status': True}
 
     # ================================================================== #

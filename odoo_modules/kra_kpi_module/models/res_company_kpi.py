@@ -15,6 +15,17 @@ COUNTRY_MOBILE_LENGTH = {
     'MX': 10,
 }
 
+# Default editable WhatsApp message for app password-reset codes. Written in
+# plain, normal English (no jargon / labels / bold headers) so it reads like a
+# real person's note. The words in braces are filled in at send time with the
+# real values — {name} {code} {minutes} (and optionally {app}).
+DEFAULT_OTP_TEMPLATE = (
+    "Hi {name}! 👋\n\n"
+    "Your password reset code is {code}. Just open the app and enter it to set a "
+    "new password — it stays valid for the next {minutes} minutes.\n\n"
+    "If you didn't ask for this, you can safely ignore this message."
+)
+
 
 class ResCompany(models.Model):
     """Global KRA/KPI settings stored on the company."""
@@ -31,6 +42,22 @@ class ResCompany(models.Model):
         help="Extra WhatsApp numbers (comma-separated) that receive the note when a "
              "developer taps the 🚨 Urgent button in the Pause dialog. The owner is "
              "always included in addition to these.")
+
+    kpi_wa_sender_number = fields.Char(
+        string='App OTP Sender (WhatsApp)',
+        help="WhatsApp number shown to users as the sender of password-reset codes. "
+             "Note: the actual code is sent from the connected WhatsApp session — "
+             "this is a display/record value.")
+
+    kpi_otp_message_template = fields.Text(
+        string='App OTP WhatsApp Message',
+        help="Editable WhatsApp message for password-reset codes. Placeholders: "
+             "{app} {name} {code} {minutes}. Empty falls back to the default.")
+
+    def kpi_otp_template(self):
+        """Return the OTP message template (custom or the built-in default)."""
+        self.ensure_one()
+        return self.kpi_otp_message_template or DEFAULT_OTP_TEMPLATE
 
     # --- Country / mobile-number format (drives the Configuration screen) --- #
     kpi_country_id = fields.Many2one(
