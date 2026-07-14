@@ -101,12 +101,22 @@ export class KpiUserAccess extends Component {
 
                 <!-- Users table -->
                 <div class="card shadow-sm border-0" style="border-left: 4px solid #6366f1 !important;">
-                    <div class="card-header bg-white fw-bold"><i class="fa fa-user me-2 text-primary"></i> Users</div>
+                    <div class="card-header bg-white fw-bold d-flex align-items-center justify-content-between">
+                        <span><i class="fa fa-user me-2 text-primary"></i> Team Members</span>
+                        <select class="form-select form-select-sm" style="width:auto; min-width:150px;"
+                                t-on-change="(ev) => this.setRoleFilter(ev)">
+                            <option value="all" t-att-selected="state.roleFilter === 'all'">All roles</option>
+                            <option value="admin" t-att-selected="state.roleFilter === 'admin'">Admin</option>
+                            <option value="developer" t-att-selected="state.roleFilter === 'developer'">User</option>
+                            <option value="client" t-att-selected="state.roleFilter === 'client'">Client</option>
+                        </select>
+                    </div>
                     <div class="card-body">
                         <table class="table table-hover align-middle mb-0">
                             <thead class="table-light">
                                 <tr>
                                     <th>Name</th>
+                                    <th style="width:130px;">Role</th>
                                     <th style="width:190px;">Mobile (login)</th>
                                     <th style="width:150px;">Last login</th>
                                     <th style="width:150px;">Last device</th>
@@ -115,10 +125,19 @@ export class KpiUserAccess extends Component {
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr t-foreach="state.users" t-as="u" t-key="u.id">
+                                <tr t-foreach="filteredUsers" t-as="u" t-key="u.id">
                                     <td>
                                         <div class="fw-semibold" t-esc="u.name"/>
                                         <small class="text-muted" t-esc="u.login"/>
+                                    </td>
+                                    <td>
+                                        <select class="form-select form-select-sm" t-att-disabled="u.is_system"
+                                                t-on-change="(ev) => this.saveRole(u, ev)">
+                                            <option value="admin" t-att-selected="u.role === 'admin'">Admin</option>
+                                            <option value="developer" t-att-selected="u.role === 'developer'">User</option>
+                                            <option value="client" t-att-selected="u.role === 'client'">Client</option>
+                                        </select>
+                                        <span t-if="u._savedRole" class="text-success" style="font-size:11px;">✓ Saved</span>
                                     </td>
                                     <td>
                                         <div class="input-group input-group-sm">
@@ -143,7 +162,10 @@ export class KpiUserAccess extends Component {
                                         <div t-if="u._resetMsg" class="text-success" style="font-size:11px;" t-esc="u._resetMsg"/>
                                     </td>
                                 </tr>
-                                <tr t-if="!state.users.length"><td colspan="6" class="text-muted">No users.</td></tr>
+                                <tr t-if="!filteredUsers.length"><td colspan="7" class="text-muted">
+                                    <t t-if="state.roleFilter !== 'all'">No users with this role.</t>
+                                    <t t-else="">No users.</t>
+                                </td></tr>
                             </tbody>
                         </table>
                         <small class="text-muted d-block mt-2">Reset sets the password to <b>1111</b> and forces the
@@ -156,6 +178,7 @@ export class KpiUserAccess extends Component {
     setup() {
         this.state = useState({
             loading: true, error: "", users: [],
+            roleFilter: "all",
             connected_number: "",
             otp_template: "", otp_default: "", otp_preview: "", savedOtp: false,
             dial: "", mobile_length: 10,
@@ -191,6 +214,16 @@ export class KpiUserAccess extends Component {
         });
         onWillUnmount(() => this.stopWaPolling());
     }
+
+    // --- Role filter (Team Members card header) ------------------------- //
+    // Rows shown in the table, narrowed to the selected role (all = everyone).
+    get filteredUsers() {
+        const f = this.state.roleFilter;
+        if (!f || f === "all") return this.state.users;
+        return this.state.users.filter((u) => u.role === f);
+    }
+
+    setRoleFilter(ev) { this.state.roleFilter = ev.target.value; }
 
     // --- WhatsApp server (Neonize) connect / poll / delete -------------- //
     startWaPolling() {
@@ -289,6 +322,15 @@ export class KpiUserAccess extends Component {
             if (res.status) { u.mobile = res.mobile; this._flash(u, "_savedMobile"); }
             else alert(res.message || "Not authorized.");
         } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+
+    async saveRole(u, ev) {
+        const role = ev.target.value;
+        try {
+            const res = await rpc("/kpi_user_access/set_role", { user_id: u.id, role });
+            if (res.status) { u.role = res.role; this._flash(u, "_savedRole"); }
+            else { alert(res.message || "Not authorized."); ev.target.value = u.role; }
+        } catch (e) { alert(e?.data?.message || "Failed to save."); ev.target.value = u.role; }
     }
 
     async toggle(u) {

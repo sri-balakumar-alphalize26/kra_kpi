@@ -1,9 +1,18 @@
 import logging
 
-from odoo import fields, models
+from odoo import api, fields, models
 from odoo.exceptions import AccessDenied
 
 _logger = logging.getLogger(__name__)
+
+# XML ids of the KRA/KPI role groups (kept in one place so the compute/inverse
+# and the Login Management dropdown stay in sync).
+_ROLE_GROUP_XMLIDS = (
+    'kra_kpi_module.group_kra_developer',
+    'kra_kpi_module.group_kra_client',
+    'kra_kpi_module.group_kra_admin',
+    'kra_kpi_module.group_kra_owner',
+)
 
 # Default first-time app password (admin can override per user).
 _DEFAULT_APP_PASSWORD = '1111'
@@ -50,6 +59,61 @@ class ResUsers(models.Model):
         help="Force the user to set their own password on next login.")
     kpi_last_app_login = fields.Datetime(string='Last App Login', copy=False)
     kpi_last_device = fields.Char(string='Last Device', copy=False)
+
+    # ---- App role (User / Client / Admin) -------------------------------- #
+    # A simple 3-way role selector shown in Settings -> Users, right under the
+    # base "Role: User / Administrator". It just maps to the KRA/KPI groups:
+    #   User  -> group_kra_developer   (gets & creates own tasks)
+    #   Client-> group_kra_client      (sees only their own project data)
+    #   Admin -> group_kra_owner        (full KRA/KPI access)
+    # Same mapping the Login Management dropdown uses, so both stay consistent.
+    kpi_role = fields.Selection(
+        selection=[
+            ('developer', 'User'),
+            ('client', 'Client'),
+            ('admin', 'Admin'),
+        ],
+        string='KRA / KPI Role',
+        compute='_compute_kpi_role',
+        inverse='_inverse_kpi_role',
+        store=False,
+        help="App role for KRA/KPI. User = developer (gets & creates own tasks); "
+             "Client = sees only their own project data; Admin = full access.")
+
+    @api.depends('group_ids', 'all_group_ids')
+    def _compute_kpi_role(self):
+        for u in self:
+            if (u.has_group('base.group_system')
+                    or u.has_group('kra_kpi_module.group_kra_owner')
+                    or u.has_group('kra_kpi_module.group_kra_admin')):
+                u.kpi_role = 'admin'
+            elif u.has_group('kra_kpi_module.group_kra_client'):
+                u.kpi_role = 'client'
+            else:
+                u.kpi_role = 'developer'
+
+    def _inverse_kpi_role(self):
+        # Collect the four role groups (skip any that don't resolve).
+        role_groups = self.env['res.groups']
+        for xmlid in _ROLE_GROUP_XMLIDS:
+            grp = self.env.ref(xmlid, raise_if_not_found=False)
+            if grp:
+                role_groups |= grp
+        dev = self.env.ref('kra_kpi_module.group_kra_developer', raise_if_not_found=False)
+        client = self.env.ref('kra_kpi_module.group_kra_client', raise_if_not_found=False)
+        owner = self.env.ref('kra_kpi_module.group_kra_owner', raise_if_not_found=False)
+        target_by_role = {'developer': dev, 'client': client, 'admin': owner}
+        for u in self:
+            # Never re-role the base super-admin from here.
+            if u.has_group('base.group_system'):
+                continue
+            target = target_by_role.get(u.kpi_role)
+            if not target:
+                continue
+            # Clear all four role groups, then add the chosen one. Odoo re-adds
+            # the implied groups (e.g. Owner -> Coordinator -> Developer -> user).
+            cmds = [(3, g.id) for g in role_groups] + [(4, target.id)]
+            u.sudo().write({'group_ids': cmds})
 
     # ---- Password hashing (reuses Odoo's own passlib crypt context) ------ #
     def _set_app_password(self, raw):

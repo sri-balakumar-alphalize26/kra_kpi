@@ -91,18 +91,94 @@ function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
   );
 }
 
-function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure }) {
-  const p = PRIORITY[task.priority] || PRIORITY.regular;
-  const busy = busyId === task.id;
+// Meta rows (Assignee / Time / Estimate + paused reason) and the state-appropriate
+// action buttons. Shared by TaskCard (kanban) and TaskListRow (accordion list) so
+// both views behave identically — same button set, same runAction wiring, same
+// busy spinner. Reassign stays gated behind isAdmin, so role behavior is preserved.
+function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
   const st = task.task_state;
   const running = st === 'in_progress';
-
-  // Which buttons show, per state (mirrors the web card).
+  const busy = busyId === task.id;
   const canStart = ['assigned', 'urgent', 'important', 'regular', 'queue_waiting',
     'pre_approval_approved', 'pre_approval_partial'].includes(st);
   const canResume = ['paused', 'hold', 'rework'].includes(st);
   const canComplete = ['in_progress', 'paused', 'hold', 'rework'].includes(st);
   const canPause = st === 'in_progress';
+  return (
+    <>
+      {/* Meta */}
+      <View style={s.metaBlock}>
+        <View style={s.metaRow}>
+          <View style={s.avatar}><Text style={s.avatarTxt}>{initials(task.user_name)}</Text></View>
+          <Text style={s.metaLabel}>Assignee</Text>
+          <Text style={s.metaValue} numberOfLines={1}>{task.user_name || 'Unassigned'}</Text>
+        </View>
+        <MetaRow icon="time-outline" label="Time" value={fmtHMS(liveSeconds(task, nowMs))}
+          valueColor={running ? COLORS.green : undefined} />
+        <MetaRow icon="flag-outline" label="Estimate" value={task.estimate_display || '00:00'} />
+      </View>
+      {task.paused_reason && ['paused', 'hold', 'rework'].includes(st) ? (
+        <View style={s.pausedPill}>
+          <Ionicons name="pause-circle" size={14} color={COLORS.amber} />
+          <Text style={s.pausedPillTxt} numberOfLines={2}>Paused: {task.paused_reason}</Text>
+        </View>
+      ) : null}
+
+      {/* Actions */}
+      <View style={s.btnRow}>
+        {busy ? (
+          <View style={s.btnBusy}><ActivityIndicator color={COLORS.primary} /></View>
+        ) : (
+          <>
+            {canStart && <Btn label="Start" icon="play" kind="primary" onPress={() => onAction('start', task)} />}
+            {canResume && <Btn label="Resume" icon="play" kind="green" onPress={() => onAction('resume', task)} />}
+            {canPause && <Btn label="Pause" icon="pause" kind="amber" onPress={() => onAction('pause', task)} />}
+            {canComplete && <Btn label="Complete" icon="checkmark-circle" kind="red" onPress={() => onAction('complete', task)} />}
+            {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="ghostRed" onPress={() => onAction('partial', task)} />}
+            {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
+          </>
+        )}
+      </View>
+    </>
+  );
+}
+
+// One row of the list view: an "Odoo attendance"-style accordion — task name +
+// priority dot + chevron; tapping expands to reveal the shared TaskDetailBody.
+// Mirrors the chevron-forward/down conditional-render pattern used by KraNode /
+// OwnerDashboard's ClientCard.
+function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin }) {
+  const p = PRIORITY[task.priority] || PRIORITY.regular;
+  const running = task.task_state === 'in_progress';
+  return (
+    <View style={[s.listRow, expanded && s.listRowOpen]}>
+      <TouchableOpacity style={s.listHead} onPress={onToggle} activeOpacity={0.7}>
+        <View style={[s.listDot, { backgroundColor: p.fg }]} />
+        <Text style={s.listName} numberOfLines={1}>{task.name}</Text>
+        {running && (
+          <View style={s.livePill}>
+            <View style={s.liveDot} />
+            <Text style={s.liveTxt}>Live</Text>
+          </View>
+        )}
+        <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={18} color={COLORS.muted} />
+      </TouchableOpacity>
+      {expanded && (
+        <View style={s.listBody}>
+          <View style={[s.pill, s.listPill, { backgroundColor: p.bg }]}>
+            <View style={[s.pillDot, { backgroundColor: p.fg }]} />
+            <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
+          </View>
+          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} />
+        </View>
+      )}
+    </View>
+  );
+}
+
+function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure }) {
+  const p = PRIORITY[task.priority] || PRIORITY.regular;
+  const running = task.task_state === 'in_progress';
 
   // One-shot highlight + heartbeat when this card is the notification target.
   // `beat` drives BOTH the scale (heartbeat) and a highlight-overlay opacity.
@@ -169,39 +245,8 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure }) 
           )}
         </View>
 
-        {/* Meta */}
-        <View style={s.metaBlock}>
-          <View style={s.metaRow}>
-            <View style={s.avatar}><Text style={s.avatarTxt}>{initials(task.user_name)}</Text></View>
-            <Text style={s.metaLabel}>Assignee</Text>
-            <Text style={s.metaValue} numberOfLines={1}>{task.user_name || 'Unassigned'}</Text>
-          </View>
-          <MetaRow icon="time-outline" label="Time" value={fmtHMS(liveSeconds(task, nowMs))}
-            valueColor={running ? COLORS.green : undefined} />
-          <MetaRow icon="flag-outline" label="Estimate" value={task.estimate_display || '00:00'} />
-        </View>
-        {task.paused_reason && ['paused', 'hold', 'rework'].includes(st) ? (
-          <View style={s.pausedPill}>
-            <Ionicons name="pause-circle" size={14} color={COLORS.amber} />
-            <Text style={s.pausedPillTxt} numberOfLines={2}>Paused: {task.paused_reason}</Text>
-          </View>
-        ) : null}
-
-        {/* Actions */}
-        <View style={s.btnRow}>
-          {busy ? (
-            <View style={s.btnBusy}><ActivityIndicator color={COLORS.primary} /></View>
-          ) : (
-            <>
-              {canStart && <Btn label="Start" icon="play" kind="primary" onPress={() => onAction('start', task)} />}
-              {canResume && <Btn label="Resume" icon="play" kind="green" onPress={() => onAction('resume', task)} />}
-              {canPause && <Btn label="Pause" icon="pause" kind="amber" onPress={() => onAction('pause', task)} />}
-              {canComplete && <Btn label="Complete" icon="checkmark-circle" kind="red" onPress={() => onAction('complete', task)} />}
-              {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="ghostRed" onPress={() => onAction('partial', task)} />}
-              {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
-            </>
-          )}
-        </View>
+        {/* Meta + actions (shared with the list view) */}
+        <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} />
       </View>
     </View>
     </Animated.View>
@@ -312,6 +357,15 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
   const [filterStatus, setFilterStatus] = useState(null);     // lane key or null
   const [openFilter, setOpenFilter] = useState(null);         // 'assignee'|'priority'|'status'|null
 
+  // View mode: 'list' = vertical accordion (default), 'board' = horizontal kanban.
+  // Available to every role. Two-level accordion in list mode:
+  //   expandedLanes = which status headings are open (default: all collapsed —
+  //                   only the Regular/Paused/… headings show until tapped).
+  //   expandedId    = the single open task row inside an open heading (null = none).
+  const [viewMode, setViewMode] = useState('list');
+  const [expandedLanes, setExpandedLanes] = useState(() => new Set());
+  const [expandedId, setExpandedId] = useState(null);
+
   // Workday
   const [workdayOpen, setWorkdayOpen] = useState(false);
   const [workdayBusy, setWorkdayBusy] = useState(false);
@@ -415,12 +469,14 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
     }
     handledFocusRef.current = focusTaskId;
 
-    // 1. Clear every filter so the target card can't be hidden.
+    // 1. Clear every filter so the target card can't be hidden, and switch to the
+    //    board view (scroll-to-focus + heartbeat target the kanban card refs).
     setSearch('');
     setFilterAssignee(null);
     setFilterPriority(null);
     setFilterStatus(null);
     setOpenFilter(null);
+    setViewMode('board');
 
     const laneKey = laneForTask(task);
 
@@ -774,6 +830,16 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
           getLabel={(o) => o.label}
           onPick={(o) => { setFilterStatus(o.key); setOpenFilter(null); }}
         />
+        {/* View toggle (all roles): kanban board ⇄ vertical accordion list.
+            Icon shows the view you'll switch TO. */}
+        <TouchableOpacity
+          style={s.viewToggle}
+          onPress={() => { setOpenFilter(null); setViewMode(viewMode === 'board' ? 'list' : 'board'); }}
+          activeOpacity={0.8}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name={viewMode === 'board' ? 'list' : 'grid'} size={20} color={COLORS.primary} />
+        </TouchableOpacity>
       </View>
 
       {isMock && !loading && !error ? (
@@ -783,7 +849,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
         </View>
       ) : null}
 
-      {/* Body — horizontal kanban lanes (like the web board) */}
+      {/* Body — kanban lanes (board) or vertical accordion (list) */}
       {loading ? (
         <View style={s.center}><ActivityIndicator size="large" color={COLORS.primary} /><Text style={s.centerTxt}>Loading tasks…</Text></View>
       ) : error ? (
@@ -792,7 +858,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
           <Text style={s.centerTxt}>{error}</Text>
           <TouchableOpacity style={s.retry} onPress={() => load()}><Ionicons name="refresh" size={18} color="#fff" /><Text style={s.retryTxt}>Retry</Text></TouchableOpacity>
         </View>
-      ) : (
+      ) : viewMode === 'board' ? (
         <ScrollView
           ref={boardRef}
           horizontal
@@ -848,6 +914,58 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
               </AnimatedLane>
             );
           })}
+        </ScrollView>
+      ) : (
+        /* List view — vertical accordion, grouped by status. Same filtered data,
+           same actions; each row expands to reveal the shared TaskDetailBody. */
+        <ScrollView
+          style={s.listScroll}
+          contentContainerStyle={{ padding: 14, paddingBottom: 28 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {filtered.length === 0 ? (
+            <View style={s.center}>
+              <MaterialCommunityIcons name="tray" size={40} color={COLORS.faint} />
+              <Text style={s.centerTxt}>No tasks match.</Text>
+            </View>
+          ) : (
+            LANES.map((l) => {
+              const items = lanes[l.key] || [];
+              if (items.length === 0) return null;
+              const laneOpen = expandedLanes.has(l.key);
+              return (
+                <View key={l.key} style={{ marginBottom: 16 }}>
+                  {/* Level 1: status heading — tap the arrow to reveal its tasks. */}
+                  <TouchableOpacity
+                    style={[s.listSection, { backgroundColor: l.color }]}
+                    onPress={() => setExpandedLanes((prev) => {
+                      const next = new Set(prev);
+                      next.has(l.key) ? next.delete(l.key) : next.add(l.key);
+                      return next;
+                    })}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name={laneOpen ? 'chevron-down' : 'chevron-forward'} size={18} color="#fff" />
+                    <Text style={s.listSectionTxt} numberOfLines={1}>{l.label}</Text>
+                    <View style={s.laneCount}><Text style={s.laneCountTxt}>{items.length}</Text></View>
+                  </TouchableOpacity>
+                  {/* Level 2: task rows — each expands to its details + actions. */}
+                  {laneOpen && items.map((t) => (
+                    <TaskListRow
+                      key={t.id}
+                      task={t}
+                      expanded={expandedId === t.id}
+                      onToggle={() => setExpandedId(expandedId === t.id ? null : t.id)}
+                      onAction={runAction}
+                      busyId={busyId}
+                      nowMs={nowMs}
+                      isAdmin={isAdmin}
+                    />
+                  ))}
+                </View>
+              );
+            })
+          )}
         </ScrollView>
       )}
 
@@ -1304,6 +1422,21 @@ const s = StyleSheet.create({
   filterItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#F0F3F8' },
   filterItemOn: { backgroundColor: '#EEF3FF' },
   filterItemTxt: { fontSize: 13.5, color: COLORS.ink },
+
+  // View-mode toggle (board ⇄ list), sits at the end of the filter row.
+  viewToggle: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#EAF1FE', borderWidth: 1.5, borderColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+
+  // List (accordion) view
+  listScroll: { flex: 1 },
+  listSection: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 12, marginBottom: 8 },
+  listSectionTxt: { flex: 1, color: '#fff', fontSize: 14, fontWeight: '900', letterSpacing: 0.2 },
+  listRow: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, marginBottom: 8, overflow: 'hidden' },
+  listRowOpen: { borderColor: COLORS.primary },
+  listHead: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, minHeight: 52 },
+  listDot: { width: 9, height: 9, borderRadius: 5 },
+  listName: { flex: 1, fontSize: 14, fontWeight: '700', color: COLORS.ink },
+  listBody: { paddingHorizontal: 14, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#F0F3F8', paddingTop: 10 },
+  listPill: { alignSelf: 'flex-start', marginBottom: 4 },
 
   // Live activity strip (stacked rows so the break line + totals fit on a phone)
   liveStrip: { marginHorizontal: 14, marginTop: 10, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, paddingHorizontal: 12, paddingVertical: 10, gap: 8 },

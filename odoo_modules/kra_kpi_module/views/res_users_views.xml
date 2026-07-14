@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Add a "KRA / KPI Role" radio (User / Client / Admin) to Settings ->
+         Users & Companies -> Users, right under the base "Role: User /
+         Administrator". Picking one assigns the matching KRA/KPI group. -->
+    <record id="view_users_form_kpi_role" model="ir.ui.view">
+        <field name="name">res.users.form.kpi.role</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@name='access_rights']//field[@name='role']" position="after">
+                <field name="kpi_role" string="KRA / KPI Role"
+                       widget="radio" options="{'horizontal': true}"
+                       invisible="share"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

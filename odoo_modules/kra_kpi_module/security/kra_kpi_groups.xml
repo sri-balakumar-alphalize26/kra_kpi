@@ -9,14 +9,14 @@
             <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
         </record>
 
-        <!-- Client portal: read-only view of own client's invoices and KPI list.
-             Implies Portal (not Internal User) so clients don't see Discuss /
-             Contacts / Dashboards / Apps / etc. — only what's explicitly granted
-             to them via the Client Portal menu. -->
+        <!-- Client: an INTERNAL user restricted to their own client's data by the
+             KRA record rules (client_user_ids). Internal (not portal) so clients
+             appear in Login Management and can use the mobile-app login; the record
+             rules still scope them to only their own invoices / KPIs. -->
         <record id="group_kra_client" model="res.groups">
-            <field name="name">KRA / KPI Client (Portal)</field>
-            <field name="comment">Client-side portal users — sees only finalized invoices and own-KRA KPIs (read-only).</field>
-            <field name="implied_ids" eval="[(6, 0, [ref('base.group_portal')])]"/>
+            <field name="name">KRA / KPI Client</field>
+            <field name="comment">Client users — see only their own client's finalized invoices and own-KRA KPIs (scoped by record rules).</field>
+            <field name="implied_ids" eval="[(6, 0, [ref('base.group_user')])]"/>
         </record>
 
         <!-- Coordinator: full operational management — manages KRAs/KPIs and approvals. Implies Developer.

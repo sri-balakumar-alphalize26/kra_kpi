@@ -793,8 +793,21 @@ class KraKpiAPI(http.Controller):
                 'last_login': convert_to_user_tz(u.kpi_last_app_login) if u.kpi_last_app_login else '',
                 'last_device': u.kpi_last_device or '',
                 'has_password': bool(u.kpi_app_password_hash),
+                'role': self._kra_role_of(u),
+                'is_system': u.has_group('base.group_system'),
             } for u in users],
         }
+
+    def _kra_role_of(self, user):
+        """The user's app-role for the Login Management dropdown:
+        'admin' (system / owner / coordinator) | 'client' | 'developer'."""
+        if (user.has_group('base.group_system')
+                or user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('kra_kpi_module.group_kra_admin')):
+            return 'admin'
+        if user.has_group('kra_kpi_module.group_kra_client'):
+            return 'client'
+        return 'developer'
 
     @http.route('/kpi_user_access/set_mobile', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_set_mobile(self, **params):
@@ -804,6 +817,37 @@ class KraKpiAPI(http.Controller):
         mobile = re.sub(r'\D', '', params.get('mobile') or '') or False
         request.env['res.users'].sudo().browse(uid).kpi_mobile_number = mobile
         return {'status': True, 'mobile': mobile or ''}
+
+    @http.route('/kpi_user_access/set_role', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_set_role(self, **params):
+        """Set a user's KRA app-role by moving them between the role groups:
+        'admin' → Owner (full access), 'developer' → Developer, 'client' → Client.
+        Only the KRA role groups are touched; the base super-admin is never re-roled."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        user = request.env['res.users'].sudo().browse(int(params.get('user_id') or 0))
+        if not user.exists():
+            return {'status': False, 'message': 'User not found'}
+        if user.has_group('base.group_system'):
+            return {'status': False, 'message': "The Odoo administrator's role can't be changed here."}
+        role = params.get('role')
+        ref = request.env.ref
+        target = {
+            'admin':     'kra_kpi_module.group_kra_owner',
+            'developer': 'kra_kpi_module.group_kra_developer',
+            'client':    'kra_kpi_module.group_kra_client',
+        }.get(role)
+        if not target:
+            return {'status': False, 'message': 'Invalid role'}
+        # Clear every KRA role group, then add the chosen one (Odoo propagates its
+        # implied groups: owner→coordinator→developer→internal-user, etc.).
+        role_groups = (ref('kra_kpi_module.group_kra_owner')
+                       | ref('kra_kpi_module.group_kra_admin')
+                       | ref('kra_kpi_module.group_kra_developer')
+                       | ref('kra_kpi_module.group_kra_client'))
+        cmds = [(3, g.id) for g in role_groups] + [(4, ref(target).id)]
+        user.sudo().write({'group_ids': cmds})   # Odoo 19: user-groups field is group_ids (was groups_id)
+        return {'status': True, 'role': self._kra_role_of(user)}
 
     @http.route('/kpi_user_access/toggle_login', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_toggle(self, **params):

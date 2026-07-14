@@ -39,6 +39,7 @@
         "views/kpi_configuration_views.xml",
         "views/kpi_user_access_views.xml",
         "views/kpi_task_approval_views.xml",
+        "views/res_users_views.xml",
     ],
 
     "assets": {
