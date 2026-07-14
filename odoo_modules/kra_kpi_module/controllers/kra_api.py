@@ -377,7 +377,7 @@ class KraKpiAPI(http.Controller):
         the page navigates, so the pause is guaranteed to commit. JSON so the
         board can `await rpc('/kpi_action/leave')`."""
         try:
-            request.env['kpi.work.session'].sudo()._away_now(request.env.user, source='leave')
+            request.env['kpi.work.session'].sudo()._mark_leaving(request.env.user)
         except Exception as exc:
             _logger.warning("kpi_action/leave failed: %s", exc)
         return {'status': True}
@@ -388,7 +388,7 @@ class KraKpiAPI(http.Controller):
         where an awaited rpc is impossible. Same effect as /kpi_action/leave.
         type='http' so sendBeacon (same-origin, sends the session cookie) works."""
         try:
-            request.env['kpi.work.session'].sudo()._away_now(request.env.user, source='leave')
+            request.env['kpi.work.session'].sudo()._mark_leaving(request.env.user)
         except Exception as exc:
             _logger.warning("kpi_action/leave_beacon failed: %s", exc)
         return request.make_response('ok', headers=[('Content-Type', 'text/plain')])
@@ -665,11 +665,14 @@ class KraKpiAPI(http.Controller):
         new = (params.get('new_password') or '').strip()
         if len(new) < 4:
             return {'status': False, 'error': 'Password must be at least 4 characters.'}
+        if request.env.user.sudo()._check_app_password(new):
+            return {'status': False, 'error': "You can't reuse your old password. Please choose a new one."}
         request.env.user.sudo()._set_app_password(new)
         return {'status': True}
 
     def _send_wa_otp(self, user, code):
-        """Send the OTP code to the user's WhatsApp via the connected session,
+        """Send the OTP code to the user's REGISTERED login number (the one the
+        admin set in Login Management), from the scanned/linked WhatsApp session,
         using the (editable) company template."""
         company = request.env.company
         template = company.kpi_otp_template()
@@ -683,8 +686,14 @@ class KraKpiAPI(http.Controller):
             code=code,
             minutes=minutes,
         )
-        phone = (user.kpi_wa_number or user.kpi_mobile_number
-                 or (user.partner_id.mobile or user.partner_id.phone) or '')
+        # Recipient = the number the admin registered for this user (the login
+        # number). Normalize with the company country dial code so WhatsApp can
+        # route it — the stored login number is local digits (e.g. 9999999999 →
+        # 919999999999).
+        dial, length = company._kpi_mobile_cfg()
+        raw = (user.kpi_mobile_number or user.kpi_wa_number
+               or (user.partner_id.mobile or user.partner_id.phone) or '')
+        phone = normalize_wa(raw, dial, length)
         if not phone:
             return False
         session = request.env['whatsapp.session'].sudo().search([('status', '=', 'connected')], limit=1)
@@ -693,6 +702,7 @@ class KraKpiAPI(http.Controller):
             return False
         try:
             session.send_message(phone, body)
+            _logger.info("otp sent to %s (user %s) via session %s", phone, user.login, session.id)
             return True
         except Exception as exc:
             _logger.warning("otp WhatsApp send failed: %s", exc)
@@ -723,6 +733,8 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'error': 'Invalid request.'}
         if len(new) < 4:
             return {'status': False, 'error': 'Password must be at least 4 characters.'}
+        if user._check_app_password(new):
+            return {'status': False, 'error': "You can't reuse your old password. Please choose a new one."}
         if not request.env['kpi.app.otp'].sudo().verify(user, params.get('code')):
             return {'status': False, 'error': 'Incorrect or expired code.'}
         user.sudo()._set_app_password(new)   # replaces hash → old password dead

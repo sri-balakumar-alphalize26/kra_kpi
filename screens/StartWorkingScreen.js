@@ -8,17 +8,19 @@
 // timing runs there; the phone is the key + the away notifier.
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
+  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, ScrollView, Dimensions,
   StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
+import PairArt from '../components/PairArt';
 import { createLogger } from '../api/logger';
 import { generatePin, pairingStatus } from '../services/pairing';
 
 const log = createLogger('StartWorking');
+const { width: SW } = Dimensions.get('window');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
 const POLL_MS = 3000;
 
@@ -126,8 +128,8 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
           <TouchableOpacity onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.iconBtn}>
             <Ionicons name="chevron-back" size={24} color={COLORS.navy} />
           </TouchableOpacity>
-        ) : <View style={s.iconBtn} />}
-        <Text style={s.hTitle} numberOfLines={1}>{resume ? 'Continue Working' : 'Start Working'}</Text>
+        ) : null}
+        <View style={{ flex: 1 }} />
         {onLogout ? (
           <TouchableOpacity onPress={onLogout} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.iconBtn}>
             <Ionicons name="log-out-outline" size={22} color={COLORS.muted} />
@@ -135,7 +137,20 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
         ) : <View style={s.iconBtn} />}
       </View>
 
-      <View style={s.body}>
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+        {/* Brand header */}
+        <Image source={require('../assets/logo369.png')} style={s.logo} resizeMode="contain" />
+        <Text style={s.brandTitle}>{resume ? 'Continue Working' : 'Start Working'}</Text>
+        <Text style={s.brandSub}>
+          {resume
+            ? 'Pair your phone to your computer to resume your paused task.'
+            : 'Pair your phone to your computer to start timing.'}
+        </Text>
+
+        {/* Phone → computer pairing illustration */}
+        <PairArt width={SW * 0.6} height={SW * 0.6 * (190 / 300)} />
+
+        {/* PIN card (the box) */}
         <View style={s.card}>
           <View style={[s.iconCircle, { backgroundColor: resume ? COLORS.amberBg : '#EAF2FF' }]}>
             <MaterialCommunityIcons name="cellphone-key" size={40} color={resume ? COLORS.amber : COLORS.primary} />
@@ -192,7 +207,23 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
             </Text>
           </TouchableOpacity>
         </View>
-      </View>
+
+        {/* How it works */}
+        <View style={s.steps}>
+          <View style={s.stepRow}>
+            <View style={s.stepNum}><Text style={s.stepNumTxt}>1</Text></View>
+            <Text style={s.stepTxt}>Open the KPI Action Board on your computer's browser.</Text>
+          </View>
+          <View style={s.stepRow}>
+            <View style={s.stepNum}><Text style={s.stepNumTxt}>2</Text></View>
+            <Text style={s.stepTxt}>Type this PIN there to pair your phone.</Text>
+          </View>
+          <View style={s.stepRow}>
+            <View style={s.stepNum}><Text style={s.stepNumTxt}>3</Text></View>
+            <Text style={s.stepTxt}>You're working — timing runs on the computer.</Text>
+          </View>
+        </View>
+      </ScrollView>
     </View>
   );
 }
@@ -204,10 +235,18 @@ const s = StyleSheet.create({
     paddingHorizontal: 12, paddingBottom: 12,
   },
   iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', ...SHADOW },
-  hTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: COLORS.navy },
+  scroll: { flexGrow: 1, alignItems: 'center', paddingHorizontal: 20, paddingTop: 4, paddingBottom: 30 },
+  logo: { width: 168, height: 90, alignSelf: 'center', marginTop: 2, marginBottom: 4 },
+  brandTitle: { fontSize: 22, fontWeight: '900', color: COLORS.navy, textAlign: 'center' },
+  brandSub: { fontSize: 13.5, color: COLORS.muted, textAlign: 'center', marginTop: 6, marginBottom: 6, paddingHorizontal: 16, lineHeight: 19 },
 
-  body: { flex: 1, justifyContent: 'center', padding: 20 },
-  card: { backgroundColor: '#fff', borderRadius: 18, padding: 24, alignItems: 'center', ...SHADOW },
+  card: { width: '100%', backgroundColor: '#fff', borderRadius: 18, padding: 24, alignItems: 'center', marginTop: 6, ...SHADOW },
+
+  steps: { alignSelf: 'stretch', marginTop: 22, gap: 12 },
+  stepRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  stepNum: { width: 26, height: 26, borderRadius: 13, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+  stepNumTxt: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  stepTxt: { flex: 1, fontSize: 13, color: COLORS.navy, lineHeight: 18 },
   iconCircle: { width: 78, height: 78, borderRadius: 39, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
 
   cardTitle: { fontSize: 18, fontWeight: '800', color: COLORS.navy, textAlign: 'center' },

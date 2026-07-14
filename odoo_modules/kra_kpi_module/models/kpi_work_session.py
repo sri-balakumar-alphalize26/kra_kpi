@@ -90,6 +90,12 @@ class KpiWorkSession(models.Model):
     # cron pauses the running task when this goes stale. awayed_task_id lets the
     # board offer a one-click Resume when the developer comes back.
     last_heartbeat = fields.Datetime(string='Last Heartbeat', index=True)
+    leaving_at = fields.Datetime(
+        string='Board Leaving At', readonly=True,
+        help="Stamped when the board tab is closed/left (a beacon). If the board "
+             "doesn't re-appear (heartbeat) within a few seconds, the device is "
+             "un-paired so the app returns to the PIN screen. A refresh re-heartbeats "
+             "and clears this → stays paired.")
     awayed_task_id = fields.Many2one(
         'kra.kpi', string='Auto-awayed Task', readonly=True, ondelete='set null',
         help='Set by the auto-away cron to the task it paused; cleared once the board '
@@ -248,12 +254,29 @@ class KpiWorkSession(models.Model):
         vals = {'last_heartbeat': fields.Datetime.now()}
         if was_away:
             vals['awayed_task_id'] = False
+        if sess.leaving_at:
+            vals['leaving_at'] = False   # board is present → cancel any pending leave
         sess.sudo().write(vals)
         # Tell the web board whether the device is still paired — if auto-away
         # un-paired it, the board falls back to the PIN gate.
         paired = self.env['kpi.pair'].sudo().is_paired(user)
         return {'status': True, 'was_away': was_away, 'paired': paired,
                 'awayed_task_id': awayed_id, 'awayed_task_name': awayed_name}
+
+    @api.model
+    def _mark_leaving(self, user):
+        """The board tab is leaving (close / Back / nav away). Stamp `leaving_at`
+        so kpi.pair un-pairs the device in a few seconds → the app returns to the
+        PIN screen. A page REFRESH reloads and heartbeats within that window,
+        clearing the stamp so it stays paired. Never opens a session."""
+        sess = self.sudo().search([
+            ('user_id', '=', user.id),
+            ('session_date', '=', fields.Date.context_today(self)),
+            ('state', '=', 'open'),
+        ], limit=1)
+        if sess and not sess.leaving_at:
+            sess.sudo().write({'leaving_at': fields.Datetime.now()})
+        return {'status': True}
 
     @api.model
     def live_status(self, user=None):
@@ -407,6 +430,13 @@ class KpiWorkSession(models.Model):
         })
         # Close any open break/lunch so it doesn't keep running past logout.
         self.env['kpi.break.log'].stop_break(self.user_id.id)
+        # Un-pair the device: the workday is over → the web board falls back to the
+        # PIN gate and the phone app to the Start Working screen. mode='start' since
+        # the workday is now closed (the next pairing is a fresh start, not resume).
+        try:
+            self.env['kpi.pair'].sudo()._unpair(self.user_id, mode='start')
+        except Exception as exc:
+            _logger.warning("end_day un-pair failed for session %s: %s", self.id, exc)
         payload = self._daily_summary_payload(full_day=True)
         self._fire_daily_summary(payload)
         return payload
@@ -671,22 +701,48 @@ class KpiWorkSession(models.Model):
     # ------------------------------------------------------------------ #
     # Cron — close stragglers at 23:55                                   #
     # ------------------------------------------------------------------ #
-    @api.model
-    def _cron_auto_close_sessions(self):
-        """Close every session whose state is 'open' and whose session_date
-        is strictly less than today (i.e. it survived past its day).
-        Also retro-create closed sessions for developers who logged task time
-        today but never hit the Action Board (so their summary still fires).
-        """
-        today = fields.Date.context_today(self)
-        Session = self.sudo()
+    def _pause_running_task(self, reason='Workday ended (auto)'):
+        """Pause this developer's in-progress task (if any), recorded as non-
+        productive 'away' time. Used by the midnight auto-close so a task left
+        running when the day rolls over is stopped."""
+        self.ensure_one()
+        Log = self.env['kpi.time.log'].sudo()
+        active_log = Log.search([('user_id', '=', self.user_id.id), ('is_active', '=', True)], limit=1)
+        task = active_log.kpi_id if active_log else False
+        if task and task.task_state == 'in_progress':
+            task.with_user(self.user_id).pause_task(reason=reason, reason_code='away')
 
-        # Part 1: close stragglers.
-        stragglers = Session.search([
+    def _fire_workday_auto_closed(self):
+        """Tell the developer their workday was auto-closed at midnight (they
+        never pressed End Workday) — WhatsApp + in-app push. Anchored on one of
+        the dev's own tasks so the 'developer' recipient resolves to them."""
+        self.ensure_one()
+        u = self.user_id
+        ctx = {'dev': u.name or u.login or '—', 'session_date': str(self.session_date)}
+        any_kpi = self.env['kra.kpi'].sudo().search(
+            [('user_id', '=', u.id)], order='id desc', limit=1)
+        if not any_kpi:
+            _logger.info("workday_auto_closed: %s has no kra.kpi to anchor on", u.login)
+            return
+        any_kpi._notify('workday_auto_closed', **ctx)
+
+    @api.model
+    def _close_overdue(self):
+        """Close every OPEN session from a previous day (it crossed midnight):
+        pause a task the developer left running, close it (cap logout at that
+        day's 23:59:59), fire the daily summary, and notify the developer it was
+        auto-closed. Idempotent — safe to run frequently. Returns count closed."""
+        today = fields.Date.context_today(self)
+        stragglers = self.sudo().search([
             ('state', '=', 'open'),
             ('session_date', '<', today),
         ])
         for s in stragglers:
+            # Stop a task the developer left running when the day rolled over.
+            try:
+                s._pause_running_task()
+            except Exception as exc:
+                _logger.warning("overdue-close pause failed for session %s: %s", s.id, exc)
             # logout_at = end of session_date (23:59:59) — caps presence growth.
             eod = datetime.combine(s.session_date, time(23, 59, 59))
             s.write({
@@ -698,7 +754,32 @@ class KpiWorkSession(models.Model):
                 payload = s._daily_summary_payload()
                 s._fire_daily_summary(payload)
             except Exception as exc:
-                _logger.warning("auto_close summary failed for session %s: %s", s.id, exc)
+                _logger.warning("overdue-close summary failed for session %s: %s", s.id, exc)
+            # Tell the developer we auto-closed the workday they left open.
+            try:
+                s._fire_workday_auto_closed()
+            except Exception as exc:
+                _logger.warning("overdue-close notify failed for session %s: %s", s.id, exc)
+        return len(stragglers)
+
+    @api.model
+    def _cron_close_overdue_workdays(self):
+        """Frequent cron (~5 min): promptly end workdays that crossed midnight
+        (pause the running task + notify the developer). See `_close_overdue`."""
+        return self._close_overdue()
+
+    @api.model
+    def _cron_auto_close_sessions(self):
+        """Daily safety net: close any workday that crossed midnight (via
+        `_close_overdue`), then retro-create closed sessions for developers who
+        logged task time today but never hit the Action Board (so their summary
+        still fires).
+        """
+        today = fields.Date.context_today(self)
+        Session = self.sudo()
+
+        # Part 1: close stragglers (shared with the frequent midnight cron).
+        self._close_overdue()
 
         # Part 2: retro-create sessions for users who logged time today
         # but never opened the dashboard.

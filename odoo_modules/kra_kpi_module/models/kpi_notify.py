@@ -56,6 +56,7 @@ _PERSIST_EVENTS = {
     'reassigned',
     'self_task_submitted',
     'task_auto_away',   # web went idle/asleep → task auto-paused → tell the dev's phone
+    'workday_auto_closed',  # midnight cron closed a workday the dev left open
 }
 
 # Short human labels for the in-app notification title (the body reuses the
@@ -66,6 +67,7 @@ _NOTIF_TITLES = {
     'reassigned':          'Task reassigned',
     'self_task_submitted': 'Task submitted for review',
     'task_auto_away':      'Task paused — you went away',
+    'workday_auto_closed': 'Workday auto-closed',
 }
 
 
@@ -91,6 +93,8 @@ _EVENT_TO_TOGGLE = {
     'daily_summary':             'notify_daily_summary',
     # Workday-started — fires the first time the dev opens the dashboard each day.
     'workday_started':           'notify_workday_started',
+    # Workday auto-closed at midnight — reuse the daily-summary toggle.
+    'workday_auto_closed':       'notify_daily_summary',
     # Auto-away — mutable dev notice when the idle cron pauses their task.
     'task_auto_away':            'notify_task_auto_away',
     # Reminder to client when developer starts on a pre_approval_partial task.
@@ -135,6 +139,8 @@ _EVENT_RECIPIENTS = {
     'daily_summary':             ('owner', 'coordinator'),
     # Workday-started — owner + coordinator hear "dev X started their day".
     'workday_started':           ('owner', 'coordinator'),
+    # Workday auto-closed at midnight — tell the DEVELOPER (their phone).
+    'workday_auto_closed':       ('developer',),
     # Pre-approval reminder — client only.
     'pre_approval_reminder':     ('client',),
     # First-time developer assignment — developer + owner + coordinator.
@@ -328,14 +334,22 @@ _TEMPLATES = {
         "Login: {login_at}\n"
         "(Daily summary will follow at logout.)"
     ),
+    # Workday auto-closed at midnight (dev never pressed End Workday) — sent to the dev.
+    'workday_auto_closed': (
+        "🌙 Workday auto-closed — {dev}\n"
+        "Date: {session_date}\n"
+        "You didn't end your workday, so it was closed automatically at midnight "
+        "and any running task was paused. Open the app to start a new workday."
+    ),
 }
 
 
 # Events whose `ctx` already carries every placeholder for the template —
 # bypass _format_message's per-record parameter assembly.  Used for non-
 # kra.kpi-anchored events like daily_summary / workday_started.
-_PASSTHROUGH_EVENTS = ('daily_summary', 'workday_started', 'task_auto_away',
-                       'self_task_submitted', 'self_task_accepted', 'self_task_rejected')
+_PASSTHROUGH_EVENTS = ('daily_summary', 'workday_started', 'workday_auto_closed',
+                       'task_auto_away', 'self_task_submitted', 'self_task_accepted',
+                       'self_task_rejected')
 
 
 _DECISION_EMOJI = {

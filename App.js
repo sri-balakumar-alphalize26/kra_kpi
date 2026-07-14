@@ -1,7 +1,7 @@
 // KRA/KPI app shell: spinning KPI-wheel Splash → Welcome → Login (Odoo connect)
 // → Home. A remembered Odoo session boots straight to Home after the splash.
 import React, { useState, useEffect, useRef } from 'react';
-import { BackHandler } from 'react-native';
+import { BackHandler, View, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 import SplashScreen from './screens/SplashScreen';
@@ -54,6 +54,7 @@ function AppInner() {
   const [focusTaskId, setFocusTaskId] = useState(null); // task to scroll-to + pulse on the board
   const [devLocked, setDevLocked] = useState(false);  // this user is a developer who must pair
   const [devPaired, setDevPaired] = useState(false);  // developer's device is currently paired
+  const [gateReady, setGateReady] = useState(false);  // role gate resolved → avoids a Home flash before the PIN gate
   const [provisioned, setProvisioned] = useState(false); // device set up (server URL saved)
   const [forceSetup, setForceSetup] = useState(false);   // show Odoo device-setup over the app login
 
@@ -99,12 +100,15 @@ function AppInner() {
       if (user && devLocked && !devPaired) return true;
       // Everyone else: a non-home screen goes back to Home.
       if (user && appScreen !== 'home') { setAppScreen('home'); return true; }
+      // Odoo sheet open → close it, revealing the welcome ("Tap to Enter") screen.
       if (!user && screen === 'connect') { setScreen('login'); return true; }
+      // On the welcome screen during admin setup → back to the mobile login page.
+      if (!user && forceSetup) { setForceSetup(false); return true; }
       return false; // at home / login — let the OS handle it (exit)
     };
     const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
     return () => sub.remove();
-  }, [user, appScreen, screen, devLocked, devPaired]);
+  }, [user, appScreen, screen, devLocked, devPaired, forceSetup]);
 
   // Register this device for push once logged in (needs the session cookie so
   // the token binds to the right user server-side). Flush any queued tap.
@@ -127,6 +131,7 @@ function AppInner() {
   useEffect(() => {
     if (!user) return;
     let alive = true;
+    setGateReady(false);   // role unknown until /kpi_user/info resolves → show a loader, never Home
     (async () => {
       try {
         const { serverUrl } = await getConnection();
@@ -151,6 +156,8 @@ function AppInner() {
       } catch (e) {
         log.warn('role gate check failed', e?.message);
         if (alive) setDevLocked(false);
+      } finally {
+        if (alive) setGateReady(true);   // role known → safe to render Home / the PIN gate
       }
     })();
     return () => { alive = false; };
@@ -204,17 +211,28 @@ function AppInner() {
     setFocusTaskId(null);
     setDevLocked(false);
     setDevPaired(false);
+    setGateReady(false);
   };
 
   // Splash keeps showing until both the animation and the session read finish.
   if (!ready || restoring) return <SplashScreen onDone={() => setReady(true)} />;
 
   if (user) {
-    log.info('render post-login screen', { appScreen, devLocked, devPaired });
+    log.info('render post-login screen', { appScreen, devLocked, devPaired, gateReady });
     // Returning home clears any pending task-focus so it can't re-pulse later.
     const home = () => { setAppScreen('home'); setFocusTaskId(null); };
     // open(dest, param): param is an optional payload (e.g. a task id to focus).
     const open = (dest, param) => { log.info('open', dest, param); setFocusTaskId(param ?? null); setAppScreen(dest); };
+
+    // Until the role gate resolves, render a neutral loader — NEVER Home. This
+    // stops a developer from seeing a flash of Home before the PIN gate loads.
+    if (!gateReady) {
+      return (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF2FB' }}>
+          <ActivityIndicator size="large" color="#1E6FD9" />
+        </View>
+      );
+    }
 
     // HARD GATE: a developer who isn't paired can ONLY see the PIN screen —
     // no other screen renders (prevents a board "flash" before the poll bounces
@@ -284,7 +302,7 @@ function AppInner() {
       <ConnectScreen
         visible={screen === 'connect'}
         onLogin={() => { setProvisioned(true); setForceSetup(false); setScreen('login'); }}
-        goBack={() => { setScreen('login'); setForceSetup(false); }}
+        goBack={() => setScreen('login')}
       />
     </>
   );

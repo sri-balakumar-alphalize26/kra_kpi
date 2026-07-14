@@ -15,15 +15,18 @@ COUNTRY_MOBILE_LENGTH = {
     'MX': 10,
 }
 
-# Default editable WhatsApp message for app password-reset codes. Written in
-# plain, normal English (no jargon / labels / bold headers) so it reads like a
-# real person's note. The words in braces are filled in at send time with the
-# real values — {name} {code} {minutes} (and optionally {app}).
+# Default editable WhatsApp message for app password-reset codes. Classic
+# format — the recipient's name, the company name and the code are in *bold*
+# (WhatsApp markdown). Placeholders filled at send time: {app} {name} {code}
+# {minutes}.
 DEFAULT_OTP_TEMPLATE = (
-    "Hi {name}! 👋\n\n"
-    "Your password reset code is {code}. Just open the app and enter it to set a "
-    "new password — it stays valid for the next {minutes} minutes.\n\n"
-    "If you didn't ask for this, you can safely ignore this message."
+    "Hi *{name}* 👋\n\n"
+    "🔐 *{app}* — Password Reset\n\n"
+    "Your one-time code is:\n\n"
+    "🔢 *{code}*\n\n"
+    "⏱️ Expires in {minutes} minutes.\n"
+    "Open the app and enter this code to set your new password.\n\n"
+    "⚠️ Didn't request this? You can ignore this message."
 )
 
 

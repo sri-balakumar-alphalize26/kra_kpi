@@ -2,7 +2,7 @@
 // Login Management (Non-odoo) — admin manages the mobile-app login credentials:
 // per-user mobile number, login on/off toggle, password reset, plus last login /
 // last device, and the WhatsApp OTP sender number. Changes save automatically.
-import { Component, xml, useState, onWillStart, onWillUnmount } from "@odoo/owl";
+import { Component, xml, useState, onWillStart, onWillUnmount, markup } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { rpc } from "@web/core/network/rpc";
 
@@ -84,7 +84,7 @@ export class KpiUserAccess extends Component {
                             <!-- What the user actually receives, in plain English -->
                             <small class="text-muted d-block mb-1"><i class="fa fa-whatsapp me-1 text-success"/>Preview — exactly what your team receives:</small>
                             <div style="background:#dcf8c6; border-radius:12px; padding:12px 14px; max-width:440px; white-space:pre-wrap; font-size:14px; line-height:1.5; box-shadow:0 1px 2px rgba(0,0,0,0.12); color:#111;"
-                                 t-esc="state.otp_preview"/>
+                                 t-out="state.otp_preview"/>
 
                             <!-- Editable wording -->
                             <label class="form-label text-muted small mt-3 mb-1 d-block">Edit the wording:</label>
@@ -249,13 +249,17 @@ export class KpiUserAccess extends Component {
         setTimeout(() => { try { obj[key] = val === undefined ? false : ""; } catch (e) {} }, 1500);
     }
 
-    // Fill the tokens with real example values so the admin sees normal English.
+    // Fill the tokens with real example values, then render WhatsApp *bold* so
+    // the preview shows exactly what the user receives (bold, not literal *).
     renderPreview(t) {
-        return (t || "")
+        let s = (t || "")
             .split("{name}").join(this.state.sample_name || "Ravi")
             .split("{code}").join("4821")
             .split("{minutes}").join(String(this.state.otp_minutes || 5))
             .split("{app}").join(this.state.app_name || "the app");
+        s = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        s = s.replace(/\*([^*\n]+)\*/g, "<b>$1</b>");   // WhatsApp bold → <b>
+        return markup(s);
     }
 
     onOtpInput(ev) {

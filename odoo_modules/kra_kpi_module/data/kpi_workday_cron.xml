@@ -15,5 +15,18 @@
             <field name="interval_type">days</field>
             <field name="active" eval="True"/>
         </record>
+
+        <!-- Midnight cutoff: every 5 min, promptly end any workday that crossed
+             12 AM (24-hour workday) — pauses the running task + notifies the dev.
+             See models/kpi_work_session.py._cron_close_overdue_workdays. -->
+        <record id="ir_cron_kpi_close_overdue_workdays" model="ir.cron">
+            <field name="name">KRA/KPI: Close overdue workdays (midnight cutoff)</field>
+            <field name="model_id" ref="model_kpi_work_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_close_overdue_workdays()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

@@ -51,9 +51,17 @@ class KpiPair(models.Model):
 
     @api.model
     def _next_mode(self, user):
-        """The mode the NEXT pairing should carry. After an auto-away un-pair we
-        stamp the latest (expired) record's mode='resume'; a fresh day / no prior
-        record defaults to 'start'."""
+        """The mode the NEXT pairing should carry. Once today's workday is already
+        open, every pairing reads as 'resume' (Continue Working). Otherwise fall
+        back to the auto-away 'resume' stamp, else 'start'."""
+        today = fields.Date.context_today(self)
+        open_sess = self.env['kpi.work.session'].sudo().search([
+            ('user_id', '=', user.id),
+            ('session_date', '=', today),
+            ('state', '=', 'open'),
+        ], limit=1)
+        if open_sess:
+            return 'resume'
         rec = self.sudo().search([('user_id', '=', user.id)], limit=1)  # newest first
         return rec.mode if rec and rec.mode == 'resume' and rec.state != 'paired' else 'start'
 
@@ -122,7 +130,9 @@ class KpiPair(models.Model):
         rec.write({'state': 'paired', 'paired_at': fields.Datetime.now()})
         # Pairing = "start working": open today's workday so the heartbeat begins.
         try:
-            self.env['kpi.work.session'].sudo()._get_or_open_today(user=user)
+            sess = self.env['kpi.work.session'].sudo()._get_or_open_today(user=user)
+            if sess and sess.leaving_at:
+                sess.write({'leaving_at': False})   # board is back → cancel any pending leave
         except Exception:
             pass  # never let workday-open failure block a successful pairing
         return {'ok': True}
@@ -134,11 +144,39 @@ class KpiPair(models.Model):
         rec = self.sudo().search([('user_id', '=', user.id)], limit=1)
         return bool(rec and rec.state == 'paired')
 
+    # Seconds after the board signals it's leaving (close / Back) before we
+    # un-pair. Comfortably above a page-refresh reload (which re-heartbeats and
+    # clears the 'leaving' stamp), so a refresh never falsely un-pairs.
+    _LEAVE_GRACE_SECONDS = 8
+
+    @api.model
+    def _left_and_gone(self, user):
+        """True if the board signalled 'leaving' (close/Back) and hasn't come back
+        (a heartbeat would have cleared the stamp) within the grace — i.e. the tab
+        is really gone, not a quick refresh. This is an explicit signal, NOT a
+        heartbeat-timeout, so it can't misfire on a live board."""
+        sess = self.env['kpi.work.session'].sudo().search([
+            ('user_id', '=', user.id),
+            ('session_date', '=', fields.Date.context_today(self)),
+            ('state', '=', 'open'),
+        ], limit=1)
+        if not sess or not sess.leaving_at:
+            return False
+        return (fields.Datetime.now() - sess.leaving_at).total_seconds() >= self._LEAVE_GRACE_SECONDS
+
     @api.model
     def status_for(self, user):
-        """App polls this. Returns {'state', 'paired', 'mode'} for the latest record."""
+        """App polls this. Returns {'state', 'paired', 'mode'}. If the board tab was
+        closed/left (a 'leaving' beacon not cancelled by a refresh's heartbeat),
+        un-pair + pause the running task so the app returns to the PIN screen."""
         self._sweep_expired(user)
         rec = self.sudo().search([('user_id', '=', user.id)], limit=1)  # _order = newest first
+        if rec and rec.state == 'paired' and self._left_and_gone(user):
+            try:
+                self.env['kpi.work.session'].sudo()._away_now(user, source='leave')
+            except Exception:
+                self._unpair(user, mode='resume')
+            rec = self.sudo().search([('user_id', '=', user.id)], limit=1)
         state = rec.state if rec else 'none'
         mode = rec.mode if rec else 'start'
         return {'state': state, 'paired': state == 'paired', 'mode': mode}

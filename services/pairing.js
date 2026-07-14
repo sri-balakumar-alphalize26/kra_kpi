@@ -16,11 +16,13 @@ export async function generatePin() {
     log.info('generatePin — no server, mock');
     // Mock: a stable demo PIN + a 10-min expiry from a fixed base (no Date.now
     // dependency needed here; the screen ticks its own countdown).
-    return { pin: '1234', expires_at: null, isMock: true };
+    return { pin: '1234', expires_at: null, mode: 'start', isMock: true };
   }
   const res = await jsonRpc(serverUrl, '/kpi_pair/generate', {});
-  log.info('generatePin ←', { hasPin: !!res?.pin, expires_at: res?.expires_at });
-  return { pin: res?.pin || '', expires_at: res?.expires_at || null, isMock: false };
+  log.info('generatePin ←', { hasPin: !!res?.pin, expires_at: res?.expires_at, mode: res?.mode });
+  // `mode` = 'start' (no workday yet) | 'resume' (workday already open) → drives
+  // the "Start Working" vs "Continue Working" copy on the PIN screen.
+  return { pin: res?.pin || '', expires_at: res?.expires_at || null, mode: res?.mode || 'start', isMock: false };
 }
 
 // Poll pairing state. Returns { state, paired, isMock }.

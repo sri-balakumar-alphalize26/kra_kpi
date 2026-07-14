@@ -1383,8 +1383,11 @@ export class KpiAction extends Component {
                     this.state.awayAfterMinutes = r.away_after_minutes;
                 }
             }).catch(() => {});
-            // Heartbeat ~every 60s keeps the session "alive" for the auto-away cron.
-            this.heartbeatInterval = setInterval(() => this.sendHeartbeat(), 60000);
+            // Heartbeat every 15s keeps the session "alive": drives the auto-away
+            // cron AND lets the app return to the PIN screen ~30s after the tab is
+            // closed (kpi.pair heartbeat grace). Frequent enough that a page
+            // refresh's brief gap never trips the 30s grace.
+            this.heartbeatInterval = setInterval(() => this.sendHeartbeat(), 15000);
             // Refresh the live strip data (active break, anchors) every 30s.
             this.liveStatusInterval = setInterval(() => {
                 if (this.state.view === 'list') { this.loadLiveStatus(); }
@@ -1406,6 +1409,17 @@ export class KpiAction extends Component {
                 }
             };
             window.addEventListener('beforeunload', this._beforeUnloadHandler);
+
+            // On tab CLOSE / REFRESH, stamp 'leaving' so the app returns to the PIN
+            // screen a few seconds later. A refresh reloads and re-heartbeats within
+            // the grace, which CANCELS it (you stay paired). pagehide is the reliable
+            // "page is going away" event for sendBeacon.
+            this._pageHideHandler = () => {
+                if (this.getActiveTask() || this.state.workdayOpen) {
+                    this._sendLeaveBeacon();
+                }
+            };
+            window.addEventListener('pagehide', this._pageHideHandler);
         });
 
         // 🆕 NEW: Cleanup intervals when component is destroyed
@@ -1428,11 +1442,13 @@ export class KpiAction extends Component {
             if (this._beforeUnloadHandler) {
                 window.removeEventListener('beforeunload', this._beforeUnloadHandler);
             }
-            // The board is unmounting. If this is an IN-APP navigation (Back /
-            // menu) — NOT a page reload/close (`_unloading`) — the developer is
-            // leaving the working surface, so pause + un-pair immediately.
-            // A reload keeps `_unloading` true → we skip → you stay working.
-            if (!this._unloading && (this.getActiveTask() || this.state.workdayOpen)) {
+            if (this._pageHideHandler) {
+                window.removeEventListener('pagehide', this._pageHideHandler);
+            }
+            // In-app navigation away (Back / menu) also stamps 'leaving' (pagehide
+            // covers close/refresh). The beacon only STAMPS it — the app un-pairs a
+            // few seconds later UNLESS a reload (refresh) re-heartbeats and clears it.
+            if (this.getActiveTask() || this.state.workdayOpen) {
                 this._sendLeaveBeacon();
             }
             if (this._scrollResizeHandler) {
@@ -2350,7 +2366,7 @@ export class KpiAction extends Component {
                                 <i class="fa fa-arrow-left me-1"></i> Continue Working
                             </button>
                             <button type="button" class="btn btn-danger" id="endWorkdayConfirmBtn">
-                                <i class="fa fa-sign-out me-1"></i> Logout &amp; Send Summary
+                                <i class="fa fa-sign-out me-1"></i> End Workday &amp; Send Summary
                             </button>
                         </div>
                     </div>
@@ -2367,15 +2383,19 @@ export class KpiAction extends Component {
             try {
                 const res = await rpc("/kpi_workday/end", { note });
                 if (res && res.status) {
-                    // Send the user to the Odoo logout endpoint.
-                    window.location.href = "/web/session/logout";
+                    // Workday ended → close the modal and fall back to the PIN gate
+                    // (stay logged into Odoo). The server also un-paired the device,
+                    // so the phone app returns to its Start Working screen. A fresh
+                    // PIN starts a new workday.
+                    this.closeModal();
+                    this._goToGate();
                 } else {
                     alert("End-workday failed: " + (res && res.message || 'unknown error'));
-                    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-sign-out me-1"></i> Logout &amp; Send Summary'; }
+                    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-sign-out me-1"></i> End Workday &amp; Send Summary'; }
                 }
             } catch (err) {
                 alert("End-workday request failed: " + (err && err.message || err));
-                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-sign-out me-1"></i> Logout &amp; Send Summary'; }
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-sign-out me-1"></i> End Workday &amp; Send Summary'; }
             }
         });
     }
