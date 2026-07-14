@@ -14,6 +14,10 @@ import UploadAmendments from './screens/UploadAmendments';
 import OwnerDashboard from './screens/OwnerDashboard';
 import NotificationsScreen from './screens/NotificationsScreen';
 import ConfigurationScreen from './screens/ConfigurationScreen';
+import LoginManagementScreen from './screens/LoginManagementScreen';
+import ClientTasks from './screens/ClientTasks';
+import GenerateClientFiles from './screens/GenerateClientFiles';
+import ReassignmentHistory from './screens/ReassignmentHistory';
 import StartWorkingScreen from './screens/StartWorkingScreen';
 import AppLoginScreen from './screens/AppLoginScreen';
 import * as session from './api/session';
@@ -259,6 +263,14 @@ function AppInner() {
       return <NotificationsScreen onBack={home} onOpen={open} />;
     if (appScreen === 'config')
       return <ConfigurationScreen onBack={home} />;
+    if (appScreen === 'loginmgmt')
+      return <LoginManagementScreen onBack={home} />;
+    if (appScreen === 'mytasks')
+      return <ClientTasks onBack={home} />;
+    if (appScreen === 'clientfiles')
+      return <GenerateClientFiles onBack={home} />;
+    if (appScreen === 'reassignhistory')
+      return <ReassignmentHistory onBack={home} />;
     if (appScreen === 'startworking')
       // Locked developer: no back button (they must pair); give a logout escape.
       // Non-locked (shouldn't normally reach here): allow back to Home.

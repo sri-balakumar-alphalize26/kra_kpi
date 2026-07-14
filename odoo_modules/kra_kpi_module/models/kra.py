@@ -194,6 +194,12 @@ class KraMaster(models.Model):
                 'id': r.id,
                 'name': r.name,
                 'parent': r.parent_id.id if r.parent_id else None,
+                'parent_id': r.parent_id.id if r.parent_id else False,
+                'is_client': bool(r.is_client),
+                'client_user_ids': [
+                    {'id': u.id, 'name': u.name or u.login, 'login': u.login}
+                    for u in r.client_user_ids
+                ],
                 'child_ids': [],
                 'kpi_ids': [],
             }

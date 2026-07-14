@@ -12,6 +12,8 @@ Because that recipient list comes from `_EVENT_RECIPIENTS`, the "admins see all
 ever gets a row when they are a recipient of the event (i.e. their own task).
 """
 
+from datetime import timedelta
+
 from odoo import api, fields, models
 
 
@@ -74,3 +76,15 @@ class KpiNotification(models.Model):
         if not vals_list:
             return self.browse()
         return self.sudo().create(vals_list)
+
+    @api.model
+    def _gc_notifications(self, days=30):
+        """Delete notifications older than `days` (default 30). Called by the
+        daily cron so the in-app feed stays recent and the table small."""
+        if not days or days <= 0:
+            return 0
+        cutoff = fields.Datetime.now() - timedelta(days=days)
+        old = self.sudo().search([('create_date', '<', cutoff)])
+        count = len(old)
+        old.unlink()
+        return count

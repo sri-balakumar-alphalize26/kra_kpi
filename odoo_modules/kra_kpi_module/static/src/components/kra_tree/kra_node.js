@@ -39,6 +39,8 @@ export class KraNode extends Component {
                 </t>
                 <t t-else="">
                     <span class="fw-bold" style="font-size: 15px;" t-esc="props.kra.name" />
+                    <span t-if="props.kra.is_client" class="badge bg-info text-dark ms-2"
+                          style="font-size: 9px; vertical-align: middle;" title="This KRA is a Client">Client</span>
 
                     <!-- ✏️ Edit KRA -->
                     <span class="ms-2 text-primary small"
@@ -48,9 +50,9 @@ export class KraNode extends Component {
                         <i class="fa fa-pencil"></i>
                     </span>
 
-                    <!-- 👥 Assign Clients — visible only on level-2+ KRAs
-                         (those with a parent — root KRAs can't have clients). -->
-                    <t t-if="props.kra.parent_id">
+                    <!-- 👥 Assign Clients — visible on CLIENT KRAs (is_client). Pick which
+                         Client-role login users belong to this client (client_user_ids). -->
+                    <t t-if="props.kra.is_client">
                         <span class="ms-2 text-success small"
                               t-on-click.stop="() => this.openAssignClients()"
                               t-att-title="'Assign client portal users (' + (props.kra.client_user_ids ? props.kra.client_user_ids.length : 0) + ' assigned)'"

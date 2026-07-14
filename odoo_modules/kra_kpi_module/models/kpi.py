@@ -1,3 +1,5 @@
+import re
+
 from odoo import api, models, fields
 from odoo.tools import float_round
 from datetime import datetime
@@ -502,6 +504,27 @@ class KpiMaster(models.Model):
             rec.paused_reason = f"🔴 REJECTED - Manager Feedback: {rejection_reason}"
             rec.completed_by = False
             rec.completion_date = False
+
+    @api.model
+    def _next_ref_for_prefix(self, prefix):
+        """Next N for '<PREFIX>-<NNN>' external_ref — a global, case-insensitive
+        counter shared across everyone so REQ/UPT/BUG/TASK each stay unique.
+        Mirrors _next_ref_number_for_prefix in kpi_reports_api (used for the
+        '+ New Task' TASK-### ref and for re-numbering on admin accept)."""
+        if not prefix:
+            return 1
+        refs = self.sudo().search(
+            [('external_ref', '=ilike', '%s-%%' % prefix)]).mapped('external_ref')
+        pat = re.compile(r'^%s-(\d+)$' % re.escape(prefix), re.IGNORECASE)
+        max_n = 0
+        for r in refs:
+            m = pat.match((r or '').strip())
+            if m:
+                try:
+                    max_n = max(max_n, int(m.group(1)))
+                except ValueError:
+                    pass
+        return max_n + 1
 
     def reassign_task(self, user_id, reason):
         """

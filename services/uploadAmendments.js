@@ -211,3 +211,22 @@ export async function templateUrl(docType) {
   const name = TEMPLATE_NAME[docType] || 'requirement';
   return `${normalizeUrl(base)}/kpi_completion_cert/template/${name}`;
 }
+
+// Absolute URL for the admin "Generate & Download ZIP" of client document files
+// (type='http' GET stream → 3 XLSX zipped, Content-Disposition: attachment).
+// Mirrors the web kpi_client_workspace downloadUrl() exactly:
+//   /kpi_client_workspace/generate_zip?client_kra_id=..&version=..&include_data=0|1[&project_kra_id=..]
+// Built by hand (not URLSearchParams — its toString() is unreliable on RN).
+export async function clientFilesZipUrl({ clientKraId, projectKraId, version, includeData }) {
+  const base = await server();
+  if (!base || !clientKraId) return '';
+  const q = [
+    `client_kra_id=${encodeURIComponent(clientKraId)}`,
+    `version=${encodeURIComponent(version || 'v1.0')}`,
+    `include_data=${includeData ? '1' : '0'}`,
+  ];
+  if (projectKraId) q.push(`project_kra_id=${encodeURIComponent(projectKraId)}`);
+  const url = `${normalizeUrl(base)}/kpi_client_workspace/generate_zip?${q.join('&')}`;
+  log.info('clientFilesZipUrl', { clientKraId, projectKraId: projectKraId || null, version: version || 'v1.0', includeData: !!includeData });
+  return url;
+}

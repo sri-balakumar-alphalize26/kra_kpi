@@ -31,6 +31,7 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/uploadAmendments';
+import { getClientProjects } from '../services/clientPortal';
 
 const log = createLogger('UploadAmendments');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -60,6 +61,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   const [users, setUsers] = useState([]);
   const [clientId, setClientId] = useState('');
   const [subKraId, setSubKraId] = useState('');
+  const [clientProjectName, setClientProjectName] = useState(''); // client's auto-filled project (read-only)
   const [version, setVersion] = useState('');
 
   // Role / ref preview
@@ -122,7 +124,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         // System in Odoo. Only these roles may use this screen; everyone else
         // sees a "restricted" message (mock mode always allows so it's
         // reviewable offline).
-        const allowed = !!(info.isMock || info.is_system || info.is_owner || info.is_admin);
+        const allowed = !!(info.isMock || info.is_system || info.is_owner || info.is_admin || info.is_client);
         setCanCreate(allowed);
         setRoleName(
           info.is_system ? 'Administrator'
@@ -138,21 +140,27 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
           return;
         }
 
-        const [c, ref] = await Promise.all([
-          svc.getClients(),
-          svc.peekNextRef(DOC_TYPE),
-        ]);
-        setClients(c.clients);
-        setIsMock(!!c.isMock);
+        const ref = await svc.peekNextRef(DOC_TYPE);
         setRefPrefix(ref.prefix || 'UPT');
         setRefNext(ref.next_number || 1);
 
-        if (!info.is_client_only) {
-          const u = await svc.getUsers().catch((e) => { log.warn('getUsers failed', e?.message); return { users: [] }; });
-          setUsers(u.users);
-          log.info('mount: loaded', { clients: c.clients.length, users: u.users.length, isMock: !!c.isMock, isClientOnly: !!info.is_client_only, refPrefix: ref.prefix, refNext: ref.next_number });
+        if (info.is_client_only) {
+          // Client: fetch ONLY their own project(s) (scoped server-side) and
+          // auto-fill the destination read-only — no client/project pickers.
+          const cp = await getClientProjects().catch((e) => { log.warn('getClientProjects failed', e?.message); return { projects: [] }; });
+          const proj = (cp.projects || [])[0] || null;
+          setClientProjectName(proj ? (proj.display || 'Your project') : '');
+          if (proj) setSubKraId(String(proj.id));
+          log.info('mount: loaded (client)', { hasProject: !!proj, project: proj?.display, refPrefix: ref.prefix });
         } else {
-          log.info('mount: loaded (client-only)', { clients: c.clients.length, isMock: !!c.isMock, refPrefix: ref.prefix, refNext: ref.next_number });
+          const [c, u] = await Promise.all([
+            svc.getClients(),
+            svc.getUsers().catch((e) => { log.warn('getUsers failed', e?.message); return { users: [] }; }),
+          ]);
+          setClients(c.clients);
+          setIsMock(!!c.isMock);
+          setUsers(u.users);
+          log.info('mount: loaded', { clients: c.clients.length, users: u.users.length, isMock: !!c.isMock, refPrefix: ref.prefix, refNext: ref.next_number });
         }
       } catch (err) {
         log.error('load failed', err?.message);
@@ -442,24 +450,42 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
       >
         {/* ---- 1. Destination ---- */}
         <Section n="1" title="Destination" icon="folder-outline">
-          <Label required>Client (Root KRA)</Label>
-          <Selector
-            placeholder="-- Select Client --"
-            value={clientName}
-            error={touched && !clientId}
-            onPress={() => setPicker('client')}
-          />
-          {touched && !clientId && <Text style={s.errTxt}>Client is required</Text>}
-          <Label required>Project / Sub-KRA</Label>
-          <Selector
-            placeholder={loadingSubKras ? 'Loading…' : (clientId ? '-- Select Project --' : 'Select a client first')}
-            value={subKraName}
-            disabled={!clientId || loadingSubKras}
-            loading={loadingSubKras}
-            error={touched && !subKraId}
-            onPress={() => setPicker('project')}
-          />
-          {touched && !subKraId && <Text style={s.errTxt}>Project / Sub-KRA is required</Text>}
+          {isClientOnly ? (
+            <>
+              <Label>Project</Label>
+              <View style={[s.field, { opacity: 0.9 }]}>
+                <Ionicons name="folder-outline" size={18} color={COLORS.muted} style={s.fIcon} />
+                <Text style={[s.input, { color: COLORS.ink }]} numberOfLines={1}>
+                  {clientProjectName || 'Your project'}
+                </Text>
+                <Ionicons name="lock-closed" size={15} color={COLORS.faint} />
+              </View>
+              <Text style={{ fontSize: 12, color: COLORS.muted, marginTop: 4 }}>
+                Uploads go to your client's project automatically.
+              </Text>
+            </>
+          ) : (
+            <>
+              <Label required>Client (Root KRA)</Label>
+              <Selector
+                placeholder="-- Select Client --"
+                value={clientName}
+                error={touched && !clientId}
+                onPress={() => setPicker('client')}
+              />
+              {touched && !clientId && <Text style={s.errTxt}>Client is required</Text>}
+              <Label required>Project / Sub-KRA</Label>
+              <Selector
+                placeholder={loadingSubKras ? 'Loading…' : (clientId ? '-- Select Project --' : 'Select a client first')}
+                value={subKraName}
+                disabled={!clientId || loadingSubKras}
+                loading={loadingSubKras}
+                error={touched && !subKraId}
+                onPress={() => setPicker('project')}
+              />
+              {touched && !subKraId && <Text style={s.errTxt}>Project / Sub-KRA is required</Text>}
+            </>
+          )}
           <Label>Version (optional)</Label>
           <View style={s.field}>
             <Ionicons name="pricetag-outline" size={18} color={COLORS.muted} style={s.fIcon} />

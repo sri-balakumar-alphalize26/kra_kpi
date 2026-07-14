@@ -7,10 +7,10 @@
 // Header: back + "Mark all read". Body: FlatList with an unread dot, an
 // event icon, title, body preview, task name, and relative time. Pull to
 // refresh. Tapping an unread row marks it read.
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, SectionList, StyleSheet,
-  ActivityIndicator, RefreshControl, StatusBar as RNStatusBar,
+  ActivityIndicator, RefreshControl, StatusBar as RNStatusBar, Animated, Easing,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -91,8 +91,22 @@ function EventIcon({ event }) {
   );
 }
 
-function Row({ item, onPress }) {
+function Row({ item, index = 0, onPress }) {
+  // Staggered entrance: each card fades + slides up, delayed by its index so the
+  // rows appear one-by-one (delay capped so long lists don't drag).
+  const anim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(anim, {
+      toValue: 1, duration: 320, delay: Math.min(index, 12) * 55,
+      easing: Easing.out(Easing.cubic), useNativeDriver: true,
+    }).start();
+  }, [anim, index]);
+  const enterStyle = {
+    opacity: anim,
+    transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }],
+  };
   return (
+    <Animated.View style={enterStyle}>
     <TouchableOpacity
       style={[s.row, !item.is_read && s.rowUnread]}
       activeOpacity={0.8}
@@ -113,6 +127,7 @@ function Row({ item, onPress }) {
       </View>
       {!item.is_read && <View style={s.dot} />}
     </TouchableOpacity>
+    </Animated.View>
   );
 }
 
@@ -248,7 +263,7 @@ export default function NotificationsScreen({ onBack, onOpen }) {
         <SectionList
           sections={sections}
           keyExtractor={(it) => String(it.id)}
-          renderItem={({ item }) => <Row item={item} onPress={onRowPress} />}
+          renderItem={({ item, index }) => <Row item={item} index={index} onPress={onRowPress} />}
           renderSectionHeader={({ section }) => (
             <Text style={s.sectionHeaderTxt}>{section.title.toUpperCase()}</Text>
           )}

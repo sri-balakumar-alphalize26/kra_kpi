@@ -3362,17 +3362,54 @@ export class KpiAction extends Component {
     }
 
     async acceptSelfTask(task) {
-        if (!confirm(`Accept "${task.name}" into the main flow?`)) return;
-        try {
-            const res = await rpc('/kra_kpi/task/accept_self_created', { kpi_id: task.id });
-            if (res && res.status) {
-                await this.refresh();
-            } else {
-                alert((res && res.message) || 'Accept failed.');
-            }
-        } catch (e) {
-            alert('Accept failed: ' + ((e && e.message) || e));
-        }
+        // Ask the admin to categorize the task; the chosen type re-numbers its
+        // provisional TASK-### ref into REQ / UPT / BUG.
+        const safe = (task.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const container = document.getElementById("modalContainer");
+        if (!container) return;
+        container.innerHTML = `
+            <div class="modal-backdrop fade show"></div>
+            <div class="modal d-block" tabindex="-1">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                  <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="fa fa-check-circle me-2"></i> Accept task</h5>
+                    <button type="button" class="btn-close btn-close-white" id="acceptTypeClose"></button>
+                  </div>
+                  <div class="modal-body">
+                    <p class="mb-1">Accept <b>"${safe}"</b> into the main flow — what type is it?</p>
+                    <p class="text-muted small mb-3">This sets its reference id — the current <b>${(task.external_ref || 'TASK-###')}</b> becomes REQ / UPT / BUG.</p>
+                    <div class="d-grid gap-2">
+                      <button class="btn btn-outline-primary" data-type="requirement"><b>Requirement</b> <span class="text-muted small">→ REQ-###</span></button>
+                      <button class="btn btn-outline-warning" data-type="update"><b>Update</b> <span class="text-muted small">→ UPT-###</span></button>
+                      <button class="btn btn-outline-danger" data-type="bug"><b>Bug Report</b> <span class="text-muted small">→ BUG-###</span></button>
+                    </div>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-light" id="acceptTypeCancel">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        const close = () => { container.innerHTML = ""; };
+        document.getElementById("acceptTypeClose").addEventListener("click", close);
+        document.getElementById("acceptTypeCancel").addEventListener("click", close);
+        container.querySelectorAll('button[data-type]').forEach((btn) => {
+            btn.addEventListener("click", async () => {
+                const docType = btn.getAttribute("data-type");
+                close();
+                try {
+                    const res = await rpc('/kra_kpi/task/accept_self_created', { kpi_id: task.id, doc_type: docType });
+                    if (res && res.status) {
+                        await this.refresh();
+                    } else {
+                        alert((res && res.message) || 'Accept failed.');
+                    }
+                } catch (e) {
+                    alert('Accept failed: ' + ((e && e.message) || e));
+                }
+            });
+        });
     }
 
     async rejectSelfTask(task) {

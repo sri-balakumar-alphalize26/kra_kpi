@@ -29,6 +29,32 @@ export async function fetchProjects() {
   return out;
 }
 
+// Two-step Client → Project source for "+ New Task": clients (is_client roots),
+// each with its flattened descendant projects [{id, display}]. Cleaner than the
+// flat fetchProjects (which mixed clients + every sub-level in one list).
+export async function fetchClientTree() {
+  const { tree } = await getKraTree();
+  const clients = [];
+  const collect = (node) => {
+    const projects = [];
+    const walk = (nodes, prefix) => {
+      for (const n of nodes || []) {
+        const path = prefix ? `${prefix} › ${n.name}` : n.name;
+        projects.push({ id: n.id, display: path });
+        walk(n.child_ids, path);
+      }
+    };
+    walk(node.child_ids, '');
+    // Fall back to the client root itself when it has no sub-projects.
+    if (projects.length === 0) projects.push({ id: node.id, display: node.name });
+    return projects;
+  };
+  for (const root of tree || []) {
+    if (root.is_client) clients.push({ id: root.id, name: root.name, projects: collect(root) });
+  }
+  return clients;
+}
+
 // ── Lane model — mirrors the Odoo board columns in the screenshot ────────────
 // A task lands in exactly one lane. Priority lanes (Regular/Important/Urgent)
 // only hold tasks that are still in a "to-do" state (assigned/queued/etc.).
@@ -128,6 +154,20 @@ export async function fetchTasks({ myTasksOnly = false } = {}) {
     tasks: env.tasks, isAdmin: env.is_admin, currentUserId: env.current_user_id,
     selfPendingCount: env.self_pending_count, isMock: true,
   };
+}
+
+// Fetch ONE task by id — for opening a notification whose task isn't in the
+// board's scoped list (reassigned away / completed). Returns the task or null.
+export async function fetchTaskById(kpiId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return null;
+  try {
+    const res = await jsonRpc(serverUrl, '/kra_kpi/task/get', { kpi_id: kpiId });
+    return res?.status ? (res.task || null) : null;
+  } catch (e) {
+    log.warn('fetchTaskById failed', e?.message);
+    return null;
+  }
 }
 
 // Fetch users for the reassign picker (/kra_kpi/get_users).

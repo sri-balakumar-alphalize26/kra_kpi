@@ -50,7 +50,11 @@ const QUICK = [
   { label: 'Upload Requirements', lib: 'mc', name: 'file-document',    dest: 'upload:requirement', adminOnly: true,  bg: '#FEF3C7', fg: '#D97706' },
   { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true,  bg: '#FFEDD5', fg: '#EA580C' },
   { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true,  bg: '#FEE2E2', fg: '#DC2626' },
+  { label: 'Generate Client Files', lib: 'mc', name: 'folder-zip',     dest: 'clientfiles',        adminOnly: true,  bg: '#E0F2FE', fg: '#0284C7' },
+  { label: 'Reassignment History', lib: 'mc', name: 'swap-horizontal', dest: 'reassignhistory',    adminOnly: true,  bg: '#F3E8FF', fg: '#9333EA' },
+  { label: 'Login Management',   lib: 'mc',  name: 'account-key',      dest: 'loginmgmt',          adminOnly: true,  bg: '#EDE9FE', fg: '#7C3AED' },
   { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true,  bg: '#E2E8F0', fg: '#475569' },
+  { label: 'My Tasks',           lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  bg: '#DCFCE7', fg: '#16A34A' },
 ];
 
 // Home stats strip — live task-status counts, keyed to the Action Board lanes
@@ -179,6 +183,32 @@ function WavingHand() {
   const rotate = rot.interpolate({ inputRange: [-1, 1], outputRange: ['-18deg', '18deg'] });
   return (
     <Animated.Text style={{ fontSize: 26, transform: [{ rotate }] }}>👋</Animated.Text>
+  );
+}
+
+// The header bell — rings/shakes in short bursts (every few seconds) while there
+// are unread notifications; sits still when `active` is false.
+function RingingBell({ active }) {
+  const rot = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!active) { rot.stopAnimation(() => rot.setValue(0)); return; }
+    const ring = Animated.sequence([
+      Animated.timing(rot, { toValue: 1,  duration: 110, easing: Easing.linear, useNativeDriver: true }),
+      Animated.timing(rot, { toValue: -1, duration: 220, easing: Easing.linear, useNativeDriver: true }),
+      Animated.timing(rot, { toValue: 1,  duration: 220, easing: Easing.linear, useNativeDriver: true }),
+      Animated.timing(rot, { toValue: -1, duration: 220, easing: Easing.linear, useNativeDriver: true }),
+      Animated.timing(rot, { toValue: 0,  duration: 110, easing: Easing.linear, useNativeDriver: true }),
+      Animated.delay(3200),
+    ]);
+    const loop = Animated.loop(ring);
+    loop.start();
+    return () => loop.stop();
+  }, [active, rot]);
+  const rotate = rot.interpolate({ inputRange: [-1, 1], outputRange: ['-16deg', '16deg'] });
+  return (
+    <Animated.View style={{ transform: [{ rotate }] }}>
+      <Ionicons name="notifications-outline" size={26} color={COLORS.navy} />
+    </Animated.View>
   );
 }
 
@@ -317,7 +347,13 @@ function HomeTab({ name, onOpen, uid }) {
   };
 
   // Tiles the user's role is allowed to see (the full menu — always in the drawer).
-  const roleTiles = QUICK.filter((q) => isAdmin || !q.adminOnly);
+  // Role-aware: admin = everything (minus the client-only My Tasks); client = the two
+  // upload tiles + My Tasks; developer = the shared board (non-admin tiles).
+  const roleTiles = isAdmin
+    ? QUICK.filter((q) => q.dest !== 'mytasks')
+    : role === 'client'
+      ? QUICK.filter((q) => ['upload:requirement', 'upload:update', 'upload:bug', 'mytasks'].includes(q.dest))
+      : QUICK.filter((q) => !q.adminOnly);
 
   // Quick Actions customization: which of the role tiles show on the Home grid.
   // selectedKeys = chosen dest keys (null until loaded → default to all role tiles).
@@ -386,7 +422,7 @@ function HomeTab({ name, onOpen, uid }) {
         </TouchableOpacity>
         <Image source={require('../assets/logo369.png')} style={s.logo} resizeMode="contain" />
         <TouchableOpacity onPress={() => onOpen('notifications')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-          <Ionicons name="notifications-outline" size={26} color={COLORS.navy} />
+          <RingingBell active={unread > 0} />
           {unread > 0 && (
             <View style={s.badge}>
               <Text style={s.badgeTxt}>{unread > 99 ? '99+' : unread}</Text>

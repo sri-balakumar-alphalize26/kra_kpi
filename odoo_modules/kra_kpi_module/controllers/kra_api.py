@@ -156,6 +156,39 @@ class KraKpiAPI(http.Controller):
             'text_log': kpi.reassignment_log or '',
         }
 
+    # 🆕 NEW: GLOBAL reassignment history (admin-only) — powers the mobile app's
+    # "Reassignment History" screen. The route above is per-task (needs kpi_id);
+    # this one lists every reassignment across all tasks, newest first.
+    @http.route('/kra_kpi/reassignment_history/all', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_reassignment_history_all(self, **params):
+        """Admin-only global reassignment history list (Coordinator / Owner / System)."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            limit = int(params.get('limit') or 200)
+        except (TypeError, ValueError):
+            limit = 200
+        # _order = "reassignment_date desc" on the model → newest first.
+        recs = request.env['kpi.reassignment.history'].sudo().search([], limit=limit)
+        history = []
+        for h in recs:
+            history.append({
+                'id': h.id,
+                'reassignment_date': convert_to_user_tz(h.reassignment_date),
+                'kpi_id': h.kpi_id.id,
+                'kpi_task': h.kpi_id.external_ref or h.kpi_id.name or '',
+                'kpi_name': h.kpi_id.name or '',
+                'previous_assignee': h.previous_assignee_name,
+                'new_assignee': h.new_assignee_name,
+                'reassigned_by': h.reassigned_by_name,
+                'previous_state': h.previous_state,
+                'time_spent': h.time_spent_display,
+                'reason': h.reassignment_reason or '',
+                'was_paused': h.was_paused,
+                'pause_reason': h.pause_reason or '',
+            })
+        return {'status': True, 'history': history, 'count': len(history)}
+
     @http.route('/kra_kpi/get_kra_list', type='json', auth='user', methods=['POST'], csrf=False)
     def get_kra_list(self):
         kra_records = request.env['kra.master'].search([])
@@ -532,6 +565,108 @@ class KraKpiAPI(http.Controller):
             'self_pending_count': len(self_pending),  # Pending Review lane badge
         }
 
+    def _task_time_by_user(self, k):
+        """Per-developer time rows for a single task (mirrors get_tasks' batched
+        version, computed for one kpi)."""
+        TimeLog = request.env['kpi.time.log'].sudo()
+        time_map = {}
+        for g in TimeLog.read_group(
+                [('kpi_id', '=', k.id), ('is_active', '=', False)],
+                ['duration_seconds:sum'], ['user_id'], lazy=False):
+            uid = g['user_id'][0] if g.get('user_id') else False
+            if not uid:
+                continue
+            time_map[uid] = {'name': g['user_id'][1], 'seconds': g.get('duration_seconds') or 0.0}
+        now = fields.Datetime.now()
+        for a in TimeLog.search([('kpi_id', '=', k.id), ('is_active', '=', True)]):
+            if not (a.user_id and a.start_time):
+                continue
+            d = time_map.setdefault(a.user_id.id, {'name': a.user_id.name, 'seconds': 0.0})
+            d['seconds'] += max(0.0, (now - a.start_time).total_seconds())
+        rows = []
+        for uid, info in time_map.items():
+            sec = int(info['seconds'] or 0)
+            rows.append({
+                'user_id': uid,
+                'user_name': info['name'] or '',
+                'seconds': round(info['seconds'], 2),
+                'display': f"{sec // 3600}h {(sec % 3600) // 60}m",
+                'is_current': bool(k.user_id and uid == k.user_id.id),
+            })
+        rows.sort(key=lambda r: r['seconds'], reverse=True)
+        return rows
+
+    def _serialize_task(self, k):
+        """Serialize one kra.kpi to the SAME shape /kra_kpi/tasks/get returns, so a
+        single fetched task can be dropped straight into the mobile board."""
+        timer_start_iso = None
+        if k.task_state == 'in_progress' and k.timer_start_datetime:
+            timer_start_iso = k.timer_start_datetime.isoformat() + 'Z'
+        return {
+            'id': k.id,
+            'name': k.name or "",
+            'priority': k.priority or "regular",
+            'task_state': k.task_state or "assigned",
+            'user_id': (k.user_id.id if k.user_id else False),
+            'user_name': (k.user_id.name if k.user_id else ""),
+            'estimate_display': f"{k.estimate_hours:02d}:{k.estimate_minutes:02d}",
+            'estimate_hours': k.estimate_hours or 0,
+            'estimate_minutes': k.estimate_minutes or 0,
+            'timer_total_seconds': k.timer_total_seconds or 0,
+            'timer_start_datetime': timer_start_iso,
+            'paused_reason': k.paused_reason or "",
+            'description': k.description or "",
+            'progress_count': k.progress_count or 0,
+            'completed_by_id': k.completed_by.id if k.completed_by else False,
+            'completed_by_name': k.completed_by.name if k.completed_by else "",
+            'completion_date': convert_to_user_tz(k.completion_date) if k.completion_date else "",
+            'approved_by_id': k.approved_by.id if k.approved_by else False,
+            'approved_by_name': k.approved_by.name if k.approved_by else "",
+            'approval_date': convert_to_user_tz(k.approval_date) if k.approval_date else "",
+            'coordinator_review_started_at': (
+                convert_to_user_tz(k.coordinator_review_started_at)
+                if k.coordinator_review_started_at else ""),
+            'coordinator_review_started_by_name': (
+                k.coordinator_review_started_by.name
+                if k.coordinator_review_started_by else ""),
+            'deadline': str(k.deadline) if k.deadline else "",
+            'reminder_days': k.reminder_days or 0,
+            'reminder_hours': k.reminder_hours or 0,
+            'reminder_minutes': k.reminder_minutes or 0,
+            'last_reminder_shown': convert_to_user_tz(k.last_reminder_shown) if k.last_reminder_shown else "",
+            'deadline_alert_shown': k.deadline_alert_shown or False,
+            'is_self_created': k.is_self_created,
+            'admin_accepted': k.admin_accepted,
+            'requested_by_id': k.requested_by_id.id if k.requested_by_id else False,
+            'requested_by_name': k.requested_by_id.name if k.requested_by_id else "",
+            'self_review_note': k.self_review_note or "",
+            'self_review_by': k.self_review_by or "",
+            'self_resume_note': k.self_resume_note or "",
+            'self_resume_by': k.self_resume_by or "",
+            'self_needs_resume_reason': k.self_needs_resume_reason,
+            'time_by_user': self._task_time_by_user(k),
+        }
+
+    @http.route('/kra_kpi/task/get', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_single_task(self, **params):
+        """Fetch ONE task by id — used when a notification points to a task that is
+        not in the caller's scoped board list (reassigned away / completed). Allowed
+        for admins, the task's assignee, or anyone who has a notification for it."""
+        kpi_id = int(params.get('kpi_id') or 0)
+        if not kpi_id:
+            return {'status': False, 'message': 'kpi_id required'}
+        user = request.env.user
+        kpi = request.env['kra.kpi'].sudo().browse(kpi_id)
+        if not kpi.exists():
+            return {'status': False, 'message': 'Task not found'}
+        is_admin = self._is_kra_admin(user)
+        is_owner = bool(kpi.user_id and kpi.user_id.id == user.id)
+        was_notified = request.env['kpi.notification'].sudo().search_count(
+            [('user_id', '=', user.id), ('kpi_id', '=', kpi_id)]) > 0
+        if not (is_admin or is_owner or was_notified):
+            return {'status': False, 'message': 'Not authorized'}
+        return {'status': True, 'task': self._serialize_task(kpi)}
+
     # ================================================================== #
     # In-app notifications feed (kpi.notification)                        #
     # ================================================================== #
@@ -844,6 +979,10 @@ class KraKpiAPI(http.Controller):
             [('share', '=', False), ('active', '=', True)], order='name')
         # The WhatsApp server that sends the reset codes (latest session record).
         sess = request.env['whatsapp.session'].sudo().search([], limit=1, order='id desc')
+        # Keep the session labelled for the OTP sender (rename in place, no reconnect).
+        if sess and sess.name != 'Login Management WhatsApp OTP':
+            try: sess.write({'name': 'Login Management WhatsApp OTP'})
+            except Exception: pass
         from ..models.res_company_kpi import DEFAULT_OTP_TEMPLATE
         dial, length = request.env.company._kpi_mobile_cfg()
         try:
@@ -978,13 +1117,17 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         Session = request.env['whatsapp.session'].sudo()
         session = Session.search([], limit=1, order='id desc')
+        wa_name = 'Login Management WhatsApp OTP'
         if not session:
-            session = Session.create({'name': 'KRA/KPI WhatsApp'})
+            session = Session.create({'name': wa_name})
         try:
             session.action_connect()
         except Exception as exc:
             _logger.error("wa_server connect failed: %s", exc)
             return {'status': False, 'message': str(exc)}
+        # Force the label AFTER connect — action_connect can reset name to "Default".
+        if session.name != wa_name:
+            session.sudo().write({'name': wa_name})
         return {'status': True, 'session_id': session.id, 'state': session.status}
 
     @http.route('/kpi_wa_server/status', type='json', auth='user', methods=['POST'], csrf=False)
@@ -1158,6 +1301,9 @@ class KraKpiAPI(http.Controller):
         if (est_h * 60 + est_m) <= 0:
             return {'status': False, 'message': 'Estimate must be greater than zero.'}
 
+        # Provisional ref — a "+ New Task" gets TASK-### until an admin accepts it
+        # and picks the real type (REQ/UPT/BUG), which re-numbers it.
+        task_ref_n = request.env['kra.kpi']._next_ref_for_prefix('TASK')
         rec = request.env['kra.kpi'].sudo().create({
             'name': name,
             'kra_id': int(kra_id),
@@ -1171,6 +1317,7 @@ class KraKpiAPI(http.Controller):
             'is_self_created': True,
             'admin_accepted': False,
             'requested_by_id': user.id,
+            'external_ref': 'TASK-%03d' % task_ref_n,
         })
 
         # Notify owner + coordinator that a task is waiting for review.
@@ -1181,7 +1328,7 @@ class KraKpiAPI(http.Controller):
         except Exception as exc:
             _logger.warning("self_task_submitted notify failed: %s", exc)
 
-        return {'status': True, 'id': rec.id,
+        return {'status': True, 'id': rec.id, 'external_ref': rec.external_ref,
                 'message': 'Task created in your Pending Review lane.'}
 
     @http.route('/kra_kpi/task/accept_self_created', type='json', auth='user', methods=['POST'], csrf=False)
@@ -1206,6 +1353,16 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'This task is not awaiting acceptance.'}
 
         vals = {'admin_accepted': True}
+        # Admin categorizes the accepted task — re-number its provisional TASK-###
+        # ref into the chosen sequence (REQ/UPT/BUG) and apply the name prefix.
+        _REF_PREFIX = {'requirement': 'REQ', 'update': 'UPT', 'bug': 'BUG'}
+        _NAME_PREFIX = {'requirement': '', 'update': '[Update] ', 'bug': '[Bug] '}
+        doc_type = params.get('doc_type') or 'requirement'
+        prefix = _REF_PREFIX.get(doc_type, 'REQ')
+        n = request.env['kra.kpi']._next_ref_for_prefix(prefix)
+        vals['external_ref'] = '%s-%03d' % (prefix, n)
+        base_name = re.sub(r'^\[(Update|Bug)\]\s*', '', rec.name or '', flags=re.IGNORECASE)
+        vals['name'] = _NAME_PREFIX.get(doc_type, '') + base_name
         if params.get('kra_id'):
             vals['kra_id'] = int(params['kra_id'])
         if params.get('estimate_hours') not in (None, ''):

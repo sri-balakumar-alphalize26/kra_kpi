@@ -7,17 +7,17 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Dimensions,
   ActivityIndicator, Alert, Modal, StatusBar as RNStatusBar, Animated, Easing,
-  Platform, UIManager, LayoutAnimation,
+  Platform, UIManager, LayoutAnimation, findNodeHandle,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import {
-  LANES, groupIntoLanes, laneForTask, fetchTasks, fetchUsers,
+  LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers,
   startTask, pauseTask, resumeTask, completeTask, reassignTask, createProgress,
   CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
-  getWorkdayStatus, startWorkday, endWorkday, selfCreateTask, fetchProjects, getTodaySummary, getLiveStatus,
+  getWorkdayStatus, startWorkday, endWorkday, selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
 } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
 
@@ -174,7 +174,7 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
 // priority dot + chevron; tapping expands to reveal the shared TaskDetailBody.
 // Mirrors the chevron-forward/down conditional-render pattern used by KraNode /
 // OwnerDashboard's ClientCard.
-function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin }) {
+function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin, pulse, onRowRef }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
   // Rotate the chevron 0°→90° as the row expands/collapses.
@@ -183,8 +183,28 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
     Animated.timing(rot, { toValue: expanded ? 1 : 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
   }, [expanded, rot]);
   const spin = rot.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] });
+
+  // Arrival highlight (from a notification tap): a brief highlight wash that
+  // beats TWICE, so the task the notification pointed to visibly flashes.
+  const beat = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!pulse) return;
+    beat.setValue(0);
+    const oneBeat = () => Animated.sequence([
+      Animated.timing(beat, { toValue: 1, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(beat, { toValue: 0, duration: 320, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]);
+    Animated.sequence([oneBeat(), Animated.delay(160), oneBeat()]).start();
+  }, [pulse, beat]);
+  const washOpacity = beat.interpolate({ inputRange: [0, 1], outputRange: [0, 0.9] });
+
   return (
-    <View style={[s.listRow, expanded && s.listRowOpen]}>
+    <Animated.View
+      ref={(r) => { onRowRef && onRowRef(task.id, r); }}
+      style={[s.listRow, expanded && s.listRowOpen, pulse && s.listRowPulse]}
+    >
+      {/* Highlight wash — fades in/out with the double heartbeat. */}
+      <Animated.View pointerEvents="none" style={[s.listPulseWash, { opacity: washOpacity }]} />
       <TouchableOpacity style={s.listHead} onPress={onToggle} activeOpacity={0.7}>
         <View style={[s.listDot, { backgroundColor: p.fg }]} />
         <Text style={s.listName} numberOfLines={1}>{task.name}</Text>
@@ -207,7 +227,7 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
           <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} />
         </View>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -397,7 +417,10 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   const laneRefs = useRef({});                     // laneKey → vertical ScrollView ref
   const laneX = useRef({});                        // laneKey → x offset in the board
   const cardY = useRef({});                        // taskId → y offset within its lane
+  const listScrollRef = useRef(null);              // list-view vertical ScrollView
+  const listRowRefs = useRef({});                  // taskId → TaskListRow node (for scroll-to)
   const handledFocusRef = useRef(null);            // last focusTaskId acted on (idempotency vs polls)
+  const fetchedFocusRef = useRef(null);            // last focusTaskId we tried to fetch-by-id (avoid loops)
 
   // Reassign modal
   const [reassignFor, setReassignFor] = useState(null);
@@ -464,6 +487,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   // Styled error popup ("Can't start this task", etc.)
   const [errorPopup, setErrorPopup] = useState(null); // { title, message } | null
   const showError = (title, message) => setErrorPopup({ title, message });
+  const [createdPopup, setCreatedPopup] = useState(null); // { ref, name } after a New Task is created
 
   // New Task modal
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -475,6 +499,9 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   const [ntDesc, setNtDesc] = useState('');
   const [projects, setProjects] = useState([]);
   const [ntProjectOpen, setNtProjectOpen] = useState(false);
+  const [clientTree, setClientTree] = useState([]);   // [{id, name, projects:[{id,display}]}]
+  const [ntClient, setNtClient] = useState(null);
+  const [ntClientOpen, setNtClientOpen] = useState(false);
   const [ntBusy, setNtBusy] = useState(false);
 
   const load = useCallback(async (opts = {}) => {
@@ -547,41 +574,83 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   useEffect(() => {
     if (!focusTaskId) return;
     if (handledFocusRef.current === focusTaskId) return;
-    const task = raw.find((t) => t.id === focusTaskId);
+    // Type-tolerant match: the notification's kpi_id may arrive as a string while
+    // task.id is a number (or vice-versa).
+    const task = raw.find((t) => String(t.id) === String(focusTaskId));
     if (!task) {
-      // Not on this board (stale/reassigned-away, or still loading). If the
-      // load finished and it's genuinely absent, give up so we don't hang.
-      if (!loading) { handledFocusRef.current = focusTaskId; onFocusHandled && onFocusHandled(); }
+      // Not in the board's scoped list yet. While still loading, wait for it.
+      if (loading) {
+        log.info('noti focus: waiting for board load', { focusTaskId, rawCount: raw.length });
+        return;
+      }
+      // Loaded but absent (reassigned away / completed / not the dev's own task).
+      // Fetch it by id ONCE and inject it so the reveal can run; if that fails,
+      // tell the user.
+      if (fetchedFocusRef.current !== focusTaskId) {
+        fetchedFocusRef.current = focusTaskId;
+        log.info('noti focus: not in board → fetching by id', { focusTaskId, rawIds: raw.map((t) => t.id) });
+        fetchTaskById(focusTaskId).then((t) => {
+          if (t && t.id != null) {
+            log.info('noti focus: fetched task, injecting', { id: t.id, name: t.name });
+            setRaw((prev) => (prev.some((x) => String(x.id) === String(t.id)) ? prev : [...prev, t]));
+            // raw changes → this effect re-runs → task now found → reveal.
+          } else {
+            log.info('noti focus: fetch-by-id returned nothing', { focusTaskId });
+            handledFocusRef.current = focusTaskId;
+            showError('Task not available', "This task couldn't be opened — it may have been removed.");
+            onFocusHandled && onFocusHandled();
+          }
+        });
+      }
       return;
     }
     handledFocusRef.current = focusTaskId;
+    log.info('noti focus: task found → switching to kanban', { focusTaskId, name: task.name, state: task.task_state });
 
-    // 1. Clear every filter so the target card can't be hidden, and switch to the
-    //    board view (scroll-to-focus + heartbeat target the kanban card refs).
+    // 1. Clear every filter so the target task can't be hidden. Honor the CURRENT
+    //    view: in list view, expand its status + row so it's revealed; in board
+    //    view, the scroll below brings its card into view. Both then heartbeat.
     setSearch('');
     setFilterAssignee(null);
     setFilterPriority(null);
     setFilterStatus(null);
     setOpenFilter(null);
-    setViewMode('board');
 
     const laneKey = laneForTask(task);
 
-    // 2. Scroll after layout settles (filters just changed → re-render + measure).
-    const t1 = setTimeout(() => {
+    // Notification focus works best in the kanban board (reliable scroll-to-card +
+    // heartbeat), so switch to board view. Also pre-expand the list row in case the
+    // user toggles back to list.
+    setViewMode('board');
+    setExpandedLanes((prev) => new Set(prev).add(laneKey));
+    setExpandedId(focusTaskId);
+    log.info('noti focus: view=board, lane', { laneKey });
+
+    // 2. Scroll to the card — but the view is switching list→board, so the lane/
+    //    card offsets (set via onLayout) may not be measured on the first tick.
+    //    Retry until they are (up to ~1.6s).
+    let t1 = null;
+    let tries = 0;
+    const tryScroll = () => {
+      tries += 1;
       const x = laneX.current[laneKey];
+      const y = cardY.current[focusTaskId];
       if (boardRef.current && typeof x === 'number') {
         boardRef.current.scrollTo({ x: Math.max(0, x - 8), animated: true });
+        const laneRef = laneRefs.current[laneKey];
+        if (laneRef && typeof y === 'number') {
+          laneRef.scrollTo({ y: Math.max(0, y - 8), animated: true });
+        }
+        log.info('noti focus: scrolled board', { laneKey, laneX: x, cardY: y, tries });
+        return;
       }
-      const laneRef = laneRefs.current[laneKey];
-      const y = cardY.current[focusTaskId];
-      if (laneRef && typeof y === 'number') {
-        laneRef.scrollTo({ y: Math.max(0, y - 8), animated: true });
-      }
-    }, 260);
+      if (tries < 10) { t1 = setTimeout(tryScroll, 160); }
+      else { log.info('noti focus: scroll gave up (offsets not measured)', { laneKey, tries }); }
+    };
+    t1 = setTimeout(tryScroll, 250);
 
     // 3. Trigger the heartbeat + highlight on the card, then release.
-    const t2 = setTimeout(() => setPulseId(focusTaskId), 420);
+    const t2 = setTimeout(() => { log.info('noti focus: heartbeat pulse', { focusTaskId }); setPulseId(focusTaskId); }, 420);
     const t3 = setTimeout(() => {
       setPulseId(null);
       onFocusHandled && onFocusHandled();
@@ -653,8 +722,8 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   function openNewTask() {
     setNewTaskOpen(true);
     setNtName(''); setNtProject(null); setNtHours('1'); setNtMinutes('0'); setNtPriority('regular'); setNtDesc('');
-    setNtProjectOpen(false);
-    if (projects.length === 0) fetchProjects().then(setProjects).catch(() => {});
+    setNtProjectOpen(false); setNtClient(null); setNtClientOpen(false);
+    if (clientTree.length === 0) fetchClientTree().then(setClientTree).catch(() => {});
   }
 
   async function submitNewTask() {
@@ -672,7 +741,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
       if (res && res.status === false) { Alert.alert('Cannot create', res.message || 'Failed'); return; }
       setNewTaskOpen(false);
       await load({ silent: true });
-      Alert.alert('Task created', 'Added to your Pending Review lane.');
+      setCreatedPopup({ ref: (res && res.external_ref) || '', name: ntName.trim() });
     } catch (e) { Alert.alert('Error', e.message || 'Failed'); }
     finally { setNtBusy(false); }
   }
@@ -1027,6 +1096,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
            same actions; each row expands to reveal the shared TaskDetailBody. */
         <Animated.View style={bodyStyle}>
         <ScrollView
+          ref={listScrollRef}
           style={s.listScroll}
           contentContainerStyle={{ padding: 14, paddingBottom: 28 }}
           showsVerticalScrollIndicator={false}
@@ -1068,6 +1138,8 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                       busyId={busyId}
                       nowMs={nowMs}
                       isAdmin={isAdmin}
+                      pulse={pulseId === t.id}
+                      onRowRef={(id, r) => { listRowRefs.current[id] = r; }}
                     />
                   ))}
                 </View>
@@ -1302,19 +1374,38 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                 <TextInput style={[s.textInput, !ntName.trim() && s.inputErr]} placeholder="What needs doing?" placeholderTextColor={COLORS.faint} value={ntName} onChangeText={setNtName} />
                 {!ntName.trim() ? <Text style={s.mandatory}>Task name is required</Text> : null}
 
-                <Text style={s.fieldLabel}>Project (KRA) *</Text>
-                <TouchableOpacity style={[s.dropdown, !ntProject && s.inputErr]} onPress={() => setNtProjectOpen((o) => !o)} activeOpacity={0.8}>
+                <Text style={s.fieldLabel}>Client *</Text>
+                <TouchableOpacity style={[s.dropdown, !ntClient && s.inputErr]} onPress={() => { setNtClientOpen((o) => !o); setNtProjectOpen(false); }} activeOpacity={0.8}>
+                  <Text style={[s.dropdownTxt, !ntClient && { color: COLORS.faint }]} numberOfLines={1}>
+                    {ntClient ? ntClient.name : '— choose a client —'}
+                  </Text>
+                  <Ionicons name={ntClientOpen ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.muted} />
+                </TouchableOpacity>
+                {ntClientOpen && (
+                  <View style={s.dropdownList}>
+                    <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                      {clientTree.length === 0 && <Text style={[s.centerTxt, { padding: 12 }]}>Loading clients…</Text>}
+                      {clientTree.map((c) => (
+                        <TouchableOpacity key={c.id} style={[s.dropdownItem, ntClient?.id === c.id && s.dropdownItemOn]} onPress={() => { setNtClient(c); setNtProject(null); setNtClientOpen(false); }}>
+                          <Text style={[s.dropdownItemTxt, ntClient?.id === c.id && { color: COLORS.primary, fontWeight: '800' }]}>{c.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+
+                <Text style={s.fieldLabel}>Project *</Text>
+                <TouchableOpacity style={[s.dropdown, !ntProject && s.inputErr]} disabled={!ntClient} onPress={() => setNtProjectOpen((o) => !o)} activeOpacity={0.8}>
                   <Text style={[s.dropdownTxt, !ntProject && { color: COLORS.faint }]} numberOfLines={1}>
-                    {ntProject ? ntProject.display : '— choose a project —'}
+                    {ntProject ? ntProject.display : (ntClient ? '— choose a project —' : 'Select a client first')}
                   </Text>
                   <Ionicons name={ntProjectOpen ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.muted} />
                 </TouchableOpacity>
                 {!ntProject ? <Text style={s.mandatory}>Please choose a project</Text> : null}
-                {ntProjectOpen && (
+                {ntProjectOpen && ntClient && (
                   <View style={s.dropdownList}>
                     <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                      {projects.length === 0 && <Text style={[s.centerTxt, { padding: 12 }]}>Loading projects…</Text>}
-                      {projects.map((p) => (
+                      {(ntClient.projects || []).map((p) => (
                         <TouchableOpacity key={p.id} style={[s.dropdownItem, ntProject?.id === p.id && s.dropdownItemOn]} onPress={() => { setNtProject(p); setNtProjectOpen(false); }}>
                           <Text style={[s.dropdownItemTxt, ntProject?.id === p.id && { color: COLORS.primary, fontWeight: '800' }]}>{p.display}</Text>
                         </TouchableOpacity>
@@ -1366,6 +1457,36 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
               >
                 {ntBusy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.footConfirmTxt}>Create Task</Text>}
               </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Styled success popup after creating a "+ New Task" — shows the new ref */}
+      <Modal visible={!!createdPopup} transparent animationType="fade" onRequestClose={() => setCreatedPopup(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headGreenSoft]}>
+              <Text style={s.headGreenSoftTitle}>✓  Task created</Text>
+              <TouchableOpacity onPress={() => setCreatedPopup(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#0F5132" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              {createdPopup?.ref ? (
+                <View style={s.createdRefRow}>
+                  <Text style={s.createdRefLbl}>Reference</Text>
+                  <View style={s.createdRefBadge}><Text style={s.createdRefTxt}>{createdPopup.ref}</Text></View>
+                </View>
+              ) : null}
+              <Text style={s.createdName} numberOfLines={2}>{createdPopup?.name}</Text>
+              <View style={s.createdInfo}>
+                <Ionicons name="time-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
+                <Text style={s.createdInfoTxt}>In <Text style={{ fontWeight: '800' }}>Pending Review</Text> — an admin will review it, pick the type (Requirement / Update / Bug) and assign it.</Text>
+              </View>
+            </View>
+            <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
+              <TouchableOpacity style={[s.footConfirm, { backgroundColor: COLORS.green }]} onPress={() => setCreatedPopup(null)}><Text style={s.footConfirmTxt}>Done</Text></TouchableOpacity>
             </View>
           </View>
         </View>
@@ -1559,6 +1680,9 @@ const s = StyleSheet.create({
   listSectionTxt: { flex: 1, color: '#fff', fontSize: 14, fontWeight: '900', letterSpacing: 0.2 },
   listRow: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, marginBottom: 8, overflow: 'hidden' },
   listRowOpen: { borderColor: COLORS.primary },
+  // Notification-arrival highlight: brighter border + a colored wash overlay.
+  listRowPulse: { borderColor: COLORS.primary, borderWidth: 2 },
+  listPulseWash: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#DCE7FB', borderRadius: 14 },
   listHead: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, minHeight: 52 },
   listDot: { width: 9, height: 9, borderRadius: 5 },
   listName: { flex: 1, fontSize: 14, fontWeight: '700', color: COLORS.ink },
@@ -1733,6 +1857,18 @@ const s = StyleSheet.create({
   headRed: { backgroundColor: COLORS.red },
   headRedTitleRow: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 10 },
   headRedTitle: { flex: 1, fontSize: 16.5, fontWeight: '900', color: '#fff' },
+  // Soft (pale) green header — used by the "Task created" success popup, which
+  // wants dark green text/icon on a light header (distinct from the solid
+  // headGreen above that the Complete-Task popup uses with white text).
+  headGreenSoft: { backgroundColor: '#DCFCE7' },
+  headGreenSoftTitle: { fontSize: 16.5, fontWeight: '900', color: '#0F5132' },
+  createdRefRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  createdRefLbl: { fontSize: 12, color: COLORS.muted, fontWeight: '700' },
+  createdRefBadge: { backgroundColor: '#E0ECFF', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
+  createdRefTxt: { fontSize: 14, fontWeight: '900', color: '#2563EB', letterSpacing: 0.5 },
+  createdName: { fontSize: 15, fontWeight: '700', color: COLORS.ink, marginBottom: 12 },
+  createdInfo: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  createdInfoTxt: { flex: 1, fontSize: 12.5, color: COLORS.muted, lineHeight: 18 },
 
   // End Workday summary
   statTiles: { flexDirection: 'row', gap: 8, marginTop: 12 },
