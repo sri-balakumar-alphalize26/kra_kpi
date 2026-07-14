@@ -57,6 +57,7 @@ _PERSIST_EVENTS = {
     'self_task_submitted',
     'task_auto_away',   # web went idle/asleep → task auto-paused → tell the dev's phone
     'workday_auto_closed',  # midnight cron closed a workday the dev left open
+    'task_reassigned',  # tell the PREVIOUS assignee their task moved to someone else
 }
 
 # Short human labels for the in-app notification title (the body reuses the
@@ -68,6 +69,7 @@ _NOTIF_TITLES = {
     'self_task_submitted': 'Task submitted for review',
     'task_auto_away':      'Task paused — you went away',
     'workday_auto_closed': 'Workday auto-closed',
+    'task_reassigned':     'Task reassigned',
 }
 
 
@@ -304,6 +306,10 @@ _TEMPLATES = {
         "Reason: {feedback}\n"
         "New developer: open the web dashboard and press Start."
     ),
+    # Sent to the PREVIOUS assignee when their task is moved to someone else.
+    'task_reassigned': (
+        'Task "{name}" is now assigned to {new_dev} — contact admin for details.'
+    ),
     # First-time developer assignment (after client has already approved).
     # Coordinator picked a dev for a task that had been sitting unassigned.
     'task_assigned': (
@@ -349,7 +355,7 @@ _TEMPLATES = {
 # kra.kpi-anchored events like daily_summary / workday_started.
 _PASSTHROUGH_EVENTS = ('daily_summary', 'workday_started', 'workday_auto_closed',
                        'task_auto_away', 'self_task_submitted', 'self_task_accepted',
-                       'self_task_rejected')
+                       'self_task_rejected', 'task_reassigned')
 
 
 _DECISION_EMOJI = {
@@ -382,8 +388,12 @@ class KpiNotify(models.Model):
     # ------------------------------------------------------------------ #
     # Public entry point                                                 #
     # ------------------------------------------------------------------ #
-    def _notify(self, event, **ctx):
-        """Dispatch a notification for `event`. Never raises; logs failures."""
+    def _notify(self, event, extra_users=None, **ctx):
+        """Dispatch a notification for `event`. Never raises; logs failures.
+
+        `extra_users` = optional list of res.users ids to ALSO notify in-app +
+        push, beyond the role matrix (e.g. the PREVIOUS assignee on reassign,
+        who the role-based resolver would never reach)."""
         self.ensure_one()
         try:
             config = self.env['whatsapp.config'].sudo().get_config()
@@ -410,6 +420,14 @@ class KpiNotify(models.Model):
             try:
                 notif_recipients = self._notif_recipient_users(
                     _EVENT_RECIPIENTS.get(event, ()))
+                # Explicit target users (e.g. the PREVIOUS assignee on reassign)
+                # who the role matrix wouldn't reach. Feeds BOTH the in-app row
+                # and the push below (both read notif_recipients).
+                _seen_uids = {r.get('user_id') for r in notif_recipients}
+                for _uid in (extra_users or []):
+                    if _uid and _uid not in _seen_uids:
+                        notif_recipients.append({'user_id': _uid, 'role': 'previous_assignee'})
+                        _seen_uids.add(_uid)
                 created = self.env['kpi.notification'].sudo().create_for_recipients(
                     self, event,
                     _NOTIF_TITLES.get(event, event.replace('_', ' ').title()),

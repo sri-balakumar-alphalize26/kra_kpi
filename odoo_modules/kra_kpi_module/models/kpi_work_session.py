@@ -465,6 +465,7 @@ class KpiWorkSession(models.Model):
         # on the same day don't double-count the same kpi.time.log rows.
         Log = self.env['kpi.time.log'].sudo()
         per_task = {}
+        segments = []   # flat, time-ordered task work-segments for the Workday Map
         for s in sessions:
             if not s.login_at:
                 continue
@@ -489,6 +490,14 @@ class KpiWorkSession(models.Model):
                 d['duration_seconds'] += (log.duration_seconds or 0.0)
                 if log.start_time and log.end_time:
                     d['intervals'].append((log.start_time, log.end_time))
+                    segments.append({
+                        'kpi_id': k.id,
+                        'ref':    k.external_ref or f"#{k.id}",
+                        'name':   k.name or '',
+                        'start':  log.start_time,
+                        'end':    log.end_time,
+                        'active': False,
+                    })
 
         # Concurrency grouping: link tasks whose time-log intervals overlap, so a
         # multi-task dev's summary can GROUP tasks that ran at the same time
@@ -551,6 +560,14 @@ class KpiWorkSession(models.Model):
                 productive += running_secs
                 rk = active_log.kpi_id
                 if rk:
+                    segments.append({
+                        'kpi_id': rk.id,
+                        'ref':    rk.external_ref or f"#{rk.id}",
+                        'name':   rk.name or '',
+                        'start':  active_log.start_time,
+                        'end':    None,
+                        'active': True,
+                    })
                     row = next((t for t in tasks if t['kpi_id'] == rk.id), None)
                     if row:
                         row['duration_seconds'] += running_secs
@@ -636,8 +653,134 @@ class KpiWorkSession(models.Model):
             'away_display':       _fmt_hms(away_secs),
             'other_idle_display': _fmt_hms(other_idle),
             'away_events':        away_events,
+            'timeline':           self._build_workday_timeline(segments, blogs, first_login, last_logout),
             'note':               self.note or '',
         }
+
+    # ------------------------------------------------------------------ #
+    # Workday Map — ordered timeline for the End Workday popup            #
+    # ------------------------------------------------------------------ #
+    def _build_workday_timeline(self, segments, blogs, first_login, last_logout):
+        """Merge task work-segments + break/lunch intervals into ONE ordered
+        list of nodes for the End Workday "Workday Map":
+            Start -> Task (reason) -> Break -> Task -> Lunch -> ... -> End
+        Each task node carries the last reason/note typed for it — the pause
+        reason (from the break it triggered) or, for its final segment, the
+        completion outcome + latest progress summary. Purely read-only; built
+        from existing kpi.time.log / kpi.break.log / kpi.progress / kra.kpi.
+        """
+        self.ensure_one()
+        u = self.user_id
+        _break_meta = {
+            'break':   ('☕', 'Break'),
+            'lunch':   ('🍽', 'Lunch'),
+            'meeting': ('👥', 'Meeting'),
+            'away':    ('💤', 'Away'),
+            'leave':   ('🚪', 'Leave'),
+            'urgent':  ('⚡', 'Urgent'),
+            'other':   ('⏸', 'Break'),
+        }
+
+        def _hm(dt):
+            return _to_user_tz_str(dt, u, fmt='%H:%M') if dt else ''
+
+        def _range(start, end):
+            a, b = _hm(start), _hm(end)
+            if a and b:
+                return a + '-' + b
+            return a or b or ''
+
+        _far = fields.Datetime.now()
+        nodes = []
+
+        # Start node
+        if first_login:
+            nodes.append({'kind': 'start', 'icon': '🌅', 'label': 'Started workday',
+                          'time': _hm(first_login), '_sort': first_login})
+
+        # Per-task final state + latest progress summary (for completion nodes)
+        kpi_ids = list({s['kpi_id'] for s in segments})
+        Kpi = self.env['kra.kpi'].sudo()
+        _kpis_rs = Kpi.browse(kpi_ids) if kpi_ids else Kpi.browse()
+        state_by = {k.id: k.task_state for k in _kpis_rs}
+        # Current assignee per task — to flag segments where the task was MOVED
+        # (reassigned) to a developer other than the one whose day this is.
+        assignee_by = {k.id: (k.user_id.id, k.user_id.name if k.user_id else '') for k in _kpis_rs}
+        Progress = self.env['kpi.progress'].sudo()
+        prog_by = {}
+        for kid in kpi_ids:
+            p = Progress.search([('kpi_id', '=', kid)], order='create_date desc', limit=1)
+            prog_by[kid] = (p.summary or '').strip() if p else ''
+
+        # Latest end-time per task — completion outcome only lands on its final segment.
+        last_end_by = {}
+        for s in segments:
+            e = s.get('end')
+            if e and (s['kpi_id'] not in last_end_by or e > last_end_by[s['kpi_id']]):
+                last_end_by[s['kpi_id']] = e
+
+        task_breaks = [b for b in blogs if b.source_task_id]
+
+        # Task nodes
+        for s in segments:
+            start, end = s.get('start'), s.get('end')
+            outcome, reason = 'worked', ''
+            if s.get('active') or not end:
+                outcome = 'active'
+            else:
+                is_last = last_end_by.get(s['kpi_id']) == end
+                cur_uid, cur_name = assignee_by.get(s['kpi_id'], (None, None))
+                # (0) moved away? — the task now belongs to a DIFFERENT developer
+                #     (reassigned while/after this dev worked it).
+                if is_last and cur_uid and cur_uid != u.id:
+                    outcome = 'moved'
+                    reason = (f"Reassigned to {cur_name}" if cur_name else "Reassigned away")
+                else:
+                    # (1) paused? — a break from THIS task starting ~when the segment ended
+                    match = None
+                    for b in task_breaks:
+                        if (b.source_task_id.id == s['kpi_id'] and b.start_time
+                                and abs((b.start_time - end).total_seconds()) <= 120):
+                            match = b
+                            break
+                    if match is not None:
+                        outcome, reason = 'paused', (match.reason_note or '').strip()
+                    else:
+                        # (2) completed / submitted? — only on the task's final segment
+                        st = state_by.get(s['kpi_id'])
+                        if is_last and st in ('completed', 'partially_completed'):
+                            outcome = 'completed' if st == 'completed' else 'submitted'
+                            reason = prog_by.get(s['kpi_id'], '')
+            nodes.append({
+                'kind': 'task', 'icon': '🛠',
+                'ref': s['ref'], 'name': s['name'] or '',
+                'label': (str(s['ref']) + ' ' + (s['name'] or '')).strip(),
+                'time': _range(start, end), 'outcome': outcome, 'reason': reason,
+                '_sort': start or first_login or _far,
+            })
+
+        # Break / lunch nodes
+        for b in blogs:
+            icon, label = _break_meta.get(b.break_type, ('⏸', 'Break'))
+            nodes.append({
+                'kind': 'break', 'icon': icon, 'label': label, 'break_type': b.break_type,
+                'time': _range(b.start_time, b.end_time),
+                'duration_display': _fmt_hms(b.duration_seconds),
+                'reason': (b.reason_note or '').strip(),
+                '_sort': b.start_time or first_login or _far,
+            })
+
+        nodes.sort(key=lambda n: n['_sort'] or _far)
+
+        # End node — always last
+        if last_logout:
+            nodes.append({'kind': 'end', 'icon': '🌙', 'label': 'Ended workday', 'time': _hm(last_logout)})
+        else:
+            nodes.append({'kind': 'end', 'icon': '⏳', 'label': 'Still working', 'time': ''})
+
+        for n in nodes:
+            n.pop('_sort', None)
+        return nodes
 
     def _fire_daily_summary(self, payload):
         """Dispatch the 'daily_summary' WA via the existing _notify pipeline.

@@ -1022,9 +1022,16 @@ export class KpiAction extends Component {
                                                             <t t-esc="priorityLabel(task.priority)"/>
                                                         </span>
                                                     </div>
-                                                    <div class="text-muted small">
-                                                        Assigned To: <t t-esc="task.user_name"/>
-                                                    </div>
+                                                    <t t-if="task.time_by_user and task.time_by_user.length">
+                                                        <div t-foreach="task.time_by_user" t-as="tu" t-key="tu.user_id" class="text-muted small">
+                                                            <i class="fa fa-user me-1"/><t t-esc="tu.user_name"/><t t-if="tu.is_current"> <span class="text-success fw-semibold">(currently working)</span></t> — <span class="fw-semibold" t-esc="tu.display"/>
+                                                        </div>
+                                                    </t>
+                                                    <t t-else="">
+                                                        <div class="text-muted small">
+                                                            <i class="fa fa-user me-1"/>Developer: <t t-esc="task.user_name"/>
+                                                        </div>
+                                                    </t>
                                                     <t t-if="task.is_self_created and !task.admin_accepted">
                                                         <div class="mt-1">
                                                             <span class="badge bg-info text-dark">Self-Created · Pending Review</span>
@@ -1163,6 +1170,7 @@ export class KpiAction extends Component {
             allTasks: [],  // 🆕 NEW: Store all tasks for filtering
             assignees: [], // 🆕 NEW: Store unique assignees for filter dropdown
             isAdmin: false,
+            gateBypass: false,    // admins (system/owner/coordinator) skip the PIN gate — never bounce them
             selfPendingCount: 0,  // 🆕 Self-created tasks awaiting admin Accept
             currentUserId: null,  // 🆕 NEW: Store current user ID from API
             showMyTasksOnly: false,  // 🆕 NEW: Toggle for My Tasks filter
@@ -2184,13 +2192,14 @@ export class KpiAction extends Component {
                                         `).join('')}
                                     </select>
                                     <small class="text-muted">You can reassign to the same employee to reset the task</small>
+                                    <div id="reassignAssigneeErr" class="text-danger small mt-1" style="display:none;"><i class="fa fa-exclamation-circle me-1"></i><span>Please select a new assignee.</span></div>
                                 </div>
                                 
                                 <div class="mb-3">
                                     <label for="reassignReason" class="form-label fw-bold">Reason for Reassignment: *</label>
                                     <textarea id="reassignReason" class="form-control" rows="3" 
                                               placeholder="Please explain why you are reassigning this task (e.g., workload balancing, employee availability, skill match, etc.)"></textarea>
-                                    <small class="text-danger">This field is mandatory</small>
+                                    <div id="reassignReasonErr" class="text-danger small mt-1" style="display:none;"><i class="fa fa-exclamation-circle me-1"></i><span>This field is mandatory.</span></div>
                                 </div>
                             </div>
                             <div class="modal-footer">
@@ -2301,6 +2310,44 @@ export class KpiAction extends Component {
         const autoNote = data.auto_closed
             ? `<div class="alert alert-warning small mt-2">Auto-closed earlier by cron.</div>`
             : '';
+        // 🗺 Workday Map — render the day's flow as chips: start → task → break → … → end.
+        // Server sends a ready-to-render `timeline` list; each task chip shows its
+        // outcome + the last reason/note typed underneath (in brackets).
+        const tlEsc = (x) => (x == null ? '' : x.toString()).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const tlChip = (n) => {
+            const icon = n.icon || '';
+            const label = tlEsc(n.label || '');
+            const time = tlEsc(n.time || '');
+            let border = '#cbd5e1', sub = '', note = '';
+            if (n.kind === 'start' || n.kind === 'end') {
+                border = '#94a3b8';
+                if (time) sub = `<div style="font-size:11px;color:#6b7280;">${time}</div>`;
+            } else if (n.kind === 'break') {
+                const bc = { break:'#f59e0b', lunch:'#10b981', meeting:'#3b82f6', away:'#6b7280', leave:'#8b5cf6', urgent:'#ef4444', other:'#f59e0b' };
+                border = bc[n.break_type] || '#f59e0b';
+                const dur = n.duration_display ? ` · ${tlEsc(n.duration_display)}` : '';
+                sub = `<div style="font-size:11px;color:#6b7280;">${time}${dur}</div>`;
+            } else { // task
+                const oc = { completed:'#16a34a', submitted:'#0d9488', paused:'#f59e0b', active:'#3b82f6', worked:'#64748b', moved:'#f97316' };
+                border = oc[n.outcome] || '#3b82f6';
+                if (time) sub = `<div style="font-size:11px;color:#6b7280;">${time}</div>`;
+                const ocLabel = { completed:'✓ Completed', submitted:'◑ Verification pending', paused:'⏸ Paused', active:'▶ In progress', worked:'', moved:'↪ Moved' }[n.outcome] || '';
+                const parts = [];
+                if (ocLabel) parts.push(ocLabel);
+                if (n.reason) parts.push(tlEsc(n.reason));
+                if (parts.length) note = `<div style="font-size:11px;color:#374151;font-style:italic;line-height:1.3;">(${parts.join(' — ')})</div>`;
+            }
+            return `<div style="display:inline-flex;flex-direction:column;min-width:104px;max-width:190px;border:1px solid ${border};border-top:3px solid ${border};border-radius:10px;padding:6px 10px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.06);">`
+                + `<div style="font-weight:600;font-size:13px;line-height:1.25;">${icon} ${label}</div>${sub}${note}</div>`;
+        };
+        const timelineInner = (data.timeline && data.timeline.length)
+            ? data.timeline.map(tlChip).join('<span style="align-self:center;color:#9ca3af;font-size:16px;">→</span>')
+            : '<span class="text-muted small">No activity recorded yet today.</span>';
+        const timelineSection = `
+            <div class="border rounded p-3 mb-3" style="background:#f8fafc;">
+                <div class="fw-bold mb-2">🗺 Workday Map <span class="text-muted fw-normal small">(your day in order — each task shows the last reason/note typed)</span></div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;">${timelineInner}</div>
+            </div>`;
         const modalHTML = `
             <div class="modal-backdrop fade show"></div>
             <div class="modal d-block" tabindex="-1">
@@ -2345,6 +2392,7 @@ export class KpiAction extends Component {
                                     return `<li class="mb-1"><span class="badge ${badge} me-1">${e.label}</span> ${e.start} – ${e.end} <span class="text-muted">(${e.duration_display})</span>${from}${note}</li>`;
                                 }).join('')}</ul>` : ''}
                             </div>` : ''}
+                            ${timelineSection}
                             <div class="small text-danger mb-2"><i class="fa fa-exclamation-circle me-1"></i> Use <b>Complete</b> for finished tasks — Pause is only for breaks/interruptions.</div>
                             <h6 class="mt-3">Tasks worked today (${data.task_count || 0})</h6>
                             <table class="table table-sm table-striped">
@@ -2505,21 +2553,35 @@ export class KpiAction extends Component {
 
     // 🆕 UPDATED: Confirm Reassignment with Reason
     async confirmReassign() {
-        const selectedAssignee = document.getElementById("newAssignee")?.value;
-        const reason = document.getElementById("reassignReason")?.value?.trim();
-        
+        const assigneeEl = document.getElementById("newAssignee");
+        const reasonEl = document.getElementById("reassignReason");
+        const selectedAssignee = assigneeEl?.value;
+        const reason = reasonEl?.value?.trim();
+
+        // Inline validation — no browser popups. Red field + message under it.
+        const setErr = (el, errId, msg) => {
+            if (el) { el.classList.add("is-invalid"); el.focus(); }
+            const e = document.getElementById(errId);
+            if (e) { const sp = e.querySelector("span"); if (sp) sp.textContent = msg; e.style.display = "block"; }
+        };
+        const clrErr = (el, errId) => {
+            if (el) el.classList.remove("is-invalid");
+            const e = document.getElementById(errId);
+            if (e) e.style.display = "none";
+        };
+        clrErr(assigneeEl, "reassignAssigneeErr");
+        clrErr(reasonEl, "reassignReasonErr");
+
         if (!selectedAssignee) {
-            alert("Please select an assignee.");
+            setErr(assigneeEl, "reassignAssigneeErr", "Please select a new assignee.");
             return;
         }
-        
         if (!reason) {
-            alert("Please enter a reason for reassignment. This field is mandatory.");
+            setErr(reasonEl, "reassignReasonErr", "Please enter a reason — this field is mandatory.");
             return;
         }
-        
         if (reason.length < 10) {
-            alert("Please provide a more detailed reason (at least 10 characters).");
+            setErr(reasonEl, "reassignReasonErr", "Please give a bit more detail (at least 10 characters).");
             return;
         }
         
@@ -3433,7 +3495,8 @@ export class KpiAction extends Component {
             const res = await rpc('/kpi_action/heartbeat', {});
             // Un-paired (auto-away) → fall back to the PIN gate. Do this first so
             // we never keep showing a board the device is no longer paired to.
-            if (res && res.paired === false) {
+            // Admins bypass the gate entirely, so never bounce them.
+            if (res && res.paired === false && !this.state.gateBypass) {
                 this._goToGate();
                 return;
             }
@@ -3468,7 +3531,8 @@ export class KpiAction extends Component {
     async _bounceToGateIfUnpaired() {
         try {
             const res = await rpc("/kpi_pair/status", {});
-            if (res && res.paired === false) this._goToGate();
+            if (res && res.bypass_gate) this.state.gateBypass = true;   // admin: never bounce to the gate
+            if (res && res.paired === false && !this.state.gateBypass) this._goToGate();
         } catch (e) { /* if the check fails, leave the board as-is */ }
     }
 

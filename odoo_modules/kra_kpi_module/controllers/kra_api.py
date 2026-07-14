@@ -409,7 +409,9 @@ class KraKpiAPI(http.Controller):
         my_tasks_only = params.get('my_tasks_only', False)
         
         is_manager_or_admin = (
-            current_user.has_group('kra_kpi_module.group_kra_manager') or 
+            current_user.has_group('kra_kpi_module.group_kra_owner') or
+            current_user.has_group('kra_kpi_module.group_kra_admin') or
+            current_user.has_group('kra_kpi_module.group_kra_manager') or
             current_user.has_group('base.group_system')
         )
         
@@ -420,7 +422,48 @@ class KraKpiAPI(http.Controller):
             domain = [('user_id', '=', current_user.id)]  # Show only user's tasks
         
         kpis = request.env['kra.kpi'].search(domain)
-        
+
+        # Per-developer time on each task (survives reassignment — kpi.time.log
+        # rows are kept per user). One batched read_group for all listed tasks,
+        # plus the live is_active segment folded into that user's total so the
+        # currently-working developer's time is up to date.
+        time_map = {}   # kpi_id -> {user_id: {'name', 'seconds'}}
+        if kpis.ids:
+            TimeLog = request.env['kpi.time.log'].sudo()
+            for g in TimeLog.read_group(
+                    [('kpi_id', 'in', kpis.ids), ('is_active', '=', False)],
+                    ['duration_seconds:sum'], ['kpi_id', 'user_id'], lazy=False):
+                kid = g['kpi_id'][0] if g.get('kpi_id') else False
+                uid = g['user_id'][0] if g.get('user_id') else False
+                if not kid or not uid:
+                    continue
+                time_map.setdefault(kid, {})[uid] = {
+                    'name': g['user_id'][1], 'seconds': g.get('duration_seconds') or 0.0}
+            now = fields.Datetime.now()
+            for a in TimeLog.search([('kpi_id', 'in', kpis.ids), ('is_active', '=', True)]):
+                if not (a.kpi_id and a.user_id and a.start_time):
+                    continue
+                d = time_map.setdefault(a.kpi_id.id, {}).setdefault(
+                    a.user_id.id, {'name': a.user_id.name, 'seconds': 0.0})
+                d['seconds'] += max(0.0, (now - a.start_time).total_seconds())
+
+        def _fmt_dur(sec):
+            sec = int(sec or 0)
+            return f"{sec // 3600}h {(sec % 3600) // 60}m"
+
+        def _time_by_user(k):
+            rows = []
+            for uid, info in (time_map.get(k.id) or {}).items():
+                rows.append({
+                    'user_id': uid,
+                    'user_name': info['name'] or '',
+                    'seconds': round(info['seconds'], 2),
+                    'display': _fmt_dur(info['seconds']),
+                    'is_current': bool(k.user_id and uid == k.user_id.id),
+                })
+            rows.sort(key=lambda r: r['seconds'], reverse=True)
+            return rows
+
         def map_rec(k):
             # For in_progress tasks, include timer_start_datetime for real-time calculation
             timer_start_iso = None
@@ -476,6 +519,8 @@ class KraKpiAPI(http.Controller):
                 'self_resume_note': k.self_resume_note or "",
                 'self_resume_by': k.self_resume_by or "",
                 'self_needs_resume_reason': k.self_needs_resume_reason,
+                # Per-developer time (survives reassign); current holder flagged.
+                'time_by_user': _time_by_user(k),
             }
         
         self_pending = kpis.filtered(lambda x: x.is_self_created and not x.admin_accepted)
@@ -611,6 +656,24 @@ class KraKpiAPI(http.Controller):
                 return u
         return request.env['res.users'].sudo().browse()
 
+    def _device_lock_owner(self, user, params):
+        """Return the name of the Odoo account this device is LOCKED to when
+        `user` (the number's owner) is a DIFFERENT account — else None.
+
+        The device is bound to the Odoo user who did the 7-tap device-setup
+        (its uid is stored on the device and sent as `setup_uid`). Only that
+        person's mobile number may log in on this device; any other number is
+        refused. When `setup_uid` is absent (device provisioned before this
+        lock, or not yet re-set-up) the check is skipped."""
+        try:
+            setup_uid = int(params.get('setup_uid') or 0)
+        except (TypeError, ValueError):
+            setup_uid = 0
+        if setup_uid and user and user.id != setup_uid:
+            su = request.env['res.users'].sudo().browse(setup_uid)
+            return (su.name or su.login or 'another account') if su.exists() else 'another account'
+        return None
+
     @http.route('/kpi_app/config', type='json', auth='public', methods=['POST'], csrf=False)
     def app_config(self, **params):
         """Public: the mobile app fetches the company's country dial code + local
@@ -628,6 +691,9 @@ class KraKpiAPI(http.Controller):
         user = self._find_app_user(params.get('mobile'))
         if not user:
             return {'status': True, 'state': 'unknown'}
+        locked_to = self._device_lock_owner(user, params)
+        if locked_to:
+            return {'status': True, 'state': 'wrong_device', 'name': locked_to}
         return {'status': True, 'state': user._app_login_state(), 'name': user.name}
 
     @http.route('/kpi_app/login', type='json', auth='public', methods=['POST'], csrf=False)
@@ -636,8 +702,18 @@ class KraKpiAPI(http.Controller):
         mapped Odoo user (no Odoo password needed). Blocks disabled users."""
         user = self._find_app_user(params.get('mobile'))
         pw = params.get('password') or ''
-        if not user or not user.kpi_app_login_enabled or not user._check_app_password(pw):
-            return {'status': False, 'error': 'Invalid mobile number or password.'}
+        # Specific messages so the user knows WHY it failed (per request):
+        if not user:
+            return {'status': False, 'error': "This number isn't registered. Contact your admin."}
+        # Device is locked to the Odoo account that set it up — refuse any other number.
+        locked_to = self._device_lock_owner(user, params)
+        if locked_to:
+            return {'status': False,
+                    'error': f"This device is set up for {locked_to}. Contact your admin."}
+        if not user.kpi_app_login_enabled:
+            return {'status': False, 'error': "Your login is disabled. Contact your admin."}
+        if not user._check_app_password(pw):
+            return {'status': False, 'error': "Username & password don't match this number. Contact your admin."}
         # Trusted login: finalize the session as this user (mirrors Odoo's own
         # /web/session/authenticate finalize step, minus the password check we
         # already did ourselves).
@@ -989,10 +1065,19 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kpi_pair/status', type='json', auth='user', methods=['POST'], csrf=False)
     def pair_status(self, **params):
-        """App polls this to learn when the web has entered the PIN."""
-        res = request.env['kpi.pair'].sudo().status_for(request.env.user)
+        """App polls this to learn when the web has entered the PIN.
+
+        `bypass_gate` = admins (system / owner / coordinator) open the board
+        directly without pairing a device or entering a PIN. Clients and plain
+        developers are NOT in this set, so they still go through the PIN gate."""
+        user = request.env.user
+        res = request.env['kpi.pair'].sudo().status_for(user)
+        bypass = (user.has_group('base.group_system')
+                  or user.has_group('kra_kpi_module.group_kra_owner')
+                  or user.has_group('kra_kpi_module.group_kra_admin'))
         return {'status': True, 'state': res.get('state'),
-                'paired': res.get('paired'), 'mode': res.get('mode')}
+                'paired': res.get('paired'), 'mode': res.get('mode'),
+                'bypass_gate': bypass}
 
     @http.route('/kpi_pair/verify', type='json', auth='user', methods=['POST'], csrf=False)
     def pair_verify(self, **params):

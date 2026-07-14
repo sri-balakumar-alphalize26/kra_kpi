@@ -63,6 +63,8 @@ export class KpiPairGate extends Component {
         onWillStart(async () => {
             try {
                 const res = await rpc("/kpi_pair/status", {});
+                // Admins (system / owner / coordinator) skip the PIN entirely.
+                if (res?.bypass_gate) { this._openBoard(); return; }
                 if (res?.paired) { this._openBoard(); return; }
                 if (res?.mode) this.state.mode = res.mode;
             } catch (e) { /* fall through to gate */ }

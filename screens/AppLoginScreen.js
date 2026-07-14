@@ -49,9 +49,17 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [pendingUser, setPendingUser] = useState(null);
+  const [resendIn, setResendIn] = useState(0);   // seconds left before "Resend" is allowed
   // Country / mobile format from the Odoo Configuration screen.
   const [dial, setDial] = useState('91');
   const [mobileLen, setMobileLen] = useState(10);
+
+  // Tick the resend cooldown down to 0 while the OTP step is showing.
+  useEffect(() => {
+    if (step !== 'otp' || resendIn <= 0) return;
+    const id = setInterval(() => setResendIn((n) => Math.max(0, n - 1)), 1000);
+    return () => clearInterval(id);
+  }, [step, resendIn]);
 
   useEffect(() => {
     let alive = true;
@@ -113,10 +121,11 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
     log.info('continue mobile', m);
     setBusy(true); setError('');
     try {
-      const { state } = await loginCheck(m);
+      const { state, name } = await loginCheck(m);
       log.info('login state', state);
       if (state === 'unknown') return fail('This number is not registered. Please contact your admin to register this number.');
       if (state === 'disabled') return fail('Your login is disabled. Contact your admin.');
+      if (state === 'wrong_device') return fail(`This device is set up for ${name || 'another account'}. Contact your admin to use it.`);
       // ready or needs_setup → ask for the password.
       setStep('password'); setBusy(false);
     } catch (e) { fail('Could not reach the server. Try again.'); }
@@ -163,6 +172,7 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
     try {
       await requestOtp(m);              // generic — always proceeds
       setCode(''); setNewPw(''); setNewPw2('');
+      setResendIn(10);                  // 10s before a resend is allowed
       setStep('otp'); setBusy(false);
     } catch (e) { fail('Could not send the code. Try again.'); }
   }
@@ -332,8 +342,10 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
                       <TouchableOpacity style={s.primaryBtn} onPress={submitOtp} disabled={busy} activeOpacity={0.9}>
                         {busy ? <ActivityIndicator color="#fff" /> : <Text style={s.primaryTxt}>Verify & Set Password</Text>}
                       </TouchableOpacity>
-                      <TouchableOpacity onPress={startOtp} style={{ marginTop: 12 }} disabled={busy}>
-                        <Text style={s.link}>Resend code</Text>
+                      <TouchableOpacity onPress={startOtp} style={{ marginTop: 12 }} disabled={busy || resendIn > 0}>
+                        <Text style={[s.link, (busy || resendIn > 0) && s.linkDisabled]}>
+                          {resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}
+                        </Text>
                       </TouchableOpacity>
                       <TouchableOpacity onPress={() => { setStep('password'); setError(''); }} style={{ marginTop: 10 }}>
                         <Text style={s.linkMuted}>← Back</Text>
@@ -414,6 +426,7 @@ const s = StyleSheet.create({
   primaryBtn: { backgroundColor: WATER, borderRadius: 12, height: 54, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   primaryTxt: { color: '#fff', fontSize: 16.5, fontWeight: '800' },
   link: { color: WATER, fontSize: 14, fontWeight: '700', textAlign: 'center' },
+  linkDisabled: { color: COLORS.faint },
   linkMuted: { color: COLORS.muted, fontSize: 13.5, fontWeight: '600', textAlign: 'center' },
 
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingTop: 10 },

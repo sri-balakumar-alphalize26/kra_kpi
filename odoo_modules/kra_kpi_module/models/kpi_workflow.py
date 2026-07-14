@@ -756,6 +756,15 @@ class KpiWorkflow(models.Model):
                 'previous_user':    prev_name,
                 'new_user':         new_name,
             })
+            # Tell the PREVIOUS assignee their task moved to someone else
+            # (in-app notification + push). Skip a self-reassign/reset (prev==new)
+            # and the was-Unassigned case.
+            if prev_uid and prev_uid != (rec.user_id.id if rec.user_id else False):
+                try:
+                    rec._notify('task_reassigned', extra_users=[prev_uid],
+                                name=rec.name, new_dev=new_name)
+                except Exception:
+                    pass
         return result
 
     # ------------------------------------------------------------------ #

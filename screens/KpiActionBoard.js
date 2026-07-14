@@ -108,11 +108,23 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
     <>
       {/* Meta */}
       <View style={s.metaBlock}>
-        <View style={s.metaRow}>
-          <View style={s.avatar}><Text style={s.avatarTxt}>{initials(task.user_name)}</Text></View>
-          <Text style={s.metaLabel}>Assignee</Text>
-          <Text style={s.metaValue} numberOfLines={1}>{task.user_name || 'Unassigned'}</Text>
-        </View>
+        {task.time_by_user && task.time_by_user.length ? (
+          task.time_by_user.map((tu) => (
+            <View key={tu.user_id} style={s.metaRow}>
+              <View style={s.avatar}><Text style={s.avatarTxt}>{initials(tu.user_name)}</Text></View>
+              <Text style={[s.metaValue, { flex: 1 }]} numberOfLines={1}>
+                {tu.user_name}{tu.is_current ? ' (currently working)' : ''}
+              </Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: tu.is_current ? COLORS.green : COLORS.muted, marginLeft: 8 }}>{tu.display}</Text>
+            </View>
+          ))
+        ) : (
+          <View style={s.metaRow}>
+            <View style={s.avatar}><Text style={s.avatarTxt}>{initials(task.user_name)}</Text></View>
+            <Text style={s.metaLabel}>Assignee</Text>
+            <Text style={s.metaValue} numberOfLines={1}>{task.user_name || 'Unassigned'}</Text>
+          </View>
+        )}
         <MetaRow icon="time-outline" label="Time" value={fmtHMS(liveSeconds(task, nowMs))}
           valueColor={running ? COLORS.green : undefined} />
         <MetaRow icon="flag-outline" label="Estimate" value={task.estimate_display || '00:00'} />
@@ -314,7 +326,7 @@ function FilterDropdown({ label, open, onToggle, options, selected, getKey, getL
   );
 }
 
-export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) {
+export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, focusStatus }) {
   const [raw, setRaw] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isMock, setIsMock] = useState(false);
@@ -338,6 +350,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
   const [users, setUsers] = useState([]);
   const [reassignReason, setReassignReason] = useState('');
   const [reassignUser, setReassignUser] = useState(null);
+  const [reassignTried, setReassignTried] = useState(false); // show inline required-field errors only after a submit attempt
 
   // Pause modal
   const [pauseFor, setPauseFor] = useState(null);
@@ -363,7 +376,9 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
   //                   only the Regular/Paused/… headings show until tapped).
   //   expandedId    = the single open task row inside an open heading (null = none).
   const [viewMode, setViewMode] = useState('list');
-  const [expandedLanes, setExpandedLanes] = useState(() => new Set());
+  // When opened focused on a status (from a Home stat card), that lane's heading
+  // starts expanded so its tasks show immediately.
+  const [expandedLanes, setExpandedLanes] = useState(() => (focusStatus ? new Set([focusStatus]) : new Set()));
   const [expandedId, setExpandedId] = useState(null);
 
   // Workday
@@ -503,6 +518,20 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [focusTaskId, raw, loading, onFocusHandled]);
 
+  // Status focus (from a Home stat card): in board/kanban view, scroll right to
+  // the selected lane (list view auto-expands it via expandedLanes seed instead).
+  // Reuses the same laneX offsets + boardRef the notification-focus effect uses.
+  useEffect(() => {
+    if (!focusStatus || viewMode !== 'board' || loading) return;
+    const t = setTimeout(() => {
+      const x = laneX.current[focusStatus];
+      if (boardRef.current && typeof x === 'number') {
+        boardRef.current.scrollTo({ x: Math.max(0, x - 8), animated: true });
+      }
+    }, 260);
+    return () => clearTimeout(t);
+  }, [focusStatus, viewMode, loading]);
+
   const totalTasks = raw.length;
   const shownTasks = filtered.length;
   const runningCount = useMemo(() => raw.filter((t) => t.task_state === 'in_progress').length, [raw]);
@@ -582,6 +611,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
       setReassignFor(task);
       setReassignReason('');
       setReassignUser(null);
+      setReassignTried(false);
       if (users.length === 0) fetchUsers().then(setUsers).catch(() => {});
       return;
     }
@@ -665,8 +695,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
   }
 
   async function submitReassign() {
-    if (!reassignUser) return Alert.alert('Pick a user', 'Choose who to reassign to.');
-    if (!reassignReason.trim()) return Alert.alert('Reason required', 'Enter a reason for the reassignment.');
+    if (!reassignUser || !reassignReason.trim()) { setReassignTried(true); return; }
     const task = reassignFor;
     setReassignFor(null);
     setBusyId(task.id);
@@ -691,7 +720,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
           </TouchableOpacity>
         ) : <View style={{ width: 40 }} />}
         <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={s.title}>KPI Action Board</Text>
+          <Text style={s.title}>{focusStatus ? (LANES.find((l) => l.key === focusStatus)?.label || 'Tasks') : 'KPI Action Board'}</Text>
           {!loading && !error ? (
             <Text style={s.subtitle}>Showing {shownTasks} of {totalTasks} task{totalTasks === 1 ? '' : 's'}</Text>
           ) : null}
@@ -1012,17 +1041,18 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled }) 
                   )}
                 </View>
                 <Text style={s.fieldHint}>You can reassign to the same employee to reset the task</Text>
+                {reassignTried && !reassignUser ? <Text style={s.mandatory}>Please select a developer.</Text> : null}
 
                 <Text style={s.fieldLabel}>Reason for Reassignment *</Text>
                 <TextInput
-                  style={[s.reasonInput, { minHeight: 80 }]}
+                  style={[s.reasonInput, { minHeight: 80 }, reassignTried && !reassignReason.trim() ? { borderColor: COLORS.red } : null]}
                   placeholder="Please explain why you are reassigning this task (e.g., workload balancing, availability, skill match, etc.)"
                   placeholderTextColor={COLORS.faint}
                   value={reassignReason}
                   onChangeText={setReassignReason}
                   multiline
                 />
-                {!reassignReason.trim() ? <Text style={s.mandatory}>This field is mandatory</Text> : null}
+                {reassignTried && !reassignReason.trim() ? <Text style={s.mandatory}>This field is mandatory</Text> : null}
               </View>
             </ScrollView>
 

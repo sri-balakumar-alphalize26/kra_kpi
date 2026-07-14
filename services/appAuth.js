@@ -12,6 +12,19 @@ function deviceName() {
   return Device.deviceName || Device.modelName || Platform.OS || 'device';
 }
 
+// Format a login mobile for display with the company dial code: "+91 1234567890".
+// Falls back to the bare digits if the config can't be fetched.
+async function formatLoginMobile(mobile) {
+  const digits = String(mobile || '').replace(/\D/g, '');
+  if (!digits) return '';
+  try {
+    const { dial } = await getMobileConfig();
+    return dial ? `+${dial} ${digits}` : digits;
+  } catch (_) {
+    return digits;
+  }
+}
+
 // Country/mobile format from the Odoo Configuration screen, so every number
 // field in the app shows the same +dial code and allows the same digit count.
 export async function getMobileConfig() {
@@ -28,9 +41,9 @@ export async function getMobileConfig() {
 
 // Check a mobile number's state → 'unknown' | 'needs_setup' | 'ready' | 'disabled'.
 export async function loginCheck(mobile) {
-  const { serverUrl, db } = await getConnection();
+  const { serverUrl, db, setupUid } = await getConnection();
   if (!serverUrl) return { state: 'unknown' };
-  const res = await jsonRpc(serverUrl, '/kpi_app/login_check', { mobile }, undefined, db);
+  const res = await jsonRpc(serverUrl, '/kpi_app/login_check', { mobile, setup_uid: setupUid || 0 }, undefined, db);
   log.info('loginCheck ←', { state: res?.state });
   return { state: res?.state || 'unknown', name: res?.name };
 }
@@ -38,16 +51,16 @@ export async function loginCheck(mobile) {
 // Verify mobile# + password → trusted server-side login. Returns the user object
 // (to persist) + must_change flag, or { ok:false, error }.
 export async function appLogin(mobile, password) {
-  const { serverUrl, db } = await getConnection();
+  const { serverUrl, db, setupUid } = await getConnection();
   if (!serverUrl) return { ok: false, error: 'Device not set up.' };
   const res = await jsonRpc(serverUrl, '/kpi_app/login', {
-    mobile, password, device: deviceName(),
+    mobile, password, device: deviceName(), setup_uid: setupUid || 0,
   }, undefined, db);
   if (!res?.status) return { ok: false, error: res?.error || 'Login failed.' };
   return {
     ok: true,
     mustChange: !!res.must_change,
-    user: { name: res.name, username: res.login, uid: res.uid, db, serverUrl },
+    user: { name: res.name, username: res.login, uid: res.uid, db, serverUrl, mobile: await formatLoginMobile(mobile) },
   };
 }
 
@@ -69,7 +82,7 @@ export async function verifyOtp(mobile, code, newPassword) {
   if (!res?.status) return { ok: false, error: res?.error || 'Could not verify.' };
   return {
     ok: true,
-    user: { name: res.name, username: res.login, uid: res.uid, db, serverUrl },
+    user: { name: res.name, username: res.login, uid: res.uid, db, serverUrl, mobile: await formatLoginMobile(mobile) },
   };
 }
 

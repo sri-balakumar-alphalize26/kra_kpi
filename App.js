@@ -272,6 +272,10 @@ function AppInner() {
     // Upload screens share one component, differing only by docType.
     if (appScreen.startsWith('upload:'))
       return <UploadAmendments onBack={home} docType={appScreen.split(':')[1]} />;
+    // Status shortcut (from Home stat cards) → the Action Board focused on one
+    // status: list view auto-expands that heading; board view scrolls to its lane.
+    if (appScreen.startsWith('status:'))
+      return <KpiActionBoard onBack={home} focusStatus={appScreen.split(':')[1]} />;
     return (
       <HomeScreen
         user={user}

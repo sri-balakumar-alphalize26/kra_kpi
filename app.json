@@ -30,6 +30,19 @@
           "icon": "./assets/android-icon-monochrome.png",
           "color": "#1E40AF"
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to access your photos to set a profile picture.",
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to take a profile picture."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to take a profile picture."
+        }
       ]
     ],
     "extra": {

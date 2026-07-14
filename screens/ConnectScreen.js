@@ -154,7 +154,14 @@ export default function ConnectScreen({ onLogin, goBack, visible = true }) {
         setError('pw', ' ');
         return;
       }
-      await session.saveConnection({ serverUrl: base, db: selectedDb });
+      await session.saveConnection({
+        serverUrl: base, db: selectedDb,
+        // Lock this device to the Odoo account that just authenticated — only
+        // this account's mobile number may app-login here (until re-setup).
+        setupUid: result.uid,
+        setupLogin: result.username || username.trim(),
+        setupName: result.name || '',
+      });
       // Device-setup ONLY: the Odoo login just points the app at the server and
       // provisions it. We do NOT log this Odoo user in — after setup the app
       // shows the mobile-number (non-Odoo) login page, not Home.

@@ -525,7 +525,12 @@ class KpiMaster(models.Model):
             if rec.timer_start_datetime:
                 self._add_elapsed(rec)
                 rec.timer_start_datetime = False
-            
+            # Close the previous assignee's running time-log segment so their time
+            # on this task is RECORDED (End Workday popup + Workday Map) even though
+            # the task is now moving to someone else. No-op if nothing is running.
+            if previous_assignee:
+                self.env['kpi.time.log'].sudo().stop_session(rec.id, previous_assignee.id)
+
             # Create reassignment history record
             history_vals = {
                 'kpi_id': rec.id,

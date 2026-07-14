@@ -299,7 +299,12 @@ export class KpiClientDashboard extends Component {
                                         →<t t-esc="k.related_req_ref"/>
                                     </span>
                                 </td>
-                                <td class="fw-bold" t-esc="k.name"/>
+                                <td class="fw-bold">
+                                    <div t-esc="k.name"/>
+                                    <div t-if="k.primary_assignee" class="text-muted small fw-normal">
+                                        <i class="fa fa-user me-1"/>By: <t t-esc="k.primary_assignee"/>
+                                    </div>
+                                </td>
                                 <td t-esc="k.project_name"/>
                                 <td>
                                     <span class="badge" t-att-class="this.stateBadge(k.task_state)" t-esc="k.task_state"/>
