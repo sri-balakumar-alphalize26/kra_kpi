@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Dimensions,
   ActivityIndicator, Alert, Modal, StatusBar as RNStatusBar, Animated, Easing,
+  Platform, UIManager, LayoutAnimation,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -21,6 +22,20 @@ import {
 import { createLogger } from '../api/logger';
 
 const log = createLogger('ActionBoard');
+
+// Last-known workday-open state, cached across board remounts so re-entering the
+// board shows the correct Start/End label instantly (no 2–3s "Start Workday"
+// flash while getWorkdayStatus() resolves). null = not resolved yet this session.
+let WORKDAY_CACHE = null;
+
+// Smooth layout transitions for the accordion expand/collapse (needs enabling on
+// Android). animateNext() is called right before the toggle state changes.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+const animateNext = () => LayoutAnimation.configureNext(
+  LayoutAnimation.create(200, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity),
+);
 
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
 const POLL_MS = 20000;   // silent live refresh interval
@@ -162,6 +177,12 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
 function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
+  // Rotate the chevron 0°→90° as the row expands/collapses.
+  const rot = useRef(new Animated.Value(expanded ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(rot, { toValue: expanded ? 1 : 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [expanded, rot]);
+  const spin = rot.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] });
   return (
     <View style={[s.listRow, expanded && s.listRowOpen]}>
       <TouchableOpacity style={s.listHead} onPress={onToggle} activeOpacity={0.7}>
@@ -173,7 +194,9 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
             <Text style={s.liveTxt}>Live</Text>
           </View>
         )}
-        <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={18} color={COLORS.muted} />
+        <Animated.View style={{ transform: [{ rotate: spin }] }}>
+          <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
+        </Animated.View>
       </TouchableOpacity>
       {expanded && (
         <View style={s.listBody}>
@@ -299,6 +322,37 @@ function Btn({ label, icon, kind, onPress }) {
   );
 }
 
+// One node of the End Workday "Workday Map" (start → task → break → … → end).
+// The server already sends a ready-to-render `timeline`; each task chip shows its
+// outcome + the last note/reason underneath (mirrors the web popup).
+function WorkdayMapChip({ node: n }) {
+  const icon = n.icon || '';
+  const label = n.label || '';
+  let border = '#94A3B8';
+  let note = '';
+  let timeLine = n.time || '';
+  if (n.kind === 'break') {
+    const bc = { break: '#F59E0B', lunch: '#10B981', meeting: '#3B82F6', away: '#6B7280', leave: '#8B5CF6', urgent: '#EF4444', other: '#F59E0B' };
+    border = bc[n.break_type] || '#F59E0B';
+    if (n.duration_display) timeLine = `${n.time || ''}${n.time ? ' · ' : ''}${n.duration_display}`;
+  } else if (n.kind === 'task') {
+    const oc = { completed: '#16A34A', submitted: '#0D9488', paused: '#F59E0B', active: '#3B82F6', worked: '#64748B', moved: '#F97316' };
+    border = oc[n.outcome] || '#3B82F6';
+    const ocLabel = { completed: '✓ Completed', submitted: '◑ Verification pending', paused: '⏸ Paused', active: '▶ In progress', worked: '', moved: '↪ Moved' }[n.outcome] || '';
+    const parts = [];
+    if (ocLabel) parts.push(ocLabel);
+    if (n.reason) parts.push(n.reason);
+    note = parts.join(' — ');
+  }
+  return (
+    <View style={[s.mapChip, { borderColor: border, borderTopColor: border }]}>
+      <Text style={s.mapChipLabel} numberOfLines={2}>{icon} {label}</Text>
+      {timeLine ? <Text style={s.mapChipTime}>{timeLine}</Text> : null}
+      {note ? <Text style={s.mapChipNote} numberOfLines={2}>({note})</Text> : null}
+    </View>
+  );
+}
+
 // A dropdown filter pill (Assignee / Priority / Status).
 function FilterDropdown({ label, open, onToggle, options, selected, getKey, getLabel, onPick }) {
   return (
@@ -370,6 +424,13 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   const [filterStatus, setFilterStatus] = useState(null);     // lane key or null
   const [openFilter, setOpenFilter] = useState(null);         // 'assignee'|'priority'|'status'|null
 
+  // Page-entrance animation (fade + slide up) on mount.
+  const enter = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(enter, { toValue: 1, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [enter]);
+  const enterStyle = { opacity: enter, transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }] };
+
   // View mode: 'list' = vertical accordion (default), 'board' = horizontal kanban.
   // Available to every role. Two-level accordion in list mode:
   //   expandedLanes = which status headings are open (default: all collapsed —
@@ -381,8 +442,19 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   const [expandedLanes, setExpandedLanes] = useState(() => (focusStatus ? new Set([focusStatus]) : new Set()));
   const [expandedId, setExpandedId] = useState(null);
 
+  // Cross-fade the body when switching board ⇄ list (also fades in on first mount).
+  const bodyFade = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    bodyFade.setValue(0);
+    Animated.timing(bodyFade, { toValue: 1, duration: 240, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [viewMode, bodyFade]);
+  const bodyStyle = { flex: 1, opacity: bodyFade };
+
   // Workday
-  const [workdayOpen, setWorkdayOpen] = useState(false);
+  // Seed from the cache so re-entry shows the right label immediately; null until
+  // the first getWorkdayStatus() of the session resolves (button shows a spinner).
+  const [workdayOpen, setWorkdayOpenState] = useState(WORKDAY_CACHE);
+  const setWorkdayOpen = (v) => { WORKDAY_CACHE = v; setWorkdayOpenState(v); };
   const [workdayBusy, setWorkdayBusy] = useState(false);
   const [endSummary, setEndSummary] = useState(null); // payload for the End Workday popup
   const [endNote, setEndNote] = useState('');
@@ -712,6 +784,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
       <GradientBackground />
       <StatusBar style="dark" />
 
+      <Animated.View style={[{ flex: 1 }, enterStyle]}>
       {/* Header row: back + title + refresh */}
       <View style={[s.header, { paddingTop: TOP }]}>
         {onBack ? (
@@ -754,8 +827,11 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
           <Ionicons name="add" size={16} color={COLORS.primary} />
           <Text style={s.newTaskTxt}>New Task</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[s.workdayBtn, workdayOpen && s.workdayBtnEnd]} onPress={toggleWorkday} activeOpacity={0.85} disabled={workdayBusy}>
-          {workdayBusy ? <ActivityIndicator color="#fff" size="small" /> : (
+        <TouchableOpacity
+          style={[s.workdayBtn, workdayOpen === true && s.workdayBtnEnd, workdayOpen === null && s.workdayBtnLoading]}
+          onPress={toggleWorkday} activeOpacity={0.85} disabled={workdayBusy || workdayOpen === null}
+        >
+          {workdayBusy || workdayOpen === null ? <ActivityIndicator color="#fff" size="small" /> : (
             <>
               <Ionicons name={workdayOpen ? 'stop-circle' : 'play-circle'} size={16} color="#fff" />
               <Text style={s.workdayTxt}>{workdayOpen ? 'End Workday' : 'Start Workday'}</Text>
@@ -888,6 +964,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
           <TouchableOpacity style={s.retry} onPress={() => load()}><Ionicons name="refresh" size={18} color="#fff" /><Text style={s.retryTxt}>Retry</Text></TouchableOpacity>
         </View>
       ) : viewMode === 'board' ? (
+        <Animated.View style={bodyStyle}>
         <ScrollView
           ref={boardRef}
           horizontal
@@ -944,9 +1021,11 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
             );
           })}
         </ScrollView>
+        </Animated.View>
       ) : (
         /* List view — vertical accordion, grouped by status. Same filtered data,
            same actions; each row expands to reveal the shared TaskDetailBody. */
+        <Animated.View style={bodyStyle}>
         <ScrollView
           style={s.listScroll}
           contentContainerStyle={{ padding: 14, paddingBottom: 28 }}
@@ -967,11 +1046,11 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                   {/* Level 1: status heading — tap the arrow to reveal its tasks. */}
                   <TouchableOpacity
                     style={[s.listSection, { backgroundColor: l.color }]}
-                    onPress={() => setExpandedLanes((prev) => {
+                    onPress={() => { animateNext(); setExpandedLanes((prev) => {
                       const next = new Set(prev);
                       next.has(l.key) ? next.delete(l.key) : next.add(l.key);
                       return next;
-                    })}
+                    }); }}
                     activeOpacity={0.85}
                   >
                     <Ionicons name={laneOpen ? 'chevron-down' : 'chevron-forward'} size={18} color="#fff" />
@@ -984,7 +1063,7 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                       key={t.id}
                       task={t}
                       expanded={expandedId === t.id}
-                      onToggle={() => setExpandedId(expandedId === t.id ? null : t.id)}
+                      onToggle={() => { animateNext(); setExpandedId(expandedId === t.id ? null : t.id); }}
                       onAction={runAction}
                       busyId={busyId}
                       nowMs={nowMs}
@@ -996,7 +1075,9 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
             })
           )}
         </ScrollView>
+        </Animated.View>
       )}
+      </Animated.View>
 
       {/* Reassign modal — mirrors web "Reassign KPI Task" */}
       <Modal visible={!!reassignFor} transparent animationType="fade" onRequestClose={() => setReassignFor(null)}>
@@ -1376,6 +1457,21 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                   })}
                 </View>
 
+                {/* Workday Map — the day's flow (start → task → break → … → end) */}
+                {(endSummary?.timeline || []).length > 0 ? (
+                  <View style={s.mapBox}>
+                    <Text style={s.mapTitle}>🗺  Workday Map <Text style={s.awaySub}>(your day in order)</Text></Text>
+                    <View style={s.mapFlow}>
+                      {endSummary.timeline.map((n, i) => (
+                        <React.Fragment key={i}>
+                          {i > 0 ? <Text style={s.mapArrow}>→</Text> : null}
+                          <WorkdayMapChip node={n} />
+                        </React.Fragment>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
                 <Text style={s.endHint}>⚠  Use Complete for finished tasks — Pause is only for breaks/interruptions.</Text>
 
                 {/* Tasks worked today */}
@@ -1441,6 +1537,7 @@ const s = StyleSheet.create({
   newTaskTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary },
   workdayBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 36, paddingHorizontal: 12, borderRadius: 10, backgroundColor: COLORS.green, minWidth: 108, justifyContent: 'center' },
   workdayBtnEnd: { backgroundColor: COLORS.red },
+  workdayBtnLoading: { backgroundColor: '#94A3B8' },
   workdayTxt: { fontSize: 12.5, fontWeight: '800', color: '#fff' },
 
   // Filter dropdowns
@@ -1639,6 +1736,16 @@ const s = StyleSheet.create({
 
   // End Workday summary
   statTiles: { flexDirection: 'row', gap: 8, marginTop: 12 },
+
+  // Workday Map (End Workday popup) — flowing chips: start → task → break → … → end.
+  mapBox: { marginTop: 12, backgroundColor: '#F8FAFC', borderRadius: 10, padding: 10 },
+  mapTitle: { fontSize: 14, fontWeight: '800', color: COLORS.navy, marginBottom: 8 },
+  mapFlow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  mapArrow: { color: '#9CA3AF', fontSize: 15, fontWeight: '700' },
+  mapChip: { borderWidth: 1, borderTopWidth: 3, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 6, backgroundColor: '#fff', minWidth: 92, maxWidth: 152 },
+  mapChipLabel: { fontSize: 12, fontWeight: '700', color: COLORS.ink },
+  mapChipTime: { fontSize: 10.5, color: COLORS.muted, marginTop: 1 },
+  mapChipNote: { fontSize: 10.5, color: '#374151', fontStyle: 'italic', marginTop: 1 },
   statTile: { flex: 1, backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, padding: 10 },
   statTileLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '700' },
   statTileVal: { fontSize: 13, color: COLORS.ink, fontWeight: '800', marginTop: 4 },
