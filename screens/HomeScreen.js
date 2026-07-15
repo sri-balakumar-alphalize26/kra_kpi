@@ -38,6 +38,17 @@ const log = createLogger('Home');
 // mount/tab-switch instead of flashing initials while AsyncStorage loads.
 const AVATAR_CACHE = {};
 
+// The Alphalize logo gets one moment when the app opens: it shows alone briefly,
+// settles into a faint watermark, and the tiles fade in over it.
+//
+// Module scope ON PURPOSE (same trick as AVATAR_CACHE above / WORKDAY_CACHE on the
+// board): Home RE-MOUNTS every time you come back from a sub-screen, so a
+// component-level flag would replay the intro on every single return. At module
+// scope it survives re-mounts and resets on relaunch — exactly the lifetime an
+// intro should have.
+let INTRO_DONE = false;
+const INTRO_HOLD_MS = 700;   // how long the logo has the screen to itself
+
 const { width: SW, height: SH } = Dimensions.get('window');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
 const PAD = 20;
@@ -361,6 +372,12 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
   };
   const closeDrawer = () => {
     setDrawerOpen(false);
+    // Leave edit mode on the way out, so re-opening the drawer is back to normal
+    // (tap = navigate) instead of silently still being in reorder mode.
+    // Nothing to save here: each drop already persisted via onMenuOrder →
+    // saveMenuOrder, so the last arrangement is stored even if they close mid-edit.
+    setMenuEditing(false);
+    setMenuDragging(false);
     Animated.timing(drawerAnim, { toValue: 0, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: true })
       .start(() => setDrawerMounted(false));
   };
@@ -368,16 +385,42 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
 
   // Entrance transition: fade in + slide up when the Home page mounts (replays
   // every time you return to Home from a sub-screen, since it re-mounts).
+  // Logo reveal. 0 = logo bold and alone, 1 = settled into a faint watermark with
+  // the content over it. Starts at 1 when the intro has already played this
+  // launch, so returning to Home is instant.
+  const reveal = useRef(new Animated.Value(INTRO_DONE ? 1 : 0)).current;
+  const introHold = INTRO_DONE ? 0 : INTRO_HOLD_MS;
+
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     enter.setValue(0);
+    if (!INTRO_DONE) {
+      log.info('logo intro: playing (first Home of this launch)', { holdMs: INTRO_HOLD_MS });
+      Animated.timing(reveal, {
+        toValue: 1, duration: 700, delay: INTRO_HOLD_MS,
+        easing: Easing.out(Easing.cubic), useNativeDriver: true,
+      }).start(() => log.info('logo intro: settled to watermark'));
+      INTRO_DONE = true;   // set immediately: a fast back-and-forth must not replay it
+    } else {
+      log.info('logo intro: skipped (already shown this launch) — instant tiles');
+    }
     Animated.timing(enter, {
-      toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true,
+      // Wait for the logo's moment on a cold launch; instant on every later visit.
+      toValue: 1, duration: 420, delay: introHold ? introHold + 200 : 0,
+      easing: Easing.out(Easing.cubic), useNativeDriver: true,
     }).start();
+    // introHold/reveal are captured once per mount — intentionally not deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enter]);
   const enterStyle = {
     opacity: enter,
     transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }],
+  };
+  // Bold → faint, with a slight settle, so it reads as a deliberate reveal rather
+  // than a loading gap. Opacity + scale only → stays on the native driver.
+  const watermarkStyle = {
+    opacity: reveal.interpolate({ inputRange: [0, 1], outputRange: [0.30, 0.09] }),
+    transform: [{ scale: reveal.interpolate({ inputRange: [0, 1], outputRange: [1.06, 1] }) }],
   };
 
   // Tiles the user's role is allowed to see (the full menu — always in the drawer).
@@ -400,6 +443,9 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
   // like (every role, not just admins). null = never reordered → natural order.
   const [menuOrder, setMenuOrder] = useState(null);
   const [menuEditing, setMenuEditing] = useState(false);
+  // True only while a row is actually being dragged → freezes the drawer's
+  // ScrollView so it can't steal the gesture out from under the lifted row.
+  const [menuDragging, setMenuDragging] = useState(false);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -479,6 +525,33 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
       </Defs>
       <Rect x="0" y="0" width="100%" height="100%" fill="url(#homeBg)" />
     </Svg>
+    {/* Alphalize watermark — the app-side twin of the web's .alphalize-watermark.
+        Sits right after the background so it stays BEHIND every control, and
+        pointerEvents="none" so it can never swallow a tap.
+        Stacked (triangle above the wordmark) rather than using the single
+        alphalize.png: that asset is wide — symbol and wordmark side by side — so
+        fitting it across the screen leaves both small. Split into the icon + the
+        wordmark and both get much bigger in the same space.
+        No tintColor (unlike Profile's 369 mark): these are the full-colour assets,
+        and tinting would flatten them to a silhouette. */}
+    <Animated.View style={[s.homeWatermark, watermarkStyle]} pointerEvents="none">
+      <Image
+        source={require('../assets/alphalize_icon.png')}
+        style={s.homeWatermarkIcon}
+        resizeMode="contain"
+      />
+      {/* numberOfLines + adjustsFontSizeToFit: "alphalize" is 9 characters, so at
+          this size it wrapped ("ze" dropped to a second line). This keeps it on
+          ONE line and shrinks it to fit instead — on any screen width. */}
+      <Text
+        style={s.homeWatermarkWord}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        allowFontScaling={false}
+      >
+        alphalize
+      </Text>
+    </Animated.View>
     {/* Header — OUTSIDE the ScrollView on purpose, so the menu (☰) and the bell
         stay put while the page scrolls. Same for every role (all roles render
         this one component). */}
@@ -589,30 +662,42 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
           <View style={s.drawerLabelRow}>
             <Text style={[s.drawerLabel, { marginBottom: 0, marginTop: 0 }]}>MENU</Text>
             <View style={{ flex: 1 }} />
-            <TouchableOpacity
-              onPress={() => setMenuEditing((v) => !v)}
-              style={[s.menuEditBtn, menuEditing && s.menuEditBtnOn]}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              activeOpacity={0.8}
-            >
-              <Ionicons
-                name={menuEditing ? 'checkmark' : 'pencil'}
-                size={14}
-                color={menuEditing ? '#fff' : COLORS.primary}
-              />
-            </TouchableOpacity>
+            {/* Nothing to reorder with a single item — offering the pencil there
+                promises something the list can't deliver. (A client, for example,
+                may have just one tile.) */}
+            {menuTiles.length > 1 && (
+              <TouchableOpacity
+                onPress={() => setMenuEditing((v) => !v)}
+                style={[s.menuEditBtn, menuEditing && s.menuEditBtnOn]}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={menuEditing ? 'checkmark' : 'pencil'}
+                  size={14}
+                  color={menuEditing ? '#fff' : COLORS.primary}
+                />
+              </TouchableOpacity>
+            )}
           </View>
-          {menuEditing && (
-            <Text style={s.menuHint}>Hold an item for 3 seconds, then drag it to reorder.</Text>
+          {menuEditing && menuTiles.length > 1 && (
+            <Text style={s.menuHint}>Hold an item, then drag it to reorder. Tapping is off while editing.</Text>
           )}
-          <ScrollView showsVerticalScrollIndicator={false}>
+          {/* scrollEnabled=false while dragging: the ScrollView is the row's
+              ancestor and would otherwise claim the touch the moment the finger
+              moves, leaving the lifted row stuck in place. */}
+          <ScrollView showsVerticalScrollIndicator={false} scrollEnabled={!menuDragging}>
             {isAdmin === null && <ActivityIndicator color={COLORS.primary} style={{ marginTop: 20 }} />}
             {isAdmin !== null && (
               <ReorderableMenu
                 items={menuTiles}
-                editing={menuEditing}
+                // Can never be "editing" with one item: the pencil is hidden there,
+                // so there'd be no way to switch it off — and editing disables
+                // tapping, which would leave that lone tile permanently dead.
+                editing={menuEditing && menuTiles.length > 1}
                 onPress={onTile}
                 onOrder={onMenuOrder}
+                onDragStateChange={setMenuDragging}
               />
             )}
           </ScrollView>
@@ -683,6 +768,33 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
   const [logoutOpen, setLogoutOpen] = useState(false);
 
   const online = !!user?.serverUrl;
+
+  // Entrance transition — mirrors HomeTab (same 420ms / Easing.out(cubic)) so
+  // switching tabs feels like one app. Two staggered values: the header drops in
+  // with the avatar scaling up, then the details rise behind it. Replays on every
+  // mount, i.e. each time you come back to the tab.
+  const enter = useRef(new Animated.Value(0)).current;      // header
+  const enterBody = useRef(new Animated.Value(0)).current;  // details below
+  useEffect(() => {
+    enter.setValue(0);
+    enterBody.setValue(0);
+    Animated.stagger(110, [
+      Animated.timing(enter, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(enterBody, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
+  }, [enter, enterBody]);
+
+  const headStyle = {
+    opacity: enter,
+    transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [-18, 0] }) }],
+  };
+  const avatarStyle = {
+    transform: [{ scale: enter.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1] }) }],
+  };
+  const bodyStyle = {
+    opacity: enterBody,
+    transform: [{ translateY: enterBody.interpolate({ inputRange: [0, 1], outputRange: [22, 0] }) }],
+  };
 
   // KRA/KPI role (Admin / Client / User) — mirrors the "KRA / KPI Role" field on
   // the Odoo user form. This is the app's OWN role, not the Odoo Role
@@ -885,9 +997,9 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
       <Image source={require('../assets/logo369.png')} style={s.profWatermark} resizeMode="contain" tintColor={COLORS.primary} pointerEvents="none" />
 
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
-        {/* Solid single-color header with avatar */}
-        <View style={[s.profHead, { paddingTop: TOP + 12 }]}>
-          <View style={s.profAvatarWrap}>
+        {/* Solid single-color header with avatar — drops in on mount */}
+        <Animated.View style={[s.profHead, { paddingTop: TOP + 12 }, headStyle]}>
+          <Animated.View style={[s.profAvatarWrap, avatarStyle]}>
             <View style={s.profAvatar}>
               {avatar
                 ? <Image source={{ uri: avatar }} style={s.profAvatarImg} resizeMode="cover" />
@@ -897,7 +1009,7 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
             <TouchableOpacity style={s.avatarPencil} onPress={() => { log.info('avatar: source picker opened'); setPickerOpen(true); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} activeOpacity={0.85}>
               <Ionicons name="pencil" size={13} color="#fff" />
             </TouchableOpacity>
-          </View>
+          </Animated.View>
           <Text style={s.profName}>{user?.name || 'User'}</Text>
           {/* The Odoo login used to sit here. Under the name we show ONLY the
               KRA/KPI role — that's the role that means anything in this app.
@@ -913,8 +1025,10 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
             <View style={[s.profDot, { backgroundColor: online ? '#4ADE80' : '#F59E0B' }]} />
             <Text style={s.profPillTxt}>{online ? 'Connected' : 'Offline'}</Text>
           </View>
-        </View>
+        </Animated.View>
 
+        {/* Everything below rises in just after the header (staggered) */}
+        <Animated.View style={bodyStyle}>
         {/* Connection details card — icon chip per row */}
         <Text style={s.profSection}>Connection Details</Text>
         <View style={s.profCard}>
@@ -943,6 +1057,7 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
         </TouchableOpacity>
 
         <Text style={s.profFooter}>Alphalize KRA & KPI · v1.0</Text>
+        </Animated.View>
       </ScrollView>
     </View>
 
@@ -1130,7 +1245,7 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
   );
 }
 
-export default function HomeScreen({ user, onLogout, onOpen }) {
+export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, onNeedPair }) {
   const [tab, setTab] = useState('home');
   const [logoutOpen, setLogoutOpen] = useState(false);
   const name = (user && user.name) ? user.name.split(' ')[0] : 'Sonia';
@@ -1202,6 +1317,17 @@ const s = StyleSheet.create({
   hello: { fontSize: 27, fontWeight: '900', color: BRAND_BLUE, letterSpacing: 0.3 }, // 369 steel blue
   helloArrow: { position: 'absolute', left: 0 },
   helloSub: { fontSize: 14.5, color: COLORS.muted, marginTop: 4 },
+  // "Workday not started" notice, directly under the name. Red because it's a
+  // real restriction, not a hint — but it always carries the way out (the
+  // Start Workday button), so it's actionable rather than just a scold.
+  roBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10,
+    backgroundColor: COLORS.redBg, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12,
+    borderLeftWidth: 3, borderLeftColor: COLORS.red,
+  },
+  roTxt: { flex: 1, fontSize: 12, color: COLORS.red, fontWeight: '700', lineHeight: 17 },
+  roBtn: { backgroundColor: COLORS.red, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 8 },
+  roBtnTxt: { color: '#fff', fontWeight: '800', fontSize: 12 },
 
   section: { fontSize: 18, fontWeight: '900', color: COLORS.navy, paddingHorizontal: PAD, marginTop: 26, marginBottom: 14 },
   // Heading row so the pencil sits at the end of the "Quick Actions" title.
@@ -1250,6 +1376,35 @@ const s = StyleSheet.create({
   },
   statCount: { fontSize: 30, fontWeight: '900', marginTop: 8 },
   statLabel: { fontSize: 13, fontWeight: '700', color: COLORS.ink, marginTop: 2 },
+
+  // Alphalize watermark behind the Home content — the app-side twin of the web's
+  // .alphalize-watermark. Centered, faint, non-interactive.
+  //
+  // Stacked on purpose: the supplied alphalize.png is one WIDE image (triangle +
+  // wordmark side by side, ~3.8:1), so `contain` sizes it by width and both
+  // halves end up small however much height it's given. Splitting them lets the
+  // triangle fill the width on its own — much bigger in the same space.
+  homeWatermark: {
+    // Wide enough for the wordmark to sit on one line at this size.
+    position: 'absolute', alignSelf: 'center', top: SH * 0.20,
+    width: SW * 0.88, alignItems: 'center', opacity: 0.09,
+  },
+  homeWatermarkIcon: { width: SW * 0.62, height: SW * 0.62 },
+  // The word is TEXT, not an image: the only wordmark we have is baked into
+  // alphalize.png next to the triangle, so reusing it here would draw a second
+  // triangle. At watermark opacity the substitute font reads fine.
+  homeWatermarkWord: {
+    marginTop: -SW * 0.05,
+    // Sized to fit one line at width 0.88*SW; adjustsFontSizeToFit shrinks it
+    // further on narrow screens rather than ever wrapping again.
+    width: '100%',
+    textAlign: 'center',
+    fontSize: SW * 0.17,
+    lineHeight: SW * 0.20,     // room for descenders — without this the 'p' clips
+    fontWeight: '800',
+    letterSpacing: -1,
+    color: '#0B4F8A',
+  },
 
   // Profile tab
   profRoot: { flex: 1, backgroundColor: COLORS.bg },

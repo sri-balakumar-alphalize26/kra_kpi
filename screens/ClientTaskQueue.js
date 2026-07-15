@@ -15,7 +15,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
-  KeyboardAvoidingView, Platform, ActivityIndicator, Modal,
+  Platform, ActivityIndicator, Modal,
   StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -65,10 +65,9 @@ export default function ClientTaskQueue({ onBack }) {
     setError(null);
     try {
       const res = await fetchQueue();
-      const q = res.queue || [];
-      setRows(q);
-      // Open the newest day by default — an all-collapsed screen looks empty.
-      if (q.length) setOpenDates((prev) => (prev.size ? prev : new Set([dayOf(q[0].received_at)])));
+      setRows(res.queue || []);
+      // Everything starts COLLAPSED: only the dates show. Tap a date to reveal
+      // its clients, tap a client to reveal its tasks, tap a task for the form.
     } catch (e) {
       log.error('load failed', e?.message);
       setError(e.message || 'Could not load the queue');
@@ -194,12 +193,17 @@ export default function ClientTaskQueue({ onBack }) {
 
   // ---- Gates ---------------------------------------------------------------
   if (loading) {
+    // Gradient FIRST, content on top — and the root stays transparent so the
+    // loading screen shows the same background as the loaded one (no flash of a
+    // different colour on the way in).
     return (
-      <View style={[s.root, s.center]}>
+      <View style={s.root}>
         <GradientBackground />
         <StatusBar style="dark" />
-        <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={s.centerTxt}>Loading queue…</Text>
+        <View style={s.center}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={s.centerTxt}>Loading queue…</Text>
+        </View>
       </View>
     );
   }
@@ -229,7 +233,11 @@ export default function ClientTaskQueue({ onBack }) {
   const pickerRow = picker ? rows.find((r) => r.id === picker.id) : null;
 
   return (
-    <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    // Plain View + transparent root, exactly like ClientTasks / Notifications /
+    // Configuration. A KeyboardAvoidingView wrapper here was letting a strip of
+    // the root background show down the right-hand edge instead of the gradient;
+    // the ScrollView already handles the keyboard on its own.
+    <View style={s.root}>
       <GradientBackground />
       <StatusBar style="dark" />
       <Header onBack={onBack} count={rows.length} onRefresh={() => { setRefreshing(true); load(); }} refreshing={refreshing} />
@@ -379,7 +387,7 @@ export default function ClientTaskQueue({ onBack }) {
           </View>
         </View>
       </Modal>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -409,6 +417,28 @@ function TaskForm({ r, users, busy, patch, setPicker, onSave, onPublish, onDisca
         {r.submitted_login ? ` (${r.submitted_login})` : ''} · {r.received_at || ''}
       </Text>
       {!!r.project_name && <Text style={s.project} numberOfLines={1}>📁 {r.project_name}</Text>}
+
+      {/* Photos / video the submitter attached, each with their reason. Names +
+          reasons only: the file bytes stay on the server — open them on the web
+          (Task Related Documents) to view/play. */}
+      {(r.attachments || []).length > 0 && (
+        <View style={s.attBox}>
+          <Text style={s.attHead}>📎 {r.attachments.length} attachment{r.attachments.length === 1 ? '' : 's'}</Text>
+          {r.attachments.map((a) => (
+            <View key={a.id} style={s.attLine}>
+              <Ionicons
+                name={/\.(mp4|mov|avi|mkv|webm)$/i.test(a.file_name) ? 'videocam' : 'image'}
+                size={13}
+                color={COLORS.primary}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={s.attFile} numberOfLines={1}>{a.file_name}</Text>
+                {!!a.reason && <Text style={s.attWhy} numberOfLines={2}>{a.reason}</Text>}
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
 
       <View style={s.split}>
         <View style={s.half}>
@@ -593,10 +623,11 @@ function PickerSheet({ picker, row, users, onClose, onPick }) {
 }
 
 const s = StyleSheet.create({
-  // Brand blue underneath, gradient painted on top by <GradientBackground/>.
-  // Without this fallback any area the SVG doesn't cover shows through as WHITE
-  // (same reason UploadAmendments sets it).
-  root: { flex: 1, backgroundColor: '#EAF2FF' },
+  // TRANSPARENT — same as ClientTasks / NotificationsScreen / ConfigurationScreen.
+  // A solid colour here is what produced the pale strip down the right edge: it
+  // showed through wherever the gradient SVG didn't paint. Transparent lets the
+  // gradient be the only background, with nothing behind it to leak.
+  root: { flex: 1, backgroundColor: 'transparent' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   centerTxt: { color: COLORS.muted, marginTop: 10, textAlign: 'center' },
   retry: { marginTop: 14, backgroundColor: COLORS.primary, paddingHorizontal: 18, paddingVertical: 9, borderRadius: 10 },
@@ -656,6 +687,12 @@ const s = StyleSheet.create({
   rejReason: { fontSize: 12.5, color: '#7F1D1D', marginTop: 5 },
   rejReasonB: { fontWeight: '900' },
   rejBy: { fontSize: 11, color: '#9CA3AF', marginTop: 4 },
+
+  attBox: { backgroundColor: '#F1F5FB', borderRadius: 10, padding: 10, marginTop: 10 },
+  attHead: { fontSize: 12, fontWeight: '900', color: COLORS.navy, marginBottom: 4 },
+  attLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, paddingVertical: 4 },
+  attFile: { fontSize: 12, fontWeight: '700', color: COLORS.ink },
+  attWhy: { fontSize: 11.5, color: COLORS.muted, marginTop: 1, lineHeight: 16 },
 
   submitted: { fontSize: 11.5, color: COLORS.faint, marginTop: 10 },
   submittedB: { fontWeight: '800', color: COLORS.muted },

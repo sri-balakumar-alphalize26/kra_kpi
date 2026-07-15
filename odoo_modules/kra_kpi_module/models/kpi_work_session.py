@@ -22,7 +22,25 @@ import pytz
 
 from odoo import api, fields, models
 
+# Safe: kpi_nontask_block imports nothing from here, so there is no cycle. Shared
+# so the session's open-block note and the saved block row can't disagree on the
+# limit.
+from .kpi_nontask_block import NOTE_MAX as NONTASK_NOTE_MAX
+
 _logger = logging.getLogger(__name__)
+
+# How long after login (or after the last prompt) we check that SOMETHING is in
+# progress. The developer is asked, not the admin — a quiet 10 minutes is usually
+# a meeting, and telling admins about it would cry wolf.
+IDLE_CHECK_MIN = 10
+# Stop asking after this many prompts, so a developer who never answers isn't
+# nagged forever.
+IDLE_CHECK_MAX = 3
+# Once admins ARE told a developer has no tasks, repeat this often while the
+# notification stays UNREAD; reading it stops the repeats (same rule as the
+# Client Task Queue nudge).
+NO_TASK_NUDGE_MIN = 15
+NO_TASK_NUDGE_MAX = 5
 
 
 def _to_user_tz_str(dt, user, fmt='%Y-%m-%d %H:%M:%S'):
@@ -100,6 +118,69 @@ class KpiWorkSession(models.Model):
         'kra.kpi', string='Auto-awayed Task', readonly=True, ondelete='set null',
         help='Set by the auto-away cron to the task it paused; cleared once the board '
              'has told the developer (so it can offer a one-click Resume).',
+    )
+
+    # ── Idle check: workday open but nothing in progress ─────────────────────
+    # The developer is asked BEFORE any admin is told — a 10-minute silence is
+    # usually a meeting, and crying wolf to admins is how a notification feed
+    # stops being read. Only "I have no tasks" reaches them.
+    # Same shape as the queue nudge (frequent cron + per-record due timestamp);
+    # see _cron_check_idle_developers.
+    idle_check_at = fields.Datetime(
+        string='Idle Check At', index=True, copy=False,
+        help='When to check that a task is in progress. Armed at login (+10 min) and '
+             'cleared the moment any task starts.',
+    )
+    idle_check_count = fields.Integer(
+        string='Idle Prompts Sent', default=0, copy=False,
+        help='How many times the developer has been asked why nothing is running. '
+             'Capped so it can never nag forever.',
+    )
+
+    # ── Non-task block (Meeting / Break) ─────────────────────────────────────
+    # A developer can only give a reason by PAUSING a running task — with no task
+    # started there is nothing to pause, so meeting time was invisible and looked
+    # identical to sitting idle. This records it.
+    # It shows in the Workday Map and in presence, and NEVER in task time:
+    # a meeting is not work on a task, and counting it would corrupt
+    # actual-vs-estimate, the completion certificate and anything billable.
+    nontask_reason = fields.Selection(
+        [('meeting', 'Meeting'), ('break', 'Break'), ('no_tasks', 'No tasks')],
+        string='Non-task Reason', copy=False,
+        help='Set while the developer is in a meeting / on a break / has no tasks, '
+             'with no task running. Mirrors kpi.nontask.block.reason — keep the two '
+             'selections in step.',
+    )
+    nontask_note = fields.Char(
+        string='Non-task Note', size=NONTASK_NOTE_MAX, copy=False,
+        help='Optional free text for the OPEN block. Copied onto kpi.nontask.block '
+             'when the block closes; shown under it on the Workday Map.',
+    )
+    nontask_started_at = fields.Datetime(
+        string='Non-task Started At', copy=False,
+        help='Open block start. Closed when a task starts (at that same instant, so the '
+             'block and the task never overlap), when End is tapped, or at End Workday.',
+    )
+
+    # ── "No tasks" nudge to admins: repeat while UNREAD, stop once read ──────
+    # Mirrors the Client Task Queue nudge (kra.kpi.queue_nudge_next_at) —
+    # "seen" == an admin read the in-app notification.
+    no_task_nudge_at = fields.Datetime(
+        string='No-task Nudge At', index=True, copy=False,
+        help='When to re-tell the admins this developer has no tasks. Cleared once any '
+             'admin reads the notification, or the developer starts a task.',
+    )
+    no_task_nudge_count = fields.Integer(
+        string='No-task Nudges Sent', default=0, copy=False,
+    )
+    # The exact notification rows the last nudge created. Needed because
+    # kpi.notification has no link back to a session or to the developer it is
+    # ABOUT (only to its recipient) — so with two idle developers, "is the
+    # no-task notification read?" would be unanswerable from the event name
+    # alone. Holding the ids makes the read-check exact.
+    no_task_notif_ids = fields.Many2many(
+        'kpi.notification', 'kpi_session_no_task_notif_rel', 'session_id', 'notif_id',
+        string='No-task Notifications', copy=False,
     )
 
     # NOT stored: time-log changes don't propagate through @api.depends so a
@@ -193,16 +274,34 @@ class KpiWorkSession(models.Model):
             'login_at':     fields.Datetime.now(),
             'state':        'open',
             'last_heartbeat': fields.Datetime.now(),
+            # Arm the idle check. If a task is running by then the cron just clears
+            # it; if not, the DEVELOPER gets asked why (never the admin first).
+            'idle_check_at': fields.Datetime.now() + timedelta(minutes=IDLE_CHECK_MIN),
         })
-        # Fire the workday_started WhatsApp to owner + coordinator.
-        try:
-            new_sess._fire_workday_started()
-        except Exception as exc:
-            _logger.warning("workday_started notification failed: %s", exc)
+        # Tell owner + coordinator the workday started (attendance only) — but
+        # ONLY on the first start of the day. Multiple sessions per day are
+        # allowed (restart after an accidental End Workday), and re-announcing
+        # attendance each time is noise: it says nothing new, and a feed that
+        # repeats itself is a feed that stops being read. Counts closed sessions
+        # too, so an end-then-restart stays silent.
+        prior_today = self.sudo().search_count([
+            ('user_id',      '=', user.id),
+            ('session_date', '=', today),
+            ('id',           '!=', new_sess.id),
+        ])
+        if prior_today:
+            _logger.info(
+                "workday_started: session %s is start #%s today for %s — not "
+                "re-notifying admins", new_sess.id, prior_today + 1, user.login)
+        else:
+            try:
+                new_sess._fire_workday_started()
+            except Exception as exc:
+                _logger.warning("workday_started notification failed: %s", exc)
         return new_sess
 
     def _fire_workday_started(self):
-        """Fire the 'workday_started' WhatsApp to owner + coordinator."""
+        """Tell owner + coordinator that this developer started their workday."""
         self.ensure_one()
         u = self.user_id
         ctx = {
@@ -326,11 +425,56 @@ class KpiWorkSession(models.Model):
         done_logs = Log.search([('user_id', '=', user.id), ('work_date', '=', today), ('is_active', '=', False)])
         productive_base = sum(done_logs.mapped('duration_seconds'))
 
+        # The open Meeting/Break block, so the board can show the pill. It rides
+        # on this poll rather than a second one, which also means the pill
+        # survives a board re-mount — the block lives on the server, not in
+        # component state.
+        nontask = False
+        if sess and sess.nontask_started_at:
+            # The row doesn't exist until the block CLOSES, so number the running
+            # one as "the next one" using the same helper create() will use — the
+            # pill and the saved row must never disagree on the number.
+            nt_seq = self.env['kpi.nontask.block'].sudo()._next_seq(
+                user.id, sess.nontask_reason, sess.session_date)
+            base_label = dict(self._fields['nontask_reason'].selection).get(
+                sess.nontask_reason, sess.nontask_reason or '')
+            nontask = {
+                'reason': sess.nontask_reason or '',
+                'seq': nt_seq,
+                'reason_label': ('%s %s' % (base_label, nt_seq)) if base_label else base_label,
+                # ISO+Z, exactly like active_break.start_raw, so the client ticks
+                # it with the same helper and can't drift from the server clock.
+                'start_raw': sess.nontask_started_at.isoformat() + 'Z',
+                'start_display': _to_user_tz_str(sess.nontask_started_at, user, fmt='%H:%M'),
+            }
+
+        # True once the cron has actually ASKED (idle_check_count > 0) and the
+        # question is STILL open. The board uses this to raise the popup, because
+        # dev_idle_check carries no kpi_id and so can't be tapped through.
+        #
+        # All three ways of answering must close it, or a board re-mount would
+        # re-ask something already answered:
+        #   task started   -> active_task
+        #   meeting/break  -> nontask
+        #   "no tasks"     -> no_task_nudge_count (stamped by /idle_reason)
+        idle_prompt = bool(
+            sess and sess.idle_check_count
+            and not active_task and not nontask
+            and not sess.no_task_nudge_count
+        )
+        # WHICH prompt this is (1..IDLE_CHECK_MAX). The app raises the popup once
+        # per number rather than once per boolean: dismissing prompt #1 must not
+        # swallow #2 and #3, or the cap-of-3 would silently become a cap-of-1.
+        idle_prompt_seq = (sess.idle_check_count or 0) if sess else 0
+
         return {
             'status': True,
             'workday_open': bool(sess),
             'active_task': active_task,
             'active_break': active_break,
+            'nontask': nontask,
+            'idle_prompt': idle_prompt,
+            'idle_prompt_seq': idle_prompt_seq,
             'login_raw': login_raw,           # anchor for live Presence (now - login)
             'productive_base': productive_base,  # finished-log seconds; add running task live
         }
@@ -430,6 +574,13 @@ class KpiWorkSession(models.Model):
         })
         # Close any open break/lunch so it doesn't keep running past logout.
         self.env['kpi.break.log'].stop_break(self.user_id.id)
+        # Same for a Meeting/Break block, and drop the idle timers: the day is
+        # over, so there's nothing left to ask about or chase admins over.
+        try:
+            self._close_nontask_block(at=self.logout_at or fields.Datetime.now())
+            self._stop_idle_tracking('workday ended')
+        except Exception as exc:
+            _logger.warning("closing non-task block at end_day failed: %s", exc)
         # Un-pair the device: the workday is over → the web board falls back to the
         # PIN gate and the phone app to the Start Working screen. mode='start' since
         # the workday is now closed (the next pairing is a fresh start, not resume).
@@ -594,32 +745,52 @@ class KpiWorkSession(models.Model):
             ('user_id', '=', self.user_id.id),
             ('work_date', '=', self.session_date),
         ], order='start_time asc')
-        break_secs   = sum(b.duration_seconds for b in blogs if b.break_type == 'break')
+        # Non-task blocks: Meeting / Break / No-tasks recorded when NO task was
+        # running. They were previously written and read by NOBODY — so that time
+        # fell into the other_idle residual below and displayed as unexplained
+        # idle, which is the exact thing recording it was meant to prevent.
+        blocks = self.env['kpi.nontask.block'].sudo().search([
+            ('user_id', '=', self.user_id.id),
+            ('session_id.session_date', '=', self.session_date),
+        ], order='start_at asc')
+
+        def _blk(kind):
+            return sum(bk.seconds for bk in blocks if bk.reason == kind)
+
+        break_secs   = sum(b.duration_seconds for b in blogs if b.break_type == 'break') + _blk('break')
         lunch_secs   = sum(b.duration_seconds for b in blogs if b.break_type == 'lunch')
-        meeting_secs = sum(b.duration_seconds for b in blogs if b.break_type == 'meeting')
+        meeting_secs = sum(b.duration_seconds for b in blogs if b.break_type == 'meeting') + _blk('meeting')
         away_secs    = sum(b.duration_seconds for b in blogs if b.break_type == 'away')
+        # Time the developer had nothing assigned. Its own bucket on purpose: it is
+        # not the developer's fault and must not read as slacking.
+        no_tasks_secs = _blk('no_tasks')
         # 'other' + 'leave' + 'urgent' + anything unexpected roll up under "Other".
         other_secs   = sum(b.duration_seconds for b in blogs
                            if b.break_type in ('other', 'leave', 'urgent'))
-        metered = break_secs + lunch_secs + meeting_secs + away_secs + other_secs
+        metered = (break_secs + lunch_secs + meeting_secs + away_secs
+                   + other_secs + no_tasks_secs)
         # Residual idle = presence not covered by productive work OR any metered reason.
         other_idle = max(0.0, presence - productive - metered)
 
-        _type_labels = {'break': 'Break', 'lunch': 'Lunch', 'meeting': 'Meeting',
-                        'other': 'Other', 'away': 'Away', 'leave': 'Leave', 'urgent': 'Urgent'}
+        # ONE ordered, numbered list — the Map. away_events is derived FROM it just
+        # below, so the Map and the Away list cannot drift apart (they used to
+        # number the same event differently: "Meeting" vs "Meeting 1").
+        timeline = self._build_workday_timeline(segments, blogs, blocks,
+                                                first_login, last_logout)
+
         away_events = []
-        _seq = {}
-        for b in blogs:
-            _seq[b.break_type] = _seq.get(b.break_type, 0) + 1
-            label = _type_labels.get(b.break_type, 'Other')
+        for n in timeline:
+            if n.get('kind') != 'break':
+                continue
+            _t = n.get('time') or ''
             away_events.append({
-                'label': label + ' ' + str(_seq[b.break_type]),
-                'type': b.break_type,
-                'start': _to_user_tz_str(b.start_time, self.user_id, fmt='%H:%M'),
-                'end': _to_user_tz_str(b.end_time, self.user_id, fmt='%H:%M') if b.end_time else '(open)',
-                'duration_display': _fmt_hms(b.duration_seconds),
-                'from': b.source_task_id.name if b.source_task_id else '',
-                'note': b.reason_note or '',
+                'label': n['label'],          # already numbered by the timeline
+                'type': n.get('break_type') or '',
+                'start': _t.split('-')[0],
+                'end': _t.split('-')[1] if '-' in _t else '(open)',
+                'duration_display': n.get('duration_display') or '',
+                'from': n.get('from') or '',  # the task a pause came from (blocks: none)
+                'note': n.get('reason') or '',
             })
 
         u = self.user_id
@@ -645,40 +816,64 @@ class KpiWorkSession(models.Model):
             'meeting_seconds':    float(meeting_secs),
             'other_seconds':      float(other_secs),
             'away_seconds':       float(away_secs),
+            'no_tasks_seconds':   float(no_tasks_secs),
             'other_idle_seconds': float(other_idle),
             'break_display':      _fmt_hms(break_secs),
             'lunch_display':      _fmt_hms(lunch_secs),
             'meeting_display':    _fmt_hms(meeting_secs),
             'other_display':      _fmt_hms(other_secs),
             'away_display':       _fmt_hms(away_secs),
+            'no_tasks_display':   _fmt_hms(no_tasks_secs),
             'other_idle_display': _fmt_hms(other_idle),
             'away_events':        away_events,
-            'timeline':           self._build_workday_timeline(segments, blogs, first_login, last_logout),
+            'timeline':           timeline,
             'note':               self.note or '',
         }
 
     # ------------------------------------------------------------------ #
     # Workday Map — ordered timeline for the End Workday popup            #
     # ------------------------------------------------------------------ #
-    def _build_workday_timeline(self, segments, blogs, first_login, last_logout):
-        """Merge task work-segments + break/lunch intervals into ONE ordered
-        list of nodes for the End Workday "Workday Map":
-            Start -> Task (reason) -> Break -> Task -> Lunch -> ... -> End
+    def _build_workday_timeline(self, segments, blogs, blocks, first_login, last_logout):
+        """Merge task work-segments + break/lunch intervals + non-task blocks into
+        ONE ordered, NUMBERED list of nodes for the End Workday "Workday Map":
+
+            Started workday
+            Meeting 1              <- kpi.nontask.block (no task was running)
+            Task 1 · REF name
+            Break 1                <- kpi.break.log (a running task was paused)
+            No tasks 1
+            Lunch 1
+            Task 2 · REF name      <- same task resumed = a NEW block of work
+            Break 2
+            Meeting 2
+            Ended workday
+
+        Every node is numbered per type in the order the day actually happened, so
+        the Map reads as a story. Numbering deliberately spans BOTH recorders
+        (kpi.break.log AND kpi.nontask.block): a Meeting is a Meeting whether or
+        not a task happened to be running, and two things called "Meeting 1" would
+        be a lie.
+
         Each task node carries the last reason/note typed for it — the pause
         reason (from the break it triggered) or, for its final segment, the
         completion outcome + latest progress summary. Purely read-only; built
-        from existing kpi.time.log / kpi.break.log / kpi.progress / kra.kpi.
+        from existing kpi.time.log / kpi.break.log / kpi.nontask.block /
+        kpi.progress / kra.kpi.
         """
         self.ensure_one()
         u = self.user_id
         _break_meta = {
-            'break':   ('☕', 'Break'),
-            'lunch':   ('🍽', 'Lunch'),
-            'meeting': ('👥', 'Meeting'),
-            'away':    ('💤', 'Away'),
-            'leave':   ('🚪', 'Leave'),
-            'urgent':  ('⚡', 'Urgent'),
-            'other':   ('⏸', 'Break'),
+            'break':    ('☕', 'Break'),
+            'lunch':    ('🍽', 'Lunch'),
+            'meeting':  ('👥', 'Meeting'),
+            'away':     ('💤', 'Away'),
+            'leave':    ('🚪', 'Leave'),
+            'urgent':   ('⚡', 'Urgent'),
+            # No tasks assigned — recorded so it can never be mistaken for idling.
+            'no_tasks': ('📭', 'No tasks'),
+            # 'other' says "Other", matching _type_labels. It used to say "Break"
+            # here and "Other" there — the same event, named two different things.
+            'other':    ('⏸', 'Other'),
         }
 
         def _hm(dt):
@@ -759,20 +954,53 @@ class KpiWorkSession(models.Model):
                 '_sort': start or first_login or _far,
             })
 
-        # Break / lunch nodes
+        # Break / lunch nodes — a RUNNING task was paused with a reason.
         for b in blogs:
-            icon, label = _break_meta.get(b.break_type, ('⏸', 'Break'))
+            icon, label = _break_meta.get(b.break_type, ('⏸', 'Other'))
             nodes.append({
                 'kind': 'break', 'icon': icon, 'label': label, 'break_type': b.break_type,
                 'time': _range(b.start_time, b.end_time),
                 'duration_display': _fmt_hms(b.duration_seconds),
                 'reason': (b.reason_note or '').strip(),
+                'from': b.source_task_id.name if b.source_task_id else '',
                 '_sort': b.start_time or first_login or _far,
+            })
+
+        # Non-task blocks — NO task was running (the 09:30 start / 09:31 meeting
+        # case). Same node shape as a break so they sort and number together: one
+        # counter across both recorders, for free.
+        for bk in blocks:
+            icon, label = _break_meta.get(bk.reason, ('⏸', 'Other'))
+            nodes.append({
+                'kind': 'break', 'icon': icon, 'label': label, 'break_type': bk.reason,
+                'time': _range(bk.start_at, bk.end_at),
+                'duration_display': _fmt_hms(bk.seconds),
+                'reason': (bk.note or '').strip(),
+                'from': '',   # no task was running — that is the whole point
+                '_sort': bk.start_at or first_login or _far,
             })
 
         nodes.sort(key=lambda n: n['_sort'] or _far)
 
-        # End node — always last
+        # Number every node per type, in the order the day actually happened:
+        #   Meeting 1 -> Task 1 -> Break 1 -> No tasks 1 -> Task 2 -> Break 2 ...
+        # AFTER the sort, so numbers follow the clock and not the query order.
+        # Start/End are never numbered — there is only one of each.
+        _seq = {}
+        for n in nodes:
+            key = 'task' if n['kind'] == 'task' else n.get('break_type')
+            if not key:
+                continue
+            _seq[key] = _seq.get(key, 0) + 1
+            n['seq'] = _seq[key]
+            if n['kind'] == 'task':
+                # Keep the task's identity — an admin reading the saved image must
+                # still be able to tell WHICH task this was.
+                n['label'] = ('Task %d · %s' % (_seq[key], n['label'])).strip()
+            else:
+                n['label'] = '%s %d' % (n['label'], _seq[key])
+
+        # End node — always last, and never numbered.
         if last_logout:
             nodes.append({'kind': 'end', 'icon': '🌙', 'label': 'Ended workday', 'time': _hm(last_logout)})
         else:
@@ -968,3 +1196,198 @@ class KpiWorkSession(models.Model):
                 _logger.warning("auto_close retro-summary failed for user %s: %s", uid, exc)
 
         return len(stragglers)
+
+    # ================================================================== #
+    # Idle check — workday open, nothing in progress                      #
+    # ------------------------------------------------------------------ #
+    # The DEVELOPER is asked before any admin is told. A quiet 10 minutes is
+    # usually a meeting (start 09:30, meeting 09:31), and reporting that to an
+    # admin would be a false alarm — the fastest way to make a notification feed
+    # worth ignoring. Only "I have no tasks" is the admin's problem, and only
+    # that reaches them.
+    # ================================================================== #
+
+    def _has_running_task(self):
+        """True when this developer has a live timer.
+
+        kpi.time.log.is_active is the authoritative 'working right now' signal —
+        the same one _pause_running_task uses — rather than re-deriving it from
+        kra.kpi.task_state.
+        """
+        self.ensure_one()
+        return bool(self.env['kpi.time.log'].sudo().search_count([
+            ('user_id', '=', self.user_id.id),
+            ('is_active', '=', True),
+        ]))
+
+    def _anchor_kpi(self):
+        """A kra.kpi to hang _notify() on (it lives on that model).
+
+        An idle developer may have NO tasks — that's the whole point of the
+        alert — so fall back to any task at all. Both events this anchors are
+        _PASSTHROUGH_EVENTS, so the anchor never leaks into the message text,
+        and neither resolves recipients from the anchor's assignee.
+        """
+        self.ensure_one()
+        Kpi = self.env['kra.kpi'].sudo()
+        return (Kpi.search([('user_id', '=', self.user_id.id)], order='id desc', limit=1)
+                or Kpi.search([], order='id desc', limit=1))
+
+    def _idle_ctx(self):
+        self.ensure_one()
+        u = self.user_id
+        return {
+            'dev':      u.name or u.login or '—',
+            'login_at': _to_user_tz_str(self.login_at, u),
+        }
+
+    def _fire_idle_check(self):
+        """Ask the DEVELOPER why nothing is running. Admins hear nothing."""
+        self.ensure_one()
+        anchor = self._anchor_kpi()
+        if not anchor:
+            _logger.info("idle check: no kra.kpi to anchor _notify on")
+            return
+        # extra_users, not the role matrix: 'developer' would resolve to the
+        # ANCHOR task's assignee, which may be someone else entirely.
+        anchor._notify('dev_idle_check', extra_users=[self.user_id.id], **self._idle_ctx())
+
+    def _fire_no_task(self):
+        """Tell the admins this developer has nothing to work on, and remember
+        the rows so we can tell whether they've read it."""
+        self.ensure_one()
+        anchor = self._anchor_kpi()
+        if not anchor:
+            _logger.info("no-task alert: no kra.kpi to anchor _notify on")
+            return
+        Notif = self.env['kpi.notification'].sudo()
+        before = Notif.search([('event', '=', 'dev_no_task')], order='id desc', limit=1)
+        anchor._notify('dev_no_task', **self._idle_ctx())
+        # The rows _notify just created (same transaction, so id > the last one
+        # that existed a moment ago). _notify doesn't hand them back, and
+        # kpi.notification has no link to the developer it's ABOUT — only to its
+        # recipient — so this is what makes the later read-check exact.
+        fresh = Notif.search([('event', '=', 'dev_no_task'),
+                              ('id', '>', before.id if before else 0)])
+        if fresh:
+            self.sudo().write({'no_task_notif_ids': [(6, 0, fresh.ids)]})
+
+    def _admins_read_no_task(self):
+        """True once ANY admin has read the latest no-task notification."""
+        self.ensure_one()
+        rows = self.no_task_notif_ids
+        if not rows:
+            return False          # nothing recorded → nothing to have read
+        return not any(not r.is_read for r in rows)
+
+    def _close_nontask_block(self, at=None):
+        """Close an open Meeting/Break block. Returns True if one was open.
+
+        `at` lets the caller close it at an EXACT instant — start_task passes the
+        moment the timer starts, so the block ends and the task begins on the same
+        tick: no overlap, no gap.
+
+        The block is recorded on kpi.nontask.block for the Workday Map. It is
+        deliberately NOT written to kpi.time.log and never touches
+        timer_total_seconds: a meeting is not work on a task, and counting it
+        would corrupt actual-vs-estimate, the completion certificate and anything
+        billable. Wall-clock (presence_seconds) already covers it.
+        """
+        self.ensure_one()
+        if not self.nontask_started_at:
+            return False
+        end = at or fields.Datetime.now()
+        self.env['kpi.nontask.block'].sudo().create({
+            'session_id': self.id,
+            'user_id':    self.user_id.id,
+            'reason':     self.nontask_reason or 'meeting',
+            'note':       self.nontask_note or False,
+            'start_at':   self.nontask_started_at,
+            'end_at':     end,
+        })
+        _logger.info("non-task block closed: %s %s → %s (%s)",
+                     self.user_id.login, self.nontask_started_at, end, self.nontask_reason)
+        self.sudo().write({'nontask_started_at': False, 'nontask_reason': False,
+                           'nontask_note': False})
+        return True
+
+    def _stop_idle_tracking(self, reason=''):
+        """A task is running (or the day is over) → drop every timer."""
+        self.ensure_one()
+        vals = {}
+        if self.idle_check_at:
+            vals['idle_check_at'] = False
+            vals['idle_check_count'] = 0
+        if self.no_task_nudge_at:
+            vals['no_task_nudge_at'] = False
+        if vals:
+            _logger.info("idle tracking stopped for %s (%s)", self.user_id.login, reason)
+            self.sudo().write(vals)
+
+    @api.model
+    def _cron_check_idle_developers(self):
+        """Two jobs, one sweep (see data/kpi_idle_check_cron.xml, every 5 min).
+
+        1. Workday open with nothing in progress → ask the DEVELOPER
+           (Meeting / Break / I have no tasks), every IDLE_CHECK_MIN, capped.
+        2. Admins told 'no tasks' → repeat every NO_TASK_NUDGE_MIN while the
+           notification stays UNREAD; reading it stops the repeats.
+        """
+        now = fields.Datetime.now()
+        asked = nudged = 0
+
+        # ── 1. ask the developer ──────────────────────────────────────────
+        for s in self.sudo().search([
+            ('state', '=', 'open'),
+            ('idle_check_at', '!=', False),
+            ('idle_check_at', '<=', now),
+        ]):
+            try:
+                if s._has_running_task():
+                    s._stop_idle_tracking('task running')
+                    continue
+                # Already told us why (meeting/break) → silent, just look again later.
+                if s.nontask_started_at:
+                    s.sudo().write({'idle_check_at': now + timedelta(minutes=IDLE_CHECK_MIN)})
+                    continue
+                # Never answered. Per the rule "only 'no task' goes to the admin",
+                # silence is NOT escalated — we simply stop asking.
+                if s.idle_check_count >= IDLE_CHECK_MAX:
+                    s.sudo().write({'idle_check_at': False})
+                    continue
+                s._fire_idle_check()
+                s.sudo().write({
+                    'idle_check_at': now + timedelta(minutes=IDLE_CHECK_MIN),
+                    'idle_check_count': s.idle_check_count + 1,
+                })
+                asked += 1
+            except Exception as exc:
+                _logger.warning("idle check failed for session %s: %s", s.id, exc)
+
+        # ── 2. re-nudge the admins while unread ───────────────────────────
+        for s in self.sudo().search([
+            ('state', '=', 'open'),
+            ('no_task_nudge_at', '!=', False),
+            ('no_task_nudge_at', '<=', now),
+        ]):
+            try:
+                if s._has_running_task():
+                    s._stop_idle_tracking('task running — no-task alert resolved')
+                    continue
+                if s._admins_read_no_task():
+                    _logger.info("no-task nudge stopped for %s: an admin read it", s.user_id.login)
+                    s.sudo().write({'no_task_nudge_at': False})
+                    continue
+                if s.no_task_nudge_count >= NO_TASK_NUDGE_MAX:
+                    s.sudo().write({'no_task_nudge_at': False})
+                    continue
+                s._fire_no_task()
+                s.sudo().write({
+                    'no_task_nudge_at': now + timedelta(minutes=NO_TASK_NUDGE_MIN),
+                    'no_task_nudge_count': s.no_task_nudge_count + 1,
+                })
+                nudged += 1
+            except Exception as exc:
+                _logger.warning("no-task nudge failed for session %s: %s", s.id, exc)
+
+        return {'asked': asked, 'nudged': nudged}

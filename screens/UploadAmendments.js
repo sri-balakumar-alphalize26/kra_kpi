@@ -14,6 +14,8 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 // SDK 54: the classic readAsStringAsync + EncodingType live under /legacy
 // (the main entry now exports the new File/Directory API and throwing stubs).
 import * as FileSystem from 'expo-file-system/legacy';
@@ -103,6 +105,20 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   const [picker, setPicker] = useState(null);
   // Missing mandatory fields → styled popup (replaces the native Alert).
   const [missingPopup, setMissingPopup] = useState(null); // string[] | null
+
+  // ---- Photos / video attachments -----------------------------------------
+  // Hidden behind one button. Each attachment belongs to ONE task row (picked by
+  // the task name typed above) and MUST carry a reason. Files are attached after
+  // the tasks exist (they need a kpi_id), via kpi.user.manual.
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [mediaKind, setMediaKind] = useState('image');   // 'image' | 'video' — image is the default
+  const [mediaRow, setMediaRow] = useState(null);        // index of the task row it belongs to
+  const [mediaReason, setMediaReason] = useState('');
+  const [mediaPicked, setMediaPicked] = useState(null);  // { data, name, size, kind }
+  const [mediaBusy, setMediaBusy] = useState(false);
+  // [{ rowIndex, kind, data, name, size, reason, status, pct }]
+  const [attachments, setAttachments] = useState([]);
+  const [uploadPopup, setUploadPopup] = useState(null);  // { ok, done, total, failed:[] }
 
   const defaults = useMemo(() => ({
     hours: Number(defHours) || 0,
@@ -298,6 +314,133 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     }
   }
 
+  // ---- Photos / video -----------------------------------------------------
+  // Rows the client can attach to: only NAMED ones — the task name is what
+  // identifies it in the picker.
+  const namedRows = tasks.map((r, i) => ({ i, name: (r.name || '').trim() })).filter((r) => r.name);
+
+  async function pickMedia() {
+    setMediaBusy(true);
+    try {
+      const isVideo = mediaKind === 'video';
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: isVideo ? ['videos'] : ['images'],
+        quality: 1,           // compressed below for images; video is passed through
+      });
+      if (res.canceled) { log.info('media pick cancelled'); return; }
+      const asset = res.assets?.[0];
+      if (!asset) return;
+
+      let uri = asset.uri;
+      let name = asset.fileName || (isVideo ? `video_${Date.now()}.mp4` : `photo_${Date.now()}.jpg`);
+
+      if (!isVideo) {
+        // Shrink before base64 — a raw phone photo is several MB and there's no
+        // reason to ship that through a JSON body.
+        const m = await ImageManipulator.manipulateAsync(
+          uri, [{ resize: { width: 1600 } }], { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG },
+        );
+        uri = m.uri;
+        if (!/\.(jpg|jpeg)$/i.test(name)) name = name.replace(/\.[^.]+$/, '') + '.jpg';
+      }
+
+      const info = await FileSystem.getInfoAsync(uri);
+      const size = info?.size || 0;
+
+      // Refuse at PICK time, never mid-upload: an over-cap file can't finish
+      // inside the 45s window and would just fail after a long wait.
+      const cap = isVideo ? svc.MAX_VIDEO_BYTES : svc.MAX_IMAGE_BYTES;
+      if (size > cap) {
+        flash('err', `${isVideo ? 'Video' : 'Image'} is ${svc.humanSize(size)} — the limit is ${svc.humanSize(cap)}. ${isVideo ? 'Please record a shorter clip, or use a photo instead.' : 'Please pick a smaller image.'}`);
+        log.warn('media rejected: too big', { name, size, cap });
+        return;
+      }
+
+      const data = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+      setMediaPicked({ data, name, size, kind: mediaKind });
+      log.info('media picked', { name, size, kind: mediaKind });
+    } catch (err) {
+      log.error('media pick failed', err?.message);
+      flash('err', err?.message || 'Could not read that file');
+    } finally {
+      setMediaBusy(false);
+    }
+  }
+
+  // Reason is mandatory, and it must belong to a task.
+  const mediaReady = mediaPicked && mediaRow != null && mediaReason.trim().length > 0;
+
+  function addAttachment() {
+    if (!mediaReady) return;
+    setAttachments((list) => [...list, {
+      rowIndex: mediaRow,
+      kind: mediaPicked.kind,
+      data: mediaPicked.data,
+      name: mediaPicked.name,
+      size: mediaPicked.size,
+      reason: mediaReason.trim(),
+      status: 'idle',
+      pct: 0,
+    }]);
+    setMediaPicked(null);
+    setMediaReason('');
+    log.info('attachment added', { row: mediaRow, kind: mediaKind });
+  }
+
+  const removeAttachment = (idx) => setAttachments((l) => l.filter((_, i) => i !== idx));
+
+  // Upload one attachment, streaming its % into state.
+  const sendOne = useCallback(async (att, index, kpiId) => {
+    setAttachments((l) => l.map((a, i) => (i === index ? { ...a, status: 'uploading', pct: 0 } : a)));
+    try {
+      await svc.uploadManual(
+        kpiId,
+        { fileData: att.data, fileName: att.name, reason: att.reason },
+        (sent, total) => {
+          // `total` is the base64 body (~+33% of the file) — use it, not att.size,
+          // or the bar stalls around 75%.
+          const pct = total ? Math.min(100, Math.round((sent / total) * 100)) : 0;
+          setAttachments((l) => l.map((a, i) => (i === index ? { ...a, pct } : a)));
+        },
+      );
+      setAttachments((l) => l.map((a, i) => (i === index ? { ...a, status: 'done', pct: 100 } : a)));
+      return true;
+    } catch (e) {
+      log.error('attachment upload failed', { name: att.name, msg: e?.message });
+      setAttachments((l) => l.map((a, i) => (i === index ? { ...a, status: 'failed' } : a)));
+      return false;
+    }
+  }, []);
+
+  // Re-send only the failures. The tasks already exist and the form is cleared,
+  // so this attaches to the stored kpiId — it can never duplicate a task.
+  const retryFailed = useCallback(async () => {
+    setUploadPopup(null);
+    setCreating(true);
+    try {
+      const list = attachments;
+      const stillFailed = [];
+      for (let i = 0; i < list.length; i++) {
+        const att = list[i];
+        if (att.status === 'done' || !att.kpiId) continue;
+        const ok = await sendOne(att, i, att.kpiId);
+        if (!ok) stillFailed.push(att);
+      }
+      const total = list.length;
+      const done = total - stillFailed.length;
+      if (stillFailed.length) {
+        setAttachments(stillFailed);
+        setUploadPopup({ ok: false, done, total, failed: stillFailed.map((f) => f.name) });
+      } else {
+        setAttachments([]);
+        setMediaOpen(false);
+        setUploadPopup({ ok: true, done, total, failed: [] });
+      }
+    } finally {
+      setCreating(false);
+    }
+  }, [attachments, sendOne]);
+
   // ---- Template download --------------------------------------------------
   async function onDownloadTemplate() {
     log.info('download template', { docType: DOC_TYPE });
@@ -342,8 +485,43 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         requirementVersion: version,
       });
       log.info('create result', { created_count: res.created_count, isMock: res.isMock });
-      flash('ok', `Created ${res.created_count} task(s)${res.isMock ? ' (offline mock)' : ''}`);
-      // Clear the table + source, refresh the next ref counter.
+
+      // ---- Attachments -----------------------------------------------------
+      // The tasks exist now, so each file can be hung off its kpi_id. Uploaded
+      // ONE AT A TIME so the % means something and memory stays flat.
+      // The tasks are NEVER rolled back: a failed photo must not cost the user
+      // everything they typed. Failures are reported and retryable instead.
+      const ids = res.kpi_ids || [];
+      let failed = [];
+      if (attachments.length && ids.length) {
+        // `named` is the filtered list actually sent, so kpi_ids[n] lines up with
+        // named[n]. Map each attachment's ORIGINAL row index onto that.
+        const namedIdx = new Map(); // original tasks index -> sent index
+        let k = 0;
+        tasks.forEach((r, i) => { if (r.name.trim()) namedIdx.set(i, k++); });
+
+        // Stamp each attachment with the task it now belongs to. Retry needs this
+        // AFTER the form is cleared — without it a retry would have no kpi_id.
+        const withIds = attachments.map((a) => {
+          const sentIdx = namedIdx.get(a.rowIndex);
+          return { ...a, kpiId: sentIdx != null ? ids[sentIdx] || null : null };
+        });
+        setAttachments(withIds);
+
+        for (let i = 0; i < withIds.length; i++) {
+          const att = withIds[i];
+          if (!att.kpiId) { failed.push(att); continue; }
+          const ok = await sendOne(att, i, att.kpiId);
+          if (!ok) failed.push({ ...att, status: 'failed' });
+        }
+      }
+
+      const total = attachments.length;
+      const done = total - failed.length;
+
+      // The TASKS are created either way — always clear the form so a retry can
+      // never re-create them as duplicates. Only the failed FILES are kept (with
+      // their kpiId) so "Retry failed" re-sends just those.
       setTasks([]);
       setSourceDoc(null);
       setPasteText('');
@@ -351,6 +529,19 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
       setImportStatus('');
       const ref = await svc.peekNextRef(DOC_TYPE).catch(() => null);
       if (ref) { setRefPrefix(ref.prefix); setRefNext(ref.next_number); }
+
+      if (failed.length) {
+        setAttachments(failed);                 // keep ONLY the failures, for retry
+        setMediaOpen(true);
+        setUploadPopup({ ok: false, done, total, failed: failed.map((f) => f.name) });
+        flash('ok', `Created ${res.created_count} task(s)`);
+        return;
+      }
+
+      setAttachments([]);
+      setMediaOpen(false);
+      if (total) setUploadPopup({ ok: true, done, total, failed: [] });
+      flash('ok', `Created ${res.created_count} task(s)${res.isMock ? ' (offline mock)' : ''}`);
     } catch (err) {
       log.error('create failed', err?.message);
       flash('err', err?.message || 'Task creation failed');
@@ -636,6 +827,156 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
           )}
         </View>
 
+        {/* ---- 3b. Photos / video (hidden behind one button) ---- */}
+        <View style={s.card}>
+          {!mediaOpen ? (
+            <TouchableOpacity style={s.mediaOpenBtn} onPress={() => setMediaOpen(true)} activeOpacity={0.85}>
+              <Ionicons name="attach" size={18} color={COLORS.primary} />
+              <Text style={s.mediaOpenTxt}>Add photos / video</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              <View style={s.secTitleRow}>
+                <View style={s.badge}><Ionicons name="attach" size={13} color="#fff" /></View>
+                <Text style={s.secTitle}>Photos / video</Text>
+                <View style={{ flex: 1 }} />
+                <TouchableOpacity onPress={() => setMediaOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="chevron-up" size={20} color={COLORS.muted} />
+                </TouchableOpacity>
+              </View>
+
+              {namedRows.length === 0 ? (
+                <Text style={s.hintTxt}>Type a task name above first — attachments are added to a task.</Text>
+              ) : (
+                <>
+                  {/* Which task does this belong to — by the name typed above. */}
+                  <Label required>Which task?</Label>
+                  <View style={s.taskPickWrap}>
+                    {namedRows.map((r) => {
+                      const on = mediaRow === r.i;
+                      return (
+                        <TouchableOpacity
+                          key={r.i}
+                          style={[s.taskPick, on && s.taskPickOn]}
+                          onPress={() => setMediaRow(r.i)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={[s.taskPickTxt, on && s.taskPickTxtOn]} numberOfLines={1}>
+                            #{r.i + 1} {r.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {/* Image is the default; video is the exception. */}
+                  <Label>Type</Label>
+                  <View style={s.kindRow}>
+                    {[['image', 'image-outline', 'Photo'], ['video', 'videocam-outline', 'Video']].map(([k, icon, label]) => {
+                      const on = mediaKind === k;
+                      return (
+                        <TouchableOpacity
+                          key={k}
+                          style={[s.kindBtn, on && (k === 'video' ? s.kindBtnVideoOn : s.kindBtnOn)]}
+                          onPress={() => { setMediaKind(k); setMediaPicked(null); }}
+                          activeOpacity={0.85}
+                        >
+                          <Ionicons name={icon} size={16} color={on ? '#fff' : COLORS.muted} />
+                          <Text style={[s.kindTxt2, on && { color: '#fff' }]}>{label}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {mediaKind === 'video' && (
+                    <View style={s.warnBox}>
+                      <Ionicons name="warning" size={15} color={COLORS.red} style={{ marginTop: 1 }} />
+                      <Text style={s.warnTxt}>
+                        Only upload a video if it's really needed — a photo is usually enough. Videos are
+                        slow to upload and limited to {svc.humanSize(svc.MAX_VIDEO_BYTES)}.
+                      </Text>
+                    </View>
+                  )}
+
+                  <TouchableOpacity style={s.pickBtn} onPress={pickMedia} disabled={mediaBusy} activeOpacity={0.85}>
+                    {mediaBusy ? <ActivityIndicator size="small" color={COLORS.primary} />
+                      : <Ionicons name={mediaKind === 'video' ? 'videocam' : 'images'} size={17} color={COLORS.primary} />}
+                    <Text style={s.pickTxt} numberOfLines={1}>
+                      {mediaPicked ? `${mediaPicked.name} · ${svc.humanSize(mediaPicked.size)}`
+                        : (mediaKind === 'video' ? 'Choose a video' : 'Choose photo')}
+                    </Text>
+                    {mediaPicked ? <Ionicons name="checkmark-circle" size={17} color={COLORS.green} /> : null}
+                  </TouchableOpacity>
+
+                  {/* Mandatory — an attachment with no explanation is noise. */}
+                  <Label required>Reason</Label>
+                  <TextInput
+                    style={s.taskName}
+                    placeholder="Why are you attaching this?"
+                    placeholderTextColor={COLORS.faint}
+                    value={mediaReason}
+                    onChangeText={setMediaReason}
+                    multiline
+                  />
+
+                  <TouchableOpacity
+                    style={[s.addMediaBtn, !mediaReady && s.addMediaBtnOff]}
+                    onPress={addAttachment}
+                    disabled={!mediaReady}
+                    activeOpacity={0.9}
+                  >
+                    <Ionicons name="add" size={17} color="#fff" />
+                    <Text style={s.addMediaTxt}>Add attachment</Text>
+                  </TouchableOpacity>
+                  {!mediaReady && (mediaPicked || mediaReason) ? (
+                    <Text style={s.hintTxt}>
+                      {!mediaRow && mediaRow !== 0 ? 'Pick which task it belongs to.'
+                        : !mediaPicked ? 'Choose a photo or video.'
+                        : 'A reason is required.'}
+                    </Text>
+                  ) : null}
+                </>
+              )}
+
+              {/* Queued / uploading attachments */}
+              {attachments.length > 0 && (
+                <View style={{ marginTop: 14 }}>
+                  {attachments.map((a, i) => (
+                    <View key={`${a.name}-${i}`} style={s.attRow}>
+                      <Ionicons
+                        name={a.kind === 'video' ? 'videocam' : 'image'}
+                        size={16}
+                        color={a.status === 'failed' ? COLORS.red : COLORS.primary}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.attName} numberOfLines={1}>
+                          {a.name} · {svc.humanSize(a.size)}
+                          {tasks[a.rowIndex]?.name ? `  →  ${tasks[a.rowIndex].name}` : ''}
+                        </Text>
+                        <Text style={s.attReason} numberOfLines={1}>{a.reason}</Text>
+                        {a.status === 'uploading' && (
+                          <>
+                            <View style={s.barTrack}><View style={[s.barFill, { width: `${a.pct}%` }]} /></View>
+                            <Text style={s.attPct}>{svc.humanSize(a.size)} · {a.pct}%</Text>
+                          </>
+                        )}
+                        {a.status === 'failed' && <Text style={s.attFail}>Upload failed</Text>}
+                      </View>
+                      {a.status === 'done' ? <Ionicons name="checkmark-circle" size={18} color={COLORS.green} />
+                        : a.status === 'uploading' ? <ActivityIndicator size="small" color={COLORS.primary} />
+                        : (
+                          <TouchableOpacity onPress={() => removeAttachment(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="close-circle" size={18} color={COLORS.muted} />
+                          </TouchableOpacity>
+                        )}
+                    </View>
+                  ))}
+                </View>
+              )}
+            </>
+          )}
+        </View>
+
         {/* ---- 4. Defaults for new rows ---- */}
         <Section n="4" title="Defaults for new rows" icon="settings-outline">
           <Text style={s.hintTxt}>Applied when adding rows or importing — each row stays editable above.</Text>
@@ -682,6 +1023,52 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Attachment result — the tasks are always safe by this point, so this is
+          only ever about the FILES. */}
+      <Modal visible={!!uploadPopup} transparent animationType="fade" onRequestClose={() => setUploadPopup(null)}>
+        <View style={s.missWrap}>
+          <View style={s.missCard}>
+            <View style={[s.missHead, uploadPopup?.ok ? { backgroundColor: COLORS.green } : null]}>
+              <Ionicons name={uploadPopup?.ok ? 'checkmark-circle' : 'alert-circle'} size={20} color="#fff" />
+              <Text style={s.missTitle}>
+                {uploadPopup?.ok ? 'All files uploaded' : `${uploadPopup?.done} of ${uploadPopup?.total} files uploaded`}
+              </Text>
+              <TouchableOpacity onPress={() => setUploadPopup(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.missPad}>
+              {uploadPopup?.ok ? (
+                <Text style={s.missLead}>Your tasks and attachments were sent.</Text>
+              ) : (
+                <>
+                  <Text style={s.missLead}>
+                    Your tasks were created — nothing was lost. These files didn't upload:
+                  </Text>
+                  {(uploadPopup?.failed || []).map((n) => (
+                    <View key={n} style={s.missRow}>
+                      <View style={s.missDot} />
+                      <Text style={s.missRowTxt} numberOfLines={1}>{n}</Text>
+                    </View>
+                  ))}
+                </>
+              )}
+            </View>
+            <View style={s.missFoot}>
+              {uploadPopup?.ok ? (
+                <TouchableOpacity style={[s.missBtn, { backgroundColor: COLORS.green }]} onPress={() => setUploadPopup(null)} activeOpacity={0.9}>
+                  <Text style={s.missBtnTxt}>Done</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={s.missBtn} onPress={retryFailed} activeOpacity={0.9}>
+                  <Text style={s.missBtnTxt}>Retry failed</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Styled "missing required fields" popup (replaces the native Alert) */}
       <Modal visible={!!missingPopup} transparent animationType="fade" onRequestClose={() => setMissingPopup(null)}>
@@ -942,6 +1329,58 @@ const s = StyleSheet.create({
     shadowColor: COLORS.green, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 5,
   },
   createTxt: { color: '#fff', fontSize: 16, fontWeight: '800' },
+
+  // ── Photos / video ────────────────────────────────────────────────────────
+  mediaOpenBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    height: 48, borderRadius: 12, borderWidth: 1.5, borderColor: '#DCE4F2',
+    borderStyle: 'dashed', backgroundColor: '#F7FAFF',
+  },
+  mediaOpenTxt: { fontSize: 14.5, fontWeight: '800', color: COLORS.primary },
+  taskPickWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  taskPick: {
+    maxWidth: '100%', paddingHorizontal: 10, paddingVertical: 7, borderRadius: 9,
+    backgroundColor: '#F1F5FB', borderWidth: 1.5, borderColor: '#E7ECF3',
+  },
+  taskPickOn: { backgroundColor: '#EEF3FF', borderColor: COLORS.primary },
+  taskPickTxt: { fontSize: 12.5, color: COLORS.muted, fontWeight: '700' },
+  taskPickTxtOn: { color: COLORS.primary, fontWeight: '900' },
+  kindRow: { flexDirection: 'row', gap: 8 },
+  kindBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    height: 42, borderRadius: 10, borderWidth: 1.5, borderColor: '#E7ECF3', backgroundColor: '#fff',
+  },
+  kindBtnOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  kindBtnVideoOn: { backgroundColor: COLORS.red, borderColor: COLORS.red },
+  kindTxt2: { fontSize: 13.5, fontWeight: '800', color: COLORS.muted },
+  warnBox: {
+    flexDirection: 'row', gap: 7, alignItems: 'flex-start', marginTop: 9,
+    backgroundColor: COLORS.redBg, borderRadius: 10, padding: 10,
+    borderLeftWidth: 3, borderLeftColor: COLORS.red,
+  },
+  warnTxt: { flex: 1, fontSize: 12, color: '#991B1B', lineHeight: 17, fontWeight: '600' },
+  pickBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 10,
+    backgroundColor: '#F5F8FD', borderWidth: 1.5, borderColor: '#E7ECF3',
+    borderRadius: 12, paddingHorizontal: 13, height: 48,
+  },
+  pickTxt: { flex: 1, fontSize: 14, color: COLORS.ink, fontWeight: '600' },
+  addMediaBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    marginTop: 12, height: 44, borderRadius: 11, backgroundColor: COLORS.primary,
+  },
+  addMediaBtnOff: { backgroundColor: '#A9BEDF' },
+  addMediaTxt: { color: '#fff', fontWeight: '900', fontSize: 14 },
+  attRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 9,
+    borderTopWidth: 1, borderTopColor: '#F1F5F9',
+  },
+  attName: { fontSize: 12.5, fontWeight: '800', color: COLORS.ink },
+  attReason: { fontSize: 11.5, color: COLORS.muted, marginTop: 1 },
+  attPct: { fontSize: 11, color: COLORS.primary, fontWeight: '800', marginTop: 3 },
+  attFail: { fontSize: 11.5, color: COLORS.red, fontWeight: '800', marginTop: 2 },
+  barTrack: { height: 5, borderRadius: 3, backgroundColor: '#E7ECF3', marginTop: 6, overflow: 'hidden' },
+  barFill: { height: 5, borderRadius: 3, backgroundColor: COLORS.primary },
 
   // "Missing required fields" popup — centered card, amber header.
   missWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 24 },

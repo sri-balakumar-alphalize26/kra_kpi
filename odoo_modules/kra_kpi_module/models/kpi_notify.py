@@ -80,8 +80,19 @@ _PERSIST_EVENTS = {
     # Everything below used to be WhatsApp-only. With kpi_wa_task_notifications
     # off, not persisting these would mean they reach NOBODY, so they move into
     # the feed. Deliberately EXCLUDED as routine noise: start / start_prep /
-    # pause / resume / complete / workday_started / daily_summary — their
-    # _notify() calls simply become no-ops.
+    # pause / resume / complete / daily_summary — their _notify() calls simply
+    # become no-ops.
+    #
+    # workday_started was on that excluded list; the user has since asked for it
+    # (attendance: "X started their workday"). It's fired already, with the right
+    # recipients and ctx — it was only ever missing from this set.
+    'workday_started',
+    # A developer 10 min into their workday with nothing in progress — asked BEFORE
+    # any admin is told, so a 9:31 meeting doesn't raise a false alarm.
+    'dev_idle_check',
+    # ...and the one case that IS the admin's problem: they have no work assigned.
+    # Re-nudged while unread (see _cron_check_idle_developers).
+    'dev_no_task',
     'internal_rejected',    # dev: your work was sent back → rework
     'final_approved',       # client signed off → the task is done
     'self_task_accepted',   # dev: admin accepted the task you created
@@ -115,6 +126,9 @@ _NOTIF_TITLES = {
     'partial_timeout':      "Client didn't respond",
     'pre_approval_reminder': 'Approval reminder',
     'urgent_pause':         '🚨 Urgent',
+    'workday_started':      'Workday started',
+    'dev_idle_check':       'Not started a task yet?',
+    'dev_no_task':          '📭 Developer has no tasks',
 }
 
 # App-shaped bodies for the in-app feed. The WhatsApp templates below are full of
@@ -171,6 +185,28 @@ _APP_TEMPLATES = {
         "📌 {title}\n"
         "👤 Developer: {dev} • Project: {project}\n\n"
         "The task waits for the client's decision."
+    ),
+    # Attendance, nothing more — deliberately no task count or warning wording:
+    # "no tasks" has its own path (dev_no_task), so saying it here too would just
+    # make the everyday message noisier.
+    # PASSTHROUGH event → only ctx keys exist here ({dev}, {session_date},
+    # {login_at}), never record fields.
+    'workday_started': (
+        "🌅 {dev} started their workday\n"
+        "🕘 {login_at}"
+    ),
+    # Asked of the DEVELOPER, not an admin. The three answers map to
+    # /kpi_workday/idle_reason.
+    'dev_idle_check': (
+        "You haven't started a task yet.\n"
+        "In a meeting, on a break — or do you have no tasks assigned?\n\n"
+        "Tap to tell us, so nobody has to chase you."
+    ),
+    # The admin's one actionable case.
+    'dev_no_task': (
+        "📭 {dev} has no tasks to work on.\n"
+        "🕘 Workday started {login_at}\n\n"
+        "Assign them something from the board."
     ),
     # Stage 2 — the work is done and needs the client's final sign-off.
     'internal_approved': (
@@ -339,6 +375,17 @@ _EVENT_RECIPIENTS = {
     'daily_summary':             ('owner', 'coordinator'),
     # Workday-started — owner + coordinator hear "dev X started their day".
     'workday_started':           ('owner', 'coordinator'),
+    # Asked of the DEVELOPER first — a 10-min silence is usually a meeting, not a
+    # problem, and telling the admins about it would cry wolf.
+    #
+    # EMPTY on purpose, do not "fix" to ('developer',): _notify lives on kra.kpi and
+    # the 'developer' role resolves to the ANCHOR TASK's assignee. An idle developer
+    # may have no tasks at all, so the anchor is some unrelated task and the prompt
+    # would land on the wrong person. The caller passes the real developer via
+    # _notify(extra_users=[uid]) instead.
+    'dev_idle_check':            (),
+    # The one case that IS the admin's to fix. Re-nudged every 15 min while unread.
+    'dev_no_task':               ('owner', 'coordinator'),
     # Workday auto-closed at midnight — tell the DEVELOPER (their phone).
     'workday_auto_closed':       ('developer',),
     # Pre-approval reminder — client only.
@@ -564,7 +611,13 @@ _TEMPLATES = {
 # kra.kpi-anchored events like daily_summary / workday_started.
 _PASSTHROUGH_EVENTS = ('daily_summary', 'workday_started', 'workday_auto_closed',
                        'task_auto_away', 'self_task_submitted', 'self_task_accepted',
-                       'self_task_rejected', 'task_reassigned')
+                       'self_task_rejected', 'task_reassigned',
+                       # Both are about a DEVELOPER, not about the task they're
+                       # anchored on. _notify lives on kra.kpi, and an idle dev may
+                       # have no tasks — so the anchor is an unrelated record and
+                       # {dev} built from it would name the WRONG person. Passthrough
+                       # renders from ctx only, so the caller supplies the real dev.
+                       'dev_idle_check', 'dev_no_task')
 
 
 _DECISION_EMOJI = {

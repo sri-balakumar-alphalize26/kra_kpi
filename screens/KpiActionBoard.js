@@ -13,12 +13,14 @@ import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
+import KpiTaskDetail from './KpiTaskDetail';
 import {
   LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers,
   startTask, pauseTask, resumeTask, completeTask, reassignTask, createProgress,
   CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
   getWorkdayStatus, startWorkday, endWorkday, selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
   acceptSelfCreated, rejectSelfCreated,
+  IDLE_REASONS, setIdleReason, endNonTask, IDLE_NOTE_MAX,
 } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
 
@@ -111,7 +113,7 @@ function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
 // action buttons. Shared by TaskCard (kanban) and TaskListRow (accordion list) so
 // both views behave identically — same button set, same runAction wiring, same
 // busy spinner. Reassign stays gated behind isAdmin, so role behavior is preserved.
-function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
+function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, readOnly = false }) {
   const st = task.task_state;
   const running = st === 'in_progress';
   const busy = busyId === task.id;
@@ -156,30 +158,36 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
         </View>
       ) : null}
 
-      {/* Actions */}
-      <View style={s.btnRow}>
-        {busy ? (
-          <View style={s.btnBusy}><ActivityIndicator color={COLORS.primary} /></View>
-        ) : (
-          <>
-            {/* Pending Review — a developer created this task themselves and it
-                stays OUT of the official flow until an admin decides. Only the
-                admin sees these, and only while it's still awaiting acceptance. */}
-            {isAdmin && awaitingReview && (
-              <Btn label="Accept" icon="checkmark-done" kind="green" onPress={() => onAction('acceptSelf', task)} />
-            )}
-            {isAdmin && awaitingReview && (
-              <Btn label="Reject" icon="close-circle" kind="ghostRed" onPress={() => onAction('rejectSelf', task)} />
-            )}
-            {canStart && <Btn label="Start" icon="play" kind="primary" onPress={() => onAction('start', task)} />}
-            {canResume && <Btn label="Resume" icon="play" kind="green" onPress={() => onAction('resume', task)} />}
-            {canPause && <Btn label="Pause" icon="pause" kind="amber" onPress={() => onAction('pause', task)} />}
-            {canComplete && <Btn label="Complete" icon="checkmark-circle" kind="red" onPress={() => onAction('complete', task)} />}
-            {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="ghostRed" onPress={() => onAction('partial', task)} />}
-            {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
-          </>
-        )}
-      </View>
+      {/* Actions. Hidden entirely while the workday hasn't started: every one of
+          these changes a task, which is exactly what read-only withholds. The
+          whole row goes (not just the buttons) so there's no dead gap, and the
+          banner above already explains why. Card + list both render this
+          component, so they stay in step automatically. */}
+      {!readOnly && (
+        <View style={s.btnRow}>
+          {busy ? (
+            <View style={s.btnBusy}><ActivityIndicator color={COLORS.primary} /></View>
+          ) : (
+            <>
+              {/* Pending Review — a developer created this task themselves and it
+                  stays OUT of the official flow until an admin decides. Only the
+                  admin sees these, and only while it's still awaiting acceptance. */}
+              {isAdmin && awaitingReview && (
+                <Btn label="Accept" icon="checkmark-done" kind="green" onPress={() => onAction('acceptSelf', task)} />
+              )}
+              {isAdmin && awaitingReview && (
+                <Btn label="Reject" icon="close-circle" kind="ghostRed" onPress={() => onAction('rejectSelf', task)} />
+              )}
+              {canStart && <Btn label="Start" icon="play" kind="primary" onPress={() => onAction('start', task)} />}
+              {canResume && <Btn label="Resume" icon="play" kind="green" onPress={() => onAction('resume', task)} />}
+              {canPause && <Btn label="Pause" icon="pause" kind="amber" onPress={() => onAction('pause', task)} />}
+              {canComplete && <Btn label="Complete" icon="checkmark-circle" kind="red" onPress={() => onAction('complete', task)} />}
+              {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="ghostRed" onPress={() => onAction('partial', task)} />}
+              {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
+            </>
+          )}
+        </View>
+      )}
     </>
   );
 }
@@ -188,7 +196,7 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
 // priority dot + chevron; tapping expands to reveal the shared TaskDetailBody.
 // Mirrors the chevron-forward/down conditional-render pattern used by KraNode /
 // OwnerDashboard's ClientCard.
-function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin, pulse, onRowRef }) {
+function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin, pulse, onRowRef, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
   // Rotate the chevron 0°→90° as the row expands/collapses.
@@ -219,9 +227,20 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
     >
       {/* Highlight wash — fades in/out with the double heartbeat. */}
       <Animated.View pointerEvents="none" style={[s.listPulseWash, { opacity: washOpacity }]} />
+      {/* The WHOLE row toggles the dropdown; the NAME is a nested touchable that
+          opens KPI Details instead. Nesting (rather than two siblings sized by
+          flex) is what makes "name → details, anywhere else → dropdown" reliable:
+          the inner touchable swallows taps on the text, everything else — the
+          spacer, the Live pill, the chevron — falls through to the outer one. */}
       <TouchableOpacity style={s.listHead} onPress={onToggle} activeOpacity={0.7}>
         <View style={[s.listDot, { backgroundColor: p.fg }]} />
-        <Text style={s.listName} numberOfLines={1}>{task.name}</Text>
+        <TouchableOpacity style={s.listNameHit} activeOpacity={0.6} disabled={!onOpenDetail}
+          onPress={() => onOpenDetail && onOpenDetail(task)}>
+          <Text style={[s.listName, !!onOpenDetail && s.listNameLink]} numberOfLines={1}>{task.name}</Text>
+        </TouchableOpacity>
+        {/* Belongs to the OUTER touchable, so the empty middle of the row opens
+            the dropdown rather than the details. */}
+        <View style={s.listSpacer} />
         {running && (
           <View style={s.livePill}>
             <View style={s.liveDot} />
@@ -238,14 +257,14 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
             <View style={[s.pillDot, { backgroundColor: p.fg }]} />
             <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
           </View>
-          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} />
+          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} readOnly={readOnly} />
         </View>
       )}
     </Animated.View>
   );
 }
 
-function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure }) {
+function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
 
@@ -297,10 +316,14 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure }) 
       <View style={[s.accent, { backgroundColor: p.fg }]} />
 
       <View style={s.cardBody}>
-        {/* Title + priority pill */}
-        <View style={s.cardTop}>
-          <Text style={s.cardTitle} numberOfLines={2}>{task.name}</Text>
-        </View>
+        {/* Title + priority pill. The title opens KPI Details — matching the web
+            board, where the task name is what you tap. In the list view the name
+            is already the accordion toggle, so there it's an ⓘ button instead. */}
+        <TouchableOpacity style={s.cardTop} onPress={() => onOpenDetail && onOpenDetail(task)}
+          activeOpacity={0.6} disabled={!onOpenDetail}>
+          <Text style={[s.cardTitle, !!onOpenDetail && s.cardTitleLink]} numberOfLines={2}>{task.name}</Text>
+          {onOpenDetail && <Ionicons name="information-circle-outline" size={16} color={COLORS.primary} style={{ marginLeft: 6, marginTop: 2 }} />}
+        </TouchableOpacity>
         <View style={s.chipRow}>
           <View style={[s.pill, { backgroundColor: p.bg }]}>
             <View style={[s.pillDot, { backgroundColor: p.fg }]} />
@@ -315,7 +338,7 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure }) 
         </View>
 
         {/* Meta + actions (shared with the list view) */}
-        <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} />
+        <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} readOnly={readOnly} />
       </View>
     </View>
     </Animated.View>
@@ -366,7 +389,10 @@ function WorkdayMapChip({ node: n }) {
   let note = '';
   let timeLine = n.time || '';
   if (n.kind === 'break') {
-    const bc = { break: '#F59E0B', lunch: '#10B981', meeting: '#3B82F6', away: '#6B7280', leave: '#8B5CF6', urgent: '#EF4444', other: '#F59E0B' };
+    // Mirrors AWAY_COLORS in the web board's kpi_action.js — keep them in step.
+    // no_tasks is teal, not red: having nothing assigned is not the developer's
+    // fault and must not be coloured like a warning.
+    const bc = { break: '#F59E0B', lunch: '#10B981', meeting: '#3B82F6', away: '#6B7280', leave: '#8B5CF6', urgent: '#EF4444', no_tasks: '#0891B2', other: '#F59E0B' };
     border = bc[n.break_type] || '#F59E0B';
     if (n.duration_display) timeLine = `${n.time || ''}${n.time ? ' · ' : ''}${n.duration_display}`;
   } else if (n.kind === 'task') {
@@ -414,7 +440,15 @@ function FilterDropdown({ label, open, onToggle, options, selected, getKey, getL
   );
 }
 
-export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, focusStatus }) {
+export default function KpiActionBoard({
+  onBack, focusTaskId, onFocusHandled, focusStatus,
+  // workdayLocked: a developer whose workday hasn't started (device unpaired).
+  // The board stays fully BROWSABLE — lanes, filters, search, details — but every
+  // task ACTION is hidden, because starting work requires pairing at the computer.
+  // onNeedPair: send them to the PIN screen (the only thing that opens a workday).
+  // onWorkdayEnded: End Workday un-pairs server-side → flip to read-only at once.
+  workdayLocked = false, onNeedPair, onWorkdayEnded,
+}) {
   const [raw, setRaw] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isMock, setIsMock] = useState(false);
@@ -455,6 +489,14 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   const [finishSummary, setFinishSummary] = useState('');
   const [checklist, setChecklist] = useState({});
 
+  // "You haven't started your workday" — asked on every board entry while locked,
+  // so it's a prompt, not a trap: Cancel keeps them browsing read-only.
+  const [startPrompt, setStartPrompt] = useState(false);
+  useEffect(() => { if (workdayLocked) setStartPrompt(true); }, [workdayLocked]);
+  // Read-only = locked. (The popup is just the explanation; dismissing it doesn't
+  // grant anything — otherwise Cancel would look like it unlocked the board.)
+  const readOnly = workdayLocked;
+
   // Pending Review — admin accepts (with a type) or sends back (with a note) a
   // task a developer created themselves.
   const [acceptFor, setAcceptFor] = useState(null);
@@ -486,6 +528,12 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   const [expandedLanes, setExpandedLanes] = useState(() => (focusStatus ? new Set([focusStatus]) : new Set()));
   const [expandedId, setExpandedId] = useState(null);
 
+  // KPI Details — a full screen that REPLACES the board, exactly as the web pane
+  // replaces its list. Its own component owns the loading/writes; the board just
+  // says which task and takes it back on Back.
+  const [detailTask, setDetailTask] = useState(null);
+  const openDetail = useCallback((task) => setDetailTask(task), []);
+
   // Cross-fade the body when switching board ⇄ list (also fades in on first mount).
   const bodyFade = useRef(new Animated.Value(1)).current;
   useEffect(() => {
@@ -504,6 +552,17 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   const [endNote, setEndNote] = useState('');
   const [endBusy, setEndBusy] = useState(false);
   const [live, setLive] = useState(null); // live_status payload for the activity strip
+
+  // "Not on a task?" — Meeting / Break / No tasks.
+  const [idlePopup, setIdlePopup] = useState(false);
+  const [idleBusy, setIdleBusy] = useState(null);   // the reason code being sent
+  const [idleNote, setIdleNote] = useState('');     // optional, shows on the Map
+  const [nontaskBusy, setNontaskBusy] = useState(false);
+  // The server asks via a notification that carries no kpi_id, so it can't be
+  // tapped through to anywhere. Raise the popup here instead — but only ONCE per
+  // prompt, or a 15s poll would re-open it every 15s and trap them. Holds the
+  // prompt NUMBER already shown, so dismissing #1 still lets #2 and #3 through.
+  const idleAskedRef = useRef(0);
 
   // Styled error popup ("Can't start this task", etc.)
   const [errorPopup, setErrorPopup] = useState(null); // { title, message } | null
@@ -564,14 +623,83 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
     getWorkdayStatus().then((r) => setWorkdayOpen(!!r?.is_open)).catch(() => {});
   }, []);
 
+  // ONE place that reacts to a live_status payload, so the 15s poll and the
+  // after-an-action refresh can never drift apart on when to ask.
+  const applyLive = useCallback((r) => {
+    setLive(r);
+    log.info('live ←', {
+      workday_open: !!r?.workday_open,
+      active_task: !!r?.active_task,
+      nontask: r?.nontask ? r.nontask.reason : false,
+      idle_prompt: !!r?.idle_prompt,
+      seq: r?.idle_prompt_seq || 0,
+    });
+    // The server has actually asked and the question is still open. Raise the
+    // popup once per prompt — a 15s poll re-opening it every 15s would trap
+    // them, but each NEW prompt (seq 1..3) does get to ask again.
+    const seq = r?.idle_prompt_seq || 0;
+    if (r?.idle_prompt && seq > idleAskedRef.current) {
+      idleAskedRef.current = seq;
+      log.info('idle prompt → opening popup', { seq });
+      setIdlePopup(true);
+    }
+    // Answered — the server drops idle_prompt for a started task, a declared
+    // block, or "no tasks". Reset so a later idle stretch asks from the top.
+    if (!r?.idle_prompt) idleAskedRef.current = 0;
+  }, []);
+
   // Poll the live activity strip (running task / active break / anchors).
   useEffect(() => {
     let alive = true;
-    const tick = () => getLiveStatus().then((r) => { if (alive) setLive(r); }).catch(() => {});
+    const tick = () => getLiveStatus().then((r) => { if (alive) applyLive(r); }).catch(() => {});
     tick();
     const id = setInterval(tick, 15000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
+  }, [applyLive]);
+
+  // Refresh the strip immediately instead of waiting up to 15s — the pill
+  // appearing/disappearing is the only feedback these actions give.
+  const refreshLive = useCallback(
+    () => getLiveStatus().then(applyLive).catch(() => {}), [applyLive]);
+
+  async function chooseIdleReason(code) {
+    log.info('idle reason', { code, hasNote: !!idleNote.trim() });
+    setIdleBusy(code);
+    try {
+      const res = await setIdleReason(code, idleNote);
+      if (res && res.status === false) {
+        showError("Couldn't save that", res.message || 'Failed');
+        return;
+      }
+      setIdlePopup(false);
+      setIdleNote('');
+      // No need to touch idleAskedRef — the answer drops idle_prompt server-side
+      // and applyLive resets from that.
+      await refreshLive();
+    } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
+    finally { setIdleBusy(null); }
+  }
+
+  async function endNonTaskBlock() {
+    log.info('end non-task block');
+    setNontaskBusy(true);
+    try {
+      const res = await endNonTask();
+      if (res && res.status === false) {
+        showError("Couldn't end that", res.message || 'Failed');
+        return;
+      }
+      await refreshLive();
+      // Meeting over with no task to start — the case starting a task can't
+      // cover. Re-ask now so "I have no tasks" is one tap, not a 10-min wait.
+      // Needed even though applyLive raises the popup on a cron prompt: a block
+      // declared from the status button never had one, so idle_prompt is false
+      // and nothing else would ask. Leave idleAskedRef alone — it tracks cron
+      // prompts, and claiming one here would swallow the real prompt #1.
+      if (res && res.ask_again) setIdlePopup(true);
+    } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
+    finally { setNontaskBusy(false); }
+  }
 
   // Filter by search + assignee + priority + status, then group into lanes.
   const filtered = useMemo(() => {
@@ -710,7 +838,12 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   }, [raw]);
 
   async function toggleWorkday() {
-    log.info('workday toggle', { currentlyOpen: workdayOpen });
+    log.info('workday toggle', { currentlyOpen: workdayOpen, workdayLocked });
+    // Unpaired: starting the workday IS pairing. Route to the PIN screen instead
+    // of calling /kpi_workday/start — otherwise the device would be "working"
+    // while unpaired, which is exactly what pairing exists to prevent. Nothing
+    // starts here; only a verified PIN opens the workday.
+    if (workdayLocked) { onNeedPair && onNeedPair(); return; }
     setWorkdayBusy(true);
     try {
       if (workdayOpen) {
@@ -735,6 +868,11 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
       if (res && res.status === false) { showError("Can't end workday", res.message || 'Failed'); return; }
       setWorkdayOpen(false);
       setEndSummary(null);
+      // Ending the workday UN-PAIRS the device server-side (action_end_day →
+      // _unpair). Tell App now instead of waiting up to 5s for the pairing poll
+      // to notice — otherwise the board keeps showing Start/Pause/Complete on a
+      // device that can no longer work, and a tap in that window would stick.
+      onWorkdayEnded && onWorkdayEnded();
       await load({ silent: true });
     } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
     finally { setEndBusy(false); }
@@ -913,6 +1051,20 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
     finally { setBusyId(null); }
   }
 
+  // KPI Details takes over the whole screen, the way the web detail pane replaces
+  // the web board. Safe to return early here: every hook above has already run,
+  // and the board's state stays mounted-in-memory so Back restores it untouched
+  // (same scroll position, same open lanes) with no navigation stack involved.
+  if (detailTask) {
+    return (
+      <KpiTaskDetail
+        task={detailTask}
+        onBack={() => setDetailTask(null)}
+        onChanged={() => load({ silent: true })}
+      />
+    );
+  }
+
   return (
     <View style={s.root}>
       <GradientBackground />
@@ -957,22 +1109,37 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
           </View>
         )}
         <View style={{ flex: 1 }} />
-        <TouchableOpacity style={s.newTaskBtn} onPress={openNewTask} activeOpacity={0.85}>
-          <Ionicons name="add" size={16} color={COLORS.primary} />
-          <Text style={s.newTaskTxt}>New Task</Text>
-        </TouchableOpacity>
+        {/* Creating a task is work → hidden while the workday hasn't started. */}
+        {!readOnly && (
+          <TouchableOpacity style={s.newTaskBtn} onPress={openNewTask} activeOpacity={0.85}>
+            <Ionicons name="add" size={16} color={COLORS.primary} />
+            <Text style={s.newTaskTxt}>New Task</Text>
+          </TouchableOpacity>
+        )}
+        {/* Stays visible while locked — it's the way OUT of read-only, and it
+            already says "Start Workday". Locked → it routes to the PIN screen. */}
         <TouchableOpacity
-          style={[s.workdayBtn, workdayOpen === true && s.workdayBtnEnd, workdayOpen === null && s.workdayBtnLoading]}
-          onPress={toggleWorkday} activeOpacity={0.85} disabled={workdayBusy || workdayOpen === null}
+          style={[s.workdayBtn, workdayOpen === true && s.workdayBtnEnd,
+            !readOnly && workdayOpen === null && s.workdayBtnLoading]}
+          onPress={toggleWorkday} activeOpacity={0.85}
+          disabled={!readOnly && (workdayBusy || workdayOpen === null)}
         >
-          {workdayBusy || workdayOpen === null ? <ActivityIndicator color="#fff" size="small" /> : (
+          {!readOnly && (workdayBusy || workdayOpen === null) ? <ActivityIndicator color="#fff" size="small" /> : (
             <>
-              <Ionicons name={workdayOpen ? 'stop-circle' : 'play-circle'} size={16} color="#fff" />
-              <Text style={s.workdayTxt}>{workdayOpen ? 'End Workday' : 'Start Workday'}</Text>
+              <Ionicons name={!readOnly && workdayOpen ? 'stop-circle' : 'play-circle'} size={16} color="#fff" />
+              <Text style={s.workdayTxt}>{!readOnly && workdayOpen ? 'End Workday' : 'Start Workday'}</Text>
             </>
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Why the action buttons are missing — stated, not left to be discovered. */}
+      {readOnly && (
+        <View style={s.roBanner}>
+          <Ionicons name="lock-closed" size={13} color={COLORS.red} />
+          <Text style={s.roBannerTxt}>Read-only — start your workday to work on tasks.</Text>
+        </View>
+      )}
 
       {/* Live activity strip + idle warning (when a workday is open) */}
       {live?.workday_open ? (
@@ -995,9 +1162,36 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                 <View style={s.liveWorking}>
                   <Ionicons name="pause" size={13} color={COLORS.faint} />
                   <Text style={s.liveIdle}>No task running</Text>
+                  {/* Say so up front. Without this a 9:31 meeting can only be
+                      declared by waiting to be asked at 9:40. */}
+                  {!readOnly && !live.nontask ? (
+                    <TouchableOpacity style={s.notOnTaskBtn} onPress={() => setIdlePopup(true)} activeOpacity={0.85}>
+                      <Text style={s.notOnTaskTxt}>Not on a task?</Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
               )}
             </View>
+
+            {/* Row 1b: the open Meeting/Break block. Starting a task closes it
+                automatically; [End] is for when NO task follows. */}
+            {live.nontask ? (
+              <View style={s.nontaskPill}>
+                <Text style={s.nontaskPillTxt} numberOfLines={1}>
+                  ⏸ {live.nontask.reason_label} · started {live.nontask.start_display} · {fmtHMS(secsSince(live.nontask.start_raw, nowMs))}
+                </Text>
+                <TouchableOpacity
+                  style={s.nontaskEndBtn}
+                  onPress={endNonTaskBlock}
+                  disabled={nontaskBusy}
+                  activeOpacity={0.85}
+                >
+                  {nontaskBusy
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={s.nontaskEndTxt}>End</Text>}
+                </TouchableOpacity>
+              </View>
+            ) : null}
 
             {/* Row 2: break pill (full width — shows the whole line) */}
             {live.active_break ? (
@@ -1147,6 +1341,8 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                         isAdmin={isAdmin}
                         pulse={pulseId === t.id}
                         onMeasure={(y) => { cardY.current[t.id] = y; }}
+                        onOpenDetail={openDetail}
+                        readOnly={readOnly}
                       />
                     ))
                   )}
@@ -1205,6 +1401,8 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                       isAdmin={isAdmin}
                       pulse={pulseId === t.id}
                       onRowRef={(id, r) => { listRowRefs.current[id] = r; }}
+                      onOpenDetail={openDetail}
+                      readOnly={readOnly}
                     />
                   ))}
                 </View>
@@ -1338,15 +1536,20 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                 </View>
               )}
 
-              {/* Note */}
+              {/* Note — capped: this text is drawn inside a Workday Map chip, and
+                  the Map is what gets frozen into the saved End Workday image. */}
               <TextInput
                 style={s.pauseNote}
                 placeholder="Optional note (required for 'Other' and 'Urgent')…"
                 placeholderTextColor={COLORS.faint}
                 value={pauseNote}
                 onChangeText={setPauseNote}
+                maxLength={IDLE_NOTE_MAX}
                 multiline
               />
+              <Text style={s.idleNoteHint}>
+                Keep it short — this shows on your Workday Map. {pauseNote.length}/{IDLE_NOTE_MAX}
+              </Text>
 
               <Text style={s.pauseHelp}>Every pause reason is tracked as away-time in your day summary — never counted as productive.</Text>
             </View>
@@ -1557,6 +1760,46 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
         </View>
       </Modal>
 
+      {/* Workday not started → ask, don't block. Start Workday goes to the PIN
+          (the only thing that opens a workday); Cancel keeps them browsing
+          read-only. Shown on every board entry while locked, so it can't trap
+          them and can't be missed. */}
+      <Modal visible={startPrompt} transparent animationType="fade" onRequestClose={() => setStartPrompt(false)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headAmber]}>
+              <Text style={s.headAmberTitle}>⏱  Workday not started</Text>
+              <TouchableOpacity onPress={() => setStartPrompt(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#7a5200" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              <Text style={s.createdInfoTxt}>
+                You haven't started your workday, so tasks are read-only — you can look
+                around, but Start, Pause and Complete are hidden.
+              </Text>
+              <View style={s.createdInfo}>
+                <Ionicons name="information-circle-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
+                <Text style={s.createdInfoTxt}>
+                  Starting your workday pairs this device with your computer — you'll get a PIN to enter there.
+                </Text>
+              </View>
+            </View>
+            <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setStartPrompt(false)}>
+                <Text style={s.footCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.footConfirm, { backgroundColor: COLORS.green }]}
+                onPress={() => { setStartPrompt(false); onNeedPair && onNeedPair(); }}
+              >
+                <Text style={s.footConfirmTxt}>Start Workday</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Pending Review → ACCEPT. Accepting also categorises the task: the server
           re-numbers its provisional TASK-### into the chosen REQ/UPT/BUG sequence
           and prefixes the name, which is exactly what the "Task created" popup
@@ -1654,6 +1897,63 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
         </View>
       </Modal>
 
+      {/* "Not on a task?" — raised by the 10-min check, the strip button, or
+          ending a meeting with no task to follow. */}
+      <Modal visible={idlePopup} transparent animationType="fade" onRequestClose={() => setIdlePopup(false)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headAmber]}>
+              <Text style={s.headAmberTitle}>Not on a task?</Text>
+              <TouchableOpacity onPress={() => setIdlePopup(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#7a5200" />
+              </TouchableOpacity>
+            </View>
+            <View style={{ padding: 18 }}>
+              <Text style={s.idleIntro}>
+                Nothing is running. Tell us why so your time is recorded correctly.
+              </Text>
+              {IDLE_REASONS.map((r) => (
+                <TouchableOpacity
+                  key={r.code}
+                  style={[s.idleOpt, r.code === 'no_tasks' && s.idleOptAlert]}
+                  onPress={() => chooseIdleReason(r.code)}
+                  disabled={!!idleBusy}
+                  activeOpacity={0.85}
+                >
+                  <Text style={s.idleOptEmoji}>{r.emoji}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.idleOptLabel}>{r.label}</Text>
+                    {/* Say who hears about it — the difference between these
+                        options is exactly that, and it must not be a surprise. */}
+                    <Text style={s.idleOptNote}>{r.note}</Text>
+                  </View>
+                  {idleBusy === r.code ? <ActivityIndicator size="small" color={COLORS.primary} /> : null}
+                </TouchableOpacity>
+              ))}
+
+              {/* Optional note. Capped because it is drawn inside a Workday Map
+                  chip — and the Map is what gets frozen into the saved image. */}
+              <TextInput
+                style={s.idleNote}
+                placeholder="Optional note (e.g. sprint planning)…"
+                placeholderTextColor={COLORS.faint}
+                value={idleNote}
+                onChangeText={setIdleNote}
+                maxLength={IDLE_NOTE_MAX}
+                editable={!idleBusy}
+              />
+              <Text style={s.idleNoteHint}>
+                Keep it short — this shows on your Workday Map. {idleNote.length}/{IDLE_NOTE_MAX}
+              </Text>
+
+              <TouchableOpacity onPress={() => setIdlePopup(false)} disabled={!!idleBusy}>
+                <Text style={s.idleLater}>Not now</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Styled error popup — "Can't start this task", etc. */}
       <Modal visible={!!errorPopup} transparent animationType="fade" onRequestClose={() => setErrorPopup(null)}>
         <View style={s.modalWrap}>
@@ -1714,6 +2014,9 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
                       ['Break', endSummary?.break_display],
                       ['Lunch', endSummary?.lunch_display],
                       ['Meeting', endSummary?.meeting_display],
+                      // Its own bucket: time with nothing assigned is not the
+                      // developer's fault and must not read as idling.
+                      ['No tasks', endSummary?.no_tasks_display],
                       ['Other', endSummary?.other_display],
                       ['Away (auto)', endSummary?.away_display],
                       ['Other/Idle', endSummary?.other_idle_display],
@@ -1847,7 +2150,15 @@ const s = StyleSheet.create({
   listPulseWash: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#DCE7FB', borderRadius: 14 },
   listHead: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, minHeight: 52 },
   listDot: { width: 9, height: 9, borderRadius: 5 },
-  listName: { flex: 1, fontSize: 14, fontWeight: '700', color: COLORS.ink },
+  // NOT flex:1 — the name must claim only its own width, or its touchable covers
+  // the row and every tap opens details instead of the dropdown.
+  listName: { fontSize: 14, fontWeight: '700', color: COLORS.ink },
+  // Same "opens details" cue as the kanban card and the web board.
+  listNameLink: { color: COLORS.primary, textDecorationLine: 'underline' },
+  // Shrinks (so long names still truncate to one line) but never grows.
+  listNameHit: { flexShrink: 1, paddingVertical: 15 },
+  // Eats the leftover width for the OUTER (dropdown) touchable.
+  listSpacer: { flex: 1, alignSelf: 'stretch', minWidth: 8 },
   listBody: { paddingHorizontal: 14, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#F0F3F8', paddingTop: 10 },
   listPill: { alignSelf: 'flex-start', marginBottom: 4 },
 
@@ -1862,6 +2173,40 @@ const s = StyleSheet.create({
   liveIdle: { fontSize: 12.5, color: COLORS.muted, fontWeight: '600' },
   breakPill: { alignSelf: 'flex-start', backgroundColor: '#FDE68A', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   breakPillTxt: { fontSize: 12, fontWeight: '800', color: '#6b5200' },
+
+  // "Not on a task?" — declare a meeting/break without waiting to be asked.
+  notOnTaskBtn: { marginLeft: 8, backgroundColor: '#E0E7FF', borderRadius: 7, paddingHorizontal: 9, paddingVertical: 4 },
+  notOnTaskTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
+
+  // The open Meeting/Break block. Violet, deliberately NOT the break pill's
+  // amber — this is time that is never counted as task time.
+  nontaskPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#EDE9FE', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+  },
+  nontaskPillTxt: { flex: 1, fontSize: 12, fontWeight: '800', color: '#4C1D95' },
+  nontaskEndBtn: { backgroundColor: '#7C3AED', borderRadius: 6, paddingHorizontal: 12, paddingVertical: 5, minWidth: 52, alignItems: 'center' },
+  nontaskEndTxt: { fontSize: 11.5, fontWeight: '900', color: '#fff' },
+
+  // The "Not on a task?" popup.
+  idleIntro: { fontSize: 13.5, color: COLORS.muted, marginBottom: 14, lineHeight: 19 },
+  idleOpt: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    borderWidth: 1, borderColor: COLORS.line, borderRadius: 12,
+    paddingHorizontal: 13, paddingVertical: 12, marginBottom: 10,
+  },
+  idleOptAlert: { borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
+  idleOptEmoji: { fontSize: 20 },
+  idleOptLabel: { fontSize: 14.5, fontWeight: '800', color: COLORS.ink },
+  idleOptNote: { fontSize: 11.5, color: COLORS.muted, marginTop: 2, lineHeight: 15 },
+  idleNote: {
+    borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12,
+    paddingVertical: 10, fontSize: 14, color: COLORS.ink, marginTop: 4,
+  },
+  // Red on purpose: the length limit is a real constraint (it has to fit the Map
+  // chip), not a suggestion, so it should read as one.
+  idleNoteHint: { fontSize: 11.5, color: COLORS.red, marginTop: 6, marginBottom: 4 },
+  idleLater: { fontSize: 13, fontWeight: '700', color: COLORS.faint, textAlign: 'center', paddingVertical: 8 },
   livePresence: { fontSize: 12, color: COLORS.muted, fontWeight: '600' },
   liveProductive: { color: COLORS.green, fontWeight: '800' },
   idleWarn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginHorizontal: 14, marginTop: 6, backgroundColor: COLORS.redBg, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
@@ -1918,8 +2263,12 @@ const s = StyleSheet.create({
   },
   accent: { width: 5 },
   cardBody: { flex: 1, padding: 13 },
-  cardTop: { marginBottom: 8 },
-  cardTitle: { fontSize: 15, fontWeight: '800', color: COLORS.navy, lineHeight: 20 },
+  // Row, not a bare block: the title now shares the line with the ⓘ affordance.
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
+  cardTitle: { flex: 1, fontSize: 15, fontWeight: '800', color: COLORS.navy, lineHeight: 20 },
+  // Underlined + primary, the same "this opens details" cue the web board gives
+  // the task name (kra_style.scss .kpi-task).
+  cardTitleLink: { color: COLORS.primary, textDecorationLine: 'underline' },
 
   chipRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 4 },
@@ -1964,6 +2313,14 @@ const s = StyleSheet.create({
   userRowOn: { backgroundColor: '#EAF1FE', borderColor: COLORS.primary },
   userTxt: { fontSize: 14.5, color: COLORS.ink },
   reasonInput: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, padding: 12, minHeight: 60, fontSize: 14.5, color: COLORS.ink, textAlignVertical: 'top' },
+  // Read-only banner — sits under the toolbar and explains the missing buttons.
+  roBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    marginHorizontal: 14, marginBottom: 4, paddingVertical: 8, paddingHorizontal: 11,
+    backgroundColor: COLORS.redBg, borderRadius: 10,
+    borderLeftWidth: 3, borderLeftColor: COLORS.red,
+  },
+  roBannerTxt: { flex: 1, fontSize: 12, color: COLORS.red, fontWeight: '700' },
   // Pending Review → Accept: pick the type the task is filed as (drives its
   // REQ/UPT/BUG reference).
   typeRow: { flexDirection: 'row', gap: 8 },

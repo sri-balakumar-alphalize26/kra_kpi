@@ -13,9 +13,17 @@ class KpiUserManual(models.Model):
         ondelete='cascade'
     )
     
+    # attachment=True keeps the bytes in the FILESTORE, not a DB bytea column.
+    # Every other binary in this module already does this (kra.kpi.requirement_document,
+    # signed_certificate, kra.master.logo, kpi.backup.backup_file); this one was
+    # the odd one out. It matters now that clients attach photos/video from the
+    # app: in-DB blobs bloat the database AND every backup forever, and any read
+    # of the field pulls the whole file into memory.
+    # NOTE: rows created before this change keep their bytea until rewritten.
     manual_file = fields.Binary(
         string='Manual File',
-        help='Upload PDF or document file'
+        attachment=True,
+        help='Image / video / document attached to this task'
     )
     
     file_name = fields.Char(

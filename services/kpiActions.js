@@ -8,7 +8,7 @@
 //     paused_reason, description, progress_count, is_self_created, admin_accepted, ... }
 
 import { getConnection } from '../api/session';
-import { jsonRpc } from '../api/odooApi';
+import { jsonRpc, httpUpload } from '../api/odooApi';
 import { createLogger } from '../api/logger';
 import { getKraTree } from './kraKpi';
 
@@ -170,6 +170,38 @@ export async function fetchTaskById(kpiId) {
   }
 }
 
+// Everything the KPI Details screen renders, in ONE round-trip (the web pane
+// makes seven): the task, `meta` (the fields map_rec doesn't carry — ref, KRA,
+// type, checklist, guidelines, and the is_manager/is_assignee/can_complete
+// flags), plus its manuals, progress updates, GitHub links and reassignments.
+//
+// Unlike the other fetchers this one surfaces WHY it failed: the route is
+// access-gated (admin and coordinator see any task, a developer only their own,
+// a client none), so "not authorized" is a real answer the screen must show
+// rather than a silently empty page.
+export async function fetchTaskDetails(kpiId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { ok: false, message: 'No server connection' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kra_kpi/task/details', { kpi_id: kpiId });
+    if (!res?.status) return { ok: false, message: res?.message || 'Could not load details' };
+    return {
+      ok: true,
+      task: res.task || null,
+      meta: res.meta || {},
+      manuals: res.manuals || [],
+      progress: res.progress || [],
+      github: res.github || [],
+      reassignments: res.reassignments || [],
+      files: res.files || [],
+      links: res.links || [],
+    };
+  } catch (e) {
+    log.warn('fetchTaskDetails failed', e?.message);
+    return { ok: false, message: 'Could not load details' };
+  }
+}
+
 // ── Pending Review: admin decides on a DEVELOPER-created task ──────────────
 // A developer can create their own task and work it immediately, but it stays
 // out of the official flow (is_self_created && !admin_accepted → the "Pending
@@ -242,6 +274,90 @@ export const completeTask = (kpiId, employeeChecklist = {}, partial = false) =>
 export const createProgress = (kpiId, summary) =>
   action('/kpi/progress/create', { kpi_id: kpiId, summary: summary || '' });
 
+// ── KPI Details view: the same writes the web detail pane offers ───────────
+// Routes all pre-exist in kra_api.py; these are just the app's door into them.
+
+// Server's own cap on /kpi/progress/upload_file. Check it before sending so a
+// too-big file is refused instantly instead of after a long doomed upload.
+export const MAX_PROGRESS_BYTES = 50 * 1024 * 1024;
+
+// Progress update, with an optional attachment and related links.
+//
+// Two paths, mirroring exactly what the web detail pane does:
+//   file    -> multipart POST /kpi/progress/upload_file  (50 MB, streams the file)
+//   no file -> JSON  POST /kpi/progress/create           ("unchanged path")
+// Do NOT push a file through /kpi/progress/create: it's the small-payload route,
+// and base64 inflates the body ~33% while holding the whole file in memory.
+export async function submitProgressUpdate(kpiId, { summary, links, file }, onProgress) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, message: 'Mock — not sent to a server' };
+
+  if (file?.uri) {
+    if (file.size && file.size > MAX_PROGRESS_BYTES) {
+      return { status: false, message: 'That file is over the 50 MB limit. Add a Drive or GitHub link instead.' };
+    }
+    const fd = new FormData();
+    fd.append('kpi_id', String(kpiId));
+    fd.append('summary', summary || '');
+    fd.append('related_links', JSON.stringify(links || []));
+    fd.append('file', {
+      uri: file.uri,
+      name: file.name || 'file',
+      type: file.mimeType || 'application/octet-stream',
+    });
+    return await httpUpload(serverUrl, '/kpi/progress/upload_file', fd, 180000, onProgress);
+  }
+
+  // NOTE the `null` in the db slot — jsonRpc is (url, path, params, timeout, db,
+  // onProgress). Passing onProgress here as `db` sets an X-Odoo-Database header,
+  // which Odoo rejects outright (403) when a session cookie is also present.
+  return await jsonRpc(serverUrl, '/kpi/progress/create', {
+    kpi_id: kpiId,
+    summary: summary || '',
+    related_links: JSON.stringify(links || []),
+  }, 45000, null, null);
+}
+
+// A progress file's bytes, for View / Download. Base64 over the authenticated
+// JSON channel — an <Image> or external browser pointed at /kpi/progress/view
+// sends no session cookie and lands on the login page instead of the file.
+export async function fetchProgressFile(progressId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'No server connection' };
+  try {
+    // 60s: a 50 MB file is ~67 MB of base64 coming back.
+    const res = await jsonRpc(serverUrl, '/kpi/progress/file_b64', { progress_id: progressId }, 60000);
+    return res || { status: false, message: 'Empty response' };
+  } catch (e) {
+    log.warn('fetchProgressFile failed', e?.message);
+    return { status: false, message: 'Could not fetch the file' };
+  }
+}
+
+// Same, for a user-manual file.
+export async function fetchManualFile(manualId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'No server connection' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi/manual/file_b64', { manual_id: manualId }, 60000);
+    return res || { status: false, message: 'Empty response' };
+  } catch (e) {
+    log.warn('fetchManualFile failed', e?.message);
+    return { status: false, message: 'Could not fetch the file' };
+  }
+}
+
+// The server rejects non-github.com URLs and requires a branch — surface its
+// message rather than inventing our own client-side copy of that rule.
+export const addGithubLink = (kpiId, githubUrl, branchName) =>
+  action('/kpi/github/add', { kpi_id: kpiId, github_url: githubUrl || '', branch_name: branchName || '' });
+
+export const deleteGithubLink = (linkId) =>
+  action('/kpi/github/delete', { link_id: linkId });
+
+export const deleteManual = (manualId) =>
+  action('/kpi/manual/delete', { manual_id: manualId });
+
 // The 5 employee-checklist keys the server expects for a full Complete.
 export const CHECKLIST_ITEMS = [
   { key: 'verify_github', label: 'Verified GitHub URL' },
@@ -295,6 +411,26 @@ export async function getWorkdayStatus() {
 }
 export const startWorkday = () => action('/kpi_workday/ping', {});
 export const endWorkday = (note = '') => action('/kpi_workday/end', { note });
+
+// ── Not on a task: Meeting / Break / No tasks ────────────────────────────────
+// Why this exists: a 9:30 start with a 9:31 meeting must not look like idling.
+// ALL THREE are recorded on the Workday Map so the time is accounted for; they
+// differ only in who gets told. Only "no tasks" reaches admins, because only that
+// one is theirs to fix.
+export const IDLE_REASONS = [
+  { code: 'meeting',  label: 'In a meeting',  emoji: '👥', note: 'Recorded on your Workday Map. Admins are not notified.' },
+  { code: 'break',    label: 'On a break',    emoji: '☕', note: 'Recorded on your Workday Map. Admins are not notified.' },
+  { code: 'no_tasks', label: 'I have no tasks', emoji: '📭', note: 'Recorded on your Workday Map, and your admins are told right away so they can assign you work.' },
+];
+// The note is drawn inside a Workday Map chip (and frozen into the saved End
+// Workday image), so it has to stay short. The server clamps to the same number —
+// this cap is a courtesy, not the guarantee.
+export const IDLE_NOTE_MAX = 60;
+export const setIdleReason = (reason, note = '') =>
+  action('/kpi_workday/idle_reason', { reason, note: (note || '').trim().slice(0, IDLE_NOTE_MAX) });
+// Ends the block. `ask_again` comes back true when nothing is running, so the
+// app re-opens the popup instead of making them wait for the next 10-min check.
+export const endNonTask = () => action('/kpi_workday/end_nontask', {});
 
 // Live activity strip: running task + active break + presence/productive anchors.
 export async function getLiveStatus() {

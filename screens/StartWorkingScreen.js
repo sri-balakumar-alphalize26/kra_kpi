@@ -12,6 +12,7 @@ import {
   StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
@@ -33,6 +34,10 @@ function secondsLeft(expiresAtIso, nowMs) {
 }
 
 export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
+  // "Not now — keep browsing" is the last thing on the page, so the content has
+  // to clear the phone's nav/gesture bar or it sits under it. SafeAreaProvider is
+  // already set up in App.js for exactly this (see components/TabBar.js).
+  const insets = useSafeAreaInsets();
   const [pin, setPin] = useState('');
   const [mode, setMode] = useState('start');   // 'start' | 'resume'
   const [expiresAt, setExpiresAt] = useState(null);
@@ -137,7 +142,12 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
         ) : <View style={s.iconBtn} />}
       </View>
 
-      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+      {/* Math.max(insets.bottom, 12): devices with hardware buttons report a
+          bottom inset of 0, and the button still needs breathing room there. */}
+      <ScrollView
+        contentContainerStyle={[s.scroll, { paddingBottom: 28 + Math.max(insets.bottom, 12) }]}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Brand header */}
         <Image source={require('../assets/logo369.png')} style={s.logo} resizeMode="contain" />
         <Text style={s.brandTitle}>{resume ? 'Continue Working' : 'Start Working'}</Text>
@@ -223,12 +233,28 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
             <Text style={s.stepTxt}>You're working — timing runs on the computer.</Text>
           </View>
         </View>
+
+        {/* A way out. Someone who tapped Start Workday by mistake — or who isn't
+            at their computer yet — must not be stranded here. Nothing has started:
+            only a verified PIN opens the workday, so leaving costs nothing. */}
+        {onBack ? (
+          <TouchableOpacity style={s.notNowBtn} onPress={onBack} activeOpacity={0.85}>
+            <Ionicons name="eye-outline" size={16} color={COLORS.muted} />
+            <Text style={s.notNowTxt}>Not now — keep browsing</Text>
+          </TouchableOpacity>
+        ) : null}
       </ScrollView>
     </View>
   );
 }
 
 const s = StyleSheet.create({
+  notNowBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    alignSelf: 'center', marginTop: 18, paddingVertical: 11, paddingHorizontal: 18,
+    borderRadius: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E2E8F0',
+  },
+  notNowTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 13.5 },
   root: { flex: 1, backgroundColor: 'transparent' },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

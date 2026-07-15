@@ -201,6 +201,147 @@ const TEMPLATE = xml/* xml */`
         </table>
     </div>
 
+    <!-- Step 3b: Photos / video — hidden behind ONE button. Every role gets it. -->
+    <div class="card p-3 mb-3 shadow-sm">
+        <button t-if="!state.mediaOpen" class="btn btn-outline-primary w-100 py-2"
+                style="border-style:dashed" t-on-click="() => state.mediaOpen = true">
+            <i class="fa fa-paperclip me-2"/> Add photos / video
+        </button>
+
+        <t t-if="state.mediaOpen">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="fw-bold mb-0"><i class="fa fa-paperclip me-2 text-primary"/> Photos / video</h5>
+                <button class="btn btn-sm btn-light" t-on-click="() => state.mediaOpen = false">
+                    <i class="fa fa-chevron-up"/>
+                </button>
+            </div>
+
+            <div t-if="namedRows.length === 0" class="text-muted small">
+                Type a task name above first — attachments are added to a task.
+            </div>
+
+            <t t-if="namedRows.length > 0">
+                <div class="row g-3">
+                    <!-- Which task (by the name typed above) -->
+                    <div class="col-md-5">
+                        <label class="form-label small fw-bold">Which task? <span class="text-danger">*</span></label>
+                        <select class="form-select form-select-sm" t-model.number="state.mediaRow">
+                            <option value="">— select a task —</option>
+                            <t t-foreach="namedRows" t-as="r" t-key="r.i">
+                                <option t-att-value="r.i" t-esc="'#' + (r.i + 1) + '  ' + r.name"/>
+                            </t>
+                        </select>
+                    </div>
+
+                    <!-- Photo is the default; video is the exception -->
+                    <div class="col-md-3">
+                        <label class="form-label small fw-bold">Type</label>
+                        <div class="btn-group w-100">
+                            <button class="btn btn-sm"
+                                    t-att-class="state.mediaKind === 'image' ? 'btn-primary' : 'btn-outline-secondary'"
+                                    t-on-click="() => this.setMediaKind('image')">
+                                <i class="fa fa-image me-1"/> Photo
+                            </button>
+                            <button class="btn btn-sm"
+                                    t-att-class="state.mediaKind === 'video' ? 'btn-danger' : 'btn-outline-secondary'"
+                                    t-on-click="() => this.setMediaKind('video')">
+                                <i class="fa fa-video-camera me-1"/> Video
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">
+                            <t t-esc="state.mediaKind === 'video' ? 'Choose a video' : 'Choose photo'"/>
+                        </label>
+                        <input type="file" class="form-control form-control-sm"
+                               t-att-accept="state.mediaKind === 'video' ? 'video/*' : 'image/*'"
+                               t-on-change="(ev) => this.onMediaFile(ev)"/>
+                    </div>
+
+                    <div t-if="state.mediaKind === 'video'" class="col-12">
+                        <div class="alert alert-danger py-2 px-3 mb-0 small d-flex align-items-start">
+                            <i class="fa fa-exclamation-triangle me-2 mt-1"/>
+                            <div>
+                                Only upload a video if it's <strong>really needed</strong> — a photo is usually
+                                enough, and videos are slow to upload. Limit:
+                                <strong t-esc="this.humanSize(this.maxVideoBytes)"/>.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Preview (the web can show the real thing) -->
+                    <div t-if="state.mediaPicked" class="col-12 d-flex align-items-center gap-3">
+                        <img t-if="state.mediaPicked.preview" t-att-src="state.mediaPicked.preview"
+                             style="height:64px;width:64px;object-fit:cover;border-radius:8px;border:1px solid #dee2e6"/>
+                        <div t-else="" class="d-flex align-items-center justify-content-center"
+                             style="height:64px;width:64px;border-radius:8px;background:#f1f5fb">
+                            <i class="fa fa-video-camera fa-2x text-muted"/>
+                        </div>
+                        <div class="small">
+                            <div class="fw-bold" t-esc="state.mediaPicked.name"/>
+                            <div class="text-muted" t-esc="this.humanSize(state.mediaPicked.size)"/>
+                        </div>
+                    </div>
+
+                    <!-- Mandatory: an attachment with no explanation is noise -->
+                    <div class="col-12">
+                        <label class="form-label small fw-bold">Reason <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control form-control-sm"
+                               placeholder="Why are you attaching this?"
+                               t-model="state.mediaReason"/>
+                    </div>
+
+                    <div class="col-12">
+                        <button class="btn btn-sm btn-primary" t-att-disabled="!mediaReady"
+                                t-on-click="addAttachment">
+                            <i class="fa fa-plus me-1"/> Add attachment
+                        </button>
+                        <span t-if="!mediaReady" class="text-muted small ms-2">
+                            Pick a task, choose a file, and give a reason.
+                        </span>
+                    </div>
+                </div>
+            </t>
+
+            <!-- Queued / uploading -->
+            <div t-if="state.attachments.length" class="mt-3">
+                <t t-foreach="state.attachments" t-as="a" t-key="a_index">
+                    <div class="d-flex align-items-center gap-2 py-2 border-top">
+                        <i t-att-class="a.kind === 'video' ? 'fa fa-video-camera text-primary' : 'fa fa-image text-primary'"/>
+                        <div class="flex-grow-1 small">
+                            <div>
+                                <span class="fw-bold" t-esc="a.name"/>
+                                <span class="text-muted"> · <t t-esc="this.humanSize(a.size)"/></span>
+                                <span t-if="state.tasks[a.rowIndex]" class="text-muted">
+                                    →  <t t-esc="state.tasks[a.rowIndex].name"/>
+                                </span>
+                            </div>
+                            <div class="text-muted" t-esc="a.reason"/>
+                            <div t-if="a.status === 'uploading'" class="progress mt-1" style="height:5px">
+                                <div class="progress-bar" t-attf-style="width: {{a.pct}}%"/>
+                            </div>
+                            <div t-if="a.status === 'uploading'" class="text-primary fw-bold" style="font-size:11px">
+                                <t t-esc="this.humanSize(a.size)"/> · <t t-esc="a.pct"/>%
+                            </div>
+                            <div t-if="a.status === 'failed'" class="text-danger fw-bold" style="font-size:11px">Upload failed</div>
+                        </div>
+                        <i t-if="a.status === 'done'" class="fa fa-check-circle text-success"/>
+                        <button t-if="a.status === 'idle'" class="btn btn-sm btn-link text-muted p-0"
+                                t-on-click="() => this.removeAttachment(a_index)">
+                            <i class="fa fa-times-circle"/>
+                        </button>
+                    </div>
+                </t>
+                <button t-if="state.attachments.some(x => x.status === 'failed')"
+                        class="btn btn-sm btn-outline-danger mt-2" t-att-disabled="state.uploading"
+                        t-on-click="retryFailedUploads">
+                    <i class="fa fa-refresh me-1"/> Retry failed uploads
+                </button>
+            </div>
+        </t>
+    </div>
+
     <!-- Step 4: Defaults for NEW rows (and AI/import suggestions) — ADMIN/MANAGER ONLY -->
     <div t-if="!state.isClientOnly" class="card p-3 mb-3 shadow-sm">
         <h5 class="fw-bold mb-3">
@@ -285,6 +426,17 @@ class _BaseUpload extends Component {
             suggestionMessage: '',
             import_status: '',
             lastCreated: 0,
+            // ---- Photos / video (mirrors the mobile app) --------------------
+            // Hidden behind one button. Each attachment belongs to ONE task row
+            // (picked by the task name typed above) and MUST carry a reason.
+            // Files are attached AFTER the tasks exist, via kpi.user.manual.
+            mediaOpen: false,
+            mediaKind: 'image',      // 'image' | 'video' — photo is the default
+            mediaRow: null,          // index of the task row it belongs to
+            mediaReason: '',
+            mediaPicked: null,       // {data, name, size, kind, preview}
+            attachments: [],         // [{rowIndex, kind, data, name, size, reason, status, pct}]
+            uploading: false,
             refPrefix: 'REQ',     // overwritten by /kpi_requirements/peek_next_ref
             refNextNum: 1,        // overwritten by /kpi_requirements/peek_next_ref
         });
@@ -430,6 +582,113 @@ class _BaseUpload extends Component {
             this.state.suggesting = false;
         }
     }
+    // ---- Photos / video ----------------------------------------------------
+    // Same rules as the mobile app: photo is the default, video is capped, and
+    // a reason is mandatory. Files ride the EXISTING /kpi/manual/upload route.
+
+    // Only NAMED rows can be attached to — the name is what identifies the task.
+    get namedRows() {
+        return this.state.tasks
+            .map((t, i) => ({ i, name: (t.name || '').trim() }))
+            .filter(r => r.name);
+    }
+    get maxVideoBytes() { return 10 * 1024 * 1024; }
+    humanSize(b) {
+        b = Number(b) || 0;
+        if (b >= 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + ' MB';
+        if (b >= 1024) return Math.round(b / 1024) + ' KB';
+        return b + ' B';
+    }
+    // Reason is mandatory, and it must belong to a task.
+    get mediaReady() {
+        return !!this.state.mediaPicked
+            && this.state.mediaRow !== null
+            && (this.state.mediaReason || '').trim().length > 0;
+    }
+    setMediaKind(kind) {
+        this.state.mediaKind = kind;
+        this.state.mediaPicked = null;   // a picked photo isn't a video
+    }
+    async onMediaFile(ev) {
+        const file = ev.target.files && ev.target.files[0];
+        if (!file) return;
+        const isVideo = this.state.mediaKind === 'video';
+        // Refuse at PICK time, never mid-upload.
+        if (isVideo && file.size > this.maxVideoBytes) {
+            alert(`That video is ${this.humanSize(file.size)} — the limit is ${this.humanSize(this.maxVideoBytes)}.\n\nRecord a shorter clip, or use a photo instead.`);
+            ev.target.value = '';
+            return;
+        }
+        const dataUrl = await new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(fr.result);
+            fr.onerror = reject;
+            fr.readAsDataURL(file);
+        });
+        this.state.mediaPicked = {
+            data: String(dataUrl).split(',')[1] || '',   // strip the data: prefix
+            name: file.name,
+            size: file.size,
+            kind: this.state.mediaKind,
+            // The web can show a real preview — the app can't do this cheaply.
+            preview: isVideo ? '' : dataUrl,
+        };
+        ev.target.value = '';
+    }
+    addAttachment() {
+        if (!this.mediaReady) return;
+        const p = this.state.mediaPicked;
+        this.state.attachments.push({
+            rowIndex: this.state.mediaRow,
+            kind: p.kind, data: p.data, name: p.name, size: p.size,
+            preview: p.preview,
+            reason: this.state.mediaReason.trim(),
+            status: 'idle', pct: 0, kpiId: null,
+        });
+        this.state.mediaPicked = null;
+        this.state.mediaReason = '';
+    }
+    removeAttachment(i) { this.state.attachments.splice(i, 1); }
+
+    // Upload ONE file with a live %.
+    //
+    // Hand-rolled XHR rather than rpc(): the module notes at
+    // /kpi/progress/upload_file that "base64-in-JSON can't" show progress — true
+    // of OWL's rpc() helper, which exposes no progress hook. XHR does, so we get
+    // a real bar on the existing JSON route without a multipart endpoint.
+    _uploadManual(att, onPct) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/kpi/manual/upload', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.upload.onprogress = (e) => {
+                // e.total is the BASE64 body (~+33% of the file) — use it, or the
+                // bar stalls around 75%.
+                if (e.lengthComputable && onPct) onPct(Math.min(100, Math.round((e.loaded / e.total) * 100)));
+            };
+            xhr.onload = () => {
+                try {
+                    const body = JSON.parse(xhr.responseText || '{}');
+                    const r = body.result;
+                    if (body.error) return reject(new Error(body.error.data?.message || 'Upload failed'));
+                    if (!r || r.status === false) return reject(new Error(r?.message || 'Upload failed'));
+                    resolve(r);
+                } catch (e) { reject(e); }
+            };
+            xhr.onerror = () => reject(new Error('Network error'));
+            xhr.send(JSON.stringify({
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                    kpi_id: att.kpiId,
+                    file_data: att.data,
+                    file_name: att.name,
+                    description: att.reason,
+                    related_links: '',
+                },
+            }));
+        });
+    }
+
     async createAllTasks() {
         if (!this.state.client_kra_id || !this.state.sub_kra_id) {
             alert('Pick a Client and Project first.');
@@ -463,12 +722,54 @@ class _BaseUpload extends Component {
             return;
         }
         this.state.lastCreated = r.created_count || 0;
+
+        // ---- Attachments -----------------------------------------------------
+        // The tasks exist now, so each file can be hung off its kpi_id. Uploaded
+        // ONE AT A TIME so the % means something. The tasks are NEVER rolled back:
+        // a failed photo must not cost the user everything they typed.
+        const ids = r.kpi_ids || [];
+        const failedNames = [];
+        if (this.state.attachments.length && ids.length) {
+            // `tasks` above is the FILTERED list actually sent, so kpi_ids[n] lines
+            // up with it. Map each attachment's ORIGINAL row index onto that.
+            const namedIdx = new Map();
+            let k = 0;
+            this.state.tasks.forEach((t, i) => { if ((t.name || '').trim()) namedIdx.set(i, k++); });
+
+            this.state.uploading = true;
+            for (const att of this.state.attachments) {
+                const sent = namedIdx.get(att.rowIndex);
+                att.kpiId = sent != null ? (ids[sent] || null) : null;
+                if (!att.kpiId) { att.status = 'failed'; failedNames.push(att.name); continue; }
+                att.status = 'uploading'; att.pct = 0;
+                try {
+                    await this._uploadManual(att, (pct) => { att.pct = pct; });
+                    att.status = 'done'; att.pct = 100;
+                } catch (e) {
+                    att.status = 'failed';
+                    failedNames.push(att.name);
+                }
+            }
+            this.state.uploading = false;
+        }
+
         // Keep destination, clear task table + source
         this.state.tasks = [];
         this.state.paste_text = '';
         this.state.file_data = '';
         this.state.file_name = '';
         this.state.import_status = '';
+
+        if (failedNames.length) {
+            // Keep ONLY the failures (they already carry their kpiId) so Retry
+            // re-sends just those — the tasks are gone from the form, so a retry
+            // can never duplicate them.
+            this.state.attachments = this.state.attachments.filter(a => a.status === 'failed');
+            alert(`Your ${r.created_count} task(s) were created.\n\nBut these files did not upload:\n\n${failedNames.map(n => '•  ' + n).join('\n')}\n\nUse "Retry failed uploads" to send them again.`);
+        } else {
+            this.state.attachments = [];
+            this.state.mediaOpen = false;
+        }
         // Refresh the next-ref preview so a follow-up batch starts at the right number
         try {
             const rp = await rpc('/kpi_requirements/peek_next_ref', { doc_type: this.docType });
@@ -478,6 +779,33 @@ class _BaseUpload extends Component {
             }
         } catch (_) { /* ignore */ }
     }
+    // Re-send only the failures. The tasks already exist and the form is cleared,
+    // so this attaches to the stored kpiId — it can never duplicate a task.
+    async retryFailedUploads() {
+        this.state.uploading = true;
+        const stillFailed = [];
+        for (const att of this.state.attachments) {
+            if (att.status === 'done' || !att.kpiId) continue;
+            att.status = 'uploading'; att.pct = 0;
+            try {
+                await this._uploadManual(att, (pct) => { att.pct = pct; });
+                att.status = 'done'; att.pct = 100;
+            } catch (e) {
+                att.status = 'failed';
+                stillFailed.push(att.name);
+            }
+        }
+        this.state.uploading = false;
+        if (stillFailed.length) {
+            this.state.attachments = this.state.attachments.filter(a => a.status === 'failed');
+            alert('Still could not upload:\n\n' + stillFailed.map(n => '•  ' + n).join('\n'));
+        } else {
+            this.state.attachments = [];
+            this.state.mediaOpen = false;
+            alert('All files uploaded.');
+        }
+    }
+
     resetForm() {
         this.state.client_kra_id = '';
         this.state.sub_kra_id = '';

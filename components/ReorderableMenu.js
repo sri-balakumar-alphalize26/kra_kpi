@@ -4,22 +4,38 @@
 // slide out of the way → release to drop. The new order is reported via
 // onOrder(destKeys) and persisted by the caller.
 //
-// Built on RN's own PanResponder + Animated ON PURPOSE: this project has no
+// Built on RN's raw touch events + Animated ON PURPOSE: this project has no
 // react-native-gesture-handler / reanimated / draggable-flatlist, and pulling in
 // that stack (plus a babel plugin + rebuild) for one drawer list isn't worth it.
 //
-// How the gesture avoids fighting the ScrollView: `onMoveShouldSetPanResponder`
-// only claims the responder AFTER the long-press timer has fired. Until then the
-// touch belongs to the ScrollView, so normal scrolling still works, and a quick
-// tap is handled as a plain press.
+// Why touch events and not PanResponder: these rows sit inside the drawer's
+// ScrollView, which claims the responder the moment the finger moves. RN then
+// stops asking anyone else, so onMoveShouldSetPanResponder was never consulted
+// and the lifted row never received the gesture — it just froze. Touch events
+// are delivered to the view under the finger regardless of the responder, so
+// they work. The caller also freezes the ScrollView during a drag
+// (onDragStateChange → scrollEnabled) so the list doesn't slide underneath.
+//
+// Both Animated values here are JS-driven and must stay that way: `lift` (scale)
+// and `dragY` (translateY) share one transform, and RN forbids mixing drivers on
+// a single view — the native side takes over and JS setValue() calls are dropped.
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, Animated, PanResponder, StyleSheet } from 'react-native';
+import { View, Text, Animated, StyleSheet } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS } from '../theme';
+import { createLogger } from '../api/logger';
 
-// Hold time before an item lifts. NOTE: 3s is what was asked for; the platform
-// norm is ~500ms, so if it feels sluggish this single constant is the knob.
-export const LONG_PRESS_MS = 3000;
+const log = createLogger('ReorderMenu');
+
+// Hold time before an item lifts, in EDIT mode only.
+//
+// Was 3000ms and effectively unusable: holding within CANCEL_SLOP for three full
+// seconds is beyond a normal finger, so drift cancelled the timer and the drag
+// "didn't work". 400ms is the platform norm (~500ms on iOS/Android) — long
+// enough to tell a deliberate hold from a scroll, short enough that drift can't
+// eat it. Entering edit mode is already the explicit intent; a long hold on top
+// of it was just friction.
+export const LONG_PRESS_MS = 400;
 // Row height + marginBottom (see `item`/`wrap` styles) — the drag maths assumes a
 // fixed pitch, which is what keeps this simple and predictable.
 const ROW_H = 64;
@@ -34,15 +50,21 @@ function Icon({ lib, name, size, color }) {
     : <Ionicons name={name} size={size} color={color} />;
 }
 
-export default function ReorderableMenu({ items, onPress, onOrder, editing }) {
+export default function ReorderableMenu({
+  items, onPress, onOrder, editing,
+  // Fired true/false around a drag. The caller MUST stop its ScrollView while
+  // true: the ScrollView is our ancestor and will otherwise claim the touch
+  // once the finger moves, so the lifted row never receives the gesture.
+  onDragStateChange,
+}) {
   const [order, setOrder] = useState(items);
   useEffect(() => { setOrder(items); }, [items]);
 
   const [dragIdx, setDragIdx] = useState(null);   // index being dragged (for render)
   const [hoverIdx, setHoverIdx] = useState(null); // where it would drop
 
-  // Refs mirror the state so the PanResponder callbacks (created once) always
-  // read the latest values instead of a stale closure.
+  // Refs mirror the state so the touch handlers always read the latest values
+  // instead of a stale closure.
   const dragRef = useRef(null);
   const hoverRef = useRef(null);
   const orderRef = useRef(items);
@@ -55,24 +77,36 @@ export default function ReorderableMenu({ items, onPress, onOrder, editing }) {
     dragRef.current = i; hoverRef.current = i;
     setDragIdx(i); setHoverIdx(i);
     dragY.setValue(0);
-    Animated.spring(lift, { toValue: 1, useNativeDriver: true, friction: 6 }).start();
-  }, [dragY, lift]);
+    log.info('drag start', { index: i });
+    onDragStateChange && onDragStateChange(true);   // parent stops the ScrollView
+    // useNativeDriver MUST stay false: `lift` (scale) and `dragY` (translateY)
+    // share one transform, and RN won't let a view mix drivers — the native side
+    // takes ownership and every dragY.setValue() from JS is then silently
+    // dropped. That's what made a lifted row freeze: the scale animated, the
+    // movement didn't.
+    Animated.spring(lift, { toValue: 1, useNativeDriver: false, friction: 6 }).start();
+  }, [dragY, lift, onDragStateChange]);
 
   const endDrag = useCallback(() => {
     const from = dragRef.current;
     const to = hoverRef.current;
-    Animated.timing(lift, { toValue: 0, duration: 140, useNativeDriver: true }).start();
+    // Same driver rule as startDrag — see the comment there.
+    Animated.timing(lift, { toValue: 0, duration: 140, useNativeDriver: false }).start();
     if (from != null && to != null && from !== to) {
       const next = [...orderRef.current];
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
       setOrder(next);
-      onOrder && onOrder(next.map((t) => t.dest));
+      log.info('drag drop → reordered', { from, to, order: next.map((t) => t.dest) });
+      onOrder && onOrder(next.map((t) => t.dest));   // caller persists it
+    } else {
+      log.info('drag drop → unchanged', { from, to });
     }
     dragRef.current = null; hoverRef.current = null;
     setDragIdx(null); setHoverIdx(null);
     dragY.setValue(0);
-  }, [dragY, lift, onOrder]);
+    onDragStateChange && onDragStateChange(false);   // parent re-enables scrolling
+  }, [dragY, lift, onOrder, onDragStateChange]);
 
   // How far a NON-dragged row slides to open a slot for the dragged one.
   const shiftFor = (i) => {
@@ -114,52 +148,76 @@ function Row({
   const timerRef = useRef(null);
   const movedRef = useRef(false);
   const startRef = useRef(0);
+  // Set the instant a drag ends, read by the onTouchEnd that fires immediately
+  // after — see the comment there. Without it, dropping a row opened it.
+  const justDraggedRef = useRef(false);
 
   const clearTimer = () => { if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; } };
 
-  const pan = useRef(
-    PanResponder.create({
-      // Never claim on touch-start — that would kill ScrollView scrolling.
-      onStartShouldSetPanResponder: () => false,
-      // Claim ONLY once this row is the one being dragged (timer already fired).
-      onMoveShouldSetPanResponder: () => dragRef.current === index,
-      onPanResponderMove: (_e, g) => {
-        if (dragRef.current !== index) return;
-        dragY.setValue(g.dy);
-        // Which slot are we over? Fixed pitch keeps this a simple division.
-        let target = index + Math.round(g.dy / PITCH);
-        if (target < 0) target = 0;
-        if (target > count - 1) target = count - 1;
-        if (target !== hoverRef.current) {
-          hoverRef.current = target;
-          setHoverIdx(target);
-        }
-      },
-      onPanResponderRelease: () => { if (dragRef.current === index) onEndDrag(); },
-      onPanResponderTerminate: () => { if (dragRef.current === index) onEndDrag(); },
-      // Don't let the ScrollView steal the gesture mid-drag.
-      onPanResponderTerminationRequest: () => dragRef.current !== index,
-    })
-  ).current;
+  const endDragSafely = () => {
+    if (dragRef.current !== index) return;
+    justDraggedRef.current = true;   // must be set BEFORE onEndDrag clears dragRef
+    onEndDrag();
+  };
 
+  // The drag runs on TOUCH events, not a PanResponder, and that's deliberate.
+  //
+  // PanResponder never worked here: these rows live inside the drawer's
+  // ScrollView, which claims the responder as soon as the finger moves. Once a
+  // view owns the responder RN stops asking anyone else, so
+  // `onMoveShouldSetPanResponder` was never consulted and onPanResponderMove
+  // never fired — the row lifted and then sat frozen. (Logs showed
+  // "drag start" with no "drag over slot" following it, ever.)
+  //
+  // onTouchStart/Move/End are dispatched to the view under the finger regardless
+  // of who holds the responder — which is why the long-press detection here
+  // always worked. So the drag uses the same channel. dy is computed from pageY
+  // instead of PanResponder's gestureState.
   const onTouchStart = (e) => {
     movedRef.current = false;
     startRef.current = e.nativeEvent.pageY;
     clearTimer();
+    // Only arm the hold in EDIT mode. Outside it there is nothing to drag, and
+    // arming it there meant a slow tap anywhere could lift a row.
+    if (!editing) return;
     timerRef.current = setTimeout(() => {
-      if (!movedRef.current) onStartDrag(index);
+      if (movedRef.current) { log.info('hold cancelled — finger moved', { index }); return; }
+      log.info('hold fired → lifting', { index, ms: LONG_PRESS_MS });
+      onStartDrag(index);
     }, LONG_PRESS_MS);
   };
+
   const onTouchMove = (e) => {
-    if (dragRef.current === index) return;           // already dragging
-    if (Math.abs(e.nativeEvent.pageY - startRef.current) > CANCEL_SLOP) {
-      movedRef.current = true;                       // it's a scroll → not a long press
+    const dy = e.nativeEvent.pageY - startRef.current;
+    // Dragging → move with the finger and work out which slot we're over.
+    if (dragRef.current === index) {
+      dragY.setValue(dy);
+      let target = index + Math.round(dy / PITCH);   // fixed pitch → simple division
+      if (target < 0) target = 0;
+      if (target > count - 1) target = count - 1;
+      if (target !== hoverRef.current) {
+        log.info('drag over slot', { from: index, over: target, dy: Math.round(dy) });
+        hoverRef.current = target;
+        setHoverIdx(target);
+      }
+      return;
+    }
+    // Not dragging yet: enough movement means this is a scroll, not a hold.
+    if (Math.abs(dy) > CANCEL_SLOP) {
+      movedRef.current = true;
       clearTimer();
     }
   };
+
   const onTouchEnd = () => {
     clearTimer();
-    if (dragRef.current === index) return;           // the drag handles its own release
+    // Finish the drag we own.
+    if (dragRef.current === index) { endDragSafely(); return; }
+    // Never navigate in edit mode: the whole point is rearranging, and a tap that
+    // jumped to a screen made reordering feel broken.
+    if (editing) return;
+    // Belt-and-braces: swallow the tap that can arrive right after a drop.
+    if (justDraggedRef.current) { justDraggedRef.current = false; return; }
     if (!movedRef.current) onPress && onPress(q);    // a plain tap → navigate
   };
 
@@ -174,8 +232,7 @@ function Row({
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
-      onTouchCancel={clearTimer}
-      {...pan.panHandlers}
+      onTouchCancel={onTouchEnd}
     >
       <View style={[s.item, dragging && s.itemDragging]}>
         <View style={[s.icon, { backgroundColor: q.bg }]}>

@@ -51,19 +51,31 @@ class KpiPair(models.Model):
 
     @api.model
     def _next_mode(self, user):
-        """The mode the NEXT pairing should carry. Once today's workday is already
-        open, every pairing reads as 'resume' (Continue Working). Otherwise fall
-        back to the auto-away 'resume' stamp, else 'start'."""
+        """The mode the NEXT pairing should carry: 'resume' (Continue Working)
+        ONLY while today's workday is still open, else 'start'.
+
+        An open session today is exactly the auto-away case: _away_now
+        (kpi_work_session.py) requires an open session, pauses the running task
+        and un-pairs the device, but deliberately leaves the session OPEN. So the
+        genuine "you went away" case always still has one.
+
+        With no open session today the developer either never started or already
+        ended their day — both mean 'start'.
+
+        This used to fall back to the newest kpi.pair row's `mode` with NO date
+        filter. _unpair() stamps mode='resume' and that row lives forever, so a
+        developer who went away YESTERDAY and never started today was told "You
+        went away and your task was paused". That fallback could only ever be
+        reached with no open session — i.e. only ever with a stale cross-day
+        stamp — so it is gone rather than merely date-scoped.
+        """
         today = fields.Date.context_today(self)
         open_sess = self.env['kpi.work.session'].sudo().search([
             ('user_id', '=', user.id),
             ('session_date', '=', today),
             ('state', '=', 'open'),
         ], limit=1)
-        if open_sess:
-            return 'resume'
-        rec = self.sudo().search([('user_id', '=', user.id)], limit=1)  # newest first
-        return rec.mode if rec and rec.mode == 'resume' and rec.state != 'paired' else 'start'
+        return 'resume' if open_sess else 'start'
 
     @api.model
     def generate_for(self, user):

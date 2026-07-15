@@ -100,7 +100,9 @@ export class TaskDocuments extends Component {
                                         style="border: 1px solid #d1d5db; border-radius: 0.375rem; font-size: 0.9rem; height: 38px;"
                                         t-on-change="onDocTypeChange">
                                     <option value="">All Types</option>
+                                    <option value="task_docs" t-att-selected="state.filters.documentType === 'task_docs'">📁 Has Task Documents</option>
                                     <option value="files" t-att-selected="state.filters.documentType === 'files'">📄 Has Files</option>
+                                    <option value="drive" t-att-selected="state.filters.documentType === 'drive'">☁️ Has Drive / Cloud</option>
                                     <option value="links" t-att-selected="state.filters.documentType === 'links'">🔗 Has Links</option>
                                     <option value="github" t-att-selected="state.filters.documentType === 'github'">🐙 Has GitHub Repos</option>
                                     <option value="manuals" t-att-selected="state.filters.documentType === 'manuals'">📚 Has Manuals</option>
@@ -317,9 +319,22 @@ export class TaskDocuments extends Component {
                 
                 <t t-if="state.selectedTask">
                     <div class="card p-4 mb-3" style="background-color: #f9fafb; border: 1px solid #e5e7eb;">
-                        <h3 class="fw-bold mb-3" style="color: #111827;">
+                        <h3 class="fw-bold mb-2" style="color: #111827;">
                             <i class="fa fa-tasks"></i> <t t-esc="state.selectedTask.name"/>
                         </h3>
+                        <!-- Ref / linked-req / version: without these you can't tell
+                             WHICH task this is, only its name. -->
+                        <div class="d-flex gap-2 flex-wrap mb-3">
+                            <span t-if="state.task.external_ref" class="badge bg-primary">
+                                <t t-esc="state.task.external_ref"/>
+                            </span>
+                            <span t-if="state.task.related_req_ref" class="badge bg-light text-dark border">
+                                <i class="fa fa-link"></i> Linked to <t t-esc="state.task.related_req_ref"/>
+                            </span>
+                            <span t-if="state.task.delivery_version" class="badge bg-info text-dark">
+                                <i class="fa fa-tag"></i> <t t-esc="state.task.delivery_version"/>
+                            </span>
+                        </div>
                         <div class="d-flex gap-4 flex-wrap" style="color: #4b5563;">
                             <div>
                                 <strong>Assignee:</strong>
@@ -330,6 +345,8 @@ export class TaskDocuments extends Component {
                                 <span class="ms-2" t-esc="state.selectedTask.priority"/>
                             </div>
                         </div>
+                        <p t-if="state.task.description" class="mb-0 mt-3 text-muted small"
+                           style="white-space: pre-wrap;" t-esc="state.task.description"/>
                     </div>
                 </t>
                 
@@ -341,6 +358,36 @@ export class TaskDocuments extends Component {
                 </t>
                 
                 <t t-else="">
+                    <!-- The task's OWN documents (requirement / updates / signed
+                         certificate). These live on the task record itself and were
+                         never shown here before, so a task holding only a requirement
+                         doc looked like it had no attachments at all. -->
+                    <t t-if="state.documents.task_docs.length > 0">
+                        <div class="card p-4 mb-3" style="border: 1px solid #e5e7eb; border-left: 3px solid #2563eb;">
+                            <h4 class="fw-bold mb-3" style="color: #374151;">
+                                <i class="fa fa-folder-open"></i> Task Documents (<t t-esc="state.documents.task_docs.length"/>)
+                            </h4>
+                            <div class="list-group">
+                                <t t-foreach="state.documents.task_docs" t-as="td" t-key="td.kind">
+                                    <div class="list-group-item border-0 mb-2" style="background-color: #f9fafb; border-radius: 0.5rem; border: 1px solid #e5e7eb;">
+                                        <div class="d-flex justify-content-between align-items-start">
+                                            <div class="flex-grow-1">
+                                                <h6 class="mb-2 fw-bold" style="color: #111827;">
+                                                    <span class="badge bg-primary me-2" t-esc="td.kind"/>
+                                                    <t t-esc="td.file_name"/>
+                                                </h6>
+                                                <p t-if="td.note" class="mb-0 text-muted small" t-esc="td.note"/>
+                                            </div>
+                                            <a class="btn btn-sm btn-primary" t-att-href="td.download_url" target="_blank">
+                                                <i class="fa fa-download"></i> Download
+                                            </a>
+                                        </div>
+                                    </div>
+                                </t>
+                            </div>
+                        </div>
+                    </t>
+
                     <!-- Attached Files -->
                     <t t-if="state.documents.files.length > 0">
                         <div class="card p-4 mb-3" style="border: 1px solid #e5e7eb; border-left: 3px solid #6b7280;">
@@ -380,16 +427,51 @@ export class TaskDocuments extends Component {
                         </div>
                     </t>
                     
-                    <!-- Related Links -->
-                    <t t-if="state.documents.links.length > 0">
-                        <div class="card p-4 mb-3" style="border: 1px solid #e5e7eb; border-left: 3px solid #6b7280;">
+                    <!-- Drive &amp; Cloud. Links carry no type in storage (a bare JSON
+                         array of URLs), so the "kind" is worked out from the URL by
+                         the server — see /task_documents/details.
+                         NOTE: never use backticks in here — this whole template is a
+                         backtick literal, so one would end it and break the bundle. -->
+                    <t t-if="driveLinks.length > 0">
+                        <div class="card p-4 mb-3" style="border: 1px solid #e5e7eb; border-left: 3px solid #16a34a;">
                             <h4 class="fw-bold mb-3" style="color: #374151;">
-                                <i class="fa fa-link"></i> Related Links (<t t-esc="state.documents.links.length"/>)
+                                <i class="fa fa-cloud"></i> Drive &amp; Cloud (<t t-esc="driveLinks.length"/>)
                             </h4>
                             <div class="list-group">
-                                <t t-foreach="state.documents.links" t-as="link" t-key="link_index">
-                                    <a t-att-href="link.url" 
-                                       target="_blank" 
+                                <t t-foreach="driveLinks" t-as="link" t-key="link_index">
+                                    <a t-att-href="link.url"
+                                       target="_blank"
+                                       class="list-group-item list-group-item-action border-0 mb-2"
+                                       style="background-color: #f9fafb; border-radius: 0.5rem; border: 1px solid #e5e7eb; transition: all 0.2s;">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <div class="flex-grow-1">
+                                                <h6 class="mb-2 fw-bold" style="color: #111827;">
+                                                    <span class="badge bg-success me-2" t-esc="link.kind"/>
+                                                    <t t-esc="link.url"/>
+                                                </h6>
+                                                <p class="mb-0 text-muted small">
+                                                    <i class="fa fa-user"></i> <t t-esc="link.added_by"/> •
+                                                    <i class="fa fa-calendar"></i> <t t-esc="formatDate(link.added_date)"/>
+                                                </p>
+                                            </div>
+                                            <i class="fa fa-arrow-right" style="color: #9ca3af;"></i>
+                                        </div>
+                                    </a>
+                                </t>
+                            </div>
+                        </div>
+                    </t>
+
+                    <!-- Everything else -->
+                    <t t-if="otherLinks.length > 0">
+                        <div class="card p-4 mb-3" style="border: 1px solid #e5e7eb; border-left: 3px solid #6b7280;">
+                            <h4 class="fw-bold mb-3" style="color: #374151;">
+                                <i class="fa fa-link"></i> Other Links (<t t-esc="otherLinks.length"/>)
+                            </h4>
+                            <div class="list-group">
+                                <t t-foreach="otherLinks" t-as="link" t-key="link_index">
+                                    <a t-att-href="link.url"
+                                       target="_blank"
                                        class="list-group-item list-group-item-action border-0 mb-2"
                                        style="background-color: #f9fafb; border-radius: 0.5rem; border: 1px solid #e5e7eb; transition: all 0.2s;">
                                         <div class="d-flex justify-content-between align-items-center">
@@ -398,7 +480,9 @@ export class TaskDocuments extends Component {
                                                     <i class="fa fa-external-link" style="color: #6b7280;"></i> <t t-esc="link.url"/>
                                                 </h6>
                                                 <p class="mb-0 text-muted small">
-                                                    <i class="fa fa-user"></i> <t t-esc="link.added_by"/> • 
+                                                    <span t-if="link.kind and link.kind !== 'Other'"
+                                                          class="badge bg-light text-dark border me-2" t-esc="link.kind"/>
+                                                    <i class="fa fa-user"></i> <t t-esc="link.added_by"/> •
                                                     <i class="fa fa-calendar"></i> <t t-esc="formatDate(link.added_date)"/>
                                                 </p>
                                             </div>
@@ -505,11 +589,15 @@ export class TaskDocuments extends Component {
             allTasks: [],
             tasks: [],
             selectedTask: null,
+            // Header context for the detail view (ref / linked req / version /
+            // description) — served by /task_documents/details.
+            task: {},
             documents: {
                 files: [],
                 links: [],
                 github: [],
                 manuals: [],
+                task_docs: [],
             },
             assignees: [],
             selectedAssignee: '',
@@ -557,9 +645,27 @@ export class TaskDocuments extends Component {
     }
 
     // =========================================================
+    // LINK GROUPING
+    // =========================================================
+    // Links have no type in storage — the server works `kind` out from the URL
+    // (see /task_documents/details). These two getters just split that one list
+    // so Drive/cloud links get their own card instead of being buried among
+    // every other URL.
+
+    get driveLinks() {
+        const links = (this.state.documents && this.state.documents.links) || [];
+        return links.filter(l => l.kind === 'Google Drive' || l.kind === 'Cloud Storage');
+    }
+
+    get otherLinks() {
+        const links = (this.state.documents && this.state.documents.links) || [];
+        return links.filter(l => l.kind !== 'Google Drive' && l.kind !== 'Cloud Storage');
+    }
+
+    // =========================================================
     // FILTER LOGIC
     // =========================================================
-    
+
     getFilteredTasks() {
         let tasks = [...this.state.allTasks];
         
@@ -605,6 +711,12 @@ export class TaskDocuments extends Component {
                         return (task.github_count || 0) > 0;
                     case 'manuals':
                         return (task.manual_count || 0) > 0;
+                    // Counted server-side by classifying each URL — see the list route.
+                    case 'drive':
+                        return (task.drive_count || 0) > 0;
+                    // The task's own requirement / updates / signed certificate.
+                    case 'task_docs':
+                        return (task.task_doc_count || 0) > 0;
                     default:
                         return true;
                 }
@@ -741,17 +853,21 @@ export class TaskDocuments extends Component {
     
     getDocTypeIcon(docType) {
         const icons = {
+            'task_docs': 'fa fa-folder-open',
             'files': 'fa fa-file-text-o',
+            'drive': 'fa fa-cloud',
             'links': 'fa fa-link',
             'github': 'fa fa-github',
             'manuals': 'fa fa-book',
         };
         return icons[docType] || 'fa fa-file';
     }
-    
+
     getDocTypeLabel(docType) {
         const labels = {
+            'task_docs': 'Task Documents',
             'files': 'Files',
+            'drive': 'Drive / Cloud',
             'links': 'Links',
             'github': 'GitHub',
             'manuals': 'Manuals',
@@ -775,14 +891,16 @@ export class TaskDocuments extends Component {
     async viewTaskDocuments(taskId) {
         this.state.detailLoading = true;
         this.state.view = 'detail';
-        
+        this.state.task = {};          // clear the previous task's header context
+
         this.state.selectedTask = this.state.allTasks.find(t => t.id === taskId);
-        
+
         try {
             const result = await rpc('/task_documents/details', { task_id: taskId });
-            
+
             if (result.status) {
                 this.state.documents = result.documents;
+                this.state.task = result.task || {};   // ref / linked req / version / description
             }
         } catch (error) {
             console.error('Error loading task documents:', error);
@@ -794,11 +912,13 @@ export class TaskDocuments extends Component {
     backToList() {
         this.state.view = 'list';
         this.state.selectedTask = null;
+        this.state.task = {};
         this.state.documents = {
             files: [],
             links: [],
             github: [],
             manuals: [],
+            task_docs: [],   // must match the state shape, or the next task inherits this one's
         };
     }
 

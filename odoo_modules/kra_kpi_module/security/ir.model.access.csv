@@ -68,6 +68,10 @@ access_kpi_work_session_admin,kpi.work.session.admin,model_kpi_work_session,base
 access_kpi_work_session_coord,kpi.work.session.coord,model_kpi_work_session,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_work_session_owner,kpi.work.session.owner,model_kpi_work_session,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_work_session_developer,kpi.work.session.developer,model_kpi_work_session,kra_kpi_module.group_kra_developer,1,1,1,0
+access_kpi_nontask_block_admin,kpi.nontask.block.admin,model_kpi_nontask_block,base.group_system,1,1,1,1
+access_kpi_nontask_block_coord,kpi.nontask.block.coord,model_kpi_nontask_block,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_nontask_block_owner,kpi.nontask.block.owner,model_kpi_nontask_block,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_nontask_block_developer,kpi.nontask.block.developer,model_kpi_nontask_block,kra_kpi_module.group_kra_developer,1,1,1,0
 access_kpi_notification_queue_admin,kpi.notification.queue.admin,model_kpi_notification_queue,base.group_system,1,1,1,1
 access_kpi_notification_queue_owner,kpi.notification.queue.owner,model_kpi_notification_queue,kra_kpi_module.group_kra_owner,1,0,0,0
 access_kpi_notification_queue_coord,kpi.notification.queue.coord,model_kpi_notification_queue,kra_kpi_module.group_kra_admin,1,0,0,0

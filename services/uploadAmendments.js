@@ -198,11 +198,63 @@ export function buildTaskRow(row) {
     name: (row.name || '').trim(),
     external_ref: row.external_ref || '',
     related_req_ref: row.related_req_ref || '',
+    description: row.description || '',
     estimate_hours: Number(row.estimate_hours) || 0,
     estimate_minutes: Number(row.estimate_minutes) || 0,
     priority: row.priority || 'regular',
     primary_user_id: row.primary_user_id ? Number(row.primary_user_id) : false,
   };
+}
+
+// ---- Task attachments (photos / video + reason) ----------------------------
+// Files go to kpi.user.manual via the EXISTING /kpi/manual/* routes — one row per
+// file, unlimited per task, and its `description` is the client's reason. The web
+// "Task Related Documents" viewer already renders these, which is how the
+// developer sees them.
+
+// Hard cap for video. Deliberately far below the module's 50 MB multipart guard:
+// this route is base64-in-JSON, which inflates the file ~+33% and is held in
+// memory ~3x (RN string -> axios body -> Odoo decode), and LONG_TIMEOUT is a
+// 45s TOTAL deadline. 10 MB (~30-60s of phone video) stays safely inside both.
+// For anything bigger, clone the multipart /kpi/progress/upload_file instead of
+// raising this.
+export const MAX_VIDEO_BYTES = 10 * 1024 * 1024;
+// Images are compressed before we get here; this is just a sanity backstop.
+export const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+
+// "8.4 MB" / "412 KB" — shown on the chip and while uploading.
+export function humanSize(bytes) {
+  const b = Number(bytes) || 0;
+  if (b >= 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  if (b >= 1024) return `${Math.round(b / 1024)} KB`;
+  return `${b} B`;
+}
+
+// Attach ONE file to a task. `onProgress(sent, total)` drives the live %.
+// `links` — optional related links, stored as the JSON array the web writes.
+export async function uploadManual(kpiId, { fileData, fileName, reason, links }, onProgress) {
+  const base = await server();
+  if (!base) return { status: true };
+  log.info('uploadManual → /kpi/manual/upload', { kpi_id: kpiId, fileName, bytesB64: (fileData || '').length, links: (links || []).length });
+  const res = await jsonRpc(
+    base, '/kpi/manual/upload',
+    {
+      kpi_id: kpiId,
+      file_data: fileData,
+      file_name: fileName,
+      description: reason || '',   // the client's reason for this file
+      related_links: JSON.stringify(links || []),
+    },
+    LONG_TIMEOUT,
+    null,
+    onProgress,
+  );
+  if (!res || res.status === false) {
+    log.error('uploadManual ✗', res?.message);
+    throw new Error(res?.message || `Could not upload ${fileName}`);
+  }
+  log.info('uploadManual ←', { kpi_id: kpiId, fileName });
+  return res;
 }
 
 // Absolute URL for the "Download Blank Template" link (type='http' GET route).

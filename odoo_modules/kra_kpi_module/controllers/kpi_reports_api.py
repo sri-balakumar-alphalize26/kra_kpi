@@ -1,7 +1,13 @@
 from odoo import http, fields
 from odoo.http import request
+from datetime import timedelta
 import json
 import re
+
+# Idle-check timings live with the model that owns them (kpi.work.session) so the
+# cron and these routes can never drift apart on the numbers.
+from ..models.kpi_work_session import IDLE_CHECK_MIN, NO_TASK_NUDGE_MIN
+from ..models.kpi_nontask_block import NOTE_MAX
 
 
 def _parse_task_array(text):
@@ -1567,6 +1573,14 @@ class KpiReportsAPI(http.Controller):
                     'rejected_by': k.pre_approval_decided_by_name or '',
                     'rejected_at': (k.pre_approval_decided_at.strftime('%Y-%m-%d %H:%M')
                                     if k.pre_approval_decided_at else ''),
+                    # Photos / video the submitter attached, each with their reason
+                    # (kpi.user.manual.description). Metadata only — never the file
+                    # bytes, or a queue with videos in it would be unusable.
+                    'attachments': [{
+                        'id': m.id,
+                        'file_name': m.file_name or 'file',
+                        'reason': m.description or '',
+                    } for m in k.user_manual_ids],
                 })
             return {'status': True, 'queue': result}
         except Exception as e:
@@ -2486,9 +2500,15 @@ class KpiReportsAPI(http.Controller):
 
     @http.route('/kpi_workday/today_summary', type='json', auth='user', methods=['POST'], csrf=False)
     def workday_today_summary(self, **params):
-        """Return today's session payload (login time, totals, per-task array)
+        """Return today's payload (login time, totals, per-task array, Workday Map)
         for the current user. Used to render the End Workday modal.
         Auto-opens the session if missing so the modal works first time too.
+
+        full_day=True to match action_end_day, which is what actually gets sent and
+        saved. Without it this preview took login_at from the CURRENT session only
+        while still pulling the whole day's breaks — so after a restart the Map
+        showed earlier breaks BEFORE "Started workday", and the preview disagreed
+        with the record. Same call, same day, same story.
         """
         try:
             user = request.env.user
@@ -2497,12 +2517,93 @@ class KpiReportsAPI(http.Controller):
             # Force re-compute so live presence reflects "now".
             sess.invalidate_recordset(['productive_seconds', 'presence_seconds',
                                        'task_count'])
-            payload = sess._daily_summary_payload()
+            payload = sess._daily_summary_payload(full_day=True)
             payload['status'] = True
             return payload
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"workday_today_summary: {e}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_workday/idle_reason', type='json', auth='user', methods=['POST'], csrf=False)
+    def workday_idle_reason(self, **params):
+        """The developer says why nothing is running: meeting | break | no_tasks.
+
+        Reached two ways — the 10-min prompt, or the board's status button (so a
+        09:31 meeting can be declared at 09:31 rather than waiting to be asked).
+
+        ALL THREE open a non-task block, so the time lands on the Workday Map
+        instead of silently becoming "unexplained idle". They differ only in who
+        gets told:
+          meeting/break → admins hear NOTHING. A meeting is not a problem, and
+                          telling them would be the false alarm that makes the
+                          whole feed worth ignoring.
+          no_tasks      → admins told straight away; that one IS theirs to fix.
+
+        `no_tasks` records time TOO (it used to record nothing): a developer with
+        nothing assigned would otherwise look identical to one who is slacking —
+        untrue, and unfair to them.
+
+        `note` is optional free text, clamped to NOTE_MAX here because a client
+        maxLength is a courtesy, not a guarantee, and this text has to fit in a
+        Workday Map chip.
+        """
+        try:
+            reason = (params.get('reason') or '').strip().lower()
+            if reason not in ('meeting', 'break', 'no_tasks'):
+                return {'status': False, 'message': 'Invalid reason.'}
+            note = (params.get('note') or '').strip()[:NOTE_MAX]
+            user = request.env.user
+            sess = request.env['kpi.work.session'].sudo()._get_or_open_today(user=user)
+
+            # Open the block — idempotent: keep the original start so re-tapping
+            # can't restart the clock and lose time already spent.
+            vals = {'nontask_reason': reason, 'nontask_note': note or False}
+            if not sess.nontask_started_at:
+                vals['nontask_started_at'] = fields.Datetime.now()
+
+            admins_notified = False
+            if reason == 'no_tasks':
+                sess._fire_no_task()
+                admins_notified = True
+                # Arm the repeat: re-tell the admins every NO_TASK_NUDGE_MIN until
+                # one of them READS it (kpi.work.session._admins_read_no_task).
+                vals['no_task_nudge_at'] = fields.Datetime.now() + timedelta(minutes=NO_TASK_NUDGE_MIN)
+                vals['no_task_nudge_count'] = 1
+                # Stop asking the developer — they've answered.
+                vals['idle_check_at'] = False
+            else:
+                # Keep checking: a block left open all day is its own problem.
+                vals['idle_check_at'] = fields.Datetime.now() + timedelta(minutes=IDLE_CHECK_MIN)
+
+            sess.write(vals)
+            return {'status': True, 'reason': reason, 'note': note,
+                    'admins_notified': admins_notified,
+                    'started_at': (sess.nontask_started_at.strftime('%Y-%m-%d %H:%M:%S')
+                                   if sess.nontask_started_at else '')}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"workday_idle_reason: {e}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_workday/end_nontask', type='json', auth='user', methods=['POST'], csrf=False)
+    def workday_end_nontask(self, **params):
+        """Close the open Meeting/Break block ([End] on the board pill).
+
+        Starting a task closes it automatically (see kra.kpi.start_task); this is
+        for the case a task ISN'T started next — e.g. the meeting ends and they
+        still have nothing to work on. `ask_again` tells the app to re-open the
+        same popup, so 'I have no tasks' is one tap rather than a 10-min wait.
+        """
+        try:
+            user = request.env.user
+            sess = request.env['kpi.work.session'].sudo()._get_or_open_today(user=user)
+            closed = sess._close_nontask_block()
+            return {'status': True, 'closed': closed,
+                    'ask_again': not sess._has_running_task()}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"workday_end_nontask: {e}")
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_workday/end', type='json', auth='user', methods=['POST'], csrf=False)
@@ -3340,6 +3441,12 @@ class KpiReportsAPI(http.Controller):
                 ref_counter += 1
                 if t.get('related_req_ref'):
                     vals['related_req_ref'] = t['related_req_ref']
+                # The client's reason / detail for this task. This was silently
+                # dropped before, which is why the Client Task Queue's Description
+                # box was always empty for uploaded tasks even though it renders it.
+                # (Mirrors /kpi_completion_cert/create_task_from_doc.)
+                if t.get('description'):
+                    vals['description'] = t['description']
                 if file_data:
                     if doc_type == 'update':
                         vals['updates_document'] = file_data

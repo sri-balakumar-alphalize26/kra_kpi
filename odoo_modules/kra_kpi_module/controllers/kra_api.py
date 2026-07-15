@@ -667,6 +667,149 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         return {'status': True, 'task': self._serialize_task(kpi)}
 
+    @http.route('/kra_kpi/task/details', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_task_details(self, **params):
+        """Task meta + its uploads, for the app's KPI Details popup.
+
+        One round-trip on purpose: the web detail pane (kpi_action.js) fans out to
+        seven sequential calls, which is fine on a desk and miserable on a phone.
+        The app already holds the meta in memory from /kra_kpi/tasks/get, so the
+        payload it actually needs from here is `manuals` — the previous uploads a
+        developer opens the popup to check — but the task is re-serialized too so
+        the popup can refresh stale card data in the same trip.
+
+        Access: _may_view_kpi_details — admin/coordinator any, developer own, client never.
+        """
+        kpi_id = int(params.get('kpi_id') or 0)
+        if not kpi_id:
+            return {'status': False, 'message': 'kpi_id required'}
+        kpi = request.env['kra.kpi'].sudo().browse(kpi_id)
+        if not kpi.exists():
+            return {'status': False, 'message': 'Task not found'}
+        denied = self._may_view_kpi_details(kpi)
+        if denied:
+            return {'status': False, 'message': denied}
+
+        Env = request.env
+        manuals = Env['kpi.user.manual'].sudo().search(
+            [('kpi_id', '=', kpi_id)], order='upload_date desc')
+        progress = Env['kpi.progress'].sudo().search(
+            [('kpi_id', '=', kpi_id)], order='create_date desc')
+        gh = Env['kpi.github.link'].sudo().search(
+            [('kpi_id', '=', kpi_id)], order='create_date desc')
+        hist = Env['kpi.reassignment.history'].sudo().search(
+            [('kpi_id', '=', kpi_id)], order='reassignment_date desc')
+
+        # Related links: progress-level + task-level, each classified by url.
+        # Mirrors /task_documents/details so the two panes agree.
+        categorize = Env['kpi.backup'].sudo()._categorize_link
+        links = []
+        for p in progress:
+            try:
+                for l in json.loads(p.related_links or '[]'):
+                    links.append({
+                        'url': l, 'kind': categorize(l),
+                        'added_by': p.employee_name or '',
+                        'added_date': convert_to_user_tz(p.create_date),
+                        # Which update carried this link — lets the app's
+                        # "View note" jump to it. False = task-level link.
+                        'progress_id': p.id,
+                    })
+            except Exception:
+                pass  # one bad row must not take out the whole detail payload
+        try:
+            for l in json.loads(kpi.related_links or '[]'):
+                links.append({
+                    'url': l, 'kind': categorize(l),
+                    'added_by': 'Task Creator',
+                    'added_date': convert_to_user_tz(kpi.create_date) if kpi.create_date else '',
+                    'progress_id': False,
+                })
+        except Exception:
+            pass
+
+        user = request.env.user
+        is_admin = self._is_kra_admin(user)
+        is_assignee = bool(kpi.user_id and kpi.user_id.id == user.id)
+        # Type derived from the name prefix — same rule as /kpi_action/details.
+        nm, ref = (kpi.name or ''), (kpi.external_ref or '').upper()
+        if nm.startswith('[Update]') or ref.startswith('UPD'):
+            kind = 'update'
+        elif nm.startswith('[Bug]') or ref.startswith('BUG'):
+            kind = 'bug'
+        else:
+            kind = 'requirement'
+
+        return {
+            'status': True,
+            'task': self._serialize_task(kpi),
+            # Fields the board's task payload (map_rec) doesn't carry but the
+            # detail view shows — kept in `meta` so map_rec stays untouched and
+            # the board's list call doesn't get heavier for every task.
+            'meta': {
+                'external_ref': kpi.external_ref or '',
+                'kind': kind,
+                'kra': kpi.kra_id.name or '',
+                'checklist': kpi.checklist or '',
+                'guidelines': kpi.guidelines or '',
+                'points': kpi.points or 0,
+                'is_manager': is_admin,
+                'is_assignee': is_assignee,
+                # Mirrors the web's Complete panel gate (kpi_action.js): the state
+                # must be workable AND you must be the assignee or a manager.
+                'can_complete': (kpi.task_state in ('in_progress', 'paused', 'hold', 'rework')
+                                 and (is_assignee or is_admin)),
+            },
+            'manuals': [{
+                'id': m.id,
+                'file_name': m.file_name or '',
+                # `description` is the mandatory "reason" the uploader typed.
+                'reason': m.description or '',
+                'uploaded_by': m.uploader_name or '',
+                'upload_date': convert_to_user_tz(m.upload_date),
+                'related_links': m.related_links or '[]',
+            } for m in manuals],
+            'progress': [{
+                'id': p.id,
+                'summary': p.summary or '',
+                'file_name': p.file_name or '',
+                'has_file': bool(p.uploaded_file),
+                'employee_name': p.employee_name or '',
+                'create_date': convert_to_user_tz(p.create_date),
+                'related_links': p.related_links or '[]',
+            } for p in progress],
+            'github': [{
+                'id': g.id,
+                'github_url': g.github_url or '',
+                'branch_name': g.branch_name or '',
+                'employee_name': g.employee_name or '',
+                'create_date': convert_to_user_tz(g.create_date),
+            } for g in gh],
+            'reassignments': [{
+                'id': h.id,
+                'previous_assignee': h.previous_assignee_name or '',
+                'new_assignee': h.new_assignee_name or '',
+                'reassigned_by': h.reassigned_by_name or '',
+                'reassignment_date': convert_to_user_tz(h.reassignment_date),
+                'reason': h.reassignment_reason or '',
+                'time_spent': h.time_spent_display or '',
+            } for h in hist],
+            # The web's "Attached Files" / "Documents" panes — both render the same
+            # thing: the files carried by progress updates. One list here.
+            'files': [{
+                'id': p.id,
+                'file_name': p.file_name or '',
+                'uploaded_by': p.employee_name or '',
+                'upload_date': convert_to_user_tz(p.create_date),
+            } for p in progress if p.uploaded_file],
+            # The web's "Drive & Links" pane. Links are stored as bare URL strings
+            # with no type, so the ONLY way to group them is to read the url —
+            # done via the module's existing classifier (kpi.backup._categorize_link:
+            # Repository | Google Drive | YouTube | Cloud Storage | Email | Other),
+            # reused rather than re-implemented so the app and web can't disagree.
+            'links': links,
+        }
+
     # ================================================================== #
     # In-app notifications feed (kpi.notification)                        #
     # ================================================================== #
@@ -1517,6 +1660,7 @@ class KraKpiAPI(http.Controller):
                 'client_approval_minutes': c.client_approval_minutes or 5,
                 'queue_nudge_minutes': c.queue_nudge_minutes or 30,
                 'urgent_nudge_minutes': c.urgent_nudge_minutes or 5,
+                'standard_workday_hours': c.standard_workday_hours or 9.0,
                 'country_id': c.kpi_country_id.id if c.kpi_country_id else False,
                 'country_dial_code': dial,
                 'mobile_length': length,
@@ -1558,6 +1702,23 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         request.env.company.sudo().client_approval_minutes = max(1, int(params.get('minutes') or 5))
         return {'status': True}
+
+    @http.route('/kpi_config/set_standard_hours', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_standard_hours(self, **params):
+        """A normal working day, in hours. The End Workday summary compares it
+        against PRESENCE: at/over reads green, under reads red."""
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            hours = float(params.get('hours') or 9.0)
+        except (TypeError, ValueError):
+            hours = 9.0
+        # Clamped to a sane day: 0 would make every day green and >24 every day
+        # red, and either makes the whole green/red signal meaningless.
+        hours = max(0.5, min(24.0, hours))
+        request.env.company.sudo().standard_workday_hours = hours
+        return {'status': True, 'hours': hours}
 
     @http.route('/kpi_config/set_queue_nudge', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_set_queue_nudge(self, **params):
@@ -1660,12 +1821,38 @@ class KraKpiAPI(http.Controller):
         kpi.unlink()
         return {"status": True, "message": "KPI deleted"}
     
+    def _may_view_kpi_details(self, kpi):
+        """Who may read a task's KPI details.
+
+        Admin / coordinator / owner: any task.  Developer: only tasks they are on
+        (effective_contributor_ids already unions user_id + contributors + role
+        lists — see kpi.py:98).  Client: never — they file requests and approve
+        developers, they do not read the internal task record.
+
+        Returns None when allowed, else the refusal message.
+        """
+        user = request.env.user
+        is_admin = self._is_kra_admin(user)
+        if user.has_group('kra_kpi_module.group_kra_client') and not is_admin:
+            return 'Not authorized'
+        if is_admin:
+            return None
+        if user.id in kpi.sudo().effective_contributor_ids.ids:
+            return None
+        return 'Not authorized'
+
     @http.route('/kpi_action/details', type='json', auth='user')
     def get_kpi_action_details(self, id):
         kpi = request.env['kra.kpi'].sudo().browse(int(id))
 
         if not kpi.exists():
             return {"error": "KPI not found"}
+
+        # sudo() above bypasses the record rules, so the id must be authorised
+        # explicitly — otherwise any logged-in user can read any task by id.
+        denied = self._may_view_kpi_details(kpi)
+        if denied:
+            return {"error": denied}
 
         # Derive type from name prefix (mirrors bulk-create + add_task logic)
         nm = kpi.name or ''
@@ -1931,6 +2118,46 @@ class KraKpiAPI(http.Controller):
         except Exception as e:
             _logger.error(f"Error fetching progress updates: {str(e)}")
             return {'status': False, 'message': str(e)}
+    @http.route('/kpi/progress/file_b64', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_progress_file_b64(self, **params):
+        """A progress file's bytes as base64, for the APP's View / Download.
+
+        The /view and /download routes above are type='http': fine in a browser
+        that carries the session cookie, useless to the app. React Native's image
+        loader and any external browser handed such a URL send NO cookie, so they
+        silently land on the login page instead of the file (the same trap that
+        broke the client-ZIP download). Fetching over the authenticated JSON
+        channel is the fix, exactly as /kpi_client_workspace/generate_zip_b64 does.
+
+        Gated by the task's own rule: admin/coordinator any, developer own,
+        client never — a file must not be readable where its task isn't.
+        """
+        pid = int(params.get('progress_id') or 0)
+        if not pid:
+            return {'status': False, 'message': 'progress_id required'}
+        prog = request.env['kpi.progress'].sudo().browse(pid)
+        if not prog.exists() or not prog.uploaded_file:
+            return {'status': False, 'message': 'File not found'}
+        denied = self._may_view_kpi_details(prog.kpi_id)
+        if denied:
+            return {'status': False, 'message': denied}
+
+        file_name = prog.file_name or 'file'
+        mime_type, _ = mimetypes.guess_type(file_name)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
+        data_b64 = prog.uploaded_file
+        if isinstance(data_b64, bytes):
+            data_b64 = data_b64.decode()
+        return {
+            'status': True,
+            'file_name': file_name,
+            'mimetype': mime_type,
+            'data_b64': data_b64,
+            # Decoded size, i.e. what actually lands on disk — base64 is ~+33%.
+            'size': len(base64.b64decode(prog.uploaded_file)),
+        }
+
     @http.route('/kpi/progress/view', type='http', auth='user', methods=['GET'])
     def view_progress_file(self, progress_id, **kwargs):
         """View a progress update file inline (for viewing in browser)"""
@@ -2056,6 +2283,40 @@ class KraKpiAPI(http.Controller):
         except Exception as e:
             _logger.error(f"Error listing user manuals: {str(e)}")
             return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi/manual/file_b64', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_manual_file_b64(self, **params):
+        """A manual's bytes as base64, for the APP's View / Download.
+
+        Same reasoning as /kpi/progress/file_b64: the /view and /download routes
+        below are type='http' and depend on the session cookie, which the app's
+        image loader and any external browser do NOT send — they'd land on the
+        login page instead of the file. Gated by the task's own rule.
+        """
+        mid = int(params.get('manual_id') or 0)
+        if not mid:
+            return {'status': False, 'message': 'manual_id required'}
+        man = request.env['kpi.user.manual'].sudo().browse(mid)
+        if not man.exists() or not man.manual_file:
+            return {'status': False, 'message': 'File not found'}
+        denied = self._may_view_kpi_details(man.kpi_id)
+        if denied:
+            return {'status': False, 'message': denied}
+
+        file_name = man.file_name or 'manual'
+        mime_type, _ = mimetypes.guess_type(file_name)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
+        data_b64 = man.manual_file
+        if isinstance(data_b64, bytes):
+            data_b64 = data_b64.decode()
+        return {
+            'status': True,
+            'file_name': file_name,
+            'mimetype': mime_type,
+            'data_b64': data_b64,
+            'size': len(base64.b64decode(man.manual_file)),
+        }
 
     @http.route('/kpi/manual/view/<int:manual_id>', type='http', auth='user', methods=['GET'])
     def view_user_manual(self, manual_id, **kwargs):
@@ -2658,24 +2919,39 @@ class KraKpiAPI(http.Controller):
                     ('related_links', '!=', False)
                 ])
                 
+                # Links carry no type in storage (a bare JSON array of URL strings),
+                # so "is this a Drive link?" can only be answered by reading the URL.
+                # Reuses the module's existing classifier so the count here and the
+                # grouping in /task_documents/details can never disagree.
+                categorize = request.env['kpi.backup'].sudo()._categorize_link
+                DRIVE_KINDS = ('Google Drive', 'Cloud Storage')
+
                 link_count = 0
+                drive_count = 0
                 for prog in progress_with_links:
                     try:
                         links = json.loads(prog.related_links or '[]')
                         link_count += len(links)
+                        drive_count += sum(1 for l in links if categorize(l) in DRIVE_KINDS)
                     except:
                         pass
-                
+
                 # Also count task-level related links
                 try:
                     task_links = json.loads(kpi.related_links or '[]')
                     link_count += len(task_links)
+                    drive_count += sum(1 for l in task_links if categorize(l) in DRIVE_KINDS)
                 except:
                     pass
-                
+
                 doc_count = len(progress_files)
                 github_count = len(github_links)
                 manual_count = len(user_manuals)
+                # The task's own attachments — always existed on the record, never
+                # surfaced here, so tasks holding only a requirement doc looked empty.
+                task_doc_count = sum(1 for f in (kpi.requirement_document,
+                                                 kpi.updates_document,
+                                                 kpi.signed_certificate) if f)
                 
                 # ✅ CHANGED: Include ALL tasks regardless of document count
                 tasks.append({
@@ -2688,7 +2964,10 @@ class KraKpiAPI(http.Controller):
                     'link_count': link_count,
                     'github_count': github_count,
                     'manual_count': manual_count,
-                    'has_attachments': (doc_count + link_count + github_count + manual_count) > 0,
+                    'drive_count': drive_count,
+                    'task_doc_count': task_doc_count,
+                    'has_attachments': (doc_count + link_count + github_count
+                                        + manual_count + task_doc_count) > 0,
                 })
             
             # ✅ Get unique assignees for filter dropdown
@@ -2742,33 +3021,46 @@ class KraKpiAPI(http.Controller):
                     'download_url': f'/kpi/progress/download?progress_id={prog.id}',
                 })
             
-            # Get related links
+            # Get related links.
+            #
+            # Links are stored as a plain JSON array of BARE URL STRINGS — there is
+            # no type, label or per-link author anywhere in the model. So a Drive
+            # link and any other link are indistinguishable in storage, and the only
+            # way to group them is to read the URL. `kind` below does exactly that,
+            # via the module's EXISTING classifier (kpi.backup._categorize_link →
+            # 'Repository' | 'Google Drive' | 'YouTube' | 'Cloud Storage' | 'Email' |
+            # 'Other'). Reused rather than re-implemented so the two can't drift;
+            # it's a pure function of the url, so calling it on an empty recordset
+            # is fine.
+            categorize = request.env['kpi.backup'].sudo()._categorize_link
             links = []
-            
+
             # From progress updates
             progress_with_links = request.env['kpi.progress'].sudo().search([
                 ('kpi_id', '=', int(task_id)),
                 ('related_links', '!=', False)
             ], order='create_date desc')
-            
+
             for prog in progress_with_links:
                 try:
                     link_list = json.loads(prog.related_links or '[]')
                     for link in link_list:
                         links.append({
                             'url': link,
+                            'kind': categorize(link),
                             'added_by': prog.employee_name,
                             'added_date': convert_to_user_tz(prog.create_date),
                         })
                 except:
                     pass
-            
+
             # From task-level related links
             try:
                 task_links = json.loads(kpi.related_links or '[]')
                 for link in task_links:
                     links.append({
                         'url': link,
+                        'kind': categorize(link),
                         'added_by': 'Task Creator',
                         'added_date': convert_to_user_tz(kpi.create_date) if kpi.create_date else '',
                     })
@@ -2807,13 +3099,53 @@ class KraKpiAPI(http.Controller):
                     'download_url': f'/kpi/manual/download/{manual.id}',
                 })
             
+            # The task's OWN documents. These are real attachments that have always
+            # been on kra.kpi (requirement / updates / signed certificate) but no
+            # route ever returned them, so the Documents screen — the one place you'd
+            # look for a task's documents — couldn't show them at all.
+            # Downloads reuse the existing /kpi_completion_cert/download_doc route,
+            # which already serves all three doc_types.
+            task_docs = []
+            if kpi.requirement_document:
+                task_docs.append({
+                    'kind': 'Requirement',
+                    'file_name': kpi.requirement_document_name or 'requirement',
+                    'note': (('Version ' + kpi.requirement_version) if kpi.requirement_version else ''),
+                    'download_url': f'/kpi_completion_cert/download_doc?kpi_id={kpi.id}&doc_type=requirement',
+                })
+            if kpi.updates_document:
+                task_docs.append({
+                    'kind': 'Updates & Errors',
+                    'file_name': kpi.updates_document_name or 'updates',
+                    'note': '',
+                    'download_url': f'/kpi_completion_cert/download_doc?kpi_id={kpi.id}&doc_type=updates',
+                })
+            if kpi.signed_certificate:
+                task_docs.append({
+                    'kind': 'Signed Certificate',
+                    'file_name': kpi.signed_certificate_name or 'signed_certificate.pdf',
+                    'note': (('Signed ' + str(kpi.signed_certificate_date))
+                             if kpi.signed_certificate_date else ''),
+                    'download_url': f'/kpi_completion_cert/download_doc?kpi_id={kpi.id}&doc_type=signed',
+                })
+
             return {
                 'status': True,
+                # Context for the detail header — without these the screen showed
+                # only name/assignee/priority, which isn't enough to know WHICH task
+                # you're looking at or what it's for.
+                'task': {
+                    'external_ref': kpi.external_ref or '',
+                    'related_req_ref': kpi.related_req_ref or '',
+                    'delivery_version': kpi.delivery_version or '',
+                    'description': kpi.description or '',
+                },
                 'documents': {
                     'files': files,
                     'links': links,
                     'github': github,
                     'manuals': manuals,
+                    'task_docs': task_docs,
                 }
             }
         except Exception as e:
@@ -2821,11 +3153,14 @@ class KraKpiAPI(http.Controller):
             return {
                 'status': False,
                 'message': str(e),
+                # Same shape as the success path — the UI reads these keys blindly.
+                'task': {},
                 'documents': {
                     'files': [],
                     'links': [],
                     'github': [],
                     'manuals': [],
+                    'task_docs': [],
                 }
             }
 

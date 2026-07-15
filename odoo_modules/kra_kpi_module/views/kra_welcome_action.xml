@@ -1,0 +1,11 @@
+<odoo>
+    <!-- The landing page for the KRA / KPI app menu. Referenced by menu_kra_root
+         in views/menu.xml, so this file MUST load before menu.xml (see the data
+         list in __manifest__.py). Without an action on the root menu, Odoo picks
+         the first visible child's action instead — which is how everyone ended up
+         on "Task Related Documents". -->
+    <record id="action_kra_welcome" model="ir.actions.client">
+        <field name="name">KRA / KPI</field>
+        <field name="tag">kra_kpi_welcome</field>
+    </record>
+</odoo>

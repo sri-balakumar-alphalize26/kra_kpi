@@ -664,6 +664,23 @@ class KpiWorkflow(models.Model):
         self._check_single_task_limit()
         prev = {rec.id: rec.task_state for rec in self}
         result = super().start_task()
+        # Starting work ends any open Meeting/Break block and stops the idle
+        # chasing — the developer is plainly working now, so there's nothing to
+        # ask and nothing to tell the admins.
+        #
+        # Closed at `now`, the same instant super().start_task() stamped
+        # timer_start_datetime: the block ends exactly where the task begins —
+        # no overlap, no gap. Never raises: a bookkeeping failure must not stop
+        # someone starting work.
+        try:
+            Session = self.env['kpi.work.session'].sudo()
+            sess = Session.search([('user_id', '=', self.env.user.id),
+                                   ('state', '=', 'open')], limit=1)
+            if sess:
+                sess._close_nontask_block(at=fields.Datetime.now())
+                sess._stop_idle_tracking('task started')
+        except Exception as exc:
+            _logger.warning("closing non-task block on start failed: %s", exc)
         for rec in self:
             prev_state = prev.get(rec.id)
             event = 'start_prep' if prev_state == 'pre_approval_partial' else 'start'

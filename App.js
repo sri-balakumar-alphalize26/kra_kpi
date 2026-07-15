@@ -278,6 +278,17 @@ function AppInner() {
     // task ACTIONS are off everywhere (read-only). Everything else works.
     const workdayLocked = devLocked && !devPaired;
 
+    // End Workday un-pairs the device server-side (action_end_day → _unpair), so
+    // flip to read-only immediately rather than leaving live action buttons on
+    // screen until the 5s pairing poll catches up. Cache it too, so the mode is
+    // still right if they go offline before the next successful request.
+    const onWorkdayEnded = () => {
+      if (!devLocked) return;              // admins/clients are never locked
+      log.info('workday ended → read-only');
+      setDevPaired(false);
+      saveRoleState(user?.uid, { kpiRole: 'developer', paired: false });
+    };
+
     // Until the role gate resolves, render a neutral loader — NEVER Home. This
     // stops a developer from seeing a flash of Home before the PIN gate loads.
     if (!gateReady) {
@@ -317,6 +328,7 @@ function AppInner() {
         <KpiActionBoard
           onBack={home} focusTaskId={focusTaskId} onFocusHandled={() => setFocusTaskId(null)}
           workdayLocked={workdayLocked} onNeedPair={() => setAppScreen('startworking')}
+          onWorkdayEnded={onWorkdayEnded}
         />
       );
     if (appScreen === 'owner')
@@ -345,16 +357,9 @@ function AppInner() {
       return <ReassignmentHistory onBack={home} />;
     if (appScreen === 'taskqueue')
       return <ClientTaskQueue onBack={home} />;
-    if (appScreen === 'startworking')
-      // Locked developer: no back button (they must pair); give a logout escape.
-      // Non-locked (shouldn't normally reach here): allow back to Home.
-      return (
-        <StartWorkingScreen
-          onBack={devLocked ? null : home}
-          onLogout={logout}
-          onPaired={() => setAppScreen('home')}
-        />
-      );
+    // (A second `appScreen === 'startworking'` branch used to sit here. It was
+    // unreachable — the live one above returns first — and still carried the
+    // retired "locked developer: no back button" rule, contradicting it.)
     // Upload screens share one component, differing only by docType.
     if (appScreen.startsWith('upload:'))
       return <UploadAmendments onBack={home} docType={appScreen.split(':')[1]} />;
@@ -365,6 +370,7 @@ function AppInner() {
         <KpiActionBoard
           onBack={home} focusStatus={appScreen.split(':')[1]}
           workdayLocked={workdayLocked} onNeedPair={() => setAppScreen('startworking')}
+          onWorkdayEnded={onWorkdayEnded}
         />
       );
     return (

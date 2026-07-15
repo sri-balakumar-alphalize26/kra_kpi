@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Every 5 minutes, two jobs in one sweep (models/kpi_work_session.py
+             _cron_check_idle_developers):
+
+             1. A workday is open but nothing is in progress → ask the DEVELOPER
+                why (Meeting / Break / I have no tasks). Deliberately NOT the
+                admin: a start at 09:30 with a meeting at 09:31 is normal, and
+                reporting it would be a false alarm. Asked every IDLE_CHECK_MIN
+                (10), capped at IDLE_CHECK_MAX (3) so it can't nag.
+
+             2. Admins HAVE been told a developer has no tasks → repeat every
+                NO_TASK_NUDGE_MIN (15) while the notification stays UNREAD; the
+                moment any admin reads it, the repeats stop. Same rule as the
+                Client Task Queue nudge.
+
+             The 5-minute interval is just the sweep rate — the real timing lives
+             per-session in idle_check_at / no_task_nudge_at. -->
+        <record id="ir_cron_kpi_idle_check" model="ir.cron">
+            <field name="name">KRA/KPI: Ask idle developers, then tell admins about no-task devs</field>
+            <field name="model_id" ref="model_kpi_work_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_check_idle_developers()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

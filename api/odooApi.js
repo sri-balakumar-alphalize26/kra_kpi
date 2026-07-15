@@ -143,7 +143,15 @@ export async function callKw(baseUrl, model, method, args = [], kwargs = {}) {
 // return { result: ... }. Relies on the session cookie from authenticate().
 // `timeout` overrides the default 10s window (e.g. AI suggestions / bulk writes
 // that legitimately take longer).
-export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS, db = null) {
+// `onProgress(sentBytes, totalBytes)` — optional. Fires while the request body
+// is uploaded, so a file upload can show a live percentage.
+//
+// The module notes elsewhere that "base64-in-JSON can't" report progress — that
+// is true of the WEB's OWL rpc() helper, but axios uses XHR under React Native
+// and RN implements xhr.upload.onprogress, so it works here on the plain JSON
+// route with no multipart needed. NOTE: `total` is the BASE64 body (~+33% of the
+// file), so drive any bar off these numbers rather than the raw file size.
+export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS, db = null, onProgress = null) {
   const base = normalizeUrl(baseUrl);
   log.info('jsonRpc →', path, log.redact(params));
   // Pre-login (public) routes have no session cookie yet, so on a multi-db
@@ -151,10 +159,16 @@ export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS, 
   const headers = db ? { ...JSONRPC_HEADERS, 'X-Odoo-Database': db } : JSONRPC_HEADERS;
   let res;
   try {
+    const cfg = { headers, timeout, withCredentials: true };
+    if (onProgress) {
+      cfg.onUploadProgress = (e) => {
+        try { onProgress(e.loaded || 0, e.total || 0); } catch (_) {}
+      };
+    }
     res = await axios.post(
       `${base}${path}`,
       jsonrpcBody(params),
-      { headers, timeout, withCredentials: true }
+      cfg
     );
   } catch (err) {
     log.error('jsonRpc ✗ network/http error', path, err?.message);
@@ -167,6 +181,40 @@ export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS, 
   }
   log.info('jsonRpc ←', path, 'ok');
   return res.data?.result;
+}
+
+// POST multipart/form-data to an @http.route(type='http') endpoint — the way the
+// web uploads a progress file (/kpi/progress/upload_file). Two reasons to prefer
+// this over base64-in-JSON for files: the file streams straight from disk (no
+// ~+33% base64 inflation and no whole-file string in memory), and that route
+// accepts 50 MB where the JSON one is only meant for small payloads.
+//
+// These routes reply with request.make_json_response(...) — a PLAIN JSON body,
+// NOT the JSON-RPC {result:...} envelope — so the body is returned as-is.
+// Auth is the session cookie, same as jsonRpc.
+export async function httpUpload(baseUrl, path, formData, timeout = 120000, onProgress = null) {
+  const base = normalizeUrl(baseUrl);
+  log.info('httpUpload →', path);
+  const cfg = {
+    timeout,
+    withCredentials: true,
+    // Let the runtime set Content-Type so it can add the multipart boundary.
+    headers: { 'Content-Type': 'multipart/form-data' },
+  };
+  if (onProgress) {
+    cfg.onUploadProgress = (e) => {
+      try { onProgress(e.loaded || 0, e.total || 0); } catch (_) {}
+    };
+  }
+  let res;
+  try {
+    res = await axios.post(`${base}${path}`, formData, cfg);
+  } catch (err) {
+    log.error('httpUpload ✗ network/http error', path, err?.message);
+    throw err;
+  }
+  log.info('httpUpload ←', path, { status: res.data?.status });
+  return res.data;
 }
 
 // Map a network/HTTP error to a short, user-friendly message.

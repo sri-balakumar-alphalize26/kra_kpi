@@ -18,9 +18,12 @@
         "data/kpi_notification_retry_cron.xml",
         "data/kpi_notification_cleanup_cron.xml",
         "data/kpi_queue_nudge_cron.xml",
+        "data/kpi_idle_check_cron.xml",
         "data/kpi_urgent_nudge_cron.xml",
         "data/kpi_auto_away_cron.xml",
         "views/wa_approval_templates.xml",
+        # Must load BEFORE menu.xml — menu_kra_root references this action.
+        "views/kra_welcome_action.xml",
         "views/client_action.xml",
         "views/kpi_action_screen.xml",
         "views/kpi_pair_gate_views.xml",
@@ -59,6 +62,8 @@
             # Existing JS files
             "kra_kpi_module/static/src/js/router.js",
             "kra_kpi_module/static/src/js/main.js",
+            # Landing page for the KRA / KPI root menu (see kra_welcome_action.xml).
+            "kra_kpi_module/static/src/components/kpi_welcome/kpi_welcome.js",
             "kra_kpi_module/static/src/components/dashboard/dashboard.js",
             "kra_kpi_module/static/src/components/kra_tree/kra_tree.js",
             "kra_kpi_module/static/src/components/kra_tree/kra_node.js",

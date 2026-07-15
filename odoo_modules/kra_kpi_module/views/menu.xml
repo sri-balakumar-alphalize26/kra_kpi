@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Root Menu: Visible to developers and admins; client portal users do NOT see this. -->
+    <!-- Root Menu: Visible to developers and admins; client portal users do NOT see this.
+         The action MATTERS: without one, Odoo promotes the first visible child's
+         action to be the app's (web/models/ir_ui_menu.py walks children[0]), which
+         made the landing page role-dependent — most users opened straight onto
+         "Task Related Documents". Pointing the root at the welcome screen stops
+         that promotion for every role. -->
     <menuitem id="menu_kra_root"
               name="KRA / KPI"
               sequence="10"
+              action="kra_kpi_module.action_kra_welcome"
               groups="kra_kpi_module.group_kra_developer"/>
     
     <!-- KRA/KPI Master: Only Managers and Admin -->

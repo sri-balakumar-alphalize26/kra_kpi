@@ -61,6 +61,15 @@ class ResCompany(models.Model):
              "Nudging stops once an admin reads the notification (or the task resumes). "
              "Read by kra.kpi._cron_nudge_urgent_pause.")
 
+    standard_workday_hours = fields.Float(
+        string='Standard Workday (hours)',
+        default=9.0,
+        help="A normal working day. The End Workday summary compares it against "
+             "PRESENCE (wall clock, login→logout): at or over it reads green, under "
+             "it reads red. Note this is presence, not productive time — a long day "
+             "with little task work still reads green, which is why the summary shows "
+             "Productive next to it.")
+
     kpi_wa_sender_number = fields.Char(
         string='App OTP Sender (WhatsApp)',
         help="WhatsApp number shown to users as the sender of password-reset codes. "
