@@ -1,7 +1,7 @@
 // HOME — 369 ai.Biz dashboard. Matches the mockup exactly:
 // header (menu / 369 logo / bell+badge), "Hello, <name> 👋", Quick Actions grid,
 // Select View role cards, "Focus. Measure. Grow." banner, and a bottom tab bar.
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View, Text, Image, ScrollView, TouchableOpacity, StyleSheet, Dimensions,
   Alert, Modal, ActivityIndicator, Animated, Easing, StatusBar as RNStatusBar,
@@ -15,10 +15,14 @@ import { COLORS } from '../theme';
 import TabBar from '../components/TabBar';
 import CameraCaptureModal from '../components/CameraCaptureModal';
 import { createLogger } from '../api/logger';
-import { getConnection, saveSession, getQuickActions, saveQuickActions, getAvatar, saveAvatar, clearAvatar } from '../api/session';
+import { getConnection, saveSession, getQuickActions, saveQuickActions, getMenuOrder, saveMenuOrder, getAvatar, saveAvatar, clearAvatar } from '../api/session';
+import ReorderableMenu from '../components/ReorderableMenu';
 import { jsonRpc } from '../api/odooApi';
 import { fetchUnreadCount } from '../services/notifications';
 import { fetchTasks, groupIntoLanes } from '../services/kpiActions';
+// Clients aren't served by /kra_kpi/tasks/get (it returns nothing for them), so
+// their stats come from the same portal feed My Requests uses.
+import { getClientDashboard } from '../services/clientPortal';
 import { requestOtp, verifyOtp } from '../services/appAuth';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -50,11 +54,12 @@ const QUICK = [
   { label: 'Upload Requirements', lib: 'mc', name: 'file-document',    dest: 'upload:requirement', adminOnly: true,  bg: '#FEF3C7', fg: '#D97706' },
   { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true,  bg: '#FFEDD5', fg: '#EA580C' },
   { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true,  bg: '#FEE2E2', fg: '#DC2626' },
+  { label: 'Client Task Queue',  lib: 'mc',  name: 'inbox-arrow-down', dest: 'taskqueue',          adminOnly: true,  bg: '#FEF3C7', fg: '#D97706' },
   { label: 'Generate Client Files', lib: 'mc', name: 'folder-zip',     dest: 'clientfiles',        adminOnly: true,  bg: '#E0F2FE', fg: '#0284C7' },
   { label: 'Reassignment History', lib: 'mc', name: 'swap-horizontal', dest: 'reassignhistory',    adminOnly: true,  bg: '#F3E8FF', fg: '#9333EA' },
   { label: 'Login Management',   lib: 'mc',  name: 'account-key',      dest: 'loginmgmt',          adminOnly: true,  bg: '#EDE9FE', fg: '#7C3AED' },
   { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true,  bg: '#E2E8F0', fg: '#475569' },
-  { label: 'My Tasks',           lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  bg: '#DCFCE7', fg: '#16A34A' },
+  { label: 'My Requests',        lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  bg: '#DCFCE7', fg: '#16A34A' },
 ];
 
 // Home stats strip — live task-status counts, keyed to the Action Board lanes
@@ -252,7 +257,7 @@ function Greeting({ name }) {
   );
 }
 
-function HomeTab({ name, onOpen, uid }) {
+function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
   // Fetch the user's role so admin-only tiles can be hidden from regular users.
   // Default to admin=true optimistically until the role resolves, then correct —
   // but hold tile render until we know, to avoid a flash of admin tiles.
@@ -266,9 +271,16 @@ function HomeTab({ name, onOpen, uid }) {
         const { serverUrl } = await getConnection();
         if (!serverUrl) { setIsAdmin(true); setRole('admin'); return; } // offline demo → show all
         const info = await jsonRpc(serverUrl, '/kpi_user/info', {});
-        const admin = !!(info && (info.is_system || info.is_owner || info.is_admin));
-        const r = admin ? 'admin' : (info && info.is_client ? 'client' : 'developer');
-        log.info('home role', { admin, role: r, login: info?.login });
+        // The KRA/KPI role (kpi_role: admin|client|user) is the single source of
+        // truth — the same value Login Management's dropdown sets. 'user' is this
+        // screen's 'developer'. Falls back to the flags on an older server.
+        const kpiRole = (info && info.kpi_role) || '';
+        const admin = kpiRole ? kpiRole === 'admin'
+          : !!(info && (info.is_system || info.is_owner || info.is_admin));
+        const r = kpiRole
+          ? (kpiRole === 'admin' ? 'admin' : kpiRole === 'client' ? 'client' : 'developer')
+          : (admin ? 'admin' : (info && info.is_client ? 'client' : 'developer'));
+        log.info('home role', { kpi_role: kpiRole, admin, role: r, login: info?.login });
         setIsAdmin(admin);
         setRole(r);
       } catch (e) {
@@ -296,23 +308,45 @@ function HomeTab({ name, onOpen, uid }) {
     return () => { alive = false; };
   }, []);
 
-  // Live task-status counts for the stats strip. Reuses the Action Board data
-  // layer (fetchTasks + groupIntoLanes) — role-scoped, mock-safe offline.
+  // Live task-status counts for the stats strip.
   // null = still loading (cards show a spinner); {} on failure → cards show 0.
+  //
+  // Role decides the SOURCE. /kra_kpi/tasks/get is the developer/admin board feed
+  // and returns NOTHING for a client, so using it for everyone made every client's
+  // stats read 0 while they actually had tasks. Clients read the client portal
+  // dashboard instead — the same feed My Requests uses.
   const [lanes, setLanes] = useState(null);
   useEffect(() => {
+    if (!role) return undefined;        // wait for the role, or we'd pick the wrong source
     let alive = true;
     (async () => {
       try {
-        const { tasks } = await fetchTasks();
-        if (alive) setLanes(groupIntoLanes(tasks));
+        if (role === 'client') {
+          const d = await getClientDashboard('all');
+          // Count from the task list rather than the portal's `totals`: totals has
+          // no `awaiting_client` key (only all/assigned/in_progress/paused/
+          // partially_completed/completed), so that card would read 0 — the very
+          // bug being fixed. Counting task_state also guarantees Home agrees with
+          // the My Requests list, which derives its chips the same way.
+          // Shaped like groupIntoLanes' output so StatCard is untouched: it only
+          // ever reads `lanes[key].length`.
+          const kpis = d.kpis || [];
+          const asLanes = {};
+          CLIENT_STATS.forEach((k) => {
+            asLanes[k] = { length: kpis.filter((t) => t.task_state === k).length };
+          });
+          if (alive) setLanes(asLanes);
+        } else {
+          const { tasks } = await fetchTasks();
+          if (alive) setLanes(groupIntoLanes(tasks));
+        }
       } catch (e) {
         log.warn('home stats failed', e?.message);
         if (alive) setLanes({});
       }
     })();
     return () => { alive = false; };
-  }, []);
+  }, [role]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMounted, setDrawerMounted] = useState(false); // keep Modal up during close anim
@@ -347,8 +381,8 @@ function HomeTab({ name, onOpen, uid }) {
   };
 
   // Tiles the user's role is allowed to see (the full menu — always in the drawer).
-  // Role-aware: admin = everything (minus the client-only My Tasks); client = the two
-  // upload tiles + My Tasks; developer = the shared board (non-admin tiles).
+  // Role-aware: admin = everything (minus the client-only My Requests); client = the two
+  // upload tiles + My Requests; developer = the shared board (non-admin tiles).
   const roleTiles = isAdmin
     ? QUICK.filter((q) => q.dest !== 'mytasks')
     : role === 'client'
@@ -361,6 +395,19 @@ function HomeTab({ name, onOpen, uid }) {
   const [selectedKeys, setSelectedKeys] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
   const [draftKeys, setDraftKeys] = useState([]);
+
+  // Side-menu order — the user can drag the drawer items into any order they
+  // like (every role, not just admins). null = never reordered → natural order.
+  const [menuOrder, setMenuOrder] = useState(null);
+  const [menuEditing, setMenuEditing] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const saved = await getMenuOrder(uid);
+      if (alive) setMenuOrder(saved);
+    })();
+    return () => { alive = false; };
+  }, [uid]);
 
   useEffect(() => {
     let alive = true;
@@ -375,6 +422,24 @@ function HomeTab({ name, onOpen, uid }) {
   const gridTiles = selectedKeys
     ? roleTiles.filter((q) => selectedKeys.includes(q.dest))
     : roleTiles;
+
+  // Drawer tiles in the user's saved order. Anything not in the saved list (a
+  // newly added tile, or one that appeared with a role change) keeps its natural
+  // position at the end rather than vanishing.
+  const menuTiles = useMemo(() => {
+    if (!menuOrder) return roleTiles;
+    const left = new Map(roleTiles.map((t) => [t.dest, t]));
+    const out = [];
+    menuOrder.forEach((d) => { if (left.has(d)) { out.push(left.get(d)); left.delete(d); } });
+    left.forEach((t) => out.push(t));
+    return out;
+  }, [roleTiles, menuOrder]);
+
+  const onMenuOrder = useCallback(async (keys) => {
+    setMenuOrder(keys);
+    await saveMenuOrder(uid, keys);
+    log.info('menu order saved', { keys });
+  }, [uid]);
 
   const openEdit = () => {
     // Seed the draft from the current selection (or all, if not customized yet).
@@ -414,28 +479,44 @@ function HomeTab({ name, onOpen, uid }) {
       </Defs>
       <Rect x="0" y="0" width="100%" height="100%" fill="url(#homeBg)" />
     </Svg>
-    <ScrollView style={{ backgroundColor: 'transparent' }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
-      {/* Header */}
-      <View style={[s.header, { paddingTop: TOP }]}>
-        <TouchableOpacity onPress={openDrawer} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-          <Ionicons name="menu" size={28} color={COLORS.navy} />
-        </TouchableOpacity>
-        <Image source={require('../assets/logo369.png')} style={s.logo} resizeMode="contain" />
-        <TouchableOpacity onPress={() => onOpen('notifications')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-          <RingingBell active={unread > 0} />
-          {unread > 0 && (
-            <View style={s.badge}>
-              <Text style={s.badgeTxt}>{unread > 99 ? '99+' : unread}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
+    {/* Header — OUTSIDE the ScrollView on purpose, so the menu (☰) and the bell
+        stay put while the page scrolls. Same for every role (all roles render
+        this one component). */}
+    <View style={[s.header, { paddingTop: TOP }]}>
+      <TouchableOpacity onPress={openDrawer} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+        <Ionicons name="menu" size={28} color={COLORS.navy} />
+      </TouchableOpacity>
+      <Image source={require('../assets/logo369.png')} style={s.logo} resizeMode="contain" />
+      <TouchableOpacity onPress={() => onOpen('notifications')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+        <RingingBell active={unread > 0} />
+        {unread > 0 && (
+          <View style={s.badge}>
+            <Text style={s.badgeTxt}>{unread > 99 ? '99+' : unread}</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+    </View>
 
+    <ScrollView style={{ backgroundColor: 'transparent' }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
       {/* Greeting + Quick Actions animate in together on entry */}
       <Animated.View style={enterStyle}>
       <View style={{ paddingHorizontal: PAD, marginTop: 4 }}>
         <Greeting name={name} />
         <Text style={s.helloSub}>Track, Analyze & Improve your KPIs</Text>
+        {/* Workday not started → say so up front, right under the name, instead of
+            letting them discover it when a button is missing. Developer-only:
+            admins and clients are never locked. */}
+        {workdayLocked ? (
+          <View style={s.roBar}>
+            <Ionicons name="lock-closed" size={14} color={COLORS.red} />
+            <Text style={s.roTxt}>
+              Read-only — everything except Profile.{'\n'}Start your workday to work on tasks.
+            </Text>
+            <TouchableOpacity style={s.roBtn} onPress={onNeedPair} activeOpacity={0.85}>
+              <Text style={s.roBtnTxt}>Start Workday</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </View>
 
       {/* Stats strip — role-aware live task-status counts. Tapping a card opens
@@ -451,7 +532,9 @@ function HomeTab({ name, onOpen, uid }) {
               st={stat}
               count={lanes ? (lanes[stat.key] || []).length : null}
               index={i}
-              onPress={() => onOpen('status:' + stat.key)}
+              // A client has no Action Board (it loads 0 tasks for them), so their
+              // stats open My Requests instead of a dead-end status view.
+              onPress={() => onOpen(role === 'client' ? 'mytasks' : 'status:' + stat.key)}
             />
           ))}
         </View>
@@ -502,18 +585,36 @@ function HomeTab({ name, onOpen, uid }) {
               <Ionicons name="close" size={20} color={COLORS.navy} />
             </TouchableOpacity>
           </View>
-          <Text style={s.drawerLabel}>MENU</Text>
+          {/* MENU + the reorder pencil (sits under the X, opposite the label). */}
+          <View style={s.drawerLabelRow}>
+            <Text style={[s.drawerLabel, { marginBottom: 0, marginTop: 0 }]}>MENU</Text>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity
+              onPress={() => setMenuEditing((v) => !v)}
+              style={[s.menuEditBtn, menuEditing && s.menuEditBtnOn]}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name={menuEditing ? 'checkmark' : 'pencil'}
+                size={14}
+                color={menuEditing ? '#fff' : COLORS.primary}
+              />
+            </TouchableOpacity>
+          </View>
+          {menuEditing && (
+            <Text style={s.menuHint}>Hold an item for 3 seconds, then drag it to reorder.</Text>
+          )}
           <ScrollView showsVerticalScrollIndicator={false}>
             {isAdmin === null && <ActivityIndicator color={COLORS.primary} style={{ marginTop: 20 }} />}
-            {isAdmin !== null && roleTiles.map((q) => (
-              <TouchableOpacity key={q.label} style={s.drawerItem} onPress={() => onTile(q)} activeOpacity={0.6}>
-                <View style={[s.drawerIcon, { backgroundColor: q.bg }]}>
-                  <Icon lib={q.lib} name={q.name} size={20} color={q.fg} />
-                </View>
-                <Text style={s.drawerItemTxt}>{q.label}</Text>
-                <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
-              </TouchableOpacity>
-            ))}
+            {isAdmin !== null && (
+              <ReorderableMenu
+                items={menuTiles}
+                editing={menuEditing}
+                onPress={onTile}
+                onOrder={onMenuOrder}
+              />
+            )}
           </ScrollView>
         </Animated.View>
       </View>
@@ -582,6 +683,43 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
   const [logoutOpen, setLogoutOpen] = useState(false);
 
   const online = !!user?.serverUrl;
+
+  // KRA/KPI role (Admin / Client / User) — mirrors the "KRA / KPI Role" field on
+  // the Odoo user form. This is the app's OWN role, not the Odoo Role
+  // (User/Administrator), which is why a user can be an Odoo "User" but a KRA/KPI
+  // "Client". Resolved from /kpi_user/info, the same source the Home tiles use.
+  const [kpiRole, setKpiRole] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { serverUrl } = await getConnection();
+        if (!serverUrl) return;                       // offline demo → no badge
+        const info = await jsonRpc(serverUrl, '/kpi_user/info', {});
+        if (!alive || !info) return;
+        // Read the KRA/KPI role straight off the server (res.users.kpi_role:
+        // admin | client | developer) — the same single value Login Management's
+        // dropdown sets. No re-deriving from group flags: one field, one answer.
+        // `developer` is shown as "User", matching _compute_kpi_role's help text.
+        const BADGE = {
+          admin:     { label: 'Admin',  bg: '#EDE9FE', fg: '#6D28D9', icon: 'shield-checkmark' },
+          client:    { label: 'Client', bg: '#CFFAFE', fg: '#0E7490', icon: 'business' },
+          developer: { label: 'User',   bg: '#DBEAFE', fg: '#1D4ED8', icon: 'person' },
+        };
+        // Fallback to the flags only if the server predates kpi_role on this route.
+        const key = info.kpi_role
+          || ((info.is_system || info.is_owner || info.is_admin) ? 'admin'
+            : info.is_client ? 'client' : 'developer');
+        log.info('profile kpi role', {
+          kpi_role: info.kpi_role, resolved: key, login: info.login, status: info.status,
+        });
+        setKpiRole(BADGE[key] || BADGE.developer);   // never leave the badge blank
+      } catch (e) {
+        log.warn('profile role failed', e?.message);
+      }
+    })();
+    return () => { alive = false; };
+  }, [user?.uid]);
 
   // ── Profile photo (local-only) ─────────────────────────────────────────────
   // Stored as a base64 data URI on this device (AsyncStorage), so it's cleared on
@@ -761,7 +899,16 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
             </TouchableOpacity>
           </View>
           <Text style={s.profName}>{user?.name || 'User'}</Text>
-          <Text style={s.profSub}>{user?.username || user?.login || ''}</Text>
+          {/* The Odoo login used to sit here. Under the name we show ONLY the
+              KRA/KPI role — that's the role that means anything in this app.
+              The login is still listed under Connection Details below. */}
+          {/* KRA/KPI role — Admin / Client / User */}
+          {kpiRole ? (
+            <View style={[s.roleBadge, { backgroundColor: kpiRole.bg }]}>
+              <Ionicons name={kpiRole.icon} size={12} color={kpiRole.fg} />
+              <Text style={[s.roleBadgeTxt, { color: kpiRole.fg }]}>{kpiRole.label}</Text>
+            </View>
+          ) : null}
           <View style={[s.profPill, online ? s.profPillOn : s.profPillOff]}>
             <View style={[s.profDot, { backgroundColor: online ? '#4ADE80' : '#F59E0B' }]} />
             <Text style={s.profPillTxt}>{online ? 'Connected' : 'Offline'}</Text>
@@ -1006,7 +1153,12 @@ export default function HomeScreen({ user, onLogout, onOpen }) {
     <View style={s.root}>
       <StatusBar style="dark" />
       <View style={{ flex: 1 }}>
-        {tab === 'home'    && <HomeTab name={name} onOpen={onOpen} uid={user?.uid} />}
+        {tab === 'home'    && (
+          <HomeTab
+            name={name} onOpen={onOpen} uid={user?.uid}
+            workdayLocked={workdayLocked} onNeedPair={onNeedPair}
+          />
+        )}
         {tab === 'profile' && <ProfileTab user={user} onLogout={onLogout} avatar={avatar} setAvatar={setAvatar} />}
       </View>
       <TabBar active={tab} onChange={(t) => { log.info('tab switch', { from: tab, to: t }); setTab(t); }} onLogout={() => setLogoutOpen(true)} />
@@ -1139,6 +1291,12 @@ const s = StyleSheet.create({
   picNote: { fontSize: 12, color: COLORS.muted, lineHeight: 17, marginTop: 10, textAlign: 'center' },
   profName: { color: '#fff', fontSize: 23, fontWeight: '900', marginTop: 16, textAlign: 'center' },
   profSub: { color: '#C7D8F7', fontSize: 14, marginTop: 4, textAlign: 'center' },
+  // KRA/KPI role pill under the name (Admin / Client / User).
+  roleBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 9,
+    paddingHorizontal: 11, height: 24, borderRadius: 12,
+  },
+  roleBadgeTxt: { fontSize: 12, fontWeight: '900', letterSpacing: 0.3 },
   profPill: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 14, paddingHorizontal: 14, height: 30, borderRadius: 15, borderWidth: 1 },
   profPillOn: { backgroundColor: 'rgba(74,222,128,0.2)', borderColor: 'rgba(74,222,128,0.6)' },
   profPillOff: { backgroundColor: 'rgba(245,158,11,0.2)', borderColor: 'rgba(245,158,11,0.6)' },
@@ -1205,6 +1363,14 @@ const s = StyleSheet.create({
   drawerClose: { position: 'absolute', right: 0, top: 6, width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.85)', alignItems: 'center', justifyContent: 'center' },
   drawerLogo: { width: 130, height: 60, alignSelf: 'center' },
   drawerLabel: { fontSize: 12, fontWeight: '900', color: COLORS.muted, letterSpacing: 1.5, marginBottom: 12, marginTop: 6 },
+  // MENU label + the reorder pencil on the opposite side (under the X).
+  drawerLabelRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 12 },
+  menuEditBtn: {
+    width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#EEF3FF', borderWidth: 1, borderColor: '#DCE4F2',
+  },
+  menuEditBtnOn: { backgroundColor: COLORS.green, borderColor: COLORS.green },
+  menuHint: { fontSize: 11.5, color: COLORS.primary, marginTop: -6, marginBottom: 10, fontWeight: '600' },
   drawerItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: 12, marginBottom: 10, borderRadius: 14, backgroundColor: '#F5F8FD', borderWidth: 1, borderColor: '#EAF1FE' },
   drawerIcon: { width: 38, height: 38, borderRadius: 11, backgroundColor: '#EAF1FE', alignItems: 'center', justifyContent: 'center' },
   drawerItemTxt: { flex: 1, fontSize: 14.5, fontWeight: '800', color: COLORS.navy },

@@ -56,7 +56,8 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- Load-time reads ------------------------------------------------------
 
-// { is_client_only } — decides whether Hours/Min/Priority/Developer show.
+// { is_client_only } — decides whether the Developer picker shows (clients set
+// their own Hours/Min/Priority, but never assign a developer).
 export async function getUserInfo() {
   const base = await server();
   if (!base) { log.info('getUserInfo: no server → mock (is_client_only=false)'); return { isMock: true, is_client_only: false }; }
@@ -212,21 +213,30 @@ export async function templateUrl(docType) {
   return `${normalizeUrl(base)}/kpi_completion_cert/template/${name}`;
 }
 
-// Absolute URL for the admin "Generate & Download ZIP" of client document files
-// (type='http' GET stream → 3 XLSX zipped, Content-Disposition: attachment).
-// Mirrors the web kpi_client_workspace downloadUrl() exactly:
-//   /kpi_client_workspace/generate_zip?client_kra_id=..&version=..&include_data=0|1[&project_kra_id=..]
-// Built by hand (not URLSearchParams — its toString() is unreliable on RN).
-export async function clientFilesZipUrl({ clientKraId, projectKraId, version, includeData }) {
+// Admin "Generate Client Files" → the ZIP (3 XLSX) as base64.
+//
+// NOTE: we deliberately do NOT open the web's type='http' GET
+// (/kpi_client_workspace/generate_zip) in a browser: an external browser has its
+// own cookie jar, so it loses the app's Odoo session and Odoo redirects it to the
+// login page instead of downloading. This calls the JSON sibling route over the
+// same authenticated channel every other app call uses.
+// Returns { filename, data_b64, size }.
+export async function generateClientFilesZip({ clientKraId, projectKraId, version, includeData }) {
   const base = await server();
-  if (!base || !clientKraId) return '';
-  const q = [
-    `client_kra_id=${encodeURIComponent(clientKraId)}`,
-    `version=${encodeURIComponent(version || 'v1.0')}`,
-    `include_data=${includeData ? '1' : '0'}`,
-  ];
-  if (projectKraId) q.push(`project_kra_id=${encodeURIComponent(projectKraId)}`);
-  const url = `${normalizeUrl(base)}/kpi_client_workspace/generate_zip?${q.join('&')}`;
-  log.info('clientFilesZipUrl', { clientKraId, projectKraId: projectKraId || null, version: version || 'v1.0', includeData: !!includeData });
-  return url;
+  if (!base) throw new Error('Connect to a server to generate files');
+  if (!clientKraId) throw new Error('Please select a client');
+  const payload = {
+    client_kra_id: clientKraId,
+    project_kra_id: projectKraId || false,
+    version: version || 'v1.0',
+    include_data: includeData ? '1' : '0',
+  };
+  log.info('generateClientFilesZip → /kpi_client_workspace/generate_zip_b64', payload);
+  const res = await jsonRpc(base, '/kpi_client_workspace/generate_zip_b64', payload, LONG_TIMEOUT);
+  if (!res || res.status === false) {
+    log.error('generateClientFilesZip ✗', res?.message);
+    throw new Error(res?.message || 'Could not generate the ZIP');
+  }
+  log.info('generateClientFilesZip ←', { filename: res.filename, size: res.size });
+  return { filename: res.filename || 'client_files.zip', data_b64: res.data_b64 || '', size: res.size || 0 };
 }

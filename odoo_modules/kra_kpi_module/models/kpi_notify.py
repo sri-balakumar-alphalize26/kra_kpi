@@ -58,6 +58,37 @@ _PERSIST_EVENTS = {
     'task_auto_away',   # web went idle/asleep → task auto-paused → tell the dev's phone
     'workday_auto_closed',  # midnight cron closed a workday the dev left open
     'task_reassigned',  # tell the PREVIOUS assignee their task moved to someone else
+    # In-app client approval: the client must see the request in the app (this used
+    # to be WhatsApp-only, so nothing was ever persisted for it), and dev+admin must
+    # see the outcome. Persisting also gives them an Expo push for free.
+    'pre_approval_request',
+    'pre_approval_decided',
+    # A decision that lands AFTER the window closed (i.e. after auto-approve).
+    # The engine records it without reverting state, so without this the dev +
+    # admins would never learn a late reject happened.
+    'pre_approval_decided_late',
+    'client_task_queued',   # client submitted a task → admins (re-nudged while unread)
+    # Client rejected the assigned developer → task is back in the queue needing
+    # a new one. Carries the reason.
+    'client_task_rejected',
+    # Client paused their own approval countdown → tell the dev not to wait.
+    'pre_approval_held',
+    # Stage 2: admin approved the dev's work → the CLIENT must sign off. Was
+    # WhatsApp-only too, so clients got nothing in-app for it either.
+    'internal_approved',
+    # ── App-only migration (WhatsApp task messages are now OFF by default) ──
+    # Everything below used to be WhatsApp-only. With kpi_wa_task_notifications
+    # off, not persisting these would mean they reach NOBODY, so they move into
+    # the feed. Deliberately EXCLUDED as routine noise: start / start_prep /
+    # pause / resume / complete / workday_started / daily_summary — their
+    # _notify() calls simply become no-ops.
+    'internal_rejected',    # dev: your work was sent back → rework
+    'final_approved',       # client signed off → the task is done
+    'self_task_accepted',   # dev: admin accepted the task you created
+    'self_task_rejected',   # dev: admin sent your task back
+    'partial_timeout',      # client stayed silent → prep auto-started
+    'pre_approval_reminder',  # client: you still haven't approved
+    'urgent_pause',         # 🚨 dev needs help — re-nudged until an admin reads it
 }
 
 # Short human labels for the in-app notification title (the body reuses the
@@ -70,6 +101,165 @@ _NOTIF_TITLES = {
     'task_auto_away':      'Task paused — you went away',
     'workday_auto_closed': 'Workday auto-closed',
     'task_reassigned':     'Task reassigned',
+    'pre_approval_request': 'Approval needed',
+    'pre_approval_decided': 'Approval decided',
+    'pre_approval_decided_late': 'Late decision',
+    'client_task_queued':   'New client task queued',
+    'client_task_rejected': 'Task rejected — reassign',
+    'pre_approval_held':    'Client held approval',
+    'internal_approved':    'Your sign-off needed',
+    'internal_rejected':    'Rework needed',
+    'final_approved':       'Client signed off',
+    'self_task_accepted':   'Task accepted',
+    'self_task_rejected':   'Task sent back',
+    'partial_timeout':      "Client didn't respond",
+    'pre_approval_reminder': 'Approval reminder',
+    'urgent_pause':         '🚨 Urgent',
+}
+
+# App-shaped bodies for the in-app feed. The WhatsApp templates below are full of
+# wa.me tap-to-send links and `1-<token>` reply codes, which are meaningless (and
+# ugly) inside the app — there the client just taps Approve/Reject in My Tasks.
+# `_format_message` falls back to the WhatsApp body for events not listed here.
+# NOTE: `client_task_queued` has NO WhatsApp template on purpose — it is in-app
+# only, so `_notify` returns before the WhatsApp send (empty body).
+_APP_TEMPLATES = {
+    'pre_approval_request': (
+        "A task needs your approval:\n"
+        "📌 {title}\n"
+        "👤 Developer: {dev}\n"
+        "🏷 Project: {project}\n\n"
+        "Open My Tasks to Approve or Reject.\n"
+        "If you don't respond in time it is approved automatically."
+    ),
+    'pre_approval_decided': (
+        "{decision_emoji} Client decision: {decision_caps}\n"
+        "📌 {title}\n"
+        "👤 Developer: {dev} • Project: {project}\n"
+        "🗣 By: {decided_by} • {decided_at}\n"
+        "💬 Reason: {feedback}"
+    ),
+    # Landed after the approval window — the engine stamps the decision but does
+    # NOT revert the live state, so say that plainly or the team will wonder why
+    # a "reject" changed nothing.
+    'pre_approval_decided_late': (
+        "{decision_emoji} Late client decision: {decision_caps}\n"
+        "📌 {title}\n"
+        "👤 Developer: {dev} • Project: {project}\n"
+        "🗣 By: {decided_by} • {decided_at}\n"
+        "This came in after the approval window — the task state was not changed."
+    ),
+    'client_task_queued': (
+        "🆕 A client submitted a task — it needs a developer.\n"
+        "📌 {title}\n"
+        "👤 From: {created_by} • Client: {client_name}\n"
+        "🏷 Project: {project}\n\n"
+        "Open the Client Task Queue to assign a developer."
+    ),
+    # Client rejected WHO the task went to → it's back in the queue with no
+    # developer. Lead with the reason: it's the only thing the admin needs.
+    'client_task_rejected': (
+        "❌ Client rejected the assignment — needs a new developer.\n"
+        "📌 {title}\n"
+        "💬 Reason: {feedback}\n"
+        "👤 Was assigned to: {dev} • Project: {project}\n\n"
+        "Open the Client Task Queue to reassign."
+    ),
+    # Client paused their own approval countdown — the dev must not sit waiting.
+    'pre_approval_held': (
+        "⏸ Client put approval on hold — it will NOT auto-approve.\n"
+        "📌 {title}\n"
+        "👤 Developer: {dev} • Project: {project}\n\n"
+        "The task waits for the client's decision."
+    ),
+    # Stage 2 — the work is done and needs the client's final sign-off.
+    'internal_approved': (
+        "✅ Work completed — your sign-off is needed:\n"
+        "📌 {title}\n"
+        "👤 Developer: {dev}\n"
+        "🏷 Project: {project} • ⏱ {elapsed}\n\n"
+        "Open My Tasks to review and sign off."
+    ),
+
+    # ── App-only migration ──────────────────────────────────────────────────
+    # Everything below used to be WhatsApp-only. With task WhatsApp off these
+    # are the ONLY copy the recipient ever sees, so they must read as plain
+    # app messages (no wa.me links, no reply tokens).
+    #
+    # NOTE: 'internal_rejected' has no _TEMPLATES entry at all, so before this
+    # it rendered an empty body and was silently never delivered on ANY channel.
+    'internal_rejected': (
+        "🔁 Your work was sent back — rework needed.\n"
+        "📌 {title} ({ref})\n"
+        "🏷 Project: {project}\n"
+        "💬 Reason: {feedback}"
+    ),
+    'final_approved': (
+        "🎉 The client signed off — task complete!\n"
+        "📌 {title} ({ref})\n"
+        "🏷 Project: {project}\n"
+        "👤 Developer: {dev} • ⏱ {elapsed}\n"
+        "✍️ Signed by: {decided_by}"
+    ),
+    'partial_timeout': (
+        "⌛ No client reply in time — prep started automatically.\n"
+        "📌 {title} ({ref})\n"
+        "🏷 Project: {project} • 👤 {dev}\n\n"
+        "Prep only (not billable) until the client approves."
+    ),
+    'pre_approval_reminder': (
+        "⚠️ Reminder — this task still needs your approval.\n"
+        "📌 {title}\n"
+        "🏷 Project: {project} • Deadline: {deadline}\n"
+        "👤 {dev} has started prep work in non-billable mode.\n\n"
+        "Open My Tasks to Approve so it can be billed as a full task."
+    ),
+    # Lead with WHO — the admin's first question is always "who needs help?".
+    'urgent_pause': (
+        "🚨 {dev} needs help — task paused.\n"
+        "📌 {title} ({ref})\n"
+        "📝 {note}\n"
+        "🏷 Project: {project}"
+    ),
+
+    # These four previously fell back to the raw WhatsApp body in the feed.
+    'task_created': (
+        "🆕 New task added\n"
+        "📌 {title}\n"
+        "🏷 {client} • {project}\n"
+        "⚡ {priority} • Deadline: {deadline}\n"
+        "👤 Added by: {created_by}"
+    ),
+    'task_assigned': (
+        "📋 A task was assigned to you.\n"
+        "📌 {title} ({ref})\n"
+        "🏷 {client} • {project}\n"
+        "⚡ {priority} • Deadline: {deadline} • Estimate: {estimate}"
+    ),
+    'reassigned': (
+        "🔄 A task was reassigned to you.\n"
+        "📌 {title} ({ref})\n"
+        "🏷 Project: {project} • Estimate: {estimate}\n"
+        "💬 Reason: {feedback}"
+    ),
+
+    # ── Passthrough events ──────────────────────────────────────────────────
+    # These render with `ctx` ONLY (see _format_message + _PASSTHROUGH_EVENTS),
+    # so they may use nothing but the keys their call site passes.
+    'self_task_accepted': (          # ctx: title, project
+        "✅ Your task was accepted — it's now official.\n"
+        "📌 {title}\n"
+        "🏷 Project: {project}"
+    ),
+    'self_task_rejected': (          # ctx: title, reason
+        "🔁 Your task was sent back.\n"
+        "📌 {title}\n"
+        "💬 Reason: {reason}"
+    ),
+    'task_reassigned': (             # ctx: name, new_dev
+        "↪ \"{name}\" is now assigned to {new_dev}.\n"
+        "Contact your admin if you need details."
+    ),
 }
 
 
@@ -119,6 +309,14 @@ _EVENT_RECIPIENTS = {
     # noise for non-client recipients.
     'pre_approval_request':      ('client',),
     'pre_approval_decided':      ('owner', 'coordinator', 'developer'),
+    # Client submitted a task → it sits in the Client Task Queue until an admin
+    # assigns a developer. Admins only; re-nudged every N min while unread
+    # (see kra.kpi._cron_nudge_queued_tasks).
+    'client_task_queued':        ('owner', 'coordinator'),
+    # Client rejected the assignment → back in the queue, needs a new developer.
+    'client_task_rejected':      ('owner', 'coordinator'),
+    # Client paused their approval → the developer must know not to wait on it.
+    'pre_approval_held':         ('owner', 'coordinator', 'developer'),
     # Late approval — owner is the primary recipient (they need to know the
     # decision came after the prep window).  Coord + dev also informed.
     'pre_approval_decided_late': ('owner', 'coordinator', 'developer'),
@@ -153,8 +351,19 @@ _EVENT_RECIPIENTS = {
     'self_task_rejected':        ('developer',),
     # Auto-away — tell the DEVELOPER their running task was paused while away.
     'task_auto_away':            ('developer',),
-    # Urgent pause — owner + any configured extra numbers get the dev's note.
-    'urgent_pause':              ('owner', 'urgent_extra'),
+    # Urgent pause — owner + coordinator, IN-APP. Was ('owner', 'urgent_extra'):
+    # `urgent_extra` is a list of bare phone numbers with no user account, so it
+    # can only ever be reached over WhatsApp. With task WhatsApp off it could
+    # never fire, so it is gone; admins are reachable in the app instead and get
+    # re-nudged every few minutes until one of them reads it
+    # (see kra.kpi._cron_nudge_urgent_pause).
+    'urgent_pause':              ('owner', 'coordinator'),
+    # No ROLE recipients on purpose: this event exists to tell the PREVIOUS
+    # assignee their task moved, and they are passed explicitly via
+    # `extra_users=[prev_uid]` from kpi_workflow.write(). The role matrix would
+    # resolve `developer` to the NEW assignee, who already got `reassigned`.
+    # Listed explicitly so it reads as deliberate rather than an omission.
+    'task_reassigned':           (),
 }
 
 
@@ -406,6 +615,11 @@ class KpiNotify(models.Model):
             return
 
         body = self._format_message(event, ctx)
+        # In-app variant (no wa.me links / reply tokens). Falls back to the
+        # WhatsApp body for events without an app template. Some events are
+        # app-only (no WhatsApp template at all) — they render here and the
+        # WhatsApp leg below no-ops on the empty `body`.
+        app_body = self._format_message(event, ctx, templates=_APP_TEMPLATES) or body
 
         # Persist a browsable in-app notification per recipient user for the
         # curated assignment/upload events. This runs BEFORE the WhatsApp toggle
@@ -416,7 +630,7 @@ class KpiNotify(models.Model):
         # than the phone-deduped `recipients` list, so an admin/developer without
         # a phone still sees the notification. Scoping (admins → all events,
         # developer → own tasks) is inherited from the `_EVENT_RECIPIENTS` matrix.
-        if body and event in _PERSIST_EVENTS:
+        if app_body and event in _PERSIST_EVENTS:
             try:
                 notif_recipients = self._notif_recipient_users(
                     _EVENT_RECIPIENTS.get(event, ()))
@@ -431,7 +645,7 @@ class KpiNotify(models.Model):
                 created = self.env['kpi.notification'].sudo().create_for_recipients(
                     self, event,
                     _NOTIF_TITLES.get(event, event.replace('_', ' ').title()),
-                    body, notif_recipients,
+                    app_body, notif_recipients,
                 )
                 _logger.info(
                     "in-app notify persisted: kpi=%s event=%s recipients=%s rows=%s",
@@ -441,7 +655,7 @@ class KpiNotify(models.Model):
                 self._send_push(
                     event,
                     _NOTIF_TITLES.get(event, event.replace('_', ' ').title()),
-                    body,
+                    app_body,
                     [r['user_id'] for r in notif_recipients if r.get('user_id')],
                 )
             except Exception as exc:
@@ -452,6 +666,14 @@ class KpiNotify(models.Model):
                 )
 
         # --- WhatsApp + bus.bus channel (phone-gated, toggle-gated) ---------- #
+        # MASTER SWITCH: task notifications are app-only by default. Everything
+        # above (in-app feed + push) has already been delivered; this only skips
+        # the WhatsApp/bus leg. Password-reset OTP does NOT come through here, so
+        # it is unaffected. Flip whatsapp.config.kpi_wa_task_notifications on to
+        # restore WhatsApp (the per-event notify_* toggles then apply as before).
+        if not getattr(config, 'kpi_wa_task_notifications', False):
+            return
+
         toggle = _EVENT_TO_TOGGLE.get(event)
         if toggle and not getattr(config, toggle, True):
             # Event muted via whatsapp.config — skip the WhatsApp/bus send.
@@ -470,21 +692,6 @@ class KpiNotify(models.Model):
 
         for rcp in recipients:
             self._notify_one(event, rcp, body, session)
-
-        # Sequential client escalation: after firing pre_approval_request, mark
-        # the picked client as "already notified" and schedule the next-check
-        # 30 min out so the escalation cron picks the next client if no reply.
-        if event == 'pre_approval_request':
-            from datetime import timedelta
-            picked_user_ids = [
-                r['user_id'] for r in recipients
-                if r.get('role') == 'client' and r.get('user_id')
-            ]
-            if picked_user_ids:
-                self.sudo().write({
-                    'pre_approval_notified_user_ids': [(4, uid) for uid in picked_user_ids],
-                    'pre_approval_next_check_at': fields.Datetime.now() + timedelta(minutes=30),
-                })
 
     # ------------------------------------------------------------------ #
     # Helpers                                                            #
@@ -641,27 +848,21 @@ class KpiNotify(models.Model):
 
         if 'client' in roles:
             # Walk up to client_kra; gather portal users on that KRA.
+            # All of them, always: approval happens in the app now, so there is no
+            # sequential "one client at a time" mode any more (it used to skip
+            # clients already pinged and take pending[:1], driven by a 30-min
+            # escalation cron that has since been retired). First to answer decides.
             client_kra = getattr(self, 'client_kra_id', False) or self.kra_id
             if client_kra:
-                client_users = client_kra.client_user_ids
-                if event == 'pre_approval_request' and client_users:
-                    # Sequential single-recipient mode: skip clients already
-                    # pinged on this task, send to the first remaining one.
-                    notified = set(self.pre_approval_notified_user_ids.ids)
-                    pending = client_users.filtered(lambda u: u.id not in notified)
-                    client_users = pending[:1]
-                for u in client_users:
+                for u in client_kra.client_user_ids:
                     p = u.partner_id
                     if p:
                         _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=u.id, role='client')
 
-        # Ad-hoc numbers configured on the company for Urgent-pause escalation.
-        if 'urgent_extra' in roles:
-            nums = self.env.company.sudo().kpi_urgent_recipients or ''
-            for raw in re.split(r'[,\n;]+', nums):
-                raw = raw.strip()
-                if raw:
-                    _add(raw, role='urgent')
+        # NOTE: the 'urgent_extra' role (ad-hoc WhatsApp numbers from
+        # res.company.kpi_urgent_recipients) is gone. Those numbers had no user
+        # account, so they were unreachable once task WhatsApp was switched off.
+        # urgent_pause now goes to owner + coordinator in the app instead.
 
         return out
 
@@ -701,6 +902,18 @@ class KpiNotify(models.Model):
             _add(self.user_id, 'developer')
             for u in (self.contributor_ids or []):
                 _add(u, 'developer')
+
+        if 'client' in roles:
+            # In-app approval: the client decides in the app, so — unlike the
+            # WhatsApp path — we never narrow to "one client at a time" here.
+            # For a client-submitted task the submitter is THE approver; otherwise
+            # fall back to the client users on the nearest client KRA.
+            if self.client_submitted and self.submitted_by_uid:
+                _add(self.submitted_by_uid, 'client')
+            else:
+                client_kra = getattr(self, 'client_kra_id', False) or self.kra_id
+                for u in (client_kra.client_user_ids or []):
+                    _add(u, 'client')
 
         return out
 
@@ -770,10 +983,15 @@ class KpiNotify(models.Model):
                 if err == 'DeviceNotRegistered':
                     self.env['kpi.push.token'].sudo().deactivate(msg.get('to'))
 
-    def _format_message(self, event, ctx):
-        """Build the WhatsApp text body for an event from the template dict."""
+    def _format_message(self, event, ctx, templates=None):
+        """Build the text body for an event from a template dict.
+
+        `templates` defaults to the WhatsApp `_TEMPLATES`; pass `_APP_TEMPLATES`
+        to render the in-app variant (same placeholders, no wa.me links/tokens).
+        Returns '' when the dict has no entry for the event.
+        """
         self.ensure_one()
-        tmpl = _TEMPLATES.get(event)
+        tmpl = (templates or _TEMPLATES).get(event)
         if not tmpl:
             return ''
         # Passthrough events (daily_summary etc.) — ctx is the source of truth.

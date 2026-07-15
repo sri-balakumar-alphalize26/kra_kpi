@@ -16,7 +16,8 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import {
-  fetchConfig, setAway, setUrgent, setCountry, setMultitask, setDevWa,
+  fetchConfig, setAway, setUrgentNudge, setCountry, setMultitask, setDevWa,
+  setClientApproval, setQueueNudge,
 } from '../services/config';
 
 const log = createLogger('ConfigurationScreen');
@@ -47,7 +48,9 @@ export default function ConfigurationScreen({ onBack }) {
   const [loading, setLoading] = useState(true);
   const [isMock, setIsMock] = useState(false);
   const [away, setAwayVal] = useState('5');
-  const [urgent, setUrgentVal] = useState('');
+  const [clientApproval, setClientApprovalVal] = useState('5');
+  const [queueNudge, setQueueNudgeVal] = useState('30');
+  const [urgentNudge, setUrgentNudgeVal] = useState('5');
   const [countryId, setCountryId] = useState(false);
   const [dial, setDial] = useState('91');
   const [mobileLength, setMobileLength] = useState(10);
@@ -66,19 +69,14 @@ export default function ConfigurationScreen({ onBack }) {
       const c = await fetchConfig();
       setIsMock(c.isMock);
       setAwayVal(String(c.away_after_minutes));
+      setClientApprovalVal(String(c.client_approval_minutes));
+      setQueueNudgeVal(String(c.queue_nudge_minutes));
+      setUrgentNudgeVal(String(c.urgent_nudge_minutes));
       setDial(c.country_dial_code);
       setMobileLength(c.mobile_length);
       setCountryId(c.country_id);
       setCountries(c.countries);
       setDevelopers(c.developers);
-      // Show urgent numbers as clean local parts.
-      setUrgentVal(
-        (c.urgent_recipients || '')
-          .split(/[,\n;]+/)
-          .map((p) => toLocal(p, c.country_dial_code, c.mobile_length))
-          .filter(Boolean)
-          .join(', ')
-      );
     } catch (e) {
       log.warn('load failed', e?.message);
     }
@@ -94,30 +92,23 @@ export default function ConfigurationScreen({ onBack }) {
     setAwayVal(String(v));
     try { await setAway(v); flash('away'); } catch (e) { log.warn('saveAway', e?.message); }
   };
-  // Sanitize the urgent field live: digits + comma separators only, and cap
-  // each comma-separated number to the country's local digit length.
-  const onUrgentChange = (text) => {
-    const parts = String(text || '').split(',');
-    const cleaned = parts
-      .map((p) => p.replace(/[^\d]/g, '').slice(0, mobileLength))
-      .join(', ')
-      // collapse to a single ", " but keep a trailing comma the user just typed
-      .replace(/\s*,\s*/g, ', ');
-    // Preserve a trailing separator so the user can start the next number.
-    const trailing = /[,\s]$/.test(text) && !/[,\s]$/.test(cleaned) ? ', ' : '';
-    setUrgentVal(cleaned + trailing);
+  const saveClientApproval = async () => {
+    const v = Math.max(1, parseInt(clientApproval) || 5);
+    setClientApprovalVal(String(v));
+    try { await setClientApproval(v); flash('clientApproval'); }
+    catch (e) { log.warn('saveClientApproval', e?.message); }
   };
-
-  const saveUrgent = async () => {
-    try {
-      const res = await setUrgent(urgent || '');
-      if (res?.recipients != null) {
-        setUrgentVal(
-          res.recipients.split(/[,\n;]+/).map((p) => toLocal(p, dial, mobileLength)).filter(Boolean).join(', ')
-        );
-      }
-      flash('urgent');
-    } catch (e) { log.warn('saveUrgent', e?.message); }
+  const saveQueueNudge = async () => {
+    const v = Math.max(1, parseInt(queueNudge) || 30);
+    setQueueNudgeVal(String(v));
+    try { await setQueueNudge(v); flash('queueNudge'); }
+    catch (e) { log.warn('saveQueueNudge', e?.message); }
+  };
+  const saveUrgentNudge = async () => {
+    const v = Math.max(1, parseInt(urgentNudge) || 5);
+    setUrgentNudgeVal(String(v));
+    try { await setUrgentNudge(v); flash('urgentNudge'); }
+    catch (e) { log.warn('saveUrgentNudge', e?.message); }
   };
   const chooseCountry = async (co) => {
     setPickCountry(false);
@@ -128,7 +119,6 @@ export default function ConfigurationScreen({ onBack }) {
         const nd = String(res.dial || '91');
         const nl = Number(res.mobile_length) || 10;
         setDial(nd); setMobileLength(nl);
-        setUrgentVal((u) => u.split(/[,\n;]+/).map((p) => toLocal(p, nd, nl)).filter(Boolean).join(', '));
         setDevelopers((list) => list.map((d) => ({ ...d, _wa: toLocal(d.wa_number, nd, nl) })));
         flash('country');
       }
@@ -216,24 +206,51 @@ export default function ConfigurationScreen({ onBack }) {
             </View>
             <Text style={s.hint}>Minutes with no heartbeat (app closed / device asleep) before a running
               task auto-pauses as "Away". Used by the app and the server.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Client approval window (minutes)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="number-pad"
+                value={clientApproval} onChangeText={setClientApprovalVal}
+                onEndEditing={saveClientApproval}
+              />
+              <Text style={s.unit}>min</Text>
+              {savedFlash === 'clientApproval' && <Text style={s.savedTick}>✓</Text>}
+            </View>
+            <Text style={s.hint}>How long a client has to approve the developer assigned to their task.
+              If they don't respond in time it is approved automatically.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Queue re-nudge gap (minutes)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="number-pad"
+                value={queueNudge} onChangeText={setQueueNudgeVal}
+                onEndEditing={saveQueueNudge}
+              />
+              <Text style={s.unit}>min</Text>
+              {savedFlash === 'queueNudge' && <Text style={s.savedTick}>✓</Text>}
+            </View>
+            <Text style={s.hint}>How often admins are re-notified about a client task still waiting for a
+              developer. Stops once an admin opens the notification.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Urgent re-nudge gap (minutes)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="number-pad"
+                value={urgentNudge} onChangeText={setUrgentNudgeVal}
+                onEndEditing={saveUrgentNudge}
+              />
+              <Text style={s.unit}>min</Text>
+              {savedFlash === 'urgentNudge' && <Text style={s.savedTick}>✓</Text>}
+            </View>
+            <Text style={s.hint}>When a developer taps 🚨 Urgent while pausing, the owner and admins are
+              notified in the app and reminded this often until one of them reads it.</Text>
           </Card>
 
-          {/* 3. Urgent-pause recipients */}
-          <Card color="#dc3545" iconLib="mc" icon="alert" title="Urgent-pause recipients">
-            <Text style={s.label}>Extra WhatsApp numbers</Text>
-            <View style={s.inlineRow}>
-              <View style={s.dialBadge}><Text style={s.dialBadgeTxt}>+{dial}</Text></View>
-              <TextInput
-                style={[s.input, { flex: 1 }]} keyboardType="phone-pad"
-                placeholder={`${'9'.repeat(mobileLength)}, ${'9'.repeat(mobileLength)}`}
-                placeholderTextColor={COLORS.faint}
-                value={urgent} onChangeText={onUrgentChange} onEndEditing={saveUrgent}
-              />
-              {savedFlash === 'urgent' && <Text style={s.savedTick}>✓</Text>}
-            </View>
-            <Text style={s.hint}>Comma-separated local numbers ({mobileLength} digits each) — the +{dial} code
-              is added automatically on save. The owner is always included too.</Text>
-          </Card>
+          {/* The "Urgent-pause recipients" card (extra WhatsApp numbers) was removed:
+              those numbers had no login, so they could only be reached over WhatsApp —
+              which is now off for task notifications. Urgent goes to the owner +
+              admins in the app instead, repeating until read. */}
 
           {/* 4. Developers */}
           <Card color="#6366f1" iconLib="mc" icon="account-group" title="Developers — Multi-task & WhatsApp">
@@ -277,7 +294,7 @@ export default function ConfigurationScreen({ onBack }) {
       )}
 
       {/* Country picker */}
-      <Modal visible={pickCountry} transparent animationType="slide" onRequestClose={() => setPickCountry(false)}>
+      <Modal visible={pickCountry} transparent animationType="fade" onRequestClose={() => setPickCountry(false)}>
         <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setPickCountry(false)}>
           <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
             <View style={s.modalHead}>
@@ -355,8 +372,15 @@ const s = StyleSheet.create({
   devWaInput: { flex: 1, borderWidth: 1, borderColor: COLORS.line, borderLeftWidth: 0, borderTopRightRadius: 10, borderBottomRightRadius: 10, height: 44, paddingHorizontal: 12, fontSize: 15, color: COLORS.ink, backgroundColor: '#fff' },
   devSavedInline: { fontSize: 16, color: COLORS.green, fontWeight: '900', marginLeft: 8 },
 
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  modalSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '75%', paddingBottom: 20 },
+  // Centered dialog (not a bottom sheet) — matches the app's other popups.
+  modalBackdrop: {
+    flex: 1, backgroundColor: 'rgba(15,23,42,0.5)',
+    alignItems: 'center', justifyContent: 'center', padding: 26,
+  },
+  modalSheet: {
+    width: '100%', maxWidth: 360, backgroundColor: '#fff', borderRadius: 20,
+    maxHeight: '70%', paddingBottom: 12, overflow: 'hidden',
+  },
   modalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   modalTitle: { fontSize: 17, fontWeight: '800', color: COLORS.navy },
   modalClose: { fontSize: 18, color: COLORS.muted, fontWeight: '700' },

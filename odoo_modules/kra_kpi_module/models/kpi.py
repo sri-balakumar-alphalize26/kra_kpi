@@ -258,6 +258,35 @@ class KpiMaster(models.Model):
         help='Tasks become visible to developers once an admin reviews them and clicks Publish.')
     submitted_by_uid = fields.Many2one('res.users', string='Submitted By', readonly=True,
         help='User who originally submitted this task (typically the client portal user).')
+    # Set at create time when the submitter is a client (submitted_by_uid alone can't
+    # tell them apart — coordinators/owners also submit with published=False).
+    # Drives: the client-only Task Queue, auto-approve-on-timeout, and the
+    # no-escalation rule (only the submitting client approves).
+    client_submitted = fields.Boolean(string='Submitted by Client', default=False,
+        readonly=True, index=True,
+        help='True when a client user created this task from the app/portal.')
+    # Admin re-nudge for a queued client task. Same shape as the pre-approval
+    # escalation (frequent cron + per-record due timestamp): the gap lives in
+    # res.company.queue_nudge_minutes, not in the cron interval.
+    queue_nudge_next_at = fields.Datetime(string='Queue Nudge Next At', copy=False, index=True,
+        help='When the admins get re-notified that this client task still has no developer. '
+             'Cleared once an admin reads the notification or a developer is assigned.')
+    queue_nudge_count = fields.Integer(string='Queue Nudge Count', default=0, copy=False,
+        help='How many times the admins have been re-nudged about this queued task.')
+    # Admin re-nudge for a 🚨 Urgent pause — same shape as the queue nudge above.
+    # The gap lives in res.company.urgent_nudge_minutes (default 5).
+    urgent_nudge_next_at = fields.Datetime(string='Urgent Nudge Next At', copy=False, index=True,
+        help='When the admins get re-notified that this task is still Urgent-paused. '
+             'Cleared once an admin reads the notification or the task resumes/completes.')
+    urgent_nudge_count = fields.Integer(string='Urgent Nudge Count', default=0, copy=False,
+        help='How many times the admins have been re-nudged about this urgent pause.')
+    # Client pressed Hold on their approval → the auto-approve clock is stopped by
+    # clearing pre_approval_deadline_at (the cron requires it to be set). This flag
+    # is what makes that state explicit rather than inferred from "pending + no
+    # deadline", so the board/queue can show "Client held".
+    pre_approval_held = fields.Boolean(string='Client Held Approval', default=False, copy=False,
+        help="Client paused the auto-approve countdown; the task waits for their "
+             "decision instead of approving itself.")
 
     # Developer self-created tasks — created from the KPI Action Board "New Task"
     # button.  They sit in a separate "Pending Review" lane: workable immediately

@@ -170,6 +170,42 @@ export async function fetchTaskById(kpiId) {
   }
 }
 
+// ── Pending Review: admin decides on a DEVELOPER-created task ──────────────
+// A developer can create their own task and work it immediately, but it stays
+// out of the official flow (is_self_created && !admin_accepted → the "Pending
+// Review" lane) until an admin accepts it. Both routes are admin-gated server
+// side and refuse anything not awaiting acceptance.
+
+// Accept into the official flow. `docType` ('requirement'|'update'|'bug')
+// re-numbers the provisional TASK-### ref into the real REQ/UPT/BUG sequence and
+// applies the name prefix, so the admin is really CATEGORISING it. The server
+// then fires client pre-approval only if the dev hasn't started — a running
+// timer and its accrued time are never disturbed.
+export async function acceptSelfCreated(kpiId, docType = 'requirement') {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true };
+  const res = await jsonRpc(serverUrl, '/kra_kpi/task/accept_self_created', {
+    kpi_id: kpiId, doc_type: docType,
+  });
+  if (!res || res.status === false) throw new Error(res?.message || 'Could not accept the task');
+  log.info('acceptSelfCreated ←', { kpiId, docType });
+  return res;
+}
+
+// Send it back to the developer with a note (stays in Pending Review), or
+// discard it outright. The note reaches the dev as a `self_task_rejected`
+// notification and shows on their card.
+export async function rejectSelfCreated(kpiId, note, discard = false) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true };
+  const res = await jsonRpc(serverUrl, '/kra_kpi/task/reject_self_created', {
+    kpi_id: kpiId, note: note || '', discard: !!discard,
+  });
+  if (!res || res.status === false) throw new Error(res?.message || 'Could not send the task back');
+  log.info('rejectSelfCreated ←', { kpiId, discard });
+  return res;
+}
+
 // Fetch users for the reassign picker (/kra_kpi/get_users).
 export async function fetchUsers() {
   const { serverUrl } = await getConnection();
@@ -227,6 +263,19 @@ export const PAUSE_REASONS = [
   { code: 'leave', label: 'Leave' },
   { code: 'other', label: 'Other', emoji: '✍', quick: true },
   { code: 'urgent', label: 'Urgent', emoji: '🚨', quick: true },
+];
+
+// Why a client rejected the developer assigned to their task. Same shape as
+// PAUSE_REASONS above: `quick` renders as a one-tap button, so the common case
+// ("give it to someone else") needs no typing. 'other' reveals a note box and
+// REQUIRES text — the admin can't act on a blank reason.
+// Not stored as its own field: the chosen label (or the typed text for 'other')
+// is sent as `feedback` and lands in the existing kra.kpi.pre_approval_feedback.
+export const REJECT_REASONS = [
+  { code: 'different_dev', label: 'Want a different developer', emoji: '🔁', quick: true },
+  { code: 'wrong_details', label: 'Task details are wrong', emoji: '📝', quick: true },
+  { code: 'not_needed', label: 'Not needed anymore', emoji: '🚫', quick: true },
+  { code: 'other', label: 'Other', emoji: '✍', quick: true },
 ];
 
 // Priorities for the New Task form.

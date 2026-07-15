@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { COLORS } from '../theme';
+import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { getReassignmentHistory } from '../services/reassignmentHistory';
 import { createLogger } from '../api/logger';
@@ -77,7 +77,9 @@ function RowCard({ r, onPress }) {
       <View style={s.moveRow}>
         <Avatar name={r.previous_assignee} tint="#FEE2E2" />
         <Text style={s.moveName} numberOfLines={1}>{r.previous_assignee || '—'}</Text>
-        <Ionicons name="arrow-forward" size={16} color={COLORS.faint} style={{ marginHorizontal: 2 }} />
+        <View style={s.arrowBox}>
+          <Ionicons name="arrow-forward" size={14} color={COLORS.primary} />
+        </View>
         <Avatar name={r.new_assignee} tint="#DCFCE7" />
         <Text style={s.moveName} numberOfLines={1}>{r.new_assignee || '—'}</Text>
       </View>
@@ -186,7 +188,9 @@ export default function ReassignmentHistory({ onBack }) {
                     <Text style={s.dMoveLbl}>From</Text>
                     <Text style={s.dMoveName}>{detail?.previous_assignee || '—'}</Text>
                   </View>
-                  <Ionicons name="arrow-forward" size={18} color={COLORS.primary} />
+                  <View style={s.arrowBox}>
+                    <Ionicons name="arrow-forward" size={16} color={COLORS.primary} />
+                  </View>
                   <View style={s.dMoveCol}>
                     <Text style={s.dMoveLbl}>To</Text>
                     <Text style={[s.dMoveName, { color: COLORS.green }]}>{detail?.new_assignee || '—'}</Text>
@@ -235,7 +239,12 @@ const DRow = ({ label, value }) => (
 const s = StyleSheet.create({
   root: { flex: 1 },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 10 },
-  iconBtn: { width: 40, alignItems: 'center' },
+  // White square chip behind the back / refresh arrows so they read over the
+  // gradient (matches the Generate Client Files header).
+  iconBtn: {
+    width: 40, height: 40, borderRadius: 12, backgroundColor: '#fff',
+    alignItems: 'center', justifyContent: 'center', ...SHADOW,
+  },
   title: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '900', color: COLORS.navy },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   centerTxt: { color: COLORS.muted, marginTop: 10, textAlign: 'center' },
@@ -253,10 +262,21 @@ const s = StyleSheet.create({
   timeTxt: { fontSize: 11.5, fontWeight: '800', color: '#0F5132' },
   taskTxt: { fontSize: 14.5, fontWeight: '800', color: COLORS.ink, marginBottom: 9 },
 
-  moveRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 9 },
+  // Tinted strip so the white arrow chip below actually reads (the card is white).
+  moveRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 9,
+    backgroundColor: '#F7F9FC', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 7,
+  },
   avatar: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   avatarTxt: { fontSize: 10.5, fontWeight: '900', color: '#334155' },
   moveName: { fontSize: 13, fontWeight: '700', color: COLORS.ink, flexShrink: 1, maxWidth: '32%' },
+  // White square chip behind the prev → new arrow. Bordered + raised so it reads
+  // as a distinct white chip on the tinted strip / "From / To" block.
+  arrowBox: {
+    width: 28, height: 28, borderRadius: 8, backgroundColor: '#fff',
+    borderWidth: 1, borderColor: '#DCE4F2', alignItems: 'center', justifyContent: 'center',
+    ...SHADOW,
+  },
 
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   stateChip: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },

@@ -18,10 +18,11 @@ import LoginManagementScreen from './screens/LoginManagementScreen';
 import ClientTasks from './screens/ClientTasks';
 import GenerateClientFiles from './screens/GenerateClientFiles';
 import ReassignmentHistory from './screens/ReassignmentHistory';
+import ClientTaskQueue from './screens/ClientTaskQueue';
 import StartWorkingScreen from './screens/StartWorkingScreen';
 import AppLoginScreen from './screens/AppLoginScreen';
 import * as session from './api/session';
-import { getConnection } from './api/session';
+import { getConnection, getRoleState, saveRoleState } from './api/session';
 import { jsonRpc } from './api/odooApi';
 import { createLogger } from './api/logger';
 import { registerForPushAsync, unregisterPush } from './services/push';
@@ -62,19 +63,31 @@ function AppInner() {
   const [provisioned, setProvisioned] = useState(false); // device set up (server URL saved)
   const [forceSetup, setForceSetup] = useState(false);   // show Odoo device-setup over the app login
 
+  const [isClient, setIsClient] = useState(false);     // client-only user → no Action Board
+
   const pushTokenRef = useRef(null);       // this device's Expo token (for logout unregister)
   const pendingTapRef = useRef(null);      // kpi_id from a tap that arrived before login/restore
   const devLockedRef = useRef(false);      // latest devLocked for listeners/back-handler
   useEffect(() => { devLockedRef.current = devLocked; }, [devLocked]);
+  // routeToTask is called from notification listeners registered once at mount,
+  // so it must read the LATEST role through a ref — a captured state value would
+  // be stale and send clients back to the Action Board.
+  const isClientRef = useRef(false);
+  useEffect(() => { isClientRef.current = isClient; }, [isClient]);
 
-  // Route a notification tap to the task on the board (opens + pulses the card).
+  // Route a notification tap to the task (opens + pulses it).
+  //
+  // Role decides WHERE. The KPI Action Board is the developer/admin work screen —
+  // /kra_kpi/tasks/get returns nothing for a client, so sending them there landed
+  // them on an empty board that then couldn't even fetch the task. A client's
+  // tasks live in My Requests, so every client notification opens that instead.
   // If we aren't logged in yet (cold-start tap), queue it until the session
   // restore / login completes.
   const routeToTask = (kpiId) => {
     if (!kpiId) return;
     if (userRef.current) {
       setFocusTaskId(kpiId);
-      setAppScreen('actionboard');
+      setAppScreen(isClientRef.current ? 'mytasks' : 'actionboard');
     } else {
       pendingTapRef.current = kpiId;
     }
@@ -99,9 +112,9 @@ function AppInner() {
   // Returning true from the handler tells Android we handled the event.
   useEffect(() => {
     const onBack = () => {
-      // An unpaired developer is hard-gated to the PIN screen — swallow back so
-      // they can't escape it (they must pair on the computer).
-      if (user && devLocked && !devPaired) return true;
+      // (The old rule swallowed back for an unpaired developer to trap them on
+      // the PIN screen. The PIN now gates only task ACTIONS, so back behaves
+      // normally — the PIN screen is a place they chose to visit, not a cage.)
       // Everyone else: a non-home screen goes back to Home.
       if (user && appScreen !== 'home') { setAppScreen('home'); return true; }
       // Odoo sheet open → close it, revealing the welcome ("Tap to Enter") screen.
@@ -115,61 +128,87 @@ function AppInner() {
   }, [user, appScreen, screen, devLocked, devPaired, forceSetup]);
 
   // Register this device for push once logged in (needs the session cookie so
-  // the token binds to the right user server-side). Flush any queued tap.
+  // the token binds to the right user server-side).
   useEffect(() => {
     if (!user) return;
     (async () => {
       const token = await registerForPushAsync();
       if (token) pushTokenRef.current = token;
     })();
-    if (pendingTapRef.current) {
-      const kpiId = pendingTapRef.current;
-      pendingTapRef.current = null;
-      setFocusTaskId(kpiId);
-      setAppScreen('actionboard');
-    }
   }, [user?.uid]);
 
-  // Role gate: a DEVELOPER (not admin/owner/system) must pair via the PIN
-  // screen before using the app. Admins land on Home as usual. Runs on login.
+  // Flush a queued cold-start tap only ONCE THE ROLE IS KNOWN (`gateReady`):
+  // routeToTask picks the destination by role, and the gate resolves async —
+  // flushing on login alone would still read isClient=false and send a client
+  // to the empty Action Board, which is the bug this routing exists to fix.
+  useEffect(() => {
+    if (!user || !gateReady || !pendingTapRef.current) return;
+    const kpiId = pendingTapRef.current;
+    pendingTapRef.current = null;
+    log.info('cold-start tap flushed', { kpiId, isClient });
+    routeToTask(kpiId);
+  }, [user?.uid, gateReady, isClient]);
+
+  // Role gate: a DEVELOPER ("User" in KRA/KPI terms) must pair via the PIN screen
+  // before they can WORK. They still get the whole app read-only — Home, the bell,
+  // Profile, and the board to look at — because pairing proves they're at their
+  // computer to work, and reading isn't work. Admins/clients are never gated.
   useEffect(() => {
     if (!user) return;
     let alive = true;
     setGateReady(false);   // role unknown until /kpi_user/info resolves → show a loader, never Home
     (async () => {
+      // Seed from the last known server answer so there's no unlocked flash while
+      // the request is in flight (same trick as WORKDAY_CACHE on the board).
+      const cached = await getRoleState(user?.uid);
+      if (alive && cached) {
+        setIsClient(cached.kpiRole === 'client');
+        setDevLocked(cached.kpiRole === 'developer');
+        setDevPaired(!!cached.paired);
+      }
       try {
         const { serverUrl } = await getConnection();
         if (!serverUrl) { if (alive) { setDevLocked(false); } return; } // offline demo → Home
         const info = await jsonRpc(serverUrl, '/kpi_user/info', {});
         const isAdmin = !!(info && (info.is_system || info.is_owner || info.is_admin));
         const isDev = !!(info && info.is_developer);
-        const lock = isDev && !isAdmin;
         if (!alive) return;
+        // The KRA/KPI role ONLY (kpi_role: admin|client|developer) — the value
+        // Login Management's dropdown sets and Profile shows
+        // (res.users._compute_kpi_role). NOT the Odoo groups: those disagree, e.g.
+        // a client who is also in the developer group would be wrongly PIN-locked.
+        // Falls back to the flags if the server predates kpi_role on this route.
+        const kpiRole = (info && info.kpi_role) || '';
+        const lock = kpiRole ? kpiRole === 'developer' : (isDev && !isAdmin);
+        setIsClient(kpiRole ? kpiRole === 'client' : !!(info && info.is_client_only));
         setDevLocked(lock);
+        let paired = true;   // non-developers are never gated
         if (lock) {
-          // Resolve pairing. Paired → Home; unpaired → the PIN gate is FORCED by
-          // the render (see below), so we just record the paired flag.
           try {
             const st = await pairingStatus();
-            setDevPaired(!!st?.paired);
-            if (st?.paired) setAppScreen('home');
-          } catch (_) { setDevPaired(false); }
-        } else {
-          setDevPaired(true); // non-developers are never gated
+            paired = !!st?.paired;
+          } catch (_) { paired = false; }
         }
+        if (!alive) return;
+        setDevPaired(paired);
+        log.info('role gate', { kpi_role: kpiRole, lock, paired, isAdmin, isDev });
+        saveRoleState(user?.uid, { kpiRole, paired });   // for the offline path below
       } catch (e) {
-        log.warn('role gate check failed', e?.message);
-        if (alive) setDevLocked(false);
+        // Offline / server unreachable. Reuse the last known answer rather than
+        // guessing "unlocked" — otherwise a developer who ended their workday
+        // gets a fully-unlocked board with no signal, and every button fails.
+        // Only fall open when we've genuinely never resolved a role.
+        log.warn('role gate check failed, using cached role', e?.message);
+        if (alive && !cached) setDevLocked(false);
       } finally {
-        if (alive) setGateReady(true);   // role known → safe to render Home / the PIN gate
+        if (alive) setGateReady(true);   // role known → safe to render
       }
     })();
     return () => { alive = false; };
   }, [user?.uid]);
 
-  // While a locked developer is on the PIN gate, poll so pairing (from the web)
-  // moves them to Home. Once paired and on Home, they use the app freely; the
-  // poll only pulls them BACK to the PIN gate if they get un-paired (auto-away).
+  // Poll pairing for a developer: pairing on the web lifts read-only here, and
+  // being un-paired (End Workday / auto-away / midnight close) drops back into it.
   useEffect(() => {
     if (!user || !devLocked) return;
     const id = setInterval(async () => {
@@ -177,8 +216,15 @@ function AppInner() {
         const st = await pairingStatus();
         setDevPaired((prev) => {
           const now = !!st?.paired;
-          // On the transition unpaired → paired, land on Home.
-          if (now && !prev) setAppScreen('home');
+          if (now !== prev) {
+            // Keep the offline cache honest — this is the other place the paired
+            // state changes, and a stale cache would show the wrong mode offline.
+            saveRoleState(user?.uid, { kpiRole: 'developer', paired: now });
+            // Only navigate if they're SITTING on the PIN screen waiting: send
+            // them to the board they wanted. Never yank someone off Home or a
+            // screen they're reading just because pairing landed.
+            if (now) setAppScreen((s) => (s === 'startworking' ? 'actionboard' : s));
+          }
           return now;
         });
       } catch (_) { /* keep polling */ }
@@ -228,6 +274,10 @@ function AppInner() {
     // open(dest, param): param is an optional payload (e.g. a task id to focus).
     const open = (dest, param) => { log.info('open', dest, param); setFocusTaskId(param ?? null); setAppScreen(dest); };
 
+    // A developer ("User") who hasn't paired → the workday hasn't started, so
+    // task ACTIONS are off everywhere (read-only). Everything else works.
+    const workdayLocked = devLocked && !devPaired;
+
     // Until the role gate resolves, render a neutral loader — NEVER Home. This
     // stops a developer from seeing a flash of Home before the PIN gate loads.
     if (!gateReady) {
@@ -238,15 +288,22 @@ function AppInner() {
       );
     }
 
-    // HARD GATE: a developer who isn't paired can ONLY see the PIN screen —
-    // no other screen renders (prevents a board "flash" before the poll bounces
-    // them). They stay here strictly until they pair on the computer.
-    if (devLocked && !devPaired) {
+    // The PIN gates WORK, not the app. An unpaired developer still gets Home,
+    // the bell, Profile and a READ-ONLY board — pairing proves they're at their
+    // computer to work, and reading isn't work. (It used to gate everything,
+    // which meant the midnight auto-close un-paired them and then hid the very
+    // notification telling them why.) `workdayLocked` below drives the read-only
+    // UI; this route is just the PIN screen itself.
+    if (appScreen === 'startworking') {
       return (
         <StartWorkingScreen
-          onBack={null}
+          // Backing out returns to the board they were heading for (read-only),
+          // not Home — a mis-tap shouldn't cost them their place.
+          onBack={() => setAppScreen('actionboard')}
           onLogout={logout}
-          onPaired={() => { setDevPaired(true); setAppScreen('home'); }}
+          // Nothing starts until the PIN is verified: /kpi_pair/verify is what
+          // opens the workday, so walking away from here starts nothing.
+          onPaired={() => { setDevPaired(true); setAppScreen('actionboard'); }}
         />
       );
     }
@@ -256,21 +313,38 @@ function AppInner() {
     if (appScreen === 'actionboard')
       // Back always returns to Home (the developer is paired once they can reach
       // the board; the PIN screen is only the pre-pair gate).
-      return <KpiActionBoard onBack={home} focusTaskId={focusTaskId} onFocusHandled={() => setFocusTaskId(null)} />;
+      return (
+        <KpiActionBoard
+          onBack={home} focusTaskId={focusTaskId} onFocusHandled={() => setFocusTaskId(null)}
+          workdayLocked={workdayLocked} onNeedPair={() => setAppScreen('startworking')}
+        />
+      );
     if (appScreen === 'owner')
       return <OwnerDashboard onBack={home} />;
     if (appScreen === 'notifications')
-      return <NotificationsScreen onBack={home} onOpen={open} />;
+      // isClient → a tapped notification opens My Requests, not the Action Board.
+      // workdayLocked → READ MODE ONLY: rows still mark themselves read, but a null
+      // onOpen means tapping never navigates to the task (onRowPress guards on it).
+      return (
+        <NotificationsScreen
+          onBack={home} isClient={isClient}
+          onOpen={workdayLocked ? null : open}
+        />
+      );
     if (appScreen === 'config')
       return <ConfigurationScreen onBack={home} />;
     if (appScreen === 'loginmgmt')
       return <LoginManagementScreen onBack={home} />;
     if (appScreen === 'mytasks')
-      return <ClientTasks onBack={home} />;
+      // focusTaskId: set when a client taps a notification → the row scrolls into
+      // view and flashes, mirroring the board's behaviour for developers.
+      return <ClientTasks onBack={home} focusTaskId={focusTaskId} />;
     if (appScreen === 'clientfiles')
       return <GenerateClientFiles onBack={home} />;
     if (appScreen === 'reassignhistory')
       return <ReassignmentHistory onBack={home} />;
+    if (appScreen === 'taskqueue')
+      return <ClientTaskQueue onBack={home} />;
     if (appScreen === 'startworking')
       // Locked developer: no back button (they must pair); give a logout escape.
       // Non-locked (shouldn't normally reach here): allow back to Home.
@@ -287,12 +361,21 @@ function AppInner() {
     // Status shortcut (from Home stat cards) → the Action Board focused on one
     // status: list view auto-expands that heading; board view scrolls to its lane.
     if (appScreen.startsWith('status:'))
-      return <KpiActionBoard onBack={home} focusStatus={appScreen.split(':')[1]} />;
+      return (
+        <KpiActionBoard
+          onBack={home} focusStatus={appScreen.split(':')[1]}
+          workdayLocked={workdayLocked} onNeedPair={() => setAppScreen('startworking')}
+        />
+      );
     return (
       <HomeScreen
         user={user}
         onLogout={logout}
         onOpen={open}
+        // Drives the red "read-only" line under the name + its Start Workday
+        // button. False for admins/clients — they're never locked.
+        workdayLocked={workdayLocked}
+        onNeedPair={() => setAppScreen('startworking')}
       />
     );
   }

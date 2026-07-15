@@ -122,6 +122,21 @@ class KpiWorkflow(models.Model):
                     "Cannot request pre-approval: task '%s' is already in "
                     "state '%s'." % (rec.name or rec.id, rec.task_state)
                 )
+            # A developer is MANDATORY: this approval asks the client to sign off
+            # on WHO the task went to, so with nobody assigned there is nothing to
+            # approve (the client would see "Assigned to Unassigned").  create()
+            # calls this in bulk for brand-new tasks that may have no developer
+            # yet, so SKIP rather than raise — raising would abort the whole batch.
+            # Callers that need to tell a human pre-check themselves (e.g.
+            # /kpi_pending_queue/publish returns "Assign a developer before
+            # publishing this task.").
+            if not rec.user_id:
+                rec._log_action(
+                    'pre_approval_skipped_no_dev',
+                    source='system',
+                    payload={'reason': 'no developer assigned'},
+                )
+                continue
             token = rec._generate_approval_token()
             now = fields.Datetime.now()
             rec.write({
@@ -134,7 +149,7 @@ class KpiWorkflow(models.Model):
                 'pre_approval_decided_by_partner_id': False,
                 'pre_approval_source':       False,
                 'pre_approval_feedback':     False,
-                'pre_approval_deadline_at':  now + timedelta(minutes=PRE_APPROVAL_TIMEOUT_MIN),
+                'pre_approval_deadline_at':  now + timedelta(minutes=rec._client_approval_minutes()),
                 'task_state':                'pre_approval_pending',
             })
             rec._log_action(
@@ -551,7 +566,12 @@ class KpiWorkflow(models.Model):
             for rec in self:
                 if not rec.user_id:
                     will_notify_assigned.append(rec.id)
-                    if rec.task_state in ('assigned', 'queue_waiting'):
+                    # 'rework' included so that a task the CLIENT rejected (which
+                    # clears the developer and returns it to the queue, keeping
+                    # task_state='rework') asks the client again when the admin
+                    # assigns a DIFFERENT developer. Without it the reassignment
+                    # would silently never re-request approval.
+                    if rec.task_state in ('assigned', 'queue_waiting', 'rework'):
                         will_request_pre_approval.append(rec.id)
 
         # When a coordinator assigns a developer, automatically publish the
@@ -685,11 +705,15 @@ class KpiWorkflow(models.Model):
                 source_task_id=self.id if len(self) == 1 else False,
                 reason_note=reason or False,
             )
-        # 🚨 Urgent pause — escalate the developer's note to owner + configured numbers.
+        # 🚨 Urgent pause — tell owner + coordinator IN-APP (bell + push), naming
+        # the developer, and arm the re-nudge so it keeps reminding them every few
+        # minutes until one of them actually reads it.
         if reason_code == 'urgent':
             for rec in self:
                 try:
                     rec._notify('urgent_pause', note=reason)
+                    rec.sudo().write({'urgent_nudge_count': 0})
+                    rec._schedule_urgent_nudge()
                 except Exception as exc:
                     _logger.warning("urgent_pause notify failed for task %s: %s", rec.id, exc)
         return result
@@ -772,7 +796,14 @@ class KpiWorkflow(models.Model):
     # ------------------------------------------------------------------ #
     @api.model
     def _cron_pre_approval_timeout(self):
-        """Flip rows past their pre-approval deadline to 'pre_approval_partial'.
+        """Handle rows past their pre-approval deadline.
+
+        Two behaviours, deliberately split:
+          * CLIENT-submitted tasks  → AUTO-APPROVE. The client was asked in-app to
+            sign off on the developer the admin assigned; silence means consent, so
+            the task proceeds as a normal approved task (per the user's spec).
+          * everything else         → the original flip to 'pre_approval_partial'
+            (prep-only / non-billable), unchanged.
 
         Runs every minute (see data/kpi_partial_timeout_cron.xml).
         Idempotent: only acts on rows still in 'pre_approval_pending'.
@@ -784,63 +815,295 @@ class KpiWorkflow(models.Model):
             ('pre_approval_deadline_at', '<=', now),
         ])
         for rec in overdue:
-            rec.task_state = 'pre_approval_partial'
-            rec._log_action(
-                'partial_timeout',
-                source='cron',
-                payload={'deadline_at': rec.pre_approval_deadline_at and rec.pre_approval_deadline_at.isoformat()},
-            )
+            if rec.client_submitted:
+                # Silence == approval. Stamp it like a real decision so the audit
+                # trail, the board and the client screens all read consistently.
+                rec.write({
+                    'task_state': 'pre_approval_approved',
+                    'pre_approval_decision': 'approve',
+                    'pre_approval_source': 'web',
+                    'pre_approval_decided_at': now,
+                    'pre_approval_decided_by_name': 'Auto-approved (no response)',
+                    'approval_token_used': True,
+                })
+                rec._log_action(
+                    'pre_approval_auto_approved',
+                    source='cron',
+                    payload={'deadline_at': (rec.pre_approval_deadline_at
+                                             and rec.pre_approval_deadline_at.isoformat())},
+                )
+                event = 'pre_approval_decided'
+            else:
+                rec.task_state = 'pre_approval_partial'
+                rec._log_action(
+                    'partial_timeout',
+                    source='cron',
+                    payload={'deadline_at': rec.pre_approval_deadline_at and rec.pre_approval_deadline_at.isoformat()},
+                )
+                event = 'partial_timeout'
             try:
-                rec._notify('partial_timeout')
+                # Tells the developer + admins either way (both events resolve to
+                # owner/coordinator/developer). `feedback` must be passed in ctx —
+                # {feedback} never reads the field — hence the explicit reason.
+                rec._notify(event, decision='approve' if event == 'pre_approval_decided' else None,
+                            decided_by='Auto-approved (no response)',
+                            feedback='No response within the approval window')
             except Exception as exc:
                 rec._log_action(
                     'notification_failed',
-                    payload={'event': 'partial_timeout', 'error': str(exc)},
+                    payload={'event': event, 'error': str(exc)},
                     success=False,
                 )
         return len(overdue)
 
     # ------------------------------------------------------------------ #
-    # Cron — 30-min sequential client escalation                         #
+    # Cron — RETIRED: 30-min sequential client escalation                 #
     # ------------------------------------------------------------------ #
     @api.model
     def _cron_escalate_pre_approval(self):
-        """Sequential client pre-approval escalation.
+        """Retired — deliberately a no-op.
 
-        Each ping of pre_approval_request only goes to ONE client (see
-        kpi_notify._resolve_recipients).  After 30 min with no decision, this
-        cron re-fires pre_approval_request, which picks the next non-notified
-        client on the KRA.  When all clients are exhausted it becomes a no-op.
+        This drove the old WhatsApp design where each pre_approval_request went
+        to ONE client and was re-fired every 30 min to chase the next one.
+        Approval now happens in the app: ALL client users are notified at once
+        and the first to answer decides, so there is nobody left to escalate to.
 
-        Wiring: data/kpi_pre_approval_escalate_cron.xml (every 5 minutes).
+        Kept as a no-op (rather than deleted) because the cron record may still
+        exist in a deployed DB and would error on a missing method. The cron in
+        data/kpi_pre_approval_escalate_cron.xml is also deactivated.
+
+        The 5-minute auto-approve (_cron_pre_approval_timeout, gap =
+        res.company.client_approval_minutes) is now the only pre-approval timer.
+        """
+        return 0
+
+    # ------------------------------------------------------------------ #
+    # Client Task Queue — re-nudge admins while the notification is unread #
+    # ------------------------------------------------------------------ #
+    # Cap the repeats so a task nobody ever opens can't nudge forever.
+    QUEUE_NUDGE_MAX = 5
+
+    def _queue_nudge_minutes(self):
+        """Configurable gap between admin re-nudges (res.company)."""
+        try:
+            return max(1, int(self.env.company.queue_nudge_minutes or 30))
+        except Exception:
+            return 30
+
+    # Same cap for the 🚨 Urgent re-nudge — an urgent nobody opens must not
+    # nudge forever either.
+    URGENT_NUDGE_MAX = 5
+
+    def _urgent_nudge_minutes(self):
+        """Configurable gap between 🚨 Urgent re-nudges (res.company)."""
+        try:
+            return max(1, int(self.env.company.urgent_nudge_minutes or 5))
+        except Exception:
+            return 5
+
+    def _client_approval_minutes(self):
+        """Configurable client approval window; falls back to the module default."""
+        try:
+            return max(1, int(self.env.company.client_approval_minutes
+                              or PRE_APPROVAL_TIMEOUT_MIN))
+        except Exception:
+            return PRE_APPROVAL_TIMEOUT_MIN
+
+    # ------------------------------------------------------------------ #
+    # Client pre-approval — hold / resume / reject-to-queue (in-app)      #
+    # ------------------------------------------------------------------ #
+    def _hold_pre_approval(self):
+        """Client pressed Hold: stop the auto-approve clock, decide later.
+
+        Implemented by CLEARING pre_approval_deadline_at, because
+        _cron_pre_approval_timeout requires it to be set. Deliberately does NOT
+        use the engine's 'hold' action: that marks approval_token_used=True, and
+        the terminal guard in record_client_pre_decision would then answer
+        'already_decided' to any later Approve — the client would be locked out
+        of their own task forever. Here task_state stays 'pre_approval_pending'
+        and the token stays unused, so Approve/Reject keep working normally.
+        """
+        self.ensure_one()
+        self.sudo().write({'pre_approval_deadline_at': False, 'pre_approval_held': True})
+        self._log_action('pre_approval_held', source='web')
+        try:
+            self._notify('pre_approval_held')   # dev + admins: don't wait on this
+        except Exception as exc:
+            self._log_action('notification_failed',
+                             payload={'event': 'pre_approval_held', 'error': str(exc)},
+                             success=False)
+
+    def _resume_pre_approval(self):
+        """Client pressed Resume: re-arm the countdown from now."""
+        self.ensure_one()
+        self.sudo().write({
+            'pre_approval_deadline_at': (fields.Datetime.now()
+                                         + timedelta(minutes=self._client_approval_minutes())),
+            'pre_approval_held': False,
+        })
+        self._log_action('pre_approval_resumed', source='web')
+
+    def _return_to_queue_after_reject(self):
+        """Client rejected WHO the task went to → back to the Client Task Queue.
+
+        Clears the developer and unpublishes so the task reappears in the queue
+        (domain: published=False + client_submitted) and the nudge cron (which
+        also requires user_id=False) can chase the admins. task_state stays
+        'rework' — set by the engine — so the client sees "Changes Requested";
+        the write() override re-fires pre-approval when the NEXT developer is
+        assigned ('rework' is in its trigger tuple for exactly this reason).
+
+        Called from /kpi_pre_approval/decide AFTER record_client_pre_decision so
+        pre_approval_feedback is already stamped — the notification body reads it.
+        """
+        self.ensure_one()
+        # Notify BEFORE clearing user_id: the body names the developer being
+        # rejected via {dev}, which reads self.user_id — clear it first and the
+        # message would say "Unassigned", i.e. exactly the wrong thing.
+        #
+        # feedback MUST be passed explicitly: _format_message resolves {feedback}
+        # from ctx ONLY, never from the pre_approval_feedback field — omit it and
+        # the reason silently renders as the "—" placeholder, which defeats the
+        # point of making the reason mandatory.
+        try:
+            self._notify('client_task_rejected',
+                         feedback=self.pre_approval_feedback or '')
+        except Exception as exc:
+            self._log_action('notification_failed',
+                             payload={'event': 'client_task_rejected', 'error': str(exc)},
+                             success=False)
+        self.sudo().write({'user_id': False, 'published': False})
+        self._schedule_queue_nudge()
+
+    def _schedule_queue_nudge(self):
+        """Arm the next admin nudge for a queued client task."""
+        self.ensure_one()
+        self.sudo().write({
+            'queue_nudge_next_at': (fields.Datetime.now()
+                                    + timedelta(minutes=self._queue_nudge_minutes())),
+        })
+
+    def _clear_queue_nudge(self):
+        """Disarm nudging (admin saw it, or a developer got assigned)."""
+        self.sudo().write({'queue_nudge_next_at': False})
+
+    @api.model
+    def _cron_nudge_queued_tasks(self):
+        """Re-notify admins about client tasks still sitting in the queue.
+
+        Only nudges while the admins' `client_task_queued` notification is still
+        UNREAD — once any admin opens it, the task is 'seen' and nudging stops
+        (per the user's rule: unread → nudge again every N min; read → stop).
+        Also stops once a developer is assigned/published, or after
+        QUEUE_NUDGE_MAX repeats.
+
+        Wiring: data/kpi_queue_nudge_cron.xml (every 5 minutes). The N-minute gap
+        lives on res.company.queue_nudge_minutes.
         """
         now = fields.Datetime.now()
-        # Escalate as long as the client hasn't decided (token still valid)
-        # and the task isn't terminal.  Even tasks already in_progress can
-        # still receive pre-approval — dev may have started in prep mode
-        # while the client decision is still pending.
         candidates = self.sudo().search([
-            ('approval_token_used', '=', False),
-            ('task_state', 'not in', ('pre_approval_approved', 'completed')),
-            ('pre_approval_next_check_at', '!=', False),
-            ('pre_approval_next_check_at', '<=', now),
+            ('client_submitted', '=', True),
+            ('published', '=', False),
+            ('user_id', '=', False),          # still needs a developer
+            ('active', '=', True),
+            ('queue_nudge_next_at', '!=', False),
+            ('queue_nudge_next_at', '<=', now),
         ])
-        escalated = 0
+        nudged = 0
         for rec in candidates:
             try:
-                rec._notify('pre_approval_request')
+                # "Seen" == an admin read the in-app notification for this task.
+                unread = self.env['kpi.notification'].sudo().search_count([
+                    ('kpi_id', '=', rec.id),
+                    ('event', '=', 'client_task_queued'),
+                    ('is_read', '=', False),
+                ])
+                if not unread or rec.queue_nudge_count >= self.QUEUE_NUDGE_MAX:
+                    rec._clear_queue_nudge()
+                    continue
+                rec._notify('client_task_queued')
+                rec.sudo().write({
+                    'queue_nudge_count': rec.queue_nudge_count + 1,
+                    'queue_nudge_next_at': now + timedelta(minutes=rec._queue_nudge_minutes()),
+                })
                 rec._log_action(
-                    'pre_approval_escalated',
+                    'client_task_queue_nudge',
                     source='cron',
-                    payload={
-                        'notified_so_far': rec.pre_approval_notified_user_ids.mapped('login'),
-                    },
+                    payload={'nudge': rec.queue_nudge_count, 'unread': unread},
                 )
-                escalated += 1
+                nudged += 1
             except Exception as exc:
                 rec._log_action(
                     'notification_failed',
-                    payload={'event': 'pre_approval_request_escalate', 'error': str(exc)},
+                    payload={'event': 'client_task_queued_nudge', 'error': str(exc)},
                     success=False,
                 )
-        return escalated
+        return nudged
+
+    # ------------------------------------------------------------------ #
+    # 🚨 Urgent pause — re-nudge admins while the notification is unread   #
+    # ------------------------------------------------------------------ #
+    def _schedule_urgent_nudge(self):
+        """Arm the next admin nudge for an urgent-paused task."""
+        self.ensure_one()
+        self.sudo().write({
+            'urgent_nudge_next_at': (fields.Datetime.now()
+                                     + timedelta(minutes=self._urgent_nudge_minutes())),
+        })
+
+    def _clear_urgent_nudge(self):
+        """Disarm nudging (an admin saw it, or the task moved on)."""
+        self.sudo().write({'urgent_nudge_next_at': False})
+
+    @api.model
+    def _cron_nudge_urgent_pause(self):
+        """Re-notify admins while a 🚨 Urgent pause is still unread.
+
+        Mirrors _cron_nudge_queued_tasks exactly: nudge every N minutes while the
+        admins' `urgent_pause` notification is UNREAD; the moment any admin opens
+        it, stop. Also stops as soon as the task leaves the urgent pause (the dev
+        resumed / completed it) or after URGENT_NUDGE_MAX repeats.
+
+        Wiring: data/kpi_urgent_nudge_cron.xml (every minute — the N-minute gap
+        lives on res.company.urgent_nudge_minutes, default 5, not in the cron).
+        """
+        now = fields.Datetime.now()
+        candidates = self.sudo().search([
+            ('active', '=', True),
+            ('urgent_nudge_next_at', '!=', False),
+            ('urgent_nudge_next_at', '<=', now),
+        ])
+        nudged = 0
+        for rec in candidates:
+            try:
+                # The dev resumed / finished → no longer urgent, stop nudging.
+                if rec.task_state != 'paused' or rec.pause_reason_code != 'urgent':
+                    rec._clear_urgent_nudge()
+                    continue
+                # "Seen" == an admin read the in-app notification for this task.
+                unread = self.env['kpi.notification'].sudo().search_count([
+                    ('kpi_id', '=', rec.id),
+                    ('event', '=', 'urgent_pause'),
+                    ('is_read', '=', False),
+                ])
+                if not unread or rec.urgent_nudge_count >= self.URGENT_NUDGE_MAX:
+                    rec._clear_urgent_nudge()
+                    continue
+                rec._notify('urgent_pause', note=(rec.paused_reason or ''))
+                rec.sudo().write({
+                    'urgent_nudge_count': rec.urgent_nudge_count + 1,
+                    'urgent_nudge_next_at': now + timedelta(minutes=rec._urgent_nudge_minutes()),
+                })
+                rec._log_action(
+                    'urgent_pause_nudge',
+                    source='cron',
+                    payload={'nudge': rec.urgent_nudge_count, 'unread': unread},
+                )
+                nudged += 1
+            except Exception as exc:
+                rec._log_action(
+                    'notification_failed',
+                    payload={'event': 'urgent_pause_nudge', 'error': str(exc)},
+                    success=False,
+                )
+        return nudged

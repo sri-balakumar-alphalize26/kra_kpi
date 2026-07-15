@@ -1483,10 +1483,15 @@ class KpiReportsAPI(http.Controller):
 
     @http.route('/kpi_pending_queue/list', type='json', auth='user', methods=['POST'], csrf=False)
     def list_pending_queue(self, **params):
-        """Admin view: list KPIs awaiting publish (submitted by clients or via bulk import)."""
+        """Admin view: the Client Task Queue — CLIENT-submitted tasks awaiting a developer.
+
+        Client-only by design: coordinator/owner submissions also carry published=False
+        but are not part of this queue (see kra.kpi.client_submitted).
+        """
         try:
             kpis = request.env['kra.kpi'].sudo().search(
-                [('published', '=', False), ('active', '=', True)],
+                [('published', '=', False), ('active', '=', True),
+                 ('client_submitted', '=', True)],
                 order='create_date desc')
             result = []
             req_cache = {}
@@ -1549,6 +1554,19 @@ class KpiReportsAPI(http.Controller):
                         k.create_uid.login if k.create_uid else ''),
                     'received_at': k.create_date.strftime('%Y-%m-%d %H:%M') if k.create_date else '',
                     'req_options': _req_options_for(root, k.related_req_ref),
+                    # Came BACK to the queue because the client rejected the
+                    # developer we assigned. Without this the card looks identical
+                    # to a fresh submission and the admin can't see why it returned.
+                    # 'rework' + decision 'reject' is exactly the state
+                    # _return_to_queue_after_reject leaves behind.
+                    # (The previous developer isn't shown: that flow clears user_id
+                    # by design — the notification names them, the card can't.)
+                    'rejected': (k.task_state == 'rework'
+                                 and k.pre_approval_decision == 'reject'),
+                    'reject_reason': k.pre_approval_feedback or '',
+                    'rejected_by': k.pre_approval_decided_by_name or '',
+                    'rejected_at': (k.pre_approval_decided_at.strftime('%Y-%m-%d %H:%M')
+                                    if k.pre_approval_decided_at else ''),
                 })
             return {'status': True, 'queue': result}
         except Exception as e:
@@ -1599,6 +1617,12 @@ class KpiReportsAPI(http.Controller):
             kpi = request.env['kra.kpi'].sudo().browse(int(params['kpi_id']))
             if not kpi.exists():
                 return {'status': False, 'message': 'Task not found.'}
+            # A developer is MANDATORY before publishing: the client's pre-approval
+            # asks them to sign off on WHO the task went to, so there has to be a
+            # developer to name.
+            if not kpi.user_id:
+                return {'status': False,
+                        'message': 'Assign a developer before publishing this task.'}
             if kpi.published:
                 # Already published — either by an earlier publish OR by the
                 # write() override after a developer assignment.  Treat as a
@@ -1608,7 +1632,22 @@ class KpiReportsAPI(http.Controller):
                           if kpi.task_state == 'pre_approval_pending' else ''))
                 return {'status': True, 'message': msg}
             kpi.write({'published': True})
-            return {'status': True, 'message': f'Published: {kpi.name}'}
+            # Ask the client to approve the assignment (auto-approves after the
+            # 5-min window if they stay silent). The write() override only fires
+            # this when a developer is NEWLY assigned, so a task that ALREADY had
+            # a developer would otherwise be published without ever asking the
+            # client — which is exactly why no client notification was sent.
+            msg = f'Published: {kpi.name}'
+            if kpi.task_state in ('assigned', 'queue_waiting'):
+                try:
+                    kpi.request_client_pre_approval()
+                    msg += ' — client pre-approval requested.'
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "publish_pending_kpi: pre-approval request failed for %s: %s",
+                        kpi.id, exc)
+            return {'status': True, 'message': msg}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"publish_pending_kpi: {str(e)}")
@@ -1862,6 +1901,37 @@ class KpiReportsAPI(http.Controller):
             kpi = request.env['kra.kpi'].sudo().browse(int(params['kpi_id']))
             if not kpi.exists() or kpi.published:
                 return {'status': False, 'message': 'Pending task not found (or already published).'}
+            # Tell the client their submission was dropped — otherwise it just
+            # silently disappears from their list with no explanation.
+            #
+            # The row is created with kpi_id=False ON PURPOSE: kpi.notification.kpi_id
+            # is ondelete='cascade', so a notification pointing at this task would be
+            # deleted along with it by the unlink() below and the client would never
+            # see it. Detached also means it isn't tappable — correct, since the task
+            # is gone. Never blocks the discard.
+            try:
+                if kpi.client_submitted and kpi.submitted_by_uid:
+                    reason = (params.get('reason') or '').strip()
+                    body = ("🗑 Your submitted task was not taken forward.\n"
+                            "📌 %s\n" % (kpi.name or ''))
+                    if reason:
+                        body += "💬 Reason: %s\n" % reason
+                    body += "Contact your coordinator if you think this is a mistake."
+                    request.env['kpi.notification'].sudo().create({
+                        'user_id': kpi.submitted_by_uid.id,
+                        'kpi_id': False,
+                        'event': 'client_task_discarded',
+                        'role': 'client',
+                        'title': 'Task discarded',
+                        'body': body,
+                    })
+                    # Push is an HTTP call, not a DB row, so it survives the unlink.
+                    kpi._send_push('client_task_discarded', 'Task discarded', body,
+                                   [kpi.submitted_by_uid.id])
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "discard notify failed for kpi %s: %s", kpi.id, exc)
             kpi.unlink()
             return {'status': True}
         except Exception as e:
@@ -2084,8 +2154,18 @@ class KpiReportsAPI(http.Controller):
                 # Client-submitted tasks land in admin's pending queue, unpublished.
                 'published': False,
                 'submitted_by_uid': request.env.user.id,
+                # This route is the client portal — always a client submission.
+                'client_submitted': True,
             }
             kpi = request.env['kra.kpi'].sudo().create(vals)
+            # Tell the admins a client task is queued (re-nudged while unread).
+            try:
+                kpi._notify('client_task_queued')
+                kpi._schedule_queue_nudge()
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "client_task_queued notify failed for kpi %s: %s", kpi.id, exc)
             return {'status': True, 'kpi_id': kpi.id, 'name': kpi.name}
         except Exception as e:
             import logging
@@ -2147,6 +2227,14 @@ class KpiReportsAPI(http.Controller):
                 'allow_multitask': user.kpi_allow_multitask,
                 'is_client': is_client,
                 'is_client_only': is_client_only,
+                # THE KRA/KPI role — 'admin' | 'client' | 'developer' — the single
+                # value shown in Login Management's role dropdown
+                # (res.users.kpi_role / _compute_kpi_role). Prefer this over the
+                # boolean flags above: one field, same answer everywhere, and it
+                # can't drift the way a hand-rolled combination of flags can.
+                # NB: the selection's third value is 'developer' (shown as "User"
+                # in the UI) — not 'user'.
+                'kpi_role': user.kpi_role or 'developer',
             }
         except Exception as e:
             import logging
@@ -2737,6 +2825,145 @@ class KpiReportsAPI(http.Controller):
             cur = cur.parent_id
         return False
 
+    # ================================================================== #
+    # STAGE-1 pre-approval, IN-APP.  The client approves the developer    #
+    # the admin assigned, from the app — no WhatsApp link, no token.      #
+    # The decision engine (record_client_pre_decision) is reused as-is;   #
+    # these routes are just an authenticated JSON door into it, next to   #
+    # the existing token/WhatsApp door (controllers/kpi_wa_approval.py).  #
+    # ================================================================== #
+    def _pre_approval_authorized(self, kpi):
+        """Client may decide if they submitted it, or are a client on its KRA tree."""
+        if kpi.client_submitted and kpi.submitted_by_uid.id == request.env.user.id:
+            return True
+        return self._is_client_authorized_for_kpi(kpi)
+
+    @http.route('/kpi_pre_approval/list', type='json', auth='user', methods=['POST'], csrf=False)
+    def list_pre_approvals(self, **params):
+        """Tasks awaiting THIS client's approval (app 'Approval needed' section)."""
+        try:
+            kpis = request.env['kra.kpi'].sudo().search([
+                ('task_state', 'in', ('pre_approval_pending', 'pre_approval_partial')),
+                ('active', '=', True),
+                # A developer is mandatory — approving "Unassigned" is meaningless.
+                # Also hides rows created before request_client_pre_approval()
+                # started skipping dev-less tasks, with no data migration.
+                ('user_id', '!=', False),
+            ], order='pre_approval_deadline_at asc, id desc')
+            out = []
+            for k in kpis:
+                if not self._pre_approval_authorized(k):
+                    continue
+                root = k.kra_id
+                while root and root.parent_id:
+                    root = root.parent_id
+                project = k.kra_id if k.kra_id != root else False
+                nm = k.name or ''
+                ref = (k.external_ref or '').upper()
+                if nm.startswith('[Update]') or ref.startswith('UPD'):
+                    kind = 'update'
+                elif nm.startswith('[Bug]') or ref.startswith('BUG'):
+                    kind = 'bug'
+                else:
+                    kind = 'requirement'
+                out.append({
+                    'id': k.id,
+                    'name': nm,
+                    'kind': kind,
+                    'external_ref': k.external_ref or '',
+                    'description': k.description or '',
+                    'client_name': root.name if root else '',
+                    'project_name': project.name if project else '',
+                    'priority': k.priority or '',
+                    'task_state': k.task_state or '',
+                    # Who the admin assigned — the thing being approved.
+                    'developer': k.user_id.name if k.user_id else '',
+                    # Drives the app's "auto-approves in mm:ss" countdown.
+                    'deadline_at': (k.pre_approval_deadline_at.strftime('%Y-%m-%d %H:%M:%S')
+                                    if k.pre_approval_deadline_at else ''),
+                    'server_now': fields.Datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    # Whether this task will ACTUALLY auto-approve, decided here so
+                    # the app never has to re-derive the rule (and never promises an
+                    # auto-approve that can't happen). Mirrors the exact cron domain
+                    # in _cron_pre_approval_timeout: client-submitted + still pending
+                    # + a live deadline. A held task has no deadline → False.
+                    'auto_approves': bool(k.client_submitted
+                                          and k.task_state == 'pre_approval_pending'
+                                          and k.pre_approval_deadline_at),
+                    'held': bool(k.pre_approval_held),
+                })
+            return {'status': True, 'kpis': out}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"list_pre_approvals: {str(e)}")
+            return {'status': False, 'message': str(e), 'kpis': []}
+
+    @http.route('/kpi_pre_approval/decide', type='json', auth='user', methods=['POST'], csrf=False)
+    def decide_pre_approval(self, **params):
+        """Client approves/rejects the assigned developer, in-app.
+
+        Delegates to the existing engine so the app decision gets the same
+        row-locking, idempotency, late-decision handling and audit trail as the
+        WhatsApp path. `source` must be 'web' — the field only allows web|whatsapp.
+        """
+        try:
+            action = (params.get('action') or '').strip().lower()
+            if action not in ('approve', 'reject', 'hold', 'resume'):
+                return {'status': False, 'message': 'Invalid action.'}
+            kpi = request.env['kra.kpi'].sudo().browse(int(params.get('kpi_id') or 0))
+            if not kpi.exists():
+                return {'status': False, 'message': 'Task not found.'}
+            if not self._pre_approval_authorized(kpi):
+                return {'status': False, 'message': 'Not authorized for this task.'}
+            feedback = (params.get('feedback') or '').strip()
+
+            # Hold / Resume are NOT decisions — they only start/stop the
+            # auto-approve clock, so they bypass record_client_pre_decision
+            # (whose 'hold' action would mark the token used and lock the client
+            # out of ever approving). See _hold_pre_approval.
+            if action in ('hold', 'resume'):
+                if action == 'hold':
+                    kpi._hold_pre_approval()
+                else:
+                    kpi._resume_pre_approval()
+                return {'status': True,
+                        'state': kpi.task_state,
+                        'held': bool(kpi.pre_approval_held),
+                        'auto_approves': bool(kpi.client_submitted
+                                              and kpi.task_state == 'pre_approval_pending'
+                                              and kpi.pre_approval_deadline_at),
+                        'deadline_at': (kpi.pre_approval_deadline_at.strftime('%Y-%m-%d %H:%M:%S')
+                                        if kpi.pre_approval_deadline_at else ''),
+                        'server_now': fields.Datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'message': 'Held.' if action == 'hold' else 'Resumed.'}
+
+            # A reject must say why — the admin needs it to act. Enforced here
+            # and not only in the UI: never trust the client.
+            if action == 'reject' and not feedback:
+                return {'status': False, 'message': 'Please tell us what to change.'}
+
+            user = request.env.user
+            res = kpi.record_client_pre_decision(
+                action,
+                partner_name=user.name or '',
+                feedback=feedback,
+                source='web',
+                partner_id=user.partner_id.id if user.partner_id else None,
+            )
+            # Reject → hand the task back to the queue so an admin can assign a
+            # different developer (which re-fires a fresh client approval).
+            # AFTER the engine call: it's what stamps pre_approval_feedback, which
+            # the notification body reads. Only for client-submitted tasks — the
+            # WhatsApp/legacy flow keeps its existing park-in-rework behaviour.
+            if (action == 'reject' and kpi.client_submitted
+                    and res.get('status') != 'already_decided' and not res.get('late')):
+                kpi._return_to_queue_after_reject()
+            return {'status': bool(res.get('status', True)), **res}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"decide_pre_approval: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
     @http.route('/kpi_client_approval/get', type='json', auth='user', methods=['POST'], csrf=False)
     def get_client_approval_detail(self, **params):
         """Return full detail for one KPI the client is reviewing."""
@@ -3098,6 +3325,8 @@ class KpiReportsAPI(http.Controller):
                     # + estimate, which auto-fires the pre-approval pipeline.
                     'published': False,
                     'submitted_by_uid': request.env.user.id,
+                    # Marks the client-only queue + auto-approve path.
+                    'client_submitted': bool(is_client),
                 }
                 # Clients can't pre-assign developers — only admin/manager can.
                 if not is_client:
@@ -3122,6 +3351,17 @@ class KpiReportsAPI(http.Controller):
                     vals['requirement_version'] = requirement_version
                 kpi = kpi_model.create(vals)
                 created_ids.append(kpi.id)
+                # Client submission → tell the admins it's sitting in the queue
+                # needing a developer. Re-nudged while unread by
+                # kra.kpi._cron_nudge_queued_tasks. Never raises.
+                if is_client:
+                    try:
+                        kpi._notify('client_task_queued')
+                        kpi._schedule_queue_nudge()
+                    except Exception as exc:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            "client_task_queued notify failed for kpi %s: %s", kpi.id, exc)
 
             return {'status': True, 'created_count': len(created_ids), 'kpi_ids': created_ids}
         except Exception as e:
@@ -3889,6 +4129,46 @@ class KpiReportsAPI(http.Controller):
             return request.make_response(
                 b'Error generating workspace: ' + str(e).encode(),
                 headers=[('Content-Type', 'text/plain')])
+
+    # 🆕 JSON sibling of the ZIP route above — for the MOBILE APP.
+    # The app can't use the type='http' GET: opening that URL in an external
+    # browser loses the app's Odoo session cookie, so it lands on the login page
+    # instead of downloading. This route rides the same authenticated JSON-RPC
+    # channel every other app call already uses and returns the identical ZIP as
+    # base64, which the app writes to a file and hands to the share/save sheet.
+    @http.route('/kpi_client_workspace/generate_zip_b64', type='json', auth='user', methods=['POST'], csrf=False)
+    def generate_client_workspace_zip_b64(self, **params):
+        """Admin-only: the Generate-Client-Files ZIP, base64-encoded for the app."""
+        import base64 as _b64
+        user = request.env.user
+        if not (user.has_group('kra_kpi_module.group_kra_admin')
+                or user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('base.group_system')):
+            return {'status': False, 'message': 'Not authorized'}
+        if not params.get('client_kra_id'):
+            return {'status': False, 'message': 'Please select a client'}
+        include = params.get('include_data')
+        # Reuse the EXACT same builder as the web download — no duplicated logic.
+        resp = self.generate_client_workspace_zip(
+            client_kra_id=params.get('client_kra_id'),
+            project_kra_id=params.get('project_kra_id') or None,
+            version=params.get('version') or 'v1.0',
+            include_data='1' if include in (True, 1, '1') else '0',
+        )
+        data = resp.data or b''
+        ctype = (resp.headers.get('Content-Type') or '').lower()
+        if 'zip' not in ctype:
+            # The builder returned a text/plain error (e.g. openpyxl missing).
+            msg = data[:200].decode('utf-8', 'ignore') or 'Could not generate the ZIP'
+            return {'status': False, 'message': msg}
+        disp = resp.headers.get('Content-Disposition') or ''
+        m = re.search(r'filename="([^"]+)"', disp)
+        return {
+            'status': True,
+            'filename': m.group(1) if m else 'client_files.zip',
+            'data_b64': _b64.b64encode(data).decode('ascii'),
+            'size': len(data),
+        }
 
     @http.route('/kpi_completion_cert/template/<string:template_name>', type='http', auth='user')
     def download_template(self, template_name='requirement', **kw):

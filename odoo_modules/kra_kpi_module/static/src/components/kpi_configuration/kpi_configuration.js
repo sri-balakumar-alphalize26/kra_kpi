@@ -70,32 +70,48 @@ export class KpiConfiguration extends Component {
                         </div>
                         <small class="text-muted d-block mt-2">Minutes with no heartbeat (tab closed / machine asleep)
                             before a running task auto-pauses as "Away". Used by the browser AND the server.</small>
+
+                        <label class="form-label fw-semibold mt-4">Client approval window (minutes)</label>
+                        <div class="input-group" style="max-width:180px;">
+                            <input type="number" min="1" class="form-control"
+                                   t-model.number="state.client_approval_minutes"
+                                   t-on-change="() => this.saveClientApproval()"/>
+                            <span class="input-group-text">min</span>
+                            <span t-if="state.savedClientApproval" class="input-group-text text-success bg-white border-success">✓</span>
+                        </div>
+                        <small class="text-muted d-block mt-2">How long a client has to approve the developer
+                            assigned to their task before it is auto-approved. Drives the countdown the client
+                            sees in the app.</small>
+
+                        <label class="form-label fw-semibold mt-4">Queue re-nudge gap (minutes)</label>
+                        <div class="input-group" style="max-width:180px;">
+                            <input type="number" min="1" class="form-control"
+                                   t-model.number="state.queue_nudge_minutes"
+                                   t-on-change="() => this.saveQueueNudge()"/>
+                            <span class="input-group-text">min</span>
+                            <span t-if="state.savedQueueNudge" class="input-group-text text-success bg-white border-success">✓</span>
+                        </div>
+                        <small class="text-muted d-block mt-2">Gap between re-notifying admins about a client task
+                            still sitting in the Client Task Queue with no developer.</small>
+
+                        <label class="form-label fw-semibold mt-4">Urgent re-nudge gap (minutes)</label>
+                        <div class="input-group" style="max-width:180px;">
+                            <input type="number" min="1" class="form-control"
+                                   t-model.number="state.urgent_nudge_minutes"
+                                   t-on-change="() => this.saveUrgentNudge()"/>
+                            <span class="input-group-text">min</span>
+                            <span t-if="state.savedUrgentNudge" class="input-group-text text-success bg-white border-success">✓</span>
+                        </div>
+                        <small class="text-muted d-block mt-2">When a developer taps 🚨 <b>Urgent</b> in the Pause
+                            dialog, the owner + coordinators are notified in the app and re-nudged this often
+                            <b>until one of them reads it</b> (also stops when the task resumes).</small>
                     </div>
                 </div>
 
-                <!-- Urgent-pause recipients -->
-                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #dc3545 !important; border-left-style: solid;">
-                    <div class="card-header bg-white fw-bold d-flex align-items-center">
-                        <span class="me-2">🚨</span> Urgent-pause recipients
-                    </div>
-                    <div class="card-body">
-                        <label class="form-label fw-semibold">Extra WhatsApp numbers</label>
-                        <div class="input-group">
-                            <span class="input-group-text"><i class="fa fa-whatsapp text-success"></i></span>
-                            <span class="input-group-text">+<t t-esc="state.dial"/></span>
-                            <input type="text" class="form-control" inputmode="numeric"
-                                   t-att-placeholder="this.urgentPlaceholder()"
-                                   t-att-value="state.urgent_recipients"
-                                   t-on-input="(ev) => this.onUrgentInput(ev)"
-                                   t-on-change="() => this.saveUrgent()"/>
-                            <span t-if="state.savedUrgent" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <small class="text-muted d-block mt-2">Comma-separated local numbers (<b><t t-esc="state.mobileLength"/> digits</b>
-                            each) — the <b>+<t t-esc="state.dial"/></b> code is added automatically on save. When a developer taps
-                            the 🚨 <b>Urgent</b> button in the Pause dialog, their note is sent to these numbers. The owner is
-                            always included too.</small>
-                    </div>
-                </div>
+                <!-- The "Urgent-pause recipients" card (extra WhatsApp numbers) was removed:
+                     those numbers had no user account, so they could only ever be reached over
+                     WhatsApp — and task WhatsApp is now off by default. Urgent goes to
+                     owner + coordinators in the app instead, re-nudged until read. -->
 
                 <!-- Developers -->
                 <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #6366f1 !important; border-left-style: solid;">
@@ -150,12 +166,17 @@ export class KpiConfiguration extends Component {
     setup() {
         this.state = useState({
             away_after_minutes: 5,
-            urgent_recipients: "",
+            // Client-workflow timers (same res.company fields the mobile app edits).
+            client_approval_minutes: 5,
+            queue_nudge_minutes: 30,
+            urgent_nudge_minutes: 5,
             developers: [],
             loading: true,
             error: "",
             savedAway: false,
-            savedUrgent: false,
+            savedClientApproval: false,
+            savedQueueNudge: false,
+            savedUrgentNudge: false,
             // Country / mobile format
             country_id: false,
             dial: "91",
@@ -168,12 +189,13 @@ export class KpiConfiguration extends Component {
                 const cfg = await rpc("/kpi_config/get", {});
                 if (cfg?.status) {
                     if (cfg.away_after_minutes != null) this.state.away_after_minutes = cfg.away_after_minutes;
+                    if (cfg.client_approval_minutes != null) this.state.client_approval_minutes = cfg.client_approval_minutes;
+                    if (cfg.queue_nudge_minutes != null) this.state.queue_nudge_minutes = cfg.queue_nudge_minutes;
+                    if (cfg.urgent_nudge_minutes != null) this.state.urgent_nudge_minutes = cfg.urgent_nudge_minutes;
                     this.state.country_id = cfg.country_id || false;
                     this.state.dial = String(cfg.country_dial_code || "91");
                     this.state.mobileLength = Number(cfg.mobile_length) || 10;
                     this.state.countries = cfg.countries || [];
-                    // Show urgent numbers as clean local parts (dial code is the badge).
-                    this.state.urgent_recipients = this.toLocalList(cfg.urgent_recipients || "");
                 }
                 const devs = await rpc("/kpi_multitask/list", {});
                 if (devs?.status) this.state.developers = devs.developers;
@@ -198,43 +220,9 @@ export class KpiConfiguration extends Component {
         if (ev.target.value !== v) ev.target.value = v;
     }
 
-    // Convert a stored/comma list of numbers into clean LOCAL parts (strip the
-    // dial code) for display in the urgent-recipients field.
-    toLocalList(raw) {
-        const dial = this.state.dial;
-        const len = this.state.mobileLength;
-        return String(raw || "")
-            .split(/[,\n;]+/)
-            .map((p) => {
-                let d = p.replace(/[^\d]/g, "");
-                if (!d) return "";
-                if (dial && d.length > len && d.startsWith(dial)) d = d.slice(dial.length);
-                return d;
-            })
-            .filter(Boolean)
-            .join(", ");
-    }
-
-    urgentPlaceholder() {
-        const n = this.state.mobileLength;
-        const ex = "9".repeat(n);
-        return `${ex}, ${ex}`;
-    }
-
-    // Live sanitize: digits + comma separators only, each number capped to the
-    // country's local length. Keeps a trailing ", " so the next number can start.
-    onUrgentInput(ev) {
-        const raw = ev.target.value || "";
-        const len = this.state.mobileLength;
-        const cleaned = raw.split(",")
-            .map((p) => p.replace(/[^\d]/g, "").slice(0, len))
-            .join(", ")
-            .replace(/\s*,\s*/g, ", ");
-        const trailing = /[,\s]$/.test(raw) && !/[,\s]$/.test(cleaned) ? ", " : "";
-        const val = cleaned + trailing;
-        ev.target.value = val;
-        this.state.urgent_recipients = val;
-    }
+    // NOTE: toLocalList / urgentPlaceholder / onUrgentInput were removed along
+    // with the "Urgent-pause recipients" field — they only existed to format
+    // those bare WhatsApp numbers, which are no longer used anywhere.
 
     async saveCountry(ev) {
         const cid = ev?.target?.value ? parseInt(ev.target.value) : false;
@@ -261,13 +249,27 @@ export class KpiConfiguration extends Component {
         catch (e) { alert(e?.data?.message || "Failed to save."); }
     }
 
-    async saveUrgent() {
-        try {
-            const res = await rpc("/kpi_config/set_urgent", { recipients: this.state.urgent_recipients || "" });
-            // Server stores <dial><local>; show clean local parts back in the field.
-            if (res?.recipients != null) this.state.urgent_recipients = this.toLocalList(res.recipients);
-            this._flash(this.state, "savedUrgent");
-        } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    // Drives pre_approval_deadline_at (kpi_workflow.py _client_approval_minutes) —
+    // i.e. the live countdown the client sees on their approval card in the app.
+    async saveClientApproval() {
+        const val = Math.max(1, parseInt(this.state.client_approval_minutes) || 5);
+        this.state.client_approval_minutes = val;
+        try { await rpc("/kpi_config/set_client_approval", { minutes: val }); this._flash(this.state, "savedClientApproval"); }
+        catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+
+    async saveQueueNudge() {
+        const val = Math.max(1, parseInt(this.state.queue_nudge_minutes) || 30);
+        this.state.queue_nudge_minutes = val;
+        try { await rpc("/kpi_config/set_queue_nudge", { minutes: val }); this._flash(this.state, "savedQueueNudge"); }
+        catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+
+    async saveUrgentNudge() {
+        const val = Math.max(1, parseInt(this.state.urgent_nudge_minutes) || 5);
+        this.state.urgent_nudge_minutes = val;
+        try { await rpc("/kpi_config/set_urgent_nudge", { minutes: val }); this._flash(this.state, "savedUrgentNudge"); }
+        catch (e) { alert(e?.data?.message || "Failed to save."); }
     }
 
     async toggleDev(dev) {

@@ -175,7 +175,7 @@ export default function SignUpScreen({ onDone, goLogin }) {
       </ScrollView>
 
       {/* Country picker */}
-      <Modal visible={pickCountry} transparent animationType="slide" onRequestClose={() => setPickCountry(false)}>
+      <Modal visible={pickCountry} transparent animationType="fade" onRequestClose={() => setPickCountry(false)}>
         <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setPickCountry(false)}>
           <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
             <View style={s.modalHead}>
@@ -236,8 +236,15 @@ const s = StyleSheet.create({
   errHint: { color: COLORS.red, fontSize: 12.5, marginTop: -8, marginBottom: 12, marginLeft: 6 },
 
   // Country picker modal
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  modalSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '75%', paddingBottom: 20 },
+  // Centered dialog (not a bottom sheet) — matches the app's other popups.
+  modalBackdrop: {
+    flex: 1, backgroundColor: 'rgba(15,23,42,0.5)',
+    alignItems: 'center', justifyContent: 'center', padding: 26,
+  },
+  modalSheet: {
+    width: '100%', maxWidth: 360, backgroundColor: '#fff', borderRadius: 20,
+    maxHeight: '70%', paddingBottom: 12, overflow: 'hidden',
+  },
   modalHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: COLORS.line,

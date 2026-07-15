@@ -16,7 +16,9 @@ export async function fetchConfig() {
     return {
       isMock: true,
       away_after_minutes: 5,
-      urgent_recipients: '',
+      client_approval_minutes: 5,
+      queue_nudge_minutes: 30,
+      urgent_nudge_minutes: 5,
       country_id: false,
       country_dial_code: '91',
       mobile_length: 10,
@@ -34,7 +36,9 @@ export async function fetchConfig() {
   return {
     isMock: false,
     away_after_minutes: cfg?.away_after_minutes ?? 5,
-    urgent_recipients: cfg?.urgent_recipients || '',
+    client_approval_minutes: cfg?.client_approval_minutes ?? 5,
+    queue_nudge_minutes: cfg?.queue_nudge_minutes ?? 30,
+    urgent_nudge_minutes: cfg?.urgent_nudge_minutes ?? 5,
     country_id: cfg?.country_id || false,
     country_dial_code: String(cfg?.country_dial_code || '91'),
     mobile_length: Number(cfg?.mobile_length) || 10,
@@ -49,10 +53,28 @@ export async function setAway(minutes) {
   return jsonRpc(serverUrl, '/kpi_config/set_away', { minutes });
 }
 
-export async function setUrgent(recipients) {
+// Minutes a client has to approve the assigned developer before auto-approve.
+export async function setClientApproval(minutes) {
   const { serverUrl } = await getConnection();
-  if (!serverUrl) return { status: true, recipients };
-  return jsonRpc(serverUrl, '/kpi_config/set_urgent', { recipients });
+  if (!serverUrl) return { status: true };
+  return jsonRpc(serverUrl, '/kpi_config/set_client_approval', { minutes });
+}
+
+// Minutes between admin re-nudges for an unread queued client task.
+export async function setQueueNudge(minutes) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true };
+  return jsonRpc(serverUrl, '/kpi_config/set_queue_nudge', { minutes });
+}
+
+// Minutes between admin re-nudges while a 🚨 Urgent pause sits unread.
+// (Replaces setUrgent(recipients): the old "extra WhatsApp numbers" had no user
+// account, so they became unreachable once task WhatsApp was switched off.
+// Urgent now notifies owner + coordinators in the app and repeats until read.)
+export async function setUrgentNudge(minutes) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true };
+  return jsonRpc(serverUrl, '/kpi_config/set_urgent_nudge', { minutes });
 }
 
 export async function setCountry(country_id) {

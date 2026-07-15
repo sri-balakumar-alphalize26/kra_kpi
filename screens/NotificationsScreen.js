@@ -24,12 +24,60 @@ const log = createLogger('NotificationsScreen');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
 
 // Per-event icon + accent color. Falls back to a generic bell.
+//
+// An admin/owner receives ~13 of these, so the COLOUR carries the meaning and the
+// feed stays scannable at a glance:
+//   red    = urgent, someone is blocked right now
+//   amber  = needs YOUR action
+//   orange = sent back / rejected
+//   green  = good news, nothing to do
+//   purple = a decision was recorded
+//   blue   = routine activity
 const EVENT_ICON = {
+  // 🚨 A developer is blocked RIGHT NOW — the loudest thing in the feed.
+  urgent_pause:        { lib: 'mc', name: 'alert-octagram',      color: '#DC2626' },
+
+  // ── Needs action (amber) ──
+  client_task_queued:  { lib: 'mc', name: 'inbox-arrow-down',    color: '#D97706' },
+  internal_approved:   { lib: 'mc', name: 'file-sign',           color: '#D97706' },
+  pre_approval_request:  { lib: 'mc', name: 'account-clock',     color: '#D97706' },
+  pre_approval_reminder: { lib: 'mc', name: 'bell-ring',         color: '#D97706' },
+  partial_timeout:     { lib: 'mc', name: 'timer-sand',          color: '#D97706' },
+
+  // ── Sent back / rejected (orange-red) ──
+  internal_rejected:   { lib: 'mc', name: 'backup-restore',      color: '#EA580C' },
+  client_task_rejected: { lib: 'mc', name: 'account-cancel',     color: '#EA580C' },
+
+  // ── Good news (green) ──
+  final_approved:      { lib: 'mc', name: 'check-decagram',      color: '#16A34A' },
+  self_task_accepted:  { lib: 'mc', name: 'clipboard-check',     color: '#16A34A' },
+
+  // ── Decisions recorded (purple) ──
+  pre_approval_decided:      { lib: 'mc', name: 'gavel',          color: '#7C3AED' },
+  pre_approval_decided_late: { lib: 'mc', name: 'clock-alert',    color: '#7C3AED' },
+  pre_approval_held:         { lib: 'mc', name: 'pause-octagon',  color: '#7C3AED' },
+
+  // ── Routine activity (blue / slate) ──
+  task_created:        { lib: 'mc', name: 'file-plus',           color: '#2563EB' },
   task_assigned:       { lib: 'mc', name: 'account-arrow-right', color: '#1E40AF' },
   reassigned:          { lib: 'mc', name: 'account-switch',      color: '#7C3AED' },
-  task_created:        { lib: 'mc', name: 'file-plus',           color: '#2563EB' },
+  task_reassigned:     { lib: 'mc', name: 'account-arrow-left',  color: '#64748B' },
   self_task_submitted: { lib: 'mc', name: 'clipboard-account',   color: '#0891B2' },
+  self_task_rejected:  { lib: 'mc', name: 'clipboard-remove',    color: '#EA580C' },
+  task_auto_away:      { lib: 'mc', name: 'sleep',               color: '#64748B' },
+  workday_auto_closed: { lib: 'mc', name: 'weather-night',       color: '#64748B' },
 };
+
+// Events that mean "someone has to DO something" → the Action needed tab.
+const ACTION_EVENTS = new Set([
+  'urgent_pause',
+  'client_task_queued',
+  'self_task_submitted',
+  'internal_approved',
+  'pre_approval_request',
+  'pre_approval_reminder',
+  'partial_timeout',
+]);
 
 // "just now" / "5m ago" / "3h ago" / "2d ago" / date. `created` is a server
 // string like "2026-07-13 10:15:00" already in the user's timezone.
@@ -91,7 +139,11 @@ function EventIcon({ event }) {
   );
 }
 
-function Row({ item, index = 0, onPress }) {
+function Row({ item, index = 0, onPress, showWho }) {
+  // A developer is blocked right now — this must not look like a task-created row.
+  const isUrgent = item.event === 'urgent_pause';
+  // Admins get almost every event, so show WHO + WHICH CLIENT on the row itself.
+  const who = showWho ? [item.developer, item.client_name].filter(Boolean) : [];
   // Staggered entrance: each card fades + slides up, delayed by its index so the
   // rows appear one-by-one (delay capped so long lists don't drag).
   const anim = useRef(new Animated.Value(0)).current;
@@ -108,7 +160,7 @@ function Row({ item, index = 0, onPress }) {
   return (
     <Animated.View style={enterStyle}>
     <TouchableOpacity
-      style={[s.row, !item.is_read && s.rowUnread]}
+      style={[s.row, !item.is_read && s.rowUnread, isUrgent && s.rowUrgent]}
       activeOpacity={0.8}
       onPress={() => onPress(item)}
     >
@@ -117,12 +169,31 @@ function Row({ item, index = 0, onPress }) {
       <EventIcon event={item.event} />
       <View style={{ flex: 1, marginLeft: 12 }}>
         <View style={s.rowTop}>
-          <Text style={[s.title, !item.is_read && s.titleUnread]} numberOfLines={1}>
+          <Text style={[s.title, !item.is_read && s.titleUnread, isUrgent && s.titleUrgent]} numberOfLines={1}>
             {item.title || 'Notification'}
           </Text>
+          {isUrgent && <View style={s.urgentPill}><Text style={s.urgentPillTxt}>URGENT</Text></View>}
           <Text style={s.time}>{relativeTime(item.created_at)}</Text>
         </View>
         {!!item.kpi_name && <Text style={s.task} numberOfLines={1}>{item.kpi_name}</Text>}
+        {/* Admin only: 👤 developer · 🏢 client — the two things that tell
+            otherwise-identical rows apart. */}
+        {who.length > 0 && (
+          <View style={s.whoRow}>
+            {!!item.developer && (
+              <View style={s.whoChip}>
+                <Ionicons name="person" size={10} color={COLORS.muted} />
+                <Text style={s.whoTxt} numberOfLines={1}>{item.developer}</Text>
+              </View>
+            )}
+            {!!item.client_name && (
+              <View style={s.whoChip}>
+                <Ionicons name="business" size={10} color={COLORS.muted} />
+                <Text style={s.whoTxt} numberOfLines={1}>{item.client_name}</Text>
+              </View>
+            )}
+          </View>
+        )}
         {!!item.body && <Text style={s.body} numberOfLines={2}>{item.body}</Text>}
       </View>
       {!item.is_read && <View style={s.dot} />}
@@ -131,18 +202,34 @@ function Row({ item, index = 0, onPress }) {
   );
 }
 
-export default function NotificationsScreen({ onBack, onOpen }) {
+export default function NotificationsScreen({ onBack, onOpen, isClient = false }) {
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isMock, setIsMock] = useState(false);
-  const [tab, setTab] = useState('all'); // 'all' | 'unread'
+  const [isAdmin, setIsAdmin] = useState(false); // server-resolved; gates the who-line
+  const [tab, setTab] = useState('all'); // 'all' | 'unread' | 'action'
+
+  // How many rows actually need someone to act — drives the tab badge.
+  const actionCount = useMemo(
+    () => items.filter((n) => ACTION_EVENTS.has(n.event)).length,
+    [items],
+  );
 
   // Client-side filter (we already hold every row + its is_read flag), then
   // bucket into date sections. Tab switching is instant, no refetch.
   const sections = useMemo(() => {
-    const visible = tab === 'unread' ? items.filter((n) => !n.is_read) : items;
+    let visible = items;
+    if (tab === 'unread') visible = items.filter((n) => !n.is_read);
+    else if (tab === 'action') {
+      // Only the act-on-me rows, urgent first — a blocked developer outranks
+      // everything else regardless of when it arrived.
+      visible = items
+        .filter((n) => ACTION_EVENTS.has(n.event))
+        .slice()
+        .sort((a, b) => (b.event === 'urgent_pause') - (a.event === 'urgent_pause'));
+    }
     return groupByDay(visible);
   }, [items, tab]);
 
@@ -152,6 +239,7 @@ export default function NotificationsScreen({ onBack, onOpen }) {
       setItems(res.items || []);
       setUnread(res.unreadCount || 0);
       setIsMock(!!res.isMock);
+      setIsAdmin(!!res.isAdmin);
     } catch (e) {
       log.warn('load failed', e?.message);
     }
@@ -185,8 +273,14 @@ export default function NotificationsScreen({ onBack, onOpen }) {
         log.warn('markRead failed', e?.message);
       }
     }
-    if (onOpen && item.kpi_id) onOpen('actionboard', item.kpi_id);
-  }, [onOpen]);
+    // Role decides the destination. A CLIENT has no Action Board — it loads 0
+    // tasks for them and then can't even fetch the row — so their tasks open in
+    // My Requests. Uses the KRA/KPI role (kpi_role: admin|client|user), the same
+    // single value Login Management shows.
+    if (onOpen && item.kpi_id) {
+      onOpen(isClient ? 'mytasks' : 'actionboard', item.kpi_id);
+    }
+  }, [onOpen, isClient]);
 
   const onMarkAll = useCallback(async () => {
     if (!unread) return;
@@ -228,9 +322,15 @@ export default function NotificationsScreen({ onBack, onOpen }) {
         </TouchableOpacity>
       </View>
 
-      {/* All / Unread segmented control — each tab shows a count badge. */}
+      {/* All / Unread / Action needed — each tab shows a count badge. "Action
+          needed" is the admin's answer to "what do I actually have to do?",
+          since they receive nearly every event type. */}
       <View style={s.tabsBar}>
-        {[{ k: 'all', label: 'All', count: items.length }, { k: 'unread', label: 'Unread', count: unread }].map((t) => {
+        {[
+          { k: 'all', label: 'All', count: items.length },
+          { k: 'unread', label: 'Unread', count: unread },
+          { k: 'action', label: 'Action needed', count: actionCount },
+        ].map((t) => {
           const on = tab === t.k;
           return (
             <TouchableOpacity
@@ -263,7 +363,9 @@ export default function NotificationsScreen({ onBack, onOpen }) {
         <SectionList
           sections={sections}
           keyExtractor={(it) => String(it.id)}
-          renderItem={({ item, index }) => <Row item={item} index={index} onPress={onRowPress} />}
+          renderItem={({ item, index }) => (
+            <Row item={item} index={index} onPress={onRowPress} showWho={isAdmin} />
+          )}
           renderSectionHeader={({ section }) => (
             <Text style={s.sectionHeaderTxt}>{section.title.toUpperCase()}</Text>
           )}
@@ -273,15 +375,21 @@ export default function NotificationsScreen({ onBack, onOpen }) {
           ListEmptyComponent={
             <View style={s.empty}>
               <Ionicons
-                name={tab === 'unread' ? 'checkmark-done-circle-outline' : 'notifications-off-outline'}
+                name={tab === 'all' ? 'notifications-off-outline' : 'checkmark-done-circle-outline'}
                 size={40}
                 color={COLORS.faint}
               />
-              <Text style={s.emptyTxt}>{tab === 'unread' ? "You're all caught up" : 'No notifications yet'}</Text>
+              <Text style={s.emptyTxt}>
+                {tab === 'action' ? 'Nothing needs your action'
+                  : tab === 'unread' ? "You're all caught up"
+                  : 'No notifications yet'}
+              </Text>
               <Text style={s.emptySub}>
-                {tab === 'unread'
-                  ? 'No unread notifications right now.'
-                  : "You'll see task assignments and uploads here."}
+                {tab === 'action'
+                  ? 'No urgent pauses, queued client tasks or reviews waiting on you.'
+                  : tab === 'unread'
+                    ? 'No unread notifications right now.'
+                    : "You'll see task assignments and uploads here."}
               </Text>
             </View>
           }
@@ -352,6 +460,15 @@ const s = StyleSheet.create({
     marginBottom: 10, overflow: 'hidden', ...SHADOW,
   },
   rowUnread: { backgroundColor: '#F0F5FF' },
+  // 🚨 Urgent — a blocked developer. Tinted + outlined so it can't be mistaken
+  // for routine activity in a feed the admin receives everything into.
+  rowUrgent: { backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA' },
+  titleUrgent: { color: '#B91C1C', fontWeight: '900' },
+  urgentPill: {
+    backgroundColor: '#DC2626', borderRadius: 6,
+    paddingHorizontal: 6, paddingVertical: 2, marginLeft: 6,
+  },
+  urgentPillTxt: { color: '#fff', fontSize: 9.5, fontWeight: '900', letterSpacing: 0.5 },
   // Colored left edge (event type). Absolute so it fills the card height.
   rowAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
   rowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -360,6 +477,13 @@ const s = StyleSheet.create({
   titleUnread: { fontWeight: '800', color: COLORS.navy },
   time: { fontSize: 11, color: COLORS.faint, marginLeft: 8 },
   task: { fontSize: 12.5, color: COLORS.primary, marginTop: 2, fontWeight: '600' },
+  // Admin-only "who + which client" chips.
+  whoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 5 },
+  whoChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '58%',
+    backgroundColor: '#F1F5FB', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2,
+  },
+  whoTxt: { fontSize: 11, color: COLORS.muted, fontWeight: '700', flexShrink: 1 },
   body: { fontSize: 12.5, color: COLORS.muted, marginTop: 3, lineHeight: 17 },
   dot: { width: 9, height: 9, borderRadius: 5, backgroundColor: COLORS.primary, marginLeft: 8, marginTop: 4 },
 

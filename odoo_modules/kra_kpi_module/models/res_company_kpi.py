@@ -40,11 +40,26 @@ class ResCompany(models.Model):
         help="Minutes with no heartbeat (tab closed / machine asleep) before a "
              "running task auto-pauses as 'Away'. Read by the browser and the server.")
 
-    kpi_urgent_recipients = fields.Char(
-        string='Urgent-pause recipients',
-        help="Extra WhatsApp numbers (comma-separated) that receive the note when a "
-             "developer taps the 🚨 Urgent button in the Pause dialog. The owner is "
-             "always included in addition to these.")
+    client_approval_minutes = fields.Integer(
+        string='Client Approval Window (minutes)',
+        default=5,
+        help="How long a client has to approve the developer assigned to their task "
+             "before it is auto-approved. Read by request_client_pre_approval() when "
+             "setting pre_approval_deadline_at.")
+
+    queue_nudge_minutes = fields.Integer(
+        string='Queue Re-nudge Gap (minutes)',
+        default=30,
+        help="Gap between re-notifying admins about a client task still sitting in "
+             "the Client Task Queue with no developer. Nudging stops once an admin "
+             "reads the notification. Read by kra.kpi._cron_nudge_queued_tasks.")
+
+    urgent_nudge_minutes = fields.Integer(
+        string='Urgent Re-nudge Gap (minutes)',
+        default=5,
+        help="Gap between re-notifying admins that a developer 🚨 Urgent-paused a task. "
+             "Nudging stops once an admin reads the notification (or the task resumes). "
+             "Read by kra.kpi._cron_nudge_urgent_pause.")
 
     kpi_wa_sender_number = fields.Char(
         string='App OTP Sender (WhatsApp)',

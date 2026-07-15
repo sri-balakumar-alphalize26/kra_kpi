@@ -369,7 +369,7 @@ export default function LoginManagementScreen({ onBack }) {
       )}
 
       {/* Role picker */}
-      <Modal visible={!!roleForUser} transparent animationType="slide" onRequestClose={() => setRoleForUser(null)}>
+      <Modal visible={!!roleForUser} transparent animationType="fade" onRequestClose={() => setRoleForUser(null)}>
         <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setRoleForUser(null)}>
           <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
             <View style={s.modalHead}>
@@ -514,8 +514,15 @@ const s = StyleSheet.create({
   previewTxt: { fontSize: 13.5, color: '#0B3D0B', lineHeight: 20 },
 
   // Role picker modal
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  modalSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '75%', paddingBottom: 20 },
+  // Centered dialog (not a bottom sheet) — matches the app's other popups.
+  modalBackdrop: {
+    flex: 1, backgroundColor: 'rgba(15,23,42,0.5)',
+    alignItems: 'center', justifyContent: 'center', padding: 26,
+  },
+  modalSheet: {
+    width: '100%', maxWidth: 360, backgroundColor: '#fff', borderRadius: 20,
+    maxHeight: '70%', paddingBottom: 12, overflow: 'hidden',
+  },
   modalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   modalTitle: { fontSize: 17, fontWeight: '800', color: COLORS.navy },
   modalClose: { fontSize: 18, color: COLORS.muted, fontWeight: '700' },

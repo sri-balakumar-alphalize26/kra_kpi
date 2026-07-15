@@ -5,7 +5,11 @@
 // role logic is needed. Falls back to mock data when no server is configured.
 //
 // Notification shape (from get_notifications map_rec):
-//   { id, kpi_id, kpi_name, event, title, body, role, is_read, created_at }
+//   { id, kpi_id, kpi_name, developer, client_name, event, title, body, role,
+//     is_read, created_at }
+// `developer` + `client_name` let the feed show WHO and WHICH CLIENT each row is
+// about — only rendered for admins (see isAdmin below), since a developer seeing
+// their own name on every row is noise.
 
 import { getConnection } from '../api/session';
 import { jsonRpc } from '../api/odooApi';
@@ -28,7 +32,7 @@ const MOCK_ITEMS = [
   },
 ];
 
-// Fetch the feed. Returns { items, unreadCount, isMock }.
+// Fetch the feed. Returns { items, unreadCount, isAdmin, isMock }.
 export async function fetchNotifications({ limit = 50, offset = 0, onlyUnread = false } = {}) {
   const { serverUrl } = await getConnection();
   if (serverUrl) {
@@ -36,8 +40,8 @@ export async function fetchNotifications({ limit = 50, offset = 0, onlyUnread = 
       limit, offset, only_unread: onlyUnread,
     });
     const items = res?.items || [];
-    log.info('fetchNotifications ←', { count: items.length, unread: res?.unread_count });
-    return { items, unreadCount: res?.unread_count || 0, isMock: false };
+    log.info('fetchNotifications ←', { count: items.length, unread: res?.unread_count, isAdmin: !!res?.is_admin });
+    return { items, unreadCount: res?.unread_count || 0, isAdmin: !!res?.is_admin, isMock: false };
   }
   log.info('fetchNotifications — no server, using mock');
   await new Promise((r) => setTimeout(r, 300));
@@ -45,6 +49,7 @@ export async function fetchNotifications({ limit = 50, offset = 0, onlyUnread = 
   return {
     items,
     unreadCount: MOCK_ITEMS.filter((i) => !i.is_read).length,
+    isAdmin: true,          // offline demo → show the admin view
     isMock: true,
   };
 }

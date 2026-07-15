@@ -38,6 +38,15 @@ class WhatsAppConfigKpi(models.Model):
     notify_task_auto_away        = fields.Boolean(default=True, string='Notify: Task Auto-Paused (Away)',
         help='WhatsApp the developer when the idle/auto-away cron pauses their running task (tab closed or board idle). Default ON.')
 
+    # MASTER SWITCH for every task-related WhatsApp message. OFF (the default)
+    # means notifications go to the app only — the in-app feed + Expo push. The
+    # per-event notify_* toggles above only matter while this is ON.
+    # Password-reset OTP is NOT affected: it never goes through kra.kpi._notify().
+    kpi_wa_task_notifications    = fields.Boolean(default=False, string='Send task notifications on WhatsApp',
+        help='OFF (default): task notifications are delivered in the app only (bell + push). '
+             'ON: also send them on WhatsApp, subject to the per-event toggles above. '
+             'Password-reset OTP messages are unaffected either way.')
+
     # Master switch for the mobile push (Expo) banner sent alongside the in-app
     # notification feed on assignment/upload events. Default ON.
     kpi_push_enabled             = fields.Boolean(default=True, string='Mobile Push Notifications',

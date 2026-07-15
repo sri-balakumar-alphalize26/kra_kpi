@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
-  KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Modal,
+  KeyboardAvoidingView, Platform, ActivityIndicator, Modal,
   StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -101,6 +101,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   // Which dropdown modal is open: 'client' | 'project' | 'defPriority' |
   // 'defUser' | `rowPriority:<i>` | `rowUser:<i>` | null
   const [picker, setPicker] = useState(null);
+  // Missing mandatory fields → styled popup (replaces the native Alert).
+  const [missingPopup, setMissingPopup] = useState(null); // string[] | null
 
   const defaults = useMemo(() => ({
     hours: Number(defHours) || 0,
@@ -126,11 +128,11 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         // reviewable offline).
         const allowed = !!(info.isMock || info.is_system || info.is_owner || info.is_admin || info.is_client);
         setCanCreate(allowed);
+        // KRA/KPI role ONLY (Admin / Client / User) — the app never shows the
+        // Odoo role (Administrator/Manager). Mirrors res.users._compute_kpi_role,
+        // order included.
         setRoleName(
-          info.is_system ? 'Administrator'
-            : info.is_owner ? 'Owner'
-            : info.is_admin ? 'Admin'
-            : info.is_developer ? 'Developer'
+          (info.is_system || info.is_owner || info.is_admin) ? 'Admin'
             : info.is_client ? 'Client'
             : 'User'
         );
@@ -310,28 +312,27 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     // Collect ALL missing mandatory fields and show them together in a popup,
     // and mark the offending fields with a red outline (touched=true).
     const missing = [];
-    if (!clientId) missing.push('Client (Root KRA)');
-    if (!subKraId) missing.push('Project / Sub-KRA');
+    // A client never picks a Client/Project: the picker is hidden and their own
+    // project is auto-filled into subKraId on mount. Only validate what they can
+    // actually see, or they'd be blocked forever by a field they can't fill.
+    if (!isClientOnly && !clientId) missing.push('Client (Root KRA)');
+    if (!subKraId) missing.push(isClientOnly ? 'Project' : 'Project / Sub-KRA');
     const named = tasks.filter((r) => r.name.trim());
     if (!named.length) missing.push('At least one task with a name');
 
     if (missing.length) {
       setTouched(true);
       log.info('create: validation failed', { missing });
-      Alert.alert(
-        'Missing required fields',
-        `Please fill in:\n\n${missing.map((m) => `•  ${m}`).join('\n')}`,
-        [{ text: 'OK' }]
-      );
+      setMissingPopup(missing);
       return;
     }
 
     log.info('create all tasks', { subKraId, docType: DOC_TYPE, count: named.length, hasFile: !!sourceDoc, version });
     setCreating(true);
     try {
-      const rows = named.map((r) => svc.buildTaskRow(isClientOnly
-        ? { ...r, estimate_hours: 0, estimate_minutes: 0, priority: 'regular', primary_user_id: '' }
-        : r));
+      // A client sets their own estimate + priority; only the developer
+      // assignment stays internal (they have no Developer picker).
+      const rows = named.map((r) => svc.buildTaskRow(isClientOnly ? { ...r, primary_user_id: '' } : r));
       const res = await svc.createBulkTasks({
         subKraId,
         docType: DOC_TYPE,
@@ -595,75 +596,75 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                   multiline
                 />
 
-                {!isClientOnly && (
-                  <>
-                    <View style={s.rowSplit}>
-                      <View style={s.half}>
-                        <Text style={s.miniLabel}>Hours</Text>
-                        <TextInput
-                          style={s.numInput} keyboardType="number-pad"
-                          value={String(row.estimate_hours)} onChangeText={(t) => updateRow(i, { estimate_hours: t.replace(/[^0-9]/g, '') })}
-                        />
-                      </View>
-                      <View style={s.half}>
-                        <Text style={s.miniLabel}>Minutes</Text>
-                        <TextInput
-                          style={s.numInput} keyboardType="number-pad"
-                          value={String(row.estimate_minutes)}
-                          onChangeText={(t) => {
-                            let m = parseInt(t.replace(/[^0-9]/g, ''), 10);
-                            if (isNaN(m)) m = 0; if (m > 59) m = 59;
-                            updateRow(i, { estimate_minutes: m });
-                          }}
-                        />
-                      </View>
+                {/* Estimate + Priority are open to everyone (clients included).
+                    Only the Developer picker stays internal. */}
+                <View style={s.rowSplit}>
+                  <View style={s.half}>
+                    <Text style={s.miniLabel}>Hours</Text>
+                    <TextInput
+                      style={s.numInput} keyboardType="number-pad"
+                      value={String(row.estimate_hours)} onChangeText={(t) => updateRow(i, { estimate_hours: t.replace(/[^0-9]/g, '') })}
+                    />
+                  </View>
+                  <View style={s.half}>
+                    <Text style={s.miniLabel}>Minutes</Text>
+                    <TextInput
+                      style={s.numInput} keyboardType="number-pad"
+                      value={String(row.estimate_minutes)}
+                      onChangeText={(t) => {
+                        let m = parseInt(t.replace(/[^0-9]/g, ''), 10);
+                        if (isNaN(m)) m = 0; if (m > 59) m = 59;
+                        updateRow(i, { estimate_minutes: m });
+                      }}
+                    />
+                  </View>
+                </View>
+                <View style={s.rowSplit}>
+                  <View style={s.half}>
+                    <Text style={s.miniLabel}>Priority</Text>
+                    <Selector small value={prioLabel(row.priority)} onPress={() => setPicker(`rowPriority:${i}`)} />
+                  </View>
+                  {isClientOnly ? <View style={s.half} /> : (
+                    <View style={s.half}>
+                      <Text style={s.miniLabel}>Developer</Text>
+                      <Selector small placeholder="None" value={userName(row.primary_user_id)} onPress={() => setPicker(`rowUser:${i}`)} />
                     </View>
-                    <View style={s.rowSplit}>
-                      <View style={s.half}>
-                        <Text style={s.miniLabel}>Priority</Text>
-                        <Selector small value={prioLabel(row.priority)} onPress={() => setPicker(`rowPriority:${i}`)} />
-                      </View>
-                      <View style={s.half}>
-                        <Text style={s.miniLabel}>Developer</Text>
-                        <Selector small placeholder="None" value={userName(row.primary_user_id)} onPress={() => setPicker(`rowUser:${i}`)} />
-                      </View>
-                    </View>
-                  </>
-                )}
+                  )}
+                </View>
               </View>
             ))
           )}
         </View>
 
         {/* ---- 4. Defaults for new rows ---- */}
-        {!isClientOnly && (
-          <Section n="4" title="Defaults for new rows" icon="settings-outline">
-            <Text style={s.hintTxt}>Applied when adding rows or importing — each row stays editable above.</Text>
-            <View style={s.rowSplit}>
-              <View style={s.half}>
-                <Label>Default Hours</Label>
-                <TextInput style={s.numInput} keyboardType="number-pad" value={defHours} onChangeText={(t) => setDefHours(t.replace(/[^0-9]/g, ''))} />
-              </View>
-              <View style={s.half}>
-                <Label>Default Minutes</Label>
-                <TextInput
-                  style={s.numInput} keyboardType="number-pad" value={defMinutes}
-                  onChangeText={(t) => { let m = parseInt(t.replace(/[^0-9]/g, ''), 10); if (isNaN(m)) m = 0; if (m > 59) m = 59; setDefMinutes(String(m)); }}
-                />
-              </View>
+        <Section n="4" title="Defaults for new rows" icon="settings-outline">
+          <Text style={s.hintTxt}>Applied when adding rows or importing — each row stays editable above.</Text>
+          <View style={s.rowSplit}>
+            <View style={s.half}>
+              <Label>Default Hours</Label>
+              <TextInput style={s.numInput} keyboardType="number-pad" value={defHours} onChangeText={(t) => setDefHours(t.replace(/[^0-9]/g, ''))} />
             </View>
-            <View style={s.rowSplit}>
-              <View style={s.half}>
-                <Label>Default Priority</Label>
-                <Selector small value={prioLabel(defPriority)} onPress={() => setPicker('defPriority')} />
-              </View>
+            <View style={s.half}>
+              <Label>Default Minutes</Label>
+              <TextInput
+                style={s.numInput} keyboardType="number-pad" value={defMinutes}
+                onChangeText={(t) => { let m = parseInt(t.replace(/[^0-9]/g, ''), 10); if (isNaN(m)) m = 0; if (m > 59) m = 59; setDefMinutes(String(m)); }}
+              />
+            </View>
+          </View>
+          <View style={s.rowSplit}>
+            <View style={s.half}>
+              <Label>Default Priority</Label>
+              <Selector small value={prioLabel(defPriority)} onPress={() => setPicker('defPriority')} />
+            </View>
+            {isClientOnly ? <View style={s.half} /> : (
               <View style={s.half}>
                 <Label>Default Developer</Label>
                 <Selector small placeholder="None" value={userName(defUserId)} onPress={() => setPicker('defUser')} />
               </View>
-            </View>
-          </Section>
-        )}
+            )}
+          </View>
+        </Section>
       </ScrollView>
 
       {/* Sticky footer actions */}
@@ -681,6 +682,37 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Styled "missing required fields" popup (replaces the native Alert) */}
+      <Modal visible={!!missingPopup} transparent animationType="fade" onRequestClose={() => setMissingPopup(null)}>
+        <View style={s.missWrap}>
+          <View style={s.missCard}>
+            <View style={s.missHead}>
+              <Ionicons name="alert-circle" size={20} color="#fff" />
+              <Text style={s.missTitle}>Missing required fields</Text>
+              <TouchableOpacity onPress={() => setMissingPopup(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.missPad}>
+              <Text style={s.missLead}>
+                Please fill {missingPopup && missingPopup.length === 1 ? 'in this field' : 'these in'} before creating tasks:
+              </Text>
+              {(missingPopup || []).map((m) => (
+                <View key={m} style={s.missRow}>
+                  <View style={s.missDot} />
+                  <Text style={s.missRowTxt}>{m}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={s.missFoot}>
+              <TouchableOpacity style={s.missBtn} onPress={() => setMissingPopup(null)} activeOpacity={0.9}>
+                <Text style={s.missBtnTxt}>Got it</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Picker modal */}
       <PickerModal
@@ -787,15 +819,14 @@ function PickerModal({
   }
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={onClose}>
         <TouchableOpacity activeOpacity={1} style={s.modalSheet}>
-          <View style={s.modalHandle} />
           <Text style={s.modalTitle}>{title}</Text>
           {items.length === 0 ? (
             <Text style={s.modalEmpty}>Nothing to choose.</Text>
           ) : (
-            <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
               {items.map((it) => (
                 <TouchableOpacity key={it.key} style={s.modalItem} onPress={it.onPress}>
                   <Text style={s.modalItemTxt}>{it.label}</Text>
@@ -823,10 +854,11 @@ const s = StyleSheet.create({
   lockBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 26, backgroundColor: COLORS.primary, borderRadius: 13, paddingHorizontal: 24, height: 50 },
   lockBtnTxt: { color: '#fff', fontSize: 15.5, fontWeight: '800' },
 
+  // Transparent heading — the gradient shows through. Only the icon buttons keep
+  // their white square chip (see iconBtn below) so they stay readable.
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 14, paddingBottom: 10, backgroundColor: '#fff',
-    borderBottomWidth: 1, borderBottomColor: COLORS.line,
+    paddingHorizontal: 14, paddingBottom: 10,
   },
   hBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', ...SHADOW },
@@ -911,9 +943,28 @@ const s = StyleSheet.create({
   },
   createTxt: { color: '#fff', fontSize: 16, fontWeight: '800' },
 
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'flex-end' },
-  modalSheet: { backgroundColor: '#fff', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 18, paddingBottom: 28 },
-  modalHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#D5DCE8', marginBottom: 14 },
+  // "Missing required fields" popup — centered card, amber header.
+  missWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  missCard: { width: '100%', maxWidth: 400, backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden' },
+  missHead: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: COLORS.amber, paddingHorizontal: 16, paddingVertical: 13 },
+  missTitle: { flex: 1, fontSize: 16.5, fontWeight: '900', color: '#fff' },
+  missPad: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 6 },
+  missLead: { fontSize: 13.5, color: COLORS.muted, marginBottom: 8, lineHeight: 19 },
+  missRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  missDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: COLORS.red },
+  missRowTxt: { flex: 1, fontSize: 14.5, color: COLORS.ink, fontWeight: '700' },
+  missFoot: { paddingHorizontal: 18, paddingVertical: 14, borderTopWidth: 1, borderTopColor: COLORS.line, marginTop: 8 },
+  missBtn: { height: 48, borderRadius: 12, backgroundColor: COLORS.amber, alignItems: 'center', justifyContent: 'center' },
+  missBtnTxt: { color: '#fff', fontWeight: '900', fontSize: 15 },
+
+  // Centered dialog (not a bottom sheet) — matches the app's other popups.
+  modalBackdrop: {
+    flex: 1, backgroundColor: 'rgba(15,23,42,0.5)',
+    alignItems: 'center', justifyContent: 'center', padding: 26,
+  },
+  modalSheet: {
+    width: '100%', maxWidth: 360, backgroundColor: '#fff', borderRadius: 22, padding: 18,
+  },
   modalTitle: { fontSize: 17, fontWeight: '900', color: COLORS.navy, marginBottom: 10 },
   modalEmpty: { color: COLORS.muted, fontSize: 14, paddingVertical: 14 },
   modalItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F3F8' },

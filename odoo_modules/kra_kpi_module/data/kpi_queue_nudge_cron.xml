@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Every 5 minutes: re-notify admins about client-submitted tasks that
+             are still sitting in the Client Task Queue with no developer, as long
+             as the admins' `client_task_queued` notification is still UNREAD.
+             Once any admin reads it (or a developer is assigned) the nudging
+             stops. The gap between nudges is res.company.queue_nudge_minutes
+             (default 30) — editable in the app's Configuration screen — and the
+             repeats are capped by kra.kpi.QUEUE_NUDGE_MAX.
+             See models/kpi_workflow.py _cron_nudge_queued_tasks. -->
+        <record id="ir_cron_kpi_queue_nudge" model="ir.cron">
+            <field name="name">KRA/KPI: Re-nudge admins about unread queued client tasks</field>
+            <field name="model_id" ref="model_kra_kpi"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_nudge_queued_tasks()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

@@ -18,6 +18,7 @@ import {
   startTask, pauseTask, resumeTask, completeTask, reassignTask, createProgress,
   CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
   getWorkdayStatus, startWorkday, endWorkday, selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
+  acceptSelfCreated, rejectSelfCreated,
 } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
 
@@ -119,6 +120,10 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
   const canResume = ['paused', 'hold', 'rework'].includes(st);
   const canComplete = ['in_progress', 'paused', 'hold', 'rework'].includes(st);
   const canPause = st === 'in_progress';
+  // Exactly the "Pending Review" lane rule (laneForTask in services/kpiActions.js)
+  // and the same condition the server enforces on accept/reject_self_created.
+  // Independent of task_state: the dev may already be working it.
+  const awaitingReview = !!task.is_self_created && !task.admin_accepted;
   return (
     <>
       {/* Meta */}
@@ -157,6 +162,15 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin }) {
           <View style={s.btnBusy}><ActivityIndicator color={COLORS.primary} /></View>
         ) : (
           <>
+            {/* Pending Review — a developer created this task themselves and it
+                stays OUT of the official flow until an admin decides. Only the
+                admin sees these, and only while it's still awaiting acceptance. */}
+            {isAdmin && awaitingReview && (
+              <Btn label="Accept" icon="checkmark-done" kind="green" onPress={() => onAction('acceptSelf', task)} />
+            )}
+            {isAdmin && awaitingReview && (
+              <Btn label="Reject" icon="close-circle" kind="ghostRed" onPress={() => onAction('rejectSelf', task)} />
+            )}
             {canStart && <Btn label="Start" icon="play" kind="primary" onPress={() => onAction('start', task)} />}
             {canResume && <Btn label="Resume" icon="play" kind="green" onPress={() => onAction('resume', task)} />}
             {canPause && <Btn label="Pause" icon="pause" kind="amber" onPress={() => onAction('pause', task)} />}
@@ -440,6 +454,13 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
   const [finishPartial, setFinishPartial] = useState(false);
   const [finishSummary, setFinishSummary] = useState('');
   const [checklist, setChecklist] = useState({});
+
+  // Pending Review — admin accepts (with a type) or sends back (with a note) a
+  // task a developer created themselves.
+  const [acceptFor, setAcceptFor] = useState(null);
+  const [acceptType, setAcceptType] = useState('requirement');
+  const [rejectFor, setRejectFor] = useState(null);
+  const [rejectNote, setRejectNote] = useState('');
 
   // Filters
   const [filterAssignee, setFilterAssignee] = useState(null); // user id or null
@@ -770,6 +791,19 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
       setChecklist({});
       return;
     }
+    // Pending Review — accepting also CATEGORISES the task (its provisional
+    // TASK-### ref is re-numbered into REQ/UPT/BUG), so the admin must pick a
+    // type; rejecting asks for a note the developer will see.
+    if (kind === 'acceptSelf') {
+      setAcceptFor(task);
+      setAcceptType('requirement');
+      return;
+    }
+    if (kind === 'rejectSelf') {
+      setRejectFor(task);
+      setRejectNote('');
+      return;
+    }
 
     setBusyId(task.id);
     try {
@@ -832,6 +866,37 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
       if (res && res.status === false) Alert.alert('Cannot finish', res.message || 'Failed');
       await load({ silent: true });
     } catch (e) { Alert.alert('Error', e.message || 'Failed'); }
+    finally { setBusyId(null); }
+  }
+
+  // Pending Review → accept into the official flow, categorised as REQ/UPT/BUG.
+  async function submitAcceptSelf() {
+    const task = acceptFor;
+    const docType = acceptType;
+    setAcceptFor(null);
+    if (!task) return;
+    setBusyId(task.id);
+    try {
+      await acceptSelfCreated(task.id, docType);
+      await load({ silent: true });
+    } catch (e) { Alert.alert('Cannot accept', e.message || 'Failed'); }
+    finally { setBusyId(null); }
+  }
+
+  // Pending Review → send back to the developer with a note. The note is what
+  // tells them what to fix, so it's required (the server allows an empty one,
+  // but "No reason given" helps nobody).
+  async function submitRejectSelf() {
+    if (!rejectNote.trim()) return;
+    const task = rejectFor;
+    const note = rejectNote.trim();
+    setRejectFor(null);
+    if (!task) return;
+    setBusyId(task.id);
+    try {
+      await rejectSelfCreated(task.id, note, false);
+      await load({ silent: true });
+    } catch (e) { Alert.alert('Cannot send back', e.message || 'Failed'); }
     finally { setBusyId(null); }
   }
 
@@ -1492,6 +1557,103 @@ export default function KpiActionBoard({ onBack, focusTaskId, onFocusHandled, fo
         </View>
       </Modal>
 
+      {/* Pending Review → ACCEPT. Accepting also categorises the task: the server
+          re-numbers its provisional TASK-### into the chosen REQ/UPT/BUG sequence
+          and prefixes the name, which is exactly what the "Task created" popup
+          promises the developer. */}
+      <Modal visible={!!acceptFor} transparent animationType="fade" onRequestClose={() => setAcceptFor(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headGreenSoft]}>
+              <Text style={s.headGreenSoftTitle}>✓  Accept task</Text>
+              <TouchableOpacity onPress={() => setAcceptFor(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#0F5132" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              <Text style={s.createdName} numberOfLines={2}>{acceptFor?.name}</Text>
+              <Text style={s.modalLabel}>Task type</Text>
+              <View style={s.typeRow}>
+                {[
+                  { key: 'requirement', label: 'Requirement', ref: 'REQ' },
+                  { key: 'update', label: 'Update', ref: 'UPT' },
+                  { key: 'bug', label: 'Bug', ref: 'BUG' },
+                ].map((t) => {
+                  const on = acceptType === t.key;
+                  return (
+                    <TouchableOpacity
+                      key={t.key} style={[s.typeChip, on && s.typeChipOn]}
+                      onPress={() => setAcceptType(t.key)} activeOpacity={0.85}
+                    >
+                      <Text style={[s.typeChipTxt, on && s.typeChipTxtOn]}>{t.label}</Text>
+                      <Text style={[s.typeChipRef, on && s.typeChipTxtOn]}>{t.ref}-###</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <View style={s.createdInfo}>
+                <Ionicons name="information-circle-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
+                <Text style={s.createdInfoTxt}>
+                  It enters the official flow and gets a real reference. If the developer
+                  hasn't started, the client is asked to approve; any time already logged is kept.
+                </Text>
+              </View>
+            </View>
+            <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setAcceptFor(null)}>
+                <Text style={s.footCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.footConfirm, { backgroundColor: COLORS.green }]} onPress={submitAcceptSelf}>
+                <Text style={s.footConfirmTxt}>Accept</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Pending Review → REJECT (send back). The note is what tells the developer
+          what to fix, so it's required here. The task stays in Pending Review. */}
+      <Modal visible={!!rejectFor} transparent animationType="fade" onRequestClose={() => setRejectFor(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headAmber]}>
+              <Text style={s.headAmberTitle}>↩  Send back to developer</Text>
+              <TouchableOpacity onPress={() => setRejectFor(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#7a5200" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              <Text style={s.createdName} numberOfLines={2}>{rejectFor?.name}</Text>
+              <Text style={s.modalLabel}>What needs to change? (required)</Text>
+              <TextInput
+                style={s.reasonInput}
+                placeholder="e.g. Wrong project — move it under Alphalize > Phase 2"
+                placeholderTextColor={COLORS.faint}
+                value={rejectNote} onChangeText={setRejectNote} multiline
+              />
+              <View style={s.createdInfo}>
+                <Ionicons name="information-circle-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
+                <Text style={s.createdInfoTxt}>
+                  The developer is notified with this note and the task stays in Pending Review
+                  so they can fix and resubmit it.
+                </Text>
+              </View>
+            </View>
+            <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setRejectFor(null)}>
+                <Text style={s.footCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.footConfirm, { backgroundColor: COLORS.red }, !rejectNote.trim() && { opacity: 0.5 }]}
+                onPress={submitRejectSelf} disabled={!rejectNote.trim()}
+              >
+                <Text style={s.footConfirmTxt}>Send back</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Styled error popup — "Can't start this task", etc. */}
       <Modal visible={!!errorPopup} transparent animationType="fade" onRequestClose={() => setErrorPopup(null)}>
         <View style={s.modalWrap}>
@@ -1802,6 +1964,17 @@ const s = StyleSheet.create({
   userRowOn: { backgroundColor: '#EAF1FE', borderColor: COLORS.primary },
   userTxt: { fontSize: 14.5, color: COLORS.ink },
   reasonInput: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, padding: 12, minHeight: 60, fontSize: 14.5, color: COLORS.ink, textAlignVertical: 'top' },
+  // Pending Review → Accept: pick the type the task is filed as (drives its
+  // REQ/UPT/BUG reference).
+  typeRow: { flexDirection: 'row', gap: 8 },
+  typeChip: {
+    flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 10,
+    borderWidth: 1, borderColor: COLORS.line, backgroundColor: '#fff',
+  },
+  typeChipOn: { borderColor: COLORS.green, backgroundColor: '#F0FDF4' },
+  typeChipTxt: { fontSize: 13, fontWeight: '800', color: COLORS.muted },
+  typeChipTxtOn: { color: COLORS.green },
+  typeChipRef: { fontSize: 10.5, fontWeight: '700', color: COLORS.faint, marginTop: 2 },
   reasonChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   reasonChip: { paddingHorizontal: 12, height: 34, borderRadius: 17, borderWidth: 1, borderColor: COLORS.line, backgroundColor: '#fff', justifyContent: 'center' },
   reasonChipOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },

@@ -17,6 +17,8 @@
         "data/kpi_workday_cron.xml",
         "data/kpi_notification_retry_cron.xml",
         "data/kpi_notification_cleanup_cron.xml",
+        "data/kpi_queue_nudge_cron.xml",
+        "data/kpi_urgent_nudge_cron.xml",
         "data/kpi_auto_away_cron.xml",
         "views/wa_approval_templates.xml",
         "views/client_action.xml",

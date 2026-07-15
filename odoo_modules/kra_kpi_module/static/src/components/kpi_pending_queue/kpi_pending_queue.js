@@ -36,7 +36,23 @@ export class KpiPendingQueue extends Component {
             </div>
 
             <t t-foreach="state.queue" t-as="q" t-key="q.id">
-                <div class="card p-3 mb-3 shadow-sm border-start border-warning border-4">
+                <!-- Red border when the client sent it BACK, so a rejected task is
+                     distinguishable from a fresh submission at a glance. -->
+                <div class="card p-3 mb-3 shadow-sm border-start border-4"
+                     t-att-class="q.rejected ? 'border-danger' : 'border-warning'">
+                    <!-- Why it came back. The admin reassigns from this screen, so the
+                         reason has to live here, not only in the notification. -->
+                    <div t-if="q.rejected" class="alert alert-danger py-2 px-3 mb-3 d-flex align-items-start">
+                        <i class="fa fa-times-circle me-2 mt-1"/>
+                        <div class="small">
+                            <div><strong>Client rejected the assignment</strong> — needs a new developer.</div>
+                            <div t-if="q.reject_reason">Reason: <strong t-esc="q.reject_reason"/></div>
+                            <div class="text-muted">
+                                <span t-if="q.rejected_by">by <t t-esc="q.rejected_by"/></span>
+                                <span t-if="q.rejected_at"> · <t t-esc="q.rejected_at"/></span>
+                            </div>
+                        </div>
+                    </div>
                     <div class="row g-3">
                         <!-- Header line: submitted by + when + client/project -->
                         <div class="col-12 d-flex justify-content-between align-items-center">

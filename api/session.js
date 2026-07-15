@@ -70,7 +70,30 @@ export async function clearSession() {
 // Stores the list of chosen quick-action dest keys (e.g. ['actionboard','owner']).
 // Returns null when the user hasn't customized yet (caller then shows the default).
 
+const K_ROLE = 'kpi_role_state';
 const K_QUICK = 'home_quick_actions';
+
+// Last KNOWN role + pairing state, per uid. The role gate asks the server for
+// these; with no network that request throws and the gate would fall back to
+// "not locked" — so a developer who ended their workday would wrongly get a
+// fully-unlocked board offline. Caching lets us reuse the server's last answer
+// instead of guessing, and it self-corrects on the next successful request.
+// Keyed by uid so two accounts on one device can't inherit each other's state.
+export async function getRoleState(uid) {
+  try {
+    const raw = await AsyncStorage.getItem(`${K_ROLE}:${uid ?? 'me'}`);
+    const o = raw ? JSON.parse(raw) : null;
+    return (o && typeof o === 'object') ? o : null;   // { kpiRole, paired }
+  } catch (_) {
+    return null;
+  }
+}
+
+export async function saveRoleState(uid, state) {
+  try {
+    await AsyncStorage.setItem(`${K_ROLE}:${uid ?? 'me'}`, JSON.stringify(state || {}));
+  } catch (_) { /* best-effort cache — never block the gate */ }
+}
 
 export async function getQuickActions(uid) {
   try {
@@ -85,6 +108,29 @@ export async function getQuickActions(uid) {
 export async function saveQuickActions(uid, keys) {
   try {
     await AsyncStorage.setItem(`${K_QUICK}:${uid ?? 'me'}`, JSON.stringify(keys || []));
+  } catch (_) {}
+}
+
+// --- Side-menu order (drag-to-reorder in the drawer) ------------------------
+// The user's own ordering of the drawer items, as dest keys. null = never
+// reordered → the caller falls back to the natural role order. Stored per user
+// and per device, exactly like the quick actions above.
+
+const K_MENU = 'home_menu_order';
+
+export async function getMenuOrder(uid) {
+  try {
+    const raw = await AsyncStorage.getItem(`${K_MENU}:${uid ?? 'me'}`);
+    const arr = raw ? JSON.parse(raw) : null;
+    return Array.isArray(arr) ? arr : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export async function saveMenuOrder(uid, keys) {
+  try {
+    await AsyncStorage.setItem(`${K_MENU}:${uid ?? 'me'}`, JSON.stringify(keys || []));
   } catch (_) {}
 }
 

@@ -696,10 +696,19 @@ class KraKpiAPI(http.Controller):
         )
 
         def map_rec(n):
+            kpi = n.kpi_id
+            # WHO it's about + WHICH client. An admin/owner is a recipient on
+            # nearly every event, so without these two the feed is a wall of
+            # near-identical rows and they have to open each one to tell them
+            # apart. Same rule the messages use: the nearest is_client ancestor,
+            # falling back to the task's own KRA.
+            client_kra = (kpi.client_kra_id or kpi.kra_id) if kpi else False
             return {
                 'id': n.id,
-                'kpi_id': n.kpi_id.id if n.kpi_id else False,
-                'kpi_name': n.kpi_id.name if n.kpi_id else "",
+                'kpi_id': kpi.id if kpi else False,
+                'kpi_name': kpi.name if kpi else "",
+                'developer': (kpi.user_id.name if kpi and kpi.user_id else ""),
+                'client_name': (client_kra.name if client_kra else ""),
                 'event': n.event or "",
                 'title': n.title or "",
                 'body': n.body or "",
@@ -712,6 +721,9 @@ class KraKpiAPI(http.Controller):
             'status': True,
             'items': [map_rec(n) for n in recs],
             'unread_count': unread_count,
+            # The app shows the developer/client line only to admins — a developer
+            # seeing their own name on every row is just noise.
+            'is_admin': self._is_kra_admin(current_user),
         }
 
     @http.route('/kpi_notifications/mark_read', type='json', auth='user', methods=['POST'], csrf=False)
@@ -1501,7 +1513,10 @@ class KraKpiAPI(http.Controller):
             [('phone_code', '!=', 0)], order='name')
         return {'status': True,
                 'away_after_minutes': c.away_after_minutes,
-                'urgent_recipients': c.kpi_urgent_recipients or '',
+                # Client-workflow timers (both editable in the app's Configuration).
+                'client_approval_minutes': c.client_approval_minutes or 5,
+                'queue_nudge_minutes': c.queue_nudge_minutes or 30,
+                'urgent_nudge_minutes': c.urgent_nudge_minutes or 5,
                 'country_id': c.kpi_country_id.id if c.kpi_country_id else False,
                 'country_dial_code': dial,
                 'mobile_length': length,
@@ -1535,18 +1550,37 @@ class KraKpiAPI(http.Controller):
         request.env.company.sudo().away_after_minutes = max(1, int(params.get('minutes') or 5))
         return {'status': True}
 
-    @http.route('/kpi_config/set_urgent', type='json', auth='user', methods=['POST'], csrf=False)
-    def kpi_config_set_urgent(self, **params):
+    @http.route('/kpi_config/set_client_approval', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_client_approval(self, **params):
+        """Minutes a client has to approve the assigned developer before auto-approve."""
         user = request.env.user
         if not self._is_kra_admin(user):
             return {'status': False, 'message': 'Not authorized'}
-        # Normalize each comma-separated entry to <dial><local> digits.
-        dial, length = request.env.company._kpi_mobile_cfg()
-        raw = (params.get('recipients') or '').strip()
-        parts = [normalize_wa(p, dial, length) for p in re.split(r'[,\n;]+', raw) if p.strip()]
-        cleaned = ', '.join([p for p in parts if p])
-        request.env.company.sudo().kpi_urgent_recipients = cleaned or False
-        return {'status': True, 'recipients': cleaned}
+        request.env.company.sudo().client_approval_minutes = max(1, int(params.get('minutes') or 5))
+        return {'status': True}
+
+    @http.route('/kpi_config/set_queue_nudge', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_queue_nudge(self, **params):
+        """Minutes between admin re-nudges for an unread queued client task."""
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        request.env.company.sudo().queue_nudge_minutes = max(1, int(params.get('minutes') or 30))
+        return {'status': True}
+
+    @http.route('/kpi_config/set_urgent_nudge', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_urgent_nudge(self, **params):
+        """Minutes between admin re-nudges while a 🚨 Urgent pause sits unread."""
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        request.env.company.sudo().urgent_nudge_minutes = max(1, int(params.get('minutes') or 5))
+        return {'status': True}
+
+    # NOTE: /kpi_config/set_urgent (ad-hoc Urgent-pause WhatsApp numbers) was
+    # removed. Those numbers had no user account, so they became unreachable once
+    # task WhatsApp was switched off; urgent_pause now notifies owner+coordinator
+    # in the app and re-nudges until read.
 
     @http.route('/kra_kpi/get_kpi_detail', type='json', auth='user', methods=['POST'], csrf=False)
     def get_kpi_detail(self, **params):
