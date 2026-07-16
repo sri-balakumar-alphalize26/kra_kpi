@@ -18,6 +18,12 @@
         <field name="tag">kpi_kra_report</field>
     </record>
 
+    <!-- Work Report (completed tasks over a period, task-wise / client-wise) -->
+    <record id="action_kpi_period_report" model="ir.actions.client">
+        <field name="name">Work Report</field>
+        <field name="tag">kpi_period_report</field>
+    </record>
+
     <!-- Menu Items for Reports: Only Managers/Admin -->
     <menuitem id="menu_kpi_reports"
               name="KPI Reports"
@@ -45,6 +51,14 @@
               parent="menu_kpi_reports"
               action="action_kpi_kra_report"
               sequence="25"
+              groups="kra_kpi_module.group_kra_manager,base.group_system"/>
+
+    <!-- Work Report Menu Item -->
+    <menuitem id="menu_kpi_period_report"
+              name="Work Report"
+              parent="menu_kpi_reports"
+              action="action_kpi_period_report"
+              sequence="37"
               groups="kra_kpi_module.group_kra_manager,base.group_system"/>
 
     <!-- kpi_reports_views.xml - UPDATE Employee Salary Master views -->

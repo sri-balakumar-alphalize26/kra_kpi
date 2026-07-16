@@ -183,8 +183,15 @@ class KpiDailyReport(models.Model):
         res.company.logo). When no company logo is set we fall back to the
         module's bundled brand logo (the same asset the invoice PDF uses), so a
         fresh company doesn't render the Odoo 'Your logo' placeholder.
+
+        The daily report is org-wide, so it brands with the PRIMARY company (the
+        first/root company) rather than whatever company the generating user
+        happens to have active. Otherwise the manual 'Generate now' button (which
+        runs under the user's active company) could pick a secondary company with
+        no logo, while the cron uses the main one — the exact mismatch that made
+        the report show the Odoo default even after branding was set.
         """
-        company = self.env.company
+        company = self.env['res.company'].sudo().search([], order='id', limit=1) or self.env.company
         name = company.name or ''
         logo_bytes = None
         raw = company.logo
@@ -558,4 +565,15 @@ class KpiDailyReport(models.Model):
             'res_id': rec.id,
             'view_mode': 'form',
             'target': 'current',
+        }
+
+    def action_view_pdf(self):
+        """Open the report PDF inline in a new browser tab (view, not download)."""
+        self.ensure_one()
+        if not self.pdf_file:
+            raise UserError(_("This report has no PDF yet — generate it first."))
+        return {
+            'type': 'ir.actions.act_url',
+            'url': '/kpi_daily_report/view/%d' % self.id,
+            'target': 'new',
         }

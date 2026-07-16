@@ -2514,6 +2514,26 @@ class KraKpiAPI(http.Controller):
             _logger.error(f"Error downloading daily report: {str(e)}")
             return request.not_found()
 
+    @http.route('/kpi_daily_report/view/<int:report_id>', type='http', auth='user', methods=['GET'])
+    def kpi_daily_report_view(self, report_id, **kwargs):
+        """View a report PDF inline in the browser (not a download). Admins only."""
+        if not self._is_kra_admin(request.env.user):
+            return request.not_found()
+        try:
+            rep = request.env['kpi.daily.report'].sudo().browse(report_id)
+            if not rep.exists() or not rep.pdf_file:
+                return request.not_found()
+            file_content = base64.b64decode(rep.pdf_file)
+            file_name = rep.pdf_filename or ('daily-task-report-%s.pdf' % rep.report_date)
+            headers = [
+                ('Content-Type', 'application/pdf'),
+                ('Content-Disposition', f'inline; filename="{file_name}"'),
+            ]
+            return request.make_response(file_content, headers)
+        except Exception as e:
+            _logger.error(f"Error viewing daily report: {str(e)}")
+            return request.not_found()
+
     @http.route('/kpi/manual/delete', type='json', auth='user', methods=['POST'], csrf=False)
     def delete_user_manual(self, **params):
         """Delete a user manual"""

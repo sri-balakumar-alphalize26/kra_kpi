@@ -7,16 +7,15 @@
         <field name="tag">kpi_workday_snapshot</field>
     </record>
 
-    <!-- Sequence 52: free, and sits right beside Developer Workday Report (50),
-         which is where an admin already goes to look at people's days.
+    <!-- Reparented under Settings (with the other operational/admin tools).
          Gated with the house triple used by every recent admin screen
-         (Task Approval, Login Management, Configuration). NOT group_kra_manager —
+         (Client Pre-Approvals, Login Management, Configuration). NOT group_kra_manager —
          that one is deprecated (see security/kra_kpi_groups.xml). -->
     <menuitem id="menu_kpi_workday_snapshot"
               name="Workday Snapshots"
-              parent="kra_kpi_module.menu_kra_root"
+              parent="kra_kpi_module.menu_kpi_settings"
               action="kra_kpi_module.action_kpi_workday_snapshot"
-              sequence="52"
+              sequence="72"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
 
 </odoo>

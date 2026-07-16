@@ -68,12 +68,12 @@
         </field>
     </record>
 
-    <!-- Menu Item (Under KRA/KPI Reports) -->
+    <!-- Menu Item (under Settings — operational/audit tool, not an analytical report) -->
     <menuitem id="menu_kpi_reassignment_history"
               name="Reassignment History"
-              parent="menu_kra_root"
+              parent="menu_kpi_settings"
               action="action_kpi_reassignment_history"
-              sequence="40"
+              sequence="78"
               groups="kra_kpi_module.group_kra_manager,base.group_system"/>
 
 </odoo>

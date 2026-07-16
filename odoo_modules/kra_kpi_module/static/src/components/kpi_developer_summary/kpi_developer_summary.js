@@ -10,7 +10,7 @@ export class KpiDeveloperSummary extends Component {
         <div class="o_kpi_developer_summary p-4">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h2 class="fw-bold">
-                    <i class="fa fa-calendar-check-o me-2"></i> Developer Workday Report
+                    <i class="fa fa-calendar-check-o me-2"></i> Employee Tracker
                 </h2>
             </div>
 

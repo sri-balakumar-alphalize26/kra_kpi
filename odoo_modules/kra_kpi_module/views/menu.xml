@@ -57,19 +57,23 @@
               sequence="40"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
     
-    <!-- ✅ FIXED: Data Cleanup now opens AUTH popup first -->
-    <menuitem id="menu_kpi_cleanup"
-              name="Data Cleanup"
-              parent="menu_kra_root"
-              action="action_kpi_cleanup_auth"
-              sequence="60"
-              groups="base.group_system"/>
-    
-    <!-- ✅ Settings Menu (Only System Admin) -->
+    <!-- ✅ Settings Menu. Header visible to manager/admin/owner/system so the
+         operational items reparented here (Backup, Snapshots, Login Management,
+         Data Cleanup, Reassignment History, Client Pre-Approvals) stay reachable.
+         Each child keeps its OWN groups — widening the header grants no new access. -->
     <menuitem id="menu_kpi_settings"
               name="Settings"
               parent="menu_kra_root"
               sequence="100"
+              groups="kra_kpi_module.group_kra_manager,kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- ✅ FIXED: Data Cleanup now opens AUTH popup first.
+         Defined AFTER menu_kpi_settings so its parent ref resolves (same-file order). -->
+    <menuitem id="menu_kpi_cleanup"
+              name="Data Cleanup"
+              parent="menu_kpi_settings"
+              action="action_kpi_cleanup_auth"
+              sequence="76"
               groups="base.group_system"/>
 
 </odoo>

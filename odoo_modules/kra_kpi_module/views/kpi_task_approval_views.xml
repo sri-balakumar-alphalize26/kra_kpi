@@ -4,16 +4,17 @@
         <!-- Client action bound to the OWL component registered under the
              tag "kpi_task_approval" (see static/src/components/kpi_task_approval/). -->
         <record id="action_kpi_task_approval" model="ir.actions.client">
-            <field name="name">Task Approval Status</field>
+            <field name="name">Client Pre-Approvals</field>
             <field name="tag">kpi_task_approval</field>
         </record>
 
-        <!-- Menu entry — visible to Coordinator (admin), Owner, and system admin. -->
+        <!-- Menu entry (under Settings) — visible to Coordinator (admin), Owner, and system admin.
+             Renamed from "Task Approval Status" to avoid clashing with the future "Approved Tasks" screen. -->
         <menuitem id="menu_kpi_task_approval"
-                  name="Task Approval Status"
-                  parent="menu_kra_root"
+                  name="Client Pre-Approvals"
+                  parent="menu_kpi_settings"
                   action="action_kpi_task_approval"
-                  sequence="45"
+                  sequence="80"
                   groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
     </data>
 </odoo>

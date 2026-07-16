@@ -193,9 +193,9 @@
     <!-- Menu Item -->
     <menuitem id="menu_kpi_backup"
               name="Backup &amp; Restore"
-              parent="menu_kra_root"
+              parent="menu_kpi_settings"
               action="action_kpi_backup"
-              sequence="50"
+              sequence="70"
               groups="kra_kpi_module.group_kra_manager,base.group_system"/>
 
     <!-- Scheduled Action for Auto Backup (Optional) -->

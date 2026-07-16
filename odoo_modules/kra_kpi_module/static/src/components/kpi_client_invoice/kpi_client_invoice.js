@@ -89,7 +89,27 @@ const TEMPLATE = xml/* xml */`
                            t-model="state.newInvoice.to_date"
                            t-on-change="() => this.markCustomRange()"/>
                 </div>
-                <div class="col-md-3">
+                <!-- Billing method: Per Hour (rate) vs Per Task by Type (prices set in a popup). -->
+                <div class="col-12">
+                    <label class="form-label fw-bold">
+                        <i class="fa fa-money me-1 text-muted"/> Billing Method
+                    </label>
+                    <div class="btn-group w-100" role="group" aria-label="Billing method">
+                        <button type="button"
+                                t-att-class="'btn btn-sm ' + (state.newInvoice.billing_method === 'hourly' ? 'btn-primary' : 'btn-outline-primary')"
+                                t-on-click="() => state.newInvoice.billing_method = 'hourly'">
+                            <i class="fa fa-clock-o me-1"/> Per Hour
+                        </button>
+                        <button type="button"
+                                t-att-class="'btn btn-sm ' + (state.newInvoice.billing_method === 'per_task' ? 'btn-primary' : 'btn-outline-primary')"
+                                t-on-click="() => state.newInvoice.billing_method = 'per_task'">
+                            <i class="fa fa-tasks me-1"/> Per Task by Type
+                        </button>
+                    </div>
+                </div>
+                <!-- Per Hour Rate — hourly mode only. In per_task mode the per-type
+                     prices are declared in a popup before billing. -->
+                <div class="col-md-3" t-if="state.newInvoice.billing_method === 'hourly'">
                     <label class="form-label fw-bold">Per Hour Rate <span class="text-muted small">(0 = time-only)</span></label>
                     <input type="number" step="0.01" class="form-control"
                            placeholder="0.00"
@@ -105,6 +125,13 @@ const TEMPLATE = xml/* xml */`
                             </option>
                         </t>
                     </select>
+                </div>
+                <div class="col-md-6" t-if="state.newInvoice.billing_method === 'per_task'">
+                    <div class="alert alert-secondary py-2 mb-0 small mt-4">
+                        <i class="fa fa-info-circle me-1"/>
+                        After you click <b>Create Invoice</b>, you'll set a price for
+                        <b>each task individually</b> in the invoice.
+                    </div>
                 </div>
                 <!-- Task-type checkboxes — defaults to all 3 checked.  Empty = include all. -->
                 <div class="col-12">
@@ -137,7 +164,8 @@ const TEMPLATE = xml/* xml */`
                 </div>
                 <div class="col-12">
                     <!-- Live currency-aware preview before the user commits. -->
-                    <div class="alert alert-info py-2 mb-0 small" t-if="state.newInvoice.hourly_rate > 0">
+                    <div class="alert alert-info py-2 mb-0 small"
+                         t-if="state.newInvoice.billing_method === 'hourly' and state.newInvoice.hourly_rate > 0">
                         <i class="fa fa-calculator me-1"/>
                         Rate: <b t-esc="getRatePreview()"/>
                         — final invoice total = (grand total hours) × (rate above).
@@ -147,6 +175,7 @@ const TEMPLATE = xml/* xml */`
                         <i class="fa fa-plus me-1"/> Create Invoice
                     </button>
                 </div>
+
             </div>
 
             <!-- Sub-KRA (project) filter — appears once a client is chosen. -->
@@ -156,14 +185,17 @@ const TEMPLATE = xml/* xml */`
                         <i class="fa fa-sitemap me-1 text-muted"/> Filter: Sub-KRA / Project
                         <span class="text-muted small">(optional — leave empty to invoice the whole client)</span>
                     </label>
-                    <select multiple="multiple" class="form-select" size="4"
-                            t-on-change="(ev) => this.onSubKraSelect(ev)">
+                    <div class="border rounded p-2" style="max-height:160px; overflow-y:auto;">
                         <t t-foreach="state.scopeSubKras" t-as="s" t-key="s.id">
-                            <option t-att-value="s.id"
-                                    t-att-selected="state.newInvoice.filter_sub_kra_ids.includes(s.id) ? 'selected' : ''"
-                                    t-esc="s.name"/>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox"
+                                       t-att-id="'sub_' + s.id"
+                                       t-att-checked="isFilterSelected('filter_sub_kra_ids', s.id)"
+                                       t-on-change="() => this.toggleSubKra(s.id)"/>
+                                <label class="form-check-label" t-att-for="'sub_' + s.id" t-esc="s.name"/>
+                            </div>
                         </t>
-                    </select>
+                    </div>
                 </div>
             </div>
 
@@ -174,27 +206,37 @@ const TEMPLATE = xml/* xml */`
                         <i class="fa fa-user me-1 text-muted"/> Filter: Developers
                         <span class="text-muted small">(optional — leave empty for all)</span>
                     </label>
-                    <select multiple="multiple" class="form-select" size="4"
-                            t-on-change="(ev) => this.onMultiSelect(ev, 'filter_user_ids')">
+                    <div class="border rounded p-2" style="max-height:160px; overflow-y:auto;">
                         <t t-foreach="state.scopeUsers" t-as="u" t-key="u.id">
-                            <option t-att-value="u.id" t-esc="u.name"/>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox"
+                                       t-att-id="'usr_' + u.id"
+                                       t-att-checked="isFilterSelected('filter_user_ids', u.id)"
+                                       t-on-change="() => this.toggleFilter('filter_user_ids', u.id)"/>
+                                <label class="form-check-label" t-att-for="'usr_' + u.id" t-esc="u.name"/>
+                            </div>
                         </t>
-                    </select>
+                    </div>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label fw-bold">
                         <i class="fa fa-tasks me-1 text-muted"/> Filter: Tasks
                         <span class="text-muted small">(optional — leave empty for all)</span>
                     </label>
-                    <select multiple="multiple" class="form-select" size="4"
-                            t-on-change="(ev) => this.onMultiSelect(ev, 'filter_kpi_ids')">
+                    <div class="border rounded p-2" style="max-height:160px; overflow-y:auto;">
                         <t t-foreach="state.scopeKpis" t-as="k" t-key="k.id">
-                            <option t-att-value="k.id">
-                                <t t-esc="k.name"/>
-                                <span t-if="k.kra_name" class="text-muted">  (<t t-esc="k.kra_name"/>)</span>
-                            </option>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox"
+                                       t-att-id="'kpi_' + k.id"
+                                       t-att-checked="isFilterSelected('filter_kpi_ids', k.id)"
+                                       t-on-change="() => this.toggleFilter('filter_kpi_ids', k.id)"/>
+                                <label class="form-check-label" t-att-for="'kpi_' + k.id">
+                                    <t t-esc="k.name"/>
+                                    <span t-if="k.kra_name" class="text-muted">  (<t t-esc="k.kra_name"/>)</span>
+                                </label>
+                            </div>
                         </t>
-                    </select>
+                    </div>
                 </div>
             </div>
         </div>
@@ -268,7 +310,12 @@ const TEMPLATE = xml/* xml */`
                 <tbody>
                     <t t-foreach="state.invoices" t-as="inv" t-key="inv.id">
                         <tr>
-                            <td class="fw-bold" t-esc="inv.name"/>
+                            <td class="fw-bold">
+                                <t t-esc="inv.name"/>
+                                <span t-if="inv.state === 'draft'" class="badge bg-secondary ms-2">Draft</span>
+                                <span t-elif="inv.payment_status === 'paid'" class="badge bg-success ms-2">Paid</span>
+                                <span t-else="" class="badge bg-danger ms-2">Unpaid</span>
+                            </td>
                             <td>
                                 <span t-if="inv.parent_name" class="text-muted small">
                                     <t t-esc="inv.parent_name"/> &gt;
@@ -348,6 +395,9 @@ const TEMPLATE = xml/* xml */`
                     <h4 class="mb-1">
                         <span class="text-muted me-2">Invoice</span>
                         <span class="fw-bold" t-esc="state.invoice.name"/>
+                        <span t-if="state.invoice.state === 'draft'" class="badge bg-secondary ms-2 align-middle">Draft</span>
+                        <span t-elif="state.invoice.payment_status === 'paid'" class="badge bg-success ms-2 align-middle">Paid</span>
+                        <span t-else="" class="badge bg-danger ms-2 align-middle">Unpaid</span>
                     </h4>
                     <div class="text-muted">
                         <strong>Client:</strong>
@@ -370,6 +420,13 @@ const TEMPLATE = xml/* xml */`
                     </div>
                 </div>
                 <div>
+                    <!-- Hide every price/amount for a clean CEO/client view + download. -->
+                    <div class="form-check form-switch d-inline-flex align-items-center me-3">
+                        <input class="form-check-input me-2" type="checkbox" id="inv_show_amounts"
+                               t-att-checked="state.showAmounts"
+                               t-on-change="(ev) => state.showAmounts = ev.target.checked"/>
+                        <label class="form-check-label small text-nowrap" for="inv_show_amounts">Show amounts</label>
+                    </div>
                     <button class="btn btn-outline-success me-2"
                             t-on-click="() => this.downloadPdf(state.invoice.id)">
                         <i class="fa fa-download me-1"/> Download PDF
@@ -405,7 +462,7 @@ const TEMPLATE = xml/* xml */`
                            t-att-value="state.invoice.invoice_title"
                            t-on-blur="(ev) => this.saveHeader('invoice_title', ev.target.value)"/>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-4" t-if="state.invoice.billing_method !== 'per_task' and state.showAmounts">
                     <label class="form-label fw-bold">Hourly Rate <span class="text-muted small">(0 = time-only)</span></label>
                     <input type="number" step="0.01" class="form-control"
                            t-att-value="state.invoice.hourly_rate"
@@ -420,7 +477,7 @@ const TEMPLATE = xml/* xml */`
                 <div t-if="state.invoice.invoice_title" class="col-md-8">
                     <strong>Title:</strong> <t t-esc="state.invoice.invoice_title"/>
                 </div>
-                <div t-if="state.invoice.hourly_rate > 0" class="col-md-4 text-end">
+                <div t-if="state.invoice.hourly_rate > 0 and state.showAmounts" class="col-md-4 text-end">
                     <strong>Rate:</strong> <t t-esc="state.invoice.hourly_rate.toFixed(2)"/> / hour
                 </div>
             </div>
@@ -450,7 +507,7 @@ const TEMPLATE = xml/* xml */`
                 <div class="card p-3 text-center bg-primary text-white">
                     <div class="small">Grand Total (Bill)</div>
                     <div class="fw-bold fs-4" t-esc="state.invoice.grand_total_hours + 'h'"/>
-                    <div t-if="state.invoice.hourly_rate > 0" class="small mt-1">
+                    <div t-if="state.showAmounts" class="small mt-1">
                         Amount: <t t-esc="state.invoice.total_amount.toFixed(2)"/>
                     </div>
                 </div>
@@ -470,6 +527,17 @@ const TEMPLATE = xml/* xml */`
                 </button>
             </div>
 
+            <div t-if="state.invoice.billing_method === 'per_task' and state.showAmounts and !state.isPortal and state.invoice.state === 'draft'"
+                 class="alert alert-info py-2 small mb-2">
+                <i class="fa fa-info-circle me-1"/>
+                Set a <b>Price</b> for each task below — it saves as you go and the total updates live.
+            </div>
+            <div t-if="state.invoice.billing_method === 'hourly' and state.showAmounts and !state.isPortal and state.invoice.state === 'draft'"
+                 class="alert alert-info py-2 small mb-2">
+                <i class="fa fa-info-circle me-1"/>
+                Set the <b>Hours</b> for each task — Amount = hours × rate, and the total updates live.
+            </div>
+
             <table class="table table-sm align-middle">
                 <thead class="table-light">
                     <tr>
@@ -478,6 +546,8 @@ const TEMPLATE = xml/* xml */`
                         <th>Description</th>
                         <th class="text-end" style="width: 120px">Quoted (h)</th>
                         <th t-if="!state.isPortal" class="text-end" style="width: 110px">Actual (h)</th>
+                        <th t-if="state.invoice.billing_method === 'per_task' and state.showAmounts" class="text-end" style="width: 130px">Price</th>
+                        <th t-if="state.invoice.billing_method === 'hourly' and state.showAmounts" class="text-end" style="width: 130px">Amount</th>
                         <th t-if="!state.isPortal and state.invoice.state === 'draft'" style="width: 50px">&#160;</th>
                     </tr>
                 </thead>
@@ -496,6 +566,10 @@ const TEMPLATE = xml/* xml */`
                                 <span class="badge"
                                       t-att-class="line.line_type === 'kpi' ? 'bg-info' : 'bg-warning text-dark'"
                                       t-esc="line.line_type"/>
+                                <span t-if="state.invoice.billing_method === 'per_task' and line.task_kind"
+                                      class="badge ms-1"
+                                      t-att-class="{'bg-primary': line.task_kind === 'req', 'bg-info': line.task_kind === 'upt', 'bg-danger': line.task_kind === 'bug'}"
+                                      t-esc="line.task_kind.toUpperCase()"/>
                             </td>
                             <td>
                                 <input t-if="!state.isPortal and state.invoice.state === 'draft'"
@@ -515,6 +589,17 @@ const TEMPLATE = xml/* xml */`
                             <td t-if="!state.isPortal" class="text-end text-muted">
                                 <span t-if="line.line_type === 'kpi'" t-esc="line.actual_hours + 'h'"/>
                                 <span t-else="">—</span>
+                            </td>
+                            <td t-if="state.invoice.billing_method === 'per_task' and state.showAmounts" class="text-end">
+                                <input t-if="!state.isPortal and state.invoice.state === 'draft'"
+                                       type="number" step="0.01"
+                                       class="form-control form-control-sm text-end"
+                                       t-att-value="line.unit_price"
+                                       t-on-blur="(ev) => this.saveLineField(line.id, 'unit_price', ev.target.value)"/>
+                                <span t-else="" t-esc="line.unit_price.toFixed(2)"/>
+                            </td>
+                            <td t-if="state.invoice.billing_method === 'hourly' and state.showAmounts" class="text-end fw-bold">
+                                <t t-esc="(line.quoted_hours * (state.invoice.hourly_rate || 0)).toFixed(2)"/>
                             </td>
                             <td t-if="!state.isPortal and state.invoice.state === 'draft'">
                                 <button t-if="line.line_type === 'adjustment'"
@@ -536,6 +621,8 @@ const TEMPLATE = xml/* xml */`
                                     </td>
                                     <td/>
                                     <td class="text-end text-muted" t-esc="ct.hours + 'h'"/>
+                                    <td t-if="state.invoice.billing_method === 'per_task' and state.showAmounts"/>
+                                    <td t-if="state.invoice.billing_method === 'hourly' and state.showAmounts"/>
                                     <td t-if="state.invoice.state === 'draft'"/>
                                 </tr>
                             </t>
@@ -580,6 +667,7 @@ class _BaseInvoiceComponent extends Component {
             counts: { all: 0, draft: 0, finalized: 0, sent: 0, due: 0, paid: 0 },
             invoice: null,                 // current detail invoice
             expanded: {},                  // {line_id: bool}
+            showAmounts: true,             // detail toggle — off = clean, cost-free view + PDF
             notesText: '',
             scopeUsers: [],                // filter dropdown — developers in selected client
             scopeKpis: [],                 // filter dropdown — KPIs in selected client
@@ -587,7 +675,11 @@ class _BaseInvoiceComponent extends Component {
             newInvoice: {
                 client_kra_id: '',
                 invoice_title: '',
+                billing_method: 'hourly',      // 'hourly' | 'per_task'
                 hourly_rate: 0,
+                price_req: 0,
+                price_upt: 0,
+                price_bug: 0,
                 currency_id: '',
                 from_date: '',
                 to_date: '',
@@ -746,12 +838,20 @@ class _BaseInvoiceComponent extends Component {
             alert('Please pick a client and both dates.');
             return;
         }
-        const types = this._selectedTaskTypes();
         // Block creation if user un-ticked ALL three types — would produce empty invoice silently.
-        if (types.length === 0) {
+        if (this._selectedTaskTypes().length === 0) {
             alert('Pick at least one task type (REQ / UPT / BUG).');
             return;
         }
+        // Per Task: create straight away, then the admin prices each task
+        // individually in the invoice detail (saved live).
+        await this._doCreate();
+    }
+    async _doCreate() {
+        const ni = this.state.newInvoice;
+        const types = this._selectedTaskTypes();
+        // create() sets billing_method + type prices BEFORE populating, so each
+        // KPI line's unit_price is seeded by its task type server-side.
         const r = await rpc('/kpi_client_invoice/create', {
             client_kra_id: ni.client_kra_id,
             from_date: ni.from_date,
@@ -761,23 +861,16 @@ class _BaseInvoiceComponent extends Component {
             filter_sub_kra_ids: ni.filter_sub_kra_ids,
             // If all 3 are ticked we send no filter (treat as "all").
             task_types: (types.length < 3) ? types : [],
+            billing_method: ni.billing_method,
+            hourly_rate: ni.hourly_rate || 0,
+            price_req: ni.price_req || 0,
+            price_upt: ni.price_upt || 0,
+            price_bug: ni.price_bug || 0,
+            invoice_title: ni.invoice_title || '',
+            currency_id: ni.currency_id || false,
         });
         if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        // If user supplied a title/rate/currency, save them now via the header endpoint
-        if (ni.invoice_title || (ni.hourly_rate && ni.hourly_rate > 0) || ni.currency_id) {
-            const payload = {
-                invoice_id: r.invoice_id,
-                invoice_title: ni.invoice_title || '',
-                hourly_rate: ni.hourly_rate || 0,
-            };
-            if (ni.currency_id) payload.currency_id = ni.currency_id;
-            await rpc('/kpi_client_invoice/save_header', payload);
-            // Re-fetch to pick up the changes
-            const r2 = await rpc('/kpi_client_invoice/get', { invoice_id: r.invoice_id });
-            this.state.invoice = r2.data;
-        } else {
-            this.state.invoice = r.data;
-        }
+        this.state.invoice = r.data;
         this.state.notesText = this.state.invoice.notes || '';
         this.state.expanded = {};
         this.state.view = 'detail';
@@ -787,6 +880,7 @@ class _BaseInvoiceComponent extends Component {
         if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
         const pdf = r.data;
         const inv = pdf.invoice;
+        const showMoney = this.state.showAmounts !== false;   // toggle OFF = cost-free PDF
         const hasRate = pdf.has_rate;
         const rate = inv.hourly_rate || 0;
         const cur = pdf.currency || { name: '', symbol: '', position: 'after', decimal_places: 2 };
@@ -815,111 +909,176 @@ class _BaseInvoiceComponent extends Component {
         }
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+        doc.setFont('times', 'normal');            // Times New Roman throughout
         const pageW = doc.internal.pageSize.getWidth();
-        let y = 40;
-        // Header: logo (left) + COMPANY (us) name on right
-        if (pdf.company_logo_b64) {
+        const pageH = doc.internal.pageSize.getHeight();
+        const M = 48;                              // uniform page margin
+        let y = M;
+
+        // Logo data + true aspect ratio (avoid stretching the 369 logo).
+        const logoData = pdf.company_logo_b64 ? ('data:image/png;base64,' + pdf.company_logo_b64) : '';
+        let logoRatio = 1;   // width / height
+        if (logoData) {
             try {
-                doc.addImage('data:image/png;base64,' + pdf.company_logo_b64, 'PNG', 40, y, 60, 60);
+                const p = doc.getImageProperties(logoData);
+                if (p && p.width && p.height) logoRatio = p.width / p.height;
+            } catch (e) { /* keep 1:1 */ }
+        }
+        // Payment status shown next to the invoice number (and in the filename).
+        const payLabel = inv.state === 'draft'
+            ? '' : (inv.payment_status === 'paid' ? 'PAID' : 'UNPAID');
+
+        // ── Header: logo left, company + INVOICE right ──
+        if (logoData) {
+            try {
+                const h = 56, w = Math.min(h * logoRatio, 150);
+                doc.addImage(logoData, 'PNG', M, y, w, h);
             } catch (e) { /* ignore bad image */ }
         }
-        doc.setFontSize(20);
-        doc.setFont(undefined, 'bold');
-        doc.text(pdf.company_name || '', pageW - 40, y + 25, { align: 'right' });
+        doc.setFont('times', 'bold'); doc.setFontSize(22);
+        doc.text(pdf.company_name || '', pageW - M, y + 22, { align: 'right' });
+        doc.setFont('times', 'normal'); doc.setFontSize(12);
+        doc.text('INVOICE', pageW - M, y + 44, { align: 'right' });
+        y += 72;
+        doc.setDrawColor(190); doc.setLineWidth(0.8);
+        doc.line(M, y, pageW - M, y);
+        y += 22;
+
+        // ── Meta: Invoice # (+ Paid/Unpaid) left, date right ──
         doc.setFontSize(11);
-        doc.setFont(undefined, 'normal');
-        doc.text('INVOICE', pageW - 40, y + 50, { align: 'right' });
-        y += 90;
-        // Invoice metadata
-        doc.setFontSize(11);
-        doc.text(`Invoice #: ${inv.name}`, 40, y);
-        doc.text(`Invoice Date: ${inv.invoice_date}`, pageW - 40, y, { align: 'right' });
-        y += 16;
+        doc.setFont('times', 'bold');
+        doc.text(`Invoice #: ${inv.name}${payLabel ? '   —   ' + payLabel : ''}`, M, y);
+        doc.setFont('times', 'normal');
+        doc.text(`Date: ${inv.invoice_date}`, pageW - M, y, { align: 'right' });
+        y += 17;
         if (inv.invoice_title) {
-            doc.setFont(undefined, 'bold');
-            doc.text(inv.invoice_title, 40, y);
-            doc.setFont(undefined, 'normal');
-            y += 16;
+            doc.setFont('times', 'bold');
+            doc.text(inv.invoice_title, M, y);
+            doc.setFont('times', 'normal');
+            y += 17;
         }
-        doc.text(`Period: ${inv.from_date} to ${inv.to_date}`, 40, y);
-        y += 16;
-        doc.text(`Status: ${inv.state.toUpperCase()}`, 40, y);
-        if (cur.name) {
-            // Only include the symbol parenthetical when it's ASCII-safe.
-            // Otherwise jsPDF mangles the WHOLE line into &X&Y&Z glyphs.
+        doc.text(`Period: ${inv.from_date} to ${inv.to_date}`, M, y);
+        if (showMoney && cur.name) {
             const symBit = isAsciiSafe(cur.symbol) ? ` (${cur.symbol})` : '';
-            doc.text(`Currency: ${cur.name}${symBit}`, pageW - 40, y, { align: 'right' });
+            doc.text(`Currency: ${cur.name}${symBit}`, pageW - M, y, { align: 'right' });
         }
         y += 24;
-        // Bill To (= root KRA) and Project (= sub-KRA, when present)
-        doc.setFont(undefined, 'bold');
-        doc.text('Bill To:', 40, y);
-        doc.setFont(undefined, 'normal');
-        y += 14;
-        doc.setFont(undefined, 'bold');
-        doc.text(pdf.bill_to_name || pdf.client_name || '', 40, y);
-        doc.setFont(undefined, 'normal');
-        y += 14;
+
+        // ── Bill To (= root KRA) + Project (= sub-KRA) ──
+        doc.setFont('times', 'bold'); doc.text('Bill To:', M, y);
+        doc.setFont('times', 'normal'); y += 15;
+        doc.setFont('times', 'bold'); doc.setFontSize(12);
+        doc.text(pdf.bill_to_name || pdf.client_name || '', M, y);
+        doc.setFont('times', 'normal'); doc.setFontSize(11);
+        y += 15;
         if (pdf.project_name) {
-            doc.text(`Project: ${pdf.project_name}`, 40, y);
-            y += 14;
+            doc.text(`Project: ${pdf.project_name}`, M, y);
+            y += 15;
         }
         y += 10;
-        // Line items table
-        const rateHeader = hasRate
-            ? `Rate (${fmtMoney(rate)})`
-            : 'Rate';
-        const head = hasRate
-            ? [['Description', 'Hours', rateHeader, 'Amount']]
-            : [['Description', 'Hours']];
-        const body = (inv.lines || []).map(l => {
-            const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
-            const hours = (l.quoted_hours || 0).toFixed(2);
-            if (hasRate) {
+        // Line items table — per_task shows a Type + Price column; hourly shows
+        // Hours × Rate = Amount (the original layout).
+        const isPerTask = inv.billing_method === 'per_task';
+        const hasAmount = showMoney;   // "Show amounts" ON ⇒ money is shown (even at rate 0)
+        let head, body;
+        if (!showMoney) {
+            // Clean, cost-free delivery sheet — tasks + hours (or type), no money.
+            if (isPerTask) {
+                head = [['Description', 'Type']];
+                body = (inv.lines || []).map(l => {
+                    const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
+                    const kind = (l.task_kind || '').toUpperCase() || (l.line_type === 'adjustment' ? 'ADJ' : '—');
+                    return [desc, kind];
+                });
+            } else {
+                head = [['Description', 'Hours']];
+                body = (inv.lines || []).map(l => {
+                    const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
+                    return [desc, (l.quoted_hours || 0).toFixed(2)];
+                });
+            }
+        } else if (isPerTask) {
+            head = [['Description', 'Type', 'Price']];
+            body = (inv.lines || []).map(l => {
+                const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
+                const kind = (l.task_kind || '').toUpperCase() || (l.line_type === 'adjustment' ? 'ADJ' : '—');
+                return [desc, kind, fmtMoney(l.unit_price || 0)];
+            });
+        } else {
+            // Hourly + amounts on → always show Hours · Rate · Amount (rate may be 0).
+            const rateHeader = `Rate (${fmtMoney(rate)})`;
+            head = [['Description', 'Hours', rateHeader, 'Amount']];
+            body = (inv.lines || []).map(l => {
+                const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
+                const hours = (l.quoted_hours || 0).toFixed(2);
                 const amt = fmtMoney((l.quoted_hours || 0) * rate);
                 return [desc, hours, fmtMoney(rate), amt];
-            }
-            return [desc, hours];
-        });
-        // Use jsPDF autotable
+            });
+        }
+        // ── Line-items table — Description left/wide, every other column right-aligned. ──
+        const colStyles = { 0: { halign: 'left', cellWidth: 'auto' } };
+        for (let c = 1; c < head[0].length; c++) colStyles[c] = { halign: 'right', cellWidth: 92 };
         if (doc.autoTable) {
             doc.autoTable({
                 startY: y,
                 head: head,
                 body: body,
-                styles: { fontSize: 10 },
-                headStyles: { fillColor: [108, 117, 125] },
+                margin: { left: M, right: M },
+                styles: { font: 'times', fontSize: 10, cellPadding: 6, lineColor: [225, 225, 225], lineWidth: 0.5, overflow: 'linebreak' },
+                headStyles: { font: 'times', fontStyle: 'bold', fillColor: [56, 56, 92], textColor: 255, halign: 'left' },
+                columnStyles: colStyles,
+                alternateRowStyles: { fillColor: [247, 247, 251] },
             });
-            y = doc.lastAutoTable.finalY + 16;
+            y = doc.lastAutoTable.finalY + 18;
         } else {
-            // Fallback: manual rows
-            doc.setFont(undefined, 'bold');
-            doc.text(head[0].join('   |   '), 40, y); y += 14;
-            doc.setFont(undefined, 'normal');
-            body.forEach(row => { doc.text(row.join('   |   '), 40, y); y += 14; });
+            doc.setFont('times', 'bold');
+            doc.text(head[0].join('   |   '), M, y); y += 14;
+            doc.setFont('times', 'normal');
+            body.forEach(row => { doc.text(row.join('   |   '), M, y); y += 14; });
             y += 8;
         }
-        // Totals
-        doc.setFont(undefined, 'bold');
-        doc.text(`Total Hours: ${(inv.grand_total_hours || 0).toFixed(2)}`, pageW - 40, y, { align: 'right' });
-        y += 16;
-        if (hasRate) {
+
+        // ── Totals (right-aligned to the same edge as the table) ──
+        doc.setFont('times', 'bold'); doc.setFontSize(11);
+        if (!isPerTask) {
+            doc.text(`Total Hours: ${(inv.grand_total_hours || 0).toFixed(2)}`, pageW - M, y, { align: 'right' });
+            y += 16;
+        }
+        if (hasAmount) {
             doc.setFontSize(13);
-            const totalAmt = inv.total_amount || (inv.grand_total_hours * rate);
-            doc.text(`Total Amount: ${fmtMoney(totalAmt)}`, pageW - 40, y, { align: 'right' });
+            const totalAmt = isPerTask ? (inv.total_amount || 0) : (inv.total_amount || (inv.grand_total_hours * rate));
+            doc.text(`Total Amount: ${fmtMoney(totalAmt)}`, pageW - M, y, { align: 'right' });
+            doc.setFontSize(11);
             y += 20;
         }
-        // Notes
+
+        // ── Notes ──
         if (inv.notes) {
-            doc.setFontSize(11);
-            doc.setFont(undefined, 'bold');
-            doc.text('Notes:', 40, y); y += 14;
-            doc.setFont(undefined, 'normal');
             const plainNotes = (inv.notes || '').replace(/<[^>]+>/g, '').trim();
-            const lines = doc.splitTextToSize(plainNotes, pageW - 80);
-            doc.text(lines, 40, y);
+            if (plainNotes) {
+                doc.setFont('times', 'bold'); doc.text('Notes:', M, y); y += 14;
+                doc.setFont('times', 'normal');
+                doc.text(doc.splitTextToSize(plainNotes, pageW - 2 * M), M, y);
+            }
         }
-        doc.save(`${inv.name.replace(/\//g, '_')}.pdf`);
+
+        // ── Watermark: faint 369 logo, centred on every page (drawn last, low opacity). ──
+        if (logoData) {
+            try {
+                let wmW = pageW * 0.55, wmH = wmW / (logoRatio || 1);
+                if (wmH > pageH * 0.5) { wmH = pageH * 0.5; wmW = wmH * (logoRatio || 1); }
+                const wmX = (pageW - wmW) / 2, wmY = (pageH - wmH) / 2;
+                const pageCount = doc.internal.getNumberOfPages();
+                for (let p = 1; p <= pageCount; p++) {
+                    doc.setPage(p);
+                    if (doc.GState) { doc.saveGraphicsState(); doc.setGState(new doc.GState({ opacity: 0.08 })); }
+                    doc.addImage(logoData, 'PNG', wmX, wmY, wmW, wmH);
+                    if (doc.GState) doc.restoreGraphicsState();
+                }
+            } catch (e) { /* watermark is best-effort */ }
+        }
+
+        doc.save(`${inv.name.replace(/\//g, '_')}${payLabel ? '_' + payLabel : ''}.pdf`);
     }
     async onClientChange() {
         // Reset filter selections when client changes
@@ -969,6 +1128,25 @@ class _BaseInvoiceComponent extends Component {
     onMultiSelect(ev, field) {
         const selected = Array.from(ev.target.selectedOptions).map(o => parseInt(o.value, 10));
         this.state.newInvoice[field] = selected;
+    }
+    // Checkbox-style filters — tap a row to toggle it in the array (clear tick,
+    // survives re-render). Replaces the old <select multiple> boxes.
+    isFilterSelected(field, id) {
+        return (this.state.newInvoice[field] || []).includes(id);
+    }
+    toggleFilter(field, id) {
+        const arr = this.state.newInvoice[field] || [];
+        this.state.newInvoice[field] = arr.includes(id)
+            ? arr.filter(x => x !== id)
+            : [...arr, id];
+    }
+    async toggleSubKra(id) {
+        this.toggleFilter('filter_sub_kra_ids', id);
+        // Sub-KRA choice narrows which developers/tasks are in scope; refresh then
+        // clear any now-stale dev/task picks (same logic the old handler used).
+        await this._refreshScopeForSubKras();
+        this.state.newInvoice.filter_user_ids = [];
+        this.state.newInvoice.filter_kpi_ids = [];
     }
     async openInvoice(id) {
         const r = await rpc('/kpi_client_invoice/get', { invoice_id: id });

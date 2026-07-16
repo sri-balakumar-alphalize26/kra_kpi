@@ -1094,6 +1094,16 @@ class KpiReportsAPI(http.Controller):
                     pass
             if params.get('currency_id'):
                 vals['currency_id'] = int(params['currency_id'])
+            # Per-task billing: set the method + the three type prices BEFORE populate,
+            # so action_populate_from_logs seeds each line's unit_price by task type.
+            if params.get('billing_method') in ('hourly', 'per_task'):
+                vals['billing_method'] = params['billing_method']
+            for pk in ('price_req', 'price_upt', 'price_bug'):
+                if params.get(pk) is not None:
+                    try:
+                        vals[pk] = float(params[pk])
+                    except (TypeError, ValueError):
+                        pass
             inv = request.env['kpi.client.invoice'].create(vals)
             inv.action_populate_from_logs()
             return {'status': True, 'invoice_id': inv.id, 'data': inv._serialize_for_ui()}
@@ -1275,6 +1285,8 @@ class KpiReportsAPI(http.Controller):
                     updates[k] = params[k]
             if 'quoted_hours' in params:
                 updates['quoted_hours'] = float(params['quoted_hours'] or 0.0)
+            if 'unit_price' in params:
+                updates['unit_price'] = float(params['unit_price'] or 0.0)
             if updates:
                 line.write(updates)
             return {'status': True, 'data': line._serialize()}
@@ -1336,8 +1348,19 @@ class KpiReportsAPI(http.Controller):
                 updates['hourly_rate'] = float(params['hourly_rate'] or 0.0)
             if 'currency_id' in params:
                 updates['currency_id'] = int(params['currency_id']) if params['currency_id'] else False
+            if 'billing_method' in params and params['billing_method'] in ('hourly', 'per_task'):
+                updates['billing_method'] = params['billing_method']
+            price_touched = False
+            for pk in ('price_req', 'price_upt', 'price_bug'):
+                if pk in params:
+                    updates[pk] = float(params[pk] or 0.0)
+                    price_touched = True
             if updates:
                 inv.write(updates)
+            # Re-price every KPI line by its type when the method or any type price
+            # changed — "change REQ price → all REQ tasks update".
+            if price_touched or 'billing_method' in updates:
+                inv._apply_type_prices()
             return {'status': True, 'data': inv._serialize_for_ui()}
         except Exception as e:
             import logging
@@ -2816,6 +2839,46 @@ class KpiReportsAPI(http.Controller):
                     }
                 slot['tasks'][tkey]['duration_seconds'] += float(log.duration_seconds or 0.0)
 
+            # Running (is_active=True) logs carry a STORED duration of 0 — end_time
+            # is unset — so their time is invisible to both the session
+            # productive_seconds and the finished-log drill-down above. Add it live
+            # (now - start_time) so the rolling total ticks WITH the running task
+            # instead of freezing until the developer pauses, and the task shows
+            # its real elapsed time rather than 0s. Active logs are at most ~one per
+            # logged-in developer, so the unbounded search is cheap.
+            now = fields.Datetime.now()
+            dom_active = [('is_active', '=', True)]
+            if uid_filter:
+                dom_active.append(('user_id', '=', uid_filter))
+            for log in Log.search(dom_active):
+                wd = log.work_date
+                if not log.start_time or not wd or wd < from_date or wd > to_date:
+                    continue
+                live_secs = max(0.0, (now - log.start_time).total_seconds())
+                key, _ = _period_key(wd)
+                slot_id = (log.user_id.id, key)
+                slot = bucket[slot_id]
+                if not slot.get('label'):
+                    slot['user_name']  = log.user_id.name or log.user_id.login or '—'
+                    slot['label']      = _period_key(wd)[1]
+                    slot['period_key'] = key
+                    slot['user_id']    = log.user_id.id
+                slot['productive_seconds'] += live_secs
+                k = log.kpi_id
+                if not k:
+                    continue
+                tkey = k.id
+                if tkey not in slot['tasks']:
+                    slot['tasks'][tkey] = {
+                        'kpi_id':           k.id,
+                        'ref':              k.external_ref or f"#{k.id}",
+                        'name':             k.name or '',
+                        'duration_seconds': 0.0,
+                        'running':          False,
+                    }
+                slot['tasks'][tkey]['duration_seconds'] += live_secs
+                slot['tasks'][tkey]['running'] = True
+
             # Flatten + sort.
             def _fmt(secs):
                 s = int(secs or 0)
@@ -2859,6 +2922,313 @@ class KpiReportsAPI(http.Controller):
         except Exception as e:
             import logging, traceback
             logging.getLogger(__name__).error(f"developer_summary_report: {e}\n{traceback.format_exc()}")
+            return {'status': False, 'message': str(e)}
+
+    # ============================================================
+    #     EMPLOYEE TRACKER — live board + granular action log
+    # ============================================================
+
+    @http.route('/kpi_owner/live_board', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_owner_live_board(self, **params):
+        """Live 'who is working on what right now' board for the Admin Dashboard.
+
+        Iterates today's OPEN work sessions (people who started their workday),
+        joins the active time-log (is_active=True) to get each developer's current
+        task + live elapsed, and marks the row ACTIVE vs present-but-idle by
+        last_heartbeat freshness (company.away_after_minutes — the same signal the
+        auto-away cron uses). Owner / Coordinator / System only, matching the
+        Employee Tracker report gate.
+        """
+        user = request.env.user
+        allowed = (
+            user.has_group('kra_kpi_module.group_kra_admin')
+            or user.has_group('kra_kpi_module.group_kra_owner')
+            or user.has_group('base.group_system')
+        )
+        if not allowed:
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            Session = request.env['kpi.work.session'].sudo()
+            Log = request.env['kpi.time.log'].sudo()
+            now = fields.Datetime.now()
+            today = fields.Date.context_today(user)
+            try:
+                away_min = max(1, int(request.env.company.away_after_minutes or 5))
+            except Exception:
+                away_min = 5
+            stale_cutoff = now - timedelta(minutes=away_min)
+
+            open_sessions = Session.search([
+                ('session_date', '=', today),
+                ('state', '=', 'open'),
+            ], order='login_at asc')
+
+            rows = []
+            for s in open_sessions:
+                u = s.user_id
+                active_log = Log.search([
+                    ('user_id', '=', u.id),
+                    ('is_active', '=', True),
+                ], limit=1)
+                task = active_log.kpi_id if active_log else False
+                hb = s.last_heartbeat
+                is_active_now = bool(hb and hb >= stale_cutoff)  # heartbeat fresh = at the desk
+                elapsed = 0
+                if active_log and active_log.start_time:
+                    elapsed = max(0, int((now - active_log.start_time).total_seconds()))
+                rows.append({
+                    'user_id':         u.id,
+                    'user_name':       u.name or u.login or '—',
+                    'login_raw':       (s.login_at.isoformat() + 'Z') if s.login_at else False,
+                    'active':          is_active_now,
+                    'on_task':         bool(task),
+                    'task_id':         task.id if task else False,
+                    'task_ref':        (task.external_ref or f"#{task.id}") if task else '',
+                    'task_name':       task.name if task else '',
+                    'task_state':      task.task_state if task else '',
+                    # ISO+Z so the client ticks it with the same helper it uses for a
+                    # running task (see live_status) and stays in sync with the server clock.
+                    'task_start_raw':  (active_log.start_time.isoformat() + 'Z') if (active_log and active_log.start_time) else False,
+                    'elapsed_seconds': elapsed,
+                    'elapsed_display': _fmt_hms(elapsed),
+                })
+            return {
+                'status':             True,
+                'as_of':              fields.Datetime.to_string(now),
+                'away_after_minutes': away_min,
+                'present_count':      len(rows),
+                'active_count':       sum(1 for r in rows if r['active']),
+                'on_task_count':      sum(1 for r in rows if r['on_task']),
+                'rows':               rows,
+            }
+        except Exception as e:
+            import logging, traceback
+            logging.getLogger(__name__).error(f"kpi_owner_live_board: {e}\n{traceback.format_exc()}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_owner/action_log', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_owner_action_log(self, **params):
+        """Granular lifecycle log for the Employee Tracker's 'expand arrow'.
+
+        Reads kpi.action.log — the per-task audit trail (start / pause / resume /
+        complete / approve / pre-approval / notifications) written everywhere by
+        _log_action but, until now, read by NO route. Filter by task (kpi_id),
+        actor (user_id), and/or a day / date-range on the event time. Owner /
+        Coordinator / System only (matches the model ACL).
+        """
+        user = request.env.user
+        allowed = (
+            user.has_group('kra_kpi_module.group_kra_admin')
+            or user.has_group('kra_kpi_module.group_kra_owner')
+            or user.has_group('base.group_system')
+        )
+        if not allowed:
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            Log = request.env['kpi.action.log'].sudo()
+            domain = []
+            if params.get('kpi_id'):
+                domain.append(('kpi_id', '=', int(params['kpi_id'])))
+            if params.get('user_id'):
+                domain.append(('actor_user_id', '=', int(params['user_id'])))
+            # Event-time window. 'date' = a single day; else optional from/to.
+            day = params.get('date')
+            if day:
+                domain += [('create_date', '>=', day + ' 00:00:00'),
+                           ('create_date', '<=', day + ' 23:59:59')]
+            else:
+                if params.get('from_date'):
+                    domain.append(('create_date', '>=', params['from_date'] + ' 00:00:00'))
+                if params.get('to_date'):
+                    domain.append(('create_date', '<=', params['to_date'] + ' 23:59:59'))
+            try:
+                limit = min(max(1, int(params.get('limit') or 500)), 2000)
+            except (TypeError, ValueError):
+                limit = 500
+            src_labels = dict(Log._fields['source'].selection)
+            entries = Log.search(domain, order='create_date desc, id desc', limit=limit)
+            rows = []
+            for e in entries:
+                payload = {}
+                if e.payload_json:
+                    try:
+                        payload = json.loads(e.payload_json)
+                    except (ValueError, TypeError):
+                        payload = {'raw': e.payload_json}
+                rows.append({
+                    'id':            e.id,
+                    'kpi_id':        e.kpi_id.id if e.kpi_id else False,
+                    'task_ref':      (e.kpi_id.external_ref or f"#{e.kpi_id.id}") if e.kpi_id else '',
+                    'task_name':     e.kpi_id.name if e.kpi_id else '',
+                    'event':         e.event or '',
+                    'source':        e.source or '',
+                    'source_label':  src_labels.get(e.source, e.source or ''),
+                    'actor':         (e.actor_user_id.name if e.actor_user_id else (e.actor_label or '')),
+                    'actor_user_id': e.actor_user_id.id if e.actor_user_id else False,
+                    # Raw UTC + ISO+Z; the client localises with the same helper it uses elsewhere.
+                    'when':          fields.Datetime.to_string(e.create_date),
+                    'when_raw':      (e.create_date.isoformat() + 'Z') if e.create_date else False,
+                    'success':       bool(e.success),
+                    'device_ip':     e.device_ip or '',
+                    'payload':       payload,
+                })
+            return {'status': True, 'count': len(rows), 'entries': rows}
+        except Exception as e:
+            import logging, traceback
+            logging.getLogger(__name__).error(f"kpi_owner_action_log: {e}\n{traceback.format_exc()}")
+            return {'status': False, 'message': str(e)}
+
+    # ============================================================
+    #     WORK REPORT — completed tasks over a period (task/client)
+    # ============================================================
+
+    @http.route('/kpi_reports/period_work/generate', type='json', auth='user', methods=['POST'], csrf=False)
+    def period_work_report(self, **params):
+        """Completed-tasks report over a period, viewable task-wise or client-wise.
+
+        params:
+          from_date / to_date : ISO dates (default = current month → today)
+          group_by            : 'task' (flat list) | 'client' (grouped)
+          client_kra_id       : optional — restrict to one client (to send them their report)
+        Returns each COMPLETED task (task_state='completed', completion_date in range) with
+        its client/project/assignee, completion date, and hours from kpi.time.log in range.
+        """
+        user = request.env.user
+        allowed = (
+            user.has_group('kra_kpi_module.group_kra_manager')
+            or user.has_group('kra_kpi_module.group_kra_admin')
+            or user.has_group('kra_kpi_module.group_kra_owner')
+            or user.has_group('base.group_system')
+        )
+        if not allowed:
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            today = fields.Date.context_today(user)
+            from_date = fields.Date.from_string(params.get('from_date')) if params.get('from_date') else today.replace(day=1)
+            to_date = fields.Date.from_string(params.get('to_date')) if params.get('to_date') else today
+            group_by = (params.get('group_by') or 'task').lower()
+            if group_by not in ('task', 'client'):
+                group_by = 'task'
+
+            Kpi = request.env['kra.kpi'].sudo()
+            Log = request.env['kpi.time.log'].sudo()
+
+            domain = [
+                ('task_state', '=', 'completed'),
+                ('completion_date', '>=', str(from_date) + ' 00:00:00'),
+                ('completion_date', '<=', str(to_date) + ' 23:59:59'),
+            ]
+            if params.get('client_kra_id'):
+                domain.append(('client_kra_id', '=', int(params['client_kra_id'])))
+            tasks = Kpi.search(domain, order='completion_date desc')
+
+            def _fmt_h(secs):
+                s = int(secs or 0)
+                h, rem = divmod(s, 3600)
+                m = rem // 60
+                return (f"{h}h {m}m" if h else f"{m}m") if (h or m) else "0h"
+
+            rows = []
+            for t in tasks:
+                logs = Log.search([
+                    ('kpi_id', '=', t.id),
+                    ('is_active', '=', False),
+                    ('work_date', '>=', from_date),
+                    ('work_date', '<=', to_date),
+                ])
+                secs = sum(logs.mapped('duration_seconds'))
+                rows.append({
+                    'task_id':         t.id,
+                    'ref':             t.external_ref or f"#{t.id}",
+                    'name':            t.name or '',
+                    'client_id':       t.client_kra_id.id if t.client_kra_id else False,
+                    'client_name':     t.client_kra_id.name if t.client_kra_id else '—',
+                    'project_name':    t.kra_id.name if t.kra_id else '',
+                    'assignee':        t.user_id.name if t.user_id else '',
+                    'completion_date': str(t.completion_date.date()) if t.completion_date else '',
+                    'priority':        t.priority or '',
+                    'hours_seconds':   secs,
+                    'hours_display':   _fmt_h(secs),
+                })
+
+            # Brand header/watermark: the Company Branding logo (skip Odoo's default
+            # placeholder), else the bundled brand logo — same source as the invoice PDF.
+            company = request.env.company
+            logo_b64 = ''
+            if company.logo and not company.uses_default_logo:
+                raw = company.logo
+                logo_b64 = raw.decode() if isinstance(raw, bytes) else raw
+            if not logo_b64:
+                try:
+                    import base64
+                    from odoo.tools import file_open
+                    with file_open('kra_kpi_module/static/src/img/alphalize_logo.png', 'rb') as f:
+                        logo_b64 = base64.b64encode(f.read()).decode()
+                except Exception:
+                    logo_b64 = ''
+
+            total_secs = sum(r['hours_seconds'] for r in rows)
+            base = {
+                'status':             True,
+                'group_by':           group_by,
+                'from_date':          str(from_date),
+                'to_date':            str(to_date),
+                'total_tasks':        len(rows),
+                'total_hours_display': _fmt_h(total_secs),
+                'company_name':       request.env.company.name or '',
+                'company_logo_b64':   logo_b64,
+            }
+
+            if group_by == 'client':
+                from collections import defaultdict
+                buckets = defaultdict(lambda: {'client_name': '', 'client_id': False, 'tasks': [], 'total_seconds': 0.0})
+                for r in rows:
+                    b = buckets[r['client_id']]
+                    b['client_name'] = r['client_name']
+                    b['client_id'] = r['client_id']
+                    b['tasks'].append(r)
+                    b['total_seconds'] += r['hours_seconds']
+                clients = []
+                for b in buckets.values():
+                    clients.append({
+                        'client_id':     b['client_id'],
+                        'client_name':   b['client_name'],
+                        'task_count':    len(b['tasks']),
+                        'total_seconds': b['total_seconds'],
+                        'total_display': _fmt_h(b['total_seconds']),
+                        'tasks':         b['tasks'],
+                    })
+                clients.sort(key=lambda c: (c['client_name'] or '').lower())
+                base['clients'] = clients
+                return base
+
+            base['tasks'] = rows
+            return base
+        except Exception as e:
+            import logging, traceback
+            logging.getLogger(__name__).error(f"period_work_report: {e}\n{traceback.format_exc()}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_reports/period_work/clients', type='json', auth='user', methods=['POST'], csrf=False)
+    def period_work_clients(self, **params):
+        """Client dropdown for the Work Report (is_client KRAs)."""
+        user = request.env.user
+        allowed = (
+            user.has_group('kra_kpi_module.group_kra_manager')
+            or user.has_group('kra_kpi_module.group_kra_admin')
+            or user.has_group('kra_kpi_module.group_kra_owner')
+            or user.has_group('base.group_system')
+        )
+        if not allowed:
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            clients = request.env['kra.master'].sudo().search(
+                [('is_client', '=', True), ('active', '=', True)], order='name')
+            return {'status': True, 'clients': [
+                {'id': c.id, 'name': (c.parent_id.name + ' > ' + c.name) if c.parent_id else c.name}
+                for c in clients
+            ]}
+        except Exception as e:
             return {'status': False, 'message': str(e)}
 
     # ============================================================

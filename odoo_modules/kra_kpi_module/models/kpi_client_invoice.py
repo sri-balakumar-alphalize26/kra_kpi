@@ -4,6 +4,19 @@ from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
 
+def _kind_from_ref(ref):
+    """Map a task's external_ref prefix to its billing kind: 'req' / 'upt' / 'bug'
+    (or '' if none). Matches the REQ/UPT/BUG prefixes the task-type filter uses."""
+    r = (ref or '').strip().upper()
+    if r.startswith('REQ'):
+        return 'req'
+    if r.startswith('UPT'):
+        return 'upt'
+    if r.startswith('BUG'):
+        return 'bug'
+    return ''
+
+
 class KpiClientInvoice(models.Model):
     _name = 'kpi.client.invoice'
     _description = 'Client Invoice'
@@ -55,6 +68,21 @@ class KpiClientInvoice(models.Model):
     # Billing currency — defaults from the client KRA's currency on create.
     currency_id = fields.Many2one('res.currency', string='Currency',
         help="Currency for this invoice. Defaults from the client KRA's currency.")
+
+    # Billing mode: 'hourly' = grand_total_hours × hourly_rate (the original path,
+    # unchanged). 'per_task' = each task priced by its type (REQ/UPT/BUG), summed.
+    billing_method = fields.Selection(
+        [('hourly', 'Per Hour'), ('per_task', 'Per Task by Type')],
+        string='Billing Method', default='hourly', required=True,
+        help='Per Hour: total = hours × rate. Per Task: each task priced by its '
+             'type (Requirement / Update / Bug); total = sum of task prices.')
+    # Per-type prices used by per_task mode (in the invoice's currency, no forex).
+    price_req = fields.Float(string='Requirement Price', default=0.0,
+        help='Flat price charged for each Requirement (REQ) task in per_task mode.')
+    price_upt = fields.Float(string='Update Price', default=0.0,
+        help='Flat price charged for each Update (UPT) task in per_task mode.')
+    price_bug = fields.Float(string='Bug Price', default=0.0,
+        help='Flat price charged for each Bug (BUG) task in per_task mode.')
 
     # Optional filters narrowing what gets pulled from time logs.
     filter_user_ids = fields.Many2many(
@@ -112,7 +140,8 @@ class KpiClientInvoice(models.Model):
                     v['currency_id'] = client.currency_id.id
         return super().create(vals_list)
 
-    @api.depends('line_ids', 'line_ids.quoted_hours', 'line_ids.actual_hours', 'line_ids.line_type', 'hourly_rate')
+    @api.depends('line_ids', 'line_ids.quoted_hours', 'line_ids.actual_hours',
+                 'line_ids.line_type', 'line_ids.unit_price', 'hourly_rate', 'billing_method')
     def _compute_totals(self):
         for inv in self:
             kpi_lines = inv.line_ids.filtered(lambda l: l.line_type == 'kpi')
@@ -121,7 +150,25 @@ class KpiClientInvoice(models.Model):
             inv.total_actual_hours = sum(kpi_lines.mapped('actual_hours'))
             inv.total_adjusted_hours = sum(adj_lines.mapped('quoted_hours'))
             inv.grand_total_hours = inv.total_quoted_hours + inv.total_adjusted_hours
-            inv.total_amount = inv.grand_total_hours * (inv.hourly_rate or 0.0)
+            if inv.billing_method == 'per_task':
+                # Each line carries its own flat price; the total is their sum.
+                inv.total_amount = sum(inv.line_ids.mapped('unit_price'))
+            else:
+                inv.total_amount = inv.grand_total_hours * (inv.hourly_rate or 0.0)
+
+    def _price_for_kind(self, kind):
+        """The per-task price configured on this invoice for a REQ/UPT/BUG kind."""
+        self.ensure_one()
+        return {'req': self.price_req, 'upt': self.price_upt, 'bug': self.price_bug}.get(kind, 0.0)
+
+    def _apply_type_prices(self):
+        """(Re-)price every KPI line by its task type. Called after populate and
+        whenever a type price changes, so 'change REQ price → all REQ tasks update'."""
+        for inv in self:
+            if inv.billing_method != 'per_task':
+                continue
+            for line in inv.line_ids.filtered(lambda l: l.line_type == 'kpi'):
+                line.unit_price = inv._price_for_kind(line.task_kind)
 
     @api.constrains('from_date', 'to_date')
     def _check_dates(self):
@@ -162,6 +209,7 @@ class KpiClientInvoice(models.Model):
         if self.filter_kpi_ids:
             domain.append(('kpi_id', 'in', self.filter_kpi_ids.ids))
         # Filter by task-type prefix (REQ / UPT / BUG, comma-separated).
+        type_allowed_ids = None
         if self.filter_task_types:
             types = [t.strip().upper() for t in self.filter_task_types.split(',')
                      if t.strip()]
@@ -174,7 +222,8 @@ class KpiClientInvoice(models.Model):
                 for t in types:
                     ref_dom.append(('external_ref', '=ilike', t + '-%'))
                 allowed = self.env['kra.kpi'].search(ref_dom)
-                domain.append(('kpi_id', 'in', allowed.ids))
+                type_allowed_ids = allowed.ids
+                domain.append(('kpi_id', 'in', type_allowed_ids))
         logs = self.env['kpi.time.log'].search(domain)
 
         # Bucket by kpi_id, then user_id -> seconds
@@ -202,6 +251,9 @@ class KpiClientInvoice(models.Model):
             # If the KPI has no client-quoted value, default the billable line to the actual hours.
             # This way time tracked still gets billed, and admin can manually override per line.
             quoted = kpi.client_quoted if kpi.client_quoted else round(actual_secs / 3600.0, 2)
+            # In per_task mode, seed each line's flat price from its task type.
+            kind = _kind_from_ref(kpi.external_ref)
+            unit_price = self._price_for_kind(kind) if self.billing_method == 'per_task' else 0.0
             Line.create({
                 'invoice_id': self.id,
                 'sequence': seq,
@@ -210,11 +262,46 @@ class KpiClientInvoice(models.Model):
                 'description': kpi.name,
                 'quoted_hours': quoted,
                 'actual_hours': round(actual_secs / 3600.0, 2),
+                'unit_price': unit_price,
                 'contributor_data': json.dumps(contributors),
             })
             seq += 10
 
-        return {'lines_created': len([1 for k in bucket])}
+        # ── Second pass (task-driven) ──────────────────────────────────────────
+        # Include the client's tasks that had NO time logs in range, so per-task /
+        # estimated billing can still price them. Purely ADDITIVE: only creates a
+        # line for a task the log pass didn't already add, with actual_hours = 0
+        # (a 0-hour line adds 0 to an hourly total, so nothing existing changes).
+        Kpi = self.env['kra.kpi']
+        task_domain = [('kra_id', 'in', kra_ids), ('active', '=', True)]
+        if self.filter_kpi_ids:
+            task_domain.append(('id', 'in', self.filter_kpi_ids.ids))
+        if type_allowed_ids is not None:
+            task_domain.append(('id', 'in', type_allowed_ids))
+        candidate_tasks = self.env['kra.kpi'].search(task_domain)
+        if self.filter_user_ids:
+            wanted = set(self.filter_user_ids.ids)
+            candidate_tasks = candidate_tasks.filtered(
+                lambda t: wanted & set(t.effective_contributor_ids.ids))
+        for kpi in candidate_tasks.sorted('id'):
+            if kpi.id in bucket:
+                continue  # already billed from its own time logs above
+            kind = _kind_from_ref(kpi.external_ref)
+            unit_price = self._price_for_kind(kind) if self.billing_method == 'per_task' else 0.0
+            Line.create({
+                'invoice_id': self.id,
+                'sequence': seq,
+                'line_type': 'kpi',
+                'kpi_id': kpi.id,
+                'description': kpi.name,
+                'quoted_hours': kpi.client_quoted or 0.0,
+                'actual_hours': 0.0,
+                'unit_price': unit_price,
+                'contributor_data': json.dumps([]),
+            })
+            seq += 10
+
+        return {'lines_created': len(self.line_ids.filtered(lambda l: l.line_type == 'kpi'))}
 
     def action_finalize(self):
         for inv in self:
@@ -272,6 +359,10 @@ class KpiClientInvoice(models.Model):
             'name': self.name or '',
             'invoice_title': self.invoice_title or '',
             'hourly_rate': round(self.hourly_rate or 0.0, 2),
+            'billing_method': self.billing_method or 'hourly',
+            'price_req': round(self.price_req or 0.0, 2),
+            'price_upt': round(self.price_upt or 0.0, 2),
+            'price_bug': round(self.price_bug or 0.0, 2),
             'total_amount': round(self.total_amount or 0.0, 2),
             'client_id': self.client_kra_id.id,
             'client_name': self.client_kra_id.name or '',
@@ -306,14 +397,28 @@ class KpiClientInvoice(models.Model):
         while root.parent_id:
             root = root.parent_id
 
-        # Company logo from res.company, fall back to root KRA's logo if env company has none
+        # Logo: use the Company Branding logo (res.company.logo) first, so the invoice
+        # and the daily task report share one branding source; fall back to a client-set
+        # root-KRA logo, then the module's bundled brand logo. An unset company logo is
+        # falsy here, so a fresh company skips straight to the fallbacks rather than
+        # showing the Odoo "Your logo" placeholder.
         logo_b64 = ''
-        if company.logo:
-            raw = company.logo
-            logo_b64 = raw.decode() if isinstance(raw, bytes) else raw
-        elif root.logo:
-            raw = root.logo
-            logo_b64 = raw.decode() if isinstance(raw, bytes) else raw
+        # Skip Odoo's default placeholder (uses_default_logo) so a company that hasn't
+        # uploaded a Company Branding logo falls through to the bundled brand logo
+        # rather than printing the "Your logo" placeholder.
+        branding_logo = company.logo if not company.uses_default_logo else False
+        for candidate in (branding_logo, root.logo):
+            if candidate:
+                logo_b64 = candidate.decode() if isinstance(candidate, bytes) else candidate
+                break
+        if not logo_b64:
+            try:
+                import base64
+                from odoo.tools import file_open
+                with file_open('kra_kpi_module/static/src/img/alphalize_logo.png', 'rb') as f:
+                    logo_b64 = base64.b64encode(f.read()).decode()
+            except Exception:
+                logo_b64 = ''
 
         # Currency info
         cur = self.currency_id or self.client_kra_id.currency_id or root.currency_id
@@ -339,6 +444,11 @@ class KpiClientInvoice(models.Model):
             'project_name': self.client_kra_id.name if is_project else '',
             'client_name': root.name or '',  # back-compat for older OWL builds
             'has_rate': bool(self.hourly_rate and self.hourly_rate > 0),
+            # Per-task invoices also carry amounts — the PDF shows a Price column then.
+            'has_amount': bool(
+                (self.billing_method == 'per_task' and self.total_amount)
+                or (self.hourly_rate and self.hourly_rate > 0)
+            ),
             'currency': currency_info,
         }
 
@@ -386,7 +496,23 @@ class KpiClientInvoiceLine(models.Model):
         default=0.0,
         help='Auto-filled from time logs for KPI lines. Read-only display.'
     )
+    unit_price = fields.Float(
+        string='Unit Price',
+        default=0.0,
+        help='Per-task flat price. Used when the invoice bills Per Task by Type.'
+    )
+    task_kind = fields.Char(
+        string='Task Kind',
+        compute='_compute_task_kind', store=True,
+        help="'req' / 'upt' / 'bug' derived from the task's external_ref prefix; "
+             "drives the default per-type price."
+    )
     notes = fields.Text(string='Line Notes')
+
+    @api.depends('kpi_id', 'kpi_id.external_ref')
+    def _compute_task_kind(self):
+        for line in self:
+            line.task_kind = _kind_from_ref(line.kpi_id.external_ref if line.kpi_id else '')
     contributor_data = fields.Text(
         string='Contributor Data (JSON)',
         help='JSON list: [{user_id, name, hours}, ...] for the per-developer breakdown.'
@@ -406,6 +532,8 @@ class KpiClientInvoiceLine(models.Model):
             'description': self.description or '',
             'quoted_hours': round(self.quoted_hours or 0.0, 2),
             'actual_hours': round(self.actual_hours or 0.0, 2),
+            'unit_price': round(self.unit_price or 0.0, 2),
+            'task_kind': self.task_kind or '',
             'notes': self.notes or '',
             'contributors': contributors,
         }

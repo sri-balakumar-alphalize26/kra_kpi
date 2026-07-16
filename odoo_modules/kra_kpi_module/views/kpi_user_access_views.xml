@@ -7,8 +7,8 @@
 
     <menuitem id="menu_kpi_user_access"
               name="Login Management (Non-odoo)"
-              parent="menu_kra_root"
-              sequence="55"
+              parent="menu_kpi_settings"
+              sequence="74"
               action="action_kpi_user_access"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
 </odoo>

@@ -6,7 +6,7 @@
              Client action for the Developer Workday Report OWL screen.
              ============================================================ -->
         <record id="action_kpi_developer_summary" model="ir.actions.client">
-            <field name="name">Developer Workday Report</field>
+            <field name="name">Employee Tracker</field>
             <field name="tag">kpi_developer_summary</field>
         </record>
 
@@ -88,9 +88,9 @@
              Menu entries.
              ============================================================ -->
         <menuitem id="menu_kpi_developer_summary"
-                  name="Developer Workday Report"
-                  parent="menu_kra_root"
-                  sequence="50"
+                  name="Employee Tracker"
+                  parent="menu_kpi_reports"
+                  sequence="36"
                   action="action_kpi_developer_summary"
                   groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
 
