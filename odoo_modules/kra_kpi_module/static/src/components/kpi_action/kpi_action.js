@@ -24,6 +24,28 @@ const AWAY_COLORS = {
 };
 const awayColor = (t) => AWAY_COLORS[t] || '#f59e0b';
 
+// Why nothing is running. Mirrors IDLE_REASONS in the app's services/kpiActions.js.
+// All three are recorded on the Workday Map; only "no tasks" reaches the admins,
+// because only that one is theirs to fix.
+// Mirrors NONTASK_REASONS in models/kpi_nontask_block.py — keep them in step.
+// Lunch is its own reason, not a Break: it has its own Away bucket, colour and Map
+// label, so folding it into Break left the Lunch box reading 0m for anyone who ate
+// without a task running.
+const IDLE_REASONS = [
+    { code: 'meeting',  emoji: '👥', text: 'In a meeting',    label: '👥 In a meeting',
+      note: 'Recorded on your Workday Map. Admins are not notified.', alert: false },
+    { code: 'break',    emoji: '☕', text: 'On a break',      label: '☕ On a break',
+      note: 'Recorded on your Workday Map. Admins are not notified.', alert: false },
+    { code: 'lunch',    emoji: '🍽', text: 'Lunch',           label: '🍽 Lunch',
+      note: 'Recorded on your Workday Map. Admins are not notified.', alert: false },
+    { code: 'no_tasks', emoji: '📭', text: 'I have no tasks', label: '📭 I have no tasks',
+      note: 'Recorded on your Workday Map, and your admins are told right away so they can assign you work.',
+      alert: true },
+];
+// "Not now" buys this long before the popup asks again — enough to find and click
+// a task's Start button, too short to duck the question all day.
+const IDLE_SNOOZE_MS = 60000;
+
 export class KpiAction extends Component {
 
     static template = xml/* xml */`
@@ -781,33 +803,26 @@ export class KpiAction extends Component {
                                         <p class="text-muted mb-3">
                                             Nothing is running. Tell us why so your time is recorded correctly.
                                         </p>
-                                        <button class="btn btn-outline-secondary w-100 text-start mb-2 d-flex align-items-center gap-2"
-                                                t-att-disabled="state.idleBusy"
-                                                t-on-click="() => this.chooseIdleReason('meeting')">
-                                            <span style="font-size:1.3rem;">👥</span>
-                                            <span>
-                                                <span class="fw-bold d-block">In a meeting</span>
-                                                <small class="text-muted">Recorded on your Workday Map. Admins are not notified.</small>
-                                            </span>
-                                        </button>
-                                        <button class="btn btn-outline-secondary w-100 text-start mb-2 d-flex align-items-center gap-2"
-                                                t-att-disabled="state.idleBusy"
-                                                t-on-click="() => this.chooseIdleReason('break')">
-                                            <span style="font-size:1.3rem;">☕</span>
-                                            <span>
-                                                <span class="fw-bold d-block">On a break</span>
-                                                <small class="text-muted">Recorded on your Workday Map. Admins are not notified.</small>
-                                            </span>
-                                        </button>
-                                        <button class="btn btn-outline-danger w-100 text-start d-flex align-items-center gap-2"
-                                                t-att-disabled="state.idleBusy"
-                                                t-on-click="() => this.chooseIdleReason('no_tasks')">
-                                            <span style="font-size:1.3rem;">📭</span>
-                                            <span>
-                                                <span class="fw-bold d-block">I have no tasks</span>
-                                                <small class="text-muted">Your admins are told right away so they can assign you work.</small>
-                                            </span>
-                                        </button>
+                                        <!-- Says which button is for what. Red because
+                                             getting this wrong is what puts a wrong
+                                             record on someone's day. -->
+                                        <div class="alert alert-danger py-2 px-3 mb-3" style="font-size:.8rem;">
+                                            <div>• Meeting before your task? Click <b>In a meeting</b>.</div>
+                                            <div>• Nothing assigned yet? Click <b>I have no tasks</b>.</div>
+                                            <div>• Ready to work? Close this (✕) and press <b>Start</b> on your task.</div>
+                                        </div>
+                                        <t t-foreach="allReasons()" t-as="r" t-key="r.code">
+                                            <button class="w-100 text-start mb-2 d-flex align-items-center gap-2"
+                                                    t-att-class="r.alert ? 'btn btn-outline-danger w-100 text-start mb-2 d-flex align-items-center gap-2' : 'btn btn-outline-secondary w-100 text-start mb-2 d-flex align-items-center gap-2'"
+                                                    t-att-disabled="state.idleBusy"
+                                                    t-on-click="() => this.chooseIdleReason(r.code)">
+                                                <span style="font-size:1.3rem;"><t t-esc="r.emoji"/></span>
+                                                <span>
+                                                    <span class="fw-bold d-block"><t t-esc="r.text"/></span>
+                                                    <small class="text-muted"><t t-esc="r.note"/></small>
+                                                </span>
+                                            </button>
+                                        </t>
                                         <!-- Optional note. Capped because it is drawn
                                              inside a Workday Map chip. -->
                                         <input type="text" class="form-control mt-3" maxlength="60"
@@ -819,8 +834,69 @@ export class KpiAction extends Component {
                                         </div>
                                     </div>
                                     <div class="modal-footer">
+                                        <!-- Closable on purpose: this modal covers the board, so with
+                                             no way out, pressing Start — the very thing that answers
+                                             it — would be impossible. It re-asks after 60s. -->
                                         <button class="btn btn-link text-muted" t-att-disabled="state.idleBusy"
-                                                t-on-click="closeIdleModal">Not now</button>
+                                                t-on-click="closeIdleModal">I have a task — let me start it</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+
+                    <!-- Switching ends the running block and starts another. Show the
+                         hand-off rather than a bare "are you sure": the fear is that
+                         ending a meeting loses it. It doesn't, and this says so. -->
+                    <t t-if="state.switchTo">
+                        <div class="modal-backdrop fade show"></div>
+                        <div class="modal d-block" tabindex="-1">
+                            <div class="modal-dialog modal-dialog-centered modal-sm">
+                                <div class="modal-content shadow">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title">
+                                            <i class="fa fa-exchange me-2"></i>
+                                            Switch to <t t-esc="state.switchTo.text"/>?
+                                        </h5>
+                                        <button type="button" class="btn-close" t-on-click="cancelSwitch"></button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <div class="border rounded p-2 mb-2" style="background:#f8fafc;">
+                                            <div class="d-flex align-items-center gap-2">
+                                                <span style="font-size:1.1rem;">⏸</span>
+                                                <span class="flex-grow-1">
+                                                    <b t-if="currentBlock()" t-esc="currentBlock().reason_label"/>
+                                                    <div class="text-muted" style="font-size:.72rem;"
+                                                         t-if="currentBlock()">
+                                                        started <t t-esc="currentBlock().start_display"/>
+                                                        · <t t-esc="nontaskDisplay()"/>
+                                                    </div>
+                                                </span>
+                                                <span class="text-muted" style="font-size:.72rem;">ends now</span>
+                                            </div>
+                                            <div class="text-center text-muted my-1"><i class="fa fa-arrow-down"></i></div>
+                                            <div class="d-flex align-items-center gap-2">
+                                                <span style="font-size:1.1rem;"><t t-esc="state.switchTo.emoji"/></span>
+                                                <span class="flex-grow-1"><b t-esc="state.switchTo.text"/></span>
+                                                <span class="text-success" style="font-size:.72rem;">starts now</span>
+                                            </div>
+                                        </div>
+                                        <div class="text-muted" style="font-size:.78rem;">
+                                            <t t-if="currentBlock()"><t t-esc="currentBlock().reason_label"/></t>
+                                            is saved to your Workday Map. Nothing is lost.
+                                        </div>
+                                        <div class="text-danger fw-bold mt-2" style="font-size:.78rem;"
+                                             t-if="state.switchTo.code === 'no_tasks'">
+                                            Your admins will be told straight away.
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button class="btn btn-secondary btn-sm" t-att-disabled="state.idleBusy"
+                                                t-on-click="cancelSwitch">Cancel</button>
+                                        <button class="btn btn-primary btn-sm" t-att-disabled="state.idleBusy"
+                                                t-on-click="() => this.chooseIdleReason(state.switchTo.code)">
+                                            Yes, switch
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -970,16 +1046,24 @@ export class KpiAction extends Component {
                                     <t t-else="">
                                         <span class="text-muted"><i class="fa fa-pause me-1"></i> No task running</span>
                                         <!-- Say so up front. Without this a 9:31 meeting could only be
-                                             declared by waiting to be asked at 9:40. -->
-                                        <t t-if="!state.liveStatus or !state.liveStatus.nontask">
+                                             declared by waiting to be asked at 9:40.
+                                             Hidden while a break is active: they paused a task WITH a
+                                             reason, so they have already said why — asking again is
+                                             noise, and the badge beside this already says it. -->
+                                        <t t-if="(!state.liveStatus or !state.liveStatus.nontask) and !state.liveBreak">
                                             <button class="btn btn-sm btn-outline-primary py-0 px-2"
                                                     style="font-size:.75rem;"
                                                     t-on-click="openIdleModal">Not on a task?</button>
                                         </t>
                                     </t>
-                                    <!-- Open Meeting/Break block. Starting a task closes it
-                                         automatically; End is for when NO task follows. -->
-                                    <t t-if="state.liveStatus and state.liveStatus.nontask">
+                                    <!-- The open Meeting / Break / No-tasks block, with the
+                                         OTHER two reasons right beside it: switching IS how a
+                                         block ends. "Morning meeting over, I have no tasks" is
+                                         one click — the meeting closes and no-tasks begins,
+                                         both landing on the Workday Map. The third way out is
+                                         a task's own Start button, which already closes the
+                                         block on the tick the timer starts. -->
+                                    <t t-if="state.liveStatus and state.liveStatus.nontask and !getActiveTask()">
                                         <span class="badge d-inline-flex align-items-center gap-2"
                                               style="background:#EDE9FE; color:#4C1D95; font-size:.8rem;">
                                             <span>
@@ -988,10 +1072,23 @@ export class KpiAction extends Component {
                                                 · started <t t-esc="state.liveStatus.nontask.start_display"/>
                                                 · <span class="font-monospace"><t t-esc="nontaskDisplay()"/></span>
                                             </span>
+                                        </span>
+                                        <t t-foreach="otherReasons()" t-as="r" t-key="r.code">
                                             <button class="btn btn-sm py-0 px-2"
-                                                    style="background:#7C3AED; color:#fff; font-size:.72rem;"
-                                                    t-att-disabled="state.nontaskBusy"
-                                                    t-on-click="endNonTaskBlock">End</button>
+                                                    t-att-class="r.code === 'no_tasks' ? 'btn btn-sm btn-outline-danger py-0 px-2' : 'btn btn-sm btn-outline-primary py-0 px-2'"
+                                                    style="font-size:.72rem;"
+                                                    t-att-disabled="state.idleBusy"
+                                                    t-on-click="() => this.askSwitch(r)">
+                                                <t t-esc="r.label"/>
+                                            </button>
+                                        </t>
+                                        <!-- No End button on purpose: nothing it could do that these
+                                             buttons and Start don't already. Every exit closes this
+                                             block — Start (at the timer's tick), another reason
+                                             (splits), End Workday, or the midnight cron — so a block
+                                             cannot leak. -->
+                                        <span class="text-muted" style="font-size:.7rem;">
+                                            starting a task, or another reason, ends this automatically
                                         </span>
                                     </t>
                                     <!-- Active break / lunch / meeting / other / away -->
@@ -1341,6 +1438,9 @@ export class KpiAction extends Component {
             idleBusy: '',           // the reason code in flight
             idleNote: '',           // optional, shows on the Workday Map
             nontaskBusy: false,
+            // Switching ENDS the running block and starts another — a real edit to
+            // the day, and a mis-click would cut a meeting short. Confirm first.
+            switchTo: null,         // an IDLE_REASONS entry, or null
         });
 
         // Which idle prompt (1..3) has already been shown. The server asks via a
@@ -2445,6 +2545,14 @@ export class KpiAction extends Component {
                 border = awayColor(n.break_type);
                 const dur = n.duration_display ? ` · ${tlEsc(n.duration_display)}` : '';
                 sub = `<div style="font-size:11px;color:#6b7280;">${time}${dur}</div>`;
+                // The typed note + a live marker. This branch used to drop n.reason
+                // entirely, so a note saved against a meeting/break was stored and
+                // never shown — while the saved PNG printed it, leaving the image and
+                // this popup disagreeing about the same day.
+                const bparts = [];
+                if (n.running) bparts.push('▶ In progress');
+                if (n.reason) bparts.push(tlEsc(n.reason));
+                if (bparts.length) note = `<div style="font-size:11px;color:#374151;font-style:italic;line-height:1.3;">(${bparts.join(' — ')})</div>`;
             } else { // task
                 const oc = { completed:'#16a34a', submitted:'#0d9488', paused:'#f59e0b', active:'#3b82f6', worked:'#64748b', moved:'#f97316' };
                 border = oc[n.outcome] || '#3b82f6';
@@ -2489,7 +2597,11 @@ export class KpiAction extends Component {
                                 </div>
                                 <div class="p-3 border rounded">
                                     <div class="text-muted small">Presence (wall clock)</div>
-                                    <div class="fw-bold text-primary" style="font-size:1.3rem;">${data.presence_display || '0m'}</div>
+                                    <!-- Green at/over the standard day, red under it. met_standard is
+                                         decided server-side so the web popup, the app and the saved
+                                         image can never disagree on the verdict. -->
+                                    <div class="fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}" style="font-size:1.3rem;">${data.presence_display || '0m'}</div>
+                                    ${data.standard_display ? `<div class="small fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}">${data.met_standard ? '✓' : '▾'} ${data.standard_display} standard</div>` : ''}
                                 </div>
                             </div>
                             ${(data.break_seconds || data.lunch_seconds || data.meeting_seconds || data.other_seconds || data.away_seconds || data.no_tasks_seconds || data.other_idle_seconds || (data.away_events && data.away_events.length)) ? `
@@ -3644,18 +3756,20 @@ export class KpiAction extends Component {
             if (res && res.status) {
                 this.state.liveStatus = res;
                 this.state.liveBreak = res.active_break || null;
-                // The server has actually asked and the question is still open.
-                // Raise the popup once per prompt — this poll re-opening it every
-                // few seconds would trap them, but each NEW prompt does ask again.
+                // Nothing running and nothing declared → ask. Ask #1 exists from the
+                // moment the workday opens (the server no longer waits for the
+                // 10-min cron); each cron re-ask bumps the number, so a dismissed
+                // #1 can't swallow #2 and #3.
                 const seq = res.idle_prompt_seq || 0;
-                if (res.idle_prompt && seq > this._idleAskedSeq) {
+                const snoozed = Date.now() < (this._idleSnoozeUntil || 0);
+                if (res.idle_prompt && !snoozed && seq > this._idleAskedSeq) {
                     this._idleAskedSeq = seq;
                     this.state.idleModalOpen = true;
                 }
                 // Answered — the server drops idle_prompt for a started task, a
                 // declared block, or "no tasks". Reset so a later idle stretch
                 // asks from the top.
-                if (!res.idle_prompt) this._idleAskedSeq = 0;
+                if (!res.idle_prompt) { this._idleAskedSeq = 0; this._idleSnoozeUntil = 0; }
             }
         } catch (e) { /* non-fatal */ }
     }
@@ -3668,8 +3782,36 @@ export class KpiAction extends Component {
         return this.formatTime(this._elapsedSince(nt.start_raw, 0));
     }
 
+    // Every reason — the popup shows them all (nothing is running yet).
+    allReasons() { return IDLE_REASONS; }
+
+    askSwitch(r) { this.state.switchTo = r; }
+    cancelSwitch() { this.state.switchTo = null; }
+    // What is running right now, for the confirm popup's "from" row.
+    currentBlock() {
+        return (this.state.liveStatus && this.state.liveStatus.nontask) || null;
+    }
+
+    // The reasons that AREN'T the one currently running — clicking any of them ends
+    // the open block and starts the new one, in a single click.
+    otherReasons() {
+        const cur = (this.state.liveStatus && this.state.liveStatus.nontask
+                     && this.state.liveStatus.nontask.reason) || '';
+        return IDLE_REASONS.filter((r) => r.code !== cur);
+    }
+
     openIdleModal() { this.state.idleModalOpen = true; }
-    closeIdleModal() { this.state.idleModalOpen = false; }
+
+    // Closing WITHOUT answering buys a short grace, then it asks again. The modal
+    // covers the board, so it must stay closable — otherwise reaching a task's
+    // Start button, the very thing that answers it, would be impossible. A
+    // timestamp, not a flag: the escape has to expire or it's just a loophole.
+    closeIdleModal() {
+        this._idleSnoozeUntil = Date.now() + IDLE_SNOOZE_MS;
+        this._idleAskedSeq = 0;         // let the SAME prompt re-open once it lapses
+        this.state.idleNote = '';       // don't leak a typed note onto a later reason
+        this.state.idleModalOpen = false;
+    }
 
     async chooseIdleReason(code) {
         if (this.state.idleBusy) return;
@@ -3684,6 +3826,7 @@ export class KpiAction extends Component {
                 return;
             }
             this.state.idleModalOpen = false;
+            this.state.switchTo = null;
             this.state.idleNote = '';
             // No need to touch _idleAskedSeq — the answer drops idle_prompt
             // server-side and loadLiveStatus resets from that.

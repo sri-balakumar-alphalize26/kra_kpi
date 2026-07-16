@@ -17,7 +17,7 @@ import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import {
   fetchConfig, setAway, setUrgentNudge, setCountry, setMultitask, setDevWa,
-  setClientApproval, setQueueNudge,
+  setClientApproval, setQueueNudge, setStandardHours,
 } from '../services/config';
 
 const log = createLogger('ConfigurationScreen');
@@ -50,6 +50,7 @@ export default function ConfigurationScreen({ onBack }) {
   const [away, setAwayVal] = useState('5');
   const [clientApproval, setClientApprovalVal] = useState('5');
   const [queueNudge, setQueueNudgeVal] = useState('30');
+  const [standardHours, setStandardHoursVal] = useState('9');
   const [urgentNudge, setUrgentNudgeVal] = useState('5');
   const [countryId, setCountryId] = useState(false);
   const [dial, setDial] = useState('91');
@@ -71,6 +72,7 @@ export default function ConfigurationScreen({ onBack }) {
       setAwayVal(String(c.away_after_minutes));
       setClientApprovalVal(String(c.client_approval_minutes));
       setQueueNudgeVal(String(c.queue_nudge_minutes));
+      setStandardHoursVal(String(c.standard_workday_hours ?? 9));
       setUrgentNudgeVal(String(c.urgent_nudge_minutes));
       setDial(c.country_dial_code);
       setMobileLength(c.mobile_length);
@@ -103,6 +105,18 @@ export default function ConfigurationScreen({ onBack }) {
     setQueueNudgeVal(String(v));
     try { await setQueueNudge(v); flash('queueNudge'); }
     catch (e) { log.warn('saveQueueNudge', e?.message); }
+  };
+  const saveStandardHours = async () => {
+    // Hours, not minutes — and fractional (7.5) is a real workday, so parseFloat.
+    // Clamped to a sane day: 0 makes every day green, >24 makes every day red,
+    // and either way the green/red signal stops meaning anything. The server
+    // clamps to the same range.
+    let v = parseFloat(standardHours);
+    if (!isFinite(v) || v <= 0) v = 9;
+    v = Math.max(0.5, Math.min(24, v));
+    setStandardHoursVal(String(v));
+    try { await setStandardHours(v); flash('standardHours'); }
+    catch (e) { log.warn('saveStandardHours', e?.message); }
   };
   const saveUrgentNudge = async () => {
     const v = Math.max(1, parseInt(urgentNudge) || 5);
@@ -245,6 +259,21 @@ export default function ConfigurationScreen({ onBack }) {
             </View>
             <Text style={s.hint}>When a developer taps 🚨 Urgent while pausing, the owner and admins are
               notified in the app and reminded this often until one of them reads it.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Standard workday (hours)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="decimal-pad"
+                value={standardHours} onChangeText={setStandardHoursVal}
+                onEndEditing={saveStandardHours}
+              />
+              <Text style={s.unit}>h</Text>
+              {savedFlash === 'standardHours' && <Text style={s.savedTick}>✓</Text>}
+            </View>
+            <Text style={s.hint}>A normal working day. The End Workday summary compares it against
+              <Text style={{ fontWeight: '800' }}> Presence</Text> (login → logout): at or over reads
+              green, under reads red. Presence is wall-clock, so it counts breaks and meetings too —
+              the summary shows Productive next to it.</Text>
           </Card>
 
           {/* The "Urgent-pause recipients" card (extra WhatsApp numbers) was removed:

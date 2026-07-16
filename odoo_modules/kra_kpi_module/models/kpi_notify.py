@@ -57,6 +57,11 @@ _PERSIST_EVENTS = {
     'self_task_submitted',
     'task_auto_away',   # web went idle/asleep → task auto-paused → tell the dev's phone
     'workday_auto_closed',  # midnight cron closed a workday the dev left open
+    # "X ended their workday" → admins. Tapping it opens that day's frozen summary
+    # image. This is the ONLY channel it has: its WhatsApp template was removed,
+    # and it never sent anyway (kpi_wa_task_notifications defaults False), so the
+    # summary reached nobody at all before this.
+    'daily_summary',
     'task_reassigned',  # tell the PREVIOUS assignee their task moved to someone else
     # In-app client approval: the client must see the request in the app (this used
     # to be WhatsApp-only, so nothing was ever persisted for it), and dev+admin must
@@ -127,6 +132,7 @@ _NOTIF_TITLES = {
     'pre_approval_reminder': 'Approval reminder',
     'urgent_pause':         '🚨 Urgent',
     'workday_started':      'Workday started',
+    'daily_summary':        'Workday ended',
     'dev_idle_check':       'Not started a task yet?',
     'dev_no_task':          '📭 Developer has no tasks',
 }
@@ -194,6 +200,22 @@ _APP_TEMPLATES = {
     'workday_started': (
         "🌅 {dev} started their workday\n"
         "🕘 {login_at}"
+    ),
+    # Developer ended their workday — admins. TAPPING this opens that day's frozen
+    # summary image (kpi.notification.snapshot_id), which is the whole reason it is
+    # in-app and NOT WhatsApp: a text can't be tapped through to a picture. Its
+    # _TEMPLATES (WhatsApp) entry was deliberately removed, so _notify no-ops the
+    # WhatsApp leg on the empty body.
+    # Emoji are fine here — only the PIL-drawn image strips them, never the feed.
+    # PASSTHROUGH event → only ctx keys built by _fire_daily_summary exist here.
+    'daily_summary': (
+        "🌙 {dev} ended their workday — you can check the tasks done.\n"
+        "🕘 {login_at} → {logout_at}\n"
+        "⏱ Presence {presence} • Productive {productive}\n"
+        "✅ Tasks worked: {task_count}\n"
+        "{session_note}"
+        "{auto_note}"
+        "Tap to open the day's summary image."
     ),
     # Asked of the DEVELOPER, not an admin. The three answers map to
     # /kpi_workday/idle_reason.
@@ -577,18 +599,12 @@ _TEMPLATES = {
         "Assigned to: {dev}\n"
         "Developer: open the web dashboard and press Start when you're ready."
     ),
-    # Developer end-of-day summary — sent to owner + coordinator.
-    'daily_summary': (
-        "🗓 Daily Summary — {dev}\n"
-        "Date: {session_date}\n"
-        "{session_note}"
-        "First login: {login_at}  •  Last logout: {logout_at}\n"
-        "Productive: {productive}  •  Presence: {presence}\n"
-        "{multitask_note}"
-        "Tasks worked ({task_count}):\n"
-        "{task_lines}\n"
-        "{auto_note}"
-    ),
+    # NOTE: 'daily_summary' deliberately has NO WhatsApp template any more.
+    # The end-of-day summary is in-app only (see _APP_TEMPLATES): the whole point
+    # is that admins TAP it and land on the day's frozen image, which a WhatsApp
+    # text can't do. _notify() no-ops the WhatsApp leg on an empty body, which is
+    # the same trick client_task_queued uses.
+    # (It reached nobody anyway: kpi_wa_task_notifications defaults False.)
     # Developer started workday — sent to owner + coordinator.
     'workday_started': (
         "🌅 Workday Started — {dev}\n"
@@ -700,6 +716,12 @@ class KpiNotify(models.Model):
                     _NOTIF_TITLES.get(event, event.replace('_', ' ').title()),
                     app_body, notif_recipients,
                 )
+                # Some events point at something that ISN'T a task — "X ended their
+                # workday" opens that day's frozen summary image. Threaded through
+                # the context so no signature in this chain has to change for it.
+                _snap_id = self.env.context.get('kpi_snapshot_id')
+                if _snap_id and created:
+                    created.sudo().write({'snapshot_id': _snap_id})
                 _logger.info(
                     "in-app notify persisted: kpi=%s event=%s recipients=%s rows=%s",
                     self.id, event, len(notif_recipients), len(created),

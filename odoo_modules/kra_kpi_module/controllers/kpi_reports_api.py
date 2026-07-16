@@ -6,8 +6,8 @@ import re
 
 # Idle-check timings live with the model that owns them (kpi.work.session) so the
 # cron and these routes can never drift apart on the numbers.
-from ..models.kpi_work_session import IDLE_CHECK_MIN, NO_TASK_NUDGE_MIN
-from ..models.kpi_nontask_block import NOTE_MAX
+from ..models.kpi_work_session import IDLE_CHECK_MIN, NO_TASK_NUDGE_MIN, _fmt_hms
+from ..models.kpi_nontask_block import NOTE_MAX, NONTASK_REASON_CODES
 
 
 def _parse_task_array(text):
@@ -2550,35 +2550,21 @@ class KpiReportsAPI(http.Controller):
         """
         try:
             reason = (params.get('reason') or '').strip().lower()
-            if reason not in ('meeting', 'break', 'no_tasks'):
+            if reason not in NONTASK_REASON_CODES:
                 return {'status': False, 'message': 'Invalid reason.'}
             note = (params.get('note') or '').strip()[:NOTE_MAX]
             user = request.env.user
             sess = request.env['kpi.work.session'].sudo()._get_or_open_today(user=user)
 
-            # Open the block — idempotent: keep the original start so re-tapping
-            # can't restart the clock and lose time already spent.
-            vals = {'nontask_reason': reason, 'nontask_note': note or False}
-            if not sess.nontask_started_at:
-                vals['nontask_started_at'] = fields.Datetime.now()
+            # All the switching/idempotency rules live on the model so they can be
+            # probed from an Odoo shell — a controller-side copy could only be tested
+            # by re-implementing it, which tests the copy and not the code.
+            res = sess._set_nontask_reason(reason, note=note)
 
-            admins_notified = False
-            if reason == 'no_tasks':
-                sess._fire_no_task()
-                admins_notified = True
-                # Arm the repeat: re-tell the admins every NO_TASK_NUDGE_MIN until
-                # one of them READS it (kpi.work.session._admins_read_no_task).
-                vals['no_task_nudge_at'] = fields.Datetime.now() + timedelta(minutes=NO_TASK_NUDGE_MIN)
-                vals['no_task_nudge_count'] = 1
-                # Stop asking the developer — they've answered.
-                vals['idle_check_at'] = False
-            else:
-                # Keep checking: a block left open all day is its own problem.
-                vals['idle_check_at'] = fields.Datetime.now() + timedelta(minutes=IDLE_CHECK_MIN)
-
-            sess.write(vals)
             return {'status': True, 'reason': reason, 'note': note,
-                    'admins_notified': admins_notified,
+                    'admins_notified': res['admins_notified'],
+                    # What this tap ENDED, so the client can say "Meeting saved".
+                    'switched_from': res['switched_from'],
                     'started_at': (sess.nontask_started_at.strftime('%Y-%m-%d %H:%M:%S')
                                    if sess.nontask_started_at else '')}
         except Exception as e:
@@ -2622,6 +2608,95 @@ class KpiReportsAPI(http.Controller):
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"workday_end: {e}")
+            return {'status': False, 'message': str(e)}
+
+    # ------------------------------------------------------------------ #
+    # Workday Snapshots — the frozen End-Workday images, for admins       #
+    # ------------------------------------------------------------------ #
+    def _snapshot_admin_ok(self):
+        """Admin/coordinator/owner/system only. The same triple the other admin
+        screens use. Snapshots are a record of someone's day — a developer must
+        not be able to read a colleague's."""
+        user = request.env.user
+        return (user.has_group('kra_kpi_module.group_kra_admin')
+                or user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('base.group_system'))
+
+    @http.route('/kpi_workday_snapshot/list', type='json', auth='user', methods=['POST'], csrf=False)
+    def workday_snapshot_list(self, **params):
+        """Snapshots grouped date -> developers, for the admin screen's
+        date ▸ developer ▸ image tree.
+
+        Deliberately carries NO image bytes: the tree can hold weeks of days and a
+        base64 PNG per row would be megabytes of JSON for pictures nobody has
+        opened yet. The client pulls one image only when a row is expanded.
+
+        params: limit_days (default 30) — how many recent days to return.
+        """
+        try:
+            if not self._snapshot_admin_ok():
+                return {'status': False, 'message': 'Not authorized.'}
+            limit_days = max(1, min(365, int(params.get('limit_days') or 30)))
+            Snap = request.env['kpi.workday.snapshot'].sudo()
+            rows = Snap.search([], order='session_date desc, id desc')
+
+            days, seen = [], {}
+            for r in rows:
+                key = str(r.session_date)
+                if key not in seen:
+                    if len(days) >= limit_days:
+                        continue
+                    seen[key] = {'date': key, 'label': r.session_date.strftime('%d %b %Y'),
+                                 'devs': []}
+                    days.append(seen[key])
+                seen[key]['devs'].append({
+                    'snapshot_id': r.id,
+                    'user_id': r.user_id.id,
+                    'name': r.user_id.name or r.user_id.login or '—',
+                    'presence_display': _fmt_hms(r.presence_seconds or 0),
+                    'productive_display': _fmt_hms(r.productive_seconds or 0),
+                    'standard_hours': r.standard_hours or 0.0,
+                    # Frozen on the row, NOT recomputed: the standard may change
+                    # later, and this day was judged against the rule of its time.
+                    'met_standard': bool(r.met_standard),
+                    'task_count': r.task_count or 0,
+                    'image_name': r.image_name or 'workday.png',
+                    'generated_at': (fields.Datetime.to_string(r.generated_at)
+                                     if r.generated_at else ''),
+                })
+            return {'status': True, 'days': days}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"workday_snapshot_list: {e}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_workday_snapshot/image_b64', type='json', auth='user', methods=['POST'], csrf=False)
+    def workday_snapshot_image_b64(self, **params):
+        """One snapshot's PNG as base64 — the APP's path.
+
+        The app CANNOT use /web/image or any type='http' URL: React Native's image
+        loader sends no session cookie, so it silently lands on the login page and
+        renders nothing (the same trap documented on /kpi/progress/file_b64). The
+        web board uses /web/image directly and doesn't need this.
+        """
+        try:
+            if not self._snapshot_admin_ok():
+                return {'status': False, 'message': 'Not authorized.'}
+            sid = int(params.get('snapshot_id') or 0)
+            rec = request.env['kpi.workday.snapshot'].sudo().browse(sid)
+            if not rec.exists() or not rec.image:
+                return {'status': False, 'message': 'Snapshot not found.'}
+            data = rec.image
+            if isinstance(data, bytes):
+                data = data.decode()
+            return {'status': True, 'data_b64': data, 'mimetype': 'image/png',
+                    'file_name': rec.image_name or 'workday.png',
+                    'dev': rec.user_id.name or '', 'date': str(rec.session_date),
+                    'presence_display': _fmt_hms(rec.presence_seconds or 0),
+                    'met_standard': bool(rec.met_standard)}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"workday_snapshot_image_b64: {e}")
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_reports/developer_summary', type='json', auth='user', methods=['POST'], csrf=False)

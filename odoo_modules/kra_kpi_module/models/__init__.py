@@ -34,3 +34,4 @@ from . import kpi_notification
 from . import kpi_push_token
 from . import kpi_pair
 from . import kpi_app_otp
+from . import kpi_workday_snapshot

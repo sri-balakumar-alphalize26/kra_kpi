@@ -948,6 +948,41 @@
     /* Blend mode to remove white */
     mix-blend-mode: multiply;
 }
+
+/* =========================================================
+   KRA / KPI WELCOME — the app's landing page
+   Scoped to .o_kra_welcome ONLY. Never touch the shared
+   .o_kra_dashboard / .alphalize-watermark rules from here: the
+   KRA/KPI Master page uses them too and would move with us.
+   ========================================================= */
+.o_kra_welcome {
+    /* The watermark is position:absolute and needs a positioned ancestor.
+       Set here, not on the shared rule, for the same reason as above. */
+    position: relative;
+    /* Deliberately NOT an inline style on the component: inline beats the class,
+       which is exactly how .o_kra_dashboard's min-height:100vh got overridden by
+       a 70vh and left a bare white band under the gradient. */
+    display: flex;
+    flex-direction: column;
+
+    .o_kra_welcome_body {
+        /* Fill whatever the gradient fills, so the text centres on the page
+           rather than against an arbitrary vh number. */
+        flex: 1 1 auto;
+        min-height: 60vh;
+        position: relative;
+        z-index: 2;
+    }
+
+    /* A watermark, not a logo. At the shared 600px it dominated an otherwise
+       empty page and the heading looked like it was floating on top of it. */
+    .alphalize-watermark {
+        width: 320px;
+        height: 320px;
+        opacity: 0.08;
+    }
+}
+
 /* =========================================================
    TASK DOCUMENTS - ADVANCED FILTER STYLES
    Add this to your kra_style.scss file

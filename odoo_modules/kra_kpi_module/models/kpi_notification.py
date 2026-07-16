@@ -35,6 +35,20 @@ class KpiNotification(models.Model):
         ondelete='cascade',
         index=True,
     )
+    # What to open when this notification is TAPPED, when the answer isn't a task.
+    # "X ended their workday" points at the day's frozen summary image, not at any
+    # kra.kpi — without this the row is untappable, because the app routes purely
+    # on kpi_id.
+    #
+    # ondelete='set null', NOT cascade: deleting a snapshot must not silently delete
+    # the notification that mentioned it. The row survives and simply stops being
+    # tappable — the same trap that bit the discard notification with kpi_id.
+    snapshot_id = fields.Many2one(
+        'kpi.workday.snapshot',
+        string='Workday Snapshot',
+        ondelete='set null',
+        index=True,
+    )
     # Free-text event key mirroring kpi.action.log.event, e.g.
     #   task_created, task_assigned, reassigned, self_task_submitted
     event = fields.Char(string='Event', required=True, index=True)

@@ -15,6 +15,7 @@ import OwnerDashboard from './screens/OwnerDashboard';
 import NotificationsScreen from './screens/NotificationsScreen';
 import ConfigurationScreen from './screens/ConfigurationScreen';
 import LoginManagementScreen from './screens/LoginManagementScreen';
+import WorkdaySnapshots from './screens/WorkdaySnapshots';
 import ClientTasks from './screens/ClientTasks';
 import GenerateClientFiles from './screens/GenerateClientFiles';
 import ReassignmentHistory from './screens/ReassignmentHistory';
@@ -57,6 +58,9 @@ function AppInner() {
   const [user, setUser] = useState(null);
   const [appScreen, setAppScreen] = useState('home'); // post-login: home | dashboard | actionboard | startworking
   const [focusTaskId, setFocusTaskId] = useState(null); // task to scroll-to + pulse on the board
+  // Snapshot to auto-expand + flash on the Workday Snapshots screen, set when an
+  // admin taps an "ended their workday" notification. Null on every other route.
+  const [focusSnapshotId, setFocusSnapshotId] = useState(null);
   const [devLocked, setDevLocked] = useState(false);  // this user is a developer who must pair
   const [devPaired, setDevPaired] = useState(false);  // developer's device is currently paired
   const [gateReady, setGateReady] = useState(false);  // role gate resolved → avoids a Home flash before the PIN gate
@@ -272,7 +276,18 @@ function AppInner() {
     // Returning home clears any pending task-focus so it can't re-pulse later.
     const home = () => { setAppScreen('home'); setFocusTaskId(null); };
     // open(dest, param): param is an optional payload (e.g. a task id to focus).
-    const open = (dest, param) => { log.info('open', dest, param); setFocusTaskId(param ?? null); setAppScreen(dest); };
+    // `param` means different things per destination: a task id for the board /
+    // My Requests, a snapshot id for Workday Snapshots. Route it into the right
+    // slot — putting a snapshot id in focusTaskId would have the board hunting for
+    // a task that doesn't exist. Always clear the other, so a stale id can't make
+    // an unrelated row flash on the next visit.
+    const open = (dest, param) => {
+      log.info('open', dest, param);
+      const isSnap = dest === 'snapshots';
+      setFocusSnapshotId(isSnap ? (param ?? null) : null);
+      setFocusTaskId(isSnap ? null : (param ?? null));
+      setAppScreen(dest);
+    };
 
     // A developer ("User") who hasn't paired → the workday hasn't started, so
     // task ACTIONS are off everywhere (read-only). Everything else works.
@@ -347,6 +362,10 @@ function AppInner() {
       return <ConfigurationScreen onBack={home} />;
     if (appScreen === 'loginmgmt')
       return <LoginManagementScreen onBack={home} />;
+    if (appScreen === 'snapshots')
+      // focusSnapshotId: set when an admin taps the "ended their workday"
+      // notification → that day + developer auto-expand and the image flashes.
+      return <WorkdaySnapshots onBack={home} focusSnapshotId={focusSnapshotId} />;
     if (appScreen === 'mytasks')
       // focusTaskId: set when a client taps a notification → the row scrolls into
       // view and flashes, mirroring the board's behaviour for developers.

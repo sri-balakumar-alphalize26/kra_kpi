@@ -852,6 +852,10 @@ class KraKpiAPI(http.Controller):
                 'kpi_name': kpi.name if kpi else "",
                 'developer': (kpi.user_id.name if kpi and kpi.user_id else ""),
                 'client_name': (client_kra.name if client_kra else ""),
+                # Where a tap should go when the answer ISN'T a task. "X ended their
+                # workday" opens that day's frozen summary image; without this the
+                # row is untappable, because the app routes purely on kpi_id.
+                'snapshot_id': n.snapshot_id.id if n.snapshot_id else False,
                 'event': n.event or "",
                 'title': n.title or "",
                 'body': n.body or "",

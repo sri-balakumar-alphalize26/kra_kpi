@@ -69,6 +69,7 @@ const QUICK = [
   { label: 'Generate Client Files', lib: 'mc', name: 'folder-zip',     dest: 'clientfiles',        adminOnly: true,  bg: '#E0F2FE', fg: '#0284C7' },
   { label: 'Reassignment History', lib: 'mc', name: 'swap-horizontal', dest: 'reassignhistory',    adminOnly: true,  bg: '#F3E8FF', fg: '#9333EA' },
   { label: 'Login Management',   lib: 'mc',  name: 'account-key',      dest: 'loginmgmt',          adminOnly: true,  bg: '#EDE9FE', fg: '#7C3AED' },
+  { label: 'Workday Snapshots',  lib: 'mc',  name: 'camera-timer',     dest: 'snapshots',          adminOnly: true,  bg: '#CFFAFE', fg: '#0891B2' },
   { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true,  bg: '#E2E8F0', fg: '#475569' },
   { label: 'My Requests',        lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  bg: '#DCFCE7', fg: '#16A34A' },
 ];

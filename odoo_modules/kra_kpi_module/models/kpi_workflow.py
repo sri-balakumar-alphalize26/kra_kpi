@@ -664,23 +664,7 @@ class KpiWorkflow(models.Model):
         self._check_single_task_limit()
         prev = {rec.id: rec.task_state for rec in self}
         result = super().start_task()
-        # Starting work ends any open Meeting/Break block and stops the idle
-        # chasing — the developer is plainly working now, so there's nothing to
-        # ask and nothing to tell the admins.
-        #
-        # Closed at `now`, the same instant super().start_task() stamped
-        # timer_start_datetime: the block ends exactly where the task begins —
-        # no overlap, no gap. Never raises: a bookkeeping failure must not stop
-        # someone starting work.
-        try:
-            Session = self.env['kpi.work.session'].sudo()
-            sess = Session.search([('user_id', '=', self.env.user.id),
-                                   ('state', '=', 'open')], limit=1)
-            if sess:
-                sess._close_nontask_block(at=fields.Datetime.now())
-                sess._stop_idle_tracking('task started')
-        except Exception as exc:
-            _logger.warning("closing non-task block on start failed: %s", exc)
+        self._end_nontask_for_work('task started')
         for rec in self:
             prev_state = prev.get(rec.id)
             event = 'start_prep' if prev_state == 'pre_approval_partial' else 'start'
@@ -735,6 +719,33 @@ class KpiWorkflow(models.Model):
                     _logger.warning("urgent_pause notify failed for task %s: %s", rec.id, exc)
         return result
 
+    def _end_nontask_for_work(self, why):
+        """A task is now running → close any open Meeting/Break/Lunch/No-tasks
+        block and stop chasing the developer. They are plainly working.
+
+        Closed at `now`, the same instant the timer was stamped: the block ends
+        exactly where the task begins — no overlap, no gap.
+
+        Shared by start_task AND resume_task. It used to be inline in start_task
+        only, and resume_task never got a copy — so declaring a Meeting and then
+        RESUMING a paused task left the meeting running alongside the work. The
+        same minutes were then counted twice (meeting_seconds AND productive), and
+        because other_idle is max(0, presence - productive - metered) the
+        contradiction was silently floored to zero instead of showing up. End
+        Workday froze that into the image. One helper, two callers, no drift.
+
+        Never raises: bookkeeping must not stop someone getting to work.
+        """
+        try:
+            Session = self.env['kpi.work.session'].sudo()
+            sess = Session.search([('user_id', '=', self.env.user.id),
+                                   ('state', '=', 'open')], limit=1)
+            if sess:
+                sess._close_nontask_block(at=fields.Datetime.now())
+                sess._stop_idle_tracking(why)
+        except Exception as exc:
+            _logger.warning("closing non-task block on %s failed: %s", why, exc)
+
     def resume_task(self):
         # Same single-in-progress rule applies to Resume (closes the gap where a
         # dev could get two running tasks by resuming a paused one).
@@ -742,6 +753,10 @@ class KpiWorkflow(models.Model):
         result = super().resume_task()
         # Returning from a pause closes any open break/lunch for this user.
         self.env['kpi.break.log'].stop_break(self.env.user.id)
+        # ...and any open non-task block. Resuming is starting work, so the same
+        # rule must apply — without this the block ran alongside the task and the
+        # time was double-counted.
+        self._end_nontask_for_work('task resumed')
         for rec in self:
             rec._wrap_lifecycle('resume')
         return result

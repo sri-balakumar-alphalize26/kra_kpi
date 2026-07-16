@@ -42,6 +42,10 @@ const animateNext = () => LayoutAnimation.configureNext(
 
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
 const POLL_MS = 20000;   // silent live refresh interval
+// "Not now" on the "Not on a task?" popup buys this long before it asks again.
+// Long enough to find and tap a task's Start button; short enough that it can't be
+// used to duck the question for the rest of the day.
+const IDLE_SNOOZE_MS = 60000;
 const TICK_MS = 1000;    // live-timer tick for in-progress cards
 const { height: SH } = Dimensions.get('window');
 const LANE_MAX_H = Math.round(SH * 0.78); // lane card-scroll height, adapts to screen
@@ -395,6 +399,14 @@ function WorkdayMapChip({ node: n }) {
     const bc = { break: '#F59E0B', lunch: '#10B981', meeting: '#3B82F6', away: '#6B7280', leave: '#8B5CF6', urgent: '#EF4444', no_tasks: '#0891B2', other: '#F59E0B' };
     border = bc[n.break_type] || '#F59E0B';
     if (n.duration_display) timeLine = `${n.time || ''}${n.time ? ' · ' : ''}${n.duration_display}`;
+    // The typed note + a live marker. This branch used to drop n.reason entirely,
+    // so a note saved against a meeting/break was stored and then never shown —
+    // while the saved PNG printed it, leaving the image and the popup disagreeing
+    // about the same day.
+    const bparts = [];
+    if (n.running) bparts.push('▶ In progress');
+    if (n.reason) bparts.push(n.reason);
+    note = bparts.join(' — ');
   } else if (n.kind === 'task') {
     const oc = { completed: '#16A34A', submitted: '#0D9488', paused: '#F59E0B', active: '#3B82F6', worked: '#64748B', moved: '#F97316' };
     border = oc[n.outcome] || '#3B82F6';
@@ -558,11 +570,19 @@ export default function KpiActionBoard({
   const [idleBusy, setIdleBusy] = useState(null);   // the reason code being sent
   const [idleNote, setIdleNote] = useState('');     // optional, shows on the Map
   const [nontaskBusy, setNontaskBusy] = useState(false);
+  // Switching ENDS the running block and starts another — a real edit to the day's
+  // record, and a mis-tap would cut a meeting short. Confirm it first.
+  const [switchTo, setSwitchTo] = useState(null);   // an IDLE_REASONS entry, or null
   // The server asks via a notification that carries no kpi_id, so it can't be
   // tapped through to anywhere. Raise the popup here instead — but only ONCE per
   // prompt, or a 15s poll would re-open it every 15s and trap them. Holds the
   // prompt NUMBER already shown, so dismissing #1 still lets #2 and #3 through.
   const idleAskedRef = useRef(0);
+  // "Not now" buys a short grace, then it asks again. The popup covers the board,
+  // so it MUST stay closable — otherwise reaching a task's Start button, the very
+  // thing that answers the question, would be impossible. A timestamp, not a
+  // boolean: the escape has to expire or it's just a loophole.
+  const idleSnoozeRef = useRef(0);
 
   // Styled error popup ("Can't start this task", etc.)
   const [errorPopup, setErrorPopup] = useState(null); // { title, message } | null
@@ -634,18 +654,29 @@ export default function KpiActionBoard({
       idle_prompt: !!r?.idle_prompt,
       seq: r?.idle_prompt_seq || 0,
     });
-    // The server has actually asked and the question is still open. Raise the
-    // popup once per prompt — a 15s poll re-opening it every 15s would trap
-    // them, but each NEW prompt (seq 1..3) does get to ask again.
+    // Nothing running and nothing declared → ask. Ask #1 exists from the moment
+    // the workday opens (the server no longer waits for the 10-min cron), and each
+    // cron re-ask bumps the number so a dismissed #1 can't swallow #2 and #3.
     const seq = r?.idle_prompt_seq || 0;
-    if (r?.idle_prompt && seq > idleAskedRef.current) {
+    const snoozed = Date.now() < idleSnoozeRef.current;
+    if (r?.idle_prompt && !snoozed && seq > idleAskedRef.current) {
       idleAskedRef.current = seq;
       log.info('idle prompt → opening popup', { seq });
       setIdlePopup(true);
     }
     // Answered — the server drops idle_prompt for a started task, a declared
     // block, or "no tasks". Reset so a later idle stretch asks from the top.
-    if (!r?.idle_prompt) idleAskedRef.current = 0;
+    if (!r?.idle_prompt) { idleAskedRef.current = 0; idleSnoozeRef.current = 0; }
+  }, []);
+
+  // Closing without answering: a short grace to go start a task, then ask again.
+  // Re-arms idleAskedRef so the SAME prompt number can re-open once it expires.
+  const snoozeIdle = useCallback(() => {
+    idleSnoozeRef.current = Date.now() + IDLE_SNOOZE_MS;
+    idleAskedRef.current = 0;
+    setIdleNote('');   // don't let a typed note leak onto a later, different reason
+    setIdlePopup(false);
+    log.info('idle prompt snoozed', { seconds: IDLE_SNOOZE_MS / 1000 });
   }, []);
 
   // Poll the live activity strip (running task / active break / anchors).
@@ -672,6 +703,7 @@ export default function KpiActionBoard({
         return;
       }
       setIdlePopup(false);
+      setSwitchTo(null);
       setIdleNote('');
       // No need to touch idleAskedRef — the answer drops idle_prompt server-side
       // and applyLive resets from that.
@@ -1163,8 +1195,11 @@ export default function KpiActionBoard({
                   <Ionicons name="pause" size={13} color={COLORS.faint} />
                   <Text style={s.liveIdle}>No task running</Text>
                   {/* Say so up front. Without this a 9:31 meeting can only be
-                      declared by waiting to be asked at 9:40. */}
-                  {!readOnly && !live.nontask ? (
+                      declared by waiting to be asked at 9:40.
+                      Hidden while a break is active: they paused a task WITH a
+                      reason, so they have already said why — asking again is
+                      noise, and the badge next to this says it too. */}
+                  {!readOnly && !live.nontask && !live.active_break ? (
                     <TouchableOpacity style={s.notOnTaskBtn} onPress={() => setIdlePopup(true)} activeOpacity={0.85}>
                       <Text style={s.notOnTaskTxt}>Not on a task?</Text>
                     </TouchableOpacity>
@@ -1173,23 +1208,55 @@ export default function KpiActionBoard({
               )}
             </View>
 
-            {/* Row 1b: the open Meeting/Break block. Starting a task closes it
-                automatically; [End] is for when NO task follows. */}
-            {live.nontask ? (
-              <View style={s.nontaskPill}>
-                <Text style={s.nontaskPillTxt} numberOfLines={1}>
-                  ⏸ {live.nontask.reason_label} · started {live.nontask.start_display} · {fmtHMS(secsSince(live.nontask.start_raw, nowMs))}
-                </Text>
-                <TouchableOpacity
-                  style={s.nontaskEndBtn}
-                  onPress={endNonTaskBlock}
-                  disabled={nontaskBusy}
-                  activeOpacity={0.85}
-                >
-                  {nontaskBusy
-                    ? <ActivityIndicator color="#fff" size="small" />
-                    : <Text style={s.nontaskEndTxt}>End</Text>}
-                </TouchableOpacity>
+            {/* Row 1b: the open Meeting / Break / No-tasks block.
+                The OTHER two reasons sit right here, because switching IS how a
+                block ends: "morning meeting over, I have no tasks" is one tap —
+                the meeting closes and no-tasks begins, both landing on the Map.
+                The third way out is the task card's own Start button, which
+                already closes the block on the tick the timer starts. */}
+            {/* Gated on !active_task as well as on the block: while a task runs,
+                PAUSE already offers Break/Lunch/Meeting with its own note, and two
+                ways to say the same thing is how records end up contradicting each
+                other. The server can no longer leave a block open during a task
+                (start_task AND resume_task both close it) — this makes any future
+                regression surface as a missing button rather than as time counted
+                twice. */}
+            {live.nontask && !live.active_task ? (
+              <View style={s.nontaskBox}>
+                <View style={s.nontaskPill}>
+                  <Text style={s.nontaskPillTxt} numberOfLines={1}>
+                    ⏸ {live.nontask.reason_label} · started {live.nontask.start_display} · {fmtHMS(secsSince(live.nontask.start_raw, nowMs))}
+                  </Text>
+                </View>
+                {!readOnly ? (
+                  <>
+                    <View style={s.nontaskBtnRow}>
+                      {IDLE_REASONS.filter((r) => r.code !== live.nontask.reason).map((r) => (
+                        <TouchableOpacity
+                          key={r.code}
+                          style={[s.nontaskSwitch, r.code === 'no_tasks' && s.nontaskSwitchAlert]}
+                          onPress={() => setSwitchTo(r)}
+                          disabled={!!idleBusy}
+                          activeOpacity={0.85}
+                        >
+                          {idleBusy === r.code
+                            ? <ActivityIndicator size="small" color={COLORS.primary} />
+                            : <Text style={[s.nontaskSwitchTxt,
+                                r.code === 'no_tasks' && { color: COLORS.red }]}>
+                                {r.emoji} {r.label}
+                              </Text>}
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    {/* No [End] button on purpose: there is nothing it could do that
+                        these buttons and Start don't already. Every exit closes this
+                        block — Start (at the timer's tick), another reason (splits),
+                        End Workday, or the midnight cron — so a block cannot leak. */}
+                    <Text style={s.nontaskHint}>
+                      Starting a task, or picking another reason above, ends this automatically.
+                    </Text>
+                  </>
+                ) : null}
               </View>
             ) : null}
 
@@ -1897,14 +1964,15 @@ export default function KpiActionBoard({
         </View>
       </Modal>
 
-      {/* "Not on a task?" — raised by the 10-min check, the strip button, or
-          ending a meeting with no task to follow. */}
-      <Modal visible={idlePopup} transparent animationType="fade" onRequestClose={() => setIdlePopup(false)}>
+      {/* "Not on a task?" — raised from workday start onwards whenever nothing is
+          running and nothing is declared, again by the 10-min check, by the strip
+          button, and after ending a block with no task to follow. */}
+      <Modal visible={idlePopup} transparent animationType="fade" onRequestClose={snoozeIdle}>
         <View style={s.modalWrap}>
           <View style={s.modalCard}>
             <View style={[s.modalHead, s.headAmber]}>
               <Text style={s.headAmberTitle}>Not on a task?</Text>
-              <TouchableOpacity onPress={() => setIdlePopup(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <TouchableOpacity onPress={snoozeIdle} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <Ionicons name="close" size={22} color="#7a5200" />
               </TouchableOpacity>
             </View>
@@ -1912,6 +1980,13 @@ export default function KpiActionBoard({
               <Text style={s.idleIntro}>
                 Nothing is running. Tell us why so your time is recorded correctly.
               </Text>
+              {/* Says which button is for what. Red because getting this wrong is
+                  what puts a wrong record on someone's day. */}
+              <View style={s.idleGuide}>
+                <Text style={s.idleGuideTxt}>• Meeting before your task? Tap <Text style={s.idleGuideB}>In a meeting</Text>.</Text>
+                <Text style={s.idleGuideTxt}>• Nothing assigned yet? Tap <Text style={s.idleGuideB}>I have no tasks</Text>.</Text>
+                <Text style={s.idleGuideTxt}>• Ready to work? Close this (✕) and press <Text style={s.idleGuideB}>Start</Text> on your task.</Text>
+              </View>
               {IDLE_REASONS.map((r) => (
                 <TouchableOpacity
                   key={r.code}
@@ -1946,8 +2021,80 @@ export default function KpiActionBoard({
                 Keep it short — this shows on your Workday Map. {idleNote.length}/{IDLE_NOTE_MAX}
               </Text>
 
-              <TouchableOpacity onPress={() => setIdlePopup(false)} disabled={!!idleBusy}>
-                <Text style={s.idleLater}>Not now</Text>
+              {/* Closable on purpose: this popup covers the board, so a modal you
+                  couldn't close would make reaching a task's Start button — the
+                  very thing that answers this — impossible. It asks again shortly. */}
+              <TouchableOpacity onPress={snoozeIdle} disabled={!!idleBusy}>
+                <Text style={s.idleLater}>I have a task — let me start it</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Switching ends the running block and starts another — show the hand-off
+          rather than a bare "are you sure", because the fear is that ending a
+          meeting loses it. It doesn't, and the popup says so. */}
+      <Modal visible={!!switchTo} transparent animationType="fade" onRequestClose={() => setSwitchTo(null)}>
+        <View style={s.confirmWrap}>
+          <View style={s.confirmCard}>
+            <View style={s.swIcon}>
+              <Ionicons name="swap-horizontal" size={26} color={COLORS.primary} />
+            </View>
+            <Text style={s.confirmTitle}>Switch to {switchTo?.label}?</Text>
+
+            {/* from → to */}
+            <View style={s.swFlow}>
+              <View style={s.swRow}>
+                <Text style={s.swEmoji}>⏸</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.swName}>{live?.nontask?.reason_label}</Text>
+                  <Text style={s.swMeta}>
+                    started {live?.nontask?.start_display}
+                    {live?.nontask?.start_raw ? ` · ${fmtHMS(secsSince(live.nontask.start_raw, nowMs))}` : ''}
+                  </Text>
+                </View>
+                <Text style={s.swTag}>ends now</Text>
+              </View>
+
+              <Ionicons name="arrow-down" size={16} color={COLORS.faint} style={{ marginVertical: 2 }} />
+
+              <View style={s.swRow}>
+                <Text style={s.swEmoji}>{switchTo?.emoji}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.swName}>{switchTo?.label}</Text>
+                </View>
+                <Text style={[s.swTag, { color: COLORS.green }]}>starts now</Text>
+              </View>
+            </View>
+
+            {/* The whole reason this popup exists: ending a meeting SOUNDS
+                destructive. It isn't — say so plainly. */}
+            <Text style={s.confirmMsg}>
+              {live?.nontask?.reason_label} is saved to your Workday Map. Nothing is lost.
+            </Text>
+            {switchTo?.code === 'no_tasks' ? (
+              <Text style={s.swWarn}>Your admins will be told straight away.</Text>
+            ) : null}
+
+            <View style={s.confirmBtns}>
+              <TouchableOpacity
+                style={[s.confirmBtn, s.confirmCancel]}
+                onPress={() => setSwitchTo(null)}
+                disabled={!!idleBusy}
+                activeOpacity={0.85}
+              >
+                <Text style={s.confirmCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.confirmBtn, s.swDo]}
+                onPress={() => chooseIdleReason(switchTo.code)}
+                disabled={!!idleBusy}
+                activeOpacity={0.85}
+              >
+                {idleBusy
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={s.confirmDoTxt}>Yes, switch</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -2002,7 +2149,22 @@ export default function KpiActionBoard({
                   </View>
                   <View style={s.statTile}>
                     <Text style={s.statTileLbl}>Presence (wall clock)</Text>
-                    <Text style={[s.statTileBig, { color: COLORS.primary }]}>{endSummary?.presence_display || '0m'}</Text>
+                    {/* Green at/over the standard day, red under it. The verdict is
+                        decided server-side (met_standard) so the app, the web popup
+                        and the saved image always agree. */}
+                    <Text style={[s.statTileBig, {
+                      color: endSummary?.met_standard ? COLORS.green : COLORS.red,
+                    }]}>
+                      {endSummary?.presence_display || '0m'}
+                    </Text>
+                    {endSummary?.standard_display ? (
+                      <Text style={[s.statTileFoot, {
+                        color: endSummary?.met_standard ? COLORS.green : COLORS.red,
+                      }]}>
+                        {endSummary.met_standard ? '✓ ' : '▾ '}
+                        {endSummary.standard_display} standard
+                      </Text>
+                    ) : null}
                   </View>
                 </View>
 
@@ -2180,16 +2342,52 @@ const s = StyleSheet.create({
 
   // The open Meeting/Break block. Violet, deliberately NOT the break pill's
   // amber — this is time that is never counted as task time.
+  nontaskBox: { gap: 6 },
   nontaskPill: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: '#EDE9FE', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
   },
   nontaskPillTxt: { flex: 1, fontSize: 12, fontWeight: '800', color: '#4C1D95' },
-  nontaskEndBtn: { backgroundColor: '#7C3AED', borderRadius: 6, paddingHorizontal: 12, paddingVertical: 5, minWidth: 52, alignItems: 'center' },
-  nontaskEndTxt: { fontSize: 11.5, fontWeight: '900', color: '#fff' },
+  // The other two reasons + End, right under the pill. Wraps rather than shrinking:
+  // on a narrow phone these must stay tappable, not squeeze into slivers.
+  nontaskBtnRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  nontaskSwitch: {
+    borderWidth: 1, borderColor: COLORS.line, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#fff',
+  },
+  nontaskSwitchAlert: { borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
+  nontaskSwitchTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
+  // Says why there is no End button, so its absence reads as designed, not missing.
+  nontaskHint: { fontSize: 10.5, color: COLORS.faint, marginTop: 2 },
+
+  // Switch confirm — same centered-card idiom as the other confirm popups.
+  confirmWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 26 },
+  confirmCard: { width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 22, alignItems: 'center', paddingTop: 22, paddingBottom: 18, paddingHorizontal: 22 },
+  swIcon: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#E0E7FF', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  confirmTitle: { fontSize: 18.5, fontWeight: '900', color: COLORS.navy, textAlign: 'center' },
+  swFlow: { width: '100%', backgroundColor: COLORS.bg, borderRadius: 14, padding: 12, marginTop: 14, alignItems: 'center', gap: 2 },
+  swRow: { flexDirection: 'row', alignItems: 'center', gap: 10, width: '100%' },
+  swEmoji: { fontSize: 19 },
+  swName: { fontSize: 14, fontWeight: '900', color: COLORS.ink },
+  swMeta: { fontSize: 11, color: COLORS.faint, marginTop: 1 },
+  swTag: { fontSize: 11, fontWeight: '800', color: COLORS.muted },
+  confirmMsg: { fontSize: 12.5, color: COLORS.muted, textAlign: 'center', lineHeight: 18, marginTop: 12 },
+  swWarn: { fontSize: 12, fontWeight: '800', color: COLORS.red, textAlign: 'center', marginTop: 6 },
+  confirmBtns: { flexDirection: 'row', gap: 12, marginTop: 18, width: '100%' },
+  confirmBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 48, borderRadius: 14 },
+  confirmCancel: { backgroundColor: '#EEF2F8' },
+  confirmCancelTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 14.5 },
+  swDo: { backgroundColor: COLORS.primary },
+  confirmDoTxt: { color: '#fff', fontWeight: '800', fontSize: 14.5 },
 
   // The "Not on a task?" popup.
-  idleIntro: { fontSize: 13.5, color: COLORS.muted, marginBottom: 14, lineHeight: 19 },
+  idleIntro: { fontSize: 13.5, color: COLORS.muted, marginBottom: 10, lineHeight: 19 },
+  idleGuide: {
+    backgroundColor: COLORS.redBg, borderRadius: 10, padding: 10, marginBottom: 12,
+    borderWidth: 1, borderColor: '#FCA5A5',
+  },
+  idleGuideTxt: { fontSize: 11.5, color: COLORS.red, lineHeight: 17 },
+  idleGuideB: { fontWeight: '900' },
   idleOpt: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     borderWidth: 1, borderColor: COLORS.line, borderRadius: 12,
@@ -2416,6 +2614,8 @@ const s = StyleSheet.create({
   statTileLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '700' },
   statTileVal: { fontSize: 13, color: COLORS.ink, fontWeight: '800', marginTop: 4 },
   statTileBig: { fontSize: 19, fontWeight: '900', marginTop: 4 },
+  // The standard-day verdict under Presence — green at/over, red under.
+  statTileFoot: { fontSize: 10.5, fontWeight: '800', marginTop: 2 },
   awayBox: { backgroundColor: '#FEF9E7', borderRadius: 12, padding: 12, marginTop: 14 },
   awayTitle: { fontSize: 13.5, fontWeight: '900', color: COLORS.ink },
   awaySub: { fontSize: 11.5, fontWeight: '600', color: COLORS.muted },

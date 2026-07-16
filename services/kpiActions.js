@@ -417,9 +417,14 @@ export const endWorkday = (note = '') => action('/kpi_workday/end', { note });
 // ALL THREE are recorded on the Workday Map so the time is accounted for; they
 // differ only in who gets told. Only "no tasks" reaches admins, because only that
 // one is theirs to fix.
+// Mirrors NONTASK_REASONS in models/kpi_nontask_block.py — keep them in step.
+// Lunch is its own reason, not a Break: it has its own Away bucket, colour and Map
+// label, so folding it into Break left the Lunch box reading 0m for anyone who ate
+// without a task running.
 export const IDLE_REASONS = [
   { code: 'meeting',  label: 'In a meeting',  emoji: '👥', note: 'Recorded on your Workday Map. Admins are not notified.' },
   { code: 'break',    label: 'On a break',    emoji: '☕', note: 'Recorded on your Workday Map. Admins are not notified.' },
+  { code: 'lunch',    label: 'Lunch',         emoji: '🍽', note: 'Recorded on your Workday Map. Admins are not notified.' },
   { code: 'no_tasks', label: 'I have no tasks', emoji: '📭', note: 'Recorded on your Workday Map, and your admins are told right away so they can assign you work.' },
 ];
 // The note is drawn inside a Workday Map chip (and frozen into the saved End

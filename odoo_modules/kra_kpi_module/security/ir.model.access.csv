@@ -72,6 +72,9 @@ access_kpi_nontask_block_admin,kpi.nontask.block.admin,model_kpi_nontask_block,b
 access_kpi_nontask_block_coord,kpi.nontask.block.coord,model_kpi_nontask_block,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_nontask_block_owner,kpi.nontask.block.owner,model_kpi_nontask_block,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_nontask_block_developer,kpi.nontask.block.developer,model_kpi_nontask_block,kra_kpi_module.group_kra_developer,1,1,1,0
+access_kpi_workday_snapshot_admin,kpi.workday.snapshot.admin,model_kpi_workday_snapshot,base.group_system,1,1,1,1
+access_kpi_workday_snapshot_coord,kpi.workday.snapshot.coord,model_kpi_workday_snapshot,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_workday_snapshot_owner,kpi.workday.snapshot.owner,model_kpi_workday_snapshot,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_notification_queue_admin,kpi.notification.queue.admin,model_kpi_notification_queue,base.group_system,1,1,1,1
 access_kpi_notification_queue_owner,kpi.notification.queue.owner,model_kpi_notification_queue,kra_kpi_module.group_kra_owner,1,0,0,0
 access_kpi_notification_queue_coord,kpi.notification.queue.coord,model_kpi_notification_queue,kra_kpi_module.group_kra_admin,1,0,0,0

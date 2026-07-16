@@ -19,6 +19,7 @@ export async function fetchConfig() {
       client_approval_minutes: 5,
       queue_nudge_minutes: 30,
       urgent_nudge_minutes: 5,
+      standard_workday_hours: 9,
       country_id: false,
       country_dial_code: '91',
       mobile_length: 10,
@@ -39,6 +40,7 @@ export async function fetchConfig() {
     client_approval_minutes: cfg?.client_approval_minutes ?? 5,
     queue_nudge_minutes: cfg?.queue_nudge_minutes ?? 30,
     urgent_nudge_minutes: cfg?.urgent_nudge_minutes ?? 5,
+    standard_workday_hours: Number(cfg?.standard_workday_hours) || 9,
     country_id: cfg?.country_id || false,
     country_dial_code: String(cfg?.country_dial_code || '91'),
     mobile_length: Number(cfg?.mobile_length) || 10,
@@ -75,6 +77,14 @@ export async function setUrgentNudge(minutes) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true };
   return jsonRpc(serverUrl, '/kpi_config/set_urgent_nudge', { minutes });
+}
+
+// A normal working day, in hours. The End Workday summary compares it against
+// PRESENCE (wall clock): at/over reads green, under reads red.
+export async function setStandardHours(hours) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, hours };
+  return jsonRpc(serverUrl, '/kpi_config/set_standard_hours', { hours });
 }
 
 export async function setCountry(country_id) {

@@ -23,12 +23,17 @@ export class KpiWelcome extends Component {
     // rule: the watermark is position:absolute, so it needs a positioned
     // ancestor — and editing the shared rule would move the watermark on the
     // KRA/KPI Master page too.
+    //
+    // NO inline min-height. It used to say 70vh, and an inline style BEATS the
+    // class — so it overrode .o_kra_dashboard's min-height:100vh and the animated
+    // gradient stopped at 70% of the viewport, leaving a bare white band below.
+    // Sizing lives in the scoped .o_kra_welcome rule (css/kra_style.scss) instead,
+    // where it can't silently outrank the shared one.
     static template = xml/* xml */`
-        <div class="o_kra_welcome o_kra_dashboard p-3" style="position: relative; min-height: 70vh;">
+        <div class="o_kra_welcome o_kra_dashboard p-3">
             <div class="alphalize-watermark"></div>
 
-            <div class="d-flex flex-column align-items-center justify-content-center text-center"
-                 style="position: relative; z-index: 2; min-height: 60vh;">
+            <div class="o_kra_welcome_body d-flex flex-column align-items-center justify-content-center text-center">
                 <h1 class="fw-bold mb-2" style="letter-spacing: 0.5px;">Welcome to KRA / KPI</h1>
                 <p class="text-muted mb-0" style="max-width: 520px;">
                     Pick a section from the menu above to get started.

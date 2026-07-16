@@ -19,6 +19,24 @@ from odoo import api, fields, models
 # here, because a client cap is a courtesy, not a guarantee.
 NOTE_MAX = 60
 
+# The ONE list of non-task reasons. The selection below, kpi.work.session's mirror
+# field, _set_nontask_reason's guard and the /kpi_workday/idle_reason route all read
+# THIS — they used to hardcode their own copies, so adding a reason meant finding
+# every list or the new one was silently rejected at the door.
+NONTASK_REASONS = [
+    ('meeting', 'Meeting'),
+    ('break', 'Break'),
+    # Lunch is its own reason, not a Break: it already has its own Away bucket,
+    # colour and Map label everywhere else, so folding it into Break left the Lunch
+    # box reading 0m for anyone who ate without a task running.
+    ('lunch', 'Lunch'),
+    # Recorded like the others ON PURPOSE: a developer with nothing assigned would
+    # otherwise show as unexplained idle — indistinguishable from slacking, which is
+    # both untrue and unfair to them. This is the only one admins hear about.
+    ('no_tasks', 'No tasks'),
+]
+NONTASK_REASON_CODES = tuple(c for c, _ in NONTASK_REASONS)
+
 
 class KpiNonTaskBlock(models.Model):
     _name = 'kpi.nontask.block'
@@ -34,13 +52,10 @@ class KpiNonTaskBlock(models.Model):
         required=True, index=True, ondelete='cascade',
     )
     reason = fields.Selection(
-        [('meeting', 'Meeting'), ('break', 'Break'), ('no_tasks', 'No tasks')],
-        string='Reason', required=True,
-        help="'no_tasks' is recorded like the others ON PURPOSE: a developer with "
-             "nothing assigned would otherwise show as unexplained idle on the "
-             "Workday Map — indistinguishable from slacking, which is both untrue "
-             "and unfair to them. Admins are told about no_tasks; meeting/break "
-             "stay silent.",
+        NONTASK_REASONS, string='Reason', required=True,
+        help="Why no task was running. Admins are told about 'no_tasks' only; "
+             "meeting / break / lunch stay silent — telling admins about a meeting "
+             "is the false alarm that makes the whole feed worth ignoring.",
     )
     note = fields.Char(
         string='Note', size=NOTE_MAX,

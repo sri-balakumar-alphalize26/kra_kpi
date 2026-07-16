@@ -273,11 +273,21 @@ export default function NotificationsScreen({ onBack, onOpen, isClient = false }
         log.warn('markRead failed', e?.message);
       }
     }
+    if (!onOpen) return;
+    // Some rows point at something that ISN'T a task. "X ended their workday"
+    // opens that day's frozen summary image — checked FIRST because such a row
+    // also carries a kpi_id (the arbitrary task _notify was anchored on), and
+    // routing on that would dump the admin on an unrelated task.
+    if (item.snapshot_id) {
+      log.info('notification → snapshot', { snapshotId: item.snapshot_id });
+      onOpen('snapshots', item.snapshot_id);
+      return;
+    }
     // Role decides the destination. A CLIENT has no Action Board — it loads 0
     // tasks for them and then can't even fetch the row — so their tasks open in
     // My Requests. Uses the KRA/KPI role (kpi_role: admin|client|user), the same
     // single value Login Management shows.
-    if (onOpen && item.kpi_id) {
+    if (item.kpi_id) {
       onOpen(isClient ? 'mytasks' : 'actionboard', item.kpi_id);
     }
   }, [onOpen, isClient]);

@@ -45,6 +45,9 @@
         "views/kpi_configuration_views.xml",
         "views/kpi_user_access_views.xml",
         "views/kpi_task_approval_views.xml",
+        # After menu.xml: it defines both its action and a menuitem under
+        # menu_kra_root, so the parent must already exist.
+        "views/kpi_workday_snapshot_views.xml",
         "views/res_users_views.xml",
     ],
 
@@ -64,6 +67,7 @@
             "kra_kpi_module/static/src/js/main.js",
             # Landing page for the KRA / KPI root menu (see kra_welcome_action.xml).
             "kra_kpi_module/static/src/components/kpi_welcome/kpi_welcome.js",
+            "kra_kpi_module/static/src/components/kpi_workday_snapshot/kpi_workday_snapshot.js",
             "kra_kpi_module/static/src/components/dashboard/dashboard.js",
             "kra_kpi_module/static/src/components/kra_tree/kra_tree.js",
             "kra_kpi_module/static/src/components/kra_tree/kra_node.js",

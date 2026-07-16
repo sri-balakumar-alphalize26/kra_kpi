@@ -25,7 +25,8 @@ from odoo import api, fields, models
 # Safe: kpi_nontask_block imports nothing from here, so there is no cycle. Shared
 # so the session's open-block note and the saved block row can't disagree on the
 # limit.
-from .kpi_nontask_block import NOTE_MAX as NONTASK_NOTE_MAX
+from .kpi_nontask_block import (NOTE_MAX as NONTASK_NOTE_MAX, NONTASK_REASONS,
+                                NONTASK_REASON_CODES)
 
 _logger = logging.getLogger(__name__)
 
@@ -145,8 +146,7 @@ class KpiWorkSession(models.Model):
     # a meeting is not work on a task, and counting it would corrupt
     # actual-vs-estimate, the completion certificate and anything billable.
     nontask_reason = fields.Selection(
-        [('meeting', 'Meeting'), ('break', 'Break'), ('no_tasks', 'No tasks')],
-        string='Non-task Reason', copy=False,
+        NONTASK_REASONS, string='Non-task Reason', copy=False,
         help='Set while the developer is in a meeting / on a break / has no tasks, '
              'with no task running. Mirrors kpi.nontask.block.reason — keep the two '
              'selections in step.',
@@ -448,24 +448,43 @@ class KpiWorkSession(models.Model):
                 'start_display': _to_user_tz_str(sess.nontask_started_at, user, fmt='%H:%M'),
             }
 
-        # True once the cron has actually ASKED (idle_check_count > 0) and the
-        # question is STILL open. The board uses this to raise the popup, because
-        # dev_idle_check carries no kpi_id and so can't be tapped through.
+        # "Nothing is running and you haven't said why" — the board raises the
+        # popup on this, because dev_idle_check carries no kpi_id and so can't be
+        # tapped through to anywhere.
         #
-        # All three ways of answering must close it, or a board re-mount would
-        # re-ask something already answered:
-        #   task started   -> active_task
-        #   meeting/break  -> nontask
-        #   "no tasks"     -> no_task_nudge_count (stamped by /idle_reason)
+        # Deliberately NOT gated on idle_check_count: the question is asked from the
+        # MOMENT THE WORKDAY OPENS, not 10 minutes later. Starting your day is
+        # exactly when "meeting / break / no tasks" is the honest answer, and the
+        # 09:30 start / 09:31 meeting case can't be recorded truthfully if nobody
+        # asks until 09:40. The cron's job is only to ASK AGAIN.
+        #
+        # FOUR ways of answering, and every one of them must close it — otherwise
+        # the popup asks something the developer has already told us.
+        #
+        #   1. started a task           -> active_task
+        #   2. declared meeting/break/  -> nontask        (a kpi.nontask.block)
+        #      lunch with no task
+        #   3. said "I have no tasks"   -> no_task_nudge_count (via /idle_reason)
+        #   4. PAUSED a task with a     -> active_break   (a kpi.break.log)
+        #      reason
+        #
+        # #4 was missed. A pause writes a break-LOG, not a block, so `nontask`
+        # stays false — and the popup asked "why is nothing running?" at someone who
+        # had just answered "Break" two seconds earlier. It was already recorded,
+        # already metered, already on the Map as "Break 1"; only this line couldn't
+        # see it.
+        #
+        # A pause with NO reason writes no break-log, so it correctly still asks:
+        # nothing was declared, so the question genuinely stands.
         idle_prompt = bool(
-            sess and sess.idle_check_count
-            and not active_task and not nontask
+            sess and not active_task and not nontask and not active_break
             and not sess.no_task_nudge_count
         )
-        # WHICH prompt this is (1..IDLE_CHECK_MAX). The app raises the popup once
-        # per number rather than once per boolean: dismissing prompt #1 must not
-        # swallow #2 and #3, or the cap-of-3 would silently become a cap-of-1.
-        idle_prompt_seq = (sess.idle_check_count or 0) if sess else 0
+        # WHICH ask this is. 1 = the one at workday start (the cron hasn't run yet);
+        # each cron re-ask bumps it. The app opens the popup once per NUMBER rather
+        # than once per boolean, so dismissing the first ask doesn't swallow the
+        # later ones — that is what keeps the cap-of-3 a cap-of-3 and not of 1.
+        idle_prompt_seq = ((sess.idle_check_count or 0) + 1) if idle_prompt else 0
 
         return {
             'status': True,
@@ -589,8 +608,23 @@ class KpiWorkSession(models.Model):
         except Exception as exc:
             _logger.warning("end_day un-pair failed for session %s: %s", self.id, exc)
         payload = self._daily_summary_payload(full_day=True)
-        self._fire_daily_summary(payload)
+        # Freeze the day into an image BEFORE anything else reads it: everything in
+        # the payload is a live compute, so this is the only record of what the day
+        # actually looked like at End Workday. Snapshot first, then notify, so the
+        # notification can point at a row that already exists.
+        snap = self._capture_snapshot(payload)
+        self._fire_daily_summary(payload, snapshot=snap)
         return payload
+
+    def _capture_snapshot(self, payload):
+        """Draw + save today's summary image. Deliberately swallows everything: a
+        drawing bug must NEVER stop a developer from ending their day."""
+        self.ensure_one()
+        try:
+            return self.env['kpi.workday.snapshot'].sudo()._capture(self, payload)
+        except Exception as exc:
+            _logger.exception("workday snapshot failed for session %s: %s", self.id, exc)
+            return self.env['kpi.workday.snapshot'].browse()
 
     def _daily_summary_payload(self, full_day=False):
         """Build the dict the popup + WhatsApp template both consume.
@@ -749,28 +783,78 @@ class KpiWorkSession(models.Model):
         # running. They were previously written and read by NOBODY — so that time
         # fell into the other_idle residual below and displayed as unexplained
         # idle, which is the exact thing recording it was meant to prevent.
-        blocks = self.env['kpi.nontask.block'].sudo().search([
+        closed_blocks = self.env['kpi.nontask.block'].sudo().search([
             ('user_id', '=', self.user_id.id),
             ('session_id.session_date', '=', self.session_date),
         ], order='start_at asc')
 
-        def _blk(kind):
-            return sum(bk.seconds for bk in blocks if bk.reason == kind)
+        # Normalized to plain dicts so the STILL-OPEN block can join them. A block
+        # only becomes a row when it closes, so a running meeting had no row and was
+        # missing from the Map entirely — open the End Workday preview mid-meeting
+        # and the meeting simply wasn't there. A running TASK already appears (its
+        # live segment is appended with outcome='active'); blocks now do the same.
+        _now = fields.Datetime.now()
+        blocks = [{
+            'reason': bk.reason, 'start_at': bk.start_at, 'end_at': bk.end_at,
+            'seconds': bk.seconds or 0.0, 'note': bk.note or '', 'open': False,
+        } for bk in closed_blocks]
+        for s in sessions:
+            if not s.nontask_started_at:
+                continue
+            blocks.append({
+                'reason': s.nontask_reason or 'meeting',
+                'start_at': s.nontask_started_at,
+                'end_at': False,                       # still running
+                'seconds': max(0.0, (_now - s.nontask_started_at).total_seconds()),
+                'note': s.nontask_note or '',
+                'open': True,
+            })
+        blocks.sort(key=lambda b: b['start_at'])
 
-        break_secs   = sum(b.duration_seconds for b in blogs if b.break_type == 'break') + _blk('break')
-        lunch_secs   = sum(b.duration_seconds for b in blogs if b.break_type == 'lunch')
-        meeting_secs = sum(b.duration_seconds for b in blogs if b.break_type == 'meeting') + _blk('meeting')
-        away_secs    = sum(b.duration_seconds for b in blogs if b.break_type == 'away')
+        def _blk(kind):
+            return sum(bk['seconds'] for bk in blocks if bk['reason'] == kind)
+
+        def _blog_secs(b):
+            """A break-log's seconds, counting an OPEN one live.
+
+            duration_seconds is computed from end_time, so an open break is 0 until
+            it closes — which meant that while a developer was ON a break, the break
+            bucket read 0m and the time slid into the other_idle residual, i.e. it
+            was reported as unexplained idle. An open BLOCK already counts live, so
+            the two paths disagreed about the same question.
+
+            Only the live preview was ever wrong: action_end_day calls stop_break
+            BEFORE building the payload, so the saved image was always correct.
+            """
+            if b.is_active and b.start_time:
+                return max(0.0, (_now - b.start_time).total_seconds())
+            return b.duration_seconds or 0.0
+
+        def _log(kind):
+            return sum(_blog_secs(b) for b in blogs if b.break_type == kind)
+
+        break_secs   = _log('break') + _blk('break')
+        # + _blk('lunch') matters: without it a no-task lunch is UNMETERED and slides
+        # into other_idle, reading as unexplained idle — the very bug the block model
+        # exists to prevent, sneaking back in through the new Lunch option.
+        lunch_secs   = _log('lunch') + _blk('lunch')
+        meeting_secs = _log('meeting') + _blk('meeting')
+        away_secs    = _log('away')
         # Time the developer had nothing assigned. Its own bucket on purpose: it is
         # not the developer's fault and must not read as slacking.
         no_tasks_secs = _blk('no_tasks')
         # 'other' + 'leave' + 'urgent' + anything unexpected roll up under "Other".
-        other_secs   = sum(b.duration_seconds for b in blogs
+        other_secs   = sum(_blog_secs(b) for b in blogs
                            if b.break_type in ('other', 'leave', 'urgent'))
         metered = (break_secs + lunch_secs + meeting_secs + away_secs
                    + other_secs + no_tasks_secs)
         # Residual idle = presence not covered by productive work OR any metered reason.
         other_idle = max(0.0, presence - productive - metered)
+
+        # The company's standard working day. `or 9.0` covers a company row that
+        # predates the field (a stored 0 would make every day green).
+        std_hours = self.env.company.standard_workday_hours or 9.0
+        std_seconds = std_hours * 3600.0
 
         # ONE ordered, numbered list — the Map. away_events is derived FROM it just
         # below, so the Map and the Away list cannot drift apart (they used to
@@ -807,6 +891,15 @@ class KpiWorkSession(models.Model):
             'presence_seconds':   float(presence),
             'productive_display': _fmt_hms(productive),
             'presence_display':   _fmt_hms(presence),
+            # A normal working day vs what was actually here. Decided ONCE, server
+            # side, so the app, the web popup and the saved image can never render
+            # a different verdict for the same day.
+            # Deliberately measured against PRESENCE (wall clock), not Productive:
+            # that is what was asked for. It means a long day with little task work
+            # still reads green — which is why productive_display sits next to it.
+            'standard_hours':     float(std_hours),
+            'standard_display':   _fmt_hms(std_seconds),
+            'met_standard':       bool(presence >= std_seconds),
             'task_count':         len(tasks),
             'tasks':              tasks,
             'auto_closed':        any(sessions.mapped('auto_closed')),
@@ -886,6 +979,9 @@ class KpiWorkSession(models.Model):
             return a or b or ''
 
         _far = fields.Datetime.now()
+        # Same clock for every "still running" duration on this Map, so two chips
+        # drawn in one render can't disagree by a few milliseconds.
+        _now_ts = _far
         nodes = []
 
         # Start node
@@ -955,13 +1051,20 @@ class KpiWorkSession(models.Model):
             })
 
         # Break / lunch nodes — a RUNNING task was paused with a reason.
+        # An OPEN one renders live, exactly like an open block: same question, so it
+        # must not get a different answer depending on which model recorded it.
         for b in blogs:
             icon, label = _break_meta.get(b.break_type, ('⏸', 'Other'))
+            b_running = bool(b.is_active and not b.end_time)
+            b_secs = (max(0.0, (_now_ts - b.start_time).total_seconds())
+                      if (b_running and b.start_time) else (b.duration_seconds or 0.0))
             nodes.append({
                 'kind': 'break', 'icon': icon, 'label': label, 'break_type': b.break_type,
-                'time': _range(b.start_time, b.end_time),
-                'duration_display': _fmt_hms(b.duration_seconds),
+                'time': (_hm(b.start_time) + ' - now') if b_running
+                        else _range(b.start_time, b.end_time),
+                'duration_display': _fmt_hms(b_secs),
                 'reason': (b.reason_note or '').strip(),
+                'running': b_running,
                 'from': b.source_task_id.name if b.source_task_id else '',
                 '_sort': b.start_time or first_login or _far,
             })
@@ -969,15 +1072,24 @@ class KpiWorkSession(models.Model):
         # Non-task blocks — NO task was running (the 09:30 start / 09:31 meeting
         # case). Same node shape as a break so they sort and number together: one
         # counter across both recorders, for free.
+        # Plain dicts, not records: the STILL-OPEN block has no row yet and is passed
+        # in alongside the saved ones, so a running meeting shows on the Map straight
+        # away instead of only appearing once it ends.
         for bk in blocks:
-            icon, label = _break_meta.get(bk.reason, ('⏸', 'Other'))
+            icon, label = _break_meta.get(bk['reason'], ('⏸', 'Other'))
+            running = bk.get('open') and not bk.get('end_at')
             nodes.append({
-                'kind': 'break', 'icon': icon, 'label': label, 'break_type': bk.reason,
-                'time': _range(bk.start_at, bk.end_at),
-                'duration_display': _fmt_hms(bk.seconds),
-                'reason': (bk.note or '').strip(),
+                'kind': 'break', 'icon': icon, 'label': label,
+                'break_type': bk['reason'],
+                # "09:31 - now" while it runs, so the card reads as live rather than
+                # as a block that mysteriously has no end.
+                'time': (_hm(bk['start_at']) + ' - now') if running
+                        else _range(bk['start_at'], bk.get('end_at')),
+                'duration_display': _fmt_hms(bk.get('seconds') or 0),
+                'reason': (bk.get('note') or '').strip(),
+                'running': bool(running),
                 'from': '',   # no task was running — that is the whole point
-                '_sort': bk.start_at or first_login or _far,
+                '_sort': bk['start_at'] or first_login or _far,
             })
 
         nodes.sort(key=lambda n: n['_sort'] or _far)
@@ -1010,8 +1122,18 @@ class KpiWorkSession(models.Model):
             n.pop('_sort', None)
         return nodes
 
-    def _fire_daily_summary(self, payload):
-        """Dispatch the 'daily_summary' WA via the existing _notify pipeline.
+    def _fire_daily_summary(self, payload, snapshot=None):
+        """Tell owner + coordinator this developer ended their workday.
+
+        IN-APP ONLY now — the WhatsApp template was removed. The point of this
+        notification is that admins TAP it and land on the day's frozen summary
+        image, which a WhatsApp text cannot do. (It reached nobody before anyway:
+        kpi_wa_task_notifications defaults False.)
+
+        `snapshot`: the kpi.workday.snapshot just saved. Passed down through the
+        CONTEXT so no signature in the _notify chain has to change; the persist
+        block stamps it onto each created row as snapshot_id, which is what makes
+        the notification tappable.
 
         _notify resolves recipients off a kra.kpi record, so we pick any
         task this dev has ever owned. Falls back to a direct send when the
@@ -1054,6 +1176,11 @@ class KpiWorkSession(models.Model):
             any_kpi = Kpi.search([], order='id desc', limit=1)
         if any_kpi:
             try:
+                # kpi_snapshot_id rides the context: _notify's persist block stamps
+                # it on each created row, which is what makes the notification
+                # tappable through to the day's image.
+                if snapshot:
+                    any_kpi = any_kpi.with_context(kpi_snapshot_id=snapshot.id)
                 any_kpi._notify('daily_summary', **ctx)
                 any_kpi._log_action(
                     'daily_summary_sent',
@@ -1122,8 +1249,14 @@ class KpiWorkSession(models.Model):
                 'auto_closed': True,
             })
             try:
-                payload = s._daily_summary_payload()
-                s._fire_daily_summary(payload)
+                # full_day=True to match action_end_day — this is the same day's
+                # record, and it must not differ just because a cron closed it.
+                payload = s._daily_summary_payload(full_day=True)
+                # The image matters MOST here: this fires for exactly the people
+                # who forgot to end their day, and there is no browser in a cron —
+                # which is why the whole thing renders server-side.
+                snap = s._capture_snapshot(payload)
+                s._fire_daily_summary(payload, snapshot=snap)
             except Exception as exc:
                 _logger.warning("overdue-close summary failed for session %s: %s", s.id, exc)
             # Tell the developer we auto-closed the workday they left open.
@@ -1310,6 +1443,76 @@ class KpiWorkSession(models.Model):
         self.sudo().write({'nontask_started_at': False, 'nontask_reason': False,
                            'nontask_note': False})
         return True
+
+    def _set_nontask_reason(self, reason, note=''):
+        """Declare what the developer is doing while no task runs:
+        meeting | break | no_tasks. Returns {switched_from, admins_notified}.
+
+        SWITCHING is how a block ends — "morning meeting over, I have no tasks" is
+        ONE tap: the meeting closes and no-tasks begins, both landing on the Map.
+
+        Rules:
+          * different reason -> close the open block AT NOW, open the new one AT NOW.
+            Same instant, so the two never overlap and never leave a gap — the same
+            contract start_task uses when it closes a block at the tick the timer
+            starts.
+          * same reason -> idempotent: keep the original start, or re-tapping would
+            restart the clock and throw away time already spent.
+
+        This lives on the model, not in the controller, so it is reachable from an
+        Odoo shell probe — the controller version could only ever be tested by
+        re-implementing it, which tests the copy and not the code.
+
+        The bug this fixes: it used to overwrite `nontask_reason` while KEEPING the
+        original start, so a 09:31 meeting switched at 10:00 collapsed into a single
+        block labelled "No tasks 09:31-10:30". The meeting vanished from the Map, its
+        time was relabelled, and admins were told there had been no tasks since 09:31
+        — untrue, unfair to the developer, and frozen into the End Workday image.
+        """
+        self.ensure_one()
+        if reason not in NONTASK_REASON_CODES:
+            raise ValueError('bad non-task reason: %s' % reason)
+        note = (note or '').strip()[:NONTASK_NOTE_MAX]
+        now = fields.Datetime.now()
+
+        open_reason = self.nontask_reason if self.nontask_started_at else False
+        switched_from = False
+        if open_reason and open_reason != reason:
+            self._close_nontask_block(at=now)
+            switched_from = open_reason
+            open_reason = False
+
+        vals = {'nontask_reason': reason, 'nontask_note': note or False}
+        if not open_reason:
+            vals['nontask_started_at'] = now
+
+        admins_notified = False
+        if reason == 'no_tasks':
+            # Only on a NEW declaration. open_reason is still 'no_tasks' ONLY when
+            # they re-tapped the same button (the switch above cleared it otherwise),
+            # and re-tapping must not tell the admins twice — the 15-min re-nudge is
+            # what chases them.
+            if open_reason != 'no_tasks':
+                self._fire_no_task()
+                admins_notified = True
+                vals['no_task_nudge_at'] = now + timedelta(minutes=NO_TASK_NUDGE_MIN)
+                vals['no_task_nudge_count'] = 1
+            # They answered — stop asking them.
+            vals['idle_check_at'] = False
+        else:
+            # Keep checking: a block left open all day is its own problem.
+            vals['idle_check_at'] = now + timedelta(minutes=IDLE_CHECK_MIN)
+            # Switching AWAY from "no tasks" (work arrived, or it was a meeting after
+            # all) → stop chasing admins about it.
+            if switched_from == 'no_tasks':
+                vals['no_task_nudge_at'] = False
+                vals['no_task_nudge_count'] = 0
+
+        self.sudo().write(vals)
+        _logger.info("non-task reason: %s %s%s", self.user_id.login, reason,
+                     (' (was %s)' % switched_from) if switched_from else '')
+        return {'switched_from': switched_from or '',
+                'admins_notified': admins_notified}
 
     def _stop_idle_tracking(self, reason=''):
         """A task is running (or the day is over) → drop every timer."""
