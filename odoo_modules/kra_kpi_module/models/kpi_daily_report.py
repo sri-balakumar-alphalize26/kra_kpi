@@ -15,6 +15,7 @@ import base64
 import io
 import logging
 from datetime import timedelta
+from xml.sax.saxutils import escape as _xml_escape
 
 from dateutil.relativedelta import relativedelta
 import pytz
@@ -25,6 +26,12 @@ from odoo.exceptions import UserError
 _logger = logging.getLogger(__name__)
 
 _IST = pytz.timezone('Asia/Kolkata')
+
+
+def _esc(text):
+    """XML-escape free text before it goes into a reportlab Paragraph, so an
+    ampersand or angle bracket in a task/employee name can't break the parser."""
+    return _xml_escape('' if text is None else str(text))
 
 
 def _fmt_secs(seconds):
@@ -167,79 +174,181 @@ class KpiDailyReport(models.Model):
         }
 
     # ------------------------------------------------------------------ #
-    # PDF rendering — reportlab (lazy import, like Pillow in the snapshot) #
+    # Branding — logo + company name from the Company Branding screen     #
+    # ------------------------------------------------------------------ #
+    def _branding(self):
+        """Return (company_name, logo_bytes) for the PDF header + watermark.
+
+        Name + logo come from the Company Branding screen (res.company.name /
+        res.company.logo). When no company logo is set we fall back to the
+        module's bundled brand logo (the same asset the invoice PDF uses), so a
+        fresh company doesn't render the Odoo 'Your logo' placeholder.
+        """
+        company = self.env.company
+        name = company.name or ''
+        logo_bytes = None
+        raw = company.logo
+        if raw:
+            try:
+                logo_bytes = base64.b64decode(raw)
+            except Exception:
+                logo_bytes = None
+        if not logo_bytes:
+            try:
+                from odoo.tools import file_open
+                with file_open('kra_kpi_module/static/src/img/alphalize_logo.png', 'rb') as f:
+                    logo_bytes = f.read()
+            except Exception:
+                logo_bytes = None
+        return name, logo_bytes
+
+    # ------------------------------------------------------------------ #
+    # PDF rendering — reportlab, styled to match the client invoice PDF   #
     # ------------------------------------------------------------------ #
     def _build_pdf(self, p):
-        """Render the payload to PDF bytes with reportlab.platypus."""
+        """Render the payload to PDF bytes with reportlab.platypus.
+
+        Mirrors the client invoice PDF's look: Times fonts, logo+company-name
+        header with a grey rule, a faint centred logo watermark on every page,
+        and #38385C table headers with zebra rows.
+        """
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import mm
+        from reportlab.lib.utils import ImageReader
         from reportlab.platypus import (
             SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak,
+            Image, HRFlowable,
         )
 
-        ink = colors.HexColor('#0F172A')
+        # Palette mirrors the invoice PDF.
+        brand = colors.HexColor('#38385C')   # table header fill / accents
+        zebra = colors.HexColor('#F7F7FB')
+        grid = colors.HexColor('#E1E1E1')
+        rule = colors.HexColor('#BEBEBE')
+        ink = colors.black
         muted = colors.HexColor('#64748B')
-        line = colors.HexColor('#E2E8F0')
-        head_bg = colors.HexColor('#1E40AF')
-        panel = colors.HexColor('#F8FAFC')
 
+        company_name, logo_bytes = self._branding()
+        logo_reader = None
+        logo_ratio = 1.0
+        if logo_bytes:
+            try:
+                logo_reader = ImageReader(io.BytesIO(logo_bytes))
+                iw, ih = logo_reader.getSize()
+                if iw and ih:
+                    logo_ratio = float(iw) / float(ih)
+            except Exception:
+                logo_reader = None
+
+        # Times New Roman, like the invoice.
         styles = getSampleStyleSheet()
-        h_title = ParagraphStyle('t', parent=styles['Title'], textColor=ink, fontSize=20, spaceAfter=2)
-        h_meta = ParagraphStyle('m', parent=styles['Normal'], textColor=muted, fontSize=9, spaceAfter=1)
-        h_emp = ParagraphStyle('e', parent=styles['Heading2'], textColor=head_bg, fontSize=14, spaceBefore=4, spaceAfter=2)
-        cell = ParagraphStyle('c', parent=styles['Normal'], textColor=ink, fontSize=8, leading=10)
-        cell_b = ParagraphStyle('cb', parent=cell, fontName='Helvetica-Bold')
-        note = ParagraphStyle('n', parent=styles['Normal'], textColor=muted, fontSize=8, leading=10, spaceAfter=1)
+        s_company = ParagraphStyle('co', parent=styles['Normal'], fontName='Times-Bold', fontSize=22, alignment=2, textColor=ink, leading=24)
+        s_doctype = ParagraphStyle('dt', parent=styles['Normal'], fontName='Times-Roman', fontSize=12, alignment=2, textColor=muted, leading=16)
+        s_meta = ParagraphStyle('me', parent=styles['Normal'], fontName='Times-Roman', fontSize=10, textColor=muted, leading=13, spaceAfter=1)
+        s_emp = ParagraphStyle('emp', parent=styles['Normal'], fontName='Times-Bold', fontSize=14, textColor=brand, leading=16, spaceBefore=2, spaceAfter=2)
+        cell = ParagraphStyle('c', parent=styles['Normal'], fontName='Times-Roman', fontSize=9, textColor=ink, leading=11)
+        cell_b = ParagraphStyle('cb', parent=cell, fontName='Times-Bold')
+        note = ParagraphStyle('n', parent=styles['Normal'], fontName='Times-Roman', fontSize=9, textColor=muted, leading=11, spaceAfter=1)
+
+        PW, PH = A4
+        MARGIN = 48
+        content_w = PW - 2 * MARGIN
+
+        def _watermark(canvas, doc_):
+            """Faint centred logo on every page (opacity 0.08, no rotation)."""
+            if not logo_reader:
+                return
+            canvas.saveState()
+            wm_w = PW * 0.55
+            wm_h = wm_w / (logo_ratio or 1.0)
+            if wm_h > PH * 0.5:
+                wm_h = PH * 0.5
+                wm_w = wm_h * (logo_ratio or 1.0)
+            x = (PW - wm_w) / 2.0
+            y = (PH - wm_h) / 2.0
+            try:
+                canvas.setFillAlpha(0.08)
+                canvas.setStrokeAlpha(0.08)
+            except Exception:
+                pass
+            try:
+                canvas.drawImage(logo_reader, x, y, wm_w, wm_h, mask='auto', preserveAspectRatio=True)
+            except Exception:
+                pass
+            canvas.restoreState()
 
         buf = io.BytesIO()
         doc = SimpleDocTemplate(
             buf, pagesize=A4,
-            leftMargin=14 * mm, rightMargin=14 * mm,
-            topMargin=14 * mm, bottomMargin=14 * mm,
+            leftMargin=MARGIN, rightMargin=MARGIN, topMargin=MARGIN, bottomMargin=MARGIN,
             title='Daily Employee Task Report',
         )
         story = []
 
-        # ---- Summary page ------------------------------------------------
-        story.append(Paragraph('Daily Employee Task Report', h_title))
-        story.append(Paragraph(p['company'], h_meta))
-        story.append(Paragraph('For %s' % p['date_display'], h_meta))
-        story.append(Paragraph('Generated %s' % p['generated_display'], h_meta))
+        # ---- Header: logo left, company name + doc type right ------------
+        right_cell = [Paragraph(_esc(company_name), s_company),
+                      Paragraph('Daily Employee Task Report', s_doctype)]
+        if logo_reader:
+            h = 56
+            w = min(h * logo_ratio, 150)
+            left_cell = Image(io.BytesIO(logo_bytes), width=w, height=h)
+            left_cell.hAlign = 'LEFT'
+        else:
+            left_cell = Paragraph('', cell)
+        header = Table([[left_cell, right_cell]],
+                       colWidths=[content_w * 0.45, content_w * 0.55])
+        header.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(header)
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width='100%', thickness=0.8, color=rule, spaceBefore=0, spaceAfter=8))
+
+        # ---- Meta ---------------------------------------------------------
+        story.append(Paragraph('For %s' % p['date_display'], s_meta))
+        story.append(Paragraph('Generated %s' % p['generated_display'], s_meta))
         story.append(Paragraph(
             '%s employee(s) • %s task(s) worked' % (p['total_employees'], p['total_tasks']),
-            h_meta))
-        story.append(Spacer(1, 8))
+            s_meta))
+        story.append(Spacer(1, 10))
 
         head = ['Employee', 'Login → Logout', 'Presence', 'Productive', 'Tasks', 'Done']
         rows = [head]
         for e in p['employees']:
             rows.append([
-                Paragraph(e['name'], cell_b),
-                Paragraph('%s → %s' % (e['login_display'], e['logout_display']), cell),
+                Paragraph(_esc(e['name']), cell_b),
+                Paragraph('%s → %s' % (_esc(e['login_display']), _esc(e['logout_display'])), cell),
                 e['presence_display'], e['productive_display'],
                 str(e['total_tasks']), str(e['completed_tasks']),
             ])
         summary = Table(rows, colWidths=[46 * mm, 40 * mm, 24 * mm, 24 * mm, 14 * mm, 14 * mm], repeatRows=1)
         summary.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), head_bg),
+            ('BACKGROUND', (0, 0), (-1, 0), brand),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('FONTNAME', (0, 0), (-1, -1), 'Times-Roman'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Times-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('ALIGN', (2, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, panel]),
-            ('GRID', (0, 0), (-1, -1), 0.4, line),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, zebra]),
+            ('GRID', (0, 0), (-1, -1), 0.5, grid),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
         ]))
         story.append(summary)
 
         # ---- One section per employee -----------------------------------
         for e in p['employees']:
             story.append(PageBreak())
-            story.append(Paragraph(e['name'], h_emp))
+            story.append(Paragraph(_esc(e['name']), s_emp))
             meta_bits = [
                 '%s → %s' % (e['login_display'], e['logout_display']),
                 'Presence %s' % e['presence_display'],
@@ -250,9 +359,9 @@ class KpiDailyReport(models.Model):
             ]
             if e['auto_closed']:
                 meta_bits.append('workday auto-closed')
-            story.append(Paragraph(' • '.join(meta_bits), h_meta))
+            story.append(Paragraph(' • '.join(meta_bits), s_meta))
             if e['email']:
-                story.append(Paragraph(e['email'], h_meta))
+                story.append(Paragraph(_esc(e['email']), s_meta))
             story.append(Spacer(1, 6))
 
             if not e['tasks']:
@@ -269,25 +378,29 @@ class KpiDailyReport(models.Model):
                 if t.get('parent_kra_name'):
                     kra = '%s / %s' % (t['parent_kra_name'], kra)
                 t_rows.append([
-                    Paragraph(t.get('name') or '', cell),
-                    Paragraph(kra, cell),
-                    Paragraph((t.get('priority') or '').title(), cell),
-                    Paragraph(t.get('task_state_display') or '', cell),
+                    Paragraph(_esc(t.get('name')), cell),
+                    Paragraph(_esc(kra), cell),
+                    Paragraph(_esc((t.get('priority') or '').title()), cell),
+                    Paragraph(_esc(t.get('task_state_display')), cell),
                     t.get('estimated_hours_display') or '—',
                     t.get('actual_hours_display') or '—',
                     perf,
                 ])
             tt = Table(t_rows, colWidths=[44 * mm, 40 * mm, 18 * mm, 24 * mm, 14 * mm, 14 * mm, 14 * mm], repeatRows=1)
             tt.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), panel),
-                ('TEXTCOLOR', (0, 0), (-1, 0), ink),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('BACKGROUND', (0, 0), (-1, 0), brand),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, -1), 'Times-Roman'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Times-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
                 ('ALIGN', (4, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('GRID', (0, 0), (-1, -1), 0.4, line),
-                ('TOPPADDING', (0, 0), (-1, -1), 3),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, zebra]),
+                ('GRID', (0, 0), (-1, -1), 0.5, grid),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
             ]))
             story.append(tt)
 
@@ -299,22 +412,22 @@ class KpiDailyReport(models.Model):
                     for s in (d.get('summaries') or []):
                         summ = (s.get('summary') or '').strip()
                         if summ:
-                            lines.append('• %s — %s' % (s.get('time', ''), summ))
+                            lines.append('• %s — %s' % (_esc(s.get('time', '')), _esc(summ)))
                 if lines:
                     progress_blocks.append((t.get('name') or '', t.get('actual_hours_display') or '', lines))
             if progress_blocks:
                 story.append(Spacer(1, 6))
                 story.append(Paragraph('Progress notes', cell_b))
                 for name, dur, lines in progress_blocks:
-                    story.append(Paragraph('<b>%s</b> — %s' % (name, dur), note))
+                    story.append(Paragraph('<b>%s</b> — %s' % (_esc(name), _esc(dur)), note))
                     for ln in lines:
                         story.append(Paragraph(ln, note))
 
             for n in e['notes']:
                 story.append(Spacer(1, 4))
-                story.append(Paragraph('End-of-day note: %s' % n, note))
+                story.append(Paragraph('End-of-day note: %s' % _esc(n), note))
 
-        doc.build(story)
+        doc.build(story, onFirstPage=_watermark, onLaterPages=_watermark)
         return buf.getvalue()
 
     # ------------------------------------------------------------------ #
