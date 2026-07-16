@@ -108,6 +108,73 @@ export class KpiConfiguration extends Component {
                     </div>
                 </div>
 
+                <!-- Daily Task Report & Retention -->
+                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #f59e0b !important; border-left-style: solid;">
+                    <div class="card-header bg-white fw-bold d-flex align-items-center">
+                        <i class="fa fa-file-text-o me-2 text-warning"></i> Daily Task Report &amp; Retention
+                    </div>
+                    <div class="card-body">
+                        <div class="form-check form-switch mb-2">
+                            <input type="checkbox" class="form-check-input" role="switch"
+                                   t-att-checked="state.daily_report_enabled"
+                                   t-on-change="() => this.toggleDailyReport()"/>
+                            <label class="form-check-label fw-semibold">Send daily employee task report (PDF) to admins</label>
+                            <span t-if="state.savedDailyReport" class="text-success small ms-2">✓ Saved</span>
+                        </div>
+                        <div class="row g-3" t-if="state.daily_report_enabled">
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold">Send time (IST)</label>
+                                <input type="time" class="form-control" style="max-width:160px;"
+                                       t-att-value="state.daily_report_time"
+                                       t-on-change="(ev) => this.saveDailyReportTime(ev)"/>
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label fw-semibold">Report covers</label>
+                                <select class="form-select" style="max-width:200px;"
+                                        t-on-change="(ev) => this.saveDailyReportCoverage(ev)">
+                                    <option value="yesterday" t-att-selected="state.daily_report_coverage === 'yesterday'">Previous day</option>
+                                    <option value="today" t-att-selected="state.daily_report_coverage === 'today'">Same day</option>
+                                </select>
+                            </div>
+                        </div>
+                        <small class="text-muted d-block mt-2">One PDF with every employee's task details for the day,
+                            delivered to admins in-app at the time above. Previous day suits a morning send (everyone has
+                            ended their workday).</small>
+
+                        <hr class="my-4"/>
+
+                        <label class="form-label fw-semibold">Keep workday snapshot images for</label>
+                        <div class="input-group" style="max-width:280px;">
+                            <input type="number" min="0" class="form-control"
+                                   t-model.number="state.snapshot_retention_number"
+                                   t-on-change="() => this.saveSnapshotRetention()"/>
+                            <select class="form-select" t-on-change="(ev) => this.saveSnapshotRetentionUnit(ev)">
+                                <option value="days" t-att-selected="state.snapshot_retention_unit === 'days'">Days</option>
+                                <option value="months" t-att-selected="state.snapshot_retention_unit === 'months'">Months</option>
+                                <option value="years" t-att-selected="state.snapshot_retention_unit === 'years'">Years</option>
+                            </select>
+                            <span t-if="state.savedSnapRetention" class="input-group-text text-success bg-white border-success">✓</span>
+                        </div>
+                        <small class="text-muted d-block mt-2">Old End-Workday summary images are cleared automatically
+                            (the day's stats are kept). <b>0 = keep forever.</b></small>
+
+                        <label class="form-label fw-semibold mt-4">Keep generated report PDFs for</label>
+                        <div class="input-group" style="max-width:280px;">
+                            <input type="number" min="0" class="form-control"
+                                   t-model.number="state.report_retention_number"
+                                   t-on-change="() => this.saveReportRetention()"/>
+                            <select class="form-select" t-on-change="(ev) => this.saveReportRetentionUnit(ev)">
+                                <option value="days" t-att-selected="state.report_retention_unit === 'days'">Days</option>
+                                <option value="months" t-att-selected="state.report_retention_unit === 'months'">Months</option>
+                                <option value="years" t-att-selected="state.report_retention_unit === 'years'">Years</option>
+                            </select>
+                            <span t-if="state.savedReportRetention" class="input-group-text text-success bg-white border-success">✓</span>
+                        </div>
+                        <small class="text-muted d-block mt-2">Reports stay viewable and downloadable until deleted.
+                            <b>0 = keep forever.</b></small>
+                    </div>
+                </div>
+
                 <!-- The "Urgent-pause recipients" card (extra WhatsApp numbers) was removed:
                      those numbers had no user account, so they could only ever be reached over
                      WhatsApp — and task WhatsApp is now off by default. Urgent goes to
@@ -183,6 +250,17 @@ export class KpiConfiguration extends Component {
             mobileLength: 10,
             countries: [],
             savedCountry: false,
+            // Daily task report schedule + snapshot/report retention.
+            daily_report_enabled: true,
+            daily_report_time: "10:00",
+            daily_report_coverage: "yesterday",
+            savedDailyReport: false,
+            snapshot_retention_number: 3,
+            snapshot_retention_unit: "months",
+            savedSnapRetention: false,
+            report_retention_number: 3,
+            report_retention_unit: "months",
+            savedReportRetention: false,
         });
         onWillStart(async () => {
             try {
@@ -196,6 +274,14 @@ export class KpiConfiguration extends Component {
                     this.state.dial = String(cfg.country_dial_code || "91");
                     this.state.mobileLength = Number(cfg.mobile_length) || 10;
                     this.state.countries = cfg.countries || [];
+                    // Daily report + retention.
+                    if (cfg.daily_report_enabled != null) this.state.daily_report_enabled = !!cfg.daily_report_enabled;
+                    if (cfg.daily_report_hour != null) this.state.daily_report_time = this.hourToTime(cfg.daily_report_hour);
+                    if (cfg.daily_report_coverage) this.state.daily_report_coverage = cfg.daily_report_coverage;
+                    if (cfg.snapshot_retention_number != null) this.state.snapshot_retention_number = cfg.snapshot_retention_number;
+                    if (cfg.snapshot_retention_unit) this.state.snapshot_retention_unit = cfg.snapshot_retention_unit;
+                    if (cfg.report_retention_number != null) this.state.report_retention_number = cfg.report_retention_number;
+                    if (cfg.report_retention_unit) this.state.report_retention_unit = cfg.report_retention_unit;
                 }
                 const devs = await rpc("/kpi_multitask/list", {});
                 if (devs?.status) this.state.developers = devs.developers;
@@ -297,6 +383,69 @@ export class KpiConfiguration extends Component {
             if (res.status) { dev.wa_number = res.wa_number || val; this._flash(dev, "_saved"); }
             else alert(res.message || "Not authorized.");
         } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+
+    // ---- Daily report schedule ------------------------------------------
+    // Stored server-side as a float hour (10.5 = 10:30); the picker is HH:MM.
+    hourToTime(h) {
+        const f = Number(h) || 0;
+        const H = Math.floor(f);
+        const M = Math.round((f - H) * 60);
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${pad(H)}:${pad(M % 60)}`;
+    }
+    timeToHour(t) {
+        const [H, M] = String(t || "10:00").split(":").map((x) => parseInt(x) || 0);
+        return H + M / 60;
+    }
+
+    async saveDailyReport() {
+        try {
+            await rpc("/kpi_config/set_daily_report", {
+                enabled: this.state.daily_report_enabled,
+                hour: this.timeToHour(this.state.daily_report_time),
+                coverage: this.state.daily_report_coverage,
+            });
+            this._flash(this.state, "savedDailyReport");
+        } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+    toggleDailyReport() {
+        this.state.daily_report_enabled = !this.state.daily_report_enabled;
+        this.saveDailyReport();
+    }
+    saveDailyReportTime(ev) {
+        this.state.daily_report_time = ev.target.value || "10:00";
+        this.saveDailyReport();
+    }
+    saveDailyReportCoverage(ev) {
+        this.state.daily_report_coverage = ev.target.value || "yesterday";
+        this.saveDailyReport();
+    }
+
+    // ---- Retention (number + Days/Months/Years unit) --------------------
+    async saveSnapshotRetention() {
+        const number = Math.max(0, parseInt(this.state.snapshot_retention_number) || 0);
+        this.state.snapshot_retention_number = number;
+        try {
+            await rpc("/kpi_config/set_snapshot_retention", { number, unit: this.state.snapshot_retention_unit });
+            this._flash(this.state, "savedSnapRetention");
+        } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+    saveSnapshotRetentionUnit(ev) {
+        this.state.snapshot_retention_unit = ev.target.value || "months";
+        this.saveSnapshotRetention();
+    }
+    async saveReportRetention() {
+        const number = Math.max(0, parseInt(this.state.report_retention_number) || 0);
+        this.state.report_retention_number = number;
+        try {
+            await rpc("/kpi_config/set_report_retention", { number, unit: this.state.report_retention_unit });
+            this._flash(this.state, "savedReportRetention");
+        } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+    saveReportRetentionUnit(ev) {
+        this.state.report_retention_unit = ev.target.value || "months";
+        this.saveReportRetention();
     }
 }
 

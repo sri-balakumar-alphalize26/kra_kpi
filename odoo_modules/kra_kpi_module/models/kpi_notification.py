@@ -49,6 +49,16 @@ class KpiNotification(models.Model):
         ondelete='set null',
         index=True,
     )
+    # What to open when a "daily report ready" notification is TAPPED — the day's
+    # generated PDF (kpi.daily.report), which is not a task either. Same rationale
+    # and same ondelete='set null' trap as snapshot_id: purging a report must not
+    # delete the notification that mentioned it — the row survives, untappable.
+    report_id = fields.Many2one(
+        'kpi.daily.report',
+        string='Daily Report',
+        ondelete='set null',
+        index=True,
+    )
     # Free-text event key mirroring kpi.action.log.event, e.g.
     #   task_created, task_assigned, reassigned, self_task_submitted
     event = fields.Char(string='Event', required=True, index=True)

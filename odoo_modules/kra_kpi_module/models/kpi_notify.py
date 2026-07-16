@@ -62,6 +62,9 @@ _PERSIST_EVENTS = {
     # and it never sent anyway (kpi_wa_task_notifications defaults False), so the
     # summary reached nobody at all before this.
     'daily_summary',
+    # "The daily employee task report (PDF) is ready" → admins. Tapping it opens
+    # the generated report (kpi.notification.report_id). App-only, like daily_summary.
+    'daily_report',
     'task_reassigned',  # tell the PREVIOUS assignee their task moved to someone else
     # In-app client approval: the client must see the request in the app (this used
     # to be WhatsApp-only, so nothing was ever persisted for it), and dev+admin must
@@ -133,6 +136,7 @@ _NOTIF_TITLES = {
     'urgent_pause':         '🚨 Urgent',
     'workday_started':      'Workday started',
     'daily_summary':        'Workday ended',
+    'daily_report':         'Daily report ready',
     'dev_idle_check':       'Not started a task yet?',
     'dev_no_task':          '📭 Developer has no tasks',
 }
@@ -216,6 +220,15 @@ _APP_TEMPLATES = {
         "{session_note}"
         "{auto_note}"
         "Tap to open the day's summary image."
+    ),
+    # The consolidated daily employee task report (PDF) has been generated →
+    # admins. TAPPING opens the report (kpi.notification.report_id). App-only:
+    # its _TEMPLATES (WhatsApp) entry is intentionally absent, so _notify no-ops
+    # the WhatsApp leg on the empty body. PASSTHROUGH — only ctx keys exist here.
+    'daily_report': (
+        "📄 Daily task report ready — {date}\n"
+        "👥 {employee_count} employee(s) • ✅ {task_count} task(s)\n"
+        "Tap to open and download the report."
     ),
     # Asked of the DEVELOPER, not an admin. The three answers map to
     # /kpi_workday/idle_reason.
@@ -395,6 +408,8 @@ _EVENT_RECIPIENTS = {
     'reassigned':                ('owner', 'coordinator', 'developer'),
     # Daily summary — owner + coordinator only.
     'daily_summary':             ('owner', 'coordinator'),
+    # Daily employee task report (PDF) — owner + coordinator.
+    'daily_report':              ('owner', 'coordinator'),
     # Workday-started — owner + coordinator hear "dev X started their day".
     'workday_started':           ('owner', 'coordinator'),
     # Asked of the DEVELOPER first — a 10-min silence is usually a meeting, not a
@@ -625,7 +640,8 @@ _TEMPLATES = {
 # Events whose `ctx` already carries every placeholder for the template —
 # bypass _format_message's per-record parameter assembly.  Used for non-
 # kra.kpi-anchored events like daily_summary / workday_started.
-_PASSTHROUGH_EVENTS = ('daily_summary', 'workday_started', 'workday_auto_closed',
+_PASSTHROUGH_EVENTS = ('daily_summary', 'daily_report',
+                       'workday_started', 'workday_auto_closed',
                        'task_auto_away', 'self_task_submitted', 'self_task_accepted',
                        'self_task_rejected', 'task_reassigned',
                        # Both are about a DEVELOPER, not about the task they're
@@ -722,6 +738,11 @@ class KpiNotify(models.Model):
                 _snap_id = self.env.context.get('kpi_snapshot_id')
                 if _snap_id and created:
                     created.sudo().write({'snapshot_id': _snap_id})
+                # Same mechanism for the daily report PDF: tapping the row opens
+                # the generated report (kpi.notification.report_id).
+                _report_id = self.env.context.get('kpi_daily_report_id')
+                if _report_id and created:
+                    created.sudo().write({'report_id': _report_id})
                 _logger.info(
                     "in-app notify persisted: kpi=%s event=%s recipients=%s rows=%s",
                     self.id, event, len(notif_recipients), len(created),

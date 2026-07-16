@@ -70,6 +70,56 @@ class ResCompany(models.Model):
              "with little task work still reads green, which is why the summary shows "
              "Productive next to it.")
 
+    # ---- Workday snapshot image retention -------------------------------- #
+    # The End Workday summary PNG (kpi.workday.snapshot.image) lives in the
+    # filestore and would otherwise pile up forever. A daily cron
+    # (_gc_snapshot_images) clears images older than this window, keeping the
+    # lightweight stats row. Number 0 = keep forever.
+    kpi_snapshot_retention_number = fields.Integer(
+        string='Snapshot Retention',
+        default=3,
+        help="Delete workday snapshot IMAGES older than this many "
+             "days/months/years (unit below). The stats row is kept — only the "
+             "PNG is freed. 0 = keep images forever. Read by "
+             "kpi.workday.snapshot._gc_snapshot_images.")
+    kpi_snapshot_retention_unit = fields.Selection(
+        [('days', 'Days'), ('months', 'Months'), ('years', 'Years')],
+        string='Snapshot Retention Unit', default='months')
+
+    # ---- Daily employee task report (PDF to admins) ---------------------- #
+    kpi_daily_report_enabled = fields.Boolean(
+        string='Send Daily Task Report',
+        default=True,
+        help="When on, a consolidated daily employee task report (PDF) is generated "
+             "and sent to admins on the schedule below. Read by "
+             "kpi.daily.report._cron_daily_report.")
+    kpi_daily_report_hour = fields.Float(
+        string='Daily Report Send Time (IST hour)',
+        default=10.0,
+        help="Hour of day (IST, 24h; 10.5 = 10:30) at which the daily report is "
+             "generated and sent. A 15-minute gate cron fires it once at/after this "
+             "time each day.")
+    kpi_daily_report_coverage = fields.Selection(
+        [('yesterday', 'Previous day'), ('today', 'Same day')],
+        string='Daily Report Covers', default='yesterday',
+        help="Which day the report summarizes. 'Previous day' suits a morning send "
+             "(everyone has ended their workday); 'Same day' suits an evening send.")
+    kpi_daily_report_last_sent = fields.Date(
+        string='Daily Report Last Sent',
+        help="Internal guard: the last date the daily report was sent, so the gate "
+             "cron fires only once per day. Not user-facing.")
+
+    # ---- Daily report PDF retention -------------------------------------- #
+    kpi_report_retention_number = fields.Integer(
+        string='Report Retention',
+        default=3,
+        help="Delete generated daily report PDFs (kpi.daily.report) older than this "
+             "many days/months/years (unit below). 0 = keep forever. Read by "
+             "kpi.daily.report._gc_reports.")
+    kpi_report_retention_unit = fields.Selection(
+        [('days', 'Days'), ('months', 'Months'), ('years', 'Years')],
+        string='Report Retention Unit', default='months')
+
     kpi_wa_sender_number = fields.Char(
         string='App OTP Sender (WhatsApp)',
         help="WhatsApp number shown to users as the sender of password-reset codes. "

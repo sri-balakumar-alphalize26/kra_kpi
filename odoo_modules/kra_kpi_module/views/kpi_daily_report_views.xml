@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- List View -->
+    <record id="view_kpi_daily_report_list" model="ir.ui.view">
+        <field name="name">kpi.daily.report.list</field>
+        <field name="model">kpi.daily.report</field>
+        <field name="arch" type="xml">
+            <list string="Daily Task Reports" create="false" edit="false">
+                <field name="report_date"/>
+                <field name="employee_count"/>
+                <field name="task_count"/>
+                <field name="generated_at"/>
+                <field name="pdf_filename"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_kpi_daily_report_form" model="ir.ui.view">
+        <field name="name">kpi.daily.report.form</field>
+        <field name="model">kpi.daily.report</field>
+        <field name="arch" type="xml">
+            <form string="Daily Task Report">
+                <header>
+                    <button name="action_generate_now"
+                            type="object"
+                            string="Generate Yesterday's Report"
+                            class="oe_highlight"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="report_date" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group string="Summary">
+                            <field name="employee_count" readonly="1"/>
+                            <field name="task_count" readonly="1"/>
+                            <field name="generated_at" readonly="1"/>
+                        </group>
+                        <group string="Report File">
+                            <field name="pdf_file" filename="pdf_filename" widget="binary"/>
+                            <field name="pdf_filename" invisible="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Search View -->
+    <record id="view_kpi_daily_report_search" model="ir.ui.view">
+        <field name="name">kpi.daily.report.search</field>
+        <field name="model">kpi.daily.report</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="report_date"/>
+                <filter name="grp_month" string="Month"
+                        context="{'group_by': 'report_date:month'}"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="action_kpi_daily_report" model="ir.actions.act_window">
+        <field name="name">Daily Task Reports</field>
+        <field name="res_model">kpi.daily.report</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No daily reports generated yet
+            </p>
+            <p>
+                A consolidated daily employee task report (PDF) is generated on the
+                configured schedule and delivered to admins. Open any row to view or
+                download the file, or use "Generate Yesterday's Report" on the form.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu Item -->
+    <menuitem id="menu_kpi_daily_report"
+              name="Daily Task Reports"
+              parent="menu_kpi_reports"
+              action="action_kpi_daily_report"
+              sequence="80"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+</odoo>

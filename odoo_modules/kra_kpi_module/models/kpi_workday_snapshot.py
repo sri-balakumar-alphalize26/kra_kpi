@@ -22,6 +22,8 @@ import io
 import logging
 import re
 
+from dateutil.relativedelta import relativedelta
+
 from odoo import api, fields, models
 
 _logger = logging.getLogger(__name__)
@@ -336,3 +338,36 @@ class KpiWorkdaySnapshot(models.Model):
         _logger.info("workday snapshot saved: %s %s (%s bytes)",
                      session.user_id.login, session.session_date, len(png))
         return rec
+
+    # ------------------------------------------------------------------ #
+    # Retention — daily cron clears old images                           #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _gc_snapshot_images(self):
+        """Clear snapshot PNGs older than the company's configured retention.
+
+        Only the image (a filestore attachment) is dropped — the lightweight
+        stats row (date / presence / productive / tasks / met_standard) is kept
+        so historical numbers survive. Writing False to the attachment=True
+        Binary deletes the underlying ir.attachment file.
+
+        Retention comes from res.company.kpi_snapshot_retention_number/_unit;
+        number <= 0 means keep forever (no-op). Called by the daily cron in
+        data/kpi_snapshot_cleanup_cron.xml — mirrors kpi.notification._gc_notifications.
+        """
+        company = self.env.company
+        number = company.kpi_snapshot_retention_number or 0
+        if number <= 0:
+            return 0
+        unit = company.kpi_snapshot_retention_unit or 'months'
+        cutoff = fields.Date.context_today(self) - relativedelta(**{unit: number})
+        old = self.sudo().search([
+            ('session_date', '<', cutoff),
+            ('image', '!=', False),
+        ])
+        count = len(old)
+        if old:
+            old.write({'image': False, 'image_name': False})
+        _logger.info("snapshot image GC: cleared %s image(s) older than %s (%s %s)",
+                     count, cutoff, number, unit)
+        return count

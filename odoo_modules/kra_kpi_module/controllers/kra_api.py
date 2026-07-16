@@ -1665,6 +1665,14 @@ class KraKpiAPI(http.Controller):
                 'queue_nudge_minutes': c.queue_nudge_minutes or 30,
                 'urgent_nudge_minutes': c.urgent_nudge_minutes or 5,
                 'standard_workday_hours': c.standard_workday_hours or 9.0,
+                # Snapshot image retention + daily report schedule & retention.
+                'snapshot_retention_number': c.kpi_snapshot_retention_number or 0,
+                'snapshot_retention_unit': c.kpi_snapshot_retention_unit or 'months',
+                'daily_report_enabled': c.kpi_daily_report_enabled,
+                'daily_report_hour': c.kpi_daily_report_hour or 10.0,
+                'daily_report_coverage': c.kpi_daily_report_coverage or 'yesterday',
+                'report_retention_number': c.kpi_report_retention_number or 0,
+                'report_retention_unit': c.kpi_report_retention_unit or 'months',
                 'country_id': c.kpi_country_id.id if c.kpi_country_id else False,
                 'country_dial_code': dial,
                 'mobile_length': length,
@@ -1741,6 +1749,70 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         request.env.company.sudo().urgent_nudge_minutes = max(1, int(params.get('minutes') or 5))
         return {'status': True}
+
+    @http.route('/kpi_config/set_snapshot_retention', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_snapshot_retention(self, **params):
+        """How long to keep workday snapshot IMAGES before the cleanup cron clears
+        them. number 0 = keep forever; unit in days/months/years."""
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            number = max(0, int(params.get('number') or 0))
+        except (TypeError, ValueError):
+            number = 0
+        unit = params.get('unit')
+        if unit not in ('days', 'months', 'years'):
+            unit = 'months'
+        c = request.env.company.sudo()
+        c.kpi_snapshot_retention_number = number
+        c.kpi_snapshot_retention_unit = unit
+        return {'status': True, 'number': number, 'unit': unit}
+
+    @http.route('/kpi_config/set_report_retention', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_report_retention(self, **params):
+        """How long to keep generated daily report PDFs before the cleanup cron
+        deletes them. number 0 = keep forever; unit in days/months/years."""
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            number = max(0, int(params.get('number') or 0))
+        except (TypeError, ValueError):
+            number = 0
+        unit = params.get('unit')
+        if unit not in ('days', 'months', 'years'):
+            unit = 'months'
+        c = request.env.company.sudo()
+        c.kpi_report_retention_number = number
+        c.kpi_report_retention_unit = unit
+        return {'status': True, 'number': number, 'unit': unit}
+
+    @http.route('/kpi_config/set_daily_report', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_daily_report(self, **params):
+        """Daily report schedule: on/off, IST send hour (0–24, 10.5 = 10:30), and
+        which day it covers (yesterday/today)."""
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        c = request.env.company.sudo()
+        if 'enabled' in params:
+            c.kpi_daily_report_enabled = bool(params.get('enabled'))
+        if params.get('hour') is not None:
+            try:
+                hour = float(params.get('hour'))
+            except (TypeError, ValueError):
+                hour = 10.0
+            c.kpi_daily_report_hour = max(0.0, min(23.99, hour))
+        coverage = params.get('coverage')
+        if coverage in ('yesterday', 'today'):
+            c.kpi_daily_report_coverage = coverage
+        return {
+            'status': True,
+            'enabled': c.kpi_daily_report_enabled,
+            'hour': c.kpi_daily_report_hour,
+            'coverage': c.kpi_daily_report_coverage,
+        }
 
     # NOTE: /kpi_config/set_urgent (ad-hoc Urgent-pause WhatsApp numbers) was
     # removed. Those numbers had no user account, so they became unreachable once
@@ -2366,6 +2438,80 @@ class KraKpiAPI(http.Controller):
             return request.make_response(file_content, headers)
         except Exception as e:
             _logger.error(f"Error downloading manual: {str(e)}")
+            return request.not_found()
+
+    # ------------------------------------------------------------------ #
+    # Daily employee task report (PDF) — admin view / download           #
+    # ------------------------------------------------------------------ #
+    @http.route('/kpi_daily_report/list', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_daily_report_list(self, **params):
+        """Recent generated daily reports, newest first. Admins only."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            limit = int(params.get('limit') or 60)
+        except (TypeError, ValueError):
+            limit = 60
+        reports = request.env['kpi.daily.report'].sudo().search([], limit=limit)
+        rows = []
+        for r in reports:
+            rows.append({
+                'id': r.id,
+                'report_date': str(r.report_date) if r.report_date else '',
+                'date_display': r.report_date.strftime('%d %b %Y') if r.report_date else '',
+                'employee_count': r.employee_count,
+                'task_count': r.task_count,
+                'file_name': r.pdf_filename or ('daily-task-report-%s.pdf' % r.report_date),
+                'has_file': bool(r.pdf_file),
+                'generated_at': convert_to_user_tz(r.generated_at) if r.generated_at else '',
+            })
+        return {'status': True, 'reports': rows}
+
+    @http.route('/kpi_daily_report/file_b64', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_daily_report_file_b64(self, **params):
+        """A report's PDF bytes as base64, for the APP's View / Download.
+
+        Same reasoning as /kpi/manual/file_b64: the type='http' download route
+        below depends on the session cookie, which the app does NOT send. Admins only.
+        """
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        rid = int(params.get('report_id') or 0)
+        if not rid:
+            return {'status': False, 'message': 'report_id required'}
+        rep = request.env['kpi.daily.report'].sudo().browse(rid)
+        if not rep.exists() or not rep.pdf_file:
+            return {'status': False, 'message': 'File not found'}
+        data_b64 = rep.pdf_file
+        if isinstance(data_b64, bytes):
+            data_b64 = data_b64.decode()
+        file_name = rep.pdf_filename or ('daily-task-report-%s.pdf' % rep.report_date)
+        return {
+            'status': True,
+            'file_name': file_name,
+            'mimetype': 'application/pdf',
+            'data_b64': data_b64,
+            'size': len(base64.b64decode(rep.pdf_file)),
+        }
+
+    @http.route('/kpi_daily_report/download/<int:report_id>', type='http', auth='user', methods=['GET'])
+    def kpi_daily_report_download(self, report_id, **kwargs):
+        """Browser download of a report PDF (Odoo web backend). Admins only."""
+        if not self._is_kra_admin(request.env.user):
+            return request.not_found()
+        try:
+            rep = request.env['kpi.daily.report'].sudo().browse(report_id)
+            if not rep.exists() or not rep.pdf_file:
+                return request.not_found()
+            file_content = base64.b64decode(rep.pdf_file)
+            file_name = rep.pdf_filename or ('daily-task-report-%s.pdf' % rep.report_date)
+            headers = [
+                ('Content-Type', 'application/pdf'),
+                ('Content-Disposition', f'attachment; filename="{file_name}"'),
+            ]
+            return request.make_response(file_content, headers)
+        except Exception as e:
+            _logger.error(f"Error downloading daily report: {str(e)}")
             return request.not_found()
 
     @http.route('/kpi/manual/delete', type='json', auth='user', methods=['POST'], csrf=False)
