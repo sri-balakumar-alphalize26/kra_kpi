@@ -23,8 +23,40 @@ import {
   IDLE_REASONS, setIdleReason, endNonTask, IDLE_NOTE_MAX,
 } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
+import { scheduleTaskReminder, cancelTaskReminder } from '../services/reminders';
+import { getReminders, setReminder, removeReminder } from '../api/session';
 
 const log = createLogger('ActionBoard');
+
+// Preset reminder durations offered in the picker (seconds).
+const REMINDER_PRESETS = [
+  { label: '15 min', secs: 15 * 60 }, { label: '30 min', secs: 30 * 60 },
+  { label: '1 hr', secs: 60 * 60 }, { label: '1 hr 30 min', secs: 90 * 60 },
+  { label: '2 hr', secs: 120 * 60 },
+];
+// States where a task is still being worked (same set the action buttons key off).
+// A reminder is auto-cancelled once its task moves OUT of these (completed / review).
+const WORKABLE_STATES = ['assigned', 'urgent', 'important', 'regular', 'queue_waiting',
+  'pre_approval_approved', 'pre_approval_partial', 'in_progress', 'paused', 'hold', 'rework'];
+
+// Styles for the reminder picker sheet (kept isolated from the board's big `s`).
+const rStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 26 },
+  sheet: { width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 18, padding: 18, ...SHADOW },
+  title: { fontSize: 16, fontWeight: '900', color: COLORS.navy },
+  taskName: { fontSize: 13, fontWeight: '700', color: COLORS.muted, marginTop: 3, marginBottom: 12 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: COLORS.line, backgroundColor: '#fff' },
+  chipTxt: { fontSize: 13, fontWeight: '800', color: COLORS.primary },
+  chipEst: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  customRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  customInput: { flex: 1, borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 44, paddingHorizontal: 12, fontSize: 14.5, color: COLORS.ink, backgroundColor: '#fff' },
+  setBtn: { backgroundColor: COLORS.primary, borderRadius: 10, paddingHorizontal: 18, height: 44, alignItems: 'center', justifyContent: 'center' },
+  setBtnTxt: { color: '#fff', fontWeight: '900', fontSize: 14 },
+  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
+  clearTxt: { fontSize: 13.5, fontWeight: '800', color: COLORS.red },
+  cancelTxt: { fontSize: 13.5, fontWeight: '800', color: COLORS.muted },
+});
 
 // Last-known workday-open state, cached across board remounts so re-entering the
 // board shows the correct Start/End label instantly (no 2–3s "Start Workday"
@@ -93,6 +125,22 @@ function fmtHMS(sec) {
   return `${h}h ${m}m ${r}s`;
 }
 
+// A task's estimate in seconds (0 when unset) — used to offer an "at estimate" reminder.
+function estimateSecs(task) {
+  return ((task.estimate_hours || 0) * 3600) + ((task.estimate_minutes || 0) * 60);
+}
+
+// Short clock label ("3:05 PM") for the reminder pill on a card.
+function fmtClock(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  let h = d.getHours();
+  const ap = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`;
+}
+
 // Initials for the assignee avatar chip.
 function initials(name) {
   if (!name) return '—';
@@ -117,7 +165,7 @@ function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
 // action buttons. Shared by TaskCard (kanban) and TaskListRow (accordion list) so
 // both views behave identically — same button set, same runAction wiring, same
 // busy spinner. Reassign stays gated behind isAdmin, so role behavior is preserved.
-function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, readOnly = false }) {
+function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, readOnly = false }) {
   const st = task.task_state;
   const running = st === 'in_progress';
   const busy = busyId === task.id;
@@ -188,6 +236,16 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, readOnly = fal
               {canComplete && <Btn label="Complete" icon="checkmark-circle" kind="red" onPress={() => onAction('complete', task)} />}
               {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="ghostRed" onPress={() => onAction('partial', task)} />}
               {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
+              {/* Developer-only per-task alarm: set a local "wrap up" reminder so
+                  you don't keep re-checking elapsed vs. estimate. */}
+              {!isAdmin && (
+                <Btn
+                  label={reminder ? `⏰ ${fmtClock(reminder.whenIso)}` : 'Remind me'}
+                  icon={reminder ? 'notifications' : 'notifications-outline'}
+                  kind={reminder ? 'amber' : 'ghost'}
+                  onPress={() => onAction('reminder', task)}
+                />
+              )}
             </>
           )}
         </View>
@@ -200,7 +258,7 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, readOnly = fal
 // priority dot + chevron; tapping expands to reveal the shared TaskDetailBody.
 // Mirrors the chevron-forward/down conditional-render pattern used by KraNode /
 // OwnerDashboard's ClientCard.
-function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin, pulse, onRowRef, onOpenDetail, readOnly = false }) {
+function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin, reminder, pulse, onRowRef, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
   // Rotate the chevron 0°→90° as the row expands/collapses.
@@ -261,14 +319,14 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
             <View style={[s.pillDot, { backgroundColor: p.fg }]} />
             <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
           </View>
-          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} readOnly={readOnly} />
+          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} reminder={reminder} readOnly={readOnly} />
         </View>
       )}
     </Animated.View>
   );
 }
 
-function TaskCard({ task, onAction, busyId, nowMs, isAdmin, pulse, onMeasure, onOpenDetail, readOnly = false }) {
+function TaskCard({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onMeasure, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
 
@@ -587,6 +645,51 @@ export default function KpiActionBoard({
   // Styled error popup ("Can't start this task", etc.)
   const [errorPopup, setErrorPopup] = useState(null); // { title, message } | null
   const showError = (title, message) => setErrorPopup({ title, message });
+
+  // Per-task reminder alarms (developer-only). Map { [taskId]: {notifId, whenIso} }
+  // loaded from AsyncStorage; reminderFor = the task whose picker is open.
+  const [reminders, setReminders] = useState({});
+  const [reminderFor, setReminderFor] = useState(null);
+  const [reminderCustom, setReminderCustom] = useState('');
+  useEffect(() => { getReminders().then(setReminders).catch(() => {}); }, []);
+
+  const applyReminder = async (task, secs) => {
+    if (!task) return;
+    const prev = reminders[String(task.id)];
+    if (prev?.notifId) await cancelTaskReminder(prev.notifId);
+    const r = await scheduleTaskReminder(task, secs);
+    setReminderFor(null); setReminderCustom('');
+    if (!r) { showError('Reminder', 'Could not set the reminder — check notification permission in settings.'); return; }
+    await setReminder(task.id, r);
+    setReminders((m) => ({ ...m, [String(task.id)]: r }));
+  };
+  const clearReminderFor = async (task) => {
+    if (!task) return;
+    const prev = reminders[String(task.id)];
+    if (prev?.notifId) await cancelTaskReminder(prev.notifId);
+    await removeReminder(task.id);
+    setReminders((m) => { const n = { ...m }; delete n[String(task.id)]; return n; });
+    setReminderFor(null);
+  };
+  // Once a reminded task leaves the workable set (completed / sent for review),
+  // cancel its reminder so it never pings about a finished task.
+  useEffect(() => {
+    if (!raw || !raw.length) return;
+    (async () => {
+      let next = null;
+      for (const t of raw) {
+        const key = String(t.id);
+        if (reminders[key] && !WORKABLE_STATES.includes(t.task_state)) {
+          if (reminders[key].notifId) await cancelTaskReminder(reminders[key].notifId);
+          await removeReminder(t.id);
+          next = next || { ...reminders };
+          delete next[key];
+        }
+      }
+      if (next) setReminders(next);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raw]);
   const [createdPopup, setCreatedPopup] = useState(null); // { ref, name } after a New Task is created
 
   // New Task modal
@@ -939,6 +1042,7 @@ export default function KpiActionBoard({
 
   async function runAction(kind, task) {
     log.info('user action', kind, { id: task.id, name: task.name, state: task.task_state });
+    if (kind === 'reminder') { setReminderFor(task); setReminderCustom(''); return; }
     if (kind === 'reassign') {
       setReassignFor(task);
       setReassignReason('');
@@ -1406,6 +1510,7 @@ export default function KpiActionBoard({
                         busyId={busyId}
                         nowMs={nowMs}
                         isAdmin={isAdmin}
+                        reminder={reminders[String(t.id)]}
                         pulse={pulseId === t.id}
                         onMeasure={(y) => { cardY.current[t.id] = y; }}
                         onOpenDetail={openDetail}
@@ -1466,6 +1571,7 @@ export default function KpiActionBoard({
                       busyId={busyId}
                       nowMs={nowMs}
                       isAdmin={isAdmin}
+                      reminder={reminders[String(t.id)]}
                       pulse={pulseId === t.id}
                       onRowRef={(id, r) => { listRowRefs.current[id] = r; }}
                       onOpenDetail={openDetail}
@@ -2099,6 +2205,55 @@ export default function KpiActionBoard({
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Per-task reminder picker (developer alarm). */}
+      <Modal visible={!!reminderFor} transparent animationType="fade" onRequestClose={() => setReminderFor(null)}>
+        <TouchableOpacity style={rStyles.backdrop} activeOpacity={1} onPress={() => setReminderFor(null)}>
+          <TouchableOpacity style={rStyles.sheet} activeOpacity={1}>
+            <Text style={rStyles.title}>Remind me about this task</Text>
+            <Text style={rStyles.taskName} numberOfLines={2}>{reminderFor?.name}</Text>
+            <View style={rStyles.chips}>
+              {REMINDER_PRESETS.map((p) => (
+                <TouchableOpacity key={p.label} style={rStyles.chip} activeOpacity={0.85}
+                  onPress={() => applyReminder(reminderFor, p.secs)}>
+                  <Text style={rStyles.chipTxt}>{p.label}</Text>
+                </TouchableOpacity>
+              ))}
+              {(() => {
+                if (!reminderFor || reminderFor.task_state !== 'in_progress') return null;
+                const left = Math.round(estimateSecs(reminderFor) - liveSeconds(reminderFor, nowMs));
+                if (left <= 60) return null;   // already at/over estimate
+                const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60);
+                return (
+                  <TouchableOpacity style={[rStyles.chip, rStyles.chipEst]} activeOpacity={0.85}
+                    onPress={() => applyReminder(reminderFor, left)}>
+                    <Text style={[rStyles.chipTxt, { color: '#fff' }]}>At estimate ({h > 0 ? `${h}h ` : ''}{m}m left)</Text>
+                  </TouchableOpacity>
+                );
+              })()}
+            </View>
+            <View style={rStyles.customRow}>
+              <TextInput style={rStyles.customInput} keyboardType="number-pad" placeholder="Custom minutes"
+                placeholderTextColor={COLORS.faint} value={reminderCustom}
+                onChangeText={(t) => setReminderCustom(t.replace(/[^0-9]/g, ''))} />
+              <TouchableOpacity style={[rStyles.setBtn, !reminderCustom && { opacity: 0.4 }]} disabled={!reminderCustom}
+                activeOpacity={0.85} onPress={() => applyReminder(reminderFor, Math.max(1, parseInt(reminderCustom, 10) || 0) * 60)}>
+                <Text style={rStyles.setBtnTxt}>Set</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={rStyles.footer}>
+              {reminders[String(reminderFor?.id)] ? (
+                <TouchableOpacity onPress={() => clearReminderFor(reminderFor)} activeOpacity={0.7}>
+                  <Text style={rStyles.clearTxt}>Clear reminder</Text>
+                </TouchableOpacity>
+              ) : <View />}
+              <TouchableOpacity onPress={() => setReminderFor(null)} activeOpacity={0.7}>
+                <Text style={rStyles.cancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
 
       {/* Styled error popup — "Can't start this task", etc. */}

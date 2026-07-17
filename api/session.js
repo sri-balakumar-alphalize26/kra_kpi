@@ -159,3 +159,36 @@ export async function clearAvatar(uid) {
     await AsyncStorage.removeItem(`${K_AVATAR}:${uid ?? 'me'}`);
   } catch (_) {}
 }
+
+// ── Per-task reminder alarms ──────────────────────────────────────────────
+// One map { [taskId]: { notifId, whenIso } } so the board can read every card's
+// state in a single call. Local-only (this device), wiped on uninstall/clear-data.
+
+const K_REMINDERS = 'kpi_reminders';
+
+export async function getReminders() {
+  try {
+    const raw = await AsyncStorage.getItem(K_REMINDERS);
+    return raw ? (JSON.parse(raw) || {}) : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+export async function setReminder(taskId, entry) {
+  try {
+    const map = await getReminders();
+    map[String(taskId)] = entry;   // { notifId, whenIso }
+    await AsyncStorage.setItem(K_REMINDERS, JSON.stringify(map));
+  } catch (_) {}
+}
+
+export async function removeReminder(taskId) {
+  try {
+    const map = await getReminders();
+    if (map[String(taskId)] !== undefined) {
+      delete map[String(taskId)];
+      await AsyncStorage.setItem(K_REMINDERS, JSON.stringify(map));
+    }
+  } catch (_) {}
+}
