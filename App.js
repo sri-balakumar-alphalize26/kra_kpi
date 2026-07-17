@@ -13,9 +13,11 @@ import KraKpiDashboard from './screens/KraKpiDashboard';
 import KpiActionBoard from './screens/KpiActionBoard';
 import UploadAmendments from './screens/UploadAmendments';
 import OwnerDashboard from './screens/OwnerDashboard';
+import LiveTracking from './screens/LiveTracking';
 import NotificationsScreen from './screens/NotificationsScreen';
 import ConfigurationScreen from './screens/ConfigurationScreen';
 import LoginManagementScreen from './screens/LoginManagementScreen';
+import UsersScreen from './screens/UsersScreen';
 import WorkdaySnapshots from './screens/WorkdaySnapshots';
 import DailyReports from './screens/DailyReports';
 import CompanyBranding from './screens/CompanyBranding';
@@ -429,6 +431,9 @@ function AppInner() {
       );
     if (appScreen === 'owner')
       return <OwnerDashboard onBack={home} />;
+    if (appScreen === 'livetracking')
+      // Admin: live "who's doing what now" + attendance. Route is admin-gated server-side.
+      return <LiveTracking onBack={home} />;
     if (appScreen === 'notifications')
       // isClient → a tapped notification opens My Requests, not the Action Board.
       // workdayLocked → READ MODE ONLY: rows still mark themselves read, but a null
@@ -443,6 +448,9 @@ function AppInner() {
       return <ConfigurationScreen onBack={home} />;
     if (appScreen === 'loginmgmt')
       return <LoginManagementScreen onBack={home} />;
+    if (appScreen === 'users')
+      // Admin: create/edit users with a KRA/KPI role only. Route is admin-gated server-side.
+      return <UsersScreen onBack={home} />;
     if (appScreen === 'snapshots')
       // focusSnapshotId: set when an admin taps the "ended their workday"
       // notification → that day + developer auto-expand and the image flashes.
@@ -460,10 +468,10 @@ function AppInner() {
     if (appScreen === 'workreport')
       return <WorkReport onBack={home} />;
     if (appScreen === 'clientinvoices')
-      return <ClientInvoices onBack={home} focusInvoiceId={focusInvoiceId} />;
+      return <ClientInvoices onBack={home} focusInvoiceId={focusInvoiceId} onFocusHandled={() => setFocusInvoiceId(null)} />;
     if (appScreen === 'myinvoices')
       // Client-facing read-only invoices (server record rule scopes to their own finalized/sent).
-      return <ClientInvoices onBack={home} portal focusInvoiceId={focusInvoiceId} />;
+      return <ClientInvoices onBack={home} portal focusInvoiceId={focusInvoiceId} onFocusHandled={() => setFocusInvoiceId(null)} />;
     if (appScreen === 'myworkday')
       // Every user's OWN daily workday report (self-scoped server-side).
       return <MyWorkday onBack={home} />;

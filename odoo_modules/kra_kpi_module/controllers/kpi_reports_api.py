@@ -2506,6 +2506,10 @@ class KpiReportsAPI(http.Controller):
                 # NB: the selection's third value is 'developer' (shown as "User"
                 # in the UI) — not 'user'.
                 'kpi_role': user.kpi_role or 'developer',
+                # True while the app password is still the default 1111 (admin reset
+                # / freshly created) — drives the red "change your password" nag on
+                # Profile until they set their own via Forgot Password.
+                'must_change': bool(user.kpi_app_must_change_password),
             }
         except Exception as e:
             import logging

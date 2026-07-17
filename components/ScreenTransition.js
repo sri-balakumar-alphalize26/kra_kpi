@@ -13,7 +13,7 @@ export default function ScreenTransition({ screenKey, children, style }) {
     anim.setValue(0);
     const a = Animated.timing(anim, {
       toValue: 1,
-      duration: 260,
+      duration: 320,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     });
@@ -21,10 +21,13 @@ export default function ScreenTransition({ screenKey, children, style }) {
     return () => a.stop();
   }, [screenKey, anim]);
 
+  // Fade + rise + a gentle settle — clearly visible on every screen (including
+  // the plain new ones with no internal entrance animation of their own).
   const animatedStyle = {
     opacity: anim,
     transform: [
-      { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [28, 0] }) },
+      { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [34, 0] }) },
+      { scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] }) },
     ],
   };
 

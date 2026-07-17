@@ -743,6 +743,31 @@ class KpiMaster(models.Model):
         self.ensure_one()
         return f"{self.estimate_hours:02d}:{self.estimate_minutes:02d}"
 
+    # --------------------------------------------------------------------- #
+    # A task's name always starts with a capital letter. Enforced in the model
+    # so it holds no matter WHERE the task is created or renamed — the mobile
+    # app, the web form, the create_kpi API, imports, or any other code path.
+    # Only the first character is touched; the rest of the name is left as-is.
+    # --------------------------------------------------------------------- #
+    @staticmethod
+    def _cap_first(name):
+        if not name:
+            return name
+        stripped = name.strip()
+        return (stripped[:1].upper() + stripped[1:]) if stripped else name
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in vals_list:
+            if vals.get('name'):
+                vals['name'] = self._cap_first(vals['name'])
+        return super().create(vals_list)
+
+    def write(self, vals):
+        if vals.get('name'):
+            vals['name'] = self._cap_first(vals['name'])
+        return super().write(vals)
+
     @api.model
     def create_kpi(self, vals):
         if isinstance(vals, (list, tuple)) and vals:

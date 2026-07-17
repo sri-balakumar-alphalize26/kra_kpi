@@ -68,7 +68,7 @@ const money = (amt, cur) => {
 };
 const stripHtml = (h) => (h || '').replace(/<[^>]+>/g, '').trim();
 
-export default function ClientInvoices({ onBack, portal = false, focusInvoiceId }) {
+export default function ClientInvoices({ onBack, portal = false, focusInvoiceId, onFocusHandled }) {
   const [mode, setMode] = useState('list');   // list | detail | create
   const chips = portal ? PORTAL_CHIPS : CHIPS;   // client sees a trimmed set
 
@@ -116,12 +116,13 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId 
     finally { setLoadingDetail(false); }
   };
 
-  // Arriving from an invoice notification tap → open that invoice once.
-  const focusedRef = useRef(null);
+  // Arriving from an invoice notification tap → open that invoice, then clear the
+  // App-level focus slot so a repeat tap of the SAME invoice re-opens it (a sticky
+  // ref would swallow the second tap while this screen stays mounted).
   useEffect(() => {
-    if (!focusInvoiceId || focusedRef.current === focusInvoiceId) return;
-    focusedRef.current = focusInvoiceId;
+    if (!focusInvoiceId) return;
     openInvoice(focusInvoiceId);
+    onFocusHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusInvoiceId]);
 

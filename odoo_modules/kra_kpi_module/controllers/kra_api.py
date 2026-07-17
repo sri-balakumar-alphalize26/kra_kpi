@@ -846,12 +846,18 @@ class KraKpiAPI(http.Controller):
             # apart. Same rule the messages use: the nearest is_client ancestor,
             # falling back to the task's own KRA.
             client_kra = (kpi.client_kra_id or kpi.kra_id) if kpi else False
+            # Invoice notifications borrow an arbitrary kra.kpi as the _notify anchor,
+            # so its task / developer / client fields are UNRELATED to the invoice (they
+            # may even belong to another client). The row taps through on invoice_id, so
+            # never expose the anchor task's details for these rows — that would leak one
+            # client's task name into another client's feed.
+            is_invoice = bool(n.invoice_id)
             return {
                 'id': n.id,
-                'kpi_id': kpi.id if kpi else False,
-                'kpi_name': kpi.name if kpi else "",
-                'developer': (kpi.user_id.name if kpi and kpi.user_id else ""),
-                'client_name': (client_kra.name if client_kra else ""),
+                'kpi_id': False if is_invoice else (kpi.id if kpi else False),
+                'kpi_name': "" if is_invoice else (kpi.name if kpi else ""),
+                'developer': "" if is_invoice else (kpi.user_id.name if kpi and kpi.user_id else ""),
+                'client_name': "" if is_invoice else (client_kra.name if client_kra else ""),
                 # Where a tap should go when the answer ISN'T a task. "X ended their
                 # workday" opens that day's frozen summary image; without this the
                 # row is untappable, because the app routes purely on kpi_id.
@@ -1164,6 +1170,8 @@ class KraKpiAPI(http.Controller):
             u_dial, u_len = u._kpi_user_mobile_cfg()
             user_rows.append({
                 'id': u.id, 'name': u.name, 'login': u.login,
+                'email': u.email or '',
+                'active': u.active,
                 'mobile': u.kpi_mobile_number or '',
                 # Per-person country + resolved dial/length (empty country_id ->
                 # the company default dial/length above still apply).
@@ -1316,6 +1324,85 @@ class KraKpiAPI(http.Controller):
         else:
             user._seed_default_app_password()
         return {'status': True}
+
+    @http.route('/kpi_user_access/create', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_create(self, **params):
+        """Create a new internal user carrying ONLY a KRA/KPI role (User/Client/
+        Admin). Odoo's normal Role / groups / companies are NOT exposed — the role
+        picks one of the group_kra_* groups (its implieds propagate). Seeds the app
+        password to 1111 (must-change) so the person logs in with mobile + 1111 on
+        the non-Odoo app login."""
+        import secrets
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        Users = request.env['res.users'].sudo()
+        name = (params.get('name') or '').strip()
+        login = (params.get('login') or '').strip()
+        email = (params.get('email') or '').strip()
+        role = params.get('kra_role') or params.get('role') or 'developer'
+        mobile = re.sub(r'\D', '', params.get('mobile') or '') or False
+        act = params.get('active')
+        active = True if act is None else bool(act)
+        if not name or not login:
+            return {'status': False, 'message': 'Name and Login are required.'}
+        if Users.with_context(active_test=False).search_count([('login', '=ilike', login)]):
+            return {'status': False, 'message': 'That login is already taken.'}
+        role_group = {
+            'admin':     'kra_kpi_module.group_kra_owner',
+            'developer': 'kra_kpi_module.group_kra_developer',
+            'client':    'kra_kpi_module.group_kra_client',
+        }.get(role, 'kra_kpi_module.group_kra_developer')
+        ref = request.env.ref
+        try:
+            groups = [ref('base.group_user').id, ref(role_group).id]
+            user = Users.create({
+                'name': name,
+                'login': login,
+                'email': email or False,
+                'active': active,
+                # Random Odoo password — unused (they log in via the app PIN), but a
+                # value keeps the account from being password-less.
+                'password': str(secrets.randbelow(900000) + 100000),
+                'notification_type': 'inbox',
+                'tz': 'Asia/Kolkata',
+                'group_ids': [(6, 0, groups)],
+                'kpi_mobile_number': mobile,
+            })
+            user._seed_default_app_password()   # app PIN = 1111, must_change=True
+            return {'status': True, 'user_id': user.id, 'role': self._kra_role_of(user)}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("user_access_create: %s", e)
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_user_access/update', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_update(self, **params):
+        """Update an existing user's identity fields: name / login / email / active.
+        (KRA/KPI role → set_role; mobile → set_mobile; app-password → reset_password.)"""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        user = request.env['res.users'].sudo().browse(int(params.get('user_id') or 0))
+        if not user.exists():
+            return {'status': False, 'message': 'User not found'}
+        vals = {}
+        if (params.get('name') or '').strip():
+            vals['name'] = params['name'].strip()
+        if 'login' in params:
+            login = (params.get('login') or '').strip()
+            if login and login.lower() != (user.login or '').lower():
+                if request.env['res.users'].sudo().with_context(active_test=False).search_count(
+                        [('login', '=ilike', login), ('id', '!=', user.id)]):
+                    return {'status': False, 'message': 'That login is already taken.'}
+                vals['login'] = login
+        if 'email' in params:
+            vals['email'] = (params.get('email') or '').strip() or False
+        if 'active' in params:
+            if user.has_group('base.group_system') and not bool(params.get('active')):
+                return {'status': False, 'message': "The administrator can't be archived here."}
+            vals['active'] = bool(params.get('active'))
+        if vals:
+            user.write(vals)
+        return {'status': True, 'role': self._kra_role_of(user)}
 
     @http.route('/kpi_user_access/set_sender', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_set_sender(self, **params):

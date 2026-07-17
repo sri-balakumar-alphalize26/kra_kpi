@@ -60,6 +60,7 @@ const STAT_W = (SW - PAD * 2 - 12) / 2;  // stat card width (2 per row, 12 gap)
 // them); the KPI Action Board is the one tile everyone gets.
 const QUICK = [
   { label: 'Owner Dashboard',    lib: 'mc',  name: 'view-dashboard',   dest: 'owner',              adminOnly: true,  section: 'main',     bg: '#E0ECFF', fg: '#2563EB' },
+  { label: 'Live Tracking',      lib: 'mc',  name: 'account-eye',      dest: 'livetracking',       adminOnly: true,  section: 'main',     bg: '#DBEAFE', fg: '#1D4ED8' },
   { label: 'KRA / KPI Master',   lib: 'mc',  name: 'file-tree',        dest: 'dashboard',          adminOnly: true,  section: 'main',     bg: '#EDE9FE', fg: '#7C3AED' },
   { label: 'KPI Action Board',   lib: 'mc',  name: 'clipboard-check',  dest: 'actionboard',        adminOnly: false, section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
   { label: 'My Workday',         lib: 'mc',  name: 'calendar-clock',   dest: 'myworkday',          adminOnly: false, section: 'reports',  bg: '#CFFAFE', fg: '#0E7490' },
@@ -70,6 +71,7 @@ const QUICK = [
   { label: 'Client Task Queue',  lib: 'mc',  name: 'inbox-arrow-down', dest: 'taskqueue',          adminOnly: true,  section: 'main',     bg: '#FEF3C7', fg: '#D97706' },
   { label: 'Generate Client Files', lib: 'mc', name: 'folder-zip',     dest: 'clientfiles',        adminOnly: true,  section: 'main',     bg: '#E0F2FE', fg: '#0284C7' },
   { label: 'Reassignment History', lib: 'mc', name: 'swap-horizontal', dest: 'reassignhistory',    adminOnly: true,  section: 'settings', bg: '#F3E8FF', fg: '#9333EA' },
+  { label: 'Users',              lib: 'mc',  name: 'account-multiple-plus', dest: 'users',          adminOnly: true,  section: 'settings', bg: '#E0ECFF', fg: '#2563EB' },
   { label: 'Login Management',   lib: 'mc',  name: 'account-key',      dest: 'loginmgmt',          adminOnly: true,  section: 'settings', bg: '#EDE9FE', fg: '#7C3AED' },
   { label: 'Workday Snapshots',  lib: 'mc',  name: 'camera-timer',     dest: 'snapshots',          adminOnly: true,  section: 'reports',  bg: '#CFFAFE', fg: '#0891B2' },
   { label: 'Daily Reports',      lib: 'mc',  name: 'file-chart',       dest: 'dailyreports',       adminOnly: true,  section: 'reports',  bg: '#DBEAFE', fg: '#4338CA' },
@@ -273,15 +275,15 @@ function Greeting({ name }) {
   };
   // Arrow width tracks the text width (a bit wider so the head clears the last letter).
   const arrowW = tw ? tw + 16 : 0;
-  const arrowH = arrowW * (44 / 230); // keep the viewBox aspect ratio
+  const arrowH = arrowW * (52 / 230); // taller viewBox (below) gives the arrowhead top headroom
   return (
-    <Animated.View style={[{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }, style]}>
-      <View style={{ justifyContent: 'center' }}>
+    <Animated.View style={[{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingTop: arrowH * 0.42 }, style]}>
+      <View style={{ justifyContent: 'center', overflow: 'visible' }}>
         {/* Orange 369-style arrow BEHIND the name: swoops down into a V dip,
             then up to the arrowhead. Rendered first + absolute → sits behind.
             Sized from the measured text width so it fits any name length. */}
         {arrowW > 0 && (
-          <Svg width={arrowW} height={arrowH} viewBox="0 0 230 44" style={[s.helloArrow, { top: -arrowH * 0.28 }]} pointerEvents="none">
+          <Svg width={arrowW} height={arrowH} viewBox="0 -8 230 52" style={[s.helloArrow, { top: -arrowH * 0.39 }]} pointerEvents="none">
             <Path d="M8 12 C 48 40, 82 42, 116 26 C 150 10, 178 10, 206 8"
               fill="none" stroke={BRAND_ORANGE} strokeWidth={5} strokeLinecap="round" opacity={0.9} />
             <Path d="M192 3 L210 6 L204 22"
@@ -455,7 +457,7 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
   // self-scoped My Workday — admins use the team-wide reports instead); client =
   // the two upload tiles + My Requests; developer = the shared board (non-admin tiles).
   const roleTiles = isAdmin
-    ? QUICK.filter((q) => q.dest !== 'mytasks' && q.dest !== 'myworkday')
+    ? QUICK.filter((q) => !['mytasks', 'myworkday', 'myinvoices', 'mysnapshots'].includes(q.dest))
     : role === 'client'
       ? QUICK.filter((q) => ['upload:requirement', 'upload:update', 'upload:bug', 'mytasks', 'myinvoices'].includes(q.dest))
       : QUICK.filter((q) => !q.adminOnly);
@@ -858,6 +860,10 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
   // (User/Administrator), which is why a user can be an Odoo "User" but a KRA/KPI
   // "Client". Resolved from /kpi_user/info, the same source the Home tiles use.
   const [kpiRole, setKpiRole] = useState(null);
+  // True while the app password is still the default 1111 (freshly created / admin
+  // reset). Turns the Forgot Password button red to nag them to set their own;
+  // cleared automatically once they change it (server flips must_change to false).
+  const [mustChange, setMustChange] = useState(false);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -866,6 +872,7 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
         if (!serverUrl) return;                       // offline demo → no badge
         const info = await jsonRpc(serverUrl, '/kpi_user/info', {});
         if (!alive || !info) return;
+        setMustChange(!!info.must_change);
         // Read the KRA/KPI role straight off the server (res.users.kpi_role:
         // admin | client | developer) — the same single value Login Management's
         // dropdown sets. No re-deriving from group flags: one field, one answer.
@@ -1027,6 +1034,7 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
       // stored session and stay logged in.
       await saveSession(res.user);
       log.info('forgot-pw: password changed');
+      setMustChange(false);   // they set their own → clear the red 1111 nag immediately
       setPwStep(null);
       Alert.alert('Password changed', 'Your app password has been updated.');
     } catch (e) {
@@ -1100,11 +1108,16 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
           ))}
         </View>
 
-        {/* Forgot / change password — only for app-login users (need a mobile). */}
+        {/* Forgot / change password — only for app-login users (need a mobile).
+            While the password is still the default 1111 (must_change), this same
+            button turns RED with a warning so nothing else moves (Log Out stays
+            put); it reverts to normal once they set their own. */}
         {user?.mobile ? (
-          <TouchableOpacity style={s.profForgot} onPress={openForgot} activeOpacity={0.9}>
-            <Ionicons name="key-outline" size={18} color={COLORS.primary} />
-            <Text style={s.profForgotTxt}>Forgot Password</Text>
+          <TouchableOpacity style={[s.profForgot, mustChange && s.profForgotWarn]} onPress={openForgot} activeOpacity={0.9}>
+            <Ionicons name={mustChange ? 'warning-outline' : 'key-outline'} size={18} color={mustChange ? COLORS.red : COLORS.primary} />
+            <Text style={[s.profForgotTxt, mustChange && s.profForgotWarnTxt]}>
+              {mustChange ? 'Password is 1111 — tap to set your own' : 'Forgot Password'}
+            </Text>
           </TouchableOpacity>
         ) : null}
 
@@ -1542,6 +1555,9 @@ const s = StyleSheet.create({
     borderWidth: 1.5, borderColor: COLORS.primary,
   },
   profForgotTxt: { color: COLORS.primary, fontSize: 15.5, fontWeight: '800' },
+  // Same button, red, when the password is still the default 1111.
+  profForgotWarn: { backgroundColor: COLORS.redBg, borderColor: COLORS.red },
+  profForgotWarnTxt: { color: COLORS.red },
 
   // Confirm popup — blue key icon chip + Send Code button.
   pwIconWrap: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#EAF1FE', alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginBottom: 14 },

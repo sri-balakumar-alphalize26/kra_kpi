@@ -47,6 +47,10 @@ const MODES = {
   bug:         { title: 'Upload Bug Reports',  lead: 'Add bug-report tasks to a project', prefix: 'BUG', showLinkedReq: true },
 };
 
+// Task names always start with a capital letter — matches the server, which
+// enforces the same on create/write for every path. Only the first char changes.
+const capFirst = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
 const pad3 = (n) => String(n).padStart(3, '0');
 const emptyRow = (defaults) => ({
   name: '', external_ref: '', related_req_ref: '',
@@ -232,7 +236,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         seen.add(name.toLowerCase());
         additions.push({
           ...emptyRow(defaults),
-          name,
+          name: capFirst(name),
           external_ref: (typeof it === 'object' && it.external_ref) || '',
           related_req_ref: (typeof it === 'object' && it.related_req_ref) || '',
         });
@@ -783,7 +787,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                 <TextInput
                   style={s.taskName}
                   placeholder="Task name" placeholderTextColor={COLORS.faint}
-                  value={row.name} onChangeText={(t) => updateRow(i, { name: t })}
+                  value={row.name} onChangeText={(t) => updateRow(i, { name: capFirst(t) })}
+                  autoCapitalize="sentences"
                   multiline
                 />
 

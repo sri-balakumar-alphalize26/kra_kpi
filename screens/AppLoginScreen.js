@@ -138,12 +138,11 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
     try {
       const res = await appLogin(mobile.replace(/[^\d]/g, ''), pw);
       if (!res.ok) return fail(res.error || 'Invalid mobile number or password.');
-      if (res.mustChange) {
-        // First login → force a new password before entering the app.
-        log.info('first login → must set a new password');
-        setPendingUser(res.user); setStep('setpw'); setBusy(false); return;
-      }
-      log.info('login success', res.user?.username);
+      // NOTE: we no longer FORCE a password change on a first (1111) login — the
+      // user goes straight into the app and is nagged to set their own via the red
+      // "Forgot Password" button on Profile (must_change drives it). Logging in with
+      // the default 1111 first, then changing it, is the intended flow.
+      log.info('login success', res.user?.username, { mustChange: !!res.mustChange });
       await saveSession(res.user);
       onLogin(res.user);
     } catch (e) { fail('Login failed. Try again.'); }
