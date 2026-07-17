@@ -16,45 +16,6 @@ export class KpiConfiguration extends Component {
             <t t-elif="state.error"><div class="alert alert-danger" t-esc="state.error"/></t>
             <t t-else="">
 
-                <!-- Country & Mobile Format -->
-                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #16a34a !important; border-left-style: solid;">
-                    <div class="card-header bg-white fw-bold d-flex align-items-center">
-                        <i class="fa fa-globe me-2 text-success"></i> Country &amp; Mobile Format
-                    </div>
-                    <div class="card-body">
-                        <div class="row g-3 align-items-end">
-                            <div class="col-md-6">
-                                <label class="form-label fw-semibold">Country</label>
-                                <select class="form-select" t-on-change="(ev) => this.saveCountry(ev)">
-                                    <option value="" t-att-selected="!state.country_id">— Select —</option>
-                                    <t t-foreach="state.countries" t-as="co" t-key="co.id">
-                                        <option t-att-value="co.id"
-                                                t-att-selected="co.id === state.country_id"
-                                                t-esc="co.name + ' (+' + co.phone_code + ')'"/>
-                                    </t>
-                                </select>
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label fw-semibold">Dial code</label>
-                                <div class="input-group">
-                                    <span class="input-group-text">+</span>
-                                    <input type="text" class="form-control bg-light" readonly="readonly"
-                                           t-att-value="state.dial"/>
-                                </div>
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label fw-semibold">Digits</label>
-                                <input type="text" class="form-control bg-light" readonly="readonly"
-                                       t-att-value="state.mobileLength"/>
-                                <span t-if="state.savedCountry" class="text-success small">✓ Saved</span>
-                            </div>
-                        </div>
-                        <small class="text-muted d-block mt-2">Applies to every WhatsApp number below —
-                            the <b>+<t t-esc="state.dial"/></b> prefix is added automatically and numbers are
-                            limited to <b><t t-esc="state.mobileLength"/> digits</b>.</small>
-                    </div>
-                </div>
-
                 <!-- Timers & Away -->
                 <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #0ea5e9 !important; border-left-style: solid;">
                     <div class="card-header bg-white fw-bold d-flex align-items-center">
@@ -193,7 +154,7 @@ export class KpiConfiguration extends Component {
                                 <tr>
                                     <th>Developer</th>
                                     <th class="text-center" style="width:110px;">Multi-task</th>
-                                    <th style="width:280px;">WhatsApp number</th>
+                                    <th style="width:430px;">Country &amp; WhatsApp number</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -209,17 +170,26 @@ export class KpiConfiguration extends Component {
                                         </div>
                                     </td>
                                     <td>
-                                        <div class="input-group input-group-sm">
-                                            <span class="input-group-text">+<t t-esc="state.dial"/></span>
+                                        <select class="form-select form-select-sm mb-1" style="max-width:260px;"
+                                                title="Country code for this developer"
+                                                t-on-change="(ev) => this.saveDevCountry(dev, ev)">
+                                            <option value="" t-att-selected="!dev.country_id">Default (+<t t-esc="state.dial"/>)</option>
+                                            <t t-foreach="state.countries" t-as="co" t-key="co.id">
+                                                <option t-att-value="co.id" t-att-selected="co.id === dev.country_id" t-esc="co.name + ' (+' + co.phone_code + ')'"/>
+                                            </t>
+                                        </select>
+                                        <div class="input-group input-group-sm" style="max-width:260px;">
+                                            <span class="input-group-text">+<t t-esc="dev.dial || state.dial"/></span>
                                             <input type="tel" inputmode="numeric" class="form-control"
-                                                   t-att-placeholder="state.mobileLength + ' digits'"
-                                                   t-att-maxlength="state.mobileLength"
-                                                   t-att-value="this.localPart(dev.wa_number)"
-                                                   t-on-input="(ev) => this.onDevWaInput(ev)"
+                                                   t-att-placeholder="(dev.mobile_length || state.mobileLength) + ' digits'"
+                                                   t-att-maxlength="dev.mobile_length || state.mobileLength"
+                                                   t-att-value="this.localPart(dev)"
+                                                   t-on-input="(ev) => this.onDevWaInput(dev, ev)"
                                                    t-on-change="(ev) => this.saveDevWa(dev, ev)"/>
-                                            <span t-if="dev._saved" class="input-group-text text-success bg-white border-success">✓ Saved</span>
+                                            <span t-if="dev._saved" class="input-group-text text-success bg-white border-success">✓</span>
                                         </div>
-                                        <small t-if="dev._invalid" class="text-danger">Enter <t t-esc="state.mobileLength"/> digits</small>
+                                        <small t-if="dev._savedCountry" class="text-success">✓ Country saved</small>
+                                        <small t-if="dev._invalid" class="text-danger">Enter <t t-esc="dev.mobile_length || state.mobileLength"/> digits</small>
                                     </td>
                                 </tr>
                                 <tr t-if="!state.developers.length"><td colspan="3" class="text-muted">No developers found.</td></tr>
@@ -290,19 +260,22 @@ export class KpiConfiguration extends Component {
         });
     }
 
-    // Show only the local part (strip a leading dial code) of a stored number.
-    localPart(waNumber) {
-        let v = String(waNumber || "").replace(/[^\d]/g, "");
-        const dial = this.state.dial;
-        if (dial && v.length > this.state.mobileLength && v.startsWith(dial)) {
+    // Show only the local part (strip a leading dial code) of a developer's
+    // stored number, using THAT developer's own dial/length.
+    localPart(dev) {
+        const len = dev.mobile_length || this.state.mobileLength;
+        const dial = dev.dial || this.state.dial;
+        let v = String(dev.wa_number || "").replace(/[^\d]/g, "");
+        if (dial && v.length > len && v.startsWith(dial)) {
             v = v.slice(dial.length);
         }
-        return v.slice(0, this.state.mobileLength);
+        return v.slice(0, len);
     }
 
-    // Digit-only + hard-cap to the country's length while typing.
-    onDevWaInput(ev) {
-        const v = (ev.target.value || "").replace(/[^\d]/g, "").slice(0, this.state.mobileLength);
+    // Digit-only + hard-cap to the developer's country length while typing.
+    onDevWaInput(dev, ev) {
+        const len = dev.mobile_length || this.state.mobileLength;
+        const v = (ev.target.value || "").replace(/[^\d]/g, "").slice(0, len);
         if (ev.target.value !== v) ev.target.value = v;
     }
 
@@ -367,22 +340,43 @@ export class KpiConfiguration extends Component {
     }
 
     async saveDevWa(dev, ev) {
-        // Keep only digits, capped to the country length; strip a pasted dial code.
+        // Keep only digits, capped to the DEVELOPER's country length; strip a
+        // pasted dial code.
+        const len = dev.mobile_length || this.state.mobileLength;
+        const dial = dev.dial || this.state.dial;
         let val = (ev?.target?.value || "").replace(/[^\d]/g, "");
-        if (this.state.dial && val.length > this.state.mobileLength && val.startsWith(this.state.dial)) {
-            val = val.slice(this.state.dial.length);
+        if (dial && val.length > len && val.startsWith(dial)) {
+            val = val.slice(dial.length);
         }
-        val = val.slice(0, this.state.mobileLength);
+        val = val.slice(0, len);
         if (ev?.target) ev.target.value = val;
 
         // Flag (but don't block) an incomplete number.
-        dev._invalid = val.length > 0 && val.length !== this.state.mobileLength;
+        dev._invalid = val.length > 0 && val.length !== len;
 
         try {
             const res = await rpc("/kpi_multitask/set_wa", { user_id: dev.id, wa_number: val });
             if (res.status) { dev.wa_number = res.wa_number || val; this._flash(dev, "_saved"); }
             else alert(res.message || "Not authorized.");
         } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+
+    // Set this developer's country code (Oman +968 / India +91 / …). Shares the
+    // per-person route with Login Management and re-normalizes their WhatsApp
+    // number to the new dial. Empty = the company default.
+    async saveDevCountry(dev, ev) {
+        const cid = ev?.target?.value ? parseInt(ev.target.value) : false;
+        try {
+            const res = await rpc("/kpi_user_access/set_country", { user_id: dev.id, country_id: cid });
+            if (res?.status) {
+                dev.country_id = res.country_id || false;
+                dev.dial = res.dial || this.state.dial;
+                dev.mobile_length = res.mobile_length || this.state.mobileLength;
+                if (res.wa_number !== undefined) dev.wa_number = res.wa_number;
+                dev._invalid = false;
+                this._flash(dev, "_savedCountry");
+            } else { alert(res?.message || "Not authorized."); if (ev?.target) ev.target.value = dev.country_id || ""; }
+        } catch (e) { alert(e?.data?.message || "Failed to save."); if (ev?.target) ev.target.value = dev.country_id || ""; }
     }
 
     // ---- Daily report schedule ------------------------------------------

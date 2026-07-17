@@ -255,7 +255,7 @@ const s = StyleSheet.create({
     borderRadius: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E2E8F0',
   },
   notNowTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 13.5 },
-  root: { flex: 1, backgroundColor: 'transparent' },
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 12, paddingBottom: 12,

@@ -20,6 +20,13 @@ export async function fetchConfig() {
       queue_nudge_minutes: 30,
       urgent_nudge_minutes: 5,
       standard_workday_hours: 9,
+      snapshot_retention_number: 3,
+      snapshot_retention_unit: 'months',
+      daily_report_enabled: true,
+      daily_report_hour: 10.0,
+      daily_report_coverage: 'yesterday',
+      report_retention_number: 3,
+      report_retention_unit: 'months',
       country_id: false,
       country_dial_code: '91',
       mobile_length: 10,
@@ -41,6 +48,14 @@ export async function fetchConfig() {
     queue_nudge_minutes: cfg?.queue_nudge_minutes ?? 30,
     urgent_nudge_minutes: cfg?.urgent_nudge_minutes ?? 5,
     standard_workday_hours: Number(cfg?.standard_workday_hours) || 9,
+    // Daily task report schedule + snapshot/report retention (0 = keep forever).
+    snapshot_retention_number: Number(cfg?.snapshot_retention_number ?? 3),
+    snapshot_retention_unit: cfg?.snapshot_retention_unit || 'months',
+    daily_report_enabled: cfg?.daily_report_enabled !== false,
+    daily_report_hour: Number(cfg?.daily_report_hour ?? 10),
+    daily_report_coverage: cfg?.daily_report_coverage || 'yesterday',
+    report_retention_number: Number(cfg?.report_retention_number ?? 3),
+    report_retention_unit: cfg?.report_retention_unit || 'months',
     country_id: cfg?.country_id || false,
     country_dial_code: String(cfg?.country_dial_code || '91'),
     mobile_length: Number(cfg?.mobile_length) || 10,
@@ -103,4 +118,38 @@ export async function setDevWa(user_id, wa_number) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true, wa_number };
   return jsonRpc(serverUrl, '/kpi_multitask/set_wa', { user_id, wa_number });
+}
+
+// Set a person's OWN country (dial + local length) for their WhatsApp/login
+// number — Oman +968 / 8 digits, India +91 / 10, etc. Shared with Login
+// Management (/kpi_user_access/set_country). Empty country_id clears the override
+// (back to the company default). Returns { dial, mobile_length, country_id,
+// wa_number } — wa_number may be cleared if the old number can't fit the new length.
+export async function setUserCountry(user_id, country_id) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, dial: '91', mobile_length: 10, country_id: country_id || false, wa_number: '' };
+  return jsonRpc(serverUrl, '/kpi_user_access/set_country', { user_id, country_id: country_id || false });
+}
+
+// How long to keep workday snapshot IMAGES before the cleanup cron clears them.
+// number 0 = keep forever; unit ∈ days/months/years.
+export async function setSnapshotRetention({ number, unit }) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, number, unit };
+  return jsonRpc(serverUrl, '/kpi_config/set_snapshot_retention', { number, unit });
+}
+
+// How long to keep generated daily report PDFs. number 0 = keep forever.
+export async function setReportRetention({ number, unit }) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, number, unit };
+  return jsonRpc(serverUrl, '/kpi_config/set_report_retention', { number, unit });
+}
+
+// Daily report schedule: on/off, IST send hour (float, 10.5 = 10:30), coverage
+// ('yesterday'/'today'). All fields optional/partial.
+export async function setDailyReport({ enabled, hour, coverage }) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, enabled, hour, coverage };
+  return jsonRpc(serverUrl, '/kpi_config/set_daily_report', { enabled, hour, coverage });
 }

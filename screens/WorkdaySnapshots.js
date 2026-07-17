@@ -10,7 +10,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
   Image, Modal, Dimensions, Animated, LayoutAnimation, Platform, UIManager,
-  Easing, findNodeHandle,
+  Easing, findNodeHandle, StatusBar as RNStatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -18,17 +18,21 @@ import * as Sharing from 'expo-sharing';
 
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
-import { fetchSnapshots, fetchSnapshotImage } from '../services/workdaySnapshots';
+import { fetchSnapshots, fetchSnapshotImage, fetchMySnapshots, fetchMySnapshotImage } from '../services/workdaySnapshots';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('Snapshots');
 const SW = Dimensions.get('window').width;
+const TOP = (RNStatusBar.currentHeight || 0) + 12;
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
+// `mine` → self-scoped "My Snapshots": the server route returns only the current
+// user's own days, so any user (not just admins) can review their own workday
+// images. Everything else on this screen is identical.
+export default function WorkdaySnapshots({ onBack, focusSnapshotId, mine }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [days, setDays] = useState([]);
@@ -37,7 +41,18 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
   const [images, setImages] = useState({});      // snapshot_id -> {b64, name} | 'loading' | 'error'
   const [viewing, setViewing] = useState(null);  // the full-size popup
   const [busyShare, setBusyShare] = useState(false);
+  const [busySend, setBusySend] = useState(false);
   const [limitDays, setLimitDays] = useState(30);
+  const [banner, setBanner] = useState(null);   // { kind:'ok'|'err', msg }
+
+  const flash = (kind, msg) => { setBanner({ kind, msg }); setTimeout(() => setBanner(null), 3500); };
+  const Banner = () => (!banner ? null : (
+    <View style={[s.banner, banner.kind === 'ok' ? s.bannerOk : s.bannerErr]}>
+      <Ionicons name={banner.kind === 'ok' ? 'checkmark-circle' : 'alert-circle'} size={15}
+        color={banner.kind === 'ok' ? COLORS.green : COLORS.red} />
+      <Text style={[s.bannerTxt, { color: banner.kind === 'ok' ? '#065F46' : COLORS.red }]}>{banner.msg}</Text>
+    </View>
+  ));
 
   // Arriving from an "X ended their workday" notification: open that day + that
   // developer, scroll to it, and flash it twice so it's obvious which one was
@@ -52,7 +67,7 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchSnapshots(dayLimit);
+      const res = await (mine ? fetchMySnapshots : fetchSnapshots)(dayLimit);
       if (res && res.status === false) {
         setError(res.message || 'Could not load snapshots.');
         setDays([]);
@@ -60,7 +75,7 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
       }
       const list = res?.days || [];
       setDays(list);
-      // Open the newest day by default — it is what an admin came for.
+      // Open the newest day by default — it is what the viewer came for.
       if (list.length) setOpenDates((p) => ({ ...p, [list[0].date]: true }));
     } catch (e) {
       log.warn('load failed', e?.message);
@@ -68,7 +83,7 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
     } finally {
       setLoading(false);
     }
-  }, [limitDays]);
+  }, [limitDays, mine]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -78,7 +93,7 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
     if (images[snapshotId]) return;
     setImages((p) => ({ ...p, [snapshotId]: 'loading' }));
     try {
-      const res = await fetchSnapshotImage(snapshotId);
+      const res = await (mine ? fetchMySnapshotImage : fetchSnapshotImage)(snapshotId);
       if (res && res.status && res.data_b64) {
         setImages((p) => ({ ...p, [snapshotId]: { b64: res.data_b64, name: res.file_name } }));
       } else {
@@ -88,7 +103,7 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
       log.warn('image fetch failed', e?.message);
       setImages((p) => ({ ...p, [snapshotId]: 'error' }));
     }
-  }, [images]);
+  }, [images, mine]);
 
   // Auto-expand + flash the snapshot a notification pointed at.
   useEffect(() => {
@@ -152,43 +167,88 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
     });
   };
 
-  // Save / share the PNG. Writes the base64 to a cache file first: shareAsync
-  // needs a real file, and a data: URI is not one.
+  // Save the PNG. Android asks WHERE to save (folder picker) via the Storage
+  // Access Framework; iOS falls back to the share sheet ("Save Image").
   const shareImage = async (dev) => {
     const img = images[dev.snapshot_id];
     if (!img || typeof img === 'string') return;
     setBusyShare(true);
     try {
+      const name = (img.name || 'workday.png').split(/[\\/]/).pop();
+
+      const SAF = FileSystem.StorageAccessFramework;
+      if (Platform.OS === 'android' && SAF) {
+        // Ask WHERE to save first — nothing is written until a folder is chosen.
+        const perm = await SAF.requestDirectoryPermissionsAsync();
+        if (!perm.granted) { flash('err', 'Download cancelled — no folder chosen.'); return; }
+        const dot = name.lastIndexOf('.');
+        const bare = dot > 0 ? name.slice(0, dot) : name;   // SAF re-appends the ext from the mime
+        const uri = await SAF.createFileAsync(perm.directoryUri, bare, 'image/png');
+        await FileSystem.writeAsStringAsync(uri, img.b64, { encoding: FileSystem.EncodingType.Base64 });
+        flash('ok', `Saved ${name}`);
+        return;
+      }
+
+      // iOS: the share sheet is where "Save Image" / "Save to Files" live.
       const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
-      const uri = `${dir}${img.name || 'workday.png'}`;
+      const uri = `${dir}${name}`;
       await FileSystem.writeAsStringAsync(uri, img.b64, { encoding: FileSystem.EncodingType.Base64 });
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          mimeType: 'image/png',
-          dialogTitle: `Save ${img.name}`,
-          UTI: 'public.png',
-        });
+        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: `Save ${name}`, UTI: 'public.png' });
+        flash('ok', `${name} ready`);
+      } else {
+        flash('err', 'Saving is not available on this device.');
       }
     } catch (e) {
       log.warn('share failed', e?.message);
+      flash('err', 'Could not save the image.');
     } finally {
       setBusyShare(false);
+    }
+  };
+
+  // Share = the all-apps OS share sheet (send the PNG to WhatsApp/Gmail/etc.),
+  // as opposed to Download which saves it to a chosen folder.
+  const sendImage = async (dev) => {
+    const img = images[dev.snapshot_id];
+    if (!img || typeof img === 'string') return;
+    setBusySend(true);
+    log.info('share: start', { snapshot: dev.snapshot_id });
+    try {
+      const name = (img.name || 'workday.png').split(/[\\/]/).pop();
+      const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      const uri = `${dir}${name}`;
+      await FileSystem.writeAsStringAsync(uri, img.b64, { encoding: FileSystem.EncodingType.Base64 });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: `Share ${name}`, UTI: 'public.png' });
+        log.info('share: sheet opened', { name });
+      } else {
+        log.warn('share: unavailable');
+        flash('err', 'Sharing is not available on this device.');
+      }
+    } catch (e) {
+      log.warn('send failed', e?.message);
+      flash('err', 'Could not share the image.');
+    } finally {
+      setBusySend(false);
     }
   };
 
   const totalDevs = days.reduce((n, d) => n + (d.devs?.length || 0), 0);
 
   return (
-    <GradientBackground>
+    <View style={s.root}>
+      <GradientBackground />
       <View style={s.header}>
-        <TouchableOpacity onPress={onBack} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name="chevron-back" size={26} color={COLORS.navy} />
+        <TouchableOpacity onPress={onBack} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={s.iconBtn}>
+          <Ionicons name="chevron-back" size={24} color={COLORS.navy} />
         </TouchableOpacity>
-        <Text style={s.headerTitle}>Workday Snapshots</Text>
-        <TouchableOpacity onPress={() => load()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <Text style={s.headerTitle} numberOfLines={1}>{mine ? 'My Snapshots' : 'Workday Snapshots'}</Text>
+        <TouchableOpacity onPress={() => load()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={s.iconBtn}>
           <Ionicons name="refresh" size={20} color={COLORS.navy} />
         </TouchableOpacity>
       </View>
+      <Banner />
 
       <View style={s.rangeRow}>
         {[7, 30, 90].map((n) => (
@@ -214,10 +274,12 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
         <View style={s.center}>
           <Ionicons name="camera-outline" size={40} color={COLORS.faint} />
           <Text style={s.emptyTitle}>No snapshots yet</Text>
-          <Text style={s.emptySub}>One is saved automatically each time a developer ends their workday.</Text>
+          <Text style={s.emptySub}>{mine
+            ? 'Your snapshot is saved automatically each time you end your workday.'
+            : 'One is saved automatically each time a developer ends their workday.'}</Text>
         </View>
       ) : (
-        <ScrollView ref={scrollRef} contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
+        <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
           <Text style={s.count}>{days.length} day{days.length !== 1 ? 's' : ''} · {totalDevs} snapshot{totalDevs !== 1 ? 's' : ''}</Text>
 
           {days.map((day) => (
@@ -289,6 +351,12 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
                                 : <Ionicons name="download-outline" size={14} color={COLORS.primary} />}
                               <Text style={s.imgBtnTxt}>Download</Text>
                             </TouchableOpacity>
+                            <TouchableOpacity style={s.imgBtn} onPress={() => sendImage(dev)} disabled={busySend} activeOpacity={0.85}>
+                              {busySend
+                                ? <ActivityIndicator size="small" color={COLORS.primary} />
+                                : <Ionicons name="share-social-outline" size={14} color={COLORS.primary} />}
+                              <Text style={s.imgBtnTxt}>Share</Text>
+                            </TouchableOpacity>
                           </View>
                         </>
                       )}
@@ -311,6 +379,7 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
                 <Ionicons name="close" size={22} color={COLORS.ink} />
               </TouchableOpacity>
             </View>
+            <Banner />
             <ScrollView
               style={{ maxHeight: Dimensions.get('window').height * 0.62 }}
               contentContainerStyle={{ padding: 10 }}
@@ -327,6 +396,17 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
             </ScrollView>
             <View style={s.mFoot}>
               <TouchableOpacity
+                style={s.mShare}
+                onPress={() => viewing && sendImage(viewing)}
+                disabled={busySend}
+                activeOpacity={0.85}
+              >
+                {busySend
+                  ? <ActivityIndicator size="small" color={COLORS.primary} />
+                  : <><Ionicons name="share-social-outline" size={16} color={COLORS.primary} />
+                      <Text style={s.mShareTxt}>Share</Text></>}
+              </TouchableOpacity>
+              <TouchableOpacity
                 style={s.mDownload}
                 onPress={() => viewing && shareImage(viewing)}
                 disabled={busyShare}
@@ -341,16 +421,23 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId }) {
           </View>
         </View>
       </Modal>
-    </GradientBackground>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingTop: 52, paddingBottom: 12,
+    paddingHorizontal: 16, paddingTop: TOP, paddingBottom: 12,
   },
-  headerTitle: { fontSize: 18, fontWeight: '900', color: COLORS.navy },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '900', color: COLORS.navy, marginHorizontal: 8 },
+  iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', ...SHADOW },
+
+  banner: { flexDirection: 'row', alignItems: 'center', gap: 7, marginHorizontal: 14, marginBottom: 8, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 10, borderWidth: 1 },
+  bannerOk: { backgroundColor: COLORS.greenBg, borderColor: '#A7F3D0' },
+  bannerErr: { backgroundColor: COLORS.redBg, borderColor: '#FCA5A5' },
+  bannerTxt: { flex: 1, fontSize: 12.5, fontWeight: '700' },
 
   rangeRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingBottom: 10 },
   rangePill: {
@@ -411,10 +498,16 @@ const s = StyleSheet.create({
   },
   mTitle: { flex: 1, fontSize: 15.5, fontWeight: '900', color: COLORS.ink },
   full: { width: '100%', height: Dimensions.get('window').height * 0.55 },
-  mFoot: { padding: 12, borderTopWidth: 1, borderTopColor: COLORS.line, alignItems: 'flex-end' },
+  mFoot: { padding: 12, borderTopWidth: 1, borderTopColor: COLORS.line, flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
   mDownload: {
     flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primary,
     borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, minWidth: 130, justifyContent: 'center',
   },
   mDownloadTxt: { color: '#fff', fontWeight: '800', fontSize: 13.5 },
+  mShare: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff',
+    borderRadius: 10, borderWidth: 1.5, borderColor: COLORS.primary,
+    paddingHorizontal: 16, paddingVertical: 10, minWidth: 110, justifyContent: 'center',
+  },
+  mShareTxt: { color: COLORS.primary, fontWeight: '800', fontSize: 13.5 },
 });

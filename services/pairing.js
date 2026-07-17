@@ -30,6 +30,9 @@ export async function pairingStatus() {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { state: 'pending', paired: false, isMock: true };
   const res = await jsonRpc(serverUrl, '/kpi_pair/status', {});
+  // Log the pairing decision — this drives the read-only gate (paired === workday
+  // started). If paired is unexpectedly true, the server saw a live 'paired' row.
+  log.info('pairingStatus ←', { state: res?.state || 'none', paired: !!res?.paired, mode: res?.mode });
   return { state: res?.state || 'none', paired: !!res?.paired, isMock: false };
 }
 

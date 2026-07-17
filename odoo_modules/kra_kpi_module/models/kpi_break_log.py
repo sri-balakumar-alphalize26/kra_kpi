@@ -73,12 +73,16 @@ class KpiBreakLog(models.Model):
         return rec.id
 
     @api.model
-    def stop_break(self, user_id=None):
-        """Close the user's active break/lunch (if any)."""
+    def stop_break(self, user_id=None, at=None):
+        """Close the user's active break/lunch (if any).
+
+        `at` caps the end time (default = now). The midnight auto-close passes the
+        session's day-end (23:59:59) so a break that crossed midnight isn't inflated
+        to a full extra day."""
         if not user_id:
             user_id = self.env.user.id
         active = self.search([('user_id', '=', user_id), ('is_active', '=', True)], limit=1)
         if active:
-            active.write({'end_time': fields.Datetime.now(), 'is_active': False})
+            active.write({'end_time': at or fields.Datetime.now(), 'is_active': False})
             return {'break_id': active.id, 'duration_seconds': active.duration_seconds}
         return {'break_id': False, 'duration_seconds': 0}

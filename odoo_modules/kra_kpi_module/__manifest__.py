@@ -94,6 +94,7 @@
             "kra_kpi_module/static/src/components/kpi_client_completions/kpi_client_completions.js",
             "kra_kpi_module/static/src/components/kpi_pending_queue/kpi_pending_queue.js",
             "kra_kpi_module/static/src/components/kpi_developer_summary/kpi_developer_summary.js",
+            "kra_kpi_module/static/src/components/kpi_live_tracking/kpi_live_tracking.js",
             "kra_kpi_module/static/src/components/kpi_period_report/kpi_period_report.js",
             "kra_kpi_module/static/src/components/kpi_company_settings/kpi_company_settings.js",
             "kra_kpi_module/static/src/components/kpi_configuration/kpi_configuration.js",

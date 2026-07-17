@@ -859,6 +859,8 @@ class KraKpiAPI(http.Controller):
                 # Same idea for the daily task report: a "daily report ready" row
                 # opens that report's PDF, not a task.
                 'report_id': n.report_id.id if n.report_id else False,
+                # ...and for invoice notifications: the row opens the invoice.
+                'invoice_id': n.invoice_id.id if n.invoice_id else False,
                 'event': n.event or "",
                 'title': n.title or "",
                 'body': n.body or "",
@@ -1060,10 +1062,11 @@ class KraKpiAPI(http.Controller):
             minutes=minutes,
         )
         # Recipient = the number the admin registered for this user (the login
-        # number). Normalize with the company country dial code so WhatsApp can
-        # route it — the stored login number is local digits (e.g. 9999999999 →
-        # 919999999999).
-        dial, length = company._kpi_mobile_cfg()
+        # number). Normalize with THIS user's own country dial code (Oman +968,
+        # India +91, …) so WhatsApp routes it — the stored login number is local
+        # digits (e.g. 9999999999 → 919999999999). Falls back to the company
+        # default when the user has no per-person country.
+        dial, length = user._kpi_user_mobile_cfg()
         raw = (user.kpi_mobile_number or user.kpi_wa_number
                or (user.partner_id.mobile or user.partner_id.phone) or '')
         phone = normalize_wa(raw, dial, length)
@@ -1145,12 +1148,35 @@ class KraKpiAPI(http.Controller):
         if sess and sess.name != 'Login Management WhatsApp OTP':
             try: sess.write({'name': 'Login Management WhatsApp OTP'})
             except Exception: pass
-        from ..models.res_company_kpi import DEFAULT_OTP_TEMPLATE
+        from ..models.res_company_kpi import DEFAULT_OTP_TEMPLATE, COUNTRY_MOBILE_LENGTH
         dial, length = request.env.company._kpi_mobile_cfg()
+        # Countries for the per-person dropdown — restricted to those whose local
+        # length we KNOW (COUNTRY_MOBILE_LENGTH), so the dial code and digit cap
+        # always come from the same country (never a mismatch).
+        countries = request.env['res.country'].sudo().search(
+            [('phone_code', '!=', 0), ('code', 'in', list(COUNTRY_MOBILE_LENGTH.keys()))], order='name')
         try:
             otp_minutes = request.env['kpi.app.otp'].sudo().ttl_minutes()
         except Exception:
             otp_minutes = 5
+        user_rows = []
+        for u in users:
+            u_dial, u_len = u._kpi_user_mobile_cfg()
+            user_rows.append({
+                'id': u.id, 'name': u.name, 'login': u.login,
+                'mobile': u.kpi_mobile_number or '',
+                # Per-person country + resolved dial/length (empty country_id ->
+                # the company default dial/length above still apply).
+                'country_id': u.kpi_mobile_country_id.id if u.kpi_mobile_country_id else False,
+                'dial': u_dial or dial or '',
+                'mobile_length': u_len or length or 10,
+                'enabled': u.kpi_app_login_enabled,
+                'last_login': convert_to_user_tz(u.kpi_last_app_login) if u.kpi_last_app_login else '',
+                'last_device': u.kpi_last_device or '',
+                'has_password': bool(u.kpi_app_password_hash),
+                'role': self._kra_role_of(u),
+                'is_system': u.has_group('base.group_system'),
+            })
         return {
             'status': True,
             'connected_number': (sess.phone_number or '') if sess else '',
@@ -1163,16 +1189,11 @@ class KraKpiAPI(http.Controller):
             'mobile_length': length or 10,
             'app_name': request.env.company.name or 'the app',
             'otp_minutes': otp_minutes,
-            'users': [{
-                'id': u.id, 'name': u.name, 'login': u.login,
-                'mobile': u.kpi_mobile_number or '',
-                'enabled': u.kpi_app_login_enabled,
-                'last_login': convert_to_user_tz(u.kpi_last_app_login) if u.kpi_last_app_login else '',
-                'last_device': u.kpi_last_device or '',
-                'has_password': bool(u.kpi_app_password_hash),
-                'role': self._kra_role_of(u),
-                'is_system': u.has_group('base.group_system'),
-            } for u in users],
+            'countries': [
+                {'id': co.id, 'name': co.name, 'code': co.code or '',
+                 'phone_code': co.phone_code}
+                for co in countries],
+            'users': user_rows,
         }
 
     def _kra_role_of(self, user):
@@ -1194,6 +1215,50 @@ class KraKpiAPI(http.Controller):
         mobile = re.sub(r'\D', '', params.get('mobile') or '') or False
         request.env['res.users'].sudo().browse(uid).kpi_mobile_number = mobile
         return {'status': True, 'mobile': mobile or ''}
+
+    @http.route('/kpi_user_access/set_country', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_set_country(self, **params):
+        """Set a PERSON's mobile country — the dial code (+968 Oman, +91 India, …)
+        and local length that apply to BOTH their app-login mobile and their
+        WhatsApp number. Empty country clears the override (back to the company
+        default). Re-keys the stored WhatsApp number to the new dial so it stops
+        routing to the old country. Shared by the Configuration screen (developer
+        WhatsApp) and Login Management, since both act on res.users by id.
+        Returns the resolved dial/length so the screen updates live."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        user = request.env['res.users'].sudo().browse(int(params.get('user_id') or 0))
+        if not user.exists():
+            return {'status': False, 'message': 'User not found'}
+        old_dial, old_length = user._kpi_user_mobile_cfg()
+        cid = params.get('country_id')
+        user.kpi_mobile_country_id = int(cid) if cid else False
+        # Auto-fill the local length from the country map (onchange doesn't run on
+        # a bare write, so mirror it); 0 = derive/fall back to the company default.
+        from ..models.res_company_kpi import COUNTRY_MOBILE_LENGTH
+        code = user.kpi_mobile_country_id.code if user.kpi_mobile_country_id else None
+        user.kpi_mobile_length = COUNTRY_MOBILE_LENGTH.get(code, 0) if code else 0
+        dial, length = user._kpi_user_mobile_cfg()
+        # The WhatsApp number is stored WITH its dial prefix. Recover the local
+        # part using the OLD dial, then re-prefix the NEW one — but ONLY when the
+        # local part still fits the new country's length. A 10-digit India number
+        # cannot be expressed as an 8-digit Oman number, so rather than store a
+        # dial-less / misrouting value we CLEAR it and the admin re-enters the
+        # number in the new format.
+        if user.kpi_wa_number:
+            digits = re.sub(r'\D', '', user.kpi_wa_number)
+            if old_dial and digits.startswith(old_dial) and len(digits) == len(old_dial) + old_length:
+                local = digits[len(old_dial):]
+            else:
+                local = digits
+            if len(local) == length:
+                user.kpi_wa_number = normalize_wa(local, dial, length) or False
+            else:
+                user.kpi_wa_number = False
+        return {'status': True,
+                'country_id': user.kpi_mobile_country_id.id if user.kpi_mobile_country_id else False,
+                'dial': dial, 'mobile_length': length,
+                'wa_number': user.kpi_wa_number or ''}
 
     @http.route('/kpi_user_access/set_role', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_set_role(self, **params):
@@ -1624,11 +1689,18 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         devs = request.env.ref('kra_kpi_module.group_kra_developer').sudo().user_ids.filtered(
             lambda u: u.active and not u.share)
-        return {'status': True, 'developers': [
-            {'id': u.id, 'name': u.name, 'login': u.login,
-             'allow_multitask': u.kpi_allow_multitask,
-             'wa_number': u.kpi_wa_number or ''}
-            for u in devs.sorted('name')]}
+        rows = []
+        for u in devs.sorted('name'):
+            u_dial, u_len = u._kpi_user_mobile_cfg()
+            rows.append({
+                'id': u.id, 'name': u.name, 'login': u.login,
+                'allow_multitask': u.kpi_allow_multitask,
+                'wa_number': u.kpi_wa_number or '',
+                # Per-person country + resolved dial/length for the WhatsApp field.
+                'country_id': u.kpi_mobile_country_id.id if u.kpi_mobile_country_id else False,
+                'dial': u_dial or '', 'mobile_length': u_len or 10,
+            })
+        return {'status': True, 'developers': rows}
 
     @http.route('/kpi_multitask/set', type='json', auth='user', methods=['POST'], csrf=False)
     def multitask_set(self, **params):
@@ -1648,19 +1720,25 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         if not params.get('user_id'):
             return {'status': False, 'message': 'user_id missing'}
-        dial, length = request.env.company._kpi_mobile_cfg()
+        dev = request.env['res.users'].sudo().browse(int(params['user_id']))
+        # Normalize with the DEVELOPER's own country dial/length (falls back to
+        # the company default when they have no per-person country).
+        dial, length = dev._kpi_user_mobile_cfg()
         num = normalize_wa(params.get('wa_number') or '', dial, length) or False
-        request.env['res.users'].sudo().browse(int(params['user_id'])).kpi_wa_number = num
-        return {'status': True, 'wa_number': num or ''}
+        dev.kpi_wa_number = num
+        return {'status': True, 'wa_number': num or '', 'dial': dial, 'mobile_length': length}
 
     # ---- Global config: Away-after-minutes + Urgent recipients (Configuration screen) ---- #
     @http.route('/kpi_config/get', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_get(self, **params):
         c = request.env.company
         dial, length = c._kpi_mobile_cfg()
-        # Countries that have a dial code, for the picker (id, name, +code).
+        # Countries for the picker — restricted to those whose local length we
+        # KNOW (COUNTRY_MOBILE_LENGTH), so the dial code and digit cap always come
+        # from the same country (id, name, +code).
+        from ..models.res_company_kpi import COUNTRY_MOBILE_LENGTH
         countries = request.env['res.country'].sudo().search(
-            [('phone_code', '!=', 0)], order='name')
+            [('phone_code', '!=', 0), ('code', 'in', list(COUNTRY_MOBILE_LENGTH.keys()))], order='name')
         return {'status': True,
                 'away_after_minutes': c.away_after_minutes,
                 # Client-workflow timers (both editable in the app's Configuration).

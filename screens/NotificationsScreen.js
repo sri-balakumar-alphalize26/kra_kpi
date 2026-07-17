@@ -66,6 +66,7 @@ const EVENT_ICON = {
   self_task_rejected:  { lib: 'mc', name: 'clipboard-remove',    color: '#EA580C' },
   task_auto_away:      { lib: 'mc', name: 'sleep',               color: '#64748B' },
   workday_auto_closed: { lib: 'mc', name: 'weather-night',       color: '#64748B' },
+  daily_report:        { lib: 'mc', name: 'file-chart',          color: '#4338CA' },
 };
 
 // Events that mean "someone has to DO something" → the Action needed tab.
@@ -278,9 +279,23 @@ export default function NotificationsScreen({ onBack, onOpen, isClient = false }
     // opens that day's frozen summary image — checked FIRST because such a row
     // also carries a kpi_id (the arbitrary task _notify was anchored on), and
     // routing on that would dump the admin on an unrelated task.
+    // Invoice notifications open the invoice (client → My Invoices, admin →
+    // Client Invoices) — checked before kpi_id, which is only the anchor task.
+    if (item.invoice_id) {
+      log.info('notification → invoice', { invoiceId: item.invoice_id });
+      onOpen(isClient ? 'myinvoices' : 'clientinvoices', item.invoice_id);
+      return;
+    }
     if (item.snapshot_id) {
       log.info('notification → snapshot', { snapshotId: item.snapshot_id });
       onOpen('snapshots', item.snapshot_id);
+      return;
+    }
+    // "Daily report ready" opens that report's PDF on the Daily Reports screen —
+    // also checked before kpi_id, for the same reason (it carries an anchor kpi_id).
+    if (item.report_id) {
+      log.info('notification → daily report', { reportId: item.report_id });
+      onOpen('dailyreports', item.report_id);
       return;
     }
     // Role decides the destination. A CLIENT has no Action Board — it loads 0
@@ -410,7 +425,7 @@ export default function NotificationsScreen({ onBack, onOpen, isClient = false }
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: 'transparent' },
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 12, paddingBottom: 12,

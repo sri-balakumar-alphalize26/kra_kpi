@@ -1130,7 +1130,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 const s = StyleSheet.create({
   // Transparent so the gradient behind it shows through — the board's root does
   // the same. A background colour here would hide the backdrop.
-  root: { flex: 1 },
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   wrap: { flex: 1 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingTop: TOP, paddingBottom: 8 },
   backChip: { width: 38, height: 38, borderRadius: 11, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },

@@ -237,7 +237,7 @@ const DRow = ({ label, value }) => (
 );
 
 const s = StyleSheet.create({
-  root: { flex: 1 },
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 10 },
   // White square chip behind the back / refresh arrows so they read over the
   // gradient (matches the Generate Client Files header).

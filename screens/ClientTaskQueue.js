@@ -627,7 +627,7 @@ const s = StyleSheet.create({
   // A solid colour here is what produced the pale strip down the right edge: it
   // showed through wherever the gradient SVG didn't paint. Transparent lets the
   // gradient be the only background, with nothing behind it to leak.
-  root: { flex: 1, backgroundColor: 'transparent' },
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   centerTxt: { color: COLORS.muted, marginTop: 10, textAlign: 'center' },
   retry: { marginTop: 14, backgroundColor: COLORS.primary, paddingHorizontal: 18, paddingVertical: 9, borderRadius: 10 },

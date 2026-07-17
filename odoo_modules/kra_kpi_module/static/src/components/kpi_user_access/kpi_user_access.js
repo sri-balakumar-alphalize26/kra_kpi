@@ -139,14 +139,23 @@ export class KpiUserAccess extends Component {
                                         </select>
                                         <span t-if="u._savedRole" class="text-success" style="font-size:11px;">✓ Saved</span>
                                     </td>
-                                    <td>
+                                    <td style="min-width:230px;">
+                                        <select class="form-select form-select-sm mb-1"
+                                                title="Country code for this person"
+                                                t-on-change="(ev) => this.saveCountry(u, ev)">
+                                            <option value="" t-att-selected="!u.country_id">Default (+<t t-esc="state.dial"/>)</option>
+                                            <t t-foreach="state.countries" t-as="co" t-key="co.id">
+                                                <option t-att-value="co.id" t-att-selected="co.id === u.country_id"><t t-esc="co.name"/> (+<t t-esc="co.phone_code"/>)</option>
+                                            </t>
+                                        </select>
                                         <div class="input-group input-group-sm">
-                                            <span class="input-group-text">+<t t-esc="state.dial"/></span>
+                                            <span class="input-group-text">+<t t-esc="u.dial || state.dial"/></span>
                                             <input type="text" class="form-control" inputmode="numeric"
-                                                   placeholder="not set" t-att-maxlength="state.mobile_length"
+                                                   placeholder="not set" t-att-maxlength="u.mobile_length || state.mobile_length"
                                                    t-att-value="u.mobile" t-on-change="(ev) => this.saveMobile(u, ev)"/>
                                         </div>
                                         <span t-if="u._savedMobile" class="text-success" style="font-size:11px;">✓ Saved</span>
+                                        <span t-if="u._savedCountry" class="text-success" style="font-size:11px;"> ✓ Country</span>
                                     </td>
                                     <td><small t-esc="u.last_login or '—'"/></td>
                                     <td><small t-esc="u.last_device or '—'"/></td>
@@ -181,7 +190,7 @@ export class KpiUserAccess extends Component {
             roleFilter: "all",
             connected_number: "",
             otp_template: "", otp_default: "", otp_preview: "", savedOtp: false,
-            dial: "", mobile_length: 10,
+            dial: "", mobile_length: 10, countries: [],
             app_name: "the app", otp_minutes: 5, sample_name: "Ravi",
             // WhatsApp server (Neonize) connection state
             wa_state: "none", wa_session_id: 0, wa_phone: "", wa_qr: "",
@@ -195,6 +204,7 @@ export class KpiUserAccess extends Component {
                     this.state.users = res.users || [];
                     this.state.dial = res.dial || "";
                     this.state.mobile_length = res.mobile_length || 10;
+                    this.state.countries = res.countries || [];
                     this.state.app_name = res.app_name || "the app";
                     this.state.otp_minutes = res.otp_minutes || 5;
                     this.state.sample_name = (res.users && res.users[0] && res.users[0].name) || "Ravi";
@@ -315,13 +325,29 @@ export class KpiUserAccess extends Component {
     }
 
     async saveMobile(u, ev) {
-        const num = (ev.target.value || "").replace(/\D/g, "").slice(0, this.state.mobile_length || 15);
+        const cap = u.mobile_length || this.state.mobile_length || 15;
+        const num = (ev.target.value || "").replace(/\D/g, "").slice(0, cap);
         ev.target.value = num;
         try {
             const res = await rpc("/kpi_user_access/set_mobile", { user_id: u.id, mobile: num });
             if (res.status) { u.mobile = res.mobile; this._flash(u, "_savedMobile"); }
             else alert(res.message || "Not authorized.");
         } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+
+    // Set this person's country code (Oman +968 / India +91 / …). Drives their
+    // login mobile AND WhatsApp number; empty = the company default.
+    async saveCountry(u, ev) {
+        const cid = parseInt(ev.target.value, 10) || false;
+        try {
+            const res = await rpc("/kpi_user_access/set_country", { user_id: u.id, country_id: cid });
+            if (res.status) {
+                u.country_id = res.country_id || false;
+                u.dial = res.dial || this.state.dial;
+                u.mobile_length = res.mobile_length || this.state.mobile_length;
+                this._flash(u, "_savedCountry");
+            } else { alert(res.message || "Not authorized."); ev.target.value = u.country_id || ""; }
+        } catch (e) { alert(e?.data?.message || "Failed to save."); ev.target.value = u.country_id || ""; }
     }
 
     async saveRole(u, ev) {

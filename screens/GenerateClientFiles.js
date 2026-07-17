@@ -516,7 +516,7 @@ function PickerModal({ picker, onClose, clients, subKras, clientId, projectId, o
 
 const s = StyleSheet.create({
   // No solid bg — GradientBackground shows through (matches the other screens).
-  root: { flex: 1 },
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   center: { alignItems: 'center', justifyContent: 'center' },
   loadingTxt: { marginTop: 14, color: COLORS.muted, fontSize: 14 },
 

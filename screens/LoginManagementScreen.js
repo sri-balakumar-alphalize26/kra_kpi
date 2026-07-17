@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Switch,
-  ActivityIndicator, Modal, Image, Alert, StatusBar as RNStatusBar,
+  ActivityIndicator, Modal, Image, Alert, FlatList, StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -15,7 +15,7 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import {
-  getAccess, setMobile, setRole, toggleLogin, resetPassword, setOtpMessage,
+  getAccess, setMobile, setUserCountry, setRole, toggleLogin, resetPassword, setOtpMessage,
   waConnect, waStatus, waDelete,
 } from '../services/loginManagement';
 
@@ -63,6 +63,8 @@ export default function LoginManagementScreen({ onBack }) {
   const [users, setUsers] = useState([]);
   const [dial, setDial] = useState('91');
   const [mobileLen, setMobileLen] = useState(10);
+  const [countries, setCountries] = useState([]);
+  const [pickCountryForUser, setPickCountryForUser] = useState(null); // user whose country is being picked
   const [appName, setAppName] = useState('the app');
   const [otpMinutes, setOtpMinutes] = useState(5);
   const [otpTemplate, setOtpTemplate] = useState('');
@@ -113,6 +115,7 @@ export default function LoginManagementScreen({ onBack }) {
       setUsers((d.users || []).map((u) => ({ ...u, _mobile: u.mobile || '' })));
       setDial(String(d.dial || '91'));
       setMobileLen(Number(d.mobile_length) || 10);
+      setCountries(d.countries || []);
       setAppName(d.app_name || 'the app');
       setOtpMinutes(Number(d.otp_minutes) || 5);
       setOtpTemplate(d.otp_template || '');
@@ -134,8 +137,35 @@ export default function LoginManagementScreen({ onBack }) {
 
   // ── User savers ─────────────────────────────────────────────────────────────
   const onMobileChange = (uid, text) => {
-    const local = String(text || '').replace(/[^\d]/g, '').slice(0, mobileLen);
-    setUsers((list) => list.map((u) => (u.id === uid ? { ...u, _mobile: local } : u)));
+    const u = users.find((x) => x.id === uid);
+    const cap = (u && u.mobile_length) || mobileLen;
+    const local = String(text || '').replace(/[^\d]/g, '').slice(0, cap);
+    setUsers((list) => list.map((x) => (x.id === uid ? { ...x, _mobile: local } : x)));
+  };
+
+  // Country label for a user's picker button (their own, or the default).
+  const userCountryLabel = (u) => {
+    const c = countries.find((x) => x.id === u.country_id);
+    return c ? `+${c.phone_code}` : `+${dial}`;
+  };
+
+  // Set ONE user's country (dial + local length). Empty co (id false) clears it
+  // back to the company default. Drives their app-login mobile AND WhatsApp number.
+  const chooseUserCountry = async (u, co) => {
+    setPickCountryForUser(null);
+    const cid = co && co.id ? co.id : false;
+    setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, country_id: cid } : x)));
+    try {
+      const res = await setUserCountry(u.id, cid);
+      if (res?.status) {
+        const nd = String(res.dial || dial || '91');
+        const nl = Number(res.mobile_length) || mobileLen || 10;
+        setUsers((list) => list.map((x) => (x.id === u.id
+          ? { ...x, country_id: res.country_id || false, dial: nd, mobile_length: nl }
+          : x)));
+        flash('country:' + u.id);
+      }
+    } catch (e) { log.warn('setUserCountry', e?.message); }
   };
   const saveMobile = async (u) => {
     try { await setMobile(u.id, u._mobile || ''); flash('mobile:' + u.id); }
@@ -271,16 +301,19 @@ export default function LoginManagementScreen({ onBack }) {
                   </TouchableOpacity>
                 </View>
 
-                {/* Line 3: mobile */}
+                {/* Line 3: tap the +code to set this user's country, then the mobile */}
                 <View style={s.waRow}>
-                  <View style={s.dialBadgeSm}><Text style={s.dialBadgeSmTxt}>+{dial}</Text></View>
+                  <TouchableOpacity style={s.dialBadgeSm} onPress={() => setPickCountryForUser(u)} activeOpacity={0.7}>
+                    <Text style={s.dialBadgeSmTxt}>{userCountryLabel(u)}</Text>
+                    <Ionicons name="chevron-down" size={12} color={COLORS.muted} style={{ marginLeft: 2 }} />
+                  </TouchableOpacity>
                   <TextInput
-                    style={s.waInput} keyboardType="phone-pad" maxLength={mobileLen}
-                    placeholder={`Mobile — ${mobileLen} digits`} placeholderTextColor={COLORS.faint}
+                    style={s.waInput} keyboardType="phone-pad" maxLength={u.mobile_length || mobileLen}
+                    placeholder={`Mobile — ${u.mobile_length || mobileLen} digits`} placeholderTextColor={COLORS.faint}
                     value={u._mobile} onChangeText={(t) => onMobileChange(u.id, t)}
                     onEndEditing={() => saveMobile(u)}
                   />
-                  {savedFlash === 'mobile:' + u.id && <Text style={s.tickInline}>✓</Text>}
+                  {(savedFlash === 'mobile:' + u.id || savedFlash === 'country:' + u.id) && <Text style={s.tickInline}>✓</Text>}
                 </View>
 
                 {(u.last_login || u.last_device) ? (
@@ -391,6 +424,36 @@ export default function LoginManagementScreen({ onBack }) {
         </TouchableOpacity>
       </Modal>
 
+      {/* Per-user country picker */}
+      <Modal visible={!!pickCountryForUser} transparent animationType="fade" onRequestClose={() => setPickCountryForUser(null)}>
+        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setPickCountryForUser(null)}>
+          <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle} numberOfLines={1}>Country — {pickCountryForUser?.name || ''}</Text>
+              <TouchableOpacity onPress={() => setPickCountryForUser(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={s.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={[{ id: false, name: `Default (+${dial})`, phone_code: dial, _default: true }, ...countries]}
+              keyExtractor={(c) => String(c.id)}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => {
+                const cur = pickCountryForUser ? (pickCountryForUser.country_id || false) : false;
+                const on = (item.id || false) === cur;
+                return (
+                  <TouchableOpacity style={[s.ccRow, on && s.ccRowOn]} onPress={() => chooseUserCountry(pickCountryForUser, item)} activeOpacity={0.8}>
+                    <Text style={s.ccRowName}>{item.name}</Text>
+                    {!item._default && <Text style={s.ccRowMeta}>+{item.phone_code}</Text>}
+                    {on && <Text style={s.ccRowTick}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Reset-password confirm popup */}
       <Modal visible={!!resetForUser} transparent animationType="fade" onRequestClose={() => setResetForUser(null)}>
         <View style={s.confirmWrap}>
@@ -445,7 +508,7 @@ export default function LoginManagementScreen({ onBack }) {
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: 'transparent' },
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 12 },
   iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', ...SHADOW },
   hTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: COLORS.navy },
@@ -484,7 +547,7 @@ const s = StyleSheet.create({
   resetBtnTxt: { fontSize: 12, fontWeight: '800', color: COLORS.red },
 
   waRow: { flexDirection: 'row', alignItems: 'center' },
-  dialBadgeSm: { backgroundColor: '#F1F4F9', borderWidth: 1, borderColor: COLORS.line, borderTopLeftRadius: 10, borderBottomLeftRadius: 10, paddingHorizontal: 10, height: 44, justifyContent: 'center' },
+  dialBadgeSm: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1F4F9', borderWidth: 1, borderColor: COLORS.line, borderTopLeftRadius: 10, borderBottomLeftRadius: 10, paddingHorizontal: 10, height: 44, justifyContent: 'center' },
   dialBadgeSmTxt: { fontSize: 14, fontWeight: '800', color: COLORS.navy },
   waInput: { flex: 1, borderWidth: 1, borderColor: COLORS.line, borderLeftWidth: 0, borderTopRightRadius: 10, borderBottomRightRadius: 10, height: 44, paddingHorizontal: 12, fontSize: 15, color: COLORS.ink, backgroundColor: '#fff' },
   tickInline: { fontSize: 16, color: COLORS.green, fontWeight: '900', marginLeft: 8 },
@@ -529,6 +592,7 @@ const s = StyleSheet.create({
   ccRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F1F4F9' },
   ccRowOn: { backgroundColor: '#F0F5FF' },
   ccRowName: { flex: 1, fontSize: 15, color: COLORS.ink, fontWeight: '600' },
+  ccRowMeta: { fontSize: 13, color: COLORS.muted, marginRight: 8 },
   ccRowTick: { color: COLORS.primary, fontSize: 15, fontWeight: '900' },
 
   // Reset-password confirm popup

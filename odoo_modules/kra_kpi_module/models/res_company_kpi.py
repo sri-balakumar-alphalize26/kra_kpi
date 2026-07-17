@@ -40,6 +40,15 @@ class ResCompany(models.Model):
         help="Minutes with no heartbeat (tab closed / machine asleep) before a "
              "running task auto-pauses as 'Away'. Read by the browser and the server.")
 
+    # ---- Attendance (Admin Live Tracking) -------------------------------- #
+    attendance_cutoff_hour = fields.Float(
+        string='Attendance Cutoff (IST hour)',
+        default=10.667,
+        help="Local (IST) hour that separates on-time from late. A developer whose "
+             "first workday login is after this reads 'Late (came HH:MM)'; one with "
+             "NO login once this hour has passed reads 'Absent'. 10.667 = 10:40. "
+             "Read by /kpi_owner/live_tracking.")
+
     client_approval_minutes = fields.Integer(
         string='Client Approval Window (minutes)',
         default=5,

@@ -60,6 +60,23 @@ class ResUsers(models.Model):
     kpi_last_app_login = fields.Datetime(string='Last App Login', copy=False)
     kpi_last_device = fields.Char(string='Last Device', copy=False)
 
+    # ---- Per-person mobile country (overrides the company default) -------- #
+    # A client/developer in another country (e.g. Oman +968, 8 digits) can have
+    # their OWN dial code + local length instead of the single global company
+    # value. Empty -> falls back to the company's KPI country
+    # (res_company_kpi._kpi_mobile_cfg). Drives BOTH the app-login mobile and the
+    # WhatsApp number for this person.
+    kpi_mobile_country_id = fields.Many2one(
+        'res.country', string='App Mobile Country',
+        help="This person's phone country. Sets the dial code (e.g. +968 Oman) and "
+             "the typical local length for their app-login mobile AND WhatsApp "
+             "number. Empty uses the company default from the Configuration screen.")
+    kpi_mobile_length = fields.Integer(
+        string='App Mobile Length',
+        help="Local digit count for this person's number (excluding the dial code). "
+             "Auto-filled from their country (Oman 8, India 10); 0 falls back to the "
+             "company default.")
+
     # ---- App role (User / Client / Admin) -------------------------------- #
     # A simple 3-way role selector shown in Settings -> Users, right under the
     # base "Role: User / Administrator". It just maps to the KRA/KPI groups:
@@ -114,6 +131,25 @@ class ResUsers(models.Model):
             # the implied groups (e.g. Owner -> Coordinator -> Developer -> user).
             cmds = [(3, g.id) for g in role_groups] + [(4, target.id)]
             u.sudo().write({'group_ids': cmds})
+
+    # ---- Per-person mobile dial code + length ---------------------------- #
+    def _kpi_user_mobile_cfg(self):
+        """(dial_digits, local_length) for THIS user's mobile/WhatsApp numbers.
+
+        Uses the person's own country (kpi_mobile_country_id) when set — so an
+        Oman user routes to +968 / 8 digits while others stay +91 / 10 — and
+        otherwise falls back to the company-wide KPI country default. Single
+        choke point every sender/normalizer resolves the code through.
+        """
+        self.ensure_one()
+        country = self.kpi_mobile_country_id
+        if country:
+            from .res_company_kpi import COUNTRY_MOBILE_LENGTH
+            dial = ''.join(filter(str.isdigit, str(country.phone_code or ''))) or '91'
+            length = self.kpi_mobile_length or COUNTRY_MOBILE_LENGTH.get(
+                country.code, self.env.company.kpi_mobile_length or 10)
+            return dial, length
+        return self.env.company._kpi_mobile_cfg()
 
     # ---- Password hashing (reuses Odoo's own passlib crypt context) ------ #
     def _set_app_password(self, raw):

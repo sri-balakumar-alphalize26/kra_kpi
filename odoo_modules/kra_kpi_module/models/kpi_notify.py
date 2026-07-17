@@ -65,6 +65,12 @@ _PERSIST_EVENTS = {
     # "The daily employee task report (PDF) is ready" → admins. Tapping it opens
     # the generated report (kpi.notification.report_id). App-only, like daily_summary.
     'daily_report',
+    # Client invoices — app-only, tap opens the invoice (kpi.notification.invoice_id).
+    # invoice_ready/invoice_paid → the client (via extra_users); invoice_client_paid
+    # → admins ("client says they've paid — confirm it").
+    'invoice_ready',
+    'invoice_paid',
+    'invoice_client_paid',
     'task_reassigned',  # tell the PREVIOUS assignee their task moved to someone else
     # In-app client approval: the client must see the request in the app (this used
     # to be WhatsApp-only, so nothing was ever persisted for it), and dev+admin must
@@ -137,6 +143,9 @@ _NOTIF_TITLES = {
     'workday_started':      'Workday started',
     'daily_summary':        'Workday ended',
     'daily_report':         'Daily report ready',
+    'invoice_ready':        'Invoice ready',
+    'invoice_paid':         'Payment recorded',
+    'invoice_client_paid':  'Client marked invoice paid',
     'dev_idle_check':       'Not started a task yet?',
     'dev_no_task':          '📭 Developer has no tasks',
 }
@@ -229,6 +238,20 @@ _APP_TEMPLATES = {
         "📄 Daily task report ready — {date}\n"
         "👥 {employee_count} employee(s) • ✅ {task_count} task(s)\n"
         "Tap to open and download the report."
+    ),
+    # Client invoice events — PASSTHROUGH (only ctx keys: {name}). Tapping opens the
+    # invoice (kpi.notification.invoice_id). App-only, no WhatsApp template.
+    'invoice_ready': (
+        "📄 Your invoice {name} is ready.\n"
+        "Tap to view and download it."
+    ),
+    'invoice_paid': (
+        "✅ Payment recorded for invoice {name}.\n"
+        "Thank you — tap to view it."
+    ),
+    'invoice_client_paid': (
+        "💰 The client marked invoice {name} as paid.\n"
+        "Tap to review and confirm the payment."
     ),
     # Asked of the DEVELOPER, not an admin. The three answers map to
     # /kpi_workday/idle_reason.
@@ -410,6 +433,12 @@ _EVENT_RECIPIENTS = {
     'daily_summary':             ('owner', 'coordinator'),
     # Daily employee task report (PDF) — owner + coordinator.
     'daily_report':              ('owner', 'coordinator'),
+    # Invoice → client: recipients come purely via extra_users (the invoice's own
+    # client_user_ids), so the role matrix is empty here.
+    'invoice_ready':             (),
+    'invoice_paid':              (),
+    # Client → admins: "the client marked it paid, confirm it".
+    'invoice_client_paid':       ('owner', 'coordinator'),
     # Workday-started — owner + coordinator hear "dev X started their day".
     'workday_started':           ('owner', 'coordinator'),
     # Asked of the DEVELOPER first — a 10-min silence is usually a meeting, not a
@@ -641,6 +670,7 @@ _TEMPLATES = {
 # bypass _format_message's per-record parameter assembly.  Used for non-
 # kra.kpi-anchored events like daily_summary / workday_started.
 _PASSTHROUGH_EVENTS = ('daily_summary', 'daily_report',
+                       'invoice_ready', 'invoice_paid', 'invoice_client_paid',
                        'workday_started', 'workday_auto_closed',
                        'task_auto_away', 'self_task_submitted', 'self_task_accepted',
                        'self_task_rejected', 'task_reassigned',
@@ -743,6 +773,11 @@ class KpiNotify(models.Model):
                 _report_id = self.env.context.get('kpi_daily_report_id')
                 if _report_id and created:
                     created.sudo().write({'report_id': _report_id})
+                # Same mechanism for a client invoice: tapping the row opens the
+                # invoice (kpi.notification.invoice_id).
+                _invoice_id = self.env.context.get('kpi_invoice_id')
+                if _invoice_id and created:
+                    created.sudo().write({'invoice_id': _invoice_id})
                 _logger.info(
                     "in-app notify persisted: kpi=%s event=%s recipients=%s rows=%s",
                     self.id, event, len(notif_recipients), len(created),
@@ -1044,6 +1079,9 @@ class KpiNotify(models.Model):
             _snap_id = self.env.context.get('kpi_snapshot_id')
             if _snap_id:
                 _push_data['snapshot_id'] = _snap_id
+            _inv_id = self.env.context.get('kpi_invoice_id')
+            if _inv_id:
+                _push_data['invoice_id'] = _inv_id
             messages = [{
                 'to': tok,
                 'title': title,

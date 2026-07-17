@@ -35,3 +35,25 @@ export async function fetchSnapshotImage(snapshotId) {
   log.info('snapshot image ←', { id: snapshotId, status: res?.status, name: res?.file_name });
   return res || { status: false };
 }
+
+// ── My Snapshots — the current user's OWN days only ──────────────────────────
+// Hard-scoped server-side to request.env.user (the route ignores any user_id), so
+// a regular user only ever gets their own snapshot images.
+export async function fetchMySnapshots(limitDays = 30) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) {
+    log.info('fetchMySnapshots — no server, mock');
+    return { status: true, days: [], isMock: true };
+  }
+  const res = await jsonRpc(serverUrl, '/kpi_workday_snapshot/my_list', { limit_days: limitDays });
+  log.info('my snapshots ←', { days: res?.days?.length ?? 0, status: res?.status });
+  return res || { status: false, days: [] };
+}
+
+export async function fetchMySnapshotImage(snapshotId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'No server' };
+  const res = await jsonRpc(serverUrl, '/kpi_workday_snapshot/my_image_b64', { snapshot_id: snapshotId });
+  log.info('my snapshot image ←', { id: snapshotId, status: res?.status, name: res?.file_name });
+  return res || { status: false };
+}

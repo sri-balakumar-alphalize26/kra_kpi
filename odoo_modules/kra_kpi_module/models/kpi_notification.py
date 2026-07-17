@@ -59,6 +59,15 @@ class KpiNotification(models.Model):
         ondelete='set null',
         index=True,
     )
+    # What to open when an invoice notification is TAPPED — the client invoice
+    # (kpi.client.invoice). Same ondelete='set null' rationale as report_id/snapshot_id:
+    # deleting an invoice must not delete the notification that mentioned it.
+    invoice_id = fields.Many2one(
+        'kpi.client.invoice',
+        string='Client Invoice',
+        ondelete='set null',
+        index=True,
+    )
     # Free-text event key mirroring kpi.action.log.event, e.g.
     #   task_created, task_assigned, reassigned, self_task_submitted
     event = fields.Char(string='Event', required=True, index=True)

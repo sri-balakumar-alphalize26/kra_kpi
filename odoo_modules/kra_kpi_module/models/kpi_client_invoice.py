@@ -1,7 +1,10 @@
 import json
+import logging
 
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
+
+_logger = logging.getLogger(__name__)
 
 
 def _kind_from_ref(ref):
@@ -51,6 +54,13 @@ class KpiClientInvoice(models.Model):
         'res.users', string='Marked Paid By', readonly=True, copy=False,
     )
     payment_notes = fields.Text(string='Payment Notes', help='Optional note recorded on payment.')
+    # Client-side "I've paid" claim: the client can flag that they've paid (which
+    # notifies admins to confirm). It does NOT set payment_status — only an admin's
+    # Mark Paid does that. Cleared automatically once actually marked paid.
+    client_paid_claim = fields.Boolean(
+        string='Client Marked Paid', default=False, copy=False,
+        help="The client indicated they've paid this invoice; awaiting admin confirmation.")
+    client_paid_claim_date = fields.Datetime(string='Client Paid-Claim On', readonly=True, copy=False)
     line_ids = fields.One2many('kpi.client.invoice.line', 'invoice_id', string='Lines')
     notes = fields.Html(string='Overall Notes')
 
@@ -313,6 +323,22 @@ class KpiClientInvoice(models.Model):
 
         return {'lines_created': len(self.line_ids.filtered(lambda l: l.line_type == 'kpi'))}
 
+    def _fire_invoice_notification(self, event, user_ids=None):
+        """Fire an app-only notification for this invoice (push + in-app feed).
+        `_notify` lives on kra.kpi, so we anchor on any task and thread the invoice
+        id (→ tap-through) + recipients through context/extra_users — the same
+        pattern as kpi.daily.report._notify_admins. Never raises."""
+        self.ensure_one()
+        try:
+            anchor = self.env['kra.kpi'].sudo().search([], order='id desc', limit=1)
+            if not anchor:
+                _logger.info("invoice notify: no kra.kpi to anchor; skipping %s", event)
+                return
+            anchor.with_context(kpi_invoice_id=self.id)._notify(
+                event, extra_users=list(user_ids or []), name=self.name or '')
+        except Exception as exc:
+            _logger.warning("invoice %s notify failed: %s", event, exc)
+
     def action_finalize(self):
         for inv in self:
             if inv.state != 'draft':
@@ -323,6 +349,8 @@ class KpiClientInvoice(models.Model):
             if locked:
                 locked.unlink()
             inv.state = 'finalized'
+            # The invoice is now visible to the client — tell them it's ready.
+            inv._fire_invoice_notification('invoice_ready', inv.client_kra_id.client_user_ids.ids)
 
     def action_send(self):
         for inv in self:
@@ -345,7 +373,10 @@ class KpiClientInvoice(models.Model):
                 'payment_date':   fields.Datetime.now(),
                 'paid_by_id':     self.env.user.id,
                 'payment_notes':  (note or '').strip() or False,
+                'client_paid_claim': False,   # confirmed → clear any pending client claim
             })
+            # Receipt confirmation to the client.
+            inv._fire_invoice_notification('invoice_paid', inv.client_kra_id.client_user_ids.ids)
 
     def action_mark_unpaid(self, note=''):
         """Revert a 'paid' invoice back to 'unpaid' (e.g. payment bounced
@@ -490,6 +521,8 @@ class KpiClientInvoice(models.Model):
             'filter_kpi_ids': [{'id': k.id, 'name': k.name} for k in self.filter_kpi_ids],
             'filter_sub_kra_ids': [{'id': k.id, 'name': k.name} for k in self.filter_sub_kra_ids],
             'payment_notes': self.payment_notes or '',
+            'client_paid_claim': self.client_paid_claim,
+            'client_paid_claim_date': fields.Datetime.to_string(self.client_paid_claim_date) if self.client_paid_claim_date else '',
         })
         return result
 

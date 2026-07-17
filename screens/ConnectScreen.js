@@ -5,7 +5,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Image,
   KeyboardAvoidingView, Platform, ActivityIndicator, Keyboard, Animated, Easing, Dimensions,
-  StatusBar as RNStatusBar,
+  StatusBar as RNStatusBar, Modal, Pressable,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { BlurView } from 'expo-blur';
@@ -275,8 +275,7 @@ export default function ConnectScreen({ onLogin, goBack, visible = true }) {
             </View>
             <Text style={s.stepTitle}>Database</Text>
           </View>
-          {/* Relative wrapper so the dropdown can float absolutely below the
-              selector without pushing the Credentials fields down. */}
+          {/* The selector button; tapping it opens the database list in a Modal. */}
           <View style={s.dbWrap}>
             <TouchableOpacity
               activeOpacity={0.8}
@@ -291,9 +290,31 @@ export default function ConnectScreen({ onLogin, goBack, visible = true }) {
                 <Ionicons name={dbOpen ? 'chevron-up' : 'chevron-down'} size={20} color={COLORS.muted} />
               )}
             </TouchableOpacity>
-            {dbOpen && databases.length > 0 && (
-              <View style={s.dropdown}>
-                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{ maxHeight: 220 }}>
+          </View>
+
+          {/* Database list — presented in a Modal so its ScrollView lives in its
+              own native layer (outside the page ScrollView) and always scrolls,
+              even with many databases. */}
+          <Modal
+            visible={dbOpen && databases.length > 0}
+            transparent
+            animationType="fade"
+            statusBarTranslucent
+            onRequestClose={() => setDbOpen(false)}
+          >
+            <Pressable style={s.dbBackdrop} onPress={() => setDbOpen(false)}>
+              <Pressable style={s.dbSheet} onPress={() => {}}>
+                <View style={s.dbSheetHead}>
+                  <Text style={s.dbSheetTitle}>Select a database</Text>
+                  <TouchableOpacity onPress={() => setDbOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Ionicons name="close" size={22} color={COLORS.muted} />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView
+                  style={s.dbSheetList}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator
+                >
                   {databases.map((item) => (
                     <TouchableOpacity
                       key={item}
@@ -305,9 +326,9 @@ export default function ConnectScreen({ onLogin, goBack, visible = true }) {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
-              </View>
-            )}
-          </View>
+              </Pressable>
+            </Pressable>
+          </Modal>
           {errors.db ? <Text style={s.errTxt}>{errors.db}</Text> : null}
 
           {/* Step 3 — Credentials */}
@@ -431,13 +452,23 @@ const s = StyleSheet.create({
   // DB selector wrapper keeps the field's gap; high zIndex so the floating
   // dropdown renders above the Credentials fields below it.
   dbWrap: { position: 'relative', marginBottom: 12, zIndex: 20 },
-  // Floating dropdown — absolute so it overlays (doesn't push) the fields below.
-  dropdown: {
-    position: 'absolute', top: 60, left: 0, right: 0, zIndex: 30,
-    borderWidth: 1.5, borderColor: '#E7ECF3', borderRadius: 13, backgroundColor: '#fff',
-    shadowColor: '#0B2A6B', shadowOpacity: 0.18, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 14,
-    overflow: 'hidden',
+  // Database picker — a Modal overlay. Its ScrollView is in its own native layer
+  // (not nested in the page ScrollView), so it always scrolls with many databases.
+  dbBackdrop: {
+    flex: 1, backgroundColor: 'rgba(11,42,107,0.45)',
+    alignItems: 'center', justifyContent: 'center', padding: 24,
   },
+  dbSheet: {
+    width: '100%', maxWidth: 440, maxHeight: '75%',
+    backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden',
+    shadowColor: '#0B2A6B', shadowOpacity: 0.25, shadowRadius: 20, shadowOffset: { width: 0, height: 10 }, elevation: 20,
+  },
+  dbSheetHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EEF1F6',
+  },
+  dbSheetTitle: { fontSize: 16, fontWeight: '800', color: COLORS.ink },
+  dbSheetList: { flexGrow: 0, flexShrink: 1 },
   dropItem: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F3F8',

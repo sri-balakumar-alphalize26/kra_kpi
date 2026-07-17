@@ -9,7 +9,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
-  RefreshControl, Platform, Alert,
+  RefreshControl, Platform, StatusBar as RNStatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -21,6 +21,7 @@ import { fetchDailyReports, fetchDailyReportFile } from '../services/dailyReport
 import { createLogger } from '../api/logger';
 
 const log = createLogger('DailyReports');
+const TOP = (RNStatusBar.currentHeight || 0) + 12;
 
 export default function DailyReports({ onBack, focusReportId }) {
   const [loading, setLoading] = useState(true);
@@ -28,7 +29,10 @@ export default function DailyReports({ onBack, focusReportId }) {
   const [error, setError] = useState(null);
   const [reports, setReports] = useState([]);
   const [busyId, setBusyId] = useState(null);   // `${id}-view` | `${id}-dl`
+  const [banner, setBanner] = useState(null);    // { kind:'ok'|'err', msg } — download/view toast
   const focusedRef = useRef(null);               // only auto-open once per arrival
+
+  const flash = (kind, msg) => { setBanner({ kind, msg }); setTimeout(() => setBanner(null), 3500); };
 
   const load = useCallback(async () => {
     setError(null);
@@ -58,7 +62,7 @@ export default function DailyReports({ onBack, focusReportId }) {
   const cachePdf = async (report) => {
     const res = await fetchDailyReportFile(report.id);
     if (!res?.status || !res.data_b64) {
-      Alert.alert('Report', res?.message || 'Could not fetch the PDF.');
+      flash('err', res?.message || 'Could not fetch the PDF.');
       return null;
     }
     const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
@@ -74,6 +78,28 @@ export default function DailyReports({ onBack, focusReportId }) {
     try {
       const c = await cachePdf(report);
       if (!c) return;
+
+      // Android: fire an ACTION_VIEW intent so the system "Open with" chooser
+      // lists every installed PDF reader. Needs a content:// URI + a read grant.
+      // If the native module isn't linked yet (before a rebuild) or no viewer is
+      // found, fall through to the share sheet below.
+      if (Platform.OS === 'android') {
+        try {
+          // Lazy require: before the rebuild the native module isn't linked, so
+          // this throws here (caught) rather than crashing the screen on import.
+          const IntentLauncher = require('expo-intent-launcher');
+          const contentUri = await FileSystem.getContentUriAsync(c.uri);
+          await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+            data: contentUri,
+            flags: 1,   // FLAG_GRANT_READ_URI_PERMISSION
+            type: 'application/pdf',
+          });
+          return;
+        } catch (e) {
+          log.warn('intent view failed, falling back to share', e?.message);
+        }
+      }
+
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(c.uri, {
           mimeType: 'application/pdf',
@@ -81,11 +107,11 @@ export default function DailyReports({ onBack, focusReportId }) {
           UTI: 'com.adobe.pdf',
         });
       } else {
-        Alert.alert('Report', 'No app available to open PDFs on this device.');
+        flash('err', 'No app available to open PDFs on this device.');
       }
     } catch (e) {
       log.warn('view failed', e?.message);
-      Alert.alert('Report', 'Could not open the PDF.');
+      flash('err', 'Could not open the PDF.');
     } finally {
       setBusyId(null);
     }
@@ -96,7 +122,7 @@ export default function DailyReports({ onBack, focusReportId }) {
     try {
       const res = await fetchDailyReportFile(report.id);
       if (!res?.status || !res.data_b64) {
-        Alert.alert('Report', res?.message || 'Could not fetch the PDF.');
+        flash('err', res?.message || 'Could not fetch the PDF.');
         return;
       }
       let name = res.file_name || `daily-report-${report.report_date}.pdf`;
@@ -105,12 +131,12 @@ export default function DailyReports({ onBack, focusReportId }) {
       const SAF = FileSystem.StorageAccessFramework;
       if (Platform.OS === 'android' && SAF) {
         const perm = await SAF.requestDirectoryPermissionsAsync();
-        if (!perm.granted) { Alert.alert('Download', 'Download cancelled — no folder chosen.'); return; }
+        if (!perm.granted) { flash('err', 'Download cancelled — no folder chosen.'); return; }
         const dot = name.lastIndexOf('.');
         const bare = dot > 0 ? name.slice(0, dot) : name;   // SAF re-appends the ext from the mime
         const uri = await SAF.createFileAsync(perm.directoryUri, bare, 'application/pdf');
         await FileSystem.writeAsStringAsync(uri, res.data_b64, { encoding: FileSystem.EncodingType.Base64 });
-        Alert.alert('Saved', `Saved ${name}`);
+        flash('ok', `Saved ${name}`);
         return;
       }
 
@@ -120,12 +146,36 @@ export default function DailyReports({ onBack, focusReportId }) {
       await FileSystem.writeAsStringAsync(uri, res.data_b64, { encoding: FileSystem.EncodingType.Base64 });
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: `Save ${name}` });
+        flash('ok', `${name} ready`);
       } else {
-        Alert.alert('Download', 'Saving is not available on this device.');
+        flash('err', 'Saving is not available on this device.');
       }
     } catch (e) {
       log.warn('download failed', e?.message);
-      Alert.alert('Report', 'Could not download the PDF.');
+      flash('err', 'Could not download the PDF.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Share = the all-apps OS share sheet (send the PDF to WhatsApp/Gmail/etc.),
+  // as opposed to Download which saves it to a chosen folder.
+  const onShare = async (report) => {
+    setBusyId(`${report.id}-share`);
+    log.info('share: start', { report: report.id });
+    try {
+      const c = await cachePdf(report);
+      if (!c) return;
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(c.uri, { mimeType: 'application/pdf', dialogTitle: `Share ${c.name}`, UTI: 'com.adobe.pdf' });
+        log.info('share: sheet opened', { name: c.name });
+      } else {
+        log.warn('share: unavailable');
+        flash('err', 'Sharing is not available on this device.');
+      }
+    } catch (e) {
+      log.warn('share failed', e?.message);
+      flash('err', 'Could not share the PDF.');
     } finally {
       setBusyId(null);
     }
@@ -167,25 +217,40 @@ export default function DailyReports({ onBack, focusReportId }) {
               : <Ionicons name="download-outline" size={15} color={COLORS.primary} />}
             <Text style={s.btnTxt}>Download</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={s.btn} onPress={() => onShare(item)} disabled={rowBusy} activeOpacity={0.85}>
+            {busyId === `${item.id}-share`
+              ? <ActivityIndicator size="small" color={COLORS.primary} />
+              : <Ionicons name="share-social-outline" size={15} color={COLORS.primary} />}
+            <Text style={s.btnTxt}>Share</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
   };
 
   return (
-    <GradientBackground>
-      <View style={s.header}>
-        <TouchableOpacity onPress={onBack} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name="chevron-back" size={26} color={COLORS.navy} />
+    <View style={s.root}>
+      <GradientBackground />
+      <View style={[s.header, { paddingTop: TOP }]}>
+        <TouchableOpacity onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.iconBtn}>
+          <Ionicons name="chevron-back" size={24} color={COLORS.navy} />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Daily Task Reports</Text>
         <TouchableOpacity
           onPress={() => { setLoading(true); load().finally(() => setLoading(false)); }}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.iconBtn}
         >
           <Ionicons name="refresh" size={20} color={COLORS.navy} />
         </TouchableOpacity>
       </View>
+
+      {!!banner && (
+        <View style={[s.banner, banner.kind === 'ok' ? s.bannerOk : s.bannerErr]}>
+          <Ionicons name={banner.kind === 'ok' ? 'checkmark-circle' : 'alert-circle'} size={15}
+            color={banner.kind === 'ok' ? COLORS.green : COLORS.red} />
+          <Text style={[s.bannerTxt, { color: banner.kind === 'ok' ? '#065F46' : COLORS.red }]}>{banner.msg}</Text>
+        </View>
+      )}
 
       {loading ? (
         <View style={s.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>
@@ -196,6 +261,7 @@ export default function DailyReports({ onBack, focusReportId }) {
         </View>
       ) : (
         <FlatList
+          style={{ flex: 1 }}
           data={reports}
           keyExtractor={(it) => String(it.id)}
           renderItem={renderItem}
@@ -210,16 +276,22 @@ export default function DailyReports({ onBack, focusReportId }) {
           }
         />
       )}
-    </GradientBackground>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingTop: 52, paddingBottom: 12,
+    paddingHorizontal: 12, paddingBottom: 12,
   },
-  headerTitle: { fontSize: 18, fontWeight: '900', color: COLORS.navy },
+  iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', ...SHADOW },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: COLORS.navy, marginHorizontal: 8 },
+  banner: { flexDirection: 'row', alignItems: 'center', gap: 7, marginHorizontal: 14, marginBottom: 6, borderRadius: 10, paddingHorizontal: 11, paddingVertical: 9 },
+  bannerOk: { backgroundColor: COLORS.greenBg },
+  bannerErr: { backgroundColor: COLORS.redBg },
+  bannerTxt: { flex: 1, fontSize: 12.5, fontWeight: '700' },
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30, gap: 8 },
   errTxt: { fontSize: 13, color: COLORS.red, textAlign: 'center' },

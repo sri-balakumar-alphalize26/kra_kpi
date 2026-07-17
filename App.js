@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BackHandler, View, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import SplashScreen from './screens/SplashScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -16,12 +17,18 @@ import NotificationsScreen from './screens/NotificationsScreen';
 import ConfigurationScreen from './screens/ConfigurationScreen';
 import LoginManagementScreen from './screens/LoginManagementScreen';
 import WorkdaySnapshots from './screens/WorkdaySnapshots';
+import DailyReports from './screens/DailyReports';
+import CompanyBranding from './screens/CompanyBranding';
+import WorkReport from './screens/WorkReport';
+import ClientInvoices from './screens/ClientInvoices';
+import MyWorkday from './screens/MyWorkday';
 import ClientTasks from './screens/ClientTasks';
 import GenerateClientFiles from './screens/GenerateClientFiles';
 import ReassignmentHistory from './screens/ReassignmentHistory';
 import ClientTaskQueue from './screens/ClientTaskQueue';
 import StartWorkingScreen from './screens/StartWorkingScreen';
 import AppLoginScreen from './screens/AppLoginScreen';
+import ScreenTransition from './components/ScreenTransition';
 import * as session from './api/session';
 import { getConnection, getRoleState, saveRoleState } from './api/session';
 import { jsonRpc } from './api/odooApi';
@@ -46,6 +53,9 @@ Notifications.setNotificationHandler({
 export default function App() {
   return (
     <SafeAreaProvider>
+      {/* One app-wide status bar: dark icons on the transparent (edge-to-edge)
+          bar, so every screen's light background shows through — no black strip. */}
+      <StatusBar style="dark" />
       <AppInner />
     </SafeAreaProvider>
   );
@@ -61,6 +71,12 @@ function AppInner() {
   // Snapshot to auto-expand + flash on the Workday Snapshots screen, set when an
   // admin taps an "ended their workday" notification. Null on every other route.
   const [focusSnapshotId, setFocusSnapshotId] = useState(null);
+  // Report to auto-open on the Daily Reports screen, set when an admin taps a
+  // "Daily report ready" notification. Null on every other route.
+  const [focusReportId, setFocusReportId] = useState(null);
+  // Invoice to auto-open on the (My) Invoices screen, set when a notification about
+  // an invoice is tapped. Null on every other route.
+  const [focusInvoiceId, setFocusInvoiceId] = useState(null);
   const [devLocked, setDevLocked] = useState(false);  // this user is a developer who must pair
   const [devPaired, setDevPaired] = useState(false);  // developer's device is currently paired
   const [gateReady, setGateReady] = useState(false);  // role gate resolved → avoids a Home flash before the PIN gate
@@ -71,6 +87,8 @@ function AppInner() {
 
   const pushTokenRef = useRef(null);       // this device's Expo token (for logout unregister)
   const pendingTapRef = useRef(null);      // kpi_id from a tap that arrived before login/restore
+  const pendingReportRef = useRef(null);   // report_id from a "daily report ready" tap before login
+  const pendingInvoiceRef = useRef(null);  // invoice_id from an invoice notification tap before login
   const devLockedRef = useRef(false);      // latest devLocked for listeners/back-handler
   useEffect(() => { devLockedRef.current = devLocked; }, [devLocked]);
   // routeToTask is called from notification listeners registered once at mount,
@@ -94,6 +112,38 @@ function AppInner() {
       setAppScreen(isClientRef.current ? 'mytasks' : 'actionboard');
     } else {
       pendingTapRef.current = kpiId;
+    }
+  };
+
+  // Route a "daily report ready" notification tap to the Daily Reports screen,
+  // auto-opening that report. Admin-only (the Home tile + server both gate it).
+  // Same cold-start queueing as routeToTask — clear the other focus slots so a
+  // stale id can't make an unrelated row flash on the next visit.
+  const routeToReport = (reportId) => {
+    if (!reportId) return;
+    if (userRef.current) {
+      setFocusReportId(reportId);
+      setFocusTaskId(null);
+      setFocusSnapshotId(null);
+      setAppScreen('dailyreports');
+    } else {
+      pendingReportRef.current = reportId;
+    }
+  };
+
+  // Route an invoice notification tap to the invoice. A client lands on their
+  // read-only "My Invoices"; an admin on the full Client Invoices screen. Same
+  // cold-start queueing; clear the other focus slots so no stale row flashes.
+  const routeToInvoice = (invoiceId) => {
+    if (!invoiceId) return;
+    if (userRef.current) {
+      setFocusInvoiceId(invoiceId);
+      setFocusTaskId(null);
+      setFocusSnapshotId(null);
+      setFocusReportId(null);
+      setAppScreen(isClientRef.current ? 'myinvoices' : 'clientinvoices');
+    } else {
+      pendingInvoiceRef.current = invoiceId;
     }
   };
 
@@ -146,7 +196,22 @@ function AppInner() {
   // flushing on login alone would still read isClient=false and send a client
   // to the empty Action Board, which is the bug this routing exists to fix.
   useEffect(() => {
-    if (!user || !gateReady || !pendingTapRef.current) return;
+    if (!user || !gateReady) return;
+    if (pendingReportRef.current) {
+      const reportId = pendingReportRef.current;
+      pendingReportRef.current = null;
+      log.info('cold-start tap flushed → report', { reportId });
+      routeToReport(reportId);
+      return;
+    }
+    if (pendingInvoiceRef.current) {
+      const invoiceId = pendingInvoiceRef.current;
+      pendingInvoiceRef.current = null;
+      log.info('cold-start tap flushed → invoice', { invoiceId });
+      routeToInvoice(invoiceId);
+      return;
+    }
+    if (!pendingTapRef.current) return;
     const kpiId = pendingTapRef.current;
     pendingTapRef.current = null;
     log.info('cold-start tap flushed', { kpiId, isClient });
@@ -241,15 +306,22 @@ function AppInner() {
   // a killed state by tapping the banner).
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
-      const kpiId = resp?.notification?.request?.content?.data?.kpi_id;
-      log.info('notification tapped', { kpiId });
-      routeToTask(kpiId);
+      const data = resp?.notification?.request?.content?.data || {};
+      log.info('notification tapped', { kpiId: data.kpi_id, reportId: data.report_id, invoiceId: data.invoice_id });
+      // Invoice / daily-report pushes carry an anchor kpi_id too — the specific
+      // tap-target (invoice_id / report_id) wins so it opens the right screen,
+      // not the unrelated anchor task.
+      if (data.invoice_id) routeToInvoice(data.invoice_id);
+      else if (data.report_id) routeToReport(data.report_id);
+      else routeToTask(data.kpi_id);
     });
     (async () => {
       try {
         const last = await Notifications.getLastNotificationResponseAsync();
-        const kpiId = last?.notification?.request?.content?.data?.kpi_id;
-        if (kpiId) { log.info('cold-start notification tap', { kpiId }); routeToTask(kpiId); }
+        const data = last?.notification?.request?.content?.data || {};
+        if (data.invoice_id) { log.info('cold-start tap → invoice', { invoiceId: data.invoice_id }); routeToInvoice(data.invoice_id); }
+        else if (data.report_id) { log.info('cold-start tap → report', { reportId: data.report_id }); routeToReport(data.report_id); }
+        else if (data.kpi_id) { log.info('cold-start notification tap', { kpiId: data.kpi_id }); routeToTask(data.kpi_id); }
       } catch (_) {}
     })();
     return () => sub.remove();
@@ -263,6 +335,8 @@ function AppInner() {
     setScreen('login');
     setAppScreen('home');
     setFocusTaskId(null);
+    setFocusReportId(null);
+    setFocusInvoiceId(null);
     setDevLocked(false);
     setDevPaired(false);
     setGateReady(false);
@@ -284,8 +358,12 @@ function AppInner() {
     const open = (dest, param) => {
       log.info('open', dest, param);
       const isSnap = dest === 'snapshots';
+      const isReport = dest === 'dailyreports';
+      const isInvoice = dest === 'myinvoices' || dest === 'clientinvoices';
       setFocusSnapshotId(isSnap ? (param ?? null) : null);
-      setFocusTaskId(isSnap ? null : (param ?? null));
+      setFocusReportId(isReport ? (param ?? null) : null);
+      setFocusInvoiceId(isInvoice ? (param ?? null) : null);
+      setFocusTaskId(isSnap || isReport || isInvoice ? null : (param ?? null));
       setAppScreen(dest);
     };
 
@@ -320,6 +398,9 @@ function AppInner() {
     // which meant the midnight auto-close un-paired them and then hid the very
     // notification telling them why.) `workdayLocked` below drives the read-only
     // UI; this route is just the PIN screen itself.
+    // Every post-login screen is rendered through renderScreen() so ScreenTransition
+    // can play the same open animation for all of them — every option, every role.
+    const renderScreen = () => {
     if (appScreen === 'startworking') {
       return (
         <StartWorkingScreen
@@ -366,6 +447,26 @@ function AppInner() {
       // focusSnapshotId: set when an admin taps the "ended their workday"
       // notification → that day + developer auto-expand and the image flashes.
       return <WorkdaySnapshots onBack={home} focusSnapshotId={focusSnapshotId} />;
+    if (appScreen === 'mysnapshots')
+      // Self-scoped: every user sees ONLY their own workday snapshot images
+      // (server route is hard-scoped to request.env.user).
+      return <WorkdaySnapshots onBack={home} mine />;
+    if (appScreen === 'dailyreports')
+      // focusReportId: set when an admin taps a "Daily report ready" notification
+      // → the Daily Reports screen opens that report's PDF.
+      return <DailyReports onBack={home} focusReportId={focusReportId} />;
+    if (appScreen === 'companybranding')
+      return <CompanyBranding onBack={home} />;
+    if (appScreen === 'workreport')
+      return <WorkReport onBack={home} />;
+    if (appScreen === 'clientinvoices')
+      return <ClientInvoices onBack={home} focusInvoiceId={focusInvoiceId} />;
+    if (appScreen === 'myinvoices')
+      // Client-facing read-only invoices (server record rule scopes to their own finalized/sent).
+      return <ClientInvoices onBack={home} portal focusInvoiceId={focusInvoiceId} />;
+    if (appScreen === 'myworkday')
+      // Every user's OWN daily workday report (self-scoped server-side).
+      return <MyWorkday onBack={home} />;
     if (appScreen === 'mytasks')
       // focusTaskId: set when a client taps a notification → the row scrolls into
       // view and flashes, mirroring the board's behaviour for developers.
@@ -402,6 +503,14 @@ function AppInner() {
         workdayLocked={workdayLocked}
         onNeedPair={() => setAppScreen('startworking')}
       />
+    );
+    };  // end renderScreen
+
+    // key by appScreen so each navigation replays the enter animation.
+    return (
+      <ScreenTransition screenKey={appScreen}>
+        {renderScreen()}
+      </ScreenTransition>
     );
   }
 

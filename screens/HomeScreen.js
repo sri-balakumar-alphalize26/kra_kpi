@@ -59,20 +59,46 @@ const STAT_W = (SW - PAD * 2 - 12) / 2;  // stat card width (2 per row, 12 gap)
 // adminOnly tiles are hidden from regular users (only admin/owner/system see
 // them); the KPI Action Board is the one tile everyone gets.
 const QUICK = [
-  { label: 'Owner Dashboard',    lib: 'mc',  name: 'view-dashboard',   dest: 'owner',              adminOnly: true,  bg: '#E0ECFF', fg: '#2563EB' },
-  { label: 'KRA / KPI Master',   lib: 'mc',  name: 'file-tree',        dest: 'dashboard',          adminOnly: true,  bg: '#EDE9FE', fg: '#7C3AED' },
-  { label: 'KPI Action Board',   lib: 'mc',  name: 'clipboard-check',  dest: 'actionboard',        adminOnly: false, bg: '#DCFCE7', fg: '#16A34A' },
-  { label: 'Upload Requirements', lib: 'mc', name: 'file-document',    dest: 'upload:requirement', adminOnly: true,  bg: '#FEF3C7', fg: '#D97706' },
-  { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true,  bg: '#FFEDD5', fg: '#EA580C' },
-  { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true,  bg: '#FEE2E2', fg: '#DC2626' },
-  { label: 'Client Task Queue',  lib: 'mc',  name: 'inbox-arrow-down', dest: 'taskqueue',          adminOnly: true,  bg: '#FEF3C7', fg: '#D97706' },
-  { label: 'Generate Client Files', lib: 'mc', name: 'folder-zip',     dest: 'clientfiles',        adminOnly: true,  bg: '#E0F2FE', fg: '#0284C7' },
-  { label: 'Reassignment History', lib: 'mc', name: 'swap-horizontal', dest: 'reassignhistory',    adminOnly: true,  bg: '#F3E8FF', fg: '#9333EA' },
-  { label: 'Login Management',   lib: 'mc',  name: 'account-key',      dest: 'loginmgmt',          adminOnly: true,  bg: '#EDE9FE', fg: '#7C3AED' },
-  { label: 'Workday Snapshots',  lib: 'mc',  name: 'camera-timer',     dest: 'snapshots',          adminOnly: true,  bg: '#CFFAFE', fg: '#0891B2' },
-  { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true,  bg: '#E2E8F0', fg: '#475569' },
-  { label: 'My Requests',        lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  bg: '#DCFCE7', fg: '#16A34A' },
+  { label: 'Owner Dashboard',    lib: 'mc',  name: 'view-dashboard',   dest: 'owner',              adminOnly: true,  section: 'main',     bg: '#E0ECFF', fg: '#2563EB' },
+  { label: 'KRA / KPI Master',   lib: 'mc',  name: 'file-tree',        dest: 'dashboard',          adminOnly: true,  section: 'main',     bg: '#EDE9FE', fg: '#7C3AED' },
+  { label: 'KPI Action Board',   lib: 'mc',  name: 'clipboard-check',  dest: 'actionboard',        adminOnly: false, section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
+  { label: 'My Workday',         lib: 'mc',  name: 'calendar-clock',   dest: 'myworkday',          adminOnly: false, section: 'reports',  bg: '#CFFAFE', fg: '#0E7490' },
+  { label: 'My Snapshots',       lib: 'mc',  name: 'camera-account',   dest: 'mysnapshots',        adminOnly: false, section: 'reports',  bg: '#E0F2FE', fg: '#0369A1' },
+  { label: 'Upload Requirements', lib: 'mc', name: 'file-document',    dest: 'upload:requirement', adminOnly: true,  section: 'main',     bg: '#FEF3C7', fg: '#D97706' },
+  { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true,  section: 'main',     bg: '#FFEDD5', fg: '#EA580C' },
+  { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true,  section: 'main',     bg: '#FEE2E2', fg: '#DC2626' },
+  { label: 'Client Task Queue',  lib: 'mc',  name: 'inbox-arrow-down', dest: 'taskqueue',          adminOnly: true,  section: 'main',     bg: '#FEF3C7', fg: '#D97706' },
+  { label: 'Generate Client Files', lib: 'mc', name: 'folder-zip',     dest: 'clientfiles',        adminOnly: true,  section: 'main',     bg: '#E0F2FE', fg: '#0284C7' },
+  { label: 'Reassignment History', lib: 'mc', name: 'swap-horizontal', dest: 'reassignhistory',    adminOnly: true,  section: 'settings', bg: '#F3E8FF', fg: '#9333EA' },
+  { label: 'Login Management',   lib: 'mc',  name: 'account-key',      dest: 'loginmgmt',          adminOnly: true,  section: 'settings', bg: '#EDE9FE', fg: '#7C3AED' },
+  { label: 'Workday Snapshots',  lib: 'mc',  name: 'camera-timer',     dest: 'snapshots',          adminOnly: true,  section: 'reports',  bg: '#CFFAFE', fg: '#0891B2' },
+  { label: 'Daily Reports',      lib: 'mc',  name: 'file-chart',       dest: 'dailyreports',       adminOnly: true,  section: 'reports',  bg: '#DBEAFE', fg: '#4338CA' },
+  { label: 'Work Report',        lib: 'mc',  name: 'chart-box-outline', dest: 'workreport',        adminOnly: true,  section: 'reports',  bg: '#E0F2FE', fg: '#0369A1' },
+  { label: 'Client Invoices',    lib: 'mc',  name: 'receipt',          dest: 'clientinvoices',     adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },
+  // Client-facing read-only invoices (whitelisted for clients below; adminOnly hides it from developers).
+  { label: 'My Invoices',        lib: 'mc',  name: 'receipt-text-outline', dest: 'myinvoices',      adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },
+  { label: 'Company Branding',   lib: 'mc',  name: 'palette',          dest: 'companybranding',    adminOnly: true,  section: 'settings', bg: '#FCE7F3', fg: '#DB2777' },
+  { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true,  section: 'settings', bg: '#E2E8F0', fg: '#475569' },
+  { label: 'My Requests',        lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
 ];
+
+// Menu sections (sub-headings), shown in the drawer, the Quick Actions grid, and
+// the Edit Quick Actions popup — mirroring the module's KRA / Reports / Settings
+// grouping. Every tile has a `section`; anything unset falls into 'main'.
+const SECTIONS = [
+  { key: 'main',     label: 'KRA / KPI' },
+  { key: 'reports',  label: 'Reports' },
+  { key: 'settings', label: 'Settings' },
+];
+
+// Group a tile list into [{key,label,tiles}] in SECTIONS order, preserving each
+// tile's order within its section and dropping empty sections (so a heading only
+// ever shows when it has at least one tile).
+function groupBySection(tiles) {
+  return SECTIONS
+    .map((sec) => ({ ...sec, tiles: tiles.filter((t) => (t.section || 'main') === sec.key) }))
+    .filter((g) => g.tiles.length > 0);
+}
 
 // Home stats strip — live task-status counts, keyed to the Action Board lanes
 // (groupIntoLanes / LANES). Pastel bg + accent fg mirror the board's lane hues.
@@ -375,7 +401,7 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
     setDrawerOpen(false);
     // Leave edit mode on the way out, so re-opening the drawer is back to normal
     // (tap = navigate) instead of silently still being in reorder mode.
-    // Nothing to save here: each drop already persisted via onMenuOrder →
+    // Nothing to save here: each drop already persisted via onSectionOrder →
     // saveMenuOrder, so the last arrangement is stored even if they close mid-edit.
     setMenuEditing(false);
     setMenuDragging(false);
@@ -425,12 +451,13 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
   };
 
   // Tiles the user's role is allowed to see (the full menu — always in the drawer).
-  // Role-aware: admin = everything (minus the client-only My Requests); client = the two
-  // upload tiles + My Requests; developer = the shared board (non-admin tiles).
+  // Role-aware: admin = everything (minus the client-only My Requests and the
+  // self-scoped My Workday — admins use the team-wide reports instead); client =
+  // the two upload tiles + My Requests; developer = the shared board (non-admin tiles).
   const roleTiles = isAdmin
-    ? QUICK.filter((q) => q.dest !== 'mytasks')
+    ? QUICK.filter((q) => q.dest !== 'mytasks' && q.dest !== 'myworkday')
     : role === 'client'
-      ? QUICK.filter((q) => ['upload:requirement', 'upload:update', 'upload:bug', 'mytasks'].includes(q.dest))
+      ? QUICK.filter((q) => ['upload:requirement', 'upload:update', 'upload:bug', 'mytasks', 'myinvoices'].includes(q.dest))
       : QUICK.filter((q) => !q.adminOnly);
 
   // Quick Actions customization: which of the role tiles show on the Home grid.
@@ -482,11 +509,23 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
     return out;
   }, [roleTiles, menuOrder]);
 
-  const onMenuOrder = useCallback(async (keys) => {
-    setMenuOrder(keys);
-    await saveMenuOrder(uid, keys);
-    log.info('menu order saved', { keys });
-  }, [uid]);
+  // Reorder WITHIN a section — a drag never crosses a heading, so there's no
+  // "moved to another section" step and nothing to confirm. Rebuild the flat saved
+  // order: each section in SECTIONS order, using the new within-section order for
+  // the one that changed and the current order for the rest.
+  const onSectionOrder = useCallback(async (sectionKey, keys) => {
+    const grouped = groupBySection(menuTiles);
+    const flat = [];
+    SECTIONS.forEach((sec) => {
+      const g = grouped.find((x) => x.key === sec.key);
+      if (!g) return;
+      if (sec.key === sectionKey) flat.push(...keys);
+      else flat.push(...g.tiles.map((t) => t.dest));
+    });
+    setMenuOrder(flat);
+    await saveMenuOrder(uid, flat);
+    log.info('menu order saved', { sectionKey, flat });
+  }, [menuTiles, uid]);
 
   const openEdit = () => {
     // Seed the draft from the current selection (or all, if not customized yet).
@@ -630,9 +669,19 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
           <ActivityIndicator color={COLORS.primary} />
         </View>
       ) : (
-        <View style={s.grid}>
-          {gridTiles.map((q, i) => (
-            <AnimatedTile key={q.label} q={q} index={i} onPress={() => onTile(q)} />
+        // Grouped by section — a sub-heading appears above a group only when it
+        // has at least one shown tile (e.g. add Configuration → a "Settings"
+        // heading shows above it).
+        <View>
+          {groupBySection(gridTiles).map((g) => (
+            <View key={g.key}>
+              <Text style={s.gridSection}>{g.label}</Text>
+              <View style={s.grid}>
+                {g.tiles.map((q, i) => (
+                  <AnimatedTile key={q.label} q={q} index={i} onPress={() => onTile(q)} />
+                ))}
+              </View>
+            </View>
           ))}
         </View>
       )}
@@ -689,18 +738,23 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
               moves, leaving the lifted row stuck in place. */}
           <ScrollView showsVerticalScrollIndicator={false} scrollEnabled={!menuDragging}>
             {isAdmin === null && <ActivityIndicator color={COLORS.primary} style={{ marginTop: 20 }} />}
-            {isAdmin !== null && (
-              <ReorderableMenu
-                items={menuTiles}
-                // Can never be "editing" with one item: the pencil is hidden there,
-                // so there'd be no way to switch it off — and editing disables
-                // tapping, which would leave that lone tile permanently dead.
-                editing={menuEditing && menuTiles.length > 1}
-                onPress={onTile}
-                onOrder={onMenuOrder}
-                onDragStateChange={setMenuDragging}
-              />
-            )}
+            {/* One group per section, each with its sub-heading. Reorder stays
+                within a section (drag never crosses a heading). */}
+            {isAdmin !== null && groupBySection(menuTiles).map((g) => (
+              <View key={g.key}>
+                <Text style={s.menuSection}>{g.label}</Text>
+                <ReorderableMenu
+                  items={g.tiles}
+                  // Can never be "editing" with one item: the pencil is hidden there,
+                  // so there'd be no way to switch it off — and editing disables
+                  // tapping, which would leave that lone tile permanently dead.
+                  editing={menuEditing && menuTiles.length > 1}
+                  onPress={onTile}
+                  onOrder={(keys) => onSectionOrder(g.key, keys)}
+                  onDragStateChange={setMenuDragging}
+                />
+              </View>
+            ))}
           </ScrollView>
         </Animated.View>
       </View>
@@ -719,27 +773,29 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
           </View>
           <Text style={s.editSub}>Choose which shortcuts appear on your Home. The rest stay in the menu.</Text>
           <ScrollView style={{ maxHeight: SH * 0.42 }} showsVerticalScrollIndicator persistentScrollbar>
-            {roleTiles.map((q) => {
-              const on = draftKeys.includes(q.dest);
-              return (
-                <TouchableOpacity key={q.dest} style={s.editRow} onPress={() => toggleDraft(q.dest)} activeOpacity={0.7}>
-                  <View style={[s.editRowIcon, { backgroundColor: q.bg }]}>
-                    <Icon lib={q.lib} name={q.name} size={18} color={q.fg} />
-                  </View>
-                  <Text style={s.editRowTxt}>{q.label}</Text>
-                  <Ionicons
-                    name={on ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={on ? COLORS.primary : COLORS.faint}
-                  />
-                </TouchableOpacity>
-              );
-            })}
+            {groupBySection(roleTiles).map((g) => (
+              <View key={g.key}>
+                <Text style={s.editSection}>{g.label}</Text>
+                {g.tiles.map((q) => {
+                  const on = draftKeys.includes(q.dest);
+                  return (
+                    <TouchableOpacity key={q.dest} style={s.editRow} onPress={() => toggleDraft(q.dest)} activeOpacity={0.7}>
+                      <View style={[s.editRowIcon, { backgroundColor: q.bg }]}>
+                        <Icon lib={q.lib} name={q.name} size={18} color={q.fg} />
+                      </View>
+                      <Text style={s.editRowTxt}>{q.label}</Text>
+                      <Ionicons
+                        name={on ? 'checkbox' : 'square-outline'}
+                        size={22}
+                        color={on ? COLORS.primary : COLORS.faint}
+                      />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))}
           </ScrollView>
           <View style={s.editBtns}>
-            <TouchableOpacity style={[s.editActBtn, s.editReset]} onPress={resetDraft} activeOpacity={0.85}>
-              <Text style={s.editResetTxt}>Reset</Text>
-            </TouchableOpacity>
             <TouchableOpacity style={[s.editActBtn, s.editSave]} onPress={saveEdit} activeOpacity={0.85}>
               <Ionicons name="checkmark" size={18} color="#fff" />
               <Text style={s.editSaveTxt}>Save</Text>
@@ -1334,6 +1390,10 @@ const s = StyleSheet.create({
   // Heading row so the pencil sits at the end of the "Quick Actions" title.
   sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: PAD, marginTop: 26, marginBottom: 14 },
   sectionFlush: { paddingHorizontal: 0, marginTop: 0, marginBottom: 0 },
+  // Sub-headings (KRA / Reports / Settings) across the grid, edit popup and drawer.
+  gridSection: { fontSize: 13, fontWeight: '900', color: COLORS.muted, letterSpacing: 0.8, paddingHorizontal: PAD, marginTop: 18, marginBottom: 10, textTransform: 'uppercase' },
+  editSection: { fontSize: 12, fontWeight: '900', color: COLORS.primary, letterSpacing: 0.8, marginTop: 12, marginBottom: 2, textTransform: 'uppercase' },
+  menuSection: { fontSize: 11.5, fontWeight: '900', color: COLORS.primary, letterSpacing: 1, marginTop: 10, marginBottom: 8, textTransform: 'uppercase' },
   editBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EAF1FE', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#D6E4FB' },
 
   // Edit-Quick-Actions popup

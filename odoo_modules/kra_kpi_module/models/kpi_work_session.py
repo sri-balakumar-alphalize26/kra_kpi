@@ -268,6 +268,24 @@ class KpiWorkSession(models.Model):
         ], limit=1)
         if existing_open:
             return existing_open
+        # Self-heal before opening today's session: a workday that crossed midnight
+        # without a clean close can leave an is_active time-log or break-log from a
+        # PREVIOUS day. Left open it reads as this developer's "current" task/break
+        # forever — and silences the idle "what are you doing?" prompt exactly when
+        # it should fire. Close any such cross-day leftovers, capped at their own
+        # day-end so durations stay sane.
+        try:
+            for lg in self.env['kpi.time.log'].sudo().search([
+                    ('user_id', '=', user.id), ('is_active', '=', True), ('work_date', '<', today)]):
+                lg.write({'is_active': False,
+                          'end_time': datetime.combine(lg.work_date, time(23, 59, 59))})
+            for bk in self.env['kpi.break.log'].sudo().search([
+                    ('user_id', '=', user.id), ('is_active', '=', True),
+                    ('start_time', '<', datetime.combine(today, time(0, 0)))]):
+                bk.write({'is_active': False,
+                          'end_time': datetime.combine(bk.start_time.date(), time(23, 59, 59))})
+        except Exception as exc:
+            _logger.warning("_get_or_open_today heal stale-active failed for %s: %s", user.id, exc)
         new_sess = self.sudo().create({
             'user_id':      user.id,
             'session_date': today,
@@ -591,22 +609,10 @@ class KpiWorkSession(models.Model):
             'state':     'closed',
             'note':      (note or '').strip() or False,
         })
-        # Close any open break/lunch so it doesn't keep running past logout.
-        self.env['kpi.break.log'].stop_break(self.user_id.id)
-        # Same for a Meeting/Break block, and drop the idle timers: the day is
-        # over, so there's nothing left to ask about or chase admins over.
-        try:
-            self._close_nontask_block(at=self.logout_at or fields.Datetime.now())
-            self._stop_idle_tracking('workday ended')
-        except Exception as exc:
-            _logger.warning("closing non-task block at end_day failed: %s", exc)
-        # Un-pair the device: the workday is over → the web board falls back to the
-        # PIN gate and the phone app to the Start Working screen. mode='start' since
-        # the workday is now closed (the next pairing is a fresh start, not resume).
-        try:
-            self.env['kpi.pair'].sudo()._unpair(self.user_id, mode='start')
-        except Exception as exc:
-            _logger.warning("end_day un-pair failed for session %s: %s", self.id, exc)
+        # Close everything still "running" (break/lunch, Meeting/Break block, idle
+        # timers) and un-pair the device. Shared with the midnight auto-close so the
+        # two paths can't drift — see _finalize_day_cleanup.
+        self._finalize_day_cleanup()
         payload = self._daily_summary_payload(full_day=True)
         # Freeze the day into an image BEFORE anything else reads it: everything in
         # the payload is a live compute, so this is the only record of what the day
@@ -615,6 +621,34 @@ class KpiWorkSession(models.Model):
         snap = self._capture_snapshot(payload)
         self._fire_daily_summary(payload, snapshot=snap)
         return payload
+
+    def _finalize_day_cleanup(self):
+        """Close everything still 'running' when a workday ends, and un-pair.
+
+        Shared by the manual End Workday (action_end_day) AND the cross-midnight
+        auto-close (_close_overdue) so a forgotten workday is cleaned up exactly
+        like a manual one. Without this on the auto-close path, an open Break/Lunch
+        or Meeting block (and the pair record) carries into the next day — which,
+        e.g., silences the idle "what are you doing?" prompt because the board still
+        thinks a Break is running. The running task itself is auto-PAUSED by the
+        caller (action_end_day already stopped it; _close_overdue calls
+        _pause_running_task first), so time is saved, not lost. Every step is
+        defensive: a cleanup failure must never block the close itself."""
+        self.ensure_one()
+        at = self.logout_at or fields.Datetime.now()
+        try:
+            self.env['kpi.break.log'].stop_break(self.user_id.id, at=at)
+        except Exception as exc:
+            _logger.warning("finalize cleanup: stop_break failed for session %s: %s", self.id, exc)
+        try:
+            self._close_nontask_block(at=at)
+            self._stop_idle_tracking('workday ended')
+        except Exception as exc:
+            _logger.warning("finalize cleanup: nontask/idle failed for session %s: %s", self.id, exc)
+        try:
+            self.env['kpi.pair'].sudo()._unpair(self.user_id, mode='start')
+        except Exception as exc:
+            _logger.warning("finalize cleanup: un-pair failed for session %s: %s", self.id, exc)
 
     def _capture_snapshot(self, payload):
         """Draw + save today's summary image. Deliberately swallows everything: a
@@ -1248,6 +1282,15 @@ class KpiWorkSession(models.Model):
                 'state':       'closed',
                 'auto_closed': True,
             })
+            # Same full cleanup a manual End Workday does — close the open
+            # Break/Lunch/Meeting (capped at eod via logout_at) and un-pair. Runs
+            # BEFORE the snapshot below so the saved image reflects the finalized
+            # day, and stops a stale 'active' break/task carrying into tomorrow
+            # (which would silence the idle prompt / show a phantom activity).
+            try:
+                s._finalize_day_cleanup()
+            except Exception as exc:
+                _logger.warning("overdue-close cleanup failed for session %s: %s", s.id, exc)
             try:
                 # full_day=True to match action_end_day — this is the same day's
                 # record, and it must not differ just because a cron closed it.

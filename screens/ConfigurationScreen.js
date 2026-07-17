@@ -16,12 +16,23 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import {
-  fetchConfig, setAway, setUrgentNudge, setCountry, setMultitask, setDevWa,
+  fetchConfig, setAway, setUrgentNudge, setUserCountry, setMultitask, setDevWa,
   setClientApproval, setQueueNudge, setStandardHours,
+  setSnapshotRetention, setReportRetention, setDailyReport,
 } from '../services/config';
 
 const log = createLogger('ConfigurationScreen');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
+
+const UNIT_OPTS = [
+  { value: 'days', label: 'Days' },
+  { value: 'months', label: 'Months' },
+  { value: 'years', label: 'Years' },
+];
+const COVERAGE_OPTS = [
+  { value: 'yesterday', label: 'Previous day' },
+  { value: 'today', label: 'Same day' },
+];
 
 // Keep only digits, strip a leading dial code, cap to the country length.
 function toLocal(value, dial, length) {
@@ -57,8 +68,18 @@ export default function ConfigurationScreen({ onBack }) {
   const [mobileLength, setMobileLength] = useState(10);
   const [countries, setCountries] = useState([]);
   const [developers, setDevelopers] = useState([]);
-  const [pickCountry, setPickCountry] = useState(false);
+  const [pickCountryForDev, setPickCountryForDev] = useState(null); // developer whose country is being picked
   const [savedFlash, setSavedFlash] = useState('');
+  // Daily task report schedule + snapshot/report retention.
+  const [snapNum, setSnapNum] = useState('3');
+  const [snapUnit, setSnapUnit] = useState('months');
+  const [repNum, setRepNum] = useState('3');
+  const [repUnit, setRepUnit] = useState('months');
+  const [dailyEnabled, setDailyEnabled] = useState(true);
+  const [dailyHH, setDailyHH] = useState('10');
+  const [dailyMM, setDailyMM] = useState('00');
+  const [dailyCoverage, setDailyCoverage] = useState('yesterday');
+  const [optPicker, setOptPicker] = useState(null);   // { title, options, current, onPick }
 
   const flash = useCallback((key) => {
     setSavedFlash(key);
@@ -79,6 +100,16 @@ export default function ConfigurationScreen({ onBack }) {
       setCountryId(c.country_id);
       setCountries(c.countries);
       setDevelopers(c.developers);
+      setSnapNum(String(c.snapshot_retention_number ?? 3));
+      setSnapUnit(c.snapshot_retention_unit || 'months');
+      setRepNum(String(c.report_retention_number ?? 3));
+      setRepUnit(c.report_retention_unit || 'months');
+      setDailyEnabled(c.daily_report_enabled !== false);
+      const dh = Number(c.daily_report_hour ?? 10);
+      const dH = Math.floor(dh);
+      setDailyHH(String(dH));
+      setDailyMM(String(Math.round((dh - dH) * 60)).padStart(2, '0'));
+      setDailyCoverage(c.daily_report_coverage || 'yesterday');
     } catch (e) {
       log.warn('load failed', e?.message);
     }
@@ -124,19 +155,57 @@ export default function ConfigurationScreen({ onBack }) {
     try { await setUrgentNudge(v); flash('urgentNudge'); }
     catch (e) { log.warn('saveUrgentNudge', e?.message); }
   };
-  const chooseCountry = async (co) => {
-    setPickCountry(false);
-    setCountryId(co.id);
+  // HH + MM inputs → the backend's float hour (10.5 = 10:30). Clamp to a real time.
+  const timeToHour = (hh, mm) => {
+    let H = parseInt(hh); if (!isFinite(H)) H = 0; H = Math.max(0, Math.min(23, H));
+    let M = parseInt(mm); if (!isFinite(M)) M = 0; M = Math.max(0, Math.min(59, M));
+    return H + M / 60;
+  };
+  // Unit is passed explicitly from the picker (state may not have flushed yet).
+  const saveSnapRetention = async (unitOverride) => {
+    const n = Math.max(0, parseInt(snapNum) || 0);
+    const u = unitOverride || snapUnit;
+    setSnapNum(String(n));
+    try { await setSnapshotRetention({ number: n, unit: u }); flash('snapRet'); }
+    catch (e) { log.warn('saveSnapRetention', e?.message); }
+  };
+  const saveRepRetention = async (unitOverride) => {
+    const n = Math.max(0, parseInt(repNum) || 0);
+    const u = unitOverride || repUnit;
+    setRepNum(String(n));
+    try { await setReportRetention({ number: n, unit: u }); flash('repRet'); }
+    catch (e) { log.warn('saveRepRetention', e?.message); }
+  };
+  const saveDaily = async (over = {}) => {
+    const enabled = over.enabled != null ? over.enabled : dailyEnabled;
+    const coverage = over.coverage || dailyCoverage;
+    const hour = timeToHour(dailyHH, dailyMM);
+    const H = Math.floor(hour);
+    setDailyHH(String(H));
+    setDailyMM(String(Math.round((hour - H) * 60)).padStart(2, '0'));
+    try { await setDailyReport({ enabled, hour, coverage }); flash('daily'); }
+    catch (e) { log.warn('saveDaily', e?.message); }
+  };
+  // Set ONE developer's country (dial + local length). Empty co (id false) clears
+  // it back to the company default. The backend re-keys their stored WhatsApp
+  // number and may clear it if the old number can't fit the new length.
+  const chooseDevCountry = async (dev, co) => {
+    setPickCountryForDev(null);
+    const cid = co && co.id ? co.id : false;
+    setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, country_id: cid } : d)));
     try {
-      const res = await setCountry(co.id);
+      const res = await setUserCountry(dev.id, cid);
       if (res?.status) {
-        const nd = String(res.dial || '91');
-        const nl = Number(res.mobile_length) || 10;
-        setDial(nd); setMobileLength(nl);
-        setDevelopers((list) => list.map((d) => ({ ...d, _wa: toLocal(d.wa_number, nd, nl) })));
-        flash('country');
+        const nd = String(res.dial || dial || '91');
+        const nl = Number(res.mobile_length) || mobileLength || 10;
+        const wa = res.wa_number != null ? res.wa_number : dev.wa_number;
+        setDevelopers((list) => list.map((d) => (d.id === dev.id ? {
+          ...d, country_id: res.country_id || false, dial: nd, mobile_length: nl,
+          wa_number: wa, _wa: toLocal(wa, nd, nl), _saved: true,
+        } : d)));
+        setTimeout(() => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _saved: false } : d))), 1400);
       }
-    } catch (e) { log.warn('setCountry', e?.message); }
+    } catch (e) { log.warn('setDevCountry', e?.message); }
   };
   const toggleDev = async (dev) => {
     const next = !dev.allow_multitask;
@@ -144,20 +213,22 @@ export default function ConfigurationScreen({ onBack }) {
     try { await setMultitask(dev.id, next); } catch (e) { log.warn('toggleDev', e?.message); }
   };
   const saveDevWa = async (dev, text) => {
-    const local = toLocal(text, dial, mobileLength);
+    const dd = dev.dial || dial, dl = dev.mobile_length || mobileLength;
+    const local = toLocal(text, dd, dl);
     setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _wa: local } : d)));
     try {
       const res = await setDevWa(dev.id, local);
-      const stored = res?.wa_number != null ? res.wa_number : (local ? dial + local : '');
+      const stored = res?.wa_number != null ? res.wa_number : (local ? dd + local : '');
       setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, wa_number: stored, _saved: true } : d)));
       setTimeout(() => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _saved: false } : d))), 1400);
     } catch (e) { log.warn('saveDevWa', e?.message); }
   };
 
-  const countryName = (() => {
-    const c = countries.find((x) => x.id === countryId);
-    return c ? `${c.name} (+${c.phone_code})` : '— Select —';
-  })();
+  // Country label for a developer's picker button (their own, or the default).
+  const devCountryLabel = (dev) => {
+    const c = countries.find((x) => x.id === dev.country_id);
+    return c ? `+${c.phone_code}` : `+${dial}`;
+  };
 
   return (
     <View style={s.root}>
@@ -184,28 +255,6 @@ export default function ConfigurationScreen({ onBack }) {
         <View style={s.center}><ActivityIndicator color={COLORS.primary} /></View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-
-          {/* 1. Country & Mobile Format */}
-          <Card color="#16a34a" iconLib="mc" icon="earth" title="Country & Mobile Format">
-            <Text style={s.label}>Country</Text>
-            <TouchableOpacity style={s.select} onPress={() => setPickCountry(true)} activeOpacity={0.8}>
-              <Text style={s.selectTxt}>{countryName}</Text>
-              <Ionicons name="chevron-down" size={18} color={COLORS.muted} />
-            </TouchableOpacity>
-            <View style={s.row2}>
-              <View style={{ flex: 1 }}>
-                <Text style={s.label}>Dial code</Text>
-                <View style={s.readBox}><Text style={s.readTxt}>+{dial}</Text></View>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={s.label}>Digits</Text>
-                <View style={s.readBox}><Text style={s.readTxt}>{mobileLength}</Text></View>
-              </View>
-              {savedFlash === 'country' && <Text style={s.savedTick}>✓</Text>}
-            </View>
-            <Text style={s.hint}>Applies to every WhatsApp number below — the +{dial} prefix is added
-              automatically and numbers are limited to {mobileLength} digits.</Text>
-          </Card>
 
           {/* 2. Timers & Away */}
           <Card color="#0ea5e9" iconLib="mc" icon="clock-outline" title="Timers & Away">
@@ -276,6 +325,95 @@ export default function ConfigurationScreen({ onBack }) {
               the summary shows Productive next to it.</Text>
           </Card>
 
+          {/* 3. Daily Task Report & Retention */}
+          <Card color="#f59e0b" iconLib="mc" icon="file-document-outline" title="Daily Task Report & Retention">
+            <View style={s.switchRow}>
+              <Text style={[s.label, { marginBottom: 0, flex: 1 }]}>Send daily employee task report (PDF)</Text>
+              <Switch
+                value={dailyEnabled}
+                onValueChange={() => { const n = !dailyEnabled; setDailyEnabled(n); saveDaily({ enabled: n }); }}
+                trackColor={{ true: COLORS.primary }}
+              />
+              {savedFlash === 'daily' && <Text style={s.savedTick}>✓</Text>}
+            </View>
+
+            {dailyEnabled && (
+              <>
+                <Text style={[s.label, { marginTop: 16 }]}>Send time (IST)</Text>
+                <View style={s.inlineRow}>
+                  <TextInput
+                    style={[s.input, { width: 58, textAlign: 'center' }]} keyboardType="number-pad" maxLength={2}
+                    value={dailyHH} onChangeText={setDailyHH} onEndEditing={() => saveDaily()}
+                  />
+                  <Text style={[s.unit, { fontWeight: '800' }]}>:</Text>
+                  <TextInput
+                    style={[s.input, { width: 58, textAlign: 'center' }]} keyboardType="number-pad" maxLength={2}
+                    value={dailyMM} onChangeText={setDailyMM} onEndEditing={() => saveDaily()}
+                  />
+                  <Text style={s.unit}>HH : MM</Text>
+                </View>
+
+                <Text style={[s.label, { marginTop: 16 }]}>Report covers</Text>
+                <TouchableOpacity
+                  style={s.select} activeOpacity={0.8}
+                  onPress={() => setOptPicker({
+                    title: 'Report covers', current: dailyCoverage, options: COVERAGE_OPTS,
+                    onPick: (v) => { setDailyCoverage(v); saveDaily({ coverage: v }); },
+                  })}
+                >
+                  <Text style={s.selectTxt}>{COVERAGE_OPTS.find((o) => o.value === dailyCoverage)?.label || dailyCoverage}</Text>
+                  <Ionicons name="chevron-down" size={18} color={COLORS.muted} />
+                </TouchableOpacity>
+              </>
+            )}
+            <Text style={s.hint}>One PDF with every employee's task details, delivered to admins in-app at the
+              time above. Previous day suits a morning send (everyone has ended their workday).</Text>
+
+            <View style={s.divider} />
+
+            <Text style={s.label}>Keep workday snapshot images for</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 70 }]} keyboardType="number-pad"
+                value={snapNum} onChangeText={setSnapNum} onEndEditing={() => saveSnapRetention()}
+              />
+              <TouchableOpacity
+                style={[s.select, { flex: 1 }]} activeOpacity={0.8}
+                onPress={() => setOptPicker({
+                  title: 'Retention unit', current: snapUnit, options: UNIT_OPTS,
+                  onPick: (v) => { setSnapUnit(v); saveSnapRetention(v); },
+                })}
+              >
+                <Text style={s.selectTxt}>{UNIT_OPTS.find((o) => o.value === snapUnit)?.label || snapUnit}</Text>
+                <Ionicons name="chevron-down" size={18} color={COLORS.muted} />
+              </TouchableOpacity>
+              {savedFlash === 'snapRet' && <Text style={s.savedTick}>✓</Text>}
+            </View>
+            <Text style={s.hint}>Old End-Workday summary images are cleared automatically (the day's stats
+              are kept). <Text style={{ fontWeight: '800' }}>0 = keep forever.</Text></Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Keep generated report PDFs for</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 70 }]} keyboardType="number-pad"
+                value={repNum} onChangeText={setRepNum} onEndEditing={() => saveRepRetention()}
+              />
+              <TouchableOpacity
+                style={[s.select, { flex: 1 }]} activeOpacity={0.8}
+                onPress={() => setOptPicker({
+                  title: 'Retention unit', current: repUnit, options: UNIT_OPTS,
+                  onPick: (v) => { setRepUnit(v); saveRepRetention(v); },
+                })}
+              >
+                <Text style={s.selectTxt}>{UNIT_OPTS.find((o) => o.value === repUnit)?.label || repUnit}</Text>
+                <Ionicons name="chevron-down" size={18} color={COLORS.muted} />
+              </TouchableOpacity>
+              {savedFlash === 'repRet' && <Text style={s.savedTick}>✓</Text>}
+            </View>
+            <Text style={s.hint}>Reports stay viewable and downloadable until deleted.
+              <Text style={{ fontWeight: '800' }}> 0 = keep forever.</Text></Text>
+          </Card>
+
           {/* The "Urgent-pause recipients" card (extra WhatsApp numbers) was removed:
               those numbers had no login, so they could only be reached over WhatsApp —
               which is now off for task notifications. Urgent goes to the owner +
@@ -304,14 +442,17 @@ export default function ConfigurationScreen({ onBack }) {
                     />
                   </View>
                 </View>
-                {/* Line 2: full-width WhatsApp number */}
+                {/* Line 2: tap the +code to set this developer's country, then the number */}
                 <View style={s.devWaRow}>
-                  <View style={s.dialBadgeSm}><Text style={s.dialBadgeSmTxt}>+{dial}</Text></View>
+                  <TouchableOpacity style={s.dialBadgeSm} onPress={() => setPickCountryForDev(dev)} activeOpacity={0.7}>
+                    <Text style={s.dialBadgeSmTxt}>{devCountryLabel(dev)}</Text>
+                    <Ionicons name="chevron-down" size={12} color={COLORS.muted} style={{ marginLeft: 2 }} />
+                  </TouchableOpacity>
                   <TextInput
-                    style={s.devWaInput} keyboardType="phone-pad" maxLength={mobileLength}
-                    placeholder={`WhatsApp number — ${mobileLength} digits`} placeholderTextColor={COLORS.faint}
-                    value={dev._wa != null ? dev._wa : toLocal(dev.wa_number, dial, mobileLength)}
-                    onChangeText={(t) => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _wa: toLocal(t, dial, mobileLength) } : d)))}
+                    style={s.devWaInput} keyboardType="phone-pad" maxLength={dev.mobile_length || mobileLength}
+                    placeholder={`WhatsApp — ${dev.mobile_length || mobileLength} digits`} placeholderTextColor={COLORS.faint}
+                    value={dev._wa != null ? dev._wa : toLocal(dev.wa_number, dev.dial || dial, dev.mobile_length || mobileLength)}
+                    onChangeText={(t) => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _wa: toLocal(t, d.dial || dial, d.mobile_length || mobileLength) } : d)))}
                     onEndEditing={(e) => saveDevWa(dev, e.nativeEvent.text)}
                   />
                   {dev._saved && <Text style={s.devSavedInline}>✓</Text>}
@@ -322,26 +463,27 @@ export default function ConfigurationScreen({ onBack }) {
         </ScrollView>
       )}
 
-      {/* Country picker */}
-      <Modal visible={pickCountry} transparent animationType="fade" onRequestClose={() => setPickCountry(false)}>
-        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setPickCountry(false)}>
+      {/* Per-developer country picker */}
+      <Modal visible={!!pickCountryForDev} transparent animationType="fade" onRequestClose={() => setPickCountryForDev(null)}>
+        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setPickCountryForDev(null)}>
           <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
             <View style={s.modalHead}>
-              <Text style={s.modalTitle}>Select country</Text>
-              <TouchableOpacity onPress={() => setPickCountry(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={s.modalTitle} numberOfLines={1}>Country — {pickCountryForDev?.name || ''}</Text>
+              <TouchableOpacity onPress={() => setPickCountryForDev(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <Text style={s.modalClose}>✕</Text>
               </TouchableOpacity>
             </View>
             <FlatList
-              data={countries}
+              data={[{ id: false, name: `Default (+${dial})`, phone_code: dial, _default: true }, ...countries]}
               keyExtractor={(c) => String(c.id)}
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => {
-                const on = item.id === countryId;
+                const cur = pickCountryForDev ? (pickCountryForDev.country_id || false) : false;
+                const on = (item.id || false) === cur;
                 return (
-                  <TouchableOpacity style={[s.ccRow, on && s.ccRowOn]} onPress={() => chooseCountry(item)} activeOpacity={0.8}>
+                  <TouchableOpacity style={[s.ccRow, on && s.ccRowOn]} onPress={() => chooseDevCountry(pickCountryForDev, item)} activeOpacity={0.8}>
                     <Text style={s.ccRowName}>{item.name}</Text>
-                    <Text style={s.ccRowMeta}>+{item.phone_code}</Text>
+                    {!item._default && <Text style={s.ccRowMeta}>+{item.phone_code}</Text>}
                     {on && <Text style={s.ccRowTick}>✓</Text>}
                   </TouchableOpacity>
                 );
@@ -350,12 +492,38 @@ export default function ConfigurationScreen({ onBack }) {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* Generic option picker (retention unit / report coverage) */}
+      <Modal visible={!!optPicker} transparent animationType="fade" onRequestClose={() => setOptPicker(null)}>
+        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setOptPicker(null)}>
+          <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle}>{optPicker?.title || 'Select'}</Text>
+              <TouchableOpacity onPress={() => setOptPicker(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={s.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {(optPicker?.options || []).map((o) => {
+              const on = o.value === optPicker.current;
+              return (
+                <TouchableOpacity
+                  key={o.value} style={[s.ccRow, on && s.ccRowOn]} activeOpacity={0.8}
+                  onPress={() => { const f = optPicker.onPick; setOptPicker(null); if (f) f(o.value); }}
+                >
+                  <Text style={s.ccRowName}>{o.label}</Text>
+                  {on && <Text style={s.ccRowTick}>✓</Text>}
+                </TouchableOpacity>
+              );
+            })}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: 'transparent' },
+  root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 12, paddingBottom: 12,
@@ -382,6 +550,8 @@ const s = StyleSheet.create({
   readTxt: { fontSize: 15, fontWeight: '700', color: COLORS.navy },
 
   inlineRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  switchRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  divider: { height: 1, backgroundColor: COLORS.line, marginVertical: 16 },
   input: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 46, paddingHorizontal: 12, fontSize: 15, color: COLORS.ink, backgroundColor: '#fff' },
   unit: { fontSize: 14, color: COLORS.muted, fontWeight: '600' },
   savedTick: { color: COLORS.green, fontSize: 18, fontWeight: '900', marginLeft: 6 },
@@ -396,7 +566,7 @@ const s = StyleSheet.create({
   devLogin: { fontSize: 12, color: COLORS.muted },
   devSmall: { fontSize: 10, color: COLORS.muted, marginBottom: 2 },
   devWaRow: { flexDirection: 'row', alignItems: 'center' },
-  dialBadgeSm: { backgroundColor: '#F1F4F9', borderWidth: 1, borderColor: COLORS.line, borderTopLeftRadius: 10, borderBottomLeftRadius: 10, paddingHorizontal: 10, height: 44, justifyContent: 'center' },
+  dialBadgeSm: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1F4F9', borderWidth: 1, borderColor: COLORS.line, borderTopLeftRadius: 10, borderBottomLeftRadius: 10, paddingHorizontal: 10, height: 44, justifyContent: 'center' },
   dialBadgeSmTxt: { fontSize: 14, fontWeight: '800', color: COLORS.navy },
   devWaInput: { flex: 1, borderWidth: 1, borderColor: COLORS.line, borderLeftWidth: 0, borderTopRightRadius: 10, borderBottomRightRadius: 10, height: 44, paddingHorizontal: 12, fontSize: 15, color: COLORS.ink, backgroundColor: '#fff' },
   devSavedInline: { fontSize: 16, color: COLORS.green, fontWeight: '900', marginLeft: 8 },

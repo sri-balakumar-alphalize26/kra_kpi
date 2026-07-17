@@ -1385,6 +1385,206 @@ class KpiReportsAPI(http.Controller):
             logging.getLogger(__name__).error(f"get_invoice_pdf_data: {str(e)}")
             return {'status': False, 'message': str(e)}
 
+    @http.route('/kpi_client_invoice/pdf', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_invoice_pdf(self, **params):
+        """Server-side branded invoice PDF (base64) for the mobile app, which can't
+        run the web's jsPDF. Reuses get_pdf_data() (record-rule scoped, so a client
+        can only render their own invoice) and renders it with reportlab in the same
+        branded style as the daily/work reports."""
+        try:
+            inv = request.env['kpi.client.invoice'].browse(int(params.get('invoice_id') or 0))
+            if not inv.exists():
+                return {'status': False, 'message': 'Invoice not found.'}
+            data = inv.get_pdf_data()
+            pdf_bytes = self._build_invoice_pdf(data)
+        except Exception as e:
+            import logging, traceback
+            logging.getLogger(__name__).error(f"get_invoice_pdf: {e}\n{traceback.format_exc()}")
+            return {'status': False, 'message': str(e)}
+        import base64
+        name = (data.get('invoice', {}).get('name') or str(inv.id)).replace('/', '_')
+        return {
+            'status': True,
+            'file_name': 'Invoice_%s.pdf' % name,
+            'mimetype': 'application/pdf',
+            'data_b64': base64.b64encode(pdf_bytes).decode(),
+        }
+
+    def _build_invoice_pdf(self, data):
+        """Render a client invoice to PDF bytes with reportlab (Times, #38385C
+        header, zebra rows, faint logo watermark) — matching the other PDFs."""
+        import base64
+        import io
+        from xml.sax.saxutils import escape as _esc
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.lib.utils import ImageReader
+        from reportlab.platypus import (
+            SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, HRFlowable,
+        )
+
+        inv = data.get('invoice', {}) or {}
+        cur = data.get('currency', {}) or {}
+        cur_name = cur.get('name') or ''
+
+        brand = colors.HexColor('#38385C')
+        zebra = colors.HexColor('#F7F7FB')
+        grid = colors.HexColor('#E1E1E1')
+        rule = colors.HexColor('#BEBEBE')
+        ink = colors.black
+        muted = colors.HexColor('#64748B')
+
+        def _money(amt):
+            try:
+                dp = int(cur.get('decimal_places', 2))
+            except Exception:
+                dp = 2
+            s = f"{float(amt or 0):,.{dp}f}"
+            return f"{cur_name} {s}".strip()
+
+        logo_bytes = None
+        if data.get('company_logo_b64'):
+            try:
+                logo_bytes = base64.b64decode(data['company_logo_b64'])
+            except Exception:
+                logo_bytes = None
+        logo_reader = None
+        logo_ratio = 1.0
+        if logo_bytes:
+            try:
+                logo_reader = ImageReader(io.BytesIO(logo_bytes))
+                iw, ih = logo_reader.getSize()
+                if iw and ih:
+                    logo_ratio = float(iw) / float(ih)
+            except Exception:
+                logo_reader = None
+
+        styles = getSampleStyleSheet()
+        s_company = ParagraphStyle('co', parent=styles['Normal'], fontName='Times-Bold', fontSize=22, alignment=2, textColor=ink, leading=24)
+        s_doctype = ParagraphStyle('dt', parent=styles['Normal'], fontName='Times-Roman', fontSize=12, alignment=2, textColor=muted, leading=16)
+        s_meta = ParagraphStyle('me', parent=styles['Normal'], fontName='Times-Roman', fontSize=10, textColor=ink, leading=15)
+        s_lbl = ParagraphStyle('lb', parent=styles['Normal'], fontName='Times-Bold', fontSize=10, textColor=muted, leading=14)
+        cell = ParagraphStyle('c', parent=styles['Normal'], fontName='Times-Roman', fontSize=9, textColor=ink, leading=11)
+        s_tot = ParagraphStyle('t', parent=styles['Normal'], fontName='Times-Bold', fontSize=12, alignment=2, textColor=ink, leading=16)
+
+        PW, PH = A4
+        MARGIN = 48
+        content_w = PW - 2 * MARGIN
+
+        def _watermark(canvas, doc_):
+            if not logo_reader:
+                return
+            canvas.saveState()
+            wm_w = PW * 0.55
+            wm_h = wm_w / (logo_ratio or 1.0)
+            if wm_h > PH * 0.5:
+                wm_h = PH * 0.5
+                wm_w = wm_h * (logo_ratio or 1.0)
+            try:
+                canvas.setFillAlpha(0.08)
+                canvas.setStrokeAlpha(0.08)
+            except Exception:
+                pass
+            try:
+                canvas.drawImage(logo_reader, (PW - wm_w) / 2.0, (PH - wm_h) / 2.0, wm_w, wm_h, mask='auto', preserveAspectRatio=True)
+            except Exception:
+                pass
+            canvas.restoreState()
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN, topMargin=MARGIN, bottomMargin=MARGIN, title='Invoice')
+        story = []
+
+        right_cell = [Paragraph(_esc(data.get('company_name') or ''), s_company),
+                      Paragraph('INVOICE', s_doctype)]
+        if logo_reader:
+            h = 56
+            w = min(h * logo_ratio, 150)
+            left_cell = Image(io.BytesIO(logo_bytes), width=w, height=h)
+            left_cell.hAlign = 'LEFT'
+        else:
+            left_cell = Paragraph('', cell)
+        header = Table([[left_cell, right_cell]], colWidths=[content_w * 0.45, content_w * 0.55])
+        header.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(header)
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width='100%', thickness=0.8, color=rule, spaceBefore=0, spaceAfter=8))
+
+        pay = (inv.get('payment_status') or '').upper()
+        story.append(Paragraph('Invoice #: <b>%s</b>%s' % (
+            _esc(inv.get('name') or ''),
+            ('   —   %s' % pay) if pay else ''), s_meta))
+        if inv.get('invoice_title'):
+            story.append(Paragraph('<b>%s</b>' % _esc(inv.get('invoice_title')), s_meta))
+        story.append(Paragraph('Date: %s   •   Period: %s to %s' % (
+            inv.get('invoice_date') or '', inv.get('from_date') or '', inv.get('to_date') or ''), s_meta))
+        if cur_name:
+            story.append(Paragraph('Currency: %s' % cur_name, s_meta))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph('Bill To:', s_lbl))
+        story.append(Paragraph('<b>%s</b>' % _esc(data.get('bill_to_name') or ''), s_meta))
+        if data.get('project_name'):
+            story.append(Paragraph('Project: %s' % _esc(data.get('project_name')), s_meta))
+        story.append(Spacer(1, 12))
+
+        billing = inv.get('billing_method') or 'hourly'
+        has_amount = bool(data.get('has_amount'))
+        rate = float(inv.get('hourly_rate') or 0)
+        lines = [l for l in (inv.get('lines') or [])]
+
+        if billing == 'per_task':
+            head = ['Description', 'Type'] + (['Price'] if has_amount else [])
+            rows = []
+            for l in lines:
+                row = [Paragraph(_esc(l.get('description')), cell), (l.get('task_kind') or l.get('line_type') or '').upper()]
+                if has_amount:
+                    row.append(_money(l.get('unit_price')))
+                rows.append(row)
+            colw = [content_w - (26 * mm) - (34 * mm if has_amount else 0), 26 * mm] + ([34 * mm] if has_amount else [])
+        else:
+            head = ['Description', 'Hours'] + (['Rate', 'Amount'] if has_amount else [])
+            rows = []
+            for l in lines:
+                qh = float(l.get('quoted_hours') or 0)
+                row = [Paragraph(_esc(l.get('description')), cell), f"{qh:g}"]
+                if has_amount:
+                    row.append(_money(rate))
+                    row.append(_money(qh * rate))
+                rows.append(row)
+            colw = ([content_w - (22 * mm) - (34 * mm) - (34 * mm), 22 * mm, 34 * mm, 34 * mm]
+                    if has_amount else [content_w - (26 * mm), 26 * mm])
+
+        tbl = Table([head] + rows, colWidths=colw, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), brand),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, -1), 'Times-Roman'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Times-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, zebra]),
+            ('GRID', (0, 0), (-1, -1), 0.5, grid),
+            ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 10))
+
+        if billing == 'hourly':
+            story.append(Paragraph('Total Hours: %g' % float(inv.get('grand_total_hours') or 0), s_tot))
+        if has_amount:
+            story.append(Paragraph('Total Amount: %s' % _money(inv.get('total_amount')), s_tot))
+
+        doc.build(story, onFirstPage=_watermark, onLaterPages=_watermark)
+        return buf.getvalue()
+
     @http.route('/kpi_client_invoice/save_notes', type='json', auth='user', methods=['POST'], csrf=False)
     def save_invoice_notes(self, **params):
         """Update the invoice's overall notes (Html). Draft only."""
@@ -1424,6 +1624,35 @@ class KpiReportsAPI(http.Controller):
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"send_client_invoice: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_client_invoice/client_mark_paid', type='json', auth='user', methods=['POST'], csrf=False)
+    def client_mark_invoice_paid(self, **params):
+        """Client-only: flag that they've paid this invoice → notifies admins to
+        confirm. Does NOT set payment_status (only an admin's Mark Paid does).
+        Clients have READ-ONLY access (record rule blocks write), so we act via
+        sudo() guarded by an explicit ownership check on client_user_ids."""
+        try:
+            inv = request.env['kpi.client.invoice'].sudo().browse(int(params.get('invoice_id') or 0))
+            if not inv.exists():
+                return {'status': False, 'message': 'Invoice not found.'}
+            # Ownership: the caller must be one of this client's linked users.
+            if request.env.user not in inv.client_kra_id.client_user_ids:
+                return {'status': False, 'message': 'Not authorized for this invoice.'}
+            if inv.state not in ('finalized', 'sent'):
+                return {'status': False, 'message': 'This invoice is not ready yet.'}
+            if inv.payment_status == 'paid':
+                return {'status': False, 'message': 'This invoice is already marked paid.'}
+            inv.write({
+                'client_paid_claim': True,
+                'client_paid_claim_date': fields.Datetime.now(),
+            })
+            # Ask the admins to confirm (recipients resolve from the role matrix).
+            inv._fire_invoice_notification('invoice_client_paid')
+            return {'status': True, 'data': inv._serialize_for_ui()}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"client_mark_invoice_paid: {str(e)}")
             return {'status': False, 'message': str(e)}
 
     # ============================================================
@@ -2727,6 +2956,75 @@ class KpiReportsAPI(http.Controller):
             logging.getLogger(__name__).error(f"workday_snapshot_image_b64: {e}")
             return {'status': False, 'message': str(e)}
 
+    # ------------------------------------------------------------------ #
+    # My Snapshots — the CURRENT user's OWN End-Workday images (self only) #
+    # ------------------------------------------------------------------ #
+    @http.route('/kpi_workday_snapshot/my_list', type='json', auth='user', methods=['POST'], csrf=False)
+    def my_workday_snapshot_list(self, **params):
+        """The logged-in user's OWN workday snapshots — no admin gate.
+
+        HARD-SCOPED to request.env.user: the domain is fixed to this user's id and
+        NO user_id is ever read from params, so a developer can only ever see their
+        own days. Same shape as /kpi_workday_snapshot/list (date ▸ [details] ▸ image)
+        so the app screen is reused unchanged.
+        """
+        try:
+            uid = request.env.user.id
+            limit_days = max(1, min(365, int(params.get('limit_days') or 30)))
+            Snap = request.env['kpi.workday.snapshot'].sudo()
+            rows = Snap.search([('user_id', '=', uid)], order='session_date desc, id desc')
+            name = request.env.user.name or request.env.user.login or 'You'
+            days, seen = [], {}
+            for r in rows:
+                key = str(r.session_date)
+                if key not in seen:
+                    if len(days) >= limit_days:
+                        continue
+                    seen[key] = {'date': key, 'label': r.session_date.strftime('%d %b %Y'),
+                                 'devs': []}
+                    days.append(seen[key])
+                seen[key]['devs'].append({
+                    'snapshot_id': r.id,
+                    'user_id': r.user_id.id,
+                    'name': name,
+                    'presence_display': _fmt_hms(r.presence_seconds or 0),
+                    'productive_display': _fmt_hms(r.productive_seconds or 0),
+                    'standard_hours': r.standard_hours or 0.0,
+                    'met_standard': bool(r.met_standard),
+                    'task_count': r.task_count or 0,
+                    'image_name': r.image_name or 'workday.png',
+                    'generated_at': (fields.Datetime.to_string(r.generated_at)
+                                     if r.generated_at else ''),
+                })
+            return {'status': True, 'days': days}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"my_workday_snapshot_list: {e}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_workday_snapshot/my_image_b64', type='json', auth='user', methods=['POST'], csrf=False)
+    def my_workday_snapshot_image_b64(self, **params):
+        """One of the CURRENT user's OWN snapshot images. Ownership is verified
+        server-side (rec.user_id must equal the caller) so a developer can never
+        pull a colleague's image by guessing an id."""
+        try:
+            sid = int(params.get('snapshot_id') or 0)
+            rec = request.env['kpi.workday.snapshot'].sudo().browse(sid)
+            if not rec.exists() or rec.user_id.id != request.env.user.id or not rec.image:
+                return {'status': False, 'message': 'Snapshot not found.'}
+            data = rec.image
+            if isinstance(data, bytes):
+                data = data.decode()
+            return {'status': True, 'data_b64': data, 'mimetype': 'image/png',
+                    'file_name': rec.image_name or 'workday.png',
+                    'dev': rec.user_id.name or '', 'date': str(rec.session_date),
+                    'presence_display': _fmt_hms(rec.presence_seconds or 0),
+                    'met_standard': bool(rec.met_standard)}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"my_workday_snapshot_image_b64: {e}")
+            return {'status': False, 'message': str(e)}
+
     @http.route('/kpi_reports/developer_summary', type='json', auth='user', methods=['POST'], csrf=False)
     def developer_summary_report(self, **params):
         """Daily / weekly / monthly per-developer report (coord+owner only).
@@ -3011,6 +3309,138 @@ class KpiReportsAPI(http.Controller):
             logging.getLogger(__name__).error(f"kpi_owner_live_board: {e}\n{traceback.format_exc()}")
             return {'status': False, 'message': str(e)}
 
+    @http.route('/kpi_owner/live_tracking', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_owner_live_tracking(self, **params):
+        """Admin LIVE TRACKING: every developer's current activity + attendance.
+
+        For the full developer roster (owners/coordinators/system excluded — they
+        imply the developer group), returns per person what they are doing RIGHT
+        NOW — running task + live elapsed / active break / lunch / meeting / idle /
+        offline — and today's attendance (present / late-with-arrival / absent /
+        pending), judged against a configurable local cutoff
+        (company.attendance_cutoff_hour, default 10:40). Owner / Coordinator /
+        System only.
+        """
+        import pytz
+        from datetime import datetime as _dt, time as _time, timedelta as _td
+        user = request.env.user
+        allowed = (
+            user.has_group('kra_kpi_module.group_kra_admin')
+            or user.has_group('kra_kpi_module.group_kra_owner')
+            or user.has_group('base.group_system'))
+        if not allowed:
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            Session = request.env['kpi.work.session'].sudo()
+            Log = request.env['kpi.time.log'].sudo()
+            Break = request.env['kpi.break.log'].sudo()
+            now = fields.Datetime.now()
+            today = fields.Date.context_today(user)
+            try:
+                away_min = max(1, int(request.env.company.away_after_minutes or 5))
+            except Exception:
+                away_min = 5
+            stale_cutoff = now - _td(minutes=away_min)
+
+            # Local attendance cutoff (default 10:40 IST) -> naive-UTC for a direct
+            # compare against the naive-UTC login_at.
+            tz = pytz.timezone(user.tz or 'Asia/Kolkata')
+            try:
+                cut = float(request.env.company.attendance_cutoff_hour or 10.667)
+            except Exception:
+                cut = 10.667
+            ch = int(cut)
+            cm = int(round((cut - ch) * 60))
+            if cm >= 60:
+                ch, cm = ch + 1, 0
+            ch = min(max(ch, 0), 23)
+            cm = min(max(cm, 0), 59)
+            cutoff_local = tz.localize(_dt.combine(today, _time(ch, cm)))
+            cutoff_utc = cutoff_local.astimezone(pytz.UTC).replace(tzinfo=None)
+            past_cutoff = now > cutoff_utc
+
+            break_sel = dict(Break._fields['break_type'].selection)
+            nontask_sel = dict(Session._fields['nontask_reason'].selection)
+
+            # Roster = pure developers only. owner->admin->developer implies down, so
+            # exclude the admin tiers + system to keep admins out of the roster.
+            devs = request.env.ref('kra_kpi_module.group_kra_developer').sudo().user_ids.filtered(
+                lambda u: u.active and not u.share and u.kpi_app_login_enabled
+                and not u.has_group('kra_kpi_module.group_kra_admin')
+                and not u.has_group('base.group_system'))
+
+            rows = []
+            for u in devs.sorted(lambda x: (x.name or x.login or '').lower()):
+                sessions = Session.search(
+                    [('user_id', '=', u.id), ('session_date', '=', today)], order='login_at asc')
+                logins = [s.login_at for s in sessions if s.login_at]
+                first_login = min(logins) if logins else False
+                open_sess = sessions.filtered(lambda s: s.state == 'open')[:1]
+
+                # ---- attendance ----
+                if first_login:
+                    attendance = 'late' if first_login > cutoff_utc else 'present'
+                    arrival = pytz.UTC.localize(first_login).astimezone(tz).strftime('%H:%M')
+                else:
+                    attendance = 'absent' if past_cutoff else 'pending'
+                    arrival = ''
+
+                # ---- current activity (only meaningful with an open session) ----
+                activity_kind, activity_label, elapsed, active_flag = 'offline', '', 0, False
+                if open_sess:
+                    s = open_sess
+                    active_flag = bool(s.last_heartbeat and s.last_heartbeat >= stale_cutoff)
+                    active_log = Log.search([('user_id', '=', u.id), ('is_active', '=', True)], limit=1)
+                    brk = Break.search([('user_id', '=', u.id), ('is_active', '=', True)], limit=1)
+                    if active_log and active_log.kpi_id:
+                        task = active_log.kpi_id
+                        activity_kind = 'task'
+                        activity_label = task.name or (task.external_ref or ("#%s" % task.id))
+                        if active_log.start_time:
+                            elapsed = max(0, int((now - active_log.start_time).total_seconds()))
+                    elif brk:
+                        bt = brk.break_type
+                        activity_kind = bt if bt in ('break', 'lunch', 'meeting') else 'break'
+                        activity_label = break_sel.get(bt, bt)
+                        if brk.start_time:
+                            elapsed = max(0, int((now - brk.start_time).total_seconds()))
+                    elif s.nontask_started_at:
+                        r = s.nontask_reason or 'no_tasks'
+                        activity_kind = r if r in ('break', 'lunch', 'meeting', 'no_tasks') else 'no_tasks'
+                        activity_label = nontask_sel.get(r, r)
+                        elapsed = max(0, int((now - s.nontask_started_at).total_seconds()))
+                    else:
+                        activity_kind, activity_label = 'idle', 'Idle'
+
+                rows.append({
+                    'user_id': u.id,
+                    'name': u.name or u.login or '—',
+                    'attendance': attendance,          # present | late | absent | pending
+                    'arrival': arrival,                # local "12:00"
+                    'started': bool(open_sess),        # workday currently open
+                    'active': active_flag,             # heartbeat fresh (at desk)
+                    'activity_kind': activity_kind,    # task|break|lunch|meeting|no_tasks|idle|offline
+                    'activity_label': activity_label,  # e.g. "abc"
+                    'elapsed_seconds': elapsed,
+                    'elapsed_display': _fmt_hms(elapsed) if elapsed else '',
+                })
+
+            return {
+                'status': True,
+                'as_of': fields.Datetime.to_string(now),
+                'cutoff_display': cutoff_local.strftime('%H:%M'),
+                'total': len(rows),
+                'present_count': sum(1 for r in rows if r['attendance'] in ('present', 'late')),
+                'active_count': sum(1 for r in rows if r['active']),
+                'absent_count': sum(1 for r in rows if r['attendance'] == 'absent'),
+                'late_count': sum(1 for r in rows if r['attendance'] == 'late'),
+                'rows': rows,
+            }
+        except Exception as e:
+            import logging, traceback
+            logging.getLogger(__name__).error(f"kpi_owner_live_tracking: {e}\n{traceback.format_exc()}")
+            return {'status': False, 'message': str(e)}
+
     @http.route('/kpi_owner/action_log', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_owner_action_log(self, **params):
         """Granular lifecycle log for the Employee Tracker's 'expand arrow'.
@@ -3246,6 +3676,245 @@ class KpiReportsAPI(http.Controller):
                 for c in clients
             ]}
         except Exception as e:
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_reports/period_work/pdf', type='json', auth='user', methods=['POST'], csrf=False)
+    def period_work_pdf(self, **params):
+        """Server-side branded PDF of the Work Report (for the mobile app, which
+        can't run the web's jsPDF). Reuses period_work_report for the data + access
+        gate, then renders it with reportlab in the same style as the daily report."""
+        data = self.period_work_report(**params)
+        if not data.get('status'):
+            return data   # not authorized / error — pass straight through
+        try:
+            pdf_bytes = self._build_work_report_pdf(data)
+        except Exception as e:
+            import logging, traceback
+            logging.getLogger(__name__).error(f"period_work_pdf: {e}\n{traceback.format_exc()}")
+            return {'status': False, 'message': str(e)}
+        import base64
+        return {
+            'status': True,
+            'file_name': 'Work_Report_%s_to_%s.pdf' % (data.get('from_date'), data.get('to_date')),
+            'mimetype': 'application/pdf',
+            'data_b64': base64.b64encode(pdf_bytes).decode(),
+        }
+
+    def _build_work_report_pdf(self, data):
+        """Render the Work Report payload to PDF bytes with reportlab — Times fonts,
+        #38385C table headers, zebra rows, a faint centred logo watermark, mirroring
+        the daily task report / invoice PDFs. Branding logo comes in the payload."""
+        import base64
+        import io
+        from xml.sax.saxutils import escape as _esc
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.lib.utils import ImageReader
+        from reportlab.platypus import (
+            SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, HRFlowable,
+        )
+
+        brand = colors.HexColor('#38385C')
+        zebra = colors.HexColor('#F7F7FB')
+        grid = colors.HexColor('#E1E1E1')
+        rule = colors.HexColor('#BEBEBE')
+        ink = colors.black
+        muted = colors.HexColor('#64748B')
+
+        logo_bytes = None
+        if data.get('company_logo_b64'):
+            try:
+                logo_bytes = base64.b64decode(data['company_logo_b64'])
+            except Exception:
+                logo_bytes = None
+        logo_reader = None
+        logo_ratio = 1.0
+        if logo_bytes:
+            try:
+                logo_reader = ImageReader(io.BytesIO(logo_bytes))
+                iw, ih = logo_reader.getSize()
+                if iw and ih:
+                    logo_ratio = float(iw) / float(ih)
+            except Exception:
+                logo_reader = None
+
+        styles = getSampleStyleSheet()
+        s_company = ParagraphStyle('co', parent=styles['Normal'], fontName='Times-Bold', fontSize=22, alignment=2, textColor=ink, leading=24)
+        s_doctype = ParagraphStyle('dt', parent=styles['Normal'], fontName='Times-Roman', fontSize=12, alignment=2, textColor=muted, leading=16)
+        s_meta = ParagraphStyle('me', parent=styles['Normal'], fontName='Times-Roman', fontSize=10, textColor=muted, leading=14)
+        s_sect = ParagraphStyle('se', parent=styles['Normal'], fontName='Times-Bold', fontSize=13, textColor=brand, leading=16, spaceBefore=8, spaceAfter=4)
+        cell = ParagraphStyle('c', parent=styles['Normal'], fontName='Times-Roman', fontSize=9, textColor=ink, leading=11)
+
+        PW, PH = A4
+        MARGIN = 48
+        content_w = PW - 2 * MARGIN
+
+        def _watermark(canvas, doc_):
+            if not logo_reader:
+                return
+            canvas.saveState()
+            wm_w = PW * 0.55
+            wm_h = wm_w / (logo_ratio or 1.0)
+            if wm_h > PH * 0.5:
+                wm_h = PH * 0.5
+                wm_w = wm_h * (logo_ratio or 1.0)
+            x = (PW - wm_w) / 2.0
+            y = (PH - wm_h) / 2.0
+            try:
+                canvas.setFillAlpha(0.08)
+                canvas.setStrokeAlpha(0.08)
+            except Exception:
+                pass
+            try:
+                canvas.drawImage(logo_reader, x, y, wm_w, wm_h, mask='auto', preserveAspectRatio=True)
+            except Exception:
+                pass
+            canvas.restoreState()
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN,
+            topMargin=MARGIN, bottomMargin=MARGIN, title='Work Report',
+        )
+        story = []
+
+        right_cell = [Paragraph(_esc(data.get('company_name') or ''), s_company),
+                      Paragraph('Work Report', s_doctype)]
+        if logo_reader:
+            h = 56
+            w = min(h * logo_ratio, 150)
+            left_cell = Image(io.BytesIO(logo_bytes), width=w, height=h)
+            left_cell.hAlign = 'LEFT'
+        else:
+            left_cell = Paragraph('', cell)
+        header = Table([[left_cell, right_cell]], colWidths=[content_w * 0.45, content_w * 0.55])
+        header.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(header)
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width='100%', thickness=0.8, color=rule, spaceBefore=0, spaceAfter=8))
+        story.append(Paragraph('Period: %s to %s' % (data.get('from_date'), data.get('to_date')), s_meta))
+        story.append(Paragraph('Completed tasks: %s • Total hours: %s' % (
+            data.get('total_tasks', 0), data.get('total_hours_display', '0h')), s_meta))
+        story.append(Spacer(1, 10))
+
+        def _hcell(txt):
+            return txt
+
+        def _tbl(head, rows, colw):
+            t = Table([head] + rows, colWidths=colw, repeatRows=1)
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), brand),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, -1), 'Times-Roman'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Times-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, zebra]),
+                ('GRID', (0, 0), (-1, -1), 0.5, grid),
+                ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ]))
+            return t
+
+        if data.get('group_by') == 'client':
+            clients = data.get('clients') or []
+            if not clients:
+                story.append(Paragraph('No completed tasks in this period.', s_meta))
+            for c in clients:
+                story.append(Paragraph('%s — %s task(s), %s' % (
+                    _esc(c.get('client_name') or '—'), c.get('task_count', 0),
+                    c.get('total_display', '0h')), s_sect))
+                head = ['Ref', 'Task', 'Project', 'Assignee', 'Completed', 'Hours']
+                rows = [[
+                    Paragraph(_esc(t.get('ref')), cell), Paragraph(_esc(t.get('name')), cell),
+                    Paragraph(_esc(t.get('project_name')), cell), Paragraph(_esc(t.get('assignee')), cell),
+                    t.get('completion_date', ''), t.get('hours_display', ''),
+                ] for t in c.get('tasks', [])]
+                story.append(_tbl(head, rows, [24 * mm, 44 * mm, 34 * mm, 30 * mm, 22 * mm, 18 * mm]))
+                story.append(Spacer(1, 6))
+        else:
+            rows_data = data.get('tasks') or []
+            if not rows_data:
+                story.append(Paragraph('No completed tasks in this period.', s_meta))
+            else:
+                head = ['Ref', 'Task', 'Client', 'Project', 'Assignee', 'Completed', 'Hours']
+                rows = [[
+                    Paragraph(_esc(t.get('ref')), cell), Paragraph(_esc(t.get('name')), cell),
+                    Paragraph(_esc(t.get('client_name')), cell), Paragraph(_esc(t.get('project_name')), cell),
+                    Paragraph(_esc(t.get('assignee')), cell),
+                    t.get('completion_date', ''), t.get('hours_display', ''),
+                ] for t in rows_data]
+                story.append(_tbl(head, rows, [20 * mm, 38 * mm, 26 * mm, 26 * mm, 26 * mm, 20 * mm, 16 * mm]))
+
+        doc.build(story, onFirstPage=_watermark, onLaterPages=_watermark)
+        return buf.getvalue()
+
+    @http.route('/kpi_reports/my_workday', type='json', auth='user', methods=['POST'], csrf=False)
+    def my_workday_report(self, **params):
+        """A developer's OWN workday report for the mobile app. HARD-SCOPED to the
+        logged-in user (request.env.user) — it NEVER reads a user_id from the client,
+        so a developer can only ever see their own days, never a colleague's. No admin
+        gate. Returns per-day presence, productive hours, and the tasks they worked on.
+        Params: from_date / to_date (default = last 30 days)."""
+        user = request.env.user
+        try:
+            import datetime as _dt
+            from collections import defaultdict
+            today = fields.Date.context_today(user)
+            from_date = fields.Date.from_string(params.get('from_date')) if params.get('from_date') else (today - _dt.timedelta(days=30))
+            to_date = fields.Date.from_string(params.get('to_date')) if params.get('to_date') else today
+
+            uid = user.id  # HARD-SCOPED — deliberately NOT from params
+            Session = request.env['kpi.work.session'].sudo()
+            Log = request.env['kpi.time.log'].sudo()
+
+            days = defaultdict(lambda: {'presence': 0.0, 'productive': 0.0, 'tasks': {}, 'sessions': 0})
+            for s in Session.search([('user_id', '=', uid),
+                                     ('session_date', '>=', from_date),
+                                     ('session_date', '<=', to_date)]):
+                d = str(s.session_date)
+                days[d]['presence'] += float(s.presence_seconds or 0.0)
+                days[d]['productive'] += float(s.productive_seconds or 0.0)
+                days[d]['sessions'] += 1
+
+            for log in Log.search([('user_id', '=', uid), ('is_active', '=', False),
+                                   ('work_date', '>=', from_date), ('work_date', '<=', to_date)]):
+                k = log.kpi_id
+                if not k:
+                    continue
+                slot = days[str(log.work_date)]['tasks'].setdefault(
+                    k.id, {'ref': k.external_ref or f"#{k.id}", 'name': k.name or '', 'secs': 0.0})
+                slot['secs'] += float(log.duration_seconds or 0.0)
+
+            def _fmt(secs):
+                s = int(secs or 0)
+                h, rem = divmod(s, 3600)
+                m = rem // 60
+                return (f"{h}h {m}m" if h else f"{m}m") if (h or m) else "0h"
+
+            result = []
+            for d in sorted(days.keys(), reverse=True):
+                info = days[d]
+                tasks = sorted(info['tasks'].values(), key=lambda x: -x['secs'])
+                result.append({
+                    'date': d,
+                    'presence_display': _fmt(info['presence']),
+                    'productive_display': _fmt(info['productive']),
+                    'session_count': info['sessions'],
+                    'task_count': len(tasks),
+                    'tasks': [{'ref': t['ref'], 'name': t['name'], 'hours_display': _fmt(t['secs'])} for t in tasks],
+                })
+            return {'status': True, 'user_name': user.name or user.login or '',
+                    'from_date': str(from_date), 'to_date': str(to_date), 'days': result}
+        except Exception as e:
+            import logging, traceback
+            logging.getLogger(__name__).error(f"my_workday_report: {e}\n{traceback.format_exc()}")
             return {'status': False, 'message': str(e)}
 
     # ============================================================
