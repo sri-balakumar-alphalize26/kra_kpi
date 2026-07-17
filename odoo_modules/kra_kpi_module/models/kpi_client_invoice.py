@@ -140,19 +140,29 @@ class KpiClientInvoice(models.Model):
                     v['currency_id'] = client.currency_id.id
         return super().create(vals_list)
 
+    def _is_locked_line(self, line):
+        """A KPI line is 'locked' (already billed elsewhere) only while THIS invoice is a
+        DRAFT and the task already sits on a DIFFERENT finalized/sent invoice. Lock is a
+        draft-only exclusion — a finalized/sent invoice always counts its OWN lines, so its
+        issued total never changes when another invoice later bills a shared task."""
+        self.ensure_one()
+        return bool(self.state == 'draft' and line.kpi_id and line.kpi_id.is_invoiced
+                    and line.kpi_id.invoiced_on_id != self)
+
     @api.depends('line_ids', 'line_ids.quoted_hours', 'line_ids.actual_hours',
-                 'line_ids.line_type', 'line_ids.unit_price', 'hourly_rate', 'billing_method')
+                 'line_ids.line_type', 'line_ids.unit_price', 'hourly_rate', 'billing_method',
+                 'line_ids.kpi_id.is_invoiced', 'line_ids.kpi_id.invoiced_on_id', 'state')
     def _compute_totals(self):
         for inv in self:
-            kpi_lines = inv.line_ids.filtered(lambda l: l.line_type == 'kpi')
+            kpi_lines = inv.line_ids.filtered(lambda l: l.line_type == 'kpi' and not inv._is_locked_line(l))
             adj_lines = inv.line_ids.filtered(lambda l: l.line_type == 'adjustment')
             inv.total_quoted_hours = sum(kpi_lines.mapped('quoted_hours'))
             inv.total_actual_hours = sum(kpi_lines.mapped('actual_hours'))
             inv.total_adjusted_hours = sum(adj_lines.mapped('quoted_hours'))
             inv.grand_total_hours = inv.total_quoted_hours + inv.total_adjusted_hours
             if inv.billing_method == 'per_task':
-                # Each line carries its own flat price; the total is their sum.
-                inv.total_amount = sum(inv.line_ids.mapped('unit_price'))
+                # Each line carries its own flat price; the total sums the billable ones.
+                inv.total_amount = sum((kpi_lines + adj_lines).mapped('unit_price'))
             else:
                 inv.total_amount = inv.grand_total_hours * (inv.hourly_rate or 0.0)
 
@@ -307,6 +317,11 @@ class KpiClientInvoice(models.Model):
         for inv in self:
             if inv.state != 'draft':
                 raise ValidationError("Only Draft invoices can be finalized.")
+            # Double-billing guard: drop any line whose task is already billed on
+            # another finalized/sent invoice, so nothing is billed twice.
+            locked = inv.line_ids.filtered(lambda l: inv._is_locked_line(l))
+            if locked:
+                locked.unlink()
             inv.state = 'finalized'
 
     def action_send(self):
@@ -350,6 +365,18 @@ class KpiClientInvoice(models.Model):
 
     def action_reset_draft(self):
         for inv in self:
+            # Guard the double-billing lock: resetting to draft unlocks this invoice's
+            # tasks (is_invoiced recomputes False), so they could be billed again. Never
+            # allow that once the client has the invoice or has paid.
+            if inv.payment_status == 'paid':
+                raise ValidationError(
+                    "Invoice %s is marked PAID — it can't be reset to draft (that would let "
+                    "already-paid work be billed again). Mark it Unpaid first if a correction "
+                    "is genuinely needed." % (inv.name or ''))
+            if inv.state == 'sent':
+                raise ValidationError(
+                    "Invoice %s has already been sent to the client — it can't be reset to "
+                    "draft. Only a finalized (un-sent) invoice can go back to draft." % (inv.name or ''))
             inv.state = 'draft'
 
     def _serialize_for_list(self):
@@ -524,6 +551,11 @@ class KpiClientInvoiceLine(models.Model):
             contributors = json.loads(self.contributor_data) if self.contributor_data else []
         except (ValueError, TypeError):
             contributors = []
+        # Locked = task billed on a DIFFERENT finalized/sent invoice, and THIS invoice is
+        # still a draft (only drafts red-flag/exclude already-billed lines — finalized
+        # invoices are frozen and show every line normally).
+        locked = bool(self.invoice_id.state == 'draft' and self.kpi_id and self.kpi_id.is_invoiced
+                      and self.kpi_id.invoiced_on_id != self.invoice_id)
         return {
             'id': self.id,
             'sequence': self.sequence or 0,
@@ -536,4 +568,6 @@ class KpiClientInvoiceLine(models.Model):
             'task_kind': self.task_kind or '',
             'notes': self.notes or '',
             'contributors': contributors,
+            'already_invoiced': locked,
+            'invoiced_on': (self.kpi_id.invoiced_on_id.name or '') if locked else '',
         }

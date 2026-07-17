@@ -1034,11 +1034,21 @@ class KpiNotify(models.Model):
             if len(short_body) > 160:
                 short_body = short_body[:157] + '...'
 
+            # Tap-target id rides in the context for non-task events (the same way
+            # the in-app feed stamps snapshot_id / report_id): a "daily report ready"
+            # push should open the report, not the anchor task.
+            _push_data = {'kpi_id': self.id, 'event': event}
+            _rep_id = self.env.context.get('kpi_daily_report_id')
+            if _rep_id:
+                _push_data['report_id'] = _rep_id
+            _snap_id = self.env.context.get('kpi_snapshot_id')
+            if _snap_id:
+                _push_data['snapshot_id'] = _snap_id
             messages = [{
                 'to': tok,
                 'title': title,
                 'body': short_body,
-                'data': {'kpi_id': self.id, 'event': event},
+                'data': _push_data,
                 'sound': 'default',
                 'channelId': 'default',
             } for tok in tokens]

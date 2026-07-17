@@ -1279,6 +1279,11 @@ class KpiReportsAPI(http.Controller):
             if not line.exists():
                 return {'status': False, 'message': 'Line not found.'}
             line.invoice_id._guard_draft()
+            # Already-billed (locked) lines are read-only — the UI disables them, and this
+            # blocks a crafted request from editing them (which would take effect if the
+            # owning invoice were ever reset to draft).
+            if line.invoice_id._is_locked_line(line):
+                return {'status': False, 'message': 'This task is already billed on another invoice and cannot be edited here.'}
             updates = {}
             for k in ('description', 'notes'):
                 if k in params:
@@ -3110,13 +3115,25 @@ class KpiReportsAPI(http.Controller):
             if group_by not in ('task', 'client'):
                 group_by = 'task'
 
+            # The picked dates are the user's LOCAL calendar days. completion_date and
+            # time-log start_time are stored naive-UTC, so convert the local
+            # midnight..midnight window to UTC bounds — otherwise tasks completed near
+            # local midnight land in the wrong day/period.
+            import pytz
+            from datetime import datetime as _dtcls, time as _tcls
+            tz = pytz.timezone(user.tz or 'Asia/Kolkata')
+            start_s = fields.Datetime.to_string(
+                tz.localize(_dtcls.combine(from_date, _tcls.min)).astimezone(pytz.UTC).replace(tzinfo=None))
+            end_s = fields.Datetime.to_string(
+                tz.localize(_dtcls.combine(to_date, _tcls.max)).astimezone(pytz.UTC).replace(tzinfo=None))
+
             Kpi = request.env['kra.kpi'].sudo()
             Log = request.env['kpi.time.log'].sudo()
 
             domain = [
                 ('task_state', '=', 'completed'),
-                ('completion_date', '>=', str(from_date) + ' 00:00:00'),
-                ('completion_date', '<=', str(to_date) + ' 23:59:59'),
+                ('completion_date', '>=', start_s),
+                ('completion_date', '<=', end_s),
             ]
             if params.get('client_kra_id'):
                 domain.append(('client_kra_id', '=', int(params['client_kra_id'])))
@@ -3133,8 +3150,8 @@ class KpiReportsAPI(http.Controller):
                 logs = Log.search([
                     ('kpi_id', '=', t.id),
                     ('is_active', '=', False),
-                    ('work_date', '>=', from_date),
-                    ('work_date', '<=', to_date),
+                    ('start_time', '>=', start_s),
+                    ('start_time', '<=', end_s),
                 ])
                 secs = sum(logs.mapped('duration_seconds'))
                 rows.append({

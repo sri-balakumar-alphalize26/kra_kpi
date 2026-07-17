@@ -121,6 +121,18 @@ class KpiMaster(models.Model):
         help='Nearest ancestor KRA where is_client=True.'
     )
 
+    # Double-billing lock: reverse link to the invoice lines this task appears on,
+    # plus a stored flag that is True once the task is on a FINALIZED/SENT invoice
+    # (draft invoices don't lock — still editable). Auto-maintained, so it back-fills
+    # on upgrade and clears itself when an invoice is reset to draft or deleted.
+    invoice_line_ids = fields.One2many('kpi.client.invoice.line', 'kpi_id', string='Invoice Lines')
+    is_invoiced = fields.Boolean(
+        string='Already Billed', compute='_compute_is_invoiced', store=True,
+        help='True when this task is on a finalized/sent client invoice — it cannot be billed again.')
+    invoiced_on_id = fields.Many2one(
+        'kpi.client.invoice', string='Billed On', compute='_compute_is_invoiced', store=True,
+        help='The finalized/sent invoice this task was billed on.')
+
     # Optional delivery / build version label shown on the completion certificate
     delivery_version = fields.Char(string='Delivery Version',
         help='Optional version label for the completion certificate (e.g. "APK v1.0.5").')
@@ -715,6 +727,16 @@ class KpiMaster(models.Model):
                     break
                 cur = cur.parent_id
             rec.client_kra_id = found
+
+    @api.depends('invoice_line_ids', 'invoice_line_ids.invoice_id.state')
+    def _compute_is_invoiced(self):
+        """A task is 'billed' once it sits on a finalized or sent invoice line.
+        Draft invoices are still editable, so they don't lock the task."""
+        for task in self:
+            locked = task.invoice_line_ids.filtered(
+                lambda l: l.invoice_id and l.invoice_id.state in ('finalized', 'sent'))
+            task.is_invoiced = bool(locked)
+            task.invoiced_on_id = locked[:1].invoice_id if locked else False
 
     def get_estimate_display(self):
         """Return estimate in HH:MM format"""

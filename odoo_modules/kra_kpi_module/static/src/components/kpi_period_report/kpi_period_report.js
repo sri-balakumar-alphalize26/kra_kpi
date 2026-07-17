@@ -285,6 +285,9 @@ export class KpiPeriodReport extends Component {
         if (clientWise) {
             for (const c of this.state.clientGroups) {
                 y += 6;
+                // Keep the client label with its table: if we're near the page bottom,
+                // start a fresh page so the label never orphans/clips above the margin.
+                if (y > pageH - 80) { doc.addPage(); y = M; }
                 doc.setFont('times', 'bold'); doc.setFontSize(11);
                 const label = showHours ? `${c.client_name}  —  ${c.task_count} tasks, ${c.total_display}` : `${c.client_name}  —  ${c.task_count} tasks`;
                 doc.text(label, M, y); y += 4;

@@ -856,6 +856,9 @@ class KraKpiAPI(http.Controller):
                 # workday" opens that day's frozen summary image; without this the
                 # row is untappable, because the app routes purely on kpi_id.
                 'snapshot_id': n.snapshot_id.id if n.snapshot_id else False,
+                # Same idea for the daily task report: a "daily report ready" row
+                # opens that report's PDF, not a task.
+                'report_id': n.report_id.id if n.report_id else False,
                 'event': n.event or "",
                 'title': n.title or "",
                 'body': n.body or "",

@@ -442,7 +442,7 @@ const TEMPLATE = xml/* xml */`
                                 t-on-click="sendInvoice">
                             <i class="fa fa-paper-plane me-1"/> Mark Sent
                         </button>
-                        <button t-if="state.invoice.state !== 'draft'"
+                        <button t-if="state.invoice.state === 'finalized' and state.invoice.payment_status !== 'paid'"
                                 class="btn btn-outline-secondary"
                                 t-on-click="resetDraft">
                             <i class="fa fa-undo me-1"/> Reset to Draft
@@ -553,7 +553,7 @@ const TEMPLATE = xml/* xml */`
                 </thead>
                 <tbody>
                     <t t-foreach="state.invoice.lines" t-as="line" t-key="line.id">
-                        <tr t-att-class="line.line_type === 'adjustment' ? 'table-warning' : ''">
+                        <tr t-att-class="line.already_invoiced ? 'table-danger' : (line.line_type === 'adjustment' ? 'table-warning' : '')">
                             <td>
                                 <button t-if="line.line_type === 'kpi' and !state.isPortal and line.contributors and line.contributors.length > 0"
                                         class="btn btn-sm btn-link p-0"
@@ -572,17 +572,21 @@ const TEMPLATE = xml/* xml */`
                                       t-esc="line.task_kind.toUpperCase()"/>
                             </td>
                             <td>
-                                <input t-if="!state.isPortal and state.invoice.state === 'draft'"
+                                <input t-if="!state.isPortal and state.invoice.state === 'draft' and !line.already_invoiced"
                                        type="text" class="form-control form-control-sm"
                                        t-att-value="line.description"
                                        t-on-blur="(ev) => this.saveLineField(line.id, 'description', ev.target.value)"/>
                                 <span t-else="" t-esc="line.description"/>
+                                <span t-if="line.already_invoiced" class="badge bg-danger ms-2">
+                                    <i class="fa fa-lock me-1"/> Billed on <t t-esc="line.invoiced_on"/>
+                                </span>
                             </td>
                             <td class="text-end">
                                 <input t-if="!state.isPortal and state.invoice.state === 'draft'"
                                        type="number" step="0.25"
                                        class="form-control form-control-sm text-end"
                                        t-att-value="line.quoted_hours"
+                                       t-att-disabled="line.already_invoiced"
                                        t-on-blur="(ev) => this.saveLineField(line.id, 'quoted_hours', ev.target.value)"/>
                                 <span t-else="" t-esc="line.quoted_hours + 'h'"/>
                             </td>
@@ -595,6 +599,7 @@ const TEMPLATE = xml/* xml */`
                                        type="number" step="0.01"
                                        class="form-control form-control-sm text-end"
                                        t-att-value="line.unit_price"
+                                       t-att-disabled="line.already_invoiced"
                                        t-on-blur="(ev) => this.saveLineField(line.id, 'unit_price', ev.target.value)"/>
                                 <span t-else="" t-esc="line.unit_price.toFixed(2)"/>
                             </td>
@@ -880,6 +885,9 @@ class _BaseInvoiceComponent extends Component {
         if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
         const pdf = r.data;
         const inv = pdf.invoice;
+        // Already-billed (locked) lines are excluded from the total, so drop them from the
+        // printed line items too — otherwise the PDF rows wouldn't sum to the stated total.
+        const pdfLines = (inv.lines || []).filter(l => !l.already_invoiced);
         const showMoney = this.state.showAmounts !== false;   // toggle OFF = cost-free PDF
         const hasRate = pdf.has_rate;
         const rate = inv.hourly_rate || 0;
@@ -985,21 +993,21 @@ class _BaseInvoiceComponent extends Component {
             // Clean, cost-free delivery sheet — tasks + hours (or type), no money.
             if (isPerTask) {
                 head = [['Description', 'Type']];
-                body = (inv.lines || []).map(l => {
+                body = pdfLines.map(l => {
                     const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
                     const kind = (l.task_kind || '').toUpperCase() || (l.line_type === 'adjustment' ? 'ADJ' : '—');
                     return [desc, kind];
                 });
             } else {
                 head = [['Description', 'Hours']];
-                body = (inv.lines || []).map(l => {
+                body = pdfLines.map(l => {
                     const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
                     return [desc, (l.quoted_hours || 0).toFixed(2)];
                 });
             }
         } else if (isPerTask) {
             head = [['Description', 'Type', 'Price']];
-            body = (inv.lines || []).map(l => {
+            body = pdfLines.map(l => {
                 const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
                 const kind = (l.task_kind || '').toUpperCase() || (l.line_type === 'adjustment' ? 'ADJ' : '—');
                 return [desc, kind, fmtMoney(l.unit_price || 0)];
@@ -1008,7 +1016,7 @@ class _BaseInvoiceComponent extends Component {
             // Hourly + amounts on → always show Hours · Rate · Amount (rate may be 0).
             const rateHeader = `Rate (${fmtMoney(rate)})`;
             head = [['Description', 'Hours', rateHeader, 'Amount']];
-            body = (inv.lines || []).map(l => {
+            body = pdfLines.map(l => {
                 const desc = (l.line_type === 'adjustment' ? '[Adjustment] ' : '') + (l.description || '');
                 const hours = (l.quoted_hours || 0).toFixed(2);
                 const amt = fmtMoney((l.quoted_hours || 0) * rate);
