@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon369.png",
     "userInterfaceStyle": "light",
+    "newArchEnabled": false,
     "android": {
       "package": "com.alphalize.krakpi",
       "permissions": [
@@ -54,7 +55,8 @@
         {
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to take a profile picture."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "extra": {
       "eas": {
