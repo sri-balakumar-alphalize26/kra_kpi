@@ -449,7 +449,9 @@ class KpiMaster(models.Model):
             rec.task_state = 'in_progress'
             rec.paused_reason = False
 
-    def pause_task(self, reason=''):
+    def pause_task(self, reason='', reason_code=''):
+        # reason_code (e.g. 'away') is passed by _away_now and the /kra_kpi/task/pause
+        # route; accept it here (was missing → TypeError on tab-close away + manual pause).
         for rec in self:
             if rec.timer_start_datetime:
                 self._add_elapsed(rec)
@@ -458,6 +460,8 @@ class KpiMaster(models.Model):
                 self.env['kpi.time.log'].stop_session(rec.id, self.env.user.id)
             rec.task_state = 'paused'
             rec.paused_reason = reason or rec.paused_reason
+            if reason_code:
+                rec.pause_reason_code = reason_code
 
     def resume_task(self):
         for rec in self:
