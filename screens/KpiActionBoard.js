@@ -24,16 +24,26 @@ import {
 } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
 import { scheduleTaskReminder, cancelTaskReminder } from '../services/reminders';
-import { getReminders, setReminder, removeReminder } from '../api/session';
+import { scheduleTaskAlarm, stopAlarm, alarmAvailable, pickAlarmSound, titleFromUri } from '../services/alarm';
+import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets, getAlarmSound, setAlarmSound, getAlarmSettings, setAlarmSettings } from '../api/session';
+import DurationTimePicker from '../components/DurationTimePicker';
 
 const log = createLogger('ActionBoard');
 
-// Preset reminder durations offered in the picker (seconds).
-const REMINDER_PRESETS = [
-  { label: '15 min', secs: 15 * 60 }, { label: '30 min', secs: 30 * 60 },
-  { label: '1 hr', secs: 60 * 60 }, { label: '1 hr 30 min', secs: 90 * 60 },
-  { label: '2 hr', secs: 120 * 60 },
-];
+// Default "quick timer" presets (MINUTES) offered in the reminder picker. The user
+// can add/remove their own (persisted per device via api/session); these seed the
+// list the first time. Capped at MAX_PRESETS chips.
+const DEFAULT_PRESET_MINS = [15, 30, 60, 90, 120];
+const MAX_PRESETS = 8;
+
+// Pretty label for a preset given in minutes: 15→"15 min", 60→"1 hr", 90→"1 hr 30 min".
+function fmtPresetLabel(mins) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h && m) return `${h} hr ${m} min`;
+  if (h) return `${h} hr`;
+  return `${m} min`;
+}
 // States where a task is still being worked (same set the action buttons key off).
 // A reminder is auto-cancelled once its task moves OUT of these (completed / review).
 const WORKABLE_STATES = ['assigned', 'urgent', 'important', 'regular', 'queue_waiting',
@@ -45,10 +55,32 @@ const rStyles = StyleSheet.create({
   sheet: { width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 18, padding: 18, ...SHADOW },
   title: { fontSize: 16, fontWeight: '900', color: COLORS.navy },
   taskName: { fontSize: 13, fontWeight: '700', color: COLORS.muted, marginTop: 3, marginBottom: 12 },
+  modeRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
+  modeBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.line, backgroundColor: '#fff' },
+  modeBtnActive: { borderColor: COLORS.primary, backgroundColor: '#E0ECFF' },
+  modeTxt: { fontSize: 13.5, fontWeight: '800', color: COLORS.muted },
+  modeTxtActive: { color: COLORS.primary },
+  modeHint: { fontSize: 11.5, color: COLORS.faint, marginBottom: 12, marginTop: 4 },
+  soundRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 12, backgroundColor: '#F7FAFF', marginBottom: 12 },
+  soundLabel: { flex: 1, fontSize: 13.5, fontWeight: '700', color: COLORS.muted },
+  soundValue: { color: COLORS.primary, fontWeight: '800' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: COLORS.line, backgroundColor: '#fff' },
   chipTxt: { fontSize: 13, fontWeight: '800', color: COLORS.primary },
   chipEst: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  // "+" chip that opens the quick-timer manager.
+  chipAdd: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999, borderWidth: 1.5, borderStyle: 'dashed', borderColor: COLORS.primary, backgroundColor: '#EAF2FF' },
+  chipAddTxt: { fontSize: 13, fontWeight: '900', color: COLORS.primary },
+  // Quick-timer manager popup.
+  mgrHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  mgrList: { marginTop: 8, marginBottom: 4 },
+  mgrRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.line },
+  mgrLabel: { fontSize: 14.5, fontWeight: '800', color: COLORS.navy },
+  mgrDel: { width: 30, height: 30, borderRadius: 15, backgroundColor: COLORS.redBg, alignItems: 'center', justifyContent: 'center' },
+  mgrAddRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
+  mgrAddBtn: { width: 44, height: 44, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+  mgrAddBtnTxt: { color: '#fff', fontSize: 24, fontWeight: '800', lineHeight: 26 },
+  mgrHint: { fontSize: 12, color: COLORS.faint, marginTop: 12 },
   customRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   customInput: { flex: 1, borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 44, paddingHorizontal: 12, fontSize: 14.5, color: COLORS.ink, backgroundColor: '#fff' },
   setBtn: { backgroundColor: COLORS.primary, borderRadius: 10, paddingHorizontal: 18, height: 44, alignItems: 'center', justifyContent: 'center' },
@@ -244,7 +276,7 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
                 const active = reminder && Date.parse(reminder.whenIso) > (nowMs || Date.now());
                 return (
                   <Btn
-                    label={active ? `⏰ ${fmtClock(reminder.whenIso)}` : 'Remind me'}
+                    label={active ? `${reminder.mode === 'alarm' ? '⏰' : '🔔'} ${fmtClock(reminder.whenIso)}` : 'Remind me'}
                     icon={active ? 'notifications' : 'notifications-outline'}
                     kind={active ? 'amber' : 'ghost'}
                     onPress={() => onAction('reminder', task)}
@@ -656,16 +688,101 @@ export default function KpiActionBoard({
   const [reminders, setReminders] = useState({});
   const [reminderFor, setReminderFor] = useState(null);
   const [reminderCustom, setReminderCustom] = useState('');
+  // Which kind of reminder the picker will set: 'notify' = a single sound
+  // notification (expo-notifications); 'alarm' = a full-screen ringing alarm that
+  // loops until Stop (notifee, Android). Seeded from the task's existing reminder.
+  const [reminderMode, setReminderMode] = useState('notify');
+  // User-editable quick-timer presets (minutes), shared by BOTH Notify and Alarm.
+  // presetMgrOpen = the manager popup (opened by the + chip); newPresetMins = its input.
+  const [presetMins, setPresetMins] = useState(DEFAULT_PRESET_MINS);
+  const [presetMgrOpen, setPresetMgrOpen] = useState(false);
+  const [newPresetMins, setNewPresetMins] = useState('');
+  // Chosen system alarm sound { uri, title } (null = device default). Applies to
+  // alarm mode only; shared globally (one setting, like the presets).
+  const [alarmSound, setAlarmSoundState] = useState(null);
+  // Global alarm behaviour { ringMins, snoozeMins }, and the open wheel-picker
+  // request { field, mode, initial, title } (null = closed).
+  const [alarmSettings, setAlarmSettingsState] = useState({ ringMins: 5, snoozeMins: 5 });
+  const [durPicker, setDurPicker] = useState(null);
   useEffect(() => {
     getReminders().then((m) => { setReminders(m || {}); log.info('reminders restored', { count: Object.keys(m || {}).length }); }).catch(() => {});
+    // null = never customised (keep defaults); an array (even empty) = the user's
+    // saved list, honoured as-is so deletions stick across relaunches.
+    getReminderPresets().then((arr) => { if (Array.isArray(arr)) { setPresetMins(arr); log.info('reminder presets restored', { count: arr.length }); } }).catch(() => {});
+    getAlarmSound().then((snd) => {
+      if (snd) {
+        // Always re-derive the name from the URI so old/generic saves self-heal.
+        const fixed = { ...snd, title: titleFromUri(snd.uri) || snd.title };
+        setAlarmSoundState(fixed);
+        log.info('alarm sound restored', { title: fixed.title, uri: fixed.uri });
+      }
+    }).catch(() => {});
+    getAlarmSettings().then((s) => { setAlarmSettingsState(s); log.info('alarm settings restored', s); }).catch(() => {});
   }, []);
+
+  // Open the phone's ringtone picker and save the chosen system alarm sound.
+  const chooseAlarmSound = async () => {
+    log.info('alarm sound: open picker', { current: alarmSound?.uri || 'default' });
+    const snd = await pickAlarmSound(alarmSound);
+    if (!snd) { log.info('alarm sound: unchanged'); return; }
+    setAlarmSoundState(snd);
+    await setAlarmSound(snd);
+    log.info('alarm sound: saved', { title: snd.title, uri: snd.uri });
+  };
+
+  // Wheel-picker confirm → route the value: ring/snooze settings, or a wall-clock
+  // time turned into "remind me in N seconds".
+  const onDurConfirm = async (result) => {
+    const dp = durPicker;
+    setDurPicker(null);
+    if (!dp) return;
+    if (dp.field === 'ring') {
+      const ringMins = Math.max(0, result.minutes);
+      setAlarmSettingsState((s) => ({ ...s, ringMins }));
+      await setAlarmSettings({ ringMins });
+      log.info('alarm setting: saved', { field: 'ringMins', value: ringMins });
+    } else if (dp.field === 'snooze') {
+      const snoozeMins = Math.max(1, result.minutes);
+      setAlarmSettingsState((s) => ({ ...s, snoozeMins }));
+      await setAlarmSettings({ snoozeMins });
+      log.info('alarm setting: saved', { field: 'snoozeMins', value: snoozeMins });
+    } else if (dp.field === 'customTime') {
+      const t = new Date(); t.setHours(result.hour24, result.minute, 0, 0);
+      if (t.getTime() <= Date.now()) t.setDate(t.getDate() + 1);   // already passed → tomorrow
+      const secs = Math.max(1, Math.round((t.getTime() - Date.now()) / 1000));
+      log.info('custom time picked', { hour24: result.hour24, minute: result.minute, secs });
+      applyReminder(dp.task, secs);
+    }
+  };
+
+  // Cancel whichever kind a stored reminder is — an alarm loops in the OS (notifee)
+  // and must be stopped via stopAlarm; a notify reminder is a scheduled expo notif.
+  const cancelReminderEntry = async (rem) => {
+    if (!rem?.notifId) return;
+    log.info('reminder: cancel entry', { notifId: rem.notifId, mode: rem.mode || 'notify' });
+    if (rem.mode === 'alarm') await stopAlarm(rem.notifId);
+    else await cancelTaskReminder(rem.notifId);
+  };
 
   const applyReminder = async (task, secs) => {
     if (!task) return;
-    log.info('reminder: apply', { id: task.id, mins: Math.round((secs / 60) * 10) / 10 });
+    // Alarm needs notifee's native module (post-rebuild). If it's not there yet,
+    // fall back to the plain notification so the reminder still gets set.
+    const wantAlarm = reminderMode === 'alarm' && Platform.OS === 'android' && alarmAvailable();
+    log.info('reminder: apply', { id: task.id, mins: Math.round((secs / 60) * 10) / 10, mode: wantAlarm ? 'alarm' : 'notify', alarmAvail: alarmAvailable() });
     const prev = reminders[String(task.id)];
-    if (prev?.notifId) await cancelTaskReminder(prev.notifId);
-    const r = await scheduleTaskReminder(task, secs);
+    await cancelReminderEntry(prev);
+    let r = null;
+    if (wantAlarm) {
+      // Alarm: schedule an exact full-screen ringing notification via notifee.
+      const whenMs = Date.now() + Math.max(1, Math.round(secs)) * 1000;
+      const notifId = await scheduleTaskAlarm(task, whenMs);
+      if (notifId) r = { notifId, whenIso: new Date(whenMs).toISOString(), mode: 'alarm' };
+    } else {
+      // Notify: a single scheduled notification (also the iOS fallback for alarm).
+      const res = await scheduleTaskReminder(task, secs);
+      if (res) r = { ...res, mode: 'notify' };
+    }
     setReminderFor(null); setReminderCustom('');
     if (!r) {
       log.warn('reminder: not set (permission/schedule failed)', { id: task.id });
@@ -674,16 +791,37 @@ export default function KpiActionBoard({
     }
     await setReminder(task.id, r);
     setReminders((m) => ({ ...m, [String(task.id)]: r }));
-    log.info('reminder: set', { id: task.id, whenIso: r.whenIso });
+    log.info('reminder: set', { id: task.id, whenIso: r.whenIso, mode: r.mode });
   };
   const clearReminderFor = async (task) => {
     if (!task) return;
     log.info('reminder: clear', { id: task.id });
     const prev = reminders[String(task.id)];
-    if (prev?.notifId) await cancelTaskReminder(prev.notifId);
+    await cancelReminderEntry(prev);
     await removeReminder(task.id);
     setReminders((m) => { const n = { ...m }; delete n[String(task.id)]; return n; });
     setReminderFor(null);
+  };
+
+  // Quick-timer preset management (shared by Notify + Alarm). Keeps the list
+  // positive, deduped, sorted ascending, and capped at MAX_PRESETS; persists it.
+  const savePresets = (arr) => {
+    const clean = Array.from(new Set(arr.filter((n) => Number.isFinite(n) && n > 0)))
+      .sort((a, b) => a - b).slice(0, MAX_PRESETS);
+    setPresetMins(clean);
+    setReminderPresets(clean);
+    return clean;
+  };
+  const addPreset = () => {
+    const m = parseInt(newPresetMins, 10);
+    if (!m || m <= 0 || presetMins.length >= MAX_PRESETS) return;
+    savePresets([...presetMins, m]);
+    setNewPresetMins('');
+    log.info('reminder: preset added', { mins: m });
+  };
+  const removePreset = (m) => {
+    savePresets(presetMins.filter((x) => x !== m));
+    log.info('reminder: preset removed', { mins: m });
   };
   // Once a reminded task leaves the workable set (completed / sent for review),
   // cancel its reminder so it never pings about a finished task.
@@ -699,7 +837,10 @@ export default function KpiActionBoard({
         const done = !WORKABLE_STATES.includes(t.task_state);     // task finished / in review
         if (expired || done) {
           log.info(expired ? 'reminder: expired, cleared' : 'reminder: auto-cancel (task done)', { id: t.id, state: t.task_state });
-          if (rem.notifId) await cancelTaskReminder(rem.notifId);
+          // Only cancel the OS reminder if it hasn't fired yet (task finished early).
+          // An already-fired alarm must keep ringing until the user taps Stop, so
+          // don't silence it here — just drop it from the card map.
+          if (!expired) await cancelReminderEntry(rem);
           await removeReminder(t.id);
           next = next || { ...reminders };
           delete next[key];
@@ -1081,6 +1222,9 @@ export default function KpiActionBoard({
     log.info('user action', kind, { id: task.id, name: task.name, state: task.task_state });
     if (kind === 'reminder') {
       log.info('reminder: open picker', { id: task.id, name: task.name, state: task.task_state });
+      // Seed the mode toggle from any existing reminder (default 'notify').
+      setReminderMode(reminders[String(task.id)]?.mode === 'alarm' ? 'alarm' : 'notify');
+      setPresetMgrOpen(false);
       setReminderFor(task); setReminderCustom(''); return;
     }
     if (kind === 'reassign') {
@@ -2249,15 +2393,108 @@ export default function KpiActionBoard({
 
       {/* Per-task reminder picker (developer alarm). */}
       <Modal visible={!!reminderFor} transparent animationType="fade" onRequestClose={() => setReminderFor(null)}>
-        <TouchableOpacity style={rStyles.backdrop} activeOpacity={1} onPress={() => setReminderFor(null)}>
+        <TouchableOpacity style={rStyles.backdrop} activeOpacity={1} onPress={() => { setReminderFor(null); setPresetMgrOpen(false); }}>
           <TouchableOpacity style={rStyles.sheet} activeOpacity={1}>
+            {presetMgrOpen ? (
+              <>
+                <View style={rStyles.mgrHeader}>
+                  <Text style={rStyles.title}>Quick timers</Text>
+                  {/* X → back to the Remind-me popup (changes are already saved). */}
+                  <TouchableOpacity onPress={() => setPresetMgrOpen(false)} activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Ionicons name="close" size={22} color={COLORS.muted} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={rStyles.taskName}>Shown in the Remind-me popup for both Notify and Alarm.</Text>
+                <View style={rStyles.mgrList}>
+                  {presetMins.map((m) => (
+                    <View key={m} style={rStyles.mgrRow}>
+                      <Text style={rStyles.mgrLabel}>{fmtPresetLabel(m)}</Text>
+                      <TouchableOpacity style={rStyles.mgrDel} activeOpacity={0.8} onPress={() => removePreset(m)}>
+                        <Ionicons name="trash-outline" size={16} color={COLORS.red} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {presetMins.length === 0 ? (
+                    <Text style={rStyles.mgrHint}>No quick timers yet — add one below.</Text>
+                  ) : null}
+                </View>
+                {presetMins.length < MAX_PRESETS ? (
+                  <View style={rStyles.mgrAddRow}>
+                    <TextInput style={rStyles.customInput} keyboardType="number-pad" placeholder="Minutes (e.g. 45)"
+                      placeholderTextColor={COLORS.faint} value={newPresetMins}
+                      onChangeText={(t) => setNewPresetMins(t.replace(/[^0-9]/g, ''))} onSubmitEditing={addPreset} />
+                    <TouchableOpacity style={[rStyles.mgrAddBtn, !newPresetMins && { opacity: 0.4 }]} disabled={!newPresetMins}
+                      activeOpacity={0.85} onPress={addPreset}>
+                      <Text style={rStyles.mgrAddBtnTxt}>＋</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <Text style={rStyles.mgrHint}>Maximum {MAX_PRESETS} quick timers.</Text>
+                )}
+                <View style={rStyles.footer}>
+                  <View />
+                  <TouchableOpacity onPress={() => setPresetMgrOpen(false)} activeOpacity={0.7}>
+                    <Text style={[rStyles.cancelTxt, { color: COLORS.primary }]}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
             <Text style={rStyles.title}>Remind me about this task</Text>
             <Text style={rStyles.taskName} numberOfLines={2}>{reminderFor?.name}</Text>
+            <View style={rStyles.modeRow}>
+              <TouchableOpacity style={[rStyles.modeBtn, reminderMode === 'notify' && rStyles.modeBtnActive]}
+                activeOpacity={0.85} onPress={() => setReminderMode('notify')}>
+                <Text style={[rStyles.modeTxt, reminderMode === 'notify' && rStyles.modeTxtActive]}>🔔 Notify</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[rStyles.modeBtn, reminderMode === 'alarm' && rStyles.modeBtnActive]}
+                activeOpacity={0.85} onPress={() => setReminderMode('alarm')}>
+                <Text style={[rStyles.modeTxt, reminderMode === 'alarm' && rStyles.modeTxtActive]}>⏰ Alarm</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={rStyles.modeHint}>
+              {reminderMode === 'alarm'
+                ? (alarmAvailable()
+                    ? 'Rings full-screen and loops until you tap Stop.'
+                    : 'Rings full-screen on a dev build; here it falls back to a notification.')
+                : 'A single notification with sound.'}
+            </Text>
+            {/* Pick the alarm's sound from the phone's ringtone picker. Alarm mode +
+                Android. Shown even without the alarm engine (Expo Go) so you can
+                configure it now; the choice takes effect once you're on a dev build. */}
+            {reminderMode === 'alarm' && Platform.OS === 'android' ? (
+              <>
+                <TouchableOpacity style={rStyles.soundRow} activeOpacity={0.8} onPress={chooseAlarmSound}>
+                  <Ionicons name="musical-notes-outline" size={18} color={COLORS.primary} />
+                  <Text style={rStyles.soundLabel} numberOfLines={1}>
+                    Alarm sound: <Text style={rStyles.soundValue}>{alarmSound?.title || 'Default alarm'}</Text>
+                  </Text>
+                  <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
+                </TouchableOpacity>
+                <TouchableOpacity style={rStyles.soundRow} activeOpacity={0.8}
+                  onPress={() => setDurPicker({ field: 'ring', mode: 'duration', initial: alarmSettings.ringMins, title: 'Rings for', infiniteLabel: 'Ring until I stop it' })}>
+                  <Ionicons name="timer-outline" size={18} color={COLORS.primary} />
+                  <Text style={rStyles.soundLabel} numberOfLines={1}>
+                    Rings for: <Text style={rStyles.soundValue}>{alarmSettings.ringMins > 0 ? fmtPresetLabel(alarmSettings.ringMins) : 'Until I stop it'}</Text>
+                  </Text>
+                  <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
+                </TouchableOpacity>
+                <TouchableOpacity style={rStyles.soundRow} activeOpacity={0.8}
+                  onPress={() => setDurPicker({ field: 'snooze', mode: 'duration', initial: alarmSettings.snoozeMins, title: 'Snooze for' })}>
+                  <Ionicons name="bed-outline" size={18} color={COLORS.primary} />
+                  <Text style={rStyles.soundLabel} numberOfLines={1}>
+                    Snooze: <Text style={rStyles.soundValue}>{fmtPresetLabel(alarmSettings.snoozeMins)}</Text>
+                  </Text>
+                  <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
+                </TouchableOpacity>
+              </>
+            ) : null}
             <View style={rStyles.chips}>
-              {REMINDER_PRESETS.map((p) => (
-                <TouchableOpacity key={p.label} style={rStyles.chip} activeOpacity={0.85}
-                  onPress={() => applyReminder(reminderFor, p.secs)}>
-                  <Text style={rStyles.chipTxt}>{p.label}</Text>
+              {presetMins.map((m) => (
+                <TouchableOpacity key={m} style={rStyles.chip} activeOpacity={0.85}
+                  onPress={() => applyReminder(reminderFor, m * 60)}>
+                  <Text style={rStyles.chipTxt}>{fmtPresetLabel(m)}</Text>
                 </TouchableOpacity>
               ))}
               {(() => {
@@ -2272,6 +2509,11 @@ export default function KpiActionBoard({
                   </TouchableOpacity>
                 );
               })()}
+              {/* + chip → opens the quick-timer manager (add/remove presets). */}
+              <TouchableOpacity style={rStyles.chipAdd} activeOpacity={0.85}
+                onPress={() => { setNewPresetMins(''); setPresetMgrOpen(true); }}>
+                <Text style={rStyles.chipAddTxt}>＋</Text>
+              </TouchableOpacity>
             </View>
             <View style={rStyles.customRow}>
               <TextInput style={rStyles.customInput} keyboardType="number-pad" placeholder="Custom minutes"
@@ -2282,6 +2524,14 @@ export default function KpiActionBoard({
                 <Text style={rStyles.setBtnTxt}>Set</Text>
               </TouchableOpacity>
             </View>
+            {/* Or pick an actual clock time to be reminded at (works for both modes). */}
+            <TouchableOpacity style={[rStyles.soundRow, { marginTop: 10, marginBottom: 0 }]} activeOpacity={0.8}
+              onPress={() => setDurPicker({ field: 'customTime', mode: 'clock', task: reminderFor,
+                initial: { hour24: new Date().getHours(), minute: new Date().getMinutes() }, title: 'Remind me at' })}>
+              <Ionicons name="time-outline" size={18} color={COLORS.primary} />
+              <Text style={rStyles.soundLabel}>Or remind me <Text style={rStyles.soundValue}>at a clock time ▸</Text></Text>
+              <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
+            </TouchableOpacity>
             <View style={rStyles.footer}>
               {reminders[String(reminderFor?.id)] ? (
                 <TouchableOpacity onPress={() => clearReminderFor(reminderFor)} activeOpacity={0.7}>
@@ -2292,9 +2542,23 @@ export default function KpiActionBoard({
                 <Text style={rStyles.cancelTxt}>Cancel</Text>
               </TouchableOpacity>
             </View>
+              </>
+            )}
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* Wheel picker for ring / snooze duration and the custom clock-time reminder. */}
+      {durPicker ? (
+        <DurationTimePicker
+          mode={durPicker.mode}
+          initial={durPicker.initial}
+          title={durPicker.title}
+          infiniteLabel={durPicker.infiniteLabel}
+          onCancel={() => { log.info('picker: cancel', { field: durPicker.field }); setDurPicker(null); }}
+          onConfirm={onDurConfirm}
+        />
+      ) : null}
 
       {/* Styled error popup — "Can't start this task", etc. */}
       <Modal visible={!!errorPopup} transparent animationType="fade" onRequestClose={() => setErrorPopup(null)}>

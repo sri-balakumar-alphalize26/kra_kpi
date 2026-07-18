@@ -4,15 +4,22 @@
     "slug": "kra-kpi-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon369.png",
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.alphalize.krakpi",
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_EXACT_ALARM",
+        "android.permission.USE_FULL_SCREEN_INTENT",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.WAKE_LOCK",
+        "android.permission.VIBRATE",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ],
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/icon369.png"
       }
     },
     "ios": {
@@ -23,6 +30,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/withAlarmLockScreen",
       "expo-web-browser",
       [
         "expo-notifications",

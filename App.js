@@ -1,7 +1,7 @@
 // KRA/KPI app shell: spinning KPI-wheel Splash → Welcome → Login (Odoo connect)
 // → Home. A remembered Odoo session boots straight to Home after the splash.
 import React, { useState, useEffect, useRef } from 'react';
-import { BackHandler, View, ActivityIndicator } from 'react-native';
+import { BackHandler, View, ActivityIndicator, AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -31,7 +31,20 @@ import ReassignmentHistory from './screens/ReassignmentHistory';
 import ClientTaskQueue from './screens/ClientTaskQueue';
 import StartWorkingScreen from './screens/StartWorkingScreen';
 import AppLoginScreen from './screens/AppLoginScreen';
+import AlarmScreen from './screens/AlarmScreen';
 import ScreenTransition from './components/ScreenTransition';
+import { scheduleTaskAlarm, stopAlarm } from './services/alarm';
+
+// notifee is a native module, present only after the one-time rebuild. Load it
+// DEFENSIVELY — a static import would throw at launch in a build without the native
+// side and crash the app. Until it's available the alarm event wiring below no-ops;
+// the app runs normally and the notification reminder still works.
+let notifee = null, EventType = {};
+try {
+  const nf = require('@notifee/react-native');
+  notifee = nf.default;
+  EventType = nf.EventType;
+} catch (_) { /* notifee native module absent (pre-rebuild) — alarm inert */ }
 import * as session from './api/session';
 import { getConnection, getRoleState, saveRoleState } from './api/session';
 import { jsonRpc } from './api/odooApi';
@@ -96,6 +109,10 @@ function AppInner() {
   // Invoice to auto-open on the (My) Invoices screen, set when a notification about
   // an invoice is tapped. Null on every other route.
   const [focusInvoiceId, setFocusInvoiceId] = useState(null);
+  // Set when a task ALARM fires (services/alarm.js full-screen intent). Holds
+  // { task, notifId }; while non-null the ringing AlarmScreen takes over the whole
+  // app (even before login) so Stop is always reachable to silence it.
+  const [alarmData, setAlarmData] = useState(null);
   const [devLocked, setDevLocked] = useState(false);  // this user is a developer who must pair
   const [devPaired, setDevPaired] = useState(false);  // developer's device is currently paired
   const [gateReady, setGateReady] = useState(false);  // role gate resolved → avoids a Home flash before the PIN gate
@@ -169,6 +186,50 @@ function AppInner() {
   // Keep a ref to `user` so listeners (registered once) see the latest value.
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
+
+  // A task alarm (notifee) carries data.alarm==='1' + kpi_id + task_name and the
+  // notification id. Show the full-screen ringing screen so the user can Stop it.
+  const routeToAlarm = (notif) => {
+    const data = notif?.data || {};
+    if (String(data.alarm) !== '1') return;
+    log.info('alarm → full-screen', { notifId: notif?.id, kpiId: data.kpi_id });
+    setAlarmData({ task: { id: data.kpi_id, name: data.task_name || '' }, notifId: notif?.id });
+  };
+
+  // STOP: cancel the notification (stops the loop), clear the stored reminder so
+  // the card bell resets, and open the task (if logged in). Then drop the takeover.
+  const stopAlarmAndClose = async () => {
+    const a = alarmData;
+    log.info('alarm: stop pressed', { notifId: a?.notifId, taskId: a?.task?.id });
+    setAlarmData(null);
+    if (a?.notifId) await stopAlarm(a.notifId);
+    if (a?.task?.id) {
+      try { await session.removeReminder(a.task.id); } catch (_) {}
+      if (userRef.current) routeToTask(a.task.id);
+    }
+  };
+
+  // SNOOZE: stop the current ring and re-schedule the same alarm 5 minutes out,
+  // updating the stored reminder so the card bell shows the new time.
+  const snoozeAlarm = async () => {
+    const a = alarmData;
+    log.info('alarm: snooze pressed', { notifId: a?.notifId, taskId: a?.task?.id });
+    setAlarmData(null);
+    if (a?.notifId) await stopAlarm(a.notifId);
+    if (a?.task) {
+      // Snooze length comes from the user's alarm settings (set in the picker).
+      const { snoozeMins } = await session.getAlarmSettings();
+      const mins = Math.max(1, snoozeMins || 5);
+      const whenMs = Date.now() + mins * 60 * 1000;
+      const notifId = await scheduleTaskAlarm(a.task, whenMs);
+      log.info('alarm: snoozed', { taskId: a.task.id, notifId, whenMs, snoozeMins: mins });
+      try {
+        await session.setReminder(a.task.id, {
+          whenIso: new Date(whenMs).toISOString(), notifId, mode: 'alarm',
+        });
+      } catch (_) {}
+    }
+  };
 
   // Restore a remembered session + device-setup state on relaunch.
   useEffect(() => {
@@ -346,6 +407,49 @@ function AppInner() {
     return () => sub.remove();
   }, []);
 
+  // Notifee (task alarm) events. onForegroundEvent covers the app-open cases: the
+  // alarm fired while the app is up (DELIVERED) or the user tapped it (PRESS).
+  // getInitialNotification covers the cold-start / lock-screen case where the
+  // full-screen intent LAUNCHED the app. Both funnel through routeToAlarm, which
+  // shows the full-screen Stop UI. Registered once.
+  useEffect(() => {
+    if (!notifee) return;   // native module absent (pre-rebuild) — no alarm events
+    const unsub = notifee.onForegroundEvent(({ type, detail }) => {
+      const notif = detail?.notification;
+      if (!notif || String(notif?.data?.alarm) !== '1') return;
+      if (type === EventType.DELIVERED || type === EventType.PRESS) {
+        log.info('alarm foreground event', { type, notifId: notif.id });
+        routeToAlarm(notif);
+      }
+    });
+    (async () => {
+      try {
+        const initial = await notifee.getInitialNotification();
+        if (String(initial?.notification?.data?.alarm) === '1') {
+          log.info('cold-start alarm', { notifId: initial.notification.id });
+          routeToAlarm(initial.notification);
+        }
+      } catch (_) {}
+    })();
+    return () => unsub();
+  }, []);
+
+  // Warm lock-screen wake: when the full-screen intent brings a BACKGROUNDED (not
+  // killed) app forward, getInitialNotification won't fire — so on every resume,
+  // check the displayed notifications for a live alarm and show the Stop screen.
+  useEffect(() => {
+    if (!notifee) return;
+    const sub = AppState.addEventListener('change', async (state) => {
+      if (state !== 'active') return;
+      try {
+        const displayed = await notifee.getDisplayedNotifications();
+        const hit = (displayed || []).find((d) => String(d?.notification?.data?.alarm) === '1');
+        if (hit) { log.info('alarm resume-check → full-screen', { notifId: hit.notification?.id }); routeToAlarm(hit.notification); }
+      } catch (_) {}
+    });
+    return () => sub.remove();
+  }, []);
+
   const logout = async () => {
     // Best-effort: stop this device receiving the previous user's banners.
     if (pushTokenRef.current) { unregisterPush(pushTokenRef.current); pushTokenRef.current = null; }
@@ -363,6 +467,12 @@ function AppInner() {
 
   // Splash keeps showing until both the animation and the session read finish.
   if (!ready || restoring) return <SplashScreen onDone={() => setReady(true)} />;
+
+  // A ringing task alarm takes over EVERYTHING (even before login) so Stop is
+  // always reachable to silence it. Wins over Home, the PIN gate, and login.
+  if (alarmData) {
+    return <AlarmScreen alarm={alarmData} onStop={stopAlarmAndClose} onSnooze={snoozeAlarm} />;
+  }
 
   if (user) {
     log.info('render post-login screen', { appScreen, devLocked, devPaired, gateReady });

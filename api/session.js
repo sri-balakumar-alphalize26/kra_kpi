@@ -192,3 +192,71 @@ export async function removeReminder(taskId) {
     }
   } catch (_) {}
 }
+
+// ── Custom "quick timer" presets for the reminder picker ───────────────────
+// A user-editable list of durations (in MINUTES) shown as chips in the Remind-me
+// popup. Local-only. Returns null when the user hasn't customised them yet, so the
+// board can fall back to its built-in defaults.
+
+const K_REMINDER_PRESETS = 'kpi_reminder_presets';
+
+export async function getReminderPresets() {
+  try {
+    const raw = await AsyncStorage.getItem(K_REMINDER_PRESETS);
+    const arr = raw ? JSON.parse(raw) : null;
+    return Array.isArray(arr) ? arr : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export async function setReminderPresets(mins) {
+  try {
+    await AsyncStorage.setItem(K_REMINDER_PRESETS, JSON.stringify(mins || []));
+  } catch (_) {}
+}
+
+// ── Chosen alarm sound (device system ringtone) ────────────────────────────
+// One global { uri, title } picked from the phone's ringtone picker. uri is a
+// content:// string (or null = Silent). Returns null when never set → "default".
+
+const K_ALARM_SOUND = 'kpi_alarm_sound';
+
+export async function getAlarmSound() {
+  try {
+    const raw = await AsyncStorage.getItem(K_ALARM_SOUND);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export async function setAlarmSound(sound) {
+  try {
+    if (sound === null) await AsyncStorage.removeItem(K_ALARM_SOUND);
+    else await AsyncStorage.setItem(K_ALARM_SOUND, JSON.stringify(sound));
+  } catch (_) {}
+}
+
+// Global alarm behaviour: how long it rings before auto-stopping (ringMins; 0 =
+// until the user taps Stop) and the snooze length (snoozeMins). Merged over
+// defaults so a partial save can't drop a field.
+const K_ALARM_SETTINGS = 'kpi_alarm_settings';
+const ALARM_DEFAULTS = { ringMins: 5, snoozeMins: 5 };
+
+export async function getAlarmSettings() {
+  try {
+    const raw = await AsyncStorage.getItem(K_ALARM_SETTINGS);
+    const saved = raw ? JSON.parse(raw) : null;
+    return { ...ALARM_DEFAULTS, ...(saved || {}) };
+  } catch (_) {
+    return { ...ALARM_DEFAULTS };
+  }
+}
+
+export async function setAlarmSettings(partial) {
+  try {
+    const cur = await getAlarmSettings();
+    await AsyncStorage.setItem(K_ALARM_SETTINGS, JSON.stringify({ ...cur, ...(partial || {}) }));
+  } catch (_) {}
+}
