@@ -1314,12 +1314,17 @@ class KraKpiAPI(http.Controller):
         login (must_change=True)."""
         if not self._is_kra_admin(request.env.user):
             return {'status': False, 'message': 'Not authorized'}
-        user = request.env['res.users'].sudo().browse(int(params.get('user_id')))
+        user = request.env['res.users'].sudo().browse(int(params.get('user_id') or 0))
+        if not user.exists():
+            return {'status': False, 'message': 'User not found'}
+        if user.has_group('base.group_system'):
+            return {'status': False, 'message': "The Odoo administrator's password can't be reset here."}
         custom = (params.get('password') or '').strip()
         if custom:
             user.write({
                 'kpi_app_password_hash': user._crypt_context().hash(custom),
                 'kpi_app_must_change_password': True,
+                'password': custom,   # keep the Odoo login password in sync (see _set_app_password)
             })
         else:
             user._seed_default_app_password()
@@ -1341,6 +1346,7 @@ class KraKpiAPI(http.Controller):
         email = (params.get('email') or '').strip()
         role = params.get('kra_role') or params.get('role') or 'developer'
         mobile = re.sub(r'\D', '', params.get('mobile') or '') or False
+        pw = (params.get('password') or '').strip()
         act = params.get('active')
         active = True if act is None else bool(act)
         if not name or not login:
@@ -1368,12 +1374,34 @@ class KraKpiAPI(http.Controller):
                 'group_ids': [(6, 0, groups)],
                 'kpi_mobile_number': mobile,
             })
-            user._seed_default_app_password()   # app PIN = 1111, must_change=True
+            if pw:
+                user._set_app_password(pw)          # admin set a real PIN → usable as-is (no must-change)
+            else:
+                user._seed_default_app_password()   # 1111 + must-change (the red-1111 nag flow)
             return {'status': True, 'user_id': user.id, 'role': self._kra_role_of(user)}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error("user_access_create: %s", e)
             return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_user_access/change_password', type='json', auth='user', methods=['POST'], csrf=False)
+    def user_access_change_password(self, **params):
+        """Admin sets a user's app-login PIN to a SPECIFIC new value (Odoo-style
+        'Change Password'). Unlike reset_password (resets to 1111 + forces a change),
+        this sets the given password and does NOT force a change — the user logs in
+        with it directly."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        user = request.env['res.users'].sudo().browse(int(params.get('user_id') or 0))
+        if not user.exists():
+            return {'status': False, 'message': 'User not found'}
+        if user.has_group('base.group_system'):
+            return {'status': False, 'message': "The Odoo administrator's password can't be changed here."}
+        pw = (params.get('password') or '').strip()
+        if len(pw) < 4:
+            return {'status': False, 'message': 'Password must be at least 4 characters.'}
+        user._set_app_password(pw)
+        return {'status': True}
 
     @http.route('/kpi_user_access/update', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_update(self, **params):

@@ -49,6 +49,7 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [pendingUser, setPendingUser] = useState(null);
+  const [needsSetup, setNeedsSetup] = useState(false);  // password still the default 1111 (not changed yet)
   const [resendIn, setResendIn] = useState(0);   // seconds left before "Resend" is allowed
   // Country / mobile format from the Odoo Configuration screen.
   const [dial, setDial] = useState('91');
@@ -126,7 +127,10 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
       if (state === 'unknown') return fail('This number is not registered. Please contact your admin to register this number.');
       if (state === 'disabled') return fail('Your login is disabled. Contact your admin.');
       if (state === 'wrong_device') return fail(`This device is set up for ${name || 'another account'}. Contact your admin to use it.`);
-      // ready or needs_setup → ask for the password.
+      // ready or needs_setup → ask for the password. needs_setup means the app
+      // password is still the default 1111 (must-change) → show the red reminder on
+      // the password page until they change it (then loginCheck returns 'ready').
+      setNeedsSetup(state === 'needs_setup');
       setStep('password'); setBusy(false);
     } catch (e) { fail('Could not reach the server. Try again.'); }
   }
@@ -288,6 +292,14 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
 
                   {step === 'password' && (
                     <View style={s.form}>
+                      {needsSetup && (
+                        <View style={s.pwWarn}>
+                          <Ionicons name="alert-circle" size={16} color={COLORS.red} />
+                          <Text style={s.pwWarnTxt}>
+                            Your password is still the default <Text style={{ fontWeight: '800' }}>1111</Text>. Please change it — tap “Forgot password?” below to set your own.
+                          </Text>
+                        </View>
+                      )}
                       <View style={s.field}>
                         <Ionicons name="lock-closed-outline" size={18} color={COLORS.muted} />
                         <TextInput
@@ -305,7 +317,7 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
                       <TouchableOpacity onPress={startOtp} style={{ marginTop: 14 }} disabled={busy}>
                         <Text style={s.link}>Forgot password?</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity onPress={() => { setStep('mobile'); setPw(''); setError(''); }} style={{ marginTop: 10 }}>
+                      <TouchableOpacity onPress={() => { setStep('mobile'); setPw(''); setError(''); setNeedsSetup(false); }} style={{ marginTop: 10 }}>
                         <Text style={s.linkMuted}>← Use a different number</Text>
                       </TouchableOpacity>
                     </View>
@@ -422,6 +434,8 @@ const s = StyleSheet.create({
   input: { flex: 1, fontSize: 15.5, color: COLORS.ink, height: '100%' },
   dialPrefix: { fontSize: 15.5, fontWeight: '700', color: COLORS.ink, marginRight: -4 },
   err: { color: COLORS.red, fontSize: 13, marginBottom: 8 },
+  pwWarn: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#FEECEC', borderWidth: 1, borderColor: COLORS.red, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 14 },
+  pwWarnTxt: { flex: 1, color: COLORS.red, fontSize: 12.5, lineHeight: 18, fontWeight: '600' },
   primaryBtn: { backgroundColor: WATER, borderRadius: 12, height: 54, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   primaryTxt: { color: '#fff', fontSize: 16.5, fontWeight: '800' },
   link: { color: WATER, fontSize: 14, fontWeight: '700', textAlign: 'center' },

@@ -238,14 +238,19 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
               {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
               {/* Developer-only per-task alarm: set a local "wrap up" reminder so
                   you don't keep re-checking elapsed vs. estimate. */}
-              {!isAdmin && (
-                <Btn
-                  label={reminder ? `⏰ ${fmtClock(reminder.whenIso)}` : 'Remind me'}
-                  icon={reminder ? 'notifications' : 'notifications-outline'}
-                  kind={reminder ? 'amber' : 'ghost'}
-                  onPress={() => onAction('reminder', task)}
-                />
-              )}
+              {!isAdmin ? (() => {
+                // Show the target time only while the reminder is still in the
+                // FUTURE; once it fires (time passed) the button resets to "Remind me".
+                const active = reminder && Date.parse(reminder.whenIso) > (nowMs || Date.now());
+                return (
+                  <Btn
+                    label={active ? `⏰ ${fmtClock(reminder.whenIso)}` : 'Remind me'}
+                    icon={active ? 'notifications' : 'notifications-outline'}
+                    kind={active ? 'amber' : 'ghost'}
+                    onPress={() => onAction('reminder', task)}
+                  />
+                );
+              })() : null}
             </>
           )}
         </View>
@@ -651,20 +656,29 @@ export default function KpiActionBoard({
   const [reminders, setReminders] = useState({});
   const [reminderFor, setReminderFor] = useState(null);
   const [reminderCustom, setReminderCustom] = useState('');
-  useEffect(() => { getReminders().then(setReminders).catch(() => {}); }, []);
+  useEffect(() => {
+    getReminders().then((m) => { setReminders(m || {}); log.info('reminders restored', { count: Object.keys(m || {}).length }); }).catch(() => {});
+  }, []);
 
   const applyReminder = async (task, secs) => {
     if (!task) return;
+    log.info('reminder: apply', { id: task.id, mins: Math.round((secs / 60) * 10) / 10 });
     const prev = reminders[String(task.id)];
     if (prev?.notifId) await cancelTaskReminder(prev.notifId);
     const r = await scheduleTaskReminder(task, secs);
     setReminderFor(null); setReminderCustom('');
-    if (!r) { showError('Reminder', 'Could not set the reminder — check notification permission in settings.'); return; }
+    if (!r) {
+      log.warn('reminder: not set (permission/schedule failed)', { id: task.id });
+      showError('Reminder', 'Could not set the reminder — check notification permission in settings.');
+      return;
+    }
     await setReminder(task.id, r);
     setReminders((m) => ({ ...m, [String(task.id)]: r }));
+    log.info('reminder: set', { id: task.id, whenIso: r.whenIso });
   };
   const clearReminderFor = async (task) => {
     if (!task) return;
+    log.info('reminder: clear', { id: task.id });
     const prev = reminders[String(task.id)];
     if (prev?.notifId) await cancelTaskReminder(prev.notifId);
     await removeReminder(task.id);
@@ -679,8 +693,13 @@ export default function KpiActionBoard({
       let next = null;
       for (const t of raw) {
         const key = String(t.id);
-        if (reminders[key] && !WORKABLE_STATES.includes(t.task_state)) {
-          if (reminders[key].notifId) await cancelTaskReminder(reminders[key].notifId);
+        const rem = reminders[key];
+        if (!rem) continue;
+        const expired = Date.parse(rem.whenIso) < Date.now();     // already fired
+        const done = !WORKABLE_STATES.includes(t.task_state);     // task finished / in review
+        if (expired || done) {
+          log.info(expired ? 'reminder: expired, cleared' : 'reminder: auto-cancel (task done)', { id: t.id, state: t.task_state });
+          if (rem.notifId) await cancelTaskReminder(rem.notifId);
           await removeReminder(t.id);
           next = next || { ...reminders };
           delete next[key];
@@ -731,6 +750,24 @@ export default function KpiActionBoard({
   useEffect(() => {
     setNowMs(new Date().getTime());
     const id = setInterval(() => setNowMs(new Date().getTime()), TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  // Auto-reset reminders: once a reminder's set time passes, drop it from state so
+  // the card's bell flips back to "Remind me" on its own (no manual refresh) — and
+  // clear it from storage. Runs on a short interval independent of the board poll.
+  useEffect(() => {
+    const id = setInterval(() => {
+      setReminders((prev) => {
+        const now = Date.now();
+        const expired = Object.keys(prev).filter((k) => Date.parse(prev[k].whenIso) < now);
+        if (!expired.length) return prev;
+        const next = { ...prev };
+        expired.forEach((k) => { delete next[k]; removeReminder(k); });
+        log.info('reminder: auto-reset expired', { ids: expired });
+        return next;
+      });
+    }, 5000);
     return () => clearInterval(id);
   }, []);
 
@@ -1042,7 +1079,10 @@ export default function KpiActionBoard({
 
   async function runAction(kind, task) {
     log.info('user action', kind, { id: task.id, name: task.name, state: task.task_state });
-    if (kind === 'reminder') { setReminderFor(task); setReminderCustom(''); return; }
+    if (kind === 'reminder') {
+      log.info('reminder: open picker', { id: task.id, name: task.name, state: task.task_state });
+      setReminderFor(task); setReminderCustom(''); return;
+    }
     if (kind === 'reassign') {
       setReassignFor(task);
       setReassignReason('');

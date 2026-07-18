@@ -24,11 +24,19 @@ export async function fetchUsers() {
   return res || { status: false, users: [] };
 }
 
-// Create a user with a KRA/KPI role only; server seeds the app PIN to 1111.
-export async function createUser({ name, login, email, kra_role, mobile, active }) {
+// Create a user with a KRA/KPI role only. If `password` is given it becomes their
+// app PIN (usable as-is); if blank the server seeds 1111 (must-change red-nag flow).
+export async function createUser({ name, login, email, kra_role, mobile, active, password }) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true, user_id: 999 };
-  return jsonRpc(serverUrl, '/kpi_user_access/create', { name, login, email, kra_role, mobile, active });
+  return jsonRpc(serverUrl, '/kpi_user_access/create', { name, login, email, kra_role, mobile, active, password });
+}
+
+// Odoo-style "Change Password": set a specific new app PIN (no forced change).
+export async function changePassword(userId, password) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true };
+  return jsonRpc(serverUrl, '/kpi_user_access/change_password', { user_id: userId, password });
 }
 
 // Update identity fields (name/login/email/active).

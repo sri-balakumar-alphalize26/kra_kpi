@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { BackHandler, View, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import SplashScreen from './screens/SplashScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -40,14 +41,30 @@ import { pairingStatus } from './services/pairing';
 
 const log = createLogger('App');
 
+// Definitive runtime check: 'storeClient' = Expo Go (local notifications DON'T
+// display there); 'standalone'/'bare' = a real dev/standalone build (they do).
+log.info('runtime env', {
+  executionEnvironment: Constants.executionEnvironment,
+  appOwnership: Constants.appOwnership,
+  isExpoGo: Constants.executionEnvironment === 'storeClient',
+});
+
 // Show a banner + add to the tray even when the app is foregrounded.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notification) => {
+    // Diagnostic: proves a (local or push) notification actually FIRED while the
+    // app is foregrounded — the reminder alarm should log here when its timer hits.
+    log.info('notification received (foreground)', {
+      title: notification?.request?.content?.title,
+      data: notification?.request?.content?.data,
+    });
+    return {
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 // SafeAreaProvider supplies the real system-bar insets (used by TabBar to sit

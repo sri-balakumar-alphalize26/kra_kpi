@@ -162,6 +162,11 @@ class ResUsers(models.Model):
         self.sudo().write({
             'kpi_app_password_hash': hashed,
             'kpi_app_must_change_password': False,
+            # Mirror Odoo's own Security -> Change Password: the same value also
+            # becomes the Odoo login password, so username + password works on the
+            # connect/device-setup screen (/web/session/authenticate), not just
+            # mobile + PIN on the app screen. Keeps the two credentials in sync.
+            'password': raw,
         })
 
     def _check_app_password(self, raw):
@@ -189,6 +194,10 @@ class ResUsers(models.Model):
             u.sudo().write({
                 'kpi_app_password_hash': u._crypt_context().hash(_DEFAULT_APP_PASSWORD),
                 'kpi_app_must_change_password': True,
+                # Keep the Odoo login password in sync with the default PIN, so
+                # username + 1111 works on the connect screen too (must-change still
+                # forces a real one on first app login, which re-syncs both).
+                'password': _DEFAULT_APP_PASSWORD,
             })
 
     # ---- Hard cut-off: block disabled app users at the Odoo login layer -- #
