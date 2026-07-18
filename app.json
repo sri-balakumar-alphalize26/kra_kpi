@@ -15,7 +15,9 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.WAKE_LOCK",
         "android.permission.VIBRATE",
-        "android.permission.RECEIVE_BOOT_COMPLETED"
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
@@ -31,6 +33,7 @@
     },
     "plugins": [
       "./plugins/withAlarmLockScreen",
+      "./plugins/android-cleartext-traffic",
       "expo-web-browser",
       [
         "expo-notifications",
@@ -55,9 +58,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "c2b2bb46-279b-48ce-b697-5fbb5fec5a45"
+        "projectId": "b561ec04-4631-4cc8-94d8-727416e9f359"
       }
     },
-    "owner": "vacihe"
+    "owner": "vavow"
   }
 }
