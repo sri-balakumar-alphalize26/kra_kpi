@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "775288217466",
+    "project_id": "kra-kpi-3efd5",
+    "storage_bucket": "kra-kpi-3efd5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:775288217466:android:ad84a777f838112b4b00c3",
+        "android_client_info": {
+          "package_name": "com.alphalize.krakpi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCmYtZdd_s76M1c1TmVf-_UlfLwtRe2Mow"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
