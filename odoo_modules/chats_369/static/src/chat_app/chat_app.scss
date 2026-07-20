@@ -149,7 +149,7 @@ $o369-line: #E6EDF5;
     .o369-bubble {
         max-width: 62%; padding: 6px 10px 4px; border-radius: 10px; box-shadow: 0 1px 1px rgba(0,0,0,.06);
         position: relative; word-wrap: break-word;
-        &.o369-out { align-self: flex-end; background: $o369-brand; color: #fff; border-bottom-right-radius: 3px; }
+        &.o369-out { align-self: flex-end; background: #D7E9FC; color: #17324f; border-bottom-right-radius: 3px; }
         &.o369-in { align-self: flex-start; background: #fff; color: #1f2937; border-bottom-left-radius: 3px; }
         &:hover .o369-msgact { opacity: 1; pointer-events: auto; }
     }
@@ -166,7 +166,7 @@ $o369-line: #E6EDF5;
         .o369-qauthor { display: block; font-weight: 700; color: $o369-accent; }
         .o369-qbody { display: block; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     }
-    .o369-out .o369-quote { background: rgba(255,255,255,.18); }
+    .o369-out .o369-quote { background: rgba(0,0,0,.06); }
     .o369-btext { white-space: pre-wrap; }
     /* Auto-detected links inside message bubbles (clickable, open in new tab). */
     .o369-link { color: #0a66c2; text-decoration: underline; word-break: break-word; &:hover { color: $o369-brand-deep; } }
@@ -175,10 +175,10 @@ $o369-line: #E6EDF5;
         display: block; text-align: right; font-size: 10px; margin-top: 2px; opacity: .8;
         .fa { font-size: 10px; }
         .o369-pinmark { color: $o369-accent; opacity: 1; }
-        .o369-read { color: #7CC6FF; opacity: 1; }
+        .o369-read { color: #2b8ae6; opacity: 1; }
         .o369-faint { opacity: .55; }
     }
-    .o369-out .o369-btime { color: rgba(255,255,255,.85); }
+    .o369-out .o369-btime { color: #5a708a; }
     .o369-in .o369-btime { color: $o369-grey; }
 
     .o369-replybar {
@@ -254,7 +254,7 @@ $o369-line: #E6EDF5;
         .fa { font-size: 12px; }
         &:hover { background: rgba(0,0,0,.12); }
     }
-    .o369-out .o369-caret { color: rgba(255,255,255,.9); }
+    .o369-out .o369-caret { color: #5a708a; }
     .o369-in .o369-caret { color: #5b6b7d; }
     .o369-bubble:hover .o369-caret { opacity: 1; }
 
@@ -285,8 +285,8 @@ $o369-line: #E6EDF5;
         &:hover { background: rgba(0,0,0,.14); }
         &.o369-react-mine { background: #ffe3cc; }
     }
-    .o369-out .o369-react { background: rgba(255,255,255,.22); }
-    .o369-out .o369-react.o369-react-mine { background: rgba(255,255,255,.4); }
+    .o369-out .o369-react { background: rgba(0,0,0,.08); }
+    .o369-out .o369-react.o369-react-mine { background: rgba(0,0,0,.16); }
 
     .o369-starmark { color: #F4C020; opacity: 1; }
     .o369-edited { opacity: .7; margin-right: 4px; font-style: italic; }

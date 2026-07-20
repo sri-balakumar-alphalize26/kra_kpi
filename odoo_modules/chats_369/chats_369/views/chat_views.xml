@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ===================== Conversation ===================== -->
+    <record id="view_chat_conversation_list" model="ir.ui.view">
+        <field name="name">chat.conversation.list</field>
+        <field name="model">chat.conversation</field>
+        <field name="arch" type="xml">
+            <list string="Conversations">
+                <field name="id"/>
+                <field name="title"/>
+                <field name="is_group"/>
+                <field name="member_count" string="Members"/>
+                <field name="owner_id"/>
+                <field name="last_message_at"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_chat_conversation_form" model="ir.ui.view">
+        <field name="name">chat.conversation.form</field>
+        <field name="model">chat.conversation</field>
+        <field name="arch" type="xml">
+            <form string="Conversation">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="title"/>
+                            <field name="is_group"/>
+                            <field name="name"/>
+                        </group>
+                        <group>
+                            <field name="owner_id"/>
+                            <field name="last_message_at"/>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Members">
+                            <field name="member_ids">
+                                <list>
+                                    <field name="user_id"/>
+                                    <field name="is_admin"/>
+                                    <field name="muted"/>
+                                    <field name="joined_at"/>
+                                    <field name="left_at"/>
+                                    <field name="last_read_message_id"/>
+                                    <field name="delivered_up_to_message_id"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Messages">
+                            <field name="message_ids">
+                                <list>
+                                    <field name="create_date"/>
+                                    <field name="author_id"/>
+                                    <field name="kind"/>
+                                    <field name="body"/>
+                                    <field name="file_name"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_chat_conversation" model="ir.actions.act_window">
+        <field name="name">Conversations</field>
+        <field name="res_model">chat.conversation</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- ===================== Message ===================== -->
+    <record id="view_chat_message_list" model="ir.ui.view">
+        <field name="name">chat.message.list</field>
+        <field name="model">chat.message</field>
+        <field name="arch" type="xml">
+            <list string="Messages">
+                <field name="create_date"/>
+                <field name="conversation_id"/>
+                <field name="author_id"/>
+                <field name="kind"/>
+                <field name="body"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_chat_message_form" model="ir.ui.view">
+        <field name="name">chat.message.form</field>
+        <field name="model">chat.message</field>
+        <field name="arch" type="xml">
+            <form string="Message">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="conversation_id"/>
+                            <field name="author_id"/>
+                            <field name="kind"/>
+                            <field name="reply_to_id"/>
+                        </group>
+                        <group>
+                            <field name="file_name"/>
+                            <field name="mimetype"/>
+                            <field name="file_size"/>
+                            <field name="duration"/>
+                        </group>
+                    </group>
+                    <field name="body"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_chat_message" model="ir.actions.act_window">
+        <field name="name">Messages</field>
+        <field name="res_model">chat.message</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- WhatsApp-Web-style chat client (OWL) -->
+    <record id="action_chats_369_app" model="ir.actions.client">
+        <field name="name">Chats</field>
+        <field name="tag">chats_369_app</field>
+    </record>
+
+    <!-- ===== Standalone top-level "369Chats" app (own icon in the Apps grid) ===== -->
+    <menuitem id="menu_chats_369_root"
+              name="369Chats"
+              sequence="46"
+              web_icon="chats_369,static/description/icon.png"
+              groups="base.group_system,kra_kpi_module.group_kra_owner,kra_kpi_module.group_kra_admin"/>
+
+    <!-- The chat UI is the default screen of the app (first child). -->
+    <menuitem id="menu_chats_369_chat"
+              name="Chats"
+              parent="menu_chats_369_root"
+              action="action_chats_369_app"
+              sequence="5"/>
+
+    <menuitem id="menu_chats_369_conversations"
+              name="Conversations"
+              parent="menu_chats_369_root"
+              action="action_chat_conversation"
+              sequence="10"/>
+
+    <menuitem id="menu_chats_369_messages"
+              name="Messages"
+              parent="menu_chats_369_root"
+              action="action_chat_message"
+              sequence="20"/>
+
+</odoo>

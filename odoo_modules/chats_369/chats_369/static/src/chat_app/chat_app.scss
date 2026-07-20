@@ -1,0 +1,576 @@
+// 369Chats web client — WhatsApp-Web layout in the 369ai.Biz brand palette
+// (steel blue + orange accent + silver-grey).
+$o369-brand: #1F5F9E;
+$o369-brand-deep: #16406e;
+$o369-accent: #F47A20;
+$o369-accent-deep: #E85D1B;
+$o369-grey: #98A2AC;
+$o369-wall: #EEF3F8;
+$o369-line: #E6EDF5;
+
+.o369 {
+    display: flex;
+    position: relative;
+    height: calc(100vh - 46px);
+    background: #fff;
+    overflow: hidden;
+    font-size: 14px;
+
+    // ---------- left pane ----------
+    .o369-left { width: 360px; min-width: 300px; border-right: 1px solid $o369-line; display: flex; flex-direction: column; background: #fff; }
+    .o369-lhead {
+        background: linear-gradient(135deg, $o369-brand, $o369-brand-deep);
+        color: #fff; padding: 11px 14px;
+        display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        .o369-brand { font-weight: 800; font-size: 17px; letter-spacing: .3px; }
+    }
+    .o369-brandwrap { display: flex; align-items: center; gap: 9px; }
+    .o369-brandlogo { width: 28px; height: 28px; border-radius: 7px; background: #fff; object-fit: contain; padding: 2px; }
+    .o369-iconbtn {
+        background: rgba(255,255,255,.18); color: #fff; border: none;
+        width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
+        &:hover { background: rgba(255,255,255,.32); }
+    }
+    .o369-search {
+        display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid $o369-line;
+        .fa { color: $o369-grey; }
+        input { flex: 1; border: none; outline: none; background: #f2f5f9; border-radius: 18px; padding: 7px 12px; font-size: 13px; }
+    }
+    .o369-list { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #c3cedb transparent;
+        &::-webkit-scrollbar { width: 7px; }
+        &::-webkit-scrollbar-thumb { background: #c3cedb; border-radius: 4px; }
+    }
+    .o369-row {
+        display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer;
+        border-bottom: 1px solid #f2f5f9; position: relative;
+        &:hover { background: $o369-wall; }
+        &.o369-active { background: #E3ECF7; }
+        &:hover .o369-rowpin { opacity: 1; }
+    }
+    .o369-avatar {
+        width: 44px; height: 44px; border-radius: 50%; background: $o369-brand; color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        font-weight: 700; font-size: 17px; flex: 0 0 auto; overflow: hidden;
+        img { width: 100%; height: 100%; object-fit: cover; }
+    }
+    .o369-rowmain { flex: 1; min-width: 0; }
+    .o369-rowtop { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    .o369-title { font-weight: 600; color: #1f2937; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .o369-pinglyph { color: $o369-accent; font-size: 11px; margin-right: 4px; }
+    .o369-time { font-size: 11px; color: $o369-grey; flex: 0 0 auto; }
+    .o369-rowbot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 2px; }
+    .o369-prev { font-size: 12.5px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .o369-unread {
+        background: $o369-accent; color: #fff; border-radius: 11px; min-width: 20px; height: 20px; padding: 0 6px;
+        display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex: 0 0 auto;
+    }
+    .o369-rowpin {
+        opacity: 0; transition: opacity .12s; border: none; background: transparent; cursor: pointer;
+        color: $o369-grey; width: 26px; height: 26px; border-radius: 50%; flex: 0 0 auto;
+        &:hover { background: #dbe4ef; color: $o369-brand; }
+        &.o369-rowpin-on { opacity: 1; color: $o369-accent; }
+    }
+    .o369-rowcaret {
+        opacity: 0; transition: opacity .12s; border: none; background: rgba(255,255,255,.9); cursor: pointer;
+        color: $o369-grey; width: 24px; height: 22px; border-radius: 5px; flex: 0 0 auto;
+        position: absolute; top: 8px; right: 8px; z-index: 6;
+        &:hover { background: #dbe4ef; color: $o369-brand; }
+    }
+    .o369-row:hover .o369-rowcaret { opacity: 1; }
+    .o369-rowpinmark { position: absolute; right: 12px; bottom: 11px; color: $o369-accent; font-size: 11px; }
+    .o369-rowmenu {
+        position: absolute; top: 30px; right: 8px; z-index: 25; min-width: 212px;
+        background: #fff; border: 1px solid $o369-line; border-radius: 10px; padding: 5px; box-shadow: 0 8px 26px rgba(0,0,0,.22);
+    }
+    .o369-mutedicon { color: $o369-grey; margin-right: 3px; font-size: 11px; }
+    .o369-unreaddot { width: 10px; height: 10px; border-radius: 50%; background: $o369-accent; display: inline-block; flex: 0 0 auto; }
+    .o369-rowicons { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+    .o369-favicon { color: #E0245E; font-size: 12px; }
+    .o369-pinicon { color: $o369-grey; font-size: 12px; }
+    .o369-checked { color: $o369-accent; }
+    .o369-hint { padding: 18px; color: $o369-grey; font-size: 13px; text-align: center; }
+    .o369-groupbar { padding: 10px; border-top: 1px solid $o369-line; }
+    .o369-createbtn {
+        width: 100%; border: none; border-radius: 10px; padding: 10px; background: $o369-accent; color: #fff; font-weight: 700; cursor: pointer;
+        &:hover { background: $o369-accent-deep; }
+        &:disabled { background: #cbd5e1; cursor: default; }
+    }
+
+    // ---------- right pane (chat wallpaper + faint Alphalize watermark) ----------
+    .o369-right {
+        flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative;
+        background-color: #e8edf3;
+        background-image: radial-gradient(rgba(31,95,158,0.06) 1px, transparent 1px);
+        background-size: 20px 20px;
+    }
+    // Alphalize watermark ONLY when a chat is open (empty state keeps just the 369 logo).
+    .o369-right.o369-hasconv::before {
+        content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+        background: url('/chats_369/static/src/img/alphalize_logo.png') center center no-repeat;
+        background-size: 340px auto; opacity: 0.05;
+    }
+    .o369-rhead, .o369-pinbar, .o369-replybar, .o369-input, .o369-empty { position: relative; z-index: 1; }
+    .o369-empty {
+        flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: $o369-grey; gap: 12px;
+        .o369-emptylogo { width: 120px; height: 120px; object-fit: contain; opacity: .85; }
+        p { font-size: 15px; }
+    }
+    .o369-rhead {
+        background: #fff; border-bottom: 1px solid $o369-line; padding: 8px 14px;
+        display: flex; align-items: center; gap: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.05); z-index: 2;
+        .o369-avatar { width: 40px; height: 40px; font-size: 15px; }
+    }
+    .o369-rtitle { font-weight: 700; color: #16306B; }
+    .o369-rsub { font-size: 12px; color: $o369-grey; }
+
+    .o369-pinbar {
+        display: flex; align-items: center; gap: 4px; background: #fff7ef; border-bottom: 1px solid #f3ddc4;
+        padding: 6px 14px; color: #7a4c1e; font-size: 12.5px; z-index: 1;
+        .fa-thumb-tack { color: $o369-accent; }
+        .o369-pinbartxt { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .o369-pinmore { color: $o369-accent; font-weight: 600; }
+        .o369-pinunpin { border: none; background: transparent; color: $o369-grey; cursor: pointer; &:hover { color: $o369-accent-deep; } }
+    }
+
+    .o369-msgs {
+        flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 3px;
+        background: transparent; position: relative; z-index: 1;
+        scrollbar-width: thin; scrollbar-color: #c3cedb transparent;
+        &::-webkit-scrollbar { width: 8px; }
+        &::-webkit-scrollbar-thumb { background: #c3cedb; border-radius: 4px; }
+    }
+    .o369-datesep {
+        align-self: center; margin: 10px 0;
+        span { background: #fff; color: #5b6b7d; font-size: 11.5px; font-weight: 600; padding: 4px 12px; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+    }
+    .o369-sys {
+        align-self: center; background: #dbe6f3; color: #45586e; font-size: 11.5px; padding: 3px 10px; border-radius: 10px; margin: 6px 0;
+    }
+    .o369-bubble {
+        max-width: 62%; padding: 6px 10px 4px; border-radius: 10px; box-shadow: 0 1px 1px rgba(0,0,0,.06);
+        position: relative; word-wrap: break-word;
+        &.o369-out { align-self: flex-end; background: $o369-brand; color: #fff; border-bottom-right-radius: 3px; }
+        &.o369-in { align-self: flex-start; background: #fff; color: #1f2937; border-bottom-left-radius: 3px; }
+        &:hover .o369-msgact { opacity: 1; pointer-events: auto; }
+    }
+    .o369-msgact {
+        position: absolute; top: -13px; right: 6px; display: flex; gap: 2px; opacity: 0; pointer-events: none; transition: opacity .12s;
+        background: #fff; border: 1px solid $o369-line; border-radius: 14px; padding: 3px 6px; box-shadow: 0 2px 6px rgba(0,0,0,.12); z-index: 3;
+        .fa { color: #5b6b7d; font-size: 12px; cursor: pointer; padding: 2px 4px; &:hover { color: $o369-brand; } }
+        .fa-trash:hover { color: $o369-accent-deep; }
+        .o369-actpinned { color: $o369-accent; }
+    }
+    .o369-sender { font-size: 11.5px; font-weight: 700; color: $o369-accent; margin-bottom: 1px; }
+    .o369-quote {
+        display: block; border-left: 3px solid $o369-accent; background: rgba(0,0,0,.06); border-radius: 5px; padding: 3px 8px; margin-bottom: 3px; font-size: 12px;
+        .o369-qauthor { display: block; font-weight: 700; color: $o369-accent; }
+        .o369-qbody { display: block; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    }
+    .o369-out .o369-quote { background: rgba(255,255,255,.18); }
+    .o369-btext { white-space: pre-wrap; }
+    .o369-deleted { font-style: italic; opacity: .75; }
+    .o369-btime {
+        display: block; text-align: right; font-size: 10px; margin-top: 2px; opacity: .8;
+        .fa { font-size: 10px; }
+        .o369-pinmark { color: $o369-accent; opacity: 1; }
+        .o369-read { color: #7CC6FF; opacity: 1; }
+        .o369-faint { opacity: .55; }
+    }
+    .o369-out .o369-btime { color: rgba(255,255,255,.85); }
+    .o369-in .o369-btime { color: $o369-grey; }
+
+    .o369-replybar {
+        display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: #e7edf4; border-top: 1px solid $o369-line;
+        .o369-replyinfo { flex: 1; border-left: 3px solid $o369-accent; padding: 2px 8px; font-size: 12.5px; color: #45586e; overflow: hidden;
+            b { display: block; color: $o369-accent; } span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
+        .o369-replyx { background: #d4deea; color: #556; }
+    }
+    .o369-input {
+        display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #eef2f7; border-top: 1px solid $o369-line;
+        input { flex: 1; border: 1px solid #d7e0ea; outline: none; background: #fff; border-radius: 22px; padding: 9px 16px; font-size: 14px; }
+    }
+    .o369-send {
+        background: $o369-accent; color: #fff; border: none; width: 42px; height: 42px; border-radius: 50%; cursor: pointer; flex: 0 0 auto;
+        &:hover { background: $o369-accent-deep; }
+    }
+
+    // ---------- popups (pin duration / pinned list) ----------
+    .o369-pinbartxt { cursor: pointer; }
+    .o369-pinleft { color: $o369-accent; font-weight: 600; }
+    .o369-modal {
+        position: absolute; inset: 0; background: rgba(15,23,42,.45);
+        display: flex; align-items: center; justify-content: center; z-index: 20;
+    }
+    .o369-modalcard {
+        background: #fff; border-radius: 14px; padding: 18px; width: 320px; max-width: 90%;
+        box-shadow: 0 12px 34px rgba(0,0,0,.28);
+    }
+    .o369-modaltitle { font-weight: 700; color: #16306B; margin-bottom: 12px; font-size: 15px; }
+    .o369-modalopt {
+        display: block; width: 100%; text-align: left; border: 1px solid $o369-line; background: #f7f9fd;
+        border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; cursor: pointer; font-size: 14px; color: #1f2937;
+        &:hover { background: #eef3f8; border-color: $o369-accent; }
+    }
+    .o369-modalcancel {
+        display: block; width: 100%; border: none; background: transparent; color: $o369-grey; padding: 6px; cursor: pointer; margin-top: 2px;
+        &:hover { color: $o369-accent-deep; }
+    }
+    /* Styled confirm dialog (replaces window.confirm) */
+    .o369-confirmcard { width: 344px; }
+    .o369-confirmbody { color: #475569; font-size: 14px; line-height: 1.5; margin-bottom: 18px; }
+    .o369-confirmbtns { display: flex; gap: 10px; justify-content: flex-end; }
+    .o369-confirmcancel {
+        border: 1px solid $o369-line; background: #fff; color: #475569; border-radius: 10px;
+        padding: 9px 18px; cursor: pointer; font-size: 14px; font-weight: 600;
+        &:hover { background: #f1f5f9; }
+    }
+    .o369-confirmok {
+        border: none; background: $o369-accent; color: #fff; border-radius: 10px;
+        padding: 9px 18px; cursor: pointer; font-size: 14px; font-weight: 700;
+        &:hover { filter: brightness(.95); }
+        &.o369-danger { background: #DC2626; }
+    }
+    .o369-pinlist { max-height: 320px; overflow-y: auto; margin-bottom: 8px; }
+    .o369-pinitem {
+        display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid #f1f5f9;
+    }
+    .o369-pinitemtxt {
+        flex: 1; min-width: 0; font-size: 13px;
+        b { color: $o369-accent; margin-right: 4px; }
+        span { color: #1f2937; }
+        small { display: block; color: $o369-grey; font-size: 11px; margin-top: 1px; }
+    }
+    .o369-pinitemx {
+        border: none; background: #f2f5f9; color: $o369-grey; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; flex: 0 0 auto;
+        &:hover { background: #fde3d0; color: $o369-accent-deep; }
+    }
+
+    // ---------- message caret menu / reactions / star / edited ----------
+    .o369-caret {
+        position: absolute; top: 2px; right: 4px; opacity: 0; transition: opacity .1s;
+        border: none; background: transparent; cursor: pointer; padding: 2px 5px; border-radius: 4px; z-index: 4;
+        .fa { font-size: 12px; }
+        &:hover { background: rgba(0,0,0,.12); }
+    }
+    .o369-out .o369-caret { color: rgba(255,255,255,.9); }
+    .o369-in .o369-caret { color: #5b6b7d; }
+    .o369-bubble:hover .o369-caret { opacity: 1; }
+
+    .o369-msgmenu {
+        position: absolute; top: 20px; right: 0; z-index: 30; min-width: 195px;
+        background: #fff; border: 1px solid $o369-line; border-radius: 10px; padding: 5px;
+        box-shadow: 0 8px 26px rgba(0,0,0,.22);
+    }
+    .o369-reactbar {
+        display: flex; gap: 2px; padding: 4px 2px 6px; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px;
+        .o369-reactbtn {
+            border: none; background: transparent; cursor: pointer; font-size: 18px; padding: 3px 5px; border-radius: 8px; line-height: 1;
+            &:hover { background: #eef3f8; transform: scale(1.18); }
+        }
+    }
+    .o369-menuitem {
+        display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+        border: none; background: transparent; cursor: pointer; padding: 8px 12px; border-radius: 7px;
+        font-size: 13.5px; color: #1f2937;
+        .fa { width: 16px; color: #5b6b7d; }
+        &:hover { background: $o369-wall; }
+        &.o369-danger { color: $o369-accent-deep; .fa { color: $o369-accent-deep; } }
+    }
+
+    .o369-reacts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .o369-react {
+        background: rgba(0,0,0,.08); border-radius: 11px; padding: 1px 7px; font-size: 12px; cursor: pointer; line-height: 1.7;
+        &:hover { background: rgba(0,0,0,.14); }
+        &.o369-react-mine { background: #ffe3cc; }
+    }
+    .o369-out .o369-react { background: rgba(255,255,255,.22); }
+    .o369-out .o369-react.o369-react-mine { background: rgba(255,255,255,.4); }
+
+    .o369-starmark { color: #F4C020; opacity: 1; }
+    .o369-edited { opacity: .7; margin-right: 4px; font-style: italic; }
+
+    // header ⋮ menu
+    .o369-headbtns { display: flex; align-items: center; gap: 6px; position: relative; }
+    .o369-hdrmenu {
+        position: absolute; top: 40px; right: 0; z-index: 30; min-width: 205px;
+        background: #fff; border: 1px solid $o369-line; border-radius: 10px; padding: 5px;
+        box-shadow: 0 8px 26px rgba(0,0,0,.22);
+    }
+
+    .o369-avatar-sm { width: 34px; height: 34px; font-size: 14px; }
+    .o369-fwdrow { cursor: pointer; &:hover { background: $o369-wall; } }
+
+    // full emoji picker
+    .o369-reactplus { font-weight: 700; color: #5b6b7d; font-size: 17px; }
+    .o369-emojicard { width: 360px; max-width: 92%; }
+    .o369-emojigrid {
+        display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; max-height: 300px; overflow-y: auto; margin-bottom: 8px;
+    }
+    .o369-emojibtn {
+        border: none; background: transparent; cursor: pointer; font-size: 20px; padding: 4px; border-radius: 6px; line-height: 1;
+        &:hover { background: #eef3f8; transform: scale(1.15); }
+    }
+
+    // filter chips + lists
+    .o369-chips {
+        display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; border-bottom: 1px solid $o369-line;
+        scrollbar-width: thin;
+        &::-webkit-scrollbar { height: 5px; }
+        &::-webkit-scrollbar-thumb { background: #c3cedb; border-radius: 3px; }
+    }
+    .o369-chip {
+        flex: 0 0 auto; border: 1px solid $o369-line; background: #f2f5f9; color: #45586e;
+        border-radius: 16px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+        &:hover { background: #e6edf5; }
+        &.o369-chip-on { background: $o369-brand; color: #fff; border-color: $o369-brand; }
+    }
+    .o369-chipadd { padding: 5px 10px; }
+    .o369-actionavatar { background: $o369-accent; }
+    .o369-selfavatar { background: $o369-brand; }
+    .o369-listinput { width: 100%; border: none; border-bottom: 2px solid $o369-accent; outline: none; padding: 8px 4px; font-size: 15px; margin-bottom: 10px; }
+    .o369-listhint { font-size: 12px; color: $o369-grey; margin-bottom: 6px; }
+
+    // header buttons + conv menu
+    .o369-rheadspace { flex: 1; }
+    .o369-hmenuwrap { position: relative; }
+    .o369-hbtn {
+        border: none; background: transparent; color: #5b6b7d; cursor: pointer; width: 34px; height: 34px; border-radius: 50%; flex: 0 0 auto;
+        &:hover { background: #eef3f8; color: $o369-brand; }
+    }
+
+    // in-chat search bar + calendar
+    .o369-searchbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: #fff; border-bottom: 1px solid $o369-line; position: relative; z-index: 3; }
+    .o369-searchfield {
+        flex: 1; display: flex; align-items: center; gap: 8px; background: #f2f5f9; border-radius: 18px; padding: 6px 12px;
+        .fa { color: $o369-grey; }
+        input { flex: 1; border: none; outline: none; background: transparent; font-size: 13px; }
+    }
+    .o369-searchcount { font-size: 12px; color: $o369-grey; white-space: nowrap; }
+    .o369-calpop { position: absolute; top: 46px; left: 8px; z-index: 40; width: 262px; background: #fff; border: 1px solid $o369-line; border-radius: 12px; padding: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.22); }
+    .o369-calhead {
+        display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 700; color: #16306B;
+        button { border: none; background: transparent; cursor: pointer; color: #5b6b7d; padding: 4px 8px; border-radius: 6px; &:hover { background: #eef3f8; } }
+    }
+    .o369-calgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+    .o369-caldow { text-align: center; font-size: 10px; color: $o369-grey; padding: 2px 0; }
+    .o369-calday {
+        border: none; background: transparent; cursor: pointer; padding: 6px 0; border-radius: 50%; font-size: 12px; color: #1f2937;
+        &:hover { background: $o369-brand; color: #fff; }
+        &.o369-calempty { visibility: hidden; }
+    }
+
+    // flash on jump-to-message
+    .o369-flash { animation: o369flash 1.4s ease; }
+
+    // contact / group info drawer
+    .o369-drawer {
+        position: absolute; top: 0; right: 0; bottom: 0; width: 380px; max-width: 92%; z-index: 45;
+        background: #fff; border-left: 1px solid $o369-line; box-shadow: -6px 0 24px rgba(0,0,0,.14);
+        display: flex; flex-direction: column;
+    }
+    .o369-drawerhead { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid $o369-line; font-weight: 700; color: #16306B; }
+    .o369-drawerbody { flex: 1; overflow-y: auto; }
+    .o369-drawerprofile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 16px; border-bottom: 8px solid #f2f5f9; }
+    .o369-avatarbig { width: 120px; height: 120px; font-size: 44px; }
+    .o369-drawername { font-size: 19px; font-weight: 700; color: #16306B; }
+    .o369-drawersub { font-size: 13px; color: $o369-grey; }
+    .o369-drawersection { padding: 12px 16px; border-bottom: 8px solid #f2f5f9; }
+    .o369-secttitle { font-size: 12px; color: $o369-accent; font-weight: 700; margin-bottom: 8px; }
+    .o369-nickrow { display: flex; gap: 8px; }
+    .o369-nickinput { flex: 1; border: 1px solid $o369-line; border-radius: 8px; padding: 8px 10px; outline: none; font-size: 14px; }
+    .o369-savebtn { border: none; background: $o369-accent; color: #fff; border-radius: 8px; padding: 8px 14px; cursor: pointer; font-weight: 700; &:hover { background: $o369-accent-deep; } }
+    .o369-mediarow { display: flex; align-items: center; font-weight: 600; color: #1f2937; }
+    .o369-mediacount { margin-left: auto; color: $o369-grey; font-weight: 700; }
+    .o369-mediastats { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: $o369-grey; }
+    .o369-drawaction {
+        display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: none; background: transparent; cursor: pointer; padding: 10px 4px; font-size: 14px; color: #1f2937;
+        .fa { width: 18px; color: #5b6b7d; }
+        &:hover { background: $o369-wall; border-radius: 8px; }
+        &.o369-danger { color: $o369-accent-deep; .fa { color: $o369-accent-deep; } }
+    }
+    .o369-memrow { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+    .o369-memtxt { flex: 1; b { display: block; font-size: 14px; color: #1f2937; } small { color: $o369-grey; font-size: 12px; } }
+    .o369-adminbadge { font-size: 10px; color: $o369-brand; border: 1px solid $o369-brand; border-radius: 6px; padding: 1px 6px; }
+}
+@keyframes o369flash { 0%,100% { box-shadow: 0 1px 1px rgba(0,0,0,.06); } 30% { box-shadow: 0 0 0 3px #F47A20; } }
+
+/* ---------- Phase 2 media ---------- */
+.o369-app {
+    .o369-msgimg { max-width: 260px; max-height: 320px; border-radius: 10px; display: block; cursor: pointer; margin-bottom: 3px; }
+    .o369-msgvid { max-width: 280px; max-height: 320px; border-radius: 10px; display: block; margin-bottom: 3px; background: #000; }
+    .o369-msgaudio { max-width: 240px; height: 40px; display: block; margin-bottom: 3px; }
+    .o369-msgdoc {
+        display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: rgba(0,0,0,.05);
+        border-radius: 10px; color: $o369-brand; text-decoration: none; font-size: 13px; margin-bottom: 3px;
+        i { font-size: 18px; }
+        &:hover { background: rgba(0,0,0,.08); }
+    }
+    .o369-memrow:hover { background: #f2f6fb; border-radius: 8px; }
+
+    /* attach + menu */
+    .o369-attachwrap { position: relative; display: inline-flex; }
+    .o369-attachbtn {
+        border: none; background: transparent; color: $o369-grey; width: 38px; height: 38px; border-radius: 50%;
+        cursor: pointer; font-size: 18px;
+        &:hover { background: #e7eef6; color: $o369-brand; }
+    }
+    .o369-attachmenu {
+        position: absolute; bottom: 46px; left: 0; background: #fff; border-radius: 12px; padding: 6px;
+        box-shadow: 0 6px 24px rgba(0,0,0,.18); z-index: 30; min-width: 190px;
+        .o369-menuitem { display: flex; align-items: center; gap: 10px; width: 100%; border: none; background: transparent;
+            padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; color: #1f2937; text-align: left;
+            i { width: 18px; color: $o369-brand; }
+            &:hover { background: #f2f6fb; } }
+    }
+
+    /* recording bar (WhatsApp-style) */
+    .o369-recbar {
+        display: flex; align-items: center; gap: 12px; padding: 8px 14px; margin: 6px 8px;
+        background: #ffffff; border-radius: 26px; box-shadow: 0 1px 3px rgba(0,0,0,.12);
+        button { border: none; background: transparent; cursor: pointer; }
+    }
+    .o369-recdel { color: $o369-grey; font-size: 17px; &:hover { color: #b3261e; } }
+    .o369-recdot { width: 11px; height: 11px; border-radius: 50%; background: #e53935; flex: 0 0 auto; animation: o369pulse 1.1s infinite; }
+    .o369-rectime { font-variant-numeric: tabular-nums; color: #374151; font-size: 14px; min-width: 40px; }
+    .o369-recwave {
+        flex: 1; display: flex; align-items: center; gap: 3px; height: 26px; overflow: hidden;
+        span {
+            flex: 1; min-width: 2px; max-width: 4px; background: $o369-brand; border-radius: 2px; opacity: .8;
+            animation: o369wave 1s ease-in-out infinite;
+        }
+        span:nth-child(3n) { animation-delay: .15s; } span:nth-child(3n+1) { animation-delay: .35s; } span:nth-child(3n+2) { animation-delay: .5s; }
+        &.o369-recpaused span { animation-play-state: paused; height: 8px; }
+    }
+    .o369-recpause { color: $o369-grey; font-size: 16px; &:hover { color: $o369-brand; } }
+    .o369-recsend {
+        width: 40px; height: 40px; border-radius: 50%; background: $o369-accent !important; color: #fff;
+        display: inline-flex; align-items: center; justify-content: center; font-size: 15px; flex: 0 0 auto;
+        &:hover { background: $o369-accent-deep !important; }
+    }
+}
+@keyframes o369pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+@keyframes o369wave { 0%,100% { height: 6px; } 50% { height: 22px; } }
+
+/* lightbox */
+.o369-lightbox {
+    position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 3000;
+    display: flex; align-items: center; justify-content: center; cursor: zoom-out;
+    img { max-width: 92vw; max-height: 92vh; border-radius: 8px; box-shadow: 0 10px 50px rgba(0,0,0,.5); }
+}
+
+/* generic option modal (member menu) */
+.o369-app .o369-modalopt {
+    display: block; width: 100%; border: none; background: transparent; text-align: left;
+    padding: 12px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; color: #1f2937;
+    &:hover { background: #f2f6fb; }
+}
+.o369-app .o369-modalcancel {
+    display: block; width: 100%; border: none; background: transparent; text-align: center;
+    padding: 11px; margin-top: 4px; cursor: pointer; font-size: 14px; color: $o369-grey; border-top: 1px solid #eef1f5;
+    &:hover { color: #1f2937; }
+}
+.o369-app .o369-modaltitle { font-weight: 700; font-size: 15px; padding: 6px 14px 10px; color: $o369-brand; }
+
+/* search highlight + calendar limits */
+.o369-app {
+    mark.o369-hl { background: #ffe08a; color: #6b4e00; border-radius: 3px; padding: 0 1px; }
+    .o369-calfuture { color: #cbd2da !important; cursor: not-allowed; }
+    .o369-caldis { opacity: .3; cursor: not-allowed; }
+}
+
+/* ---------- Group info redesign · media viewer · permissions (Features 2-4) ---------- */
+$o369-green: #12B76A;
+$o369-green-deep: #0E8F53;
+
+.o369 {
+    /* Feature 2 — avatar camera badge + name pencil + round action buttons */
+    .o369-avatarwrap { position: relative; }
+    .o369-cambadge {
+        position: absolute; right: 2px; bottom: 2px; width: 34px; height: 34px; border-radius: 50%;
+        background: $o369-accent; color: #fff; border: 3px solid #fff; cursor: pointer;
+        display: inline-flex; align-items: center; justify-content: center; font-size: 14px;
+        &:hover { background: $o369-accent-deep; }
+    }
+    .o369-namerow { display: flex; align-items: center; gap: 8px; justify-content: center; width: 100%; }
+    .o369-namerow .o369-nickinput { max-width: 220px; }
+    .o369-editpencil {
+        border: none; background: transparent; color: $o369-accent; cursor: pointer; font-size: 14px; padding: 4px;
+        &:hover { color: $o369-accent-deep; }
+    }
+    .o369-circlebtns { display: flex; gap: 26px; margin-top: 12px; }
+    .o369-circlebtn {
+        display: flex; flex-direction: column; align-items: center; gap: 6px; border: none; background: transparent; cursor: pointer;
+        .o369-circleico {
+            width: 46px; height: 46px; border-radius: 50%; background: $o369-wall; color: $o369-brand;
+            display: inline-flex; align-items: center; justify-content: center; font-size: 17px;
+        }
+        .o369-circlelbl { font-size: 12px; color: $o369-brand; font-weight: 600; }
+        &:hover .o369-circleico { background: #e0e9f4; }
+    }
+
+    /* Feature 2 — group description row */
+    .o369-descrow { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: #1f2937; }
+    .o369-descrow-edit { cursor: pointer; }
+    .o369-desctext { flex: 1; white-space: pre-wrap; }
+    .o369-descpencil { color: $o369-grey; font-size: 13px; margin-top: 2px; }
+    .o369-adddesc {
+        display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: transparent;
+        cursor: pointer; padding: 4px 0; font-size: 14px; font-weight: 600; color: $o369-green;
+        .fa { color: $o369-green; }
+        &:hover { color: $o369-green-deep; }
+    }
+    .o369-desctextarea {
+        width: 100%; min-height: 70px; border: 1px solid $o369-line; border-radius: 8px; padding: 8px 10px;
+        outline: none; font-size: 14px; resize: vertical; font-family: inherit;
+        &:focus { border-color: $o369-accent; }
+    }
+    .o369-descbtns { display: flex; gap: 8px; margin-top: 8px; }
+    .o369-drawcancel { border: 1px solid $o369-line; background: #fff; color: #475569; border-radius: 8px; padding: 8px 14px; cursor: pointer; font-weight: 600; &:hover { background: $o369-wall; } }
+
+    /* row chevron (media / permissions rows) */
+    .o369-rowchev { margin-left: auto; color: $o369-grey; font-size: 13px; }
+    .o369-mediarow-btn { cursor: pointer; }
+
+    /* Feature 3 — media viewer */
+    .o369-mediatabs {
+        display: flex; border-bottom: 1px solid $o369-line; background: #fff;
+        button {
+            flex: 1; border: none; background: transparent; padding: 12px 6px; cursor: pointer; font-size: 13px;
+            font-weight: 600; color: $o369-grey; border-bottom: 2px solid transparent;
+            &.o369-mtab-on { color: $o369-accent; border-bottom-color: $o369-accent; }
+        }
+    }
+    .o369-monthhdr { padding: 12px 16px 6px; font-size: 12px; font-weight: 700; color: $o369-grey; text-transform: uppercase; letter-spacing: .04em; }
+    .o369-mediagrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 0 6px 6px; }
+    .o369-mediacell {
+        position: relative; aspect-ratio: 1 / 1; background: $o369-wall; border-radius: 4px; overflow: hidden;
+        img { width: 100%; height: 100%; object-fit: cover; cursor: pointer; display: block; }
+    }
+    .o369-mediacellicon {
+        width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: $o369-brand;
+        font-size: 26px; text-decoration: none;
+        &:hover { background: #e0e9f4; }
+    }
+    .o369-doclink {
+        display: flex; align-items: center; gap: 12px; padding: 10px 16px; text-decoration: none; color: #1f2937; font-size: 14px;
+        border-bottom: 1px solid #f2f5f9;
+        > .fa:first-child { color: $o369-brand; font-size: 18px; width: 20px; text-align: center; }
+        .o369-docname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .o369-docdl { color: $o369-grey; }
+        &:hover { background: $o369-wall; }
+    }
+
+    /* Feature 4 — permissions toggles */
+    .o369-permrow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; font-size: 14px; color: #1f2937;
+        span:first-child { flex: 1; }
+    }
+    .o369-toggle {
+        position: relative; flex: 0 0 auto; width: 42px; height: 24px; border-radius: 999px; background: #cbd5e1;
+        cursor: pointer; transition: background .15s ease;
+        .o369-toggleknob {
+            position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .15s ease;
+        }
+        &.o369-toggle-on { background: $o369-green; .o369-toggleknob { left: 20px; } }
+    }
+}
