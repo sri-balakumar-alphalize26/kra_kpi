@@ -102,16 +102,14 @@
             "kra_kpi_module/static/src/components/kpi_user_access/kpi_user_access.js",
             "kra_kpi_module/static/src/components/kpi_task_approval/kpi_task_approval.js",
 
+            # (The dashboard/kra_tree/kra_create/kpi_create/kpi_action .xml files are
+            #  intentionally NOT bundled: those components use inline `xml\`...\``
+            #  templates, so the .xml files are unused. They previously lived in the
+            #  removed `web.assets_qweb` bundle and were imported by main.js, which
+            #  broke the whole JS bundle in Odoo 17+.)
             "kra_kpi_module/static/src/img/alphalize_logo.png",
             "kra_kpi_module/static/src/css/kra_style.scss",
             "kra_kpi_module/static/src/css/kpi_reports.css",
-        ],
-        "web.assets_qweb": [
-            "kra_kpi_module/static/src/components/dashboard/dashboard.xml",
-            "kra_kpi_module/static/src/components/kra_tree/kra_tree.xml",
-            "kra_kpi_module/static/src/components/kra_create/kra_create.xml",
-            "kra_kpi_module/static/src/components/kpi_create/kpi_create.xml",
-            "kra_kpi_module/static/src/components/kpi_action/kpi_action.xml",
         ],
     },
 

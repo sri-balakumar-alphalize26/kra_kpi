@@ -18,19 +18,20 @@ import { KpiPerformanceReport } from "../components/kpi_performance_report/kpi_p
 import { KpiAttentionReport } from "../components/kpi_attention_report/kpi_attention_report";
 import { TaskDocuments } from "../components/task_documents/task_documents";
 
-// XML Templates
-import "../components/dashboard/dashboard.xml";
-import "../components/kra_tree/kra_tree.xml";
-import "../components/kra_create/kra_create.xml";
-import "../components/kpi_create/kpi_create.xml";
-import "../components/kpi_action/kpi_action.xml";
+// NOTE: These components define their templates INLINE (static template = xml`...`),
+// so the separate .xml files are unused. They were also imported here as
+// `import ".../x.xml"`, but Odoo 17+ does not turn XML files into importable JS
+// modules, so those imports declared dependencies on modules that don't exist →
+// "The following modules are needed ... but have not been defined" → the whole
+// backend bundle failed with "error loading javascript modules". Removed.
 
-/** Register for debug (optional) */
-registry.category("main_components").add("kra_kpi_router", KraKpiRouter);
-registry.category("main_components").add("kra_tree", KraTree);
-registry.category("main_components").add("kra_create", KraCreate);
-registry.category("main_components").add("kpi_create", KpiCreate);
-registry.category("main_components").add("kpi_view", KpiView);
+/** NOTE: these were registered in "main_components", which MOUNTS every entry at
+ *  the top of the web client. KraTree/KraCreate/KpiCreate/KpiView/Dashboard are
+ *  full-page components that require props, so mounting them globally with no props
+ *  throws during render → a BLANK WHITE web client. This block never ran before
+ *  (main.js used to crash earlier on the .xml imports); once main.js loads cleanly
+ *  it would blank the screen. These components are used as client actions / child
+ *  components, NOT as global main_components. Removed. */
 
 
 /**
@@ -51,13 +52,13 @@ if (!window.__kpiNumberSelectAll) {
     });
 }
 
-/** Register client actions */
-registry.category("actions").add("kra_kpi_dashboard", KraKpiRouter);
-registry.category("actions").add("kra_kpi_actions", KpiAction);
-registry.category("actions").add("kpi_unit_report", KpiUnitReport);
-registry.category("actions").add("kpi_performance_report", KpiPerformanceReport);
-registry.category("actions").add("kpi_attention_report", KpiAttentionReport);
-registry.category("actions").add("task_documents_view", TaskDocuments);
+/** Client actions are registered ONCE, by each component's OWN file
+ *  (kpi_action.js, kpi_unit_report.js, kpi_performance_report.js,
+ *  kpi_attention_report.js, task_documents.js) and by router.js for
+ *  "kra_kpi_dashboard". Re-registering them here threw a DuplicatedKeyError
+ *  ("Cannot add key ... it already exists"), which aborted the backend JS bundle
+ *  and showed "An error occurred while loading javascript modules" on every page.
+ *  Do NOT re-add them here. */
 
 
 /**
