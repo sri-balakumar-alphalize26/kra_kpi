@@ -28,5 +28,19 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+
+        <!-- Forgotten workday: every 5 min, auto-End a workday whose board tab has
+             been gone longer than company.workday_idle_close_minutes (default 15).
+             Full End Workday + daily summary. A dev who keeps the board open still
+             heartbeats and is never closed. See _cron_close_idle_workdays. -->
+        <record id="ir_cron_kpi_close_idle_workdays" model="ir.cron">
+            <field name="name">KRA/KPI: Auto End forgotten workdays (idle cutoff)</field>
+            <field name="model_id" ref="model_kpi_work_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_close_idle_workdays()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

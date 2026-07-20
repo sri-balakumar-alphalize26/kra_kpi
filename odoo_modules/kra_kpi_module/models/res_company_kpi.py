@@ -40,6 +40,14 @@ class ResCompany(models.Model):
         help="Minutes with no heartbeat (tab closed / machine asleep) before a "
              "running task auto-pauses as 'Away'. Read by the browser and the server.")
 
+    workday_idle_close_minutes = fields.Integer(
+        string='Auto End Workday After (minutes)',
+        default=15,
+        help="Minutes with no heartbeat (board tab gone) before a workday the "
+             "developer forgot to End is auto-closed with the full daily summary. "
+             "A dev who keeps the board open (even idle / on a break) still "
+             "heartbeats and is never closed. 0 disables. See _cron_close_idle_workdays.")
+
     # ---- Attendance (Admin Live Tracking) -------------------------------- #
     attendance_cutoff_hour = fields.Float(
         string='Attendance Cutoff (IST hour)',

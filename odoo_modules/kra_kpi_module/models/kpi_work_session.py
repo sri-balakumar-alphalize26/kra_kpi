@@ -1310,6 +1310,70 @@ class KpiWorkSession(models.Model):
         return len(stragglers)
 
     @api.model
+    def _close_idle_workdays(self):
+        """Auto-close TODAY's workdays the developer forgot to End: the board
+        heartbeat has gone stale (tab closed / device gone) for longer than
+        company.workday_idle_close_minutes. Does the FULL End Workday — pause the
+        running task, close breaks/blocks, un-pair, fire the daily summary + snapshot,
+        and notify the dev — exactly like the manual button and the midnight close.
+
+        logout_at is capped at last_heartbeat (when the dev was actually last
+        present), NOT 'now', so presence isn't inflated by the idle window. A dev
+        who keeps the board open keeps heartbeating and is never touched.
+        Idempotent — safe to run every few minutes. Returns count closed."""
+        try:
+            minutes = int(self.env.company.workday_idle_close_minutes or 0)
+        except Exception:
+            minutes = 15
+        if minutes <= 0:
+            return 0
+        now = fields.Datetime.now()
+        today = fields.Date.context_today(self)
+        cutoff = now - timedelta(minutes=minutes)
+        idle = self.sudo().search([
+            ('state', '=', 'open'),
+            ('session_date', '=', today),
+            ('last_heartbeat', '!=', False),
+            ('last_heartbeat', '<', cutoff),
+        ])
+        for s in idle:
+            try:
+                s._pause_running_task()
+            except Exception as exc:
+                _logger.warning("idle-close pause failed for session %s: %s", s.id, exc)
+            # Cap logout at the last heartbeat (last time the dev was present), not
+            # now — the idle window is not working time.
+            s.write({
+                'logout_at':   s.last_heartbeat or now,
+                'state':       'closed',
+                'auto_closed': True,
+            })
+            try:
+                s._finalize_day_cleanup()
+            except Exception as exc:
+                _logger.warning("idle-close cleanup failed for session %s: %s", s.id, exc)
+            try:
+                payload = s._daily_summary_payload(full_day=True)
+                snap = s._capture_snapshot(payload)
+                s._fire_daily_summary(payload, snapshot=snap)
+            except Exception as exc:
+                _logger.warning("idle-close summary failed for session %s: %s", s.id, exc)
+            try:
+                s._fire_workday_auto_closed()
+            except Exception as exc:
+                _logger.warning("idle-close notify failed for session %s: %s", s.id, exc)
+        if idle:
+            _logger.info("idle-close: auto-ended %s forgotten workday(s) (>%s min idle)", len(idle), minutes)
+        return len(idle)
+
+    @api.model
+    def _cron_close_idle_workdays(self):
+        """Frequent cron (~5 min): auto-End workdays a developer forgot to close
+        once the board has been gone longer than the idle threshold. See
+        `_close_idle_workdays`."""
+        return self._close_idle_workdays()
+
+    @api.model
     def _cron_close_overdue_workdays(self):
         """Frequent cron (~5 min): promptly end workdays that crossed midnight
         (pause the running task + notify the developer). See `_close_overdue`."""
