@@ -43,7 +43,9 @@ yarn-error.*
 # packaged odoo module
 *.zip
 
-# Firebase / FCM credentials — never commit (secrets)
-google-services.json
+# Firebase / FCM — the service-account PRIVATE KEY must never be committed.
+# google-services.json is NOT ignored: it's a client config that ships inside the
+# APK anyway, and EAS Build excludes gitignored files (even tracked ones) from the
+# build, which breaks the Android build. So it stays tracked.
 *-firebase-adminsdk-*.json
 GoogleService-Info.plist
