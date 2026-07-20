@@ -106,10 +106,11 @@ async function ensureAlarmChannel(sound) {
 
 // Schedule a ringing alarm for `whenMs` (epoch ms). Returns the notification id
 // (persist it so it can be cancelled), or null on failure / non-Android / no notifee.
-export async function scheduleTaskAlarm(task, whenMs) {
+export async function scheduleTaskAlarm(task, whenMs, reason = '') {
   if (Platform.OS !== 'android') { log.info('schedule skipped (not android)', { platform: Platform.OS }); return null; }
   if (!notifee) { log.warn('schedule skipped — notifee unavailable (rebuild needed)', { task: task?.id }); return null; }
   try {
+    const note = (reason || '').trim();
     const secsFromNow = Math.round((whenMs - Date.now()) / 1000);
     // Read the chosen system sound HERE (not via a param) so snooze — which
     // re-schedules from only {id,name} — automatically rings the same sound.
@@ -124,8 +125,9 @@ export async function scheduleTaskAlarm(task, whenMs) {
     const notifId = await notifee.createTriggerNotification(
       {
         title: '⏰ Time to wrap up',
-        body: task?.name || 'Your task',
-        data: { kpi_id: String(task?.id ?? ''), alarm: '1', task_name: task?.name || '' },
+        // The typed reason leads when present, else the task name.
+        body: note || task?.name || 'Your task',
+        data: { kpi_id: String(task?.id ?? ''), alarm: '1', task_name: task?.name || '', reason: note },
         android: {
           channelId,
           category: AndroidCategory.ALARM,

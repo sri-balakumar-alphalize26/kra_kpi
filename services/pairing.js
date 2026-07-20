@@ -28,12 +28,14 @@ export async function generatePin() {
 // Poll pairing state. Returns { state, paired, isMock }.
 export async function pairingStatus() {
   const { serverUrl } = await getConnection();
-  if (!serverUrl) return { state: 'pending', paired: false, isMock: true };
+  if (!serverUrl) return { state: 'pending', paired: false, mode: 'start', isMock: true };
   const res = await jsonRpc(serverUrl, '/kpi_pair/status', {});
   // Log the pairing decision — this drives the read-only gate (paired === workday
   // started). If paired is unexpectedly true, the server saw a live 'paired' row.
+  // `mode` = 'resume' (workday still open, un-paired by tab-close/away) vs 'start'
+  // (never started / ended) → drives whether the app jumps to the PIN screen.
   log.info('pairingStatus ←', { state: res?.state || 'none', paired: !!res?.paired, mode: res?.mode });
-  return { state: res?.state || 'none', paired: !!res?.paired, isMock: false };
+  return { state: res?.state || 'none', paired: !!res?.paired, mode: res?.mode || 'start', isMock: false };
 }
 
 // The web deep-link that opens the KPI Action Board (where the PIN is entered).

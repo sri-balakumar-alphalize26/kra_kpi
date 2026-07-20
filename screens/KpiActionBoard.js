@@ -83,6 +83,8 @@ const rStyles = StyleSheet.create({
   mgrHint: { fontSize: 12, color: COLORS.faint, marginTop: 12 },
   customRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   customInput: { flex: 1, borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 44, paddingHorizontal: 12, fontSize: 14.5, color: COLORS.ink, backgroundColor: '#fff' },
+  reasonInput: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14.5, color: COLORS.ink, backgroundColor: '#fff', marginTop: 4 },
+  reasonHint: { fontSize: 12, color: COLORS.muted, marginTop: 5, marginLeft: 2 },
   setBtn: { backgroundColor: COLORS.primary, borderRadius: 10, paddingHorizontal: 18, height: 44, alignItems: 'center', justifyContent: 'center' },
   setBtnTxt: { color: '#fff', fontWeight: '900', fontSize: 14 },
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
@@ -688,6 +690,8 @@ export default function KpiActionBoard({
   const [reminders, setReminders] = useState({});
   const [reminderFor, setReminderFor] = useState(null);
   const [reminderCustom, setReminderCustom] = useState('');
+  // Optional note the user types — shown on the alarm/notification when it fires.
+  const [reminderReason, setReminderReason] = useState('');
   // Which kind of reminder the picker will set: 'notify' = a single sound
   // notification (expo-notifications); 'alarm' = a full-screen ringing alarm that
   // loops until Stop (notifee, Android). Seeded from the task's existing reminder.
@@ -772,18 +776,19 @@ export default function KpiActionBoard({
     log.info('reminder: apply', { id: task.id, mins: Math.round((secs / 60) * 10) / 10, mode: wantAlarm ? 'alarm' : 'notify', alarmAvail: alarmAvailable() });
     const prev = reminders[String(task.id)];
     await cancelReminderEntry(prev);
+    const reason = (reminderReason || '').trim();
     let r = null;
     if (wantAlarm) {
       // Alarm: schedule an exact full-screen ringing notification via notifee.
       const whenMs = Date.now() + Math.max(1, Math.round(secs)) * 1000;
-      const notifId = await scheduleTaskAlarm(task, whenMs);
-      if (notifId) r = { notifId, whenIso: new Date(whenMs).toISOString(), mode: 'alarm' };
+      const notifId = await scheduleTaskAlarm(task, whenMs, reason);
+      if (notifId) r = { notifId, whenIso: new Date(whenMs).toISOString(), mode: 'alarm', reason };
     } else {
       // Notify: a single scheduled notification (also the iOS fallback for alarm).
-      const res = await scheduleTaskReminder(task, secs);
-      if (res) r = { ...res, mode: 'notify' };
+      const res = await scheduleTaskReminder(task, secs, reason);
+      if (res) r = { ...res, mode: 'notify', reason };
     }
-    setReminderFor(null); setReminderCustom('');
+    setReminderFor(null); setReminderCustom(''); setReminderReason('');
     if (!r) {
       log.warn('reminder: not set (permission/schedule failed)', { id: task.id });
       showError('Reminder', 'Could not set the reminder — check notification permission in settings.');
@@ -1222,8 +1227,9 @@ export default function KpiActionBoard({
     log.info('user action', kind, { id: task.id, name: task.name, state: task.task_state });
     if (kind === 'reminder') {
       log.info('reminder: open picker', { id: task.id, name: task.name, state: task.task_state });
-      // Seed the mode toggle from any existing reminder (default 'notify').
+      // Seed the mode toggle + reason from any existing reminder (default 'notify').
       setReminderMode(reminders[String(task.id)]?.mode === 'alarm' ? 'alarm' : 'notify');
+      setReminderReason(reminders[String(task.id)]?.reason || '');
       setPresetMgrOpen(false);
       setReminderFor(task); setReminderCustom(''); return;
     }
@@ -2460,6 +2466,19 @@ export default function KpiActionBoard({
                     : 'Rings full-screen on a dev build; here it falls back to a notification.')
                 : 'A single notification with sound.'}
             </Text>
+            {/* Optional note — shown on the alarm/notification when it fires. Blank = plain. */}
+            <TextInput
+              style={rStyles.reasonInput}
+              placeholder="Reason (optional) — shows when it rings"
+              placeholderTextColor={COLORS.faint}
+              value={reminderReason}
+              onChangeText={setReminderReason}
+              maxLength={80}
+              returnKeyType="done"
+            />
+            {reminderReason.trim() ? (
+              <Text style={rStyles.reasonHint}>Shows as: “{reminderReason.trim()}”</Text>
+            ) : null}
             {/* Pick the alarm's sound from the phone's ringtone picker. Alarm mode +
                 Android. Shown even without the alarm engine (Expo Go) so you can
                 configure it now; the choice takes effect once you're on a dev build. */}

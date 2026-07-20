@@ -44,6 +44,7 @@ function useClock() {
 
 export default function AlarmScreen({ alarm, onStop, onSnooze }) {
   const task = alarm?.task || {};
+  const reason = (alarm?.reason || '').trim();   // optional note typed when set
   const { time, ap, date } = useClock();
 
   // Alarm behaviour (ring length + snooze) from the user's settings. onStop is kept
@@ -103,11 +104,17 @@ export default function AlarmScreen({ alarm, onStop, onSnooze }) {
 
           <Text style={styles.title}>⏰ Time to wrap up</Text>
 
-          {/* The reason it's ringing: this task */}
-          <View style={styles.reasonCard}>
-            <Text style={styles.reasonLabel}>REMINDER FOR</Text>
-            <Text style={styles.taskName} numberOfLines={3}>{task?.name || 'Your task'}</Text>
-          </View>
+          {/* Reason typed → show it prominently (task name as a small sub). No reason
+              → plain: just the task name line, no card. */}
+          {reason ? (
+            <View style={styles.reasonCard}>
+              <Text style={styles.reasonLabel}>REASON</Text>
+              <Text style={styles.reasonText} numberOfLines={4}>{reason}</Text>
+              {task?.name ? <Text style={styles.taskSub} numberOfLines={2}>{task.name}</Text> : null}
+            </View>
+          ) : task?.name ? (
+            <Text style={styles.taskPlain} numberOfLines={3}>{task.name}</Text>
+          ) : null}
           <Text style={styles.sub}>Your set time for this task is up.</Text>
         </View>
 
@@ -134,37 +141,39 @@ export default function AlarmScreen({ alarm, onStop, onSnooze }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#EAF2FF' },
-  safe: { flex: 1, justifyContent: 'space-between', paddingHorizontal: 26, paddingVertical: 22 },
+  safe: { flex: 1, justifyContent: 'space-between', paddingHorizontal: 24, paddingVertical: 18 },
   top: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   bellWrap: {
-    width: 108, height: 108, borderRadius: 54, backgroundColor: '#1E40AF',
-    alignItems: 'center', justifyContent: 'center', marginBottom: 20,
+    width: 78, height: 78, borderRadius: 39, backgroundColor: '#1E40AF',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 14,
   },
-  bell: { fontSize: 52 },
+  bell: { fontSize: 38 },
   // Hero time
   timeRow: { flexDirection: 'row', alignItems: 'flex-start' },
-  time: { fontSize: 76, fontWeight: '900', color: '#0F1F4D', letterSpacing: 1, lineHeight: 82 },
-  ap: { fontSize: 24, fontWeight: '800', color: '#1E3A8A', marginTop: 12, marginLeft: 6 },
-  date: { fontSize: 16, fontWeight: '700', color: '#4B5B7A', marginTop: 2, marginBottom: 20 },
-  title: { fontSize: 22, fontWeight: '800', color: '#1E40AF', marginBottom: 14 },
-  // Reason card
+  time: { fontSize: 54, fontWeight: '900', color: '#0F1F4D', letterSpacing: 1, lineHeight: 58 },
+  ap: { fontSize: 17, fontWeight: '800', color: '#1E3A8A', marginTop: 8, marginLeft: 5 },
+  date: { fontSize: 13.5, fontWeight: '700', color: '#4B5B7A', marginTop: 2, marginBottom: 14 },
+  title: { fontSize: 17, fontWeight: '800', color: '#1E40AF', marginBottom: 12 },
+  // Reason card (shown only when a reason was typed)
   reasonCard: {
-    width: '100%', backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 16, paddingHorizontal: 18,
+    width: '100%', backgroundColor: '#FFFFFF', borderRadius: 14, paddingVertical: 13, paddingHorizontal: 16,
     borderWidth: 1.5, borderColor: '#C7DDF7', alignItems: 'center',
   },
-  reasonLabel: { fontSize: 11, fontWeight: '800', color: '#7C8DB0', letterSpacing: 1.5, marginBottom: 6 },
-  taskName: { fontSize: 21, fontWeight: '800', color: '#0F1F4D', textAlign: 'center' },
-  sub: { fontSize: 14.5, color: '#4B5B7A', marginTop: 12, textAlign: 'center' },
-  actions: { gap: 14 },
+  reasonLabel: { fontSize: 10.5, fontWeight: '800', color: '#7C8DB0', letterSpacing: 1.5, marginBottom: 5 },
+  reasonText: { fontSize: 17, fontWeight: '800', color: '#0F1F4D', textAlign: 'center', lineHeight: 22 },
+  taskSub: { fontSize: 12.5, fontWeight: '600', color: '#6B7A99', textAlign: 'center', marginTop: 6 },
+  taskPlain: { fontSize: 16, fontWeight: '700', color: '#33436A', textAlign: 'center', paddingHorizontal: 10 },
+  sub: { fontSize: 13, color: '#4B5B7A', marginTop: 10, textAlign: 'center' },
+  actions: { gap: 11 },
   stopBtn: {
-    backgroundColor: '#DC2626', paddingVertical: 20, borderRadius: 20, alignItems: 'center',
-    shadowColor: '#DC2626', shadowOpacity: 0.4, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 6,
+    backgroundColor: '#DC2626', paddingVertical: 15, borderRadius: 16, alignItems: 'center',
+    shadowColor: '#DC2626', shadowOpacity: 0.4, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6,
   },
-  stopTxt: { color: '#fff', fontSize: 22, fontWeight: '800', letterSpacing: 1 },
+  stopTxt: { color: '#fff', fontSize: 18, fontWeight: '800', letterSpacing: 1 },
   snoozeBtn: {
-    backgroundColor: '#FFFFFF', paddingVertical: 16, borderRadius: 18, alignItems: 'center',
+    backgroundColor: '#FFFFFF', paddingVertical: 13, borderRadius: 14, alignItems: 'center',
     borderWidth: 1.5, borderColor: '#C7DDF7',
   },
-  snoozeTxt: { color: '#1E40AF', fontSize: 17, fontWeight: '700' },
+  snoozeTxt: { color: '#1E40AF', fontSize: 15, fontWeight: '700' },
   pressed: { opacity: 0.85 },
 });

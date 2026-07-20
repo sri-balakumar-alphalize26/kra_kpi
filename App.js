@@ -193,7 +193,9 @@ function AppInner() {
     const data = notif?.data || {};
     if (String(data.alarm) !== '1') return;
     log.info('alarm → full-screen', { notifId: notif?.id, kpiId: data.kpi_id });
-    setAlarmData({ task: { id: data.kpi_id, name: data.task_name || '' }, notifId: notif?.id });
+    // `reason` = the optional note typed when setting the reminder (shown on the
+    // alarm screen; blank → plain screen).
+    setAlarmData({ task: { id: data.kpi_id, name: data.task_name || '' }, reason: data.reason || '', notifId: notif?.id });
   };
 
   // STOP: cancel the notification (stops the loop), clear the stored reminder so
@@ -221,11 +223,12 @@ function AppInner() {
       const { snoozeMins } = await session.getAlarmSettings();
       const mins = Math.max(1, snoozeMins || 5);
       const whenMs = Date.now() + mins * 60 * 1000;
-      const notifId = await scheduleTaskAlarm(a.task, whenMs);
+      const reason = a.reason || '';
+      const notifId = await scheduleTaskAlarm(a.task, whenMs, reason);
       log.info('alarm: snoozed', { taskId: a.task.id, notifId, whenMs, snoozeMins: mins });
       try {
         await session.setReminder(a.task.id, {
-          whenIso: new Date(whenMs).toISOString(), notifId, mode: 'alarm',
+          whenIso: new Date(whenMs).toISOString(), notifId, mode: 'alarm', reason,
         });
       } catch (_) {}
     }
@@ -332,15 +335,24 @@ function AppInner() {
         setIsClient(kpiRole ? kpiRole === 'client' : !!(info && info.is_client_only));
         setDevLocked(lock);
         let paired = true;   // non-developers are never gated
+        let pairMode = 'start';
         if (lock) {
           try {
             const st = await pairingStatus();
             paired = !!st?.paired;
+            pairMode = st?.mode || 'start';
           } catch (_) { paired = false; }
         }
         if (!alive) return;
         setDevPaired(paired);
-        log.info('role gate', { kpi_role: kpiRole, lock, paired, isAdmin, isDev });
+        // Started-then-closed: the workday is still OPEN but the web tab was closed,
+        // so the device un-paired with mode='resume'. Land straight on the PIN screen
+        // to re-pair and continue. mode='start' (never started / already ended) stays
+        // read-only — no forced PIN. (Done before setGateReady, so no board flash.)
+        if (lock && !paired && pairMode === 'resume') {
+          setAppScreen((s) => (s === 'startworking' ? s : 'startworking'));
+        }
+        log.info('role gate', { kpi_role: kpiRole, lock, paired, mode: pairMode, isAdmin, isDev });
         saveRoleState(user?.uid, { kpiRole, paired });   // for the offline path below
       } catch (e) {
         // Offline / server unreachable. Reuse the last known answer rather than
@@ -379,6 +391,28 @@ function AppInner() {
       } catch (_) { /* keep polling */ }
     }, 5000);
     return () => clearInterval(id);
+  }, [user?.uid, devLocked]);
+
+  // On app FOREGROUND (open / resume): a developer whose web session was closed
+  // while the workday is still running is un-paired with mode='resume' — land them
+  // straight on the PIN screen so they re-pair and continue. mode='start' (never
+  // started / ended) stays read-only. Immediate check so it shows directly, without
+  // waiting for the 5s poll. Only on entry — never yanks someone mid-read.
+  useEffect(() => {
+    if (!user || !devLocked) return;
+    const sub = AppState.addEventListener('change', async (state) => {
+      if (state !== 'active') return;
+      try {
+        const st = await pairingStatus();
+        const paired = !!st?.paired;
+        setDevPaired(paired);
+        saveRoleState(user?.uid, { kpiRole: 'developer', paired });
+        if (!paired && (st?.mode || 'start') === 'resume') {
+          setAppScreen((s) => (s === 'startworking' ? s : 'startworking'));
+        }
+      } catch (_) { /* offline → keep current mode */ }
+    });
+    return () => sub.remove();
   }, [user?.uid, devLocked]);
 
   // Notification tap → open the task on the board. Registered once; reads the

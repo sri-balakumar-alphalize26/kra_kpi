@@ -9,6 +9,7 @@
     "newArchEnabled": false,
     "android": {
       "package": "com.alphalize.krakpi",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.USE_EXACT_ALARM",
@@ -56,13 +57,22 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to take a profile picture."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/logo369.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#EBF1FC"
+        }
+      ]
     ],
     "extra": {
       "eas": {
-        "projectId": "b561ec04-4631-4cc8-94d8-727416e9f359"
+        "projectId": "c2b2bb46-279b-48ce-b697-5fbb5fec5a45"
       }
     },
-    "owner": "vavow"
+    "owner": "vacihe"
   }
 }

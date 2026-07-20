@@ -34,10 +34,11 @@ async function ensureReminderChannel() {
 // Schedule a reminder `seconds` from now for `task`. Returns { notifId, whenIso }
 // (null on failure / no permission). Reuses the 'default' Android channel that
 // services/push.js already created.
-export async function scheduleTaskReminder(task, seconds) {
+export async function scheduleTaskReminder(task, seconds, reason = '') {
   try {
     const secs = Math.max(1, Math.round(seconds));
-    log.info('schedule: requested', { task: task?.id, name: task?.name, seconds: secs });
+    const note = (reason || '').trim();
+    log.info('schedule: requested', { task: task?.id, name: task?.name, seconds: secs, hasReason: !!note });
     const { status } = await Notifications.getPermissionsAsync();
     if (status !== 'granted') {
       const req = await Notifications.requestPermissionsAsync();
@@ -48,9 +49,10 @@ export async function scheduleTaskReminder(task, seconds) {
     const notifId = await Notifications.scheduleNotificationAsync({
       content: {
         title: '⏰ Time to wrap up',
-        body: `${name} — your set time is up.`,
+        // Typed reason leads when present, else the default task line.
+        body: note || `${name} — your set time is up.`,
         sound: 'default',
-        data: { kpi_id: task?.id },   // App.js tap listener → routeToTask(kpi_id)
+        data: { kpi_id: task?.id, reason: note },   // App.js tap listener → routeToTask(kpi_id)
       },
       // MUST carry an explicit `type`: without it, expo-notifications ignores
       // `seconds` and schedules a channel-only (no-fire) trigger. This typed
