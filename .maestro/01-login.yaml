@@ -1,0 +1,23 @@
+# 01 — Log in with mobile + password → land on Home ("Your Tasks").
+# Idempotent: if already logged in (no "Mobile number" field), it just asserts Home.
+# Needs env APP_MOBILE, APP_PASSWORD (passed by scripts/e2e-ui.mjs via -e).
+appId: com.alphalize.krakpi
+env:
+  APP_MOBILE: ""
+  APP_PASSWORD: ""
+---
+- launchApp
+- runFlow:
+    when:
+      visible: "Mobile number"
+    commands:
+      - tapOn: "Mobile number"
+      - inputText: ${APP_MOBILE}
+      - hideKeyboard
+      - tapOn: "Continue"
+      - assertVisible: "Password"
+      - tapOn: "Password"
+      - inputText: ${APP_PASSWORD}
+      - hideKeyboard
+      - tapOn: "Log In"
+- assertVisible: "Your Tasks"

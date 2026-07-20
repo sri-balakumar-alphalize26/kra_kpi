@@ -1,0 +1,70 @@
+# One-time device repoint: the app's saved Odoo URL is a stale IP. Reach the hidden
+# device-setup (7-tap the logo on the login screen), set Server URL to the USB-tunnelled
+# localhost:8069, pick the DB, log into Odoo, then log into the app (mobile + PIN) → Home.
+# Env: ODOO_URL, ODOO_DB, ODOO_WEB_LOGIN, ODOO_WEB_PASSWORD, APP_MOBILE, APP_PASSWORD.
+appId: com.alphalize.krakpi
+env:
+  ODOO_URL: "http://localhost:8069"
+  ODOO_DB: "sales_test"
+  ODOO_WEB_LOGIN: "user"
+  ODOO_WEB_PASSWORD: ""
+  APP_MOBILE: ""
+  APP_PASSWORD: ""
+---
+- launchApp
+# Wait through the ~4.6s splash until either Home or the login screen settles.
+- extendedWaitUntil:
+    visible:
+      text: "Sign in to continue|Your Tasks"
+    timeout: 25000
+# If we're on Home, log out to reach the login screen.
+- runFlow:
+    when:
+      visible: "Logout"
+    commands:
+      - tapOn: "Logout"
+      - tapOn: "Log Out"
+- extendedWaitUntil:
+    visible: "Sign in to continue"
+    timeout: 15000
+# Hidden device-setup: tap the 369 logo (clickable, ~50%,43%) seven times.
+- repeat:
+    times: 7
+    commands:
+      - tapOn:
+          point: "50%,43%"
+# ConnectScreen — Server URL
+- assertVisible: "Server URL"
+- tapOn: "https://your-server.com"
+- inputText: ${ODOO_URL}
+- hideKeyboard
+# databases auto-fetch on blur; wait for the selector to become ready
+- extendedWaitUntil:
+    visible: "Select a database"
+    timeout: 25000
+- tapOn: "Select a database"
+- tapOn: ${ODOO_DB}
+# Credentials (Odoo)
+- tapOn: "Username or Email"
+- inputText: ${ODOO_WEB_LOGIN}
+- hideKeyboard
+- tapOn: "Password"
+- inputText: ${ODOO_WEB_PASSWORD}
+- hideKeyboard
+- tapOn: "Login"
+# → app login screen (mobile + PIN)
+- extendedWaitUntil:
+    visible: "Mobile number"
+    timeout: 25000
+- tapOn: "Mobile number"
+- inputText: ${APP_MOBILE}
+- hideKeyboard
+- tapOn: "Continue"
+- assertVisible: "Password"
+- tapOn: "Password"
+- inputText: ${APP_PASSWORD}
+- hideKeyboard
+- tapOn: "Log In"
+- extendedWaitUntil:
+    visible: "Your Tasks"
+    timeout: 25000

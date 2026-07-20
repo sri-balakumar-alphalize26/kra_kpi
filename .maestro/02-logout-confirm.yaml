@@ -1,0 +1,13 @@
+# 02 — Logout shows a CONFIRM dialog (one of my fixes). Cold-start the app so we
+# land on Home (a logged-in dev with no open workday opens on Home), tap the bottom
+# TabBar "Logout", assert the "Log out?" modal, then "Cancel" so we stay logged in
+# (idempotent — verifies the confirm exists, does not actually log out).
+appId: com.alphalize.krakpi
+---
+- stopApp
+- launchApp
+- assertVisible: "Your Tasks"
+- tapOn: "Logout"
+- assertVisible: "Log out?"
+- tapOn: "Cancel"
+- assertVisible: "Your Tasks"

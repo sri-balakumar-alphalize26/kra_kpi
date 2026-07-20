@@ -1,0 +1,16 @@
+# 04 — After the web PIN is accepted, the phone's pairing poll (~5s) routes off the
+# PIN screen to the KPI Action Board with the workday OPEN. We wait for the board
+# ("End Workday" button = board reached), tap it → the End-Workday summary modal
+# opens → tap "Logout & Send Summary" to confirm → the board flips to the ended
+# state ("Workday ended for today"). Exercises the one-start-one-end-per-day fix.
+appId: com.alphalize.krakpi
+---
+- extendedWaitUntil:
+    visible: "End Workday"
+    timeout: 30000
+- tapOn: "End Workday"
+- assertVisible: "Logout & Send Summary"
+- tapOn: "Logout & Send Summary"
+- extendedWaitUntil:
+    visible: "Workday ended for today"
+    timeout: 20000

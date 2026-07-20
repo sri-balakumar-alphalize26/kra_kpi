@@ -1,0 +1,84 @@
+# FAST group A — reach Home, then Start (or Continue) Workday → PIN screen.
+#
+# CRITICAL: launchApp WARM (stopApp: false). Maestro's default launchApp COLD-starts the app —
+# killing the JS context and forcing a ~2-3 min Metro bundle reload that blows past every wait.
+# A warm foreground keeps the app on its last screen and Home matches instantly. The app resumes
+# wherever a prior run left it, so recover to Home:
+#   - dev-client launcher (only if the process actually died) → tap the Metro server
+#   - PIN screen ("Not now — keep browsing") → dismiss → board
+#   - board → system Back → Home. Detect the board by board-ONLY anchors ("End Workday" /
+#     "Workday ended for today" / "New Task") — NOT "KPI Action Board", which is also a Home tile.
+#   - login screen ("Mobile number") → log in
+# Env: APP_MOBILE, APP_PASSWORD (login fallback only).
+appId: com.alphalize.krakpi
+env:
+  APP_MOBILE: ""
+  APP_PASSWORD: ""
+---
+- launchApp:
+    stopApp: false
+- runFlow:
+    when:
+      visible: "DEVELOPMENT SERVERS"
+    commands:
+      - tapOn:
+          text: "http://localhost:8081"
+          index: 0
+- runFlow:
+    when:
+      visible: "Mobile number"
+    commands:
+      - tapOn: "Mobile number"
+      - inputText: ${APP_MOBILE}
+      - hideKeyboard
+      - tapOn: "Continue"
+      - extendedWaitUntil:
+          visible: "Password"
+          timeout: 15000
+      - tapOn: "Password"
+      - inputText: ${APP_PASSWORD}
+      - hideKeyboard
+      - tapOn: "Log In"
+# PIN screen left up by a prior run → back to the board
+- runFlow:
+    when:
+      visible: "Not now — keep browsing"
+    commands:
+      - tapOn: "Not now — keep browsing"
+      - extendedWaitUntil:
+          visible: "New Task"
+          timeout: 8000
+# board left up by a prior run → Back to Home (board-only anchors)
+- runFlow:
+    when:
+      visible: "End Workday"
+    commands:
+      - pressKey: Back
+- runFlow:
+    when:
+      visible: "Workday ended for today"
+    commands:
+      - pressKey: Back
+- runFlow:
+    when:
+      visible: "New Task"
+    commands:
+      - pressKey: Back
+# Home reached
+- extendedWaitUntil:
+    visible: "Your Tasks"
+    timeout: 30000
+# Start (or Continue) the workday → routes to the PIN screen
+- runFlow:
+    when:
+      visible: "Start Workday"
+    commands:
+      - tapOn: "Start Workday"
+- runFlow:
+    when:
+      visible: "Continue Workday"
+    commands:
+      - tapOn: "Continue Workday"
+- extendedWaitUntil:
+    visible: "Not now — keep browsing"
+    timeout: 20000

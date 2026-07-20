@@ -1,0 +1,17 @@
+# 03 — From the Home read-only bar, tap the workday button ("Start Workday" when
+# not started, "Continue Workday" when a session is open) → routes to the PIN
+# screen (StartWorkingScreen). Anchor on "Not now — keep browsing" (always present
+# on that screen). Assumes we are on Home and the day is NOT already ended.
+appId: com.alphalize.krakpi
+---
+- runFlow:
+    when:
+      visible: "Start Workday"
+    commands:
+      - tapOn: "Start Workday"
+- runFlow:
+    when:
+      visible: "Continue Workday"
+    commands:
+      - tapOn: "Continue Workday"
+- assertVisible: "Not now — keep browsing"

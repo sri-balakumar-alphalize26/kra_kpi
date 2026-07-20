@@ -1,0 +1,34 @@
+# Continues on the OPEN device-setup screen (no launchApp): fill Odoo creds → Login,
+# then app login (mobile + PIN) → Home. Env: ODOO_WEB_LOGIN/PASSWORD, APP_MOBILE/PASSWORD.
+appId: com.alphalize.krakpi
+env:
+  ODOO_WEB_LOGIN: "user"
+  ODOO_WEB_PASSWORD: ""
+  APP_MOBILE: ""
+  APP_PASSWORD: ""
+---
+- tapOn: "Username or Email"
+- inputText: ${ODOO_WEB_LOGIN}
+- hideKeyboard
+- tapOn: "Password"
+- inputText: ${ODOO_WEB_PASSWORD}
+- hideKeyboard
+- tapOn: "Login"
+# → app login (mobile + PIN)
+- extendedWaitUntil:
+    visible: "Mobile number"
+    timeout: 30000
+- tapOn: "Mobile number"
+- inputText: ${APP_MOBILE}
+- hideKeyboard
+- tapOn: "Continue"
+- extendedWaitUntil:
+    visible: "Password"
+    timeout: 15000
+- tapOn: "Password"
+- inputText: ${APP_PASSWORD}
+- hideKeyboard
+- tapOn: "Log In"
+- extendedWaitUntil:
+    visible: "Your Tasks"
+    timeout: 30000

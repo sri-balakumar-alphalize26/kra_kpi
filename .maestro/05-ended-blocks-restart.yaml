@@ -1,0 +1,12 @@
+# 05 — After ending, the day cannot be restarted (one start + one end per day).
+# The workday button reads "Workday ended for today" (disabled) and there is NO
+# "Start Workday" to tap. We tap the ended label (a no-op) and assert nothing
+# reopens. Assumes we just ended the workday (flow 04).
+appId: com.alphalize.krakpi
+---
+- assertVisible: "Workday ended for today"
+- tapOn:
+    text: "Workday ended for today"
+    optional: true
+- assertVisible: "Workday ended for today"
+- assertNotVisible: "Start Workday"

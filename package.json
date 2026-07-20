@@ -11,6 +11,7 @@
     "expo": "~54.0.36",
     "expo-blur": "~15.0.8",
     "expo-camera": "~17.0.10",
+    "expo-dev-client": "~6.0.21",
     "expo-device": "~8.0.10",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.23",
@@ -32,7 +33,29 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:e2e": "node scripts/e2e-workday.mjs",
+    "test:ui": "node scripts/e2e-ui.mjs"
+  },
+  "devDependencies": {
+    "@testing-library/react-native": "^13.3.3",
+    "babel-preset-expo": "~54.0.0",
+    "jest": "^29.7.0",
+    "jest-expo": "~54.0.0",
+    "jimp": "^0.22.12",
+    "playwright": "^1.61.1",
+    "react-test-renderer": "^19.1.0"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.js"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.test.js"
+    ]
   },
   "private": true
 }

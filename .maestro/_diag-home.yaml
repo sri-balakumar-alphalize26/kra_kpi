@@ -1,0 +1,8 @@
+# Diagnostic: does a WARM foreground (no cold-start) keep Home + match "Your Tasks"?
+appId: com.alphalize.krakpi
+---
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Your Tasks"
+    timeout: 30000

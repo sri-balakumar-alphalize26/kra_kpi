@@ -1,0 +1,7 @@
+# Smoke test — proves Maestro can launch and drive the installed app.
+# Needs NO credentials: it just opens the app and screenshots whatever screen
+# it lands on (login or Home), so we can see the current state.
+appId: com.alphalize.krakpi
+---
+- launchApp
+- takeScreenshot: maestro-smoke-launch

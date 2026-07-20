@@ -1,0 +1,10 @@
+# helper — log out to reach the AppLoginScreen (used while repointing the server)
+appId: com.alphalize.krakpi
+---
+- launchApp
+- runFlow:
+    when:
+      visible: "Logout"
+    commands:
+      - tapOn: "Logout"
+      - tapOn: "Log Out"

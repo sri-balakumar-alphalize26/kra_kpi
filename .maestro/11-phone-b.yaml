@@ -1,0 +1,94 @@
+# FAST group B — after pair-web opens the workday (and HOLDS the web tab so the phone stays
+# paired), the phone routes to the KPI Action Board. A "Not on a task?" idle prompt pops over
+# it; picking "In a meeting" records a non-task block that permanently silences it. Then End
+# Workday (confirm) → assert ended and cannot restart (one-per-day) → logout confirm.
+#
+# RESILIENCE: the phone talks to Odoo over a USB tunnel; while the module is being deployed the
+# server restarts, so any call can transiently fail — surfacing as a "Something went wrong /
+# Network Error" modal or a brief read-only "Workday not started" popup (self-un-pair). Since
+# the web pairing is held, these self-heal once Odoo answers. So each stage is a retry loop that
+# first dismisses whatever popup is up, (re)does its action only if the trigger is still there,
+# and succeeds when the expected next-state shows. Actions are guarded by `when visible` so a
+# retry never re-taps a control that already advanced.
+# No launchApp (continues live from where group A + pair-web left the app).
+appId: com.alphalize.krakpi
+---
+# board routes in after pairing (slow) → the idle prompt appears; wait for it.
+- extendedWaitUntil:
+    visible: "Not on a task?"
+    timeout: 180000
+# Stage 1 — reach a clean board with End Workday visible: dismiss any error/read-only popup,
+# (re)pick "In a meeting" to silence the idle prompt, and confirm End Workday shows.
+- retry:
+    maxRetries: 8
+    commands:
+      - runFlow:
+          when:
+            visible: "Something went wrong"
+          commands:
+            - tapOn: "OK"
+      - runFlow:
+          when:
+            visible: "Workday not started"
+          commands:
+            - tapOn: "Cancel"
+      - runFlow:
+          when:
+            visible: "Not on a task?"
+          commands:
+            - tapOn: "In a meeting"
+      - extendedWaitUntil:
+          visible: "End Workday"
+          timeout: 9000
+      - assertNotVisible: "Not on a task?"
+      - assertNotVisible: "Something went wrong"
+# Stage 2 — End Workday → the "Logout & Send Summary" confirm (retry through blips).
+- retry:
+    maxRetries: 8
+    commands:
+      - runFlow:
+          when:
+            visible: "Something went wrong"
+          commands:
+            - tapOn: "OK"
+      - runFlow:
+          when:
+            visible: "Workday not started"
+          commands:
+            - tapOn: "Cancel"
+      - runFlow:
+          when:
+            visible: "End Workday"
+          commands:
+            - tapOn: "End Workday"
+      - extendedWaitUntil:
+          visible: "Logout & Send Summary"
+          timeout: 10000
+# Stage 3 — confirm the end → the ended state (the one-start-one-end-per-day fix).
+- retry:
+    maxRetries: 8
+    commands:
+      - runFlow:
+          when:
+            visible: "Something went wrong"
+          commands:
+            - tapOn: "OK"
+      - runFlow:
+          when:
+            visible: "Logout & Send Summary"
+          commands:
+            - tapOn: "Logout & Send Summary"
+      - extendedWaitUntil:
+          visible: "Workday ended for today"
+          timeout: 12000
+# 05 — cannot restart: ended label stays, no "Start Workday"
+- assertVisible: "Workday ended for today"
+- assertNotVisible: "Start Workday"
+# 02 — logout shows a confirm dialog (Cancel keeps us logged in)
+- runFlow:
+    when:
+      visible: "Logout"
+    commands:
+      - tapOn: "Logout"
+      - assertVisible: "Log out?"
+      - tapOn: "Cancel"
