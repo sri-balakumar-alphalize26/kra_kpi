@@ -429,16 +429,115 @@ export class Chat369App extends Component {
 
             <!-- Contact / Group info drawer -->
             <div class="o369-drawer" t-if="state.infoOpen and state.contactInfo">
+                <!-- ===== Feature 3: media / docs / links sub-view ===== -->
+                <t t-if="state.mediaOpen">
+                    <div class="o369-drawerhead">
+                        <button class="o369-hbtn o369-hbtn-d" t-on-click="closeMedia"><i class="fa fa-arrow-left"/></button>
+                        <span>Media, links &amp; docs</span>
+                    </div>
+                    <div class="o369-mediatabs">
+                        <button t-att-class="{ 'o369-mtab-on': state.mediaTab === 'media' }" t-on-click="() => this.setMediaTab('media')">Media</button>
+                        <button t-att-class="{ 'o369-mtab-on': state.mediaTab === 'docs' }" t-on-click="() => this.setMediaTab('docs')">Docs</button>
+                        <button t-att-class="{ 'o369-mtab-on': state.mediaTab === 'links' }" t-on-click="() => this.setMediaTab('links')">Links</button>
+                    </div>
+                    <div class="o369-drawerbody">
+                        <t t-foreach="groupedMedia()" t-as="grp" t-key="grp.label">
+                            <div class="o369-monthhdr" t-esc="grp.label"/>
+                            <div t-if="state.mediaTab === 'media'" class="o369-mediagrid">
+                                <t t-foreach="grp.items" t-as="it" t-key="it.id">
+                                    <div class="o369-mediacell">
+                                        <img t-if="it.kind === 'image'" t-att-src="it.url" t-on-click="() => this.openLightbox(it.url)"/>
+                                        <a t-else="" class="o369-mediacellicon" t-att-href="it.url" target="_blank"><i class="fa" t-att-class="it.kind === 'video' ? 'fa-play-circle' : 'fa-file-o'"/></a>
+                                    </div>
+                                </t>
+                            </div>
+                            <t t-else="">
+                                <t t-foreach="grp.items" t-as="it" t-key="it.id">
+                                    <a class="o369-doclink" t-att-href="it.url" target="_blank">
+                                        <i class="fa" t-att-class="state.mediaTab === 'links' ? 'fa-link' : (it.kind === 'audio' ? 'fa-headphones' : 'fa-file-o')"/>
+                                        <span class="o369-docname" t-esc="it.name"/>
+                                        <i class="fa fa-download o369-docdl"/>
+                                    </a>
+                                </t>
+                            </t>
+                        </t>
+                        <div class="o369-hint" t-if="state.mediaItems.length === 0">Nothing here yet.</div>
+                    </div>
+                </t>
+                <!-- ===== Feature 4: group permissions sub-view ===== -->
+                <t t-elif="state.permsOpen">
+                    <div class="o369-drawerhead">
+                        <button class="o369-hbtn o369-hbtn-d" t-on-click="closePerms"><i class="fa fa-arrow-left"/></button>
+                        <span>Group permissions</span>
+                    </div>
+                    <div class="o369-drawerbody">
+                        <div class="o369-drawersection">
+                            <div class="o369-secttitle">Members can</div>
+                            <t t-foreach="MEMBER_PERMS" t-as="p" t-key="p.field">
+                                <div class="o369-permrow">
+                                    <span t-esc="p.label"/>
+                                    <span class="o369-toggle" t-att-class="{ 'o369-toggle-on': permOn(p.field) }" t-on-click="() => this.togglePerm(p.field)"><span class="o369-toggleknob"/></span>
+                                </div>
+                            </t>
+                        </div>
+                        <div class="o369-drawersection">
+                            <div class="o369-secttitle">Admins can</div>
+                            <div class="o369-permrow">
+                                <span>Approve new members</span>
+                                <span class="o369-toggle" t-att-class="{ 'o369-toggle-on': permOn('admin_approve') }" t-on-click="() => this.togglePerm('admin_approve')"><span class="o369-toggleknob"/></span>
+                            </div>
+                        </div>
+                        <div class="o369-drawersection">
+                            <button class="o369-drawaction" t-on-click="closePerms"><i class="fa fa-user-secret"/> Edit group admins <i class="fa fa-chevron-right o369-rowchev"/></button>
+                        </div>
+                    </div>
+                </t>
+                <!-- ===== main info view ===== -->
+                <t t-else="">
                 <div class="o369-drawerhead">
                     <button class="o369-hbtn o369-hbtn-d" t-on-click="closeContactInfo"><i class="fa fa-times"/></button>
                     <span t-esc="state.contactInfo.is_group ? 'Group info' : 'Contact info'"/>
                 </div>
                 <div class="o369-drawerbody">
                     <div class="o369-drawerprofile">
-                        <div class="o369-avatar o369-avatarbig"><img t-if="state.contactInfo.avatar_url" t-att-src="state.contactInfo.avatar_url"/><span t-else="" t-esc="initials(state.contactInfo.title)"/></div>
-                        <div class="o369-drawername" t-esc="state.contactInfo.title"/>
+                        <div class="o369-avatarwrap">
+                            <div class="o369-avatar o369-avatarbig"><img t-if="state.contactInfo.avatar_url" t-att-src="state.contactInfo.avatar_url"/><span t-else="" t-esc="initials(state.contactInfo.title)"/></div>
+                            <button class="o369-cambadge" t-if="state.contactInfo.is_group and canEditInfo()" t-on-click="changeGroupPhoto" title="Change group photo"><i class="fa fa-camera"/></button>
+                        </div>
+                        <div class="o369-namerow">
+                            <t t-if="state.contactInfo.is_group and state.nameEditing">
+                                <input class="o369-nickinput" placeholder="Group name" t-model="state.groupNameEdit"/>
+                                <button class="o369-savebtn" t-on-click="saveGroupName">Save</button>
+                                <button class="o369-hbtn o369-hbtn-d" t-on-click="cancelNameEdit"><i class="fa fa-times"/></button>
+                            </t>
+                            <t t-else="">
+                                <div class="o369-drawername" t-esc="state.contactInfo.title"/>
+                                <button class="o369-editpencil" t-if="state.contactInfo.is_group and canEditInfo()" t-on-click="startNameEdit" title="Edit name"><i class="fa fa-pencil"/></button>
+                            </t>
+                        </div>
                         <div class="o369-drawersub" t-if="!state.contactInfo.is_group" t-esc="state.contactInfo.mobile"/>
                         <div class="o369-drawersub" t-if="state.contactInfo.is_group"><t t-esc="state.contactInfo.member_count"/> members</div>
+                        <div class="o369-circlebtns" t-if="state.contactInfo.is_group">
+                            <button class="o369-circlebtn" t-if="canAddMembers()" t-on-click="openAddMembers"><span class="o369-circleico"><i class="fa fa-user-plus"/></span><span class="o369-circlelbl">Add</span></button>
+                            <button class="o369-circlebtn" t-on-click="searchFromInfo"><span class="o369-circleico"><i class="fa fa-search"/></span><span class="o369-circlelbl">Search</span></button>
+                        </div>
+                    </div>
+                    <div class="o369-drawersection" t-if="state.contactInfo.is_group">
+                        <t t-if="state.descEditing">
+                            <textarea class="o369-desctextarea" placeholder="Add group description" t-model="state.descDraft"/>
+                            <div class="o369-descbtns">
+                                <button class="o369-savebtn" t-on-click="saveDesc">Save</button>
+                                <button class="o369-drawcancel" t-on-click="cancelDescEdit">Cancel</button>
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <div class="o369-descrow" t-if="state.contactInfo.description" t-att-class="{ 'o369-descrow-edit': canEditInfo() }" t-on-click="startDescEdit">
+                                <span class="o369-desctext" t-esc="state.contactInfo.description"/>
+                                <i class="fa fa-pencil o369-descpencil" t-if="canEditInfo()"/>
+                            </div>
+                            <button class="o369-adddesc" t-elif="canEditInfo()" t-on-click="startDescEdit"><i class="fa fa-pencil"/> Add group description</button>
+                            <div class="o369-drawersub" t-else="">No description</div>
+                        </t>
                     </div>
                     <div class="o369-drawersection" t-if="!state.contactInfo.is_group and state.contactInfo.user_id">
                         <div class="o369-secttitle">Nickname (only you see this)</div>
@@ -448,7 +547,7 @@ export class Chat369App extends Component {
                         </div>
                     </div>
                     <div class="o369-drawersection">
-                        <div class="o369-mediarow"><i class="fa fa-picture-o me-2"/>Media, links &amp; docs <span class="o369-mediacount" t-esc="mediaTotal()"/></div>
+                        <div class="o369-mediarow o369-mediarow-btn" t-on-click="openMedia"><i class="fa fa-picture-o me-2"/>Media, links &amp; docs <span class="o369-mediacount" t-esc="mediaTotal()"/><i class="fa fa-chevron-right o369-rowchev"/></div>
                         <div class="o369-mediastats"><span><t t-esc="state.contactInfo.media.photos"/> photos</span><span><t t-esc="state.contactInfo.media.videos"/> videos</span><span><t t-esc="state.contactInfo.media.docs"/> docs</span></div>
                     </div>
                     <div class="o369-drawersection">
@@ -457,12 +556,7 @@ export class Chat369App extends Component {
                         <button class="o369-drawaction" t-on-click="addToListFromInfo"><i class="fa fa-folder-o"/> Add to list</button>
                     </div>
                     <div class="o369-drawersection" t-if="state.contactInfo.is_group and state.contactInfo.is_admin">
-                        <div class="o369-secttitle">Group settings (admin only)</div>
-                        <div class="o369-nickrow">
-                            <input class="o369-nickinput" placeholder="Group name" t-model="state.groupNameEdit"/>
-                            <button class="o369-savebtn" t-on-click="renameGroup">Save</button>
-                        </div>
-                        <button class="o369-drawaction" t-on-click="changeGroupPhoto"><i class="fa fa-camera"/> Change group photo</button>
+                        <button class="o369-drawaction" t-on-click="togglePerms"><i class="fa fa-lock"/> Group permissions <i class="fa fa-chevron-right o369-rowchev"/></button>
                     </div>
                     <div class="o369-drawersection" t-if="state.contactInfo.is_group">
                         <div class="o369-secttitle"><t t-esc="state.contactInfo.member_count"/> members</div>
@@ -479,6 +573,26 @@ export class Chat369App extends Component {
                         <button class="o369-drawaction o369-danger" t-on-click="headerLeave"><i class="fa fa-trash"/> <t t-esc="state.contactInfo.is_group ? 'Exit group' : 'Delete chat'"/></button>
                     </div>
                 </div>
+                </t>
+            </div>
+
+            <!-- Add members picker (Feature 2) -->
+            <div class="o369-modal" t-if="state.addMembersOpen" t-on-click.self="closeAddMembers">
+                <div class="o369-modalcard">
+                    <div class="o369-modaltitle"><i class="fa fa-user-plus me-2"/>Add members</div>
+                    <div class="o369-pinlist">
+                        <t t-foreach="state.addMemberContacts" t-as="u" t-key="u.id">
+                            <div class="o369-pinitem o369-fwdrow" t-on-click="() => this.toggleAddMemberSel(u.id)">
+                                <div class="o369-avatar o369-avatar-sm"><img t-if="u.avatar_url" t-att-src="u.avatar_url"/><span t-else="" t-esc="initials(u.name)"/></div>
+                                <div class="o369-pinitemtxt"><b t-esc="u.name"/><small t-esc="u.mobile"/></div>
+                                <i class="fa" t-att-class="state.addMemberSel.includes(u.id) ? 'fa-check-circle o369-checked' : 'fa-circle-o'"/>
+                            </div>
+                        </t>
+                        <div class="o369-hint" t-if="state.addMemberContacts.length === 0">No contacts to add.</div>
+                    </div>
+                    <button class="o369-createbtn" t-on-click="confirmAddMembers" t-att-disabled="state.addMemberSel.length === 0">Add (<t t-esc="state.addMemberSel.length"/>)</button>
+                    <button class="o369-modalcancel" t-on-click="closeAddMembers">Cancel</button>
+                </div>
             </div>
 
             <!-- Member action menu -->
@@ -494,6 +608,18 @@ export class Chat369App extends Component {
                 </div>
             </div>
 
+            <!-- Styled confirm dialog (replaces window.confirm) -->
+            <div class="o369-modal" t-if="state.confirm" t-on-click.self="() => this._confirmResolve(false)">
+                <div class="o369-modalcard o369-confirmcard">
+                    <div class="o369-modaltitle" t-esc="state.confirm.title"/>
+                    <div class="o369-confirmbody" t-esc="state.confirm.body"/>
+                    <div class="o369-confirmbtns">
+                        <button class="o369-confirmcancel" t-on-click="() => this._confirmResolve(false)">Cancel</button>
+                        <button t-att-class="'o369-confirmok' + (state.confirm.danger ? ' o369-danger' : '')" t-on-click="() => this._confirmResolve(true)" t-esc="state.confirm.okLabel"/>
+                    </div>
+                </div>
+            </div>
+
             <!-- Image lightbox -->
             <div class="o369-lightbox" t-if="state.lightbox" t-on-click="closeLightbox">
                 <img t-att-src="state.lightbox"/>
@@ -505,6 +631,13 @@ export class Chat369App extends Component {
         this.REACTIONS = ['ðŸ‘', 'â¤ï¸', 'ðŸ˜‚', 'ðŸ˜®', 'ðŸ˜¢', 'ðŸ™'];
         this.EMOJIS = [...new Set(['ðŸ˜€','ðŸ˜ƒ','ðŸ˜„','ðŸ˜','ðŸ˜†','ðŸ˜…','ðŸ˜‚','ðŸ¤£','ðŸ˜Š','ðŸ˜‡','ðŸ™‚','ðŸ™ƒ','ðŸ˜‰','ðŸ˜Œ','ðŸ˜','ðŸ¥°','ðŸ˜˜','ðŸ˜‹','ðŸ˜›','ðŸ˜œ','ðŸ¤ª','ðŸ¤¨','ðŸ§','ðŸ¤“','ðŸ˜Ž','ðŸ¥³','ðŸ˜','ðŸ˜’','ðŸ˜”','ðŸ˜Ÿ','ðŸ™','ðŸ˜£','ðŸ˜–','ðŸ˜«','ðŸ˜©','ðŸ¥º','ðŸ˜¢','ðŸ˜­','ðŸ˜¤','ðŸ˜ ','ðŸ˜¡','ðŸ¤¬','ðŸ¤¯','ðŸ˜³','ðŸ¥µ','ðŸ¥¶','ðŸ˜±','ðŸ˜¨','ðŸ˜°','ðŸ˜¥','ðŸ¤—','ðŸ¤”','ðŸ¤­','ðŸ¤«','ðŸ¤¥','ðŸ˜¶','ðŸ˜','ðŸ˜‘','ðŸ˜¬','ðŸ™„','ðŸ˜®','ðŸ˜²','ðŸ¥±','ðŸ˜´','ðŸ¤¤','ðŸ¤¢','ðŸ¤®','ðŸ¤§','ðŸ˜·','ðŸ¤’','ðŸ¤•','ðŸ‘','ðŸ‘Ž','ðŸ‘Œ','âœŒï¸','ðŸ¤ž','ðŸ¤Ÿ','ðŸ¤˜','ðŸ‘','ðŸ™Œ','ðŸ™','ðŸ’ª','ðŸ‘€','ðŸ”¥','â­','ðŸŒŸ','âœ¨','ðŸ’¯','ðŸŽ‰','ðŸŽŠ','â¤ï¸','ðŸ§¡','ðŸ’›','ðŸ’š','ðŸ’™','ðŸ’œ','ðŸ–¤','ðŸ¤','ðŸ’”','ðŸ’•','ðŸ’ž','ðŸ’—','ðŸ’–'])];
         this.notification = useService("notification");
+        this.MEMBER_PERMS = [
+            { field: 'perm_edit_info', label: 'Edit group settings' },
+            { field: 'perm_send', label: 'Send new messages' },
+            { field: 'perm_add_members', label: 'Add other members' },
+            { field: 'perm_send_history', label: 'Send message history' },
+            { field: 'perm_invite', label: 'Invite via link' },
+        ];
         this.state = useState({
             view: 'chats', conversations: [], contacts: [], messages: [], pinnedMsgs: [],
             activeConv: null, selectedId: null, draft: '', replyTo: null, editing: null,
@@ -517,6 +650,12 @@ export class Chat369App extends Component {
             searchOpen: false, searchQ: '', searchResults: [], searchIdx: 0, flashId: 0,
             calOpen: false, calYear: 0, calMonth: 0,
             attachMenu: false, lightbox: null, recording: false, recPaused: false, recSecs: 0, memberMenu: null, groupNameEdit: '',
+            confirm: null,
+            // Group info redesign / media viewer / permissions (Features 2-4)
+            nameEditing: false, descEditing: false, descDraft: '',
+            mediaOpen: false, mediaTab: 'media', mediaItems: [],
+            permsOpen: false,
+            addMembersOpen: false, addMemberSel: [], addMemberContacts: [],
         });
         this.scroller = useRef("scroller");
         this.fileinput = useRef("fileinput");
@@ -667,7 +806,7 @@ export class Chat369App extends Component {
     pickEmoji(e) { const m = this.state.emojiPickerMsg; this.state.emojiPickerMsg = null; if (m) this.react(m, e); }
     async deleteScope(m, scope) {
         this.closeMenus();
-        if (!window.confirm(scope === 'everyone' ? 'Delete this message for everyone?' : 'Delete this message for you?')) return;
+        if (!await this.askConfirm({ title: 'Delete message', body: scope === 'everyone' ? 'Delete this message for everyone?' : 'Delete this message for you?', okLabel: 'Delete', danger: true })) return;
         try {
             const res = await rpc('/chat/delete_message', { message_id: m.id, scope });
             if (res && res.status === false) { this.notify(res.message); return; }
@@ -712,10 +851,25 @@ export class Chat369App extends Component {
     closeMute() { this.state.muteConv = null; }
     confirmMute(hours) { const c = this.state.muteConv; this.state.muteConv = null; if (c) this._doMute(c.id, true, hours); }
     async _doMute(id, muted, hours) { try { await rpc('/chat/mute', { conversation_id: id, muted, hours }); await this.loadConversations(); } catch (e) {} }
-    async clearChatRow(c) { this.closeMenus(); if (!window.confirm('Clear all messages in this chat?')) return; try { await rpc('/chat/clear_chat', { conversation_id: c.id }); if (this.state.selectedId === c.id) this.reloadMessages(false); this.loadConversations(); } catch (e) {} }
+    // Styled confirm dialog — returns a Promise<boolean>. Replaces window.confirm so
+    // Clear/Delete/etc. use the app's own modal look (o369-modal) instead of the browser's.
+    askConfirm({ title, body, okLabel = 'Confirm', danger = false }) {
+        return new Promise((resolve) => { this.state.confirm = { title, body, okLabel, danger, resolve }; });
+    }
+    _confirmResolve(val) {
+        const c = this.state.confirm;
+        this.state.confirm = null;
+        if (c && c.resolve) c.resolve(val);
+    }
+    async clearChatRow(c) {
+        this.closeMenus();
+        if (!await this.askConfirm({ title: 'Clear chat', body: 'Clear all messages in this chat? This can\'t be undone.', okLabel: 'Clear', danger: true })) return;
+        try { await rpc('/chat/clear_chat', { conversation_id: c.id }); if (this.state.selectedId === c.id) this.reloadMessages(false); this.loadConversations(); } catch (e) {}
+    }
     async leaveChatRow(c) {
         this.closeMenus();
-        if (!window.confirm(c.is_group ? 'Exit this group?' : 'Delete this chat?')) return;
+        const grp = c.is_group;
+        if (!await this.askConfirm({ title: grp ? 'Exit group' : 'Delete chat', body: grp ? 'Are you sure you want to exit this group?' : 'Delete this chat? This can\'t be undone.', okLabel: grp ? 'Exit' : 'Delete', danger: true })) return;
         try { await rpc('/chat/leave_chat', { conversation_id: c.id }); if (this.state.selectedId === c.id) { this.state.selectedId = null; this.state.activeConv = null; } this.loadConversations(); } catch (e) {}
     }
 
@@ -723,9 +877,69 @@ export class Chat369App extends Component {
     async openContactInfo() {
         if (!this.state.selectedId) return;
         this.closeMenus();
+        this.state.mediaOpen = false; this.state.permsOpen = false; this.state.nameEditing = false; this.state.descEditing = false;
         try { const res = await rpc('/chat/contact_info', { conversation_id: this.state.selectedId }); if (res && res.status) { this.state.contactInfo = res.info; this.state.nickDraft = res.info.nickname || ''; this.state.groupNameEdit = res.info.name || ''; this.state.infoOpen = true; } } catch (e) {}
     }
-    closeContactInfo() { this.state.infoOpen = false; }
+    closeContactInfo() { this.state.infoOpen = false; this.state.mediaOpen = false; this.state.permsOpen = false; this.state.nameEditing = false; this.state.descEditing = false; }
+
+    // ---- group info redesign (Feature 2): permission helpers ----
+    canEditInfo() { const i = this.state.contactInfo; return !!(i && (i.is_admin || (i.permissions && i.permissions.perm_edit_info))); }
+    canAddMembers() { const i = this.state.contactInfo; return !!(i && (i.is_admin || (i.permissions && i.permissions.perm_add_members))); }
+    // Inline group-name edit (reuses renameGroup + state.groupNameEdit).
+    startNameEdit() { if (!this.canEditInfo()) return; this.state.groupNameEdit = this.state.contactInfo.name || this.state.contactInfo.title || ''; this.state.nameEditing = true; }
+    cancelNameEdit() { this.state.nameEditing = false; }
+    async saveGroupName() { await this.renameGroup(); this.state.nameEditing = false; }
+    // Inline group description edit (Feature 2).
+    startDescEdit() { if (!this.canEditInfo()) return; this.state.descDraft = (this.state.contactInfo && this.state.contactInfo.description) || ''; this.state.descEditing = true; }
+    cancelDescEdit() { this.state.descEditing = false; }
+    async saveDesc() {
+        const i = this.state.contactInfo; if (!i) return;
+        const desc = (this.state.descDraft || '').trim();
+        try { const res = await rpc('/chat/group/update', { conversation_id: i.conversation_id, action: 'description', description: desc }); if (res && res.status === false) { this.notify(res.message); return; } i.description = desc; this.state.descEditing = false; this.notify('Description updated', 'success'); } catch (e) {}
+    }
+    searchFromInfo() { this.state.infoOpen = false; this.state.searchOpen = true; this.state.searchQ = ''; this.state.searchResults = []; }
+
+    // ---- add-members picker (Feature 2) ----
+    async openAddMembers() {
+        const i = this.state.contactInfo; if (!i) return;
+        this.state.addMemberSel = []; this.state.addMemberContacts = []; this.state.addMembersOpen = true;
+        try { const res = await rpc('/chat/contacts', {}); if (res && res.status) { const have = new Set((i.members || []).map((m) => m.id)); this.state.addMemberContacts = (res.contacts || []).filter((u) => !have.has(u.id)); } } catch (e) {}
+    }
+    closeAddMembers() { this.state.addMembersOpen = false; }
+    toggleAddMemberSel(id) { const a = this.state.addMemberSel; const idx = a.indexOf(id); if (idx >= 0) a.splice(idx, 1); else a.push(id); }
+    async confirmAddMembers() {
+        const i = this.state.contactInfo; const ids = [...this.state.addMemberSel];
+        this.state.addMembersOpen = false; if (!i || !ids.length) return;
+        try { const res = await rpc('/chat/group/update', { conversation_id: i.conversation_id, action: 'add', member_ids: ids }); if (res && res.status === false) { this.notify(res.message); return; } this._refreshInfo(i.conversation_id); this.loadConversations(); this.notify('Members added', 'success'); } catch (e) {}
+    }
+
+    // ---- media viewer (Feature 3) ----
+    openMedia() { this.state.mediaOpen = true; this.state.mediaTab = 'media'; this.loadMediaList(); }
+    closeMedia() { this.state.mediaOpen = false; }
+    setMediaTab(t) { this.state.mediaTab = t; this.loadMediaList(); }
+    async loadMediaList() {
+        const i = this.state.contactInfo; if (!i) return; this.state.mediaItems = [];
+        try { const res = await rpc('/chat/media_list', { conversation_id: i.conversation_id, tab: this.state.mediaTab }); if (res && res.status) this.state.mediaItems = res.items || []; } catch (e) {}
+    }
+    groupedMedia() {
+        const groups = []; let cur = null;
+        for (const it of this.state.mediaItems) {
+            if (!cur || cur.label !== it.month_label) { cur = { label: it.month_label, items: [] }; groups.push(cur); }
+            cur.items.push(it);
+        }
+        return groups;
+    }
+
+    // ---- group permissions (Feature 4) ----
+    togglePerms() { this.state.permsOpen = true; }
+    closePerms() { this.state.permsOpen = false; }
+    permOn(field) { const i = this.state.contactInfo; return !!(i && i.permissions && i.permissions[field]); }
+    async togglePerm(field) {
+        const i = this.state.contactInfo; if (!i || !i.permissions) return;
+        const val = !i.permissions[field];
+        i.permissions[field] = val;   // optimistic
+        try { const res = await rpc('/chat/group/permissions', { conversation_id: i.conversation_id, field, value: val }); if (res && res.status === false) { this.notify(res.message); i.permissions[field] = !val; return; } if (res && res.permissions) i.permissions = res.permissions; } catch (e) { i.permissions[field] = !val; }
+    }
     mediaTotal() { const m = this.state.contactInfo && this.state.contactInfo.media; return m ? (m.photos + m.videos + m.docs) : 0; }
     async saveNick() {
         const info = this.state.contactInfo; if (!info || !info.user_id) return;
@@ -738,12 +952,13 @@ export class Chat369App extends Component {
     addToListFromInfo() { const c = this.state.conversations.find((x) => x.id === this.state.selectedId) || { id: this.state.selectedId }; this.state.infoOpen = false; this.openAddToList(c); }
     async headerClear() {
         this.closeMenus(); if (!this.state.selectedId) return;
-        if (!window.confirm('Clear all messages in this chat?')) return;
+        if (!await this.askConfirm({ title: 'Clear chat', body: 'Clear all messages in this chat? This can\'t be undone.', okLabel: 'Clear', danger: true })) return;
         try { await rpc('/chat/clear_chat', { conversation_id: this.state.selectedId }); this.reloadMessages(false); this.loadConversations(); } catch (e) {}
     }
     async headerLeave() {
         this.closeMenus(); const id = this.state.selectedId; if (!id) return;
-        if (!window.confirm(this.currentIsGroup() ? 'Exit this group?' : 'Delete this chat?')) return;
+        const grp = this.currentIsGroup();
+        if (!await this.askConfirm({ title: grp ? 'Exit group' : 'Delete chat', body: grp ? 'Are you sure you want to exit this group?' : 'Delete this chat? This can\'t be undone.', okLabel: grp ? 'Exit' : 'Delete', danger: true })) return;
         try { await rpc('/chat/leave_chat', { conversation_id: id }); this.state.infoOpen = false; this.state.selectedId = null; this.state.activeConv = null; this.loadConversations(); } catch (e) {}
     }
 
@@ -846,7 +1061,7 @@ export class Chat369App extends Component {
         try { const res = await rpc('/chat/group/update', { conversation_id: cid, action: 'promote', user_id: mm.id }); if (res && res.status === false) { this.notify(res.message); return; } this._refreshInfo(cid); } catch (e) {}
     }
     async removeMember(mm) {
-        if (!window.confirm('Remove ' + mm.name + ' from the group?')) return;
+        if (!await this.askConfirm({ title: 'Remove member', body: 'Remove ' + mm.name + ' from the group?', okLabel: 'Remove', danger: true })) return;
         const cid = this.state.contactInfo.conversation_id; this.state.memberMenu = null;
         try { const res = await rpc('/chat/group/update', { conversation_id: cid, action: 'remove', user_id: mm.id }); if (res && res.status === false) { this.notify(res.message); return; } this._refreshInfo(cid); this.loadConversations(); } catch (e) {}
     }
@@ -887,6 +1102,26 @@ export class Chat369App extends Component {
         this.jumpToMessage(this.state.searchResults[this.state.searchIdx]);
     }
     // Escape text, then wrap every occurrence of the query in <mark> (raw HTML via markup).
+    // Auto-detect URLs (http/https/www.) in a message and render them as clickable
+    // links that open in a new tab — like WhatsApp. XSS-safe: ALL text is HTML-escaped;
+    // only the <a> wrappers are injected (href + label are escaped too).
+    linkifyBody(text) {
+        const raw = String(text || '');
+        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const re = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+        let out = '', last = 0, m;
+        while ((m = re.exec(raw)) !== null) {
+            out += esc(raw.slice(last, m.index));
+            let url = m[0], tail = '';
+            const tm = url.match(/[)\].,;:!?'"]+$/);   // trailing punctuation isn't part of the link
+            if (tm) { tail = tm[0]; url = url.slice(0, url.length - tail.length); }
+            const href = url.startsWith('http') ? url : 'http://' + url;
+            out += '<a href="' + esc(href) + '" target="_blank" rel="noopener noreferrer" class="o369-link">' + esc(url) + '</a>' + esc(tail);
+            last = m.index + m[0].length;
+        }
+        out += esc(raw.slice(last));
+        return markup(out);
+    }
     highlightBody(text) {
         const raw = String(text || '');
         const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

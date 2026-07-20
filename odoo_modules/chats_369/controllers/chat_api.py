@@ -20,9 +20,13 @@ import logging
 import threading
 import requests
 import base64
+import re
 
 _logger = logging.getLogger(__name__)
 _EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
+_URL_RE = re.compile(r'https?://[^\s<>"\')]+', re.IGNORECASE)
+_PERM_FIELDS = ('perm_edit_info', 'perm_send', 'perm_add_members',
+                'perm_send_history', 'perm_invite', 'admin_approve')
 
 
 class Chat369API(http.Controller):
@@ -73,6 +77,18 @@ class Chat369API(http.Controller):
         if not dt:
             return False
         return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def _month_label(self, dt):
+        """WhatsApp-style month header: 'This Month' / 'June 2026'."""
+        if not dt:
+            return ''
+        now = fields.Datetime.now()
+        if dt.year == now.year and dt.month == now.month:
+            return 'This Month'
+        return dt.strftime('%B %Y')
+
+    def _group_perms(self, conv):
+        return {f: bool(conv[f]) for f in _PERM_FIELDS}
 
     def _user_brief(self, user):
         return {
@@ -443,9 +459,23 @@ class Chat369API(http.Controller):
             self._system_message(conv, me, '%s left' % me.name)
             return {'status': True}
 
-        # rename / add / remove need group-admin rights.
-        if not member.is_admin:
-            return {'status': False, 'message': 'Only a group admin can do that.'}
+        # Per-action gating (group permissions relax the old admin-only rule):
+        #   rename / description / photo -> admin OR perm_edit_info
+        #   add                          -> admin OR perm_add_members
+        #   remove / promote             -> admin only
+        is_admin = bool(member.is_admin)
+        denied = {'status': False, 'message': 'Only a group admin can do that.'}
+        if action in ('rename', 'description', 'photo'):
+            if not (is_admin or conv.perm_edit_info):
+                return denied
+        elif action == 'add':
+            if not (is_admin or conv.perm_add_members):
+                return denied
+        elif action in ('remove', 'promote'):
+            if not is_admin:
+                return denied
+        else:
+            return {'status': False, 'message': 'Unknown action.'}
 
         if action == 'rename':
             new = (params.get('name') or '').strip()
@@ -453,6 +483,10 @@ class Chat369API(http.Controller):
                 return {'status': False, 'message': 'Name required.'}
             conv.sudo().write({'name': new})
             self._system_message(conv, me, '%s renamed the group to "%s"' % (me.name, new))
+        elif action == 'description':
+            desc = (params.get('description') or '').strip()
+            conv.sudo().write({'description': desc})
+            self._system_message(conv, me, '%s changed the group description' % me.name)
         elif action == 'add':
             for x in (params.get('member_ids') or []):
                 try:
@@ -484,9 +518,65 @@ class Chat369API(http.Controller):
                 tgt.sudo().write({'is_admin': not tgt.is_admin})
                 self._system_message(conv, me, '%s is now %s' % (
                     tgt.user_id.name, 'an admin' if tgt.is_admin else 'no longer an admin'))
-        else:
-            return {'status': False, 'message': 'Unknown action.'}
         return {'status': True, 'conversation': self._serialize_conversation(conv, me.id)}
+
+    @http.route('/chat/group/permissions', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_group_permissions(self, **params):
+        """Read (no field) or set (admin-only) a group's permission toggles."""
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv:
+            return {'status': False, 'message': 'Not a member of this chat.'}
+        if not conv.is_group:
+            return {'status': False, 'message': 'Not a group.'}
+        field = params.get('field')
+        if field:
+            if not member.is_admin:
+                return {'status': False, 'message': 'Only a group admin can do that.'}
+            if field not in _PERM_FIELDS:
+                return {'status': False, 'message': 'Unknown permission.'}
+            conv.sudo().write({field: bool(params.get('value'))})
+        return {'status': True, 'permissions': self._group_perms(conv)}
+
+    @http.route('/chat/media_list', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_media_list(self, **params):
+        """Media / Docs / Links of a chat, newest-first with a month header.
+        tab 'media' -> image|video; 'docs' -> document|audio;
+        'links' -> messages whose body contains an http(s) URL."""
+        me = request.env.user
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv:
+            return {'status': False, 'message': 'Not a member of this chat.'}
+        tab = params.get('tab') or 'media'
+        Msg = request.env['chat.message'].sudo()
+        base = [('conversation_id', '=', conv.id), ('deleted', '=', False),
+                ('hidden_for_user_ids', 'not in', [me.id])]
+        items = []
+        if tab == 'links':
+            msgs = Msg.search(base + [('kind', '!=', 'system'), ('body', 'ilike', 'http')],
+                              order='id desc', limit=300)
+            for m in msgs:
+                match = _URL_RE.search(m.body or '')
+                if not match:
+                    continue
+                url = match.group(0)
+                items.append({
+                    'id': m.id, 'kind': 'link', 'url': url, 'name': url,
+                    'created': self._dt(m.create_date),
+                    'month_label': self._month_label(m.create_date),
+                })
+        else:
+            kinds = ['image', 'video'] if tab == 'media' else ['document', 'audio']
+            msgs = Msg.search(base + [('kind', 'in', kinds), ('attachment', '!=', False)],
+                              order='id desc', limit=300)
+            for m in msgs:
+                items.append({
+                    'id': m.id, 'kind': m.kind,
+                    'url': '/chats_369/media/%s' % m.id,
+                    'name': m.file_name or (m.kind or '').title(),
+                    'created': self._dt(m.create_date),
+                    'month_label': self._month_label(m.create_date),
+                })
+        return {'status': True, 'items': items}
 
     # ================================================================== #
     # Messages                                                           #
@@ -529,6 +619,8 @@ class Chat369API(http.Controller):
         conv, member = self._member_conv(params.get('conversation_id'))
         if not conv:
             return {'status': False, 'message': 'Not a member of this chat.'}
+        if conv.is_group and not member.is_admin and not conv.perm_send:
+            return {'status': False, 'message': 'Only admins can send messages in this group.'}
         body = (params.get('body') or '').strip()
         if not body:
             return {'status': False, 'message': 'Empty message.'}
@@ -562,6 +654,8 @@ class Chat369API(http.Controller):
         conv, member = self._member_conv(params.get('conversation_id'))
         if not conv:
             return {'status': False, 'message': 'Not a member of this chat.'}
+        if conv.is_group and not member.is_admin and not conv.perm_send:
+            return {'status': False, 'message': 'Only admins can send messages in this group.'}
         kind = params.get('kind') or 'document'
         if kind not in ('image', 'video', 'audio', 'document'):
             kind = 'document'
@@ -962,6 +1056,8 @@ class Chat369API(http.Controller):
             active = conv.member_ids.filtered(lambda m: not m.left_at)
             info.update({
                 'name': conv.name or '', 'member_count': len(active), 'me_id': me.id,
+                'description': conv.description or '',
+                'permissions': self._group_perms(conv),
                 'avatar_url': self._conv_avatar_url(conv), 'is_admin': bool(member.is_admin),
                 'members': [{'id': m.user_id.id, 'name': m.user_id.name, 'is_admin': m.is_admin,
                              'mobile': m.user_id.kpi_mobile_number or '',

@@ -215,6 +215,21 @@ $o369-line: #E6EDF5;
         display: block; width: 100%; border: none; background: transparent; color: $o369-grey; padding: 6px; cursor: pointer; margin-top: 2px;
         &:hover { color: $o369-accent-deep; }
     }
+    /* Styled confirm dialog (replaces window.confirm) */
+    .o369-confirmcard { width: 344px; }
+    .o369-confirmbody { color: #475569; font-size: 14px; line-height: 1.5; margin-bottom: 18px; }
+    .o369-confirmbtns { display: flex; gap: 10px; justify-content: flex-end; }
+    .o369-confirmcancel {
+        border: 1px solid $o369-line; background: #fff; color: #475569; border-radius: 10px;
+        padding: 9px 18px; cursor: pointer; font-size: 14px; font-weight: 600;
+        &:hover { background: #f1f5f9; }
+    }
+    .o369-confirmok {
+        border: none; background: $o369-accent; color: #fff; border-radius: 10px;
+        padding: 9px 18px; cursor: pointer; font-size: 14px; font-weight: 700;
+        &:hover { filter: brightness(.95); }
+        &.o369-danger { background: #DC2626; }
+    }
     .o369-pinlist { max-height: 320px; overflow-y: auto; margin-bottom: 8px; }
     .o369-pinitem {
         display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid #f1f5f9;
@@ -461,4 +476,101 @@ $o369-line: #E6EDF5;
     mark.o369-hl { background: #ffe08a; color: #6b4e00; border-radius: 3px; padding: 0 1px; }
     .o369-calfuture { color: #cbd2da !important; cursor: not-allowed; }
     .o369-caldis { opacity: .3; cursor: not-allowed; }
+}
+
+/* ---------- Group info redesign · media viewer · permissions (Features 2-4) ---------- */
+$o369-green: #12B76A;
+$o369-green-deep: #0E8F53;
+
+.o369 {
+    /* Feature 2 — avatar camera badge + name pencil + round action buttons */
+    .o369-avatarwrap { position: relative; }
+    .o369-cambadge {
+        position: absolute; right: 2px; bottom: 2px; width: 34px; height: 34px; border-radius: 50%;
+        background: $o369-accent; color: #fff; border: 3px solid #fff; cursor: pointer;
+        display: inline-flex; align-items: center; justify-content: center; font-size: 14px;
+        &:hover { background: $o369-accent-deep; }
+    }
+    .o369-namerow { display: flex; align-items: center; gap: 8px; justify-content: center; width: 100%; }
+    .o369-namerow .o369-nickinput { max-width: 220px; }
+    .o369-editpencil {
+        border: none; background: transparent; color: $o369-accent; cursor: pointer; font-size: 14px; padding: 4px;
+        &:hover { color: $o369-accent-deep; }
+    }
+    .o369-circlebtns { display: flex; gap: 26px; margin-top: 12px; }
+    .o369-circlebtn {
+        display: flex; flex-direction: column; align-items: center; gap: 6px; border: none; background: transparent; cursor: pointer;
+        .o369-circleico {
+            width: 46px; height: 46px; border-radius: 50%; background: $o369-wall; color: $o369-brand;
+            display: inline-flex; align-items: center; justify-content: center; font-size: 17px;
+        }
+        .o369-circlelbl { font-size: 12px; color: $o369-brand; font-weight: 600; }
+        &:hover .o369-circleico { background: #e0e9f4; }
+    }
+
+    /* Feature 2 — group description row */
+    .o369-descrow { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: #1f2937; }
+    .o369-descrow-edit { cursor: pointer; }
+    .o369-desctext { flex: 1; white-space: pre-wrap; }
+    .o369-descpencil { color: $o369-grey; font-size: 13px; margin-top: 2px; }
+    .o369-adddesc {
+        display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: transparent;
+        cursor: pointer; padding: 4px 0; font-size: 14px; font-weight: 600; color: $o369-green;
+        .fa { color: $o369-green; }
+        &:hover { color: $o369-green-deep; }
+    }
+    .o369-desctextarea {
+        width: 100%; min-height: 70px; border: 1px solid $o369-line; border-radius: 8px; padding: 8px 10px;
+        outline: none; font-size: 14px; resize: vertical; font-family: inherit;
+        &:focus { border-color: $o369-accent; }
+    }
+    .o369-descbtns { display: flex; gap: 8px; margin-top: 8px; }
+    .o369-drawcancel { border: 1px solid $o369-line; background: #fff; color: #475569; border-radius: 8px; padding: 8px 14px; cursor: pointer; font-weight: 600; &:hover { background: $o369-wall; } }
+
+    /* row chevron (media / permissions rows) */
+    .o369-rowchev { margin-left: auto; color: $o369-grey; font-size: 13px; }
+    .o369-mediarow-btn { cursor: pointer; }
+
+    /* Feature 3 — media viewer */
+    .o369-mediatabs {
+        display: flex; border-bottom: 1px solid $o369-line; background: #fff;
+        button {
+            flex: 1; border: none; background: transparent; padding: 12px 6px; cursor: pointer; font-size: 13px;
+            font-weight: 600; color: $o369-grey; border-bottom: 2px solid transparent;
+            &.o369-mtab-on { color: $o369-accent; border-bottom-color: $o369-accent; }
+        }
+    }
+    .o369-monthhdr { padding: 12px 16px 6px; font-size: 12px; font-weight: 700; color: $o369-grey; text-transform: uppercase; letter-spacing: .04em; }
+    .o369-mediagrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 0 6px 6px; }
+    .o369-mediacell {
+        position: relative; aspect-ratio: 1 / 1; background: $o369-wall; border-radius: 4px; overflow: hidden;
+        img { width: 100%; height: 100%; object-fit: cover; cursor: pointer; display: block; }
+    }
+    .o369-mediacellicon {
+        width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: $o369-brand;
+        font-size: 26px; text-decoration: none;
+        &:hover { background: #e0e9f4; }
+    }
+    .o369-doclink {
+        display: flex; align-items: center; gap: 12px; padding: 10px 16px; text-decoration: none; color: #1f2937; font-size: 14px;
+        border-bottom: 1px solid #f2f5f9;
+        > .fa:first-child { color: $o369-brand; font-size: 18px; width: 20px; text-align: center; }
+        .o369-docname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .o369-docdl { color: $o369-grey; }
+        &:hover { background: $o369-wall; }
+    }
+
+    /* Feature 4 — permissions toggles */
+    .o369-permrow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; font-size: 14px; color: #1f2937;
+        span:first-child { flex: 1; }
+    }
+    .o369-toggle {
+        position: relative; flex: 0 0 auto; width: 42px; height: 24px; border-radius: 999px; background: #cbd5e1;
+        cursor: pointer; transition: background .15s ease;
+        .o369-toggleknob {
+            position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .15s ease;
+        }
+        &.o369-toggle-on { background: $o369-green; .o369-toggleknob { left: 20px; } }
+    }
 }

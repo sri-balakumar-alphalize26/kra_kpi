@@ -21,12 +21,21 @@ class ChatConversation(models.Model):
     _rec_name = 'title'
 
     name = fields.Char(string='Group Name')          # blank for 1:1
+    description = fields.Text(string='Group Description')   # groups only
     # Readable label for the Odoo admin views (group name, or the 1:1 members).
     title = fields.Char(string='Title', compute='_compute_title', store=True)
     is_group = fields.Boolean(string='Is Group', default=False, index=True)
     is_self = fields.Boolean(string='Self Chat', default=False)   # "Message yourself"
     image = fields.Binary(string='Group Photo', attachment=True)   # Phase 2
     owner_id = fields.Many2one('res.users', string='Created By', ondelete='set null')
+
+    # Group permissions (WhatsApp-style). Enforced in the controllers.
+    perm_edit_info = fields.Boolean(string='Members Can Edit Info', default=True)
+    perm_send = fields.Boolean(string='Members Can Send', default=True)
+    perm_add_members = fields.Boolean(string='Members Can Add Members', default=True)
+    perm_send_history = fields.Boolean(string='Members Can Send History', default=True)
+    perm_invite = fields.Boolean(string='Members Can Invite Via Link', default=True)
+    admin_approve = fields.Boolean(string='Admins Approve New Members', default=False)
 
     member_ids = fields.One2many('chat.member', 'conversation_id', string='Members')
     message_ids = fields.One2many('chat.message', 'conversation_id', string='Messages')
