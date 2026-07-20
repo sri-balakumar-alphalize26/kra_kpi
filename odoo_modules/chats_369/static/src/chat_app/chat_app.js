@@ -239,7 +239,7 @@ export class Chat369App extends Component {
                                         <audio t-if="m.kind === 'audio' and m.media_url" class="o369-msgaudio" controls="controls" t-att-src="m.media_url"/>
                                         <a t-if="m.kind === 'document' and m.media_url" class="o369-msgdoc" t-att-href="m.media_url" target="_blank"><i class="fa fa-file-o me-2"/><t t-esc="m.file_name or 'Document'"/></a>
                                         <span t-if="m.body and state.searchOpen and state.searchQ" class="o369-btext" t-out="highlightBody(m.body)"/>
-                                        <span t-elif="m.body" class="o369-btext" t-esc="m.body"/>
+                                        <span t-elif="m.body" class="o369-btext" t-out="linkifyBody(m.body)"/>
                                     </t>
                                     <div class="o369-reacts" t-if="m.reactions.length">
                                         <t t-foreach="m.reactions" t-as="rx" t-key="rx.emoji">
