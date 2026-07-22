@@ -54,3 +54,13 @@ GoogleService-Info.plist
 ui-artifacts/
 __pycache__/
 *.pyc
+
+# local test/dev scripts + flows (local test logins — kept out of the repo)
+scripts/api-smoke.mjs
+scripts/api-functional.mjs
+scripts/test-autoclose.mjs
+scripts/deploy-upgrade.mjs
+.maestro/_login-dev.yaml
+.maestro/_url-fix.yaml
+.maestro/30-touch-nav.yaml
+.maestro/31-client-login.yaml
