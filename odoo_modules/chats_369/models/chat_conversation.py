@@ -36,6 +36,7 @@ class ChatConversation(models.Model):
     perm_send_history = fields.Boolean(string='Members Can Send History', default=True)
     perm_invite = fields.Boolean(string='Members Can Invite Via Link', default=True)
     admin_approve = fields.Boolean(string='Admins Approve New Members', default=False)
+    invite_token = fields.Char(string='Invite Token', index=True, copy=False)   # employee-only join link
 
     member_ids = fields.One2many('chat.member', 'conversation_id', string='Members')
     message_ids = fields.One2many('chat.message', 'conversation_id', string='Messages')

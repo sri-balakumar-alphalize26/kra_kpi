@@ -1007,17 +1007,26 @@ export class KpiAction extends Component {
                                   title="Self-created tasks awaiting your Accept">
                                 <i class="fa fa-clock-o me-1"></i> Pending Review: <t t-esc="state.selfPendingCount"/>
                             </span>
-                            <!-- GREEN Start Workday button — visible whenever no session is open.
-                                 Multiple sessions per day are allowed (so a dev can restart
-                                 after an accidental End Workday). -->
-                            <button t-if="!state.workdayOpen"
-                                    class="btn btn-sm btn-success fw-bold"
-                                    title="Start your workday + notify owner + coordinator"
-                                    t-on-click="() => this.startWorkday()">
-                                <i class="fa fa-play-circle me-1"></i>
-                                <t t-if="state.workdayClosed">Start New Workday Session</t>
-                                <t t-else="">Start Workday</t>
-                            </button>
+                            <!-- No open session: either a fresh/auto-closed day (green
+                                 Start) or the developer ENDED today themselves (one
+                                 start + one end per day → disabled "ended" button). -->
+                            <t t-if="!state.workdayOpen">
+                                <button t-if="state.dayDone"
+                                        class="btn btn-sm btn-secondary fw-bold" disabled="disabled"
+                                        title="One workday per day — start a new one tomorrow">
+                                    <i class="fa fa-check-circle me-1"></i> Workday ended for today
+                                </button>
+                                <!-- GREEN Start Workday — a fresh day, or a restart after an
+                                     AUTO-close (idle/midnight). An explicit End is final for the day. -->
+                                <button t-else=""
+                                        class="btn btn-sm btn-success fw-bold"
+                                        title="Start your workday + notify owner + coordinator"
+                                        t-on-click="() => this.startWorkday()">
+                                    <i class="fa fa-play-circle me-1"></i>
+                                    <t t-if="state.workdayClosed">Start New Workday Session</t>
+                                    <t t-else="">Start Workday</t>
+                                </button>
+                            </t>
                             <!-- RED End Workday button — visible while session is open. -->
                             <button t-if="state.workdayOpen"
                                     class="btn btn-sm btn-outline-danger"
@@ -1376,7 +1385,8 @@ export class KpiAction extends Component {
             currentUserId: null,  // 🆕 NEW: Store current user ID from API
             showMyTasksOnly: false,  // 🆕 NEW: Toggle for My Tasks filter
             workdayOpen:    false,   // green Start Workday button visible while false
-            workdayClosed:  false,   // already-logged-out today (e.g. cron auto-closed)
+            workdayClosed:  false,   // a closed session today with no open one (e.g. cron auto-closed)
+            dayDone:        false,   // developer ENDED today themselves → one start + one end per day (no restart)
             // 🆕 NEW: Filter state variables
             searchQuery: '',
             filters: {
@@ -1565,6 +1575,7 @@ export class KpiAction extends Component {
                     if (res && res.status) {
                         this.state.workdayOpen   = !!res.is_open;
                         this.state.workdayClosed = !!res.today_closed;
+                        this.state.dayDone       = !!res.day_done;
                     }
                 }).catch(() => {});
             } catch (e) {}
@@ -2489,10 +2500,15 @@ export class KpiAction extends Component {
             if (res && res.status) {
                 this.state.workdayOpen = true;
                 this.state.workdayClosed = false;
+                this.state.dayDone = false;
                 // Refresh task list so any newly-pending items show up at top.
                 if (typeof this.refresh === 'function') {
                     await this.refresh();
                 }
+            } else if (res && res.day_done) {
+                // One start + one end per day: already ended today → reflect it.
+                this.state.dayDone = true;
+                this.state.workdayOpen = false;
             } else {
                 alert("Could not start workday: " + ((res && res.message) || 'unknown error'));
             }
@@ -2665,9 +2681,10 @@ export class KpiAction extends Component {
                 const res = await rpc("/kpi_workday/end", { note });
                 if (res && res.status) {
                     // Workday ended → close the modal and fall back to the PIN gate
-                    // (stay logged into Odoo). The server also un-paired the device,
-                    // so the phone app returns to its Start Working screen. A fresh
-                    // PIN starts a new workday.
+                    // (stay logged into Odoo). The server also un-paired the device.
+                    // One start + one end per day: the gate and the phone app now
+                    // both show "Workday ended for today" — a new one waits until
+                    // tomorrow (an AUTO-close would instead allow a restart).
                     this.closeModal();
                     this._goToGate();
                 } else {

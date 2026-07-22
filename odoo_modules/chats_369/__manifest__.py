@@ -7,7 +7,7 @@
     # Depends on kra_kpi_module for the app-login user fields (kpi_mobile_number,
     # kpi_app_login_enabled), the Expo push-token store (kpi.push.token) and the
     # KRA/KPI role groups. No web assets — this is a pure JSON API for the RN app.
-    "depends": ["base", "web", "kra_kpi_module"],
+    "depends": ["base", "web", "bus", "kra_kpi_module"],
 
     "data": [
         "security/ir.model.access.csv",

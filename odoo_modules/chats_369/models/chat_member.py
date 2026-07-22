@@ -27,6 +27,9 @@ class ChatMember(models.Model):
         'chat.message', string='Last Read', ondelete='set null')
     delivered_up_to_message_id = fields.Many2one(
         'chat.message', string='Delivered Up To', ondelete='set null')
+    # When each cursor last advanced — drives Message-Info "Read/Delivered at <time>".
+    last_read_at = fields.Datetime(string='Last Read At')
+    delivered_at = fields.Datetime(string='Delivered At')
 
     is_admin = fields.Boolean(string='Group Admin', default=False)
     muted = fields.Boolean(string='Muted', default=False)
@@ -44,6 +47,27 @@ class ChatMember(models.Model):
         'unique(conversation_id, user_id)',
         'A user can only be a member of a conversation once.',
     )
+
+    def _advance_cursors(self, read_id=None, delivered_id=None):
+        """Advance the read/delivered cursors (never backwards) and stamp the time.
+        Reading implies delivered. Returns the written vals (empty = no change)."""
+        self.ensure_one()
+        vals = {}
+        now = fields.Datetime.now()
+        cur_read = self.last_read_message_id.id if self.last_read_message_id else 0
+        cur_deliv = self.delivered_up_to_message_id.id if self.delivered_up_to_message_id else 0
+        if delivered_id and delivered_id > cur_deliv:
+            vals['delivered_up_to_message_id'] = delivered_id
+            vals['delivered_at'] = now
+        if read_id and read_id > cur_read:
+            vals['last_read_message_id'] = read_id
+            vals['last_read_at'] = now
+            if read_id > (vals.get('delivered_up_to_message_id') or cur_deliv):
+                vals['delivered_up_to_message_id'] = read_id
+                vals.setdefault('delivered_at', now)
+        if vals:
+            self.sudo().write(vals)
+        return vals
 
     def _unread_count(self):
         """Count messages in this conversation authored by someone else and

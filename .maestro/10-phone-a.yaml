@@ -39,15 +39,14 @@ env:
       - inputText: ${APP_PASSWORD}
       - hideKeyboard
       - tapOn: "Log In"
-# PIN screen left up by a prior run → back to the board
+# PIN screen left up by a prior run → dismiss it. "Not now" returns to wherever we came from
+# (Home if Start Workday was tapped there; the board if we came from the board) — the board
+# recovery below + the "Your Tasks" wait handle both, so DON'T assert a board anchor here.
 - runFlow:
     when:
       visible: "Not now — keep browsing"
     commands:
       - tapOn: "Not now — keep browsing"
-      - extendedWaitUntil:
-          visible: "New Task"
-          timeout: 8000
 # board left up by a prior run → Back to Home (board-only anchors)
 - runFlow:
     when:

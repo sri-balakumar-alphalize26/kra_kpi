@@ -404,10 +404,12 @@ export const PRIORITIES = [
 // ── Workday (Start / End) ────────────────────────────────────────────────────
 export async function getWorkdayStatus() {
   const { serverUrl } = await getConnection();
-  if (!serverUrl) return { status: true, is_open: false, today_closed: false };
+  if (!serverUrl) return { status: true, is_open: false, today_closed: false, day_done: false };
   const res = await jsonRpc(serverUrl, '/kpi_workday/status', {});
-  log.info('workday status ←', { is_open: res?.is_open, today_closed: res?.today_closed });
-  return res || { is_open: false };
+  // day_done = developer ENDED today themselves → block restart (one start + one
+  // end per day). today_closed kept for older servers that predate day_done.
+  log.info('workday status ←', { is_open: res?.is_open, today_closed: res?.today_closed, day_done: res?.day_done });
+  return res || { is_open: false, day_done: false };
 }
 export const startWorkday = () => action('/kpi_workday/ping', {});
 export const endWorkday = (note = '') => action('/kpi_workday/end', { note });

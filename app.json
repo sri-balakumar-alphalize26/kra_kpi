@@ -23,7 +23,7 @@
       ],
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
-        "foregroundImage": "./assets/icon369.png"
+        "foregroundImage": "./assets/adaptive-icon-foreground.png"
       }
     },
     "ios": {
@@ -70,9 +70,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "c2b2bb46-279b-48ce-b697-5fbb5fec5a45"
+        "projectId": "b561ec04-4631-4cc8-94d8-727416e9f359"
       }
     },
-    "owner": "vacihe"
+    "owner": "vavow"
   }
 }

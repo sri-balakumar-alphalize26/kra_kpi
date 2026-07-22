@@ -46,6 +46,8 @@ class ChatMessage(models.Model):
     pin_expiry = fields.Datetime(string='Pinned Until')   # empty = pinned indefinitely
     deleted = fields.Boolean(string='Deleted', default=False)   # "delete for everyone" (soft)
     edited = fields.Boolean(string='Edited', default=False)
+    forwarded = fields.Boolean(string='Forwarded', default=False)   # shows a "Forwarded" tag
+    is_meet = fields.Boolean(string='Google Meet Link', default=False)   # renders as a Join-meeting card
     # "Delete for me": the message is hidden from these users' view only.
     hidden_for_user_ids = fields.Many2many(
         'res.users', 'chat_message_hidden_user_rel', 'message_id', 'user_id',

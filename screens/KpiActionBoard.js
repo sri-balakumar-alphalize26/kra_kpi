@@ -27,6 +27,7 @@ import { scheduleTaskReminder, cancelTaskReminder } from '../services/reminders'
 import { scheduleTaskAlarm, stopAlarm, alarmAvailable, pickAlarmSound, titleFromUri } from '../services/alarm';
 import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets, getAlarmSound, setAlarmSound, getAlarmSettings, setAlarmSettings } from '../api/session';
 import DurationTimePicker from '../components/DurationTimePicker';
+import { workdayButtonState } from '../utils/workdayState';
 
 const log = createLogger('ActionBoard');
 
@@ -96,6 +97,10 @@ const rStyles = StyleSheet.create({
 // board shows the correct Start/End label instantly (no 2–3s "Start Workday"
 // flash while getWorkdayStatus() resolves). null = not resolved yet this session.
 let WORKDAY_CACHE = null;
+// Last-known "day done" (developer ended their own workday today → no restart
+// until tomorrow). Cached the same way so re-entry shows "Workday ended for
+// today" instantly instead of flashing a tappable Start button.
+let DAYDONE_CACHE = false;
 
 // Smooth layout transitions for the accordion expand/collapse (needs enabling on
 // Android). animateNext() is called right before the toggle state changes.
@@ -276,9 +281,16 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
                 // Show the target time only while the reminder is still in the
                 // FUTURE; once it fires (time passed) the button resets to "Remind me".
                 const active = reminder && Date.parse(reminder.whenIso) > (nowMs || Date.now());
+                // A snoozed alarm reads "Snoozed <time>" (with a 😴) so it's clear
+                // the alarm was pushed back, not freshly set. Snooze only exists on
+                // the alarm path, so this never shows for a plain 🔔 reminder.
+                const snoozed = active && reminder.snoozed && reminder.mode === 'alarm';
+                const icon = reminder?.mode === 'alarm' ? '⏰' : '🔔';
                 return (
                   <Btn
-                    label={active ? `${reminder.mode === 'alarm' ? '⏰' : '🔔'} ${fmtClock(reminder.whenIso)}` : 'Remind me'}
+                    label={active
+                      ? (snoozed ? `😴 Snoozed ${fmtClock(reminder.whenIso)}` : `${icon} ${fmtClock(reminder.whenIso)}`)
+                      : 'Remind me'}
                     icon={active ? 'notifications' : 'notifications-outline'}
                     kind={active ? 'amber' : 'ghost'}
                     onPress={() => onAction('reminder', task)}
@@ -439,7 +451,7 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onM
         </View>
 
         {/* Meta + actions (shared with the list view) */}
-        <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} readOnly={readOnly} />
+        <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} reminder={reminder} readOnly={readOnly} />
       </View>
     </View>
     </Animated.View>
@@ -601,7 +613,14 @@ export default function KpiActionBoard({
   // "You haven't started your workday" — asked on every board entry while locked,
   // so it's a prompt, not a trap: Cancel keeps them browsing read-only.
   const [startPrompt, setStartPrompt] = useState(false);
-  useEffect(() => { if (workdayLocked) setStartPrompt(true); }, [workdayLocked]);
+  // "Day done" = developer ended their own workday today → one start + one end
+  // per day, no restart until tomorrow. Cached across remounts like workdayOpen.
+  // Declared here (before startPrompt's effect) because that effect reads it.
+  const [dayDone, setDayDoneState] = useState(DAYDONE_CACHE);
+  const setDayDone = (v) => { DAYDONE_CACHE = !!v; setDayDoneState(!!v); };
+  // Don't nag "you haven't started your workday" when they actually ENDED it
+  // today — that would invite a restart the one-per-day rule forbids.
+  useEffect(() => { if (workdayLocked && !dayDone) setStartPrompt(true); }, [workdayLocked, dayDone]);
   // Read-only = locked. (The popup is just the explanation; dismissing it doesn't
   // grant anything — otherwise Cancel would look like it unlocked the board.)
   const readOnly = workdayLocked;
@@ -926,7 +945,10 @@ export default function KpiActionBoard({
 
   // Check workday state on mount.
   useEffect(() => {
-    getWorkdayStatus().then((r) => setWorkdayOpen(!!r?.is_open)).catch(() => {});
+    getWorkdayStatus().then((r) => {
+      setWorkdayOpen(!!r?.is_open);
+      setDayDone(!!r?.day_done);
+    }).catch(() => {});
   }, []);
 
   // ONE place that reacts to a live_status payload, so the 15s poll and the
@@ -1156,23 +1178,28 @@ export default function KpiActionBoard({
   }, [raw]);
 
   async function toggleWorkday() {
-    log.info('workday toggle', { currentlyOpen: workdayOpen, workdayLocked });
-    // Unpaired: starting the workday IS pairing. Route to the PIN screen instead
-    // of calling /kpi_workday/start — otherwise the device would be "working"
-    // while unpaired, which is exactly what pairing exists to prevent. Nothing
-    // starts here; only a verified PIN opens the workday.
-    if (workdayLocked) { onNeedPair && onNeedPair(); return; }
+    // ONE decision, shared with the Home read-only bar (utils/workdayState.js).
+    const { action } = workdayButtonState({ locked: workdayLocked, workdayOpen: workdayOpen === true, dayDone });
+    log.info('workday toggle', { action, currentlyOpen: workdayOpen, workdayLocked, dayDone });
+    // Ended for today → button is disabled; nothing to do (one start + one end).
+    if (action === 'none') return;
+    // Unpaired: starting/continuing the workday IS pairing. Route to the PIN
+    // screen — only a verified PIN opens the workday, so nothing starts here.
+    if (action === 'pair') { onNeedPair && onNeedPair(); return; }
     setWorkdayBusy(true);
     try {
-      if (workdayOpen) {
+      if (action === 'end') {
         // Don't end yet — open the summary popup first.
         const payload = await getTodaySummary();
         setEndNote('');
         setEndSummary(payload || {});
-      } else {
+      } else { // action === 'start': already paired, session not open → open directly.
         const res = await startWorkday();
-        if (res && res.status === false) showError("Can't start workday", res.message || 'Failed');
-        else setWorkdayOpen(true);
+        if (res && res.status === false) {
+          // Backend refused because today was already ended (one per day).
+          if (res.day_done) { setDayDone(true); setWorkdayOpen(false); showError('Workday ended', res.message || 'You already ended your workday today.'); }
+          else showError("Can't start workday", res.message || 'Failed');
+        } else { setWorkdayOpen(true); setDayDone(false); }
       }
     } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
     finally { setWorkdayBusy(false); }
@@ -1185,6 +1212,10 @@ export default function KpiActionBoard({
       const res = await endWorkday(endNote.trim());
       if (res && res.status === false) { showError("Can't end workday", res.message || 'Failed'); return; }
       setWorkdayOpen(false);
+      // Ended by the developer → one start + one end per day: mark today done so
+      // the button flips straight to "Workday ended for today" (disabled), with
+      // no restartable "Start Workday" in between.
+      setDayDone(true);
       setEndSummary(null);
       // Ending the workday UN-PAIRS the device server-side (action_end_day →
       // _unpair). Tell App now instead of waiting up to 5s for the pairing poll
@@ -1442,28 +1473,43 @@ export default function KpiActionBoard({
             <Text style={s.newTaskTxt}>New Task</Text>
           </TouchableOpacity>
         )}
-        {/* Stays visible while locked — it's the way OUT of read-only, and it
-            already says "Start Workday". Locked → it routes to the PIN screen. */}
-        <TouchableOpacity
-          style={[s.workdayBtn, workdayOpen === true && s.workdayBtnEnd,
-            !readOnly && workdayOpen === null && s.workdayBtnLoading]}
-          onPress={toggleWorkday} activeOpacity={0.85}
-          disabled={!readOnly && (workdayBusy || workdayOpen === null)}
-        >
-          {!readOnly && (workdayBusy || workdayOpen === null) ? <ActivityIndicator color="#fff" size="small" /> : (
-            <>
-              <Ionicons name={!readOnly && workdayOpen ? 'stop-circle' : 'play-circle'} size={16} color="#fff" />
-              <Text style={s.workdayTxt}>{!readOnly && workdayOpen ? 'End Workday' : 'Start Workday'}</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {/* Label + action come from the shared decision helper so this button and
+            the Home read-only bar can never disagree: End / Continue / Start /
+            "Workday ended for today" (disabled). Locked → routes to the PIN screen. */}
+        {(() => {
+          const showSpinner = !readOnly && (workdayBusy || workdayOpen === null);
+          const wd = workdayButtonState({ locked: readOnly, workdayOpen: workdayOpen === true, dayDone });
+          const icon = wd.action === 'end' ? 'stop-circle'
+            : wd.action === 'none' ? 'checkmark-done-circle' : 'play-circle';
+          return (
+            <TouchableOpacity
+              style={[s.workdayBtn,
+                wd.action === 'end' && s.workdayBtnEnd,
+                wd.disabled && { backgroundColor: COLORS.muted },
+                showSpinner && s.workdayBtnLoading]}
+              onPress={toggleWorkday} activeOpacity={0.85}
+              disabled={wd.disabled || showSpinner}
+            >
+              {showSpinner ? <ActivityIndicator color="#fff" size="small" /> : (
+                <>
+                  <Ionicons name={icon} size={16} color="#fff" />
+                  <Text style={s.workdayTxt}>{wd.label}</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          );
+        })()}
       </View>
 
       {/* Why the action buttons are missing — stated, not left to be discovered. */}
       {readOnly && (
         <View style={s.roBanner}>
-          <Ionicons name="lock-closed" size={13} color={COLORS.red} />
-          <Text style={s.roBannerTxt}>Read-only — start your workday to work on tasks.</Text>
+          <Ionicons name={dayDone ? 'checkmark-done' : 'lock-closed'} size={13} color={COLORS.red} />
+          <Text style={s.roBannerTxt}>
+            {dayDone
+              ? 'Workday ended for today — tasks are read-only until tomorrow.'
+              : 'Read-only — start your workday to work on tasks.'}
+          </Text>
         </View>
       )}
 

@@ -49,3 +49,8 @@ yarn-error.*
 # build, which breaks the Android build. So it stays tracked.
 *-firebase-adminsdk-*.json
 GoogleService-Info.plist
+
+# testing artifacts + build cache
+ui-artifacts/
+__pycache__/
+*.pyc

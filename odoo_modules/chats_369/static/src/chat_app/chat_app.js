@@ -1,10 +1,10 @@
-﻿/** @odoo-module **/
+/** @odoo-module **/
 
-// 369Chats â€” WhatsApp-Web-style chat client for the Odoo backend.
-// Left: conversations (+ new chat / new group / â‹® menu). Right: the open chat.
-// Per message: hover caret â†’ menu (Reply Â· Copy Â· React Â· Forward Â· Pin Â· Star Â·
-// Edit Â· Delete for me / everyone) + quick-reactions bar. Header â‹® menu â†’
-// New group Â· Starred messages Â· Mark all as read. ~3s polling.
+// 369Chats — WhatsApp-Web-style chat client for the Odoo backend.
+// Left: conversations (+ new chat / new group / ⋮ menu). Right: the open chat.
+// Per message: hover caret → menu (Reply · Copy · React · Forward · Pin · Star ·
+// Edit · Delete for me / everyone) + quick-reactions bar. Header ⋮ menu →
+// New group · Starred messages · Mark all as read. ~3s polling.
 
 import { Component, xml, useState, useRef, onWillStart, onMounted, onWillUnmount, onPatched, useExternalListener, markup } from "@odoo/owl";
 import { registry } from "@web/core/registry";
@@ -15,8 +15,19 @@ export class Chat369App extends Component {
 
     static template = xml/* xml */`
         <div class="o369">
+            <!-- ================= LEFT NAV RAIL ================= -->
+            <div class="o369-rail">
+                <button class="o369-railbtn" t-att-class="{ 'o369-railon': state.pane === 'chats' }" t-on-click="() => this.switchPane('chats')" title="Chats"><i class="fa fa-comments"/></button>
+                <div class="o369-railgap"/>
+                <div class="o369-raildiv"/>
+                <button class="o369-railbtn" t-att-class="{ 'o369-railon': state.pane === 'media' }" t-on-click="() => this.switchPane('media')" title="Media"><i class="fa fa-picture-o"/></button>
+                <button class="o369-railav" t-att-class="{ 'o369-railon': state.pane === 'profile' }" t-on-click="() => this.switchPane('profile')" title="Profile">
+                    <img t-if="state.me and state.me.avatar_url" t-att-src="state.me.avatar_url"/>
+                    <span t-else="" t-esc="initials(state.me and state.me.name)"/>
+                </button>
+            </div>
             <!-- ================= LEFT PANE ================= -->
-            <div class="o369-left">
+            <div class="o369-left" t-if="state.pane === 'chats'">
                 <t t-if="state.view === 'chats'">
                     <div class="o369-lhead">
                         <span class="o369-brandwrap">
@@ -86,7 +97,7 @@ export class Chat369App extends Component {
                                 </div>
                             </div>
                         </t>
-                        <div class="o369-hint" t-if="filteredConversations().length === 0">No chats yet â€” tap the pencil to start one.</div>
+                        <div class="o369-hint" t-if="filteredConversations().length === 0">No chats yet — tap the pencil to start one.</div>
                     </div>
                 </t>
 
@@ -137,7 +148,7 @@ export class Chat369App extends Component {
             </div>
 
             <!-- ================= RIGHT PANE ================= -->
-            <div class="o369-right" t-att-class="{ 'o369-hasconv': state.selectedId }">
+            <div class="o369-right" t-if="state.pane === 'chats'" t-att-class="{ 'o369-hasconv': state.selectedId }">
                 <t t-if="!state.selectedId">
                     <div class="o369-empty">
                         <img src="/chats_369/static/description/icon.png" class="o369-emptylogo"/>
@@ -194,21 +205,21 @@ export class Chat369App extends Component {
                         <i class="fa fa-thumb-tack me-2"/>
                         <div class="o369-pinbartxt" t-on-click="openPins" title="View pinned messages">
                             <b t-esc="state.pinnedMsgs[0].author_name"/>: <t t-esc="state.pinnedMsgs[0].body"/>
-                            <small class="o369-pinleft"> Â· <t t-esc="pinLabel(state.pinnedMsgs[0])"/></small>
-                            <span class="o369-pinmore" t-if="state.pinnedMsgs.length > 1"> Â· +<t t-esc="state.pinnedMsgs.length - 1"/> more</span>
+                            <small class="o369-pinleft"> · <t t-esc="pinLabel(state.pinnedMsgs[0])"/></small>
+                            <span class="o369-pinmore" t-if="state.pinnedMsgs.length > 1"> · +<t t-esc="state.pinnedMsgs.length - 1"/> more</span>
                         </div>
                         <button class="o369-pinunpin" t-on-click.stop="() => this.pinMessage(state.pinnedMsgs[0], false, 0)" title="Unpin"><i class="fa fa-times"/></button>
                     </div>
 
-                    <div class="o369-msgs" t-ref="scroller">
+                    <div class="o369-msgs" t-ref="scroller" t-on-scroll="onMsgScroll">
                         <t t-foreach="groupedMessages()" t-as="it" t-key="it.id">
                             <div t-if="it.sep" class="o369-datesep"><span t-esc="it.label"/></div>
                             <t t-else="">
                                 <t t-set="m" t-value="it.msg"/>
                                 <div t-if="m.kind === 'system'" class="o369-sys"><span t-esc="m.body"/></div>
                                 <div t-else="" class="o369-bubble" t-attf-id="o369m-{{m.id}}" t-att-class="(m.mine ? 'o369-out' : 'o369-in') + (state.flashId === m.id ? ' o369-flash' : '')">
-                                    <button class="o369-caret" t-if="!m.deleted" t-on-click.stop="() => this.toggleMenu(m.id)" title="More"><i class="fa fa-chevron-down"/></button>
-                                    <div class="o369-msgmenu" t-if="state.openMenuId === m.id">
+                                    <button class="o369-caret" t-if="!m.deleted" t-on-click.stop="(ev) => this.toggleMenu(m.id, ev)" title="More"><i class="fa fa-chevron-down"/></button>
+                                    <div class="o369-msgmenu" t-if="state.openMenuId === m.id" t-attf-style="top:{{state.menuPos.top}}px; left:{{state.menuPos.left}}px;">
                                         <div class="o369-reactbar">
                                             <t t-foreach="REACTIONS" t-as="e" t-key="e">
                                                 <button class="o369-reactbtn" t-on-click.stop="() => this.react(m, e)"><t t-esc="e"/></button>
@@ -220,7 +231,8 @@ export class Chat369App extends Component {
                                         <button class="o369-menuitem" t-on-click.stop="() => this.openForward(m)"><i class="fa fa-share"/> Forward</button>
                                         <button class="o369-menuitem" t-on-click.stop="() => this.menuPin(m)"><i class="fa fa-thumb-tack"/> <t t-esc="m.pinned ? 'Unpin' : 'Pin'"/></button>
                                         <button class="o369-menuitem" t-on-click.stop="() => this.toggleStar(m)"><i class="fa fa-star"/> <t t-esc="m.starred ? 'Unstar' : 'Star'"/></button>
-                                        <button class="o369-menuitem" t-if="m.mine" t-on-click.stop="() => this.startEdit(m)"><i class="fa fa-pencil"/> Edit</button>
+                                        <button class="o369-menuitem" t-if="m.mine and !m.deleted and !m._pending" t-on-click.stop="() => this.openMessageInfo(m)"><i class="fa fa-info-circle"/> Info</button>
+                                        <button class="o369-menuitem" t-if="canEditMsg(m)" t-on-click.stop="() => this.startEdit(m)"><i class="fa fa-pencil"/> Edit</button>
                                         <button class="o369-menuitem" t-on-click.stop="() => this.deleteScope(m, 'me')"><i class="fa fa-trash-o"/> Delete for me</button>
                                         <button class="o369-menuitem o369-danger" t-if="m.mine" t-on-click.stop="() => this.deleteScope(m, 'everyone')"><i class="fa fa-trash"/> Delete for everyone</button>
                                     </div>
@@ -230,15 +242,24 @@ export class Chat369App extends Component {
                                         <span class="o369-qauthor" t-esc="m.reply_to_author"/>
                                         <span class="o369-qbody" t-esc="m.reply_to_body"/>
                                     </div>
+                                    <div class="o369-fwdtag" t-if="m.forwarded and !m.deleted"><i class="fa fa-share o369-fwdicon"/> Forwarded</div>
                                     <t t-if="m.deleted">
                                         <span class="o369-deleted"><i class="fa fa-ban me-1"/>This message was deleted</span>
                                     </t>
                                     <t t-else="">
-                                        <img t-if="m.kind === 'image' and m.media_url" class="o369-msgimg" t-att-src="m.media_url" t-on-click.stop="() => this.openLightbox(m.media_url)"/>
+                                        <img t-if="m.kind === 'image' and m.media_url" class="o369-msgimg" t-att-src="m.media_url" t-on-click.stop="() => this.openMsgViewer(m)"/>
                                         <video t-if="m.kind === 'video' and m.media_url" class="o369-msgvid" controls="controls" t-att-src="m.media_url"/>
-                                        <audio t-if="m.kind === 'audio' and m.media_url" class="o369-msgaudio" controls="controls" t-att-src="m.media_url"/>
+                                        <div t-if="m.kind === 'audio' and m.media_url" class="o369-voice">
+                                            <button class="o369-voiceplay" t-on-click.stop="() => this.toggleAudio(m)"><i class="fa" t-att-class="state.playingId === m.id and !state.audioPaused ? 'fa-pause' : 'fa-play'"/></button>
+                                            <div class="o369-voicebar" t-on-pointerdown.stop="(ev) => this.startSeek(m, ev)">
+                                                <div class="o369-voicefill" t-attf-style="width:{{audioPct(m.id)}}%"/>
+                                            </div>
+                                            <button class="o369-voicespeed" t-if="state.playingId === m.id" t-on-click.stop="() => this.cycleSpeed()" t-esc="audioSpeedLabel()"/>
+                                            <span class="o369-voicetime" t-esc="audioTimeLabel(m)"/>
+                                        </div>
                                         <a t-if="m.kind === 'document' and m.media_url" class="o369-msgdoc" t-att-href="m.media_url" target="_blank"><i class="fa fa-file-o me-2"/><t t-esc="m.file_name or 'Document'"/></a>
                                         <span t-if="m.body and state.searchOpen and state.searchQ" class="o369-btext" t-out="highlightBody(m.body)"/>
+                                        <a t-elif="m.is_meet and m.body" class="o369-meetcard" t-att-href="m.body" target="_blank"><span class="o369-meetico"><i class="fa fa-video-camera"/></span><span class="o369-meetinfo"><span class="o369-meettitle">Google Meet</span><span class="o369-meetsub" t-esc="m.body"/></span></a>
                                         <span t-elif="m.body" class="o369-btext" t-out="linkifyBody(m.body)"/>
                                     </t>
                                     <div class="o369-reacts" t-if="m.reactions.length">
@@ -251,14 +272,18 @@ export class Chat369App extends Component {
                                         <i t-if="m.pinned" class="fa fa-thumb-tack o369-pinmark me-1"/>
                                         <small t-if="m.edited" class="o369-edited">edited</small>
                                         <t t-esc="fmtTime(m.created)"/>
-                                        <i t-if="m.mine and !m.deleted" class="fa ms-1" t-att-class="m._pending ? 'fa-clock-o o369-faint' : (m.status === 'read' ? 'fa-check o369-read' : (m.status === 'delivered' ? 'fa-check' : 'fa-check o369-faint'))"/>
+                                        <span t-if="m.mine and !m.deleted" class="o369-ticks ms-1" t-att-class="m._pending ? 'o369-tick-pending' : ('o369-tick-' + (m.status or 'sent'))">
+                                            <i t-if="m._pending" class="fa fa-clock-o"/>
+                                            <t t-else=""><i class="fa fa-check o369-tick1"/><i class="fa fa-check o369-tick2"/></t>
+                                        </span>
                                     </span>
                                 </div>
                             </t>
                         </t>
-                        <div class="o369-hint" t-if="state.messages.length === 0">No messages yet â€” say hi ðŸ‘‹</div>
+                        <div class="o369-hint" t-if="state.messages.length === 0">No messages yet — say hi 👋</div>
                     </div>
 
+                    <button class="o369-jumpbtm" t-if="state.showJumpBottom" t-on-click="jumpToBottom" title="Jump to latest"><i class="fa fa-chevron-down"/></button>
                     <div class="o369-replybar" t-if="state.editing">
                         <div class="o369-replyinfo"><b>Editing message</b><span>Change the text and press send</span></div>
                         <button class="o369-iconbtn o369-replyx" t-on-click="cancelEdit" title="Cancel"><i class="fa fa-times"/></button>
@@ -286,6 +311,7 @@ export class Chat369App extends Component {
                                 <button class="o369-menuitem" t-on-click.stop="() => this.pickFile('document')"><i class="fa fa-file-o"/> Document</button>
                                 <button class="o369-menuitem" t-on-click.stop="() => this.pickFile('image')"><i class="fa fa-picture-o"/> Photos &amp; videos</button>
                                 <button class="o369-menuitem" t-on-click.stop="() => this.pickFile('audio')"><i class="fa fa-headphones"/> Audio</button>
+                                <button class="o369-menuitem" t-if="state.gmeet.connected" t-on-click.stop="startMeet"><i class="fa fa-video-camera"/> Video meeting</button>
                             </div>
                         </span>
                         <input type="text" placeholder="Type a message" t-att-value="state.draft" t-on-input="onDraftInput" t-on-keydown="onKeydown"/>
@@ -297,10 +323,132 @@ export class Chat369App extends Component {
                 </t>
             </div>
 
+            <!-- ================= MEDIA (all chats) ================= -->
+            <div class="o369-pane o369-mediapane" t-if="state.pane === 'media'">
+                <div class="o369-panehead"><div class="o369-panehc"><span class="o369-panetitle">Media</span><span class="o369-panesub">Media from all chats</span></div></div>
+                <div class="o369-mediatabs">
+                    <button t-att-class="{ 'o369-mtab-on': state.mediaAllTab === 'media' }" t-on-click="() => this.setAllMediaTab('media')">Media</button>
+                    <button t-att-class="{ 'o369-mtab-on': state.mediaAllTab === 'docs' }" t-on-click="() => this.setAllMediaTab('docs')">Docs</button>
+                    <button t-att-class="{ 'o369-mtab-on': state.mediaAllTab === 'links' }" t-on-click="() => this.setAllMediaTab('links')">Links</button>
+                </div>
+                <div class="o369-mediabody">
+                    <div t-if="state.mediaAllBusy" class="o369-hint">Loading…</div>
+                    <div t-elif="!state.mediaAllItems.length" class="o369-hint">Nothing here yet</div>
+                    <t t-else="">
+                        <t t-foreach="groupedAllMedia()" t-as="g" t-key="g.label">
+                            <div class="o369-mediamonth" t-esc="g.label"/>
+                            <div class="o369-mediagrid" t-if="state.mediaAllTab === 'media'">
+                                <div class="o369-mediacell" t-foreach="g.items" t-as="it" t-key="it.id" t-on-click="() => this.openMediaViewer(it)">
+                                    <img t-if="it.kind === 'image'" t-att-src="it.url" loading="lazy"/>
+                                    <t t-else=""><video class="o369-mediavidthumb" t-att-src="it.url" preload="metadata" muted="muted"/><span class="o369-vidplay"><i class="fa fa-play"/></span></t>
+                                    <span t-if="it.duration" class="o369-viddur" t-esc="fmtDur(it.duration)"/>
+                                    <span class="o369-mediachat" t-esc="it.chat"/>
+                                </div>
+                            </div>
+                            <div class="o369-doclist" t-elif="state.mediaAllTab === 'docs'">
+                                <a class="o369-docrow" t-foreach="g.items" t-as="it" t-key="it.id" t-att-href="it.url + '?dl=1'" t-att-download="it.name">
+                                    <i class="fa o369-docic" t-att-class="it.kind === 'audio' ? 'fa-music' : 'fa-file-o'"/>
+                                    <span class="o369-docmeta"><span class="o369-docname" t-esc="it.name"/><span class="o369-docchat"><t t-esc="it.chat"/> &#183; <t t-esc="fmtInfoTime(it.created)"/></span></span>
+                                    <i class="fa fa-download o369-docdl"/>
+                                </a>
+                            </div>
+                            <div class="o369-doclist" t-else="">
+                                <a class="o369-docrow" t-foreach="g.items" t-as="it" t-key="it.id" t-att-href="it.url" target="_blank">
+                                    <div class="o369-linkico"><i class="fa fa-link"/></div>
+                                    <span class="o369-docmeta"><span class="o369-docname o369-linkurl" t-esc="it.url"/><span class="o369-docchat"><t t-esc="it.chat"/> &#183; <t t-esc="fmtInfoTime(it.created)"/></span></span>
+                                </a>
+                            </div>
+                        </t>
+                    </t>
+                </div>
+            </div>
+
+            <!-- ================= PROFILE / SETTINGS ================= -->
+            <div class="o369-pane o369-settingspane" t-if="state.pane === 'profile'">
+                <t t-if="state.settingsView === 'menu'">
+                    <div class="o369-panehead"><span class="o369-panetitle">Settings</span></div>
+                    <div class="o369-setbody">
+                        <div class="o369-setprofile" t-on-click="() => this.settingsGo('profile')">
+                            <div class="o369-avatar o369-avatarbig"><img t-if="state.me and state.me.avatar_url" t-att-src="state.me.avatar_url"/><span t-else="" t-esc="initials(state.me and state.me.name)"/></div>
+                            <div class="o369-setpinfo"><div class="o369-setpname" t-esc="state.me and state.me.name"/><div class="o369-setpabout" t-esc="(state.me and state.me.about) or 'Available'"/></div>
+                            <i class="fa fa-angle-right o369-setchev"/>
+                        </div>
+                        <button class="o369-setrow" t-on-click="() => this.settingsGo('profile')"><i class="fa fa-user-o"/><span>Profile</span><i class="fa fa-angle-right o369-setchev"/></button>
+                        <button class="o369-setrow" t-on-click="() => this.settingsGo('privacy')"><i class="fa fa-lock"/><span>Privacy</span><i class="fa fa-angle-right o369-setchev"/></button>
+                        <button class="o369-setrow" t-on-click="() => this.settingsGo('notif')"><i class="fa fa-bell-o"/><span>Notifications</span><i class="fa fa-angle-right o369-setchev"/></button>
+                        <button class="o369-setrow" t-if="state.gmeet.is_admin" t-on-click="openGmeetSettings"><i class="fa fa-video-camera"/><span>Google Meet</span><i class="fa fa-angle-right o369-setchev"/></button>
+                        <button class="o369-setrow o369-setlogout" t-on-click="logout"><i class="fa fa-sign-out"/><span>Log out</span></button>
+                    </div>
+                </t>
+                <t t-elif="state.settingsView === 'profile'">
+                    <div class="o369-panehead"><button class="o369-backbtn" t-on-click="() => this.settingsGo('menu')"><i class="fa fa-arrow-left"/></button><span class="o369-panetitle">Profile</span></div>
+                    <div class="o369-setbody" t-if="state.me">
+                        <div class="o369-profilehero"><div class="o369-avatar o369-avatarxl"><img t-if="state.me.avatar_url" t-att-src="state.me.avatar_url"/><span t-else="" t-esc="initials(state.me.name)"/></div></div>
+                        <div class="o369-setfield">
+                            <div class="o369-setflabel">Name</div>
+                            <div class="o369-setfedit" t-if="state.profileEdit.field === 'name'"><input t-model="state.profileEdit.val"/><button t-on-click="() => this.saveProfileField('name', state.profileEdit.val)"><i class="fa fa-check"/></button></div>
+                            <div class="o369-setfval" t-else=""><span t-esc="state.me.name"/><i class="fa fa-pencil" t-on-click="() => this.startProfileEdit('name')"/></div>
+                        </div>
+                        <div class="o369-setfield">
+                            <div class="o369-setflabel">About</div>
+                            <div class="o369-setfedit" t-if="state.profileEdit.field === 'about'"><input t-model="state.profileEdit.val"/><button t-on-click="() => this.saveProfileField('about', state.profileEdit.val)"><i class="fa fa-check"/></button></div>
+                            <div class="o369-setfval" t-else=""><span t-esc="state.me.about or 'Available'"/><i class="fa fa-pencil" t-on-click="() => this.startProfileEdit('about')"/></div>
+                        </div>
+                        <div class="o369-setfield">
+                            <div class="o369-setflabel">Phone</div>
+                            <div class="o369-setfval"><span t-esc="state.me.mobile or '—'"/><i class="fa fa-copy" t-if="state.me.mobile" t-on-click="copyMyMobile"/></div>
+                        </div>
+                    </div>
+                </t>
+                <t t-elif="state.settingsView === 'privacy'">
+                    <div class="o369-panehead"><button class="o369-backbtn" t-on-click="() => this.settingsGo('menu')"><i class="fa fa-arrow-left"/></button><span class="o369-panetitle">Privacy</span></div>
+                    <div class="o369-setbody" t-if="state.me">
+                        <div class="o369-setsecttitle">Last seen</div>
+                        <button class="o369-optrow" t-on-click="() => this.setPrivacyField('last_seen_privacy','everyone')"><span>Everyone</span><i class="fa fa-check o369-optck" t-if="state.me.last_seen_privacy === 'everyone'"/></button>
+                        <button class="o369-optrow" t-on-click="() => this.setPrivacyField('last_seen_privacy','contacts')"><span>My contacts</span><i class="fa fa-check o369-optck" t-if="state.me.last_seen_privacy === 'contacts'"/></button>
+                        <button class="o369-optrow" t-on-click="() => this.setPrivacyField('last_seen_privacy','nobody')"><span>Nobody</span><i class="fa fa-check o369-optck" t-if="state.me.last_seen_privacy === 'nobody'"/></button>
+                        <div class="o369-setsecttitle">Online</div>
+                        <button class="o369-optrow" t-on-click="() => this.setPrivacyField('online_privacy','everyone')"><span>Everyone</span><i class="fa fa-check o369-optck" t-if="state.me.online_privacy === 'everyone'"/></button>
+                        <button class="o369-optrow" t-on-click="() => this.setPrivacyField('online_privacy','same')"><span>Same as last seen</span><i class="fa fa-check o369-optck" t-if="state.me.online_privacy === 'same'"/></button>
+                        <div class="o369-toggrow"><div class="o369-toginfo"><div class="o369-toglabel">Read receipts</div><div class="o369-toghint">If off, you won't send or see blue read ticks. Groups always show them.</div></div><button class="o369-switch" t-att-class="{ 'o369-switch-on': state.me.read_receipts }" t-on-click="() => this.toggleSetting('read_receipts')"><span/></button></div>
+                        <div class="o369-privhint">If you don't share your last seen, you won't be able to see anyone else's.</div>
+                    </div>
+                </t>
+                <t t-elif="state.settingsView === 'gmeet'">
+                    <div class="o369-panehead"><button class="o369-backbtn" t-on-click="() => this.settingsGo('menu')"><i class="fa fa-arrow-left"/></button><span class="o369-panetitle">Google Meet</span></div>
+                    <div class="o369-setbody">
+                        <div class="o369-setfield"><div class="o369-setflabel">Status</div><div class="o369-setfval"><span t-esc="state.gmeet.connected ? 'Connected ✓' : 'Not connected'"/></div></div>
+                        <div class="o369-setfield"><div class="o369-setflabel">Server / base URL (leave blank = auto)</div><div class="o369-setfedit"><input t-model="state.gmeetForm.base_url" placeholder="https://chat.yourcompany.com"/></div></div>
+                        <div class="o369-setfield"><div class="o369-setflabel">Redirect URI — paste this into Google</div><div class="o369-setfval"><span class="o369-redirecturi" t-esc="gmeetRedirect()"/><i class="fa fa-copy" t-on-click="copyRedirect"/></div></div>
+                        <div class="o369-setfield"><div class="o369-setflabel">Client ID</div><div class="o369-setfedit"><input t-model="state.gmeetForm.client_id" placeholder="xxxxx.apps.googleusercontent.com"/></div></div>
+                        <div class="o369-setfield"><div class="o369-setflabel">Client Secret</div><div class="o369-setfedit"><input type="password" t-model="state.gmeetForm.client_secret" placeholder="(hidden — leave blank to keep)"/></div></div>
+                        <div class="o369-setfield"><div class="o369-setflabel">Trigger words (comma-separated)</div><div class="o369-setfedit"><input t-model="state.gmeetForm.triggers" placeholder="meet, send link, gmeet"/></div></div>
+                        <div class="o369-privrow"><label>Where it works</label><select t-model="state.gmeetForm.scope"><option value="both">Groups &amp; 1:1</option><option value="groups">Groups only</option><option value="direct">1:1 only</option></select></div>
+                        <div class="o369-toggrow"><div class="o369-toglabel">Admins only</div><button class="o369-switch" t-att-class="{ 'o369-switch-on': state.gmeetForm.admin_only }" t-on-click="() => (state.gmeetForm.admin_only = !state.gmeetForm.admin_only)"><span/></button></div>
+                        <div class="o369-gmeetbtns">
+                            <button class="o369-savebtn" t-on-click="saveGmeet">Save settings</button>
+                            <button class="o369-bignbtn" t-on-click="connectGmeet"><i class="fa fa-google me-1"/> Connect Google account</button>
+                        </div>
+                        <div class="o369-privhint">Create a free Google Cloud project + OAuth client, paste the Client ID/Secret, Save, then Connect the host Gmail once. Steps are in the deploy notes.</div>
+                    </div>
+                </t>
+                <t t-else="">
+                    <div class="o369-panehead"><button class="o369-backbtn" t-on-click="() => this.settingsGo('menu')"><i class="fa fa-arrow-left"/></button><span class="o369-panetitle">Notifications</span></div>
+                    <div class="o369-setbody" t-if="state.me">
+                        <div class="o369-toggrow"><div class="o369-toglabel">Direct messages</div><button class="o369-switch" t-att-class="{ 'o369-switch-on': state.me.notif_messages }" t-on-click="() => this.toggleSetting('notif_messages')"><span/></button></div>
+                        <div class="o369-toggrow"><div class="o369-toglabel">Group messages</div><button class="o369-switch" t-att-class="{ 'o369-switch-on': state.me.notif_groups }" t-on-click="() => this.toggleSetting('notif_groups')"><span/></button></div>
+                        <div class="o369-toggrow"><div class="o369-toglabel">Sound</div><button class="o369-switch" t-att-class="{ 'o369-switch-on': state.me.notif_sound }" t-on-click="() => this.toggleSetting('notif_sound')"><span/></button></div>
+                        <div class="o369-toggrow"><div class="o369-toglabel">Show preview</div><button class="o369-switch" t-att-class="{ 'o369-switch-on': state.me.notif_preview }" t-on-click="() => this.toggleSetting('notif_preview')"><span/></button></div>
+                        <button class="o369-bignbtn" t-on-click="enableBrowserNotifs"><i class="fa fa-bell me-1"/> Enable browser notifications</button>
+                        <div class="o369-privhint">Shows desktop alerts like WhatsApp Web when a chat isn't open. Click above and allow it in the browser prompt.</div>
+                    </div>
+                </t>
+            </div>
+
             <!-- Pin-duration picker -->
             <div class="o369-modal" t-if="state.pinPrompt" t-on-click.self="cancelPin">
                 <div class="o369-modalcard">
-                    <div class="o369-modaltitle"><i class="fa fa-thumb-tack me-2"/>Pin message forâ€¦</div>
+                    <div class="o369-modaltitle"><i class="fa fa-thumb-tack me-2"/>Pin message for…</div>
                     <button class="o369-modalopt" t-on-click="() => this.confirmPin(1)">1 day</button>
                     <button class="o369-modalopt" t-on-click="() => this.confirmPin(7)">7 days</button>
                     <button class="o369-modalopt" t-on-click="() => this.confirmPin(14)">14 days</button>
@@ -329,7 +477,7 @@ export class Chat369App extends Component {
             <!-- Forward picker -->
             <div class="o369-modal" t-if="state.forwardMsg" t-on-click.self="closeForward">
                 <div class="o369-modalcard">
-                    <div class="o369-modaltitle"><i class="fa fa-share me-2"/>Forward toâ€¦</div>
+                    <div class="o369-modaltitle"><i class="fa fa-share me-2"/>Forward to…</div>
                     <div class="o369-pinlist">
                         <t t-foreach="state.conversations" t-as="c" t-key="c.id">
                             <div class="o369-pinitem o369-fwdrow" t-on-click="() => this.doForward(c)">
@@ -388,7 +536,7 @@ export class Chat369App extends Component {
                                 <i class="fa" t-att-class="l.has ? 'fa-check-circle o369-checked' : 'fa-circle-o'"/>
                             </div>
                         </t>
-                        <div class="o369-hint" t-if="state.lists.length === 0">No lists yet â€” create one below.</div>
+                        <div class="o369-hint" t-if="state.lists.length === 0">No lists yet — create one below.</div>
                     </div>
                     <button class="o369-createbtn" t-on-click="newListFromPicker">+ New list</button>
                     <button class="o369-modalcancel" t-on-click="closeAddToList">Done</button>
@@ -519,6 +667,7 @@ export class Chat369App extends Component {
                         <div class="o369-drawersub" t-if="state.contactInfo.is_group"><t t-esc="state.contactInfo.member_count"/> members</div>
                         <div class="o369-circlebtns" t-if="state.contactInfo.is_group">
                             <button class="o369-circlebtn" t-if="canAddMembers()" t-on-click="openAddMembers"><span class="o369-circleico"><i class="fa fa-user-plus"/></span><span class="o369-circlelbl">Add</span></button>
+                            <button class="o369-circlebtn" t-if="canInvite()" t-on-click="openInvite"><span class="o369-circleico"><i class="fa fa-link"/></span><span class="o369-circlelbl">Invite</span></button>
                             <button class="o369-circlebtn" t-on-click="searchFromInfo"><span class="o369-circleico"><i class="fa fa-search"/></span><span class="o369-circlelbl">Search</span></button>
                         </div>
                     </div>
@@ -620,17 +769,121 @@ export class Chat369App extends Component {
                 </div>
             </div>
 
+            <!-- Message info (delivered / read + times), WhatsApp-style -->
+            <div class="o369-modal" t-if="state.msgInfo" t-on-click.self="closeMessageInfo">
+                <div class="o369-modalcard o369-infocard">
+                    <div class="o369-modaltitle"><i class="fa fa-info-circle me-2"/>Message info</div>
+                    <div class="o369-infoprev" t-esc="state.msgInfo.body or infoKindLabel(state.msgInfo.kind)"/>
+                    <div t-if="state.msgInfo.loading" class="o369-infoempty">Loading…</div>
+                    <t t-else="">
+                        <div class="o369-inforow">
+                            <div class="o369-infohead">
+                                <span class="o369-ticks o369-tick-read"><i class="fa fa-check o369-tick1"/><i class="fa fa-check o369-tick2"/></span>
+                                Read <t t-if="state.msgInfo.is_group">(<t t-esc="state.msgInfo.read.length"/>)</t>
+                            </div>
+                            <div class="o369-infoperson" t-foreach="state.msgInfo.read" t-as="r" t-key="r.user_id">
+                                <span t-esc="r.name"/><span class="o369-infotime" t-esc="fmtInfoTime(r.at)"/>
+                            </div>
+                            <div t-if="!state.msgInfo.read.length" class="o369-infoempty">Not read yet</div>
+                        </div>
+                        <div class="o369-inforow">
+                            <div class="o369-infohead">
+                                <span class="o369-ticks o369-tick-delivered"><i class="fa fa-check o369-tick1"/><i class="fa fa-check o369-tick2"/></span>
+                                Delivered <t t-if="state.msgInfo.is_group">(<t t-esc="state.msgInfo.delivered.length"/>)</t>
+                            </div>
+                            <div class="o369-infoperson" t-foreach="state.msgInfo.delivered" t-as="d" t-key="d.user_id">
+                                <span t-esc="d.name"/><span class="o369-infotime" t-esc="fmtInfoTime(d.at)"/>
+                            </div>
+                            <div t-if="!state.msgInfo.delivered.length" class="o369-infoempty">Not delivered yet</div>
+                        </div>
+                    </t>
+                    <button class="o369-modalcancel" t-on-click="closeMessageInfo">Close</button>
+                </div>
+            </div>
+
+            <!-- Privacy: last seen / online (WhatsApp-style) -->
+            <div class="o369-modal" t-if="state.privacyOpen" t-on-click.self="closePrivacy">
+                <div class="o369-modalcard o369-privacycard">
+                    <div class="o369-modaltitle"><i class="fa fa-lock me-2"/>Privacy</div>
+                    <div class="o369-privrow">
+                        <label>Last seen</label>
+                        <select t-on-change="(ev) => this.setPrivacy('last_seen_privacy', ev.target.value)">
+                            <option value="everyone" t-att-selected="state.privacy.last_seen_privacy === 'everyone'">Everyone</option>
+                            <option value="contacts" t-att-selected="state.privacy.last_seen_privacy === 'contacts'">My contacts</option>
+                            <option value="nobody" t-att-selected="state.privacy.last_seen_privacy === 'nobody'">Nobody</option>
+                        </select>
+                    </div>
+                    <div class="o369-privrow">
+                        <label>Online</label>
+                        <select t-on-change="(ev) => this.setPrivacy('online_privacy', ev.target.value)">
+                            <option value="everyone" t-att-selected="state.privacy.online_privacy === 'everyone'">Everyone</option>
+                            <option value="same" t-att-selected="state.privacy.online_privacy === 'same'">Same as last seen</option>
+                        </select>
+                    </div>
+                    <div class="o369-privhint">If you don't share your last seen, you won't be able to see anyone else's.</div>
+                    <button class="o369-modalcancel" t-on-click="closePrivacy">Done</button>
+                </div>
+            </div>
+
+            <!-- Group invite link (employee-only join) -->
+            <div class="o369-modal" t-if="state.inviteOpen" t-on-click.self="closeInvite">
+                <div class="o369-modalcard o369-invitecard">
+                    <div class="o369-modaltitle"><i class="fa fa-link me-2"/>Invite to group via link</div>
+                    <div class="o369-invitehint">Anyone from your company with this link can join the group.</div>
+                    <div class="o369-invitelinkrow" t-if="state.inviteLink">
+                        <input class="o369-invitelink" readonly="readonly" t-att-value="state.inviteLink"/>
+                        <button class="o369-invitecopy" t-on-click="copyInviteLink" title="Copy link"><i class="fa fa-copy"/></button>
+                    </div>
+                    <div t-if="state.inviteBusy and !state.inviteLink" class="o369-infoempty">Loading…</div>
+                    <button class="o369-inviteredo" t-on-click="resetInviteLink"><i class="fa fa-refresh me-1"/> Reset link</button>
+                    <button class="o369-modalcancel" t-on-click="closeInvite">Close</button>
+                </div>
+            </div>
+
             <!-- Image lightbox -->
             <div class="o369-lightbox" t-if="state.lightbox" t-on-click="closeLightbox">
                 <img t-att-src="state.lightbox"/>
+            </div>
+
+            <!-- Rich media viewer (sender/date, download, prev/next, filmstrip) -->
+            <div class="o369-viewer" t-if="state.viewer">
+                <div class="o369-vhead">
+                    <div class="o369-vwho">
+                        <div class="o369-vname" t-esc="(viewerCur() and viewerCur().author) or 'Media'"/>
+                        <div class="o369-vdate" t-esc="viewerCur() ? fmtInfoTime(viewerCur().date) : ''"/>
+                    </div>
+                    <div class="o369-vtools">
+                        <button class="o369-vtool" t-on-click="() => this.viewerZoom(0.5)" title="Zoom in"><i class="fa fa-search-plus"/></button>
+                        <button class="o369-vtool" t-on-click="() => this.viewerZoom(-0.5)" title="Zoom out"><i class="fa fa-search-minus"/></button>
+                        <button class="o369-vtool" t-if="viewerMsg()" t-on-click="viewerReply" title="Reply"><i class="fa fa-reply"/></button>
+                        <button class="o369-vtool" t-if="viewerMsg()" t-on-click="viewerStar" title="Star"><i class="fa fa-star-o"/></button>
+                        <button class="o369-vtool" t-if="viewerMsg()" t-on-click="viewerReact" title="React"><i class="fa fa-smile-o"/></button>
+                        <button class="o369-vtool" t-if="viewerMsg()" t-on-click="viewerForward" title="Forward"><i class="fa fa-share"/></button>
+                        <a class="o369-vtool" t-att-href="viewerCur() and (viewerCur().url + '?dl=1')" t-att-download="viewerCur() and viewerCur().name" title="Download"><i class="fa fa-download"/></a>
+                        <button class="o369-vtool" t-on-click="closeViewer" title="Close"><i class="fa fa-times"/></button>
+                    </div>
+                </div>
+                <button class="o369-vnav o369-vprev" t-if="viewerHasPrev()" t-on-click.stop="viewerPrev"><i class="fa fa-chevron-left"/></button>
+                <div class="o369-vstage" t-on-click.self="closeViewer">
+                    <img t-if="viewerCur() and viewerCur().kind === 'image'" t-att-src="viewerCur().url" t-attf-style="transform: scale({{state.viewer.zoom or 1}}); transition: transform .12s;"/>
+                    <video t-elif="viewerCur()" t-att-src="viewerCur().url" controls="controls" autoplay="autoplay"/>
+                </div>
+                <button class="o369-vnav o369-vnext" t-if="viewerHasNext()" t-on-click.stop="viewerNext"><i class="fa fa-chevron-right"/></button>
+                <div class="o369-vstrip">
+                    <div class="o369-vthumb" t-foreach="state.viewer.list" t-as="v" t-key="v_index" t-att-class="{ 'o369-vthumb-on': v_index === state.viewer.idx }" t-on-click.stop="() => this.viewerGo(v_index)">
+                        <img t-if="v.kind === 'image'" t-att-src="v.url" loading="lazy"/>
+                        <div t-else="" class="o369-vthumbvid"><i class="fa fa-play"/></div>
+                    </div>
+                </div>
             </div>
         </div>
     `;
 
     setup() {
-        this.REACTIONS = ['ðŸ‘', 'â¤ï¸', 'ðŸ˜‚', 'ðŸ˜®', 'ðŸ˜¢', 'ðŸ™'];
-        this.EMOJIS = [...new Set(['ðŸ˜€','ðŸ˜ƒ','ðŸ˜„','ðŸ˜','ðŸ˜†','ðŸ˜…','ðŸ˜‚','ðŸ¤£','ðŸ˜Š','ðŸ˜‡','ðŸ™‚','ðŸ™ƒ','ðŸ˜‰','ðŸ˜Œ','ðŸ˜','ðŸ¥°','ðŸ˜˜','ðŸ˜‹','ðŸ˜›','ðŸ˜œ','ðŸ¤ª','ðŸ¤¨','ðŸ§','ðŸ¤“','ðŸ˜Ž','ðŸ¥³','ðŸ˜','ðŸ˜’','ðŸ˜”','ðŸ˜Ÿ','ðŸ™','ðŸ˜£','ðŸ˜–','ðŸ˜«','ðŸ˜©','ðŸ¥º','ðŸ˜¢','ðŸ˜­','ðŸ˜¤','ðŸ˜ ','ðŸ˜¡','ðŸ¤¬','ðŸ¤¯','ðŸ˜³','ðŸ¥µ','ðŸ¥¶','ðŸ˜±','ðŸ˜¨','ðŸ˜°','ðŸ˜¥','ðŸ¤—','ðŸ¤”','ðŸ¤­','ðŸ¤«','ðŸ¤¥','ðŸ˜¶','ðŸ˜','ðŸ˜‘','ðŸ˜¬','ðŸ™„','ðŸ˜®','ðŸ˜²','ðŸ¥±','ðŸ˜´','ðŸ¤¤','ðŸ¤¢','ðŸ¤®','ðŸ¤§','ðŸ˜·','ðŸ¤’','ðŸ¤•','ðŸ‘','ðŸ‘Ž','ðŸ‘Œ','âœŒï¸','ðŸ¤ž','ðŸ¤Ÿ','ðŸ¤˜','ðŸ‘','ðŸ™Œ','ðŸ™','ðŸ’ª','ðŸ‘€','ðŸ”¥','â­','ðŸŒŸ','âœ¨','ðŸ’¯','ðŸŽ‰','ðŸŽŠ','â¤ï¸','ðŸ§¡','ðŸ’›','ðŸ’š','ðŸ’™','ðŸ’œ','ðŸ–¤','ðŸ¤','ðŸ’”','ðŸ’•','ðŸ’ž','ðŸ’—','ðŸ’–'])];
+        this.REACTIONS = ['\u{1F44D}','\u{2764}\u{FE0F}','\u{1F602}','\u{1F62E}','\u{1F622}','\u{1F64F}'];
+        this.EMOJIS = [...new Set(['\u{1F600}','\u{1F603}','\u{1F604}','\u{1F601}','\u{1F606}','\u{1F605}','\u{1F602}','\u{1F923}','\u{1F60A}','\u{1F607}','\u{1F642}','\u{1F643}','\u{1F609}','\u{1F60C}','\u{1F60D}','\u{1F970}','\u{1F618}','\u{1F617}','\u{1F61A}','\u{1F60B}','\u{1F61B}','\u{1F61C}','\u{1F61D}','\u{1F92A}','\u{1F928}','\u{1F9D0}','\u{1F913}','\u{1F60E}','\u{1F929}','\u{1F60F}','\u{1F612}','\u{1F614}','\u{1F61E}','\u{1F61F}','\u{1F615}','\u{1F641}','\u{1F623}','\u{1F616}','\u{1F62B}','\u{1F629}','\u{1F97A}','\u{1F622}','\u{1F62D}','\u{1F624}','\u{1F620}','\u{1F621}','\u{1F92C}','\u{1F92F}','\u{1F633}','\u{1F975}','\u{1F976}','\u{1F631}','\u{1F628}','\u{1F630}','\u{1F625}','\u{1F613}','\u{1F917}','\u{1F92D}','\u{1F92B}','\u{1F914}','\u{1F610}','\u{1F611}','\u{1F636}','\u{1F644}','\u{1F62E}','\u{1F62F}','\u{1F632}','\u{1F971}','\u{1F634}','\u{1F924}','\u{1F62A}','\u{1F635}','\u{1F910}','\u{1F974}','\u{1F922}','\u{1F92E}','\u{1F927}','\u{1F637}','\u{1F912}','\u{1F915}','\u{1F925}','\u{1F44D}','\u{1F44E}','\u{1F44C}','\u{1F90F}','\u{1F91E}','\u{1F91F}','\u{1F918}','\u{1F919}','\u{1F448}','\u{1F449}','\u{1F446}','\u{1F447}','\u{1F44A}','\u{270A}','\u{1F91B}','\u{1F91C}','\u{1F44F}','\u{1F64C}','\u{1F450}','\u{1F932}','\u{1F91D}','\u{1F64F}','\u{1F4AA}','\u{1F933}','\u{1F440}','\u{1F44B}','\u{1F9E1}','\u{1F49B}','\u{1F49A}','\u{1F499}','\u{1F49C}','\u{1F5A4}','\u{1F90D}','\u{1F90E}','\u{1F494}','\u{1F495}','\u{1F49E}','\u{1F493}','\u{1F497}','\u{1F496}','\u{1F498}','\u{1F49D}','\u{1F49F}','\u{1F48B}','\u{1F525}','\u{2B50}','\u{1F31F}','\u{2728}','\u{1F4AF}','\u{1F389}','\u{1F38A}','\u{1F64B}','\u{1F3B6}','\u{1F480}','\u{1F47B}','\u{1F916}','\u{1F31E}','\u{1F319}','\u{2764}\u{FE0F}','\u{270C}\u{FE0F}','\u{261D}\u{FE0F}','\u{2705}','\u{274C}','\u{2757}','\u{2753}'])];
         this.notification = useService("notification");
+        this.bus = useService("bus_service");
         this.MEMBER_PERMS = [
             { field: 'perm_edit_info', label: 'Edit group settings' },
             { field: 'perm_send', label: 'Send new messages' },
@@ -650,7 +903,15 @@ export class Chat369App extends Component {
             searchOpen: false, searchQ: '', searchResults: [], searchIdx: 0, flashId: 0,
             calOpen: false, calYear: 0, calMonth: 0,
             attachMenu: false, lightbox: null, recording: false, recPaused: false, recSecs: 0, memberMenu: null, groupNameEdit: '',
-            confirm: null,
+            confirm: null, typing: null, msgInfo: null,
+            privacyOpen: false, privacy: { last_seen_privacy: 'everyone', online_privacy: 'everyone' },
+            playingId: null, audioPaused: false, audioCur: 0, audioDur: 0, showJumpBottom: false,
+            inviteOpen: false, inviteLink: '', inviteBusy: false, audioSpeed: 1,
+            pane: 'chats', me: null,
+            mediaAllTab: 'media', mediaAllItems: [], mediaAllBusy: false, viewer: null, menuPos: { top: 0, left: 0 },
+            gmeet: { connected: false, has_creds: false, is_admin: false, triggers: [], scope: 'both', admin_only: true, client_id: '' },
+            gmeetForm: { client_id: '', client_secret: '', triggers: '', scope: 'both', admin_only: true, base_url: '' },
+            settingsView: 'menu', profileEdit: { field: null, val: '' },
             // Group info redesign / media viewer / permissions (Features 2-4)
             nameEditing: false, descEditing: false, descDraft: '',
             mediaOpen: false, mediaTab: 'media', mediaItems: [],
@@ -664,11 +925,19 @@ export class Chat369App extends Component {
         // Close any open menu when clicking elsewhere (caret/menu clicks use .stop).
         useExternalListener(window, "click", () => this.closeMenus());
 
-        onWillStart(async () => { await this.loadConversations(true); this.loadLists(); });
-        onMounted(() => { this._timer = setInterval(() => this.tick(), 3000); });
+        this.bus.subscribe("chat369.event", (payload) => this._onBus(payload));
+        onWillStart(async () => {
+            try { const r = await rpc('/chat/bus_channel', {}); if (r && r.channel) this.bus.addChannel(r.channel); } catch (e) {}
+            await this.loadConversations(true); this.loadLists(); this.loadMe(); this.loadGmeet();
+        });
+        onMounted(() => { this._timer = setInterval(() => this.tick(), 6000); });
         onWillUnmount(() => { if (this._timer) { clearInterval(this._timer); this._timer = null; } });
         onPatched(() => {
-            if (this._scrollPending && this.scroller.el) {
+            if (this._prependAdjust && this.scroller.el) {
+                // Keep the viewport steady after prepending older history.
+                this.scroller.el.scrollTop += this.scroller.el.scrollHeight - (this._prependOldHeight || 0);
+                this._prependAdjust = false;
+            } else if (this._scrollPending && this.scroller.el) {
                 this.scroller.el.scrollTop = this.scroller.el.scrollHeight;
                 this._scrollPending = false;
             }
@@ -677,7 +946,27 @@ export class Chat369App extends Component {
 
     closeMenus() { this.state.openMenuId = null; this.state.headerMenu = false; this.state.rowMenuId = null; this.state.convMenu = false; this.state.attachMenu = false; }
     toggleConvMenu() { this.closeMenus(); this.state.convMenu = !this.state.convMenu; }
-    toggleMenu(id) { this.state.headerMenu = false; this.state.rowMenuId = null; this.state.openMenuId = this.state.openMenuId === id ? null : id; }
+    toggleMenu(id, ev) {
+        this.state.headerMenu = false; this.state.rowMenuId = null;
+        if (this.state.openMenuId === id) { this.state.openMenuId = null; return; }
+        this.state.openMenuId = id;
+        const btn = ev && ev.currentTarget;
+        if (btn && btn.getBoundingClientRect) {
+            const r = btn.getBoundingClientRect();
+            const w = 205, h = 350, pad = 8;
+            let left = Math.min(r.right - w, window.innerWidth - w - pad);
+            if (left < pad) left = pad;
+            let top = r.bottom + 4;
+            if (top + h > window.innerHeight - pad) top = Math.max(pad, r.top - h);  // flip up near bottom
+            this.state.menuPos = { top, left };
+        }
+    }
+    canEditMsg(m) {
+        // WhatsApp-style: edit only your own text, within 15 minutes of sending.
+        if (!m.mine || m.deleted || m.kind !== 'text') return false;
+        if (!m.created) return true;
+        return (Date.now() - new Date(m.created).getTime()) < 15 * 60 * 1000;
+    }
     toggleHeaderMenu() { this.state.openMenuId = null; this.state.rowMenuId = null; this.state.headerMenu = !this.state.headerMenu; }
     toggleRowMenu(id) { this.state.openMenuId = null; this.state.headerMenu = false; this.state.rowMenuId = this.state.rowMenuId === id ? null : id; }
     notify(msg, type) { this.notification.add(msg || 'Action failed.', { type: type || 'warning' }); }
@@ -729,7 +1018,10 @@ export class Chat369App extends Component {
     }
     async select(conv) {
         this.state.selectedId = conv.id; this.state.activeConv = conv; this.state.messages = [];
-        this.state.replyTo = null; this.state.editing = null; this.closeMenus();
+        this.state.replyTo = null; this.state.editing = null; this.state.typing = null; this.state.msgInfo = null;
+        this._stopAudio(); this._noMoreOlder = false; this.state.showJumpBottom = false;
+        this.closeContactInfo();   // don't leave the previous chat's info panel open on switch
+        this.closeMenus();
         await this.reloadMessages(true); this.loadPinned();
     }
     async reloadMessages(scroll) {
@@ -762,11 +1054,13 @@ export class Chat369App extends Component {
             try { const res = await rpc('/chat/edit_message', { message_id: id, body }); if (res && res.status === false) { this.notify(res.message); return; } this._applyMsg(res); this.loadConversations(); } catch (e) {}
             return;
         }
+        // Configured meeting trigger word -> generate a Google Meet link instead of sending text.
+        if (this._meetTriggered(body)) { this.state.draft = ''; this._stopTyping(); this.createMeet(); return; }
         const replyTo = this.state.replyTo;
         const replyId = replyTo ? replyTo.id : 0;
-        this.state.draft = ''; this.state.replyTo = null;
+        this.state.draft = ''; this.state.replyTo = null; this._stopTyping();
         // Optimistic: show the message instantly (a temp bubble with a clock), then
-        // swap in the server copy â€” feels instant regardless of round-trip.
+        // swap in the server copy — feels instant regardless of round-trip.
         const tempId = 'tmp-' + Date.now();
         this.state.messages.push({
             id: tempId, mine: true, body, kind: 'text', deleted: false, pinned: false, starred: false,
@@ -779,14 +1073,24 @@ export class Chat369App extends Component {
             const res = await rpc('/chat/send', { conversation_id: this.state.selectedId, body, reply_to_id: replyId });
             // Remove the temp bubble, then add the real one only if the poll didn't already.
             this.state.messages = this.state.messages.filter((m) => m.id !== tempId);
+            if (res && res.status === false) {
+                // Server rejected (e.g. only-admins-can-send / empty) — tell the user and
+                // put their text back so nothing is silently lost.
+                this.notify(res.message || 'Message not sent');
+                this.state.draft = body; this.state.replyTo = replyTo || null;
+                return;
+            }
             if (res && res.status && res.message) {
                 if (!this.state.messages.some((m) => m.id === res.message.id)) this.state.messages.push(res.message);
                 this.loadConversations();
             }
-        } catch (e) { this.state.messages = this.state.messages.filter((m) => m.id !== tempId); }
+        } catch (e) {
+            this.state.messages = this.state.messages.filter((m) => m.id !== tempId);
+            this.notify('Message not sent'); this.state.draft = body; this.state.replyTo = replyTo || null;
+        }
     }
     onKeydown(ev) { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); this.send(); } }
-    onDraftInput(ev) { this.state.draft = this.sentenceCase(ev.target.value); }
+    onDraftInput(ev) { this.state.draft = this.sentenceCase(ev.target.value); this._emitTyping(); }
     sentenceCase(s) {
         // Capitalize the first letter and the first letter after . ! ?
         return (s || '').replace(/(^\s*[a-z])|([.!?]\s+[a-z])/g, (m) => m.toUpperCase());
@@ -885,6 +1189,181 @@ export class Chat369App extends Component {
     // ---- group info redesign (Feature 2): permission helpers ----
     canEditInfo() { const i = this.state.contactInfo; return !!(i && (i.is_admin || (i.permissions && i.permissions.perm_edit_info))); }
     canAddMembers() { const i = this.state.contactInfo; return !!(i && (i.is_admin || (i.permissions && i.permissions.perm_add_members))); }
+    canInvite() { const i = this.state.contactInfo; return !!(i && (i.is_admin || (i.permissions && i.permissions.perm_invite))); }
+    async openInvite() {
+        const i = this.state.contactInfo; if (!i) return;
+        this.state.inviteOpen = true; this.state.inviteLink = ''; this.state.inviteBusy = true;
+        try { const r = await rpc('/chat/group/invite', { conversation_id: i.conversation_id, action: 'get' }); if (r && r.status) this.state.inviteLink = r.link || ''; else this.notify((r && r.message) || 'Cannot get link'); } catch (e) {}
+        this.state.inviteBusy = false;
+    }
+    async resetInviteLink() {
+        const i = this.state.contactInfo; if (!i) return;
+        this.state.inviteBusy = true;
+        try { const r = await rpc('/chat/group/invite', { conversation_id: i.conversation_id, action: 'reset' }); if (r && r.status) { this.state.inviteLink = r.link || ''; this.notify('New link created', 'success'); } } catch (e) {}
+        this.state.inviteBusy = false;
+    }
+    async copyInviteLink() {
+        try { await navigator.clipboard.writeText(this.state.inviteLink); this.notify('Link copied', 'success'); } catch (e) { this.notify('Could not copy'); }
+    }
+    closeInvite() { this.state.inviteOpen = false; }
+
+    // ---------------- nav rail: chats / media / profile ----------------
+    async switchPane(p) {
+        this.state.pane = p;
+        this.closeMenus();
+        if (p === 'profile') { this.state.settingsView = 'menu'; await this.loadMe(); }
+        else if (p === 'media') { await this.loadAllMedia(); }
+    }
+    async loadMe() {
+        try { const r = await rpc('/chat/me', {}); if (r && r.status) this.state.me = r.me; } catch (e) {}
+    }
+    // ---------------- Google Meet ----------------
+    async loadGmeet() {
+        try { const r = await rpc('/chat/gmeet/status', {}); if (r && r.status) this.state.gmeet = r; } catch (e) {}
+    }
+    _meetTriggered(body) {
+        const g = this.state.gmeet;
+        if (!g || !g.connected || !(g.triggers || []).length) return false;
+        return g.triggers.includes((body || '').trim().toLowerCase());
+    }
+    startMeet() { this.closeMenus(); this.createMeet(); }
+    async createMeet() {
+        if (!this.state.selectedId) return;
+        this.notify('Creating meeting…', 'info');
+        try {
+            const res = await rpc('/chat/create_meet', { conversation_id: this.state.selectedId });
+            if (res && res.status === false) { this.notify(res.message || 'Could not create the meeting'); return; }
+            if (res && res.status && res.message) {
+                if (!this.state.messages.some((m) => m.id === res.message.id)) this.state.messages.push(res.message);
+                this._scrollPending = true; this.loadConversations();
+            }
+        } catch (e) { this.notify('Could not create the meeting'); }
+    }
+    openGmeetSettings() {
+        const g = this.state.gmeet;
+        this.state.gmeetForm = { client_id: g.client_id || '', client_secret: '',
+            triggers: (g.triggers || []).join(', '), scope: g.scope || 'both', admin_only: g.admin_only !== false,
+            base_url: g.base_url || '' };
+        this.settingsGo('gmeet');
+    }
+    gmeetRedirect() {
+        const b = (this.state.gmeetForm.base_url || '').trim().replace(/\/+$/, '');
+        if (b) return b + '/chat/gmeet/oauth/callback';
+        return this.state.gmeet.redirect_uri || '';
+    }
+    async copyRedirect() {
+        try { await navigator.clipboard.writeText(this.gmeetRedirect()); this.notify('Copied', 'success'); } catch (e) { this.notify('Could not copy'); }
+    }
+    async saveGmeet() {
+        const f = this.state.gmeetForm;
+        try {
+            const r = await rpc('/chat/gmeet/config', { client_id: f.client_id, client_secret: f.client_secret,
+                triggers: f.triggers, scope: f.scope, admin_only: f.admin_only, base_url: f.base_url });
+            if (r && r.status) { this.notify('Saved', 'success'); this.loadGmeet(); }
+            else this.notify((r && r.message) || 'Save failed');
+        } catch (e) {}
+    }
+    connectGmeet() { window.location.href = '/chat/gmeet/oauth/start'; }
+    async loadAllMedia() {
+        this.state.mediaAllBusy = true; this.state.mediaAllItems = [];
+        try { const r = await rpc('/chat/all_media', { tab: this.state.mediaAllTab }); if (r && r.status) this.state.mediaAllItems = r.items || []; } catch (e) {}
+        this.state.mediaAllBusy = false;
+    }
+    setAllMediaTab(t) { if (this.state.mediaAllTab !== t) { this.state.mediaAllTab = t; this.loadAllMedia(); } }
+    groupedAllMedia() {
+        const out = []; let cur = null;
+        for (const it of this.state.mediaAllItems) {
+            const label = it.month_label || '';
+            if (!cur || cur.label !== label) { cur = { label, items: [] }; out.push(cur); }
+            cur.items.push(it);
+        }
+        return out;
+    }
+    fmtDur(s) { s = Math.max(0, Math.floor(s || 0)); const m = Math.floor(s / 60); const ss = s % 60; return m + ':' + (ss < 10 ? '0' + ss : ss); }
+    // ---------------- rich media viewer (sender/date + download + prev/next + filmstrip) ----------------
+    openMediaViewer(it) {
+        const src = this.state.mediaAllItems.filter((x) => x.kind === 'image' || x.kind === 'video');
+        const list = src.map((x) => ({ id: x.id, url: x.url, kind: x.kind, name: x.name, author: x.chat, date: x.created }));
+        let idx = src.findIndex((x) => x.id === it.id); if (idx < 0) idx = 0;
+        this.state.viewer = { list, idx, zoom: 1 };
+    }
+    openMsgViewer(m) {
+        const src = this.state.messages.filter((x) => (x.kind === 'image' || x.kind === 'video') && x.media_url && !x.deleted);
+        const list = src.map((x) => ({ id: x.id, url: x.media_url, kind: x.kind, name: x.file_name, author: x.mine ? 'You' : x.author_name, date: x.created }));
+        let idx = src.findIndex((x) => x.id === m.id); if (idx < 0) idx = 0;
+        this.state.viewer = { list, idx, zoom: 1 };
+    }
+    viewerCur() { const v = this.state.viewer; return (v && v.list[v.idx]) ? v.list[v.idx] : null; }
+    viewerMsg() { const c = this.viewerCur(); return (c && c.id) ? (this.state.messages.find((m) => m.id === c.id) || null) : null; }
+    viewerHasPrev() { const v = this.state.viewer; return !!(v && v.idx > 0); }
+    viewerHasNext() { const v = this.state.viewer; return !!(v && v.idx < v.list.length - 1); }
+    viewerPrev() { if (this.viewerHasPrev()) { this.state.viewer.idx--; this.state.viewer.zoom = 1; } }
+    viewerNext() { if (this.viewerHasNext()) { this.state.viewer.idx++; this.state.viewer.zoom = 1; } }
+    viewerGo(i) { if (this.state.viewer) { this.state.viewer.idx = i; this.state.viewer.zoom = 1; } }
+    viewerZoom(d) { const v = this.state.viewer; if (v) v.zoom = Math.min(4, Math.max(1, (v.zoom || 1) + d)); }
+    viewerReply() { const m = this.viewerMsg(); if (m) { this.closeViewer(); this.startReply(m); } }
+    viewerStar() { const m = this.viewerMsg(); if (m) this.toggleStar(m); }
+    viewerForward() { const m = this.viewerMsg(); if (m) { this.closeViewer(); this.openForward(m); } }
+    viewerReact() { const m = this.viewerMsg(); if (m) { this.closeViewer(); this.openEmojiPicker(m); } }
+    closeViewer() { this.state.viewer = null; }
+    // ---------------- settings / profile ----------------
+    settingsGo(v) { this.state.settingsView = v; this.state.profileEdit = { field: null, val: '' }; }
+    startProfileEdit(field) { this.state.profileEdit = { field, val: (this.state.me && this.state.me[field]) || '' }; }
+    async saveProfileField(field, value) {
+        const params = {}; params[field] = value;
+        try { const r = await rpc('/chat/profile', params); if (r && r.status && this.state.me) { this.state.me.name = r.name; this.state.me.about = r.about; this.state.me.avatar_url = r.avatar_url; this.notify('Saved', 'success'); this.loadConversations(); } } catch (e) {}
+        this.state.profileEdit = { field: null, val: '' };
+    }
+    async setPrivacyField(field, value) {
+        if (this.state.me) this.state.me[field] = value;
+        const params = {}; params[field] = value;
+        try { const r = await rpc('/chat/privacy', params); if (r && r.status && this.state.me) { this.state.me.last_seen_privacy = r.last_seen_privacy; this.state.me.online_privacy = r.online_privacy; } } catch (e) {}
+    }
+    async toggleSetting(field) {
+        if (!this.state.me) return;
+        const val = !this.state.me[field]; this.state.me[field] = val;
+        const params = {}; params[field] = val;
+        try { await rpc('/chat/settings', params); } catch (e) {}
+        if (field === 'read_receipts' && this.state.selectedId) this.syncMessages();
+    }
+    copyMyMobile() { try { navigator.clipboard.writeText((this.state.me && this.state.me.mobile) || ''); this.notify('Copied', 'success'); } catch (e) { this.notify('Could not copy'); } }
+    logout() { window.location.href = '/web/session/logout?redirect=/web/login'; }
+    // ---------------- browser notifications (WhatsApp-Web-style) ----------------
+    async enableBrowserNotifs() {
+        if (!('Notification' in window)) { this.notify('Notifications are not supported here'); return; }
+        try { const p = await Notification.requestPermission(); this.notify(p === 'granted' ? 'Browser notifications enabled' : 'Notifications blocked in the browser', p === 'granted' ? 'success' : 'warning'); } catch (e) {}
+    }
+    _msgPreview(m) {
+        if (!m) return 'New message';
+        if (m.kind === 'text') return m.body || '';
+        return ({ image: '📷 Photo', video: '🎥 Video', audio: '🎤 Voice message', document: '📄 Document' })[m.kind] || 'New message';
+    }
+    _maybeNotify(p) {
+        // bus 'message' events are only sent to me for OTHER people's messages.
+        if (!('Notification' in window) || Notification.permission !== 'granted') return;
+        const me = this.state.me;
+        const conv = this.state.conversations.find((c) => c.id === p.conversation_id);
+        const isGroup = conv ? conv.is_group : false;
+        if (me) { if (isGroup && !me.notif_groups) return; if (!isGroup && !me.notif_messages) return; }
+        if (p.conversation_id === this.state.selectedId && this.state.pane === 'chats' && document.hasFocus()) return;
+        const m = p.message;
+        const title = (conv && conv.title) || (m && m.author_name) || 'New message';
+        const body = (me && !me.notif_preview) ? 'New message' : this._msgPreview(m);
+        try {
+            const n = new Notification(title, { body, tag: 'chat369-' + p.conversation_id });
+            n.onclick = () => { window.focus(); this.state.pane = 'chats'; if (conv) this.select(conv); n.close(); };
+        } catch (e) {}
+        if (!me || me.notif_sound) this._beep();
+    }
+    _beep() {
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+            this._actx = this._actx || new Ctx();
+            const o = this._actx.createOscillator(); const g = this._actx.createGain();
+            o.frequency.value = 660; g.gain.value = 0.05; o.connect(g); g.connect(this._actx.destination);
+            o.start(); o.stop(this._actx.currentTime + 0.12);
+        } catch (e) {}
+    }
     // Inline group-name edit (reuses renameGroup + state.groupNameEdit).
     startNameEdit() { if (!this.canEditInfo()) return; this.state.groupNameEdit = this.state.contactInfo.name || this.state.contactInfo.title || ''; this.state.nameEditing = true; }
     cancelNameEdit() { this.state.nameEditing = false; }
@@ -1009,8 +1488,10 @@ export class Chat369App extends Component {
     }
     async sendMedia(kind, b64, name, mime, duration) {
         if (!this.state.selectedId || !b64) return;
+        const replyId = this.state.replyTo ? this.state.replyTo.id : 0;
+        this.state.replyTo = null;   // clear the reply bar so it can't imply a phantom reply
         try {
-            const res = await rpc('/chat/send_media', { conversation_id: this.state.selectedId, kind, file_b64: b64, file_name: name || '', mimetype: mime || '', duration: duration || 0 });
+            const res = await rpc('/chat/send_media', { conversation_id: this.state.selectedId, kind, file_b64: b64, file_name: name || '', mimetype: mime || '', duration: duration || 0, reply_to_id: replyId });
             if (res && res.status === false) { this.notify(res.message); return; }
             if (res && res.status && res.message) {
                 if (!this.state.messages.some((m) => m.id === res.message.id)) this.state.messages.push(res.message);
@@ -1107,8 +1588,8 @@ export class Chat369App extends Component {
     // only the <a> wrappers are injected (href + label are escaped too).
     linkifyBody(text) {
         const raw = String(text || '');
-        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const re = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        const re = /(https?:\/\/[^\s<"']+|www\.[^\s<"']+)/gi;
         let out = '', last = 0, m;
         while ((m = re.exec(raw)) !== null) {
             out += esc(raw.slice(last, m.index));
@@ -1124,7 +1605,7 @@ export class Chat369App extends Component {
     }
     highlightBody(text) {
         const raw = String(text || '');
-        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         const q = (this.state.searchQ || '').trim();
         if (!q) return markup(esc(raw));
         const rx = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
@@ -1169,18 +1650,199 @@ export class Chat369App extends Component {
     }
 
     // poll
+    // Safety-net poll (the bus does the instant work). Refreshes the list + presence
+    // and reconciles the open thread's ticks/reactions/edits every few seconds.
     async tick() {
         await this.loadConversations();
+        if (this.state.selectedId) await this.syncMessages();
+    }
+    async syncMessages() {
         if (!this.state.selectedId) return;
         try {
-            const res = await rpc('/chat/messages', { conversation_id: this.state.selectedId, after_id: this.lastMsgId() });
-            if (res && res.status && (res.messages || []).length) {
-                const have = new Set(this.state.messages.map((m) => m.id));
-                const fresh = res.messages.filter((m) => !have.has(m.id));
-                if (fresh.length) { this.state.messages.push(...fresh); this._scrollPending = true; this.markRead(); }
-            }
+            const res = await rpc('/chat/messages', { conversation_id: this.state.selectedId, limit: 60 });
+            if (res && res.status) this._reconcile(res.messages || []);
         } catch (e) {}
     }
+    _atBottom() {
+        const el = this.scroller.el; if (!el) return true;
+        return (el.scrollHeight - el.scrollTop - el.clientHeight) < 80;
+    }
+    onMsgScroll(ev) {
+        const el = ev.currentTarget;
+        if (this.state.openMenuId) this.state.openMenuId = null;   // fixed menu shouldn't detach on scroll
+        if (el.scrollTop < 60) this.loadOlder();
+        const show = (el.scrollHeight - el.scrollTop - el.clientHeight) > 200;
+        if (show !== this.state.showJumpBottom) this.state.showJumpBottom = show;   // avoid re-render spam
+    }
+    async loadOlder() {
+        if (this._loadingOlder || this._noMoreOlder || !this.state.selectedId) return;
+        const ids = this.state.messages.map((m) => m.id).filter((i) => typeof i === 'number');
+        if (!ids.length) return;
+        const beforeId = Math.min(...ids);
+        this._loadingOlder = true;
+        try {
+            const res = await rpc('/chat/messages', { conversation_id: this.state.selectedId, before_id: beforeId, limit: 40 });
+            if (res && res.status) {
+                const have = new Set(this.state.messages.map((m) => m.id));
+                const older = (res.messages || []).filter((m) => !have.has(m.id));
+                if (older.length) {
+                    this._prependOldHeight = this.scroller.el ? this.scroller.el.scrollHeight : 0;
+                    this.state.messages.unshift(...older);
+                    this._prependAdjust = true;
+                } else { this._noMoreOlder = true; }
+            }
+        } catch (e) {}
+        this._loadingOlder = false;
+    }
+    jumpToBottom() {
+        const el = this.scroller.el;
+        if (el) { el.scrollTop = el.scrollHeight; this.state.showJumpBottom = false; }
+    }
+    // Merge a fresh serialized list into state.messages by id: update existing in
+    // place (status/reactions/edited/deleted/pinned) and append new ones.
+    _reconcile(list) {
+        if (!list.length) return;
+        const byId = {};
+        for (const m of this.state.messages) { if (typeof m.id === 'number') byId[m.id] = m; }
+        const atB = this._atBottom();
+        let appended = false;
+        for (const nm of list) {
+            const cur = byId[nm.id];
+            if (cur) { Object.assign(cur, nm); }
+            else { this.state.messages.push(nm); appended = true; }
+        }
+        if (appended) {
+            this.state.messages.sort((a, b) => {
+                const ai = typeof a.id === 'number' ? a.id : Number.MAX_SAFE_INTEGER;
+                const bi = typeof b.id === 'number' ? b.id : Number.MAX_SAFE_INTEGER;
+                return ai - bi;
+            });
+            if (atB) this._scrollPending = true;
+            this.markRead();
+        }
+    }
+    // Live events pushed from the server over the Odoo bus.
+    _onBus(p) {
+        if (!p || !p.event) return;
+        const open = (p.conversation_id === this.state.selectedId);
+        if (p.event === 'message') {
+            if (open && p.message && !this.state.messages.some((m) => m.id === p.message.id)) {
+                const atB = this._atBottom();
+                this.state.messages.push(p.message);
+                if (atB) this._scrollPending = true;
+                this.markRead();
+                this._clearTypingUser(p.message.author_id);
+            }
+            this._maybeNotify(p);
+            this.loadConversations();
+        } else if (p.event === 'update') {
+            if (open && p.message) {
+                const i = this.state.messages.findIndex((m) => m.id === p.message.id);
+                if (i >= 0) this.state.messages.splice(i, 1, p.message);
+            }
+        } else if (p.event === 'read' || p.event === 'delivered') {
+            if (open) this.syncMessages(); else this.loadConversations();
+        } else if (p.event === 'typing') {
+            if (open) this._setTyping(p);
+        }
+    }
+    _setTyping(p) {
+        if (!p.typing) { this._clearTypingUser(p.user_id); return; }
+        this.state.typing = { user_id: p.user_id, name: p.name };
+        clearTimeout(this._typingTimer);
+        this._typingTimer = setTimeout(() => { this.state.typing = null; }, 4000);
+    }
+    _clearTypingUser(uid) {
+        if (this.state.typing && this.state.typing.user_id === uid) {
+            this.state.typing = null; clearTimeout(this._typingTimer);
+        }
+    }
+    _emitTyping() {
+        if (!this.state.selectedId) return;
+        const now = Date.now();
+        if (!this._lastTypingSent || now - this._lastTypingSent > 2500) {
+            this._lastTypingSent = now;
+            rpc('/chat/typing', { conversation_id: this.state.selectedId, typing: true }).catch(() => {});
+        }
+        clearTimeout(this._typingStop);
+        this._typingStop = setTimeout(() => this._stopTyping(), 3000);
+    }
+    _stopTyping() {
+        clearTimeout(this._typingStop); this._lastTypingSent = 0;
+        if (this.state.selectedId) rpc('/chat/typing', { conversation_id: this.state.selectedId, typing: false }).catch(() => {});
+    }
+    async openMessageInfo(m) {
+        this.closeMenus();
+        this.state.msgInfo = { id: m.id, loading: true, is_group: false, read: [], delivered: [], created: m.created, body: m.body, kind: m.kind, mine: true };
+        try {
+            const res = await rpc('/chat/message_info', { message_id: m.id });
+            if (res && res.status) { this.state.msgInfo = Object.assign({}, this.state.msgInfo, res, { loading: false }); }
+            else { this.state.msgInfo = null; this.notify((res && res.message) || 'No info available'); }
+        } catch (e) { this.state.msgInfo = null; }
+    }
+    closeMessageInfo() { this.state.msgInfo = null; }
+    async openPrivacy() {
+        this.closeMenus();
+        this.state.privacyOpen = true;
+        try { const r = await rpc('/chat/privacy', {}); if (r && r.status) this.state.privacy = { last_seen_privacy: r.last_seen_privacy, online_privacy: r.online_privacy }; } catch (e) {}
+    }
+    closePrivacy() { this.state.privacyOpen = false; }
+    async setPrivacy(field, value) {
+        this.state.privacy[field] = value;
+        const params = {}; params[field] = value;
+        try { const r = await rpc('/chat/privacy', params); if (r && r.status) { this.state.privacy = { last_seen_privacy: r.last_seen_privacy, online_privacy: r.online_privacy }; this.notify('Privacy updated', 'success'); } } catch (e) {}
+    }
+    // ---------------- voice-note player (play / seek / duration) ----------------
+    toggleAudio(m) {
+        if (this.state.playingId === m.id && this._audio) {
+            if (this._audio.paused) { this._audio.play().catch(() => {}); this.state.audioPaused = false; }
+            else { this._audio.pause(); this.state.audioPaused = true; }
+            return;
+        }
+        if (this._audio) { this._audio.pause(); }
+        this._audio = new Audio(m.media_url);
+        this.state.playingId = m.id; this.state.audioPaused = false;
+        this.state.audioCur = 0; this.state.audioDur = m.duration || 0;
+        this._audio.playbackRate = this.state.audioSpeed;
+        this._audio.addEventListener('loadedmetadata', () => { if (this._audio && isFinite(this._audio.duration)) this.state.audioDur = this._audio.duration; });
+        this._audio.addEventListener('timeupdate', () => { if (this._audio) this.state.audioCur = this._audio.currentTime; });
+        this._audio.addEventListener('ended', () => { this.state.audioCur = 0; this.state.audioPaused = true; });
+        this._audio.play().catch(() => { this.state.playingId = null; });
+    }
+    startSeek(m, ev) {
+        // Tap on a not-yet-playing clip just starts it; on the loaded clip, tap+drag scrubs.
+        if (this.state.playingId !== m.id || !this._audio) { this.toggleAudio(m); return; }
+        this._seekBar = ev.currentTarget;
+        this._seekTo(ev);
+        this._segMove = (e) => this._seekTo(e);
+        this._segUp = () => { window.removeEventListener('pointermove', this._segMove); window.removeEventListener('pointerup', this._segUp); this._seekBar = null; };
+        window.addEventListener('pointermove', this._segMove);
+        window.addEventListener('pointerup', this._segUp);
+    }
+    _seekTo(ev) {
+        if (!this._seekBar || !this._audio) return;
+        const rect = this._seekBar.getBoundingClientRect();
+        const pct = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+        const dur = isFinite(this._audio.duration) ? this._audio.duration : (this.state.audioDur || 0);
+        if (dur) { this._audio.currentTime = pct * dur; this.state.audioCur = pct * dur; }
+    }
+    cycleSpeed() {
+        const seq = [1, 1.5, 2]; const i = seq.indexOf(this.state.audioSpeed);
+        this.state.audioSpeed = seq[(i + 1) % seq.length];
+        if (this._audio) this._audio.playbackRate = this.state.audioSpeed;
+    }
+    audioSpeedLabel() { return this.state.audioSpeed + '×'; }
+    audioPct(id) {
+        if (this.state.playingId !== id) return 0;
+        const d = this.state.audioDur || 0; if (!d) return 0;
+        return Math.min(100, (this.state.audioCur / d) * 100);
+    }
+    audioTimeLabel(m) {
+        const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); const mm = Math.floor(s / 60); const ss = s % 60; return mm + ':' + (ss < 10 ? '0' + ss : ss); };
+        if (this.state.playingId === m.id) return fmt(this.state.audioCur) + ' / ' + fmt(this.state.audioDur || m.duration || 0);
+        return fmt(m.duration || 0);
+    }
+    _stopAudio() { if (this._audio) { this._audio.pause(); } this.state.playingId = null; this.state.audioPaused = true; this.state.audioCur = 0; }
 
     // ---------------- helpers ----------------
     filteredConversations() { const q = (this.state.search || '').trim().toLowerCase(); const l = this.state.conversations; return q ? l.filter((c) => (c.title || '').toLowerCase().includes(q)) : l; }
@@ -1205,22 +1867,48 @@ export class Chat369App extends Component {
         const days = this._daysAgo(d);
         if (days <= 0) return 'Today';
         if (days === 1) return 'Yesterday';
-        if (days < 7) return d.toLocaleDateString([], { weekday: 'long' });   // Monday, Tuesdayâ€¦
+        if (days < 7) return d.toLocaleDateString([], { weekday: 'long' });   // Monday, Tuesday…
         return d.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' });
     }
-    // Chat-row timestamp: todayâ†’time Â· yesterdayâ†’"Yesterday" Â· <7dâ†’weekday Â· olderâ†’date.
+    // Chat-row timestamp: today→time · yesterday→"Yesterday" · <7d→weekday · older→date.
     fmtRowTime(iso) {
         if (!iso) return '';
         const d = new Date(iso); if (isNaN(d.getTime())) return '';
         const days = this._daysAgo(d);
         if (days <= 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         if (days === 1) return 'Yesterday';
-        if (days < 7) return d.toLocaleDateString([], { weekday: 'short' });   // Mon, Tueâ€¦
+        if (days < 7) return d.toLocaleDateString([], { weekday: 'short' });   // Mon, Tue…
         return d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' });
     }
     currentIsGroup() { return !!(this.state.activeConv && this.state.activeConv.is_group); }
     currentTitle() { return this.state.activeConv ? this.state.activeConv.title : ''; }
-    currentSub() { const c = this.state.activeConv; if (!c) return ''; if (c.is_group) return (c.member_count || 0) + ' members'; if (c.online) return 'online'; return c.other_mobile || ''; }
+    currentSub() {
+        const c = this.state.activeConv; if (!c) return '';
+        const fresh = this.state.conversations.find((x) => x.id === this.state.selectedId) || c;
+        if (this.state.typing) return c.is_group ? (this.state.typing.name + ' is typing…') : 'typing…';
+        if (c.is_group) return (fresh.member_count || c.member_count || 0) + ' members';
+        if (fresh.online) return 'online';
+        if (fresh.last_seen) return 'last seen ' + this.lastSeenLabel(fresh.last_seen);
+        return c.other_mobile || '';
+    }
+    lastSeenLabel(iso) {
+        const d = new Date(iso); if (isNaN(d.getTime())) return '';
+        const now = new Date();
+        const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (d.toDateString() === now.toDateString()) return 'today at ' + t;
+        const y = new Date(now); y.setDate(now.getDate() - 1);
+        if (d.toDateString() === y.toDateString()) return 'yesterday at ' + t;
+        return d.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' at ' + t;
+    }
+    infoKindLabel(kind) { return ({ image: 'Photo', video: 'Video', audio: 'Voice message', document: 'Document' })[kind] || ''; }
+    fmtInfoTime(iso) {
+        if (!iso) return '—';
+        const d = new Date(iso); if (isNaN(d.getTime())) return '';
+        const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const now = new Date();
+        if (d.toDateString() === now.toDateString()) return 'Today at ' + t;
+        return d.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ', ' + t;
+    }
     avatarSrc(b64) { return 'data:image/png;base64,' + b64; }
     initials(name) { return (name || '?').trim().charAt(0).toUpperCase(); }
     fmtTime(iso) {

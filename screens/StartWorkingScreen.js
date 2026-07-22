@@ -40,6 +40,7 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
   const insets = useSafeAreaInsets();
   const [pin, setPin] = useState('');
   const [mode, setMode] = useState('start');   // 'start' | 'resume'
+  const [done, setDone] = useState(false);      // developer already ended today → no PIN
   const [expiresAt, setExpiresAt] = useState(null);
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(() => 0);
@@ -58,6 +59,10 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
     try {
       const res = await generatePin();
       if (seq !== genSeq.current) return;   // superseded → ignore stale result
+      // done = developer already ended their workday today (one start + one end
+      // per day). No PIN is issued; show the "ended for today" state instead.
+      if (res.done) { setDone(true); setPin(''); setExpiresAt(null); return; }
+      setDone(false);
       setPin(res.pin);
       setMode(res.mode || 'start');
       setExpiresAt(res.expires_at);
@@ -115,12 +120,13 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
   // never has to tap Regenerate. The race guard in makePin keeps it consistent.
   const autoRegenRef = useRef(false);
   useEffect(() => {
+    if (done) return;                 // ended for today → nothing to regenerate
     if (expired && expiresAt && !loading) {
       if (!autoRegenRef.current) { autoRegenRef.current = true; makePin(); }
     } else if (!expired) {
       autoRegenRef.current = false;   // fresh PIN → arm for the next expiry
     }
-  }, [expired, expiresAt, loading, makePin]);
+  }, [done, expired, expiresAt, loading, makePin]);
 
   return (
     <View style={s.root}>
@@ -150,76 +156,93 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
       >
         {/* Brand header */}
         <Image source={require('../assets/logo369.png')} style={s.logo} resizeMode="contain" />
-        <Text style={s.brandTitle}>{resume ? 'Continue Working' : 'Start Working'}</Text>
+        <Text style={s.brandTitle}>{done ? 'Workday ended for today' : resume ? 'Continue Working' : 'Start Working'}</Text>
         <Text style={s.brandSub}>
-          {resume
-            ? 'Pair your phone to your computer to resume your paused task.'
-            : 'Pair your phone to your computer to start timing.'}
+          {done
+            ? "You've finished your workday today. Come back tomorrow to start a new one."
+            : resume
+              ? 'Pair your phone to your computer to resume your paused task.'
+              : 'Pair your phone to your computer to start timing.'}
         </Text>
 
-        {/* Phone → computer pairing illustration */}
-        <PairArt width={SW * 0.6} height={SW * 0.6 * (190 / 300)} />
+        {/* Phone → computer pairing illustration (hidden once the day is done) */}
+        {!done && <PairArt width={SW * 0.6} height={SW * 0.6 * (190 / 300)} />}
 
-        {/* PIN card (the box) */}
+        {/* PIN card — or the "ended for today" card once the day is done */}
         <View style={s.card}>
-          <View style={[s.iconCircle, { backgroundColor: resume ? COLORS.amberBg : '#EAF2FF' }]}>
-            <MaterialCommunityIcons name="cellphone-key" size={40} color={resume ? COLORS.amber : COLORS.primary} />
-          </View>
-          <Text style={s.cardTitle}>
-            {resume ? 'Enter this PIN to continue working' : 'Enter this PIN on your computer'}
-          </Text>
-          <Text style={s.cardSub}>
-            {resume
-              ? 'You went away and your task was paused. Open the KPI Action Board on your computer and type this PIN to resume.'
-              : 'Open the KPI Action Board on your computer\'s web browser and type this PIN to start working.'}
-          </Text>
-
-          {loading ? (
-            <ActivityIndicator color={COLORS.primary} style={{ marginVertical: 24 }} />
+          {done ? (
+            <>
+              <View style={[s.iconCircle, { backgroundColor: '#E9F7EF' }]}>
+                <Ionicons name="checkmark-done" size={40} color="#12B76A" />
+              </View>
+              <Text style={s.cardTitle}>Workday ended for today</Text>
+              <Text style={s.cardSub}>
+                You already started and ended your workday today. It's one workday
+                per day — you can start a fresh one tomorrow.
+              </Text>
+            </>
           ) : (
             <>
-              <View style={[s.pinBox, expired && s.pinBoxExpired]}>
-                {(pin || '----').split('').map((d, i) => (
-                  <View key={i} style={s.pinCell}><Text style={s.pinDigit}>{d}</Text></View>
-                ))}
+              <View style={[s.iconCircle, { backgroundColor: resume ? COLORS.amberBg : '#EAF2FF' }]}>
+                <MaterialCommunityIcons name="cellphone-key" size={40} color={resume ? COLORS.amber : COLORS.primary} />
               </View>
-              {left != null && !expired && (
-                <Text style={s.expiry}>Expires in {mm}:{ss}</Text>
+              <Text style={s.cardTitle}>
+                {resume ? 'Enter this PIN to continue working' : 'Enter this PIN on your computer'}
+              </Text>
+              <Text style={s.cardSub}>
+                {resume
+                  ? 'You went away and your task was paused. Open the KPI Action Board on your computer and type this PIN to resume.'
+                  : 'Open the KPI Action Board on your computer\'s web browser and type this PIN to start working.'}
+              </Text>
+
+              {loading ? (
+                <ActivityIndicator color={COLORS.primary} style={{ marginVertical: 24 }} />
+              ) : (
+                <>
+                  <View style={[s.pinBox, expired && s.pinBoxExpired]}>
+                    {(pin || '----').split('').map((d, i) => (
+                      <View key={i} style={s.pinCell}><Text style={s.pinDigit}>{d}</Text></View>
+                    ))}
+                  </View>
+                  {left != null && !expired && (
+                    <Text style={s.expiry}>Expires in {mm}:{ss}</Text>
+                  )}
+                  {expired && (
+                    <Text style={[s.expiry, { color: COLORS.amber }]}>Refreshing PIN…</Text>
+                  )}
+                </>
               )}
-              {expired && (
-                <Text style={[s.expiry, { color: COLORS.amber }]}>Refreshing PIN…</Text>
-              )}
+
+              <View style={s.waitRow}>
+                <ActivityIndicator size="small" color={COLORS.muted} />
+                <Text style={s.waitTxt}>Waiting for you to enter it on the computer…</Text>
+              </View>
+
+              {/* Computer-only note — NOT a tap-to-open button. The board must be
+                  opened on the computer's browser; opening it on the phone is blocked. */}
+              <View style={s.noteBox}>
+                <MaterialCommunityIcons name="monitor" size={18} color={COLORS.amber} />
+                <Text style={s.noteTxt}>Open the KPI Action Board on your <Text style={{ fontWeight: '800' }}>computer's</Text>
+                  {' '}web browser and enter this PIN. It won't work if opened on this phone.</Text>
+              </View>
+
+              <TouchableOpacity
+                style={[s.regenBtn, cooldownLeft > 0 && { opacity: 0.5 }]}
+                onPress={onRegen}
+                disabled={cooldownLeft > 0}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="refresh" size={16} color={COLORS.muted} />
+                <Text style={s.regenTxt}>
+                  {cooldownLeft > 0 ? `Regenerate in ${cooldownLeft}s` : 'Regenerate PIN'}
+                </Text>
+              </TouchableOpacity>
             </>
           )}
-
-          <View style={s.waitRow}>
-            <ActivityIndicator size="small" color={COLORS.muted} />
-            <Text style={s.waitTxt}>Waiting for you to enter it on the computer…</Text>
-          </View>
-
-          {/* Computer-only note — NOT a tap-to-open button. The board must be
-              opened on the computer's browser; opening it on the phone is blocked. */}
-          <View style={s.noteBox}>
-            <MaterialCommunityIcons name="monitor" size={18} color={COLORS.amber} />
-            <Text style={s.noteTxt}>Open the KPI Action Board on your <Text style={{ fontWeight: '800' }}>computer's</Text>
-              {' '}web browser and enter this PIN. It won't work if opened on this phone.</Text>
-          </View>
-
-          <TouchableOpacity
-            style={[s.regenBtn, cooldownLeft > 0 && { opacity: 0.5 }]}
-            onPress={onRegen}
-            disabled={cooldownLeft > 0}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="refresh" size={16} color={COLORS.muted} />
-            <Text style={s.regenTxt}>
-              {cooldownLeft > 0 ? `Regenerate in ${cooldownLeft}s` : 'Regenerate PIN'}
-            </Text>
-          </TouchableOpacity>
         </View>
 
-        {/* How it works */}
-        <View style={s.steps}>
+        {/* How it works (hidden once the day is done) */}
+        {!done && <View style={s.steps}>
           <View style={s.stepRow}>
             <View style={s.stepNum}><Text style={s.stepNumTxt}>1</Text></View>
             <Text style={s.stepTxt}>Open the KPI Action Board on your computer's browser.</Text>
@@ -232,7 +255,7 @@ export default function StartWorkingScreen({ onBack, onLogout, onPaired }) {
             <View style={s.stepNum}><Text style={s.stepNumTxt}>3</Text></View>
             <Text style={s.stepTxt}>You're working — timing runs on the computer.</Text>
           </View>
-        </View>
+        </View>}
 
         {/* A way out. Someone who tapped Start Workday by mistake — or who isn't
             at their computer yet — must not be stranded here. Nothing has started:

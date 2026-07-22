@@ -1543,10 +1543,14 @@ class KraKpiAPI(http.Controller):
     def pair_generate(self, **params):
         """App calls this to get a fresh, short-lived pairing PIN."""
         res = request.env['kpi.pair'].sudo().generate_for(request.env.user)
-        _logger.info("pair/generate user=%s(%s) mode=%s",
-                     request.env.user.login, request.env.user.id, res.get('mode'))
+        _logger.info("pair/generate user=%s(%s) mode=%s done=%s",
+                     request.env.user.login, request.env.user.id,
+                     res.get('mode'), res.get('done'))
+        # done=True → developer already ended today (one start + one end per day):
+        # no PIN issued; the app shows the "ended for today" state.
         return {'status': True, 'expires_at': res.get('expires_at'),
-                'pin': res.get('pin'), 'mode': res.get('mode')}
+                'pin': res.get('pin'), 'mode': res.get('mode'),
+                'done': bool(res.get('done'))}
 
     @http.route('/kpi_pair/status', type='json', auth='user', methods=['POST'], csrf=False)
     def pair_status(self, **params):
@@ -1562,6 +1566,7 @@ class KraKpiAPI(http.Controller):
                   or user.has_group('kra_kpi_module.group_kra_admin'))
         return {'status': True, 'state': res.get('state'),
                 'paired': res.get('paired'), 'mode': res.get('mode'),
+                'day_done': bool(res.get('day_done')),
                 'bypass_gate': bypass}
 
     @http.route('/kpi_pair/verify', type='json', auth='user', methods=['POST'], csrf=False)

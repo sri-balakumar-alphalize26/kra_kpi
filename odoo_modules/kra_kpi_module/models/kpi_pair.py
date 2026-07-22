@@ -84,8 +84,13 @@ class KpiPair(models.Model):
     def generate_for(self, user):
         """Invalidate any prior pending PIN and issue a fresh one for `user`.
 
-        Returns {'pin', 'expires_at', 'mode'}.
+        Returns {'pin', 'expires_at', 'mode'} — or {'done': True} when the
+        developer already ended their workday today (one start + one end per
+        day): no PIN is issued and the app shows the "ended for today" state.
         """
+        # One start + one end per day. Auto-closed days can still restart.
+        if self.env['kpi.work.session'].sudo()._day_done(user):
+            return {'done': True}
         now = fields.Datetime.now()
         mode = self._next_mode(user)
         # Expire any still-pending codes for this user.
@@ -142,6 +147,10 @@ class KpiPair(models.Model):
         ], limit=1)
         if not rec:
             return {'ok': False}
+        # One start + one end per day: refuse to re-open a workday the developer
+        # already ended today. Decline WITHOUT pairing or reopening the session.
+        if self.env['kpi.work.session'].sudo()._day_done(user):
+            return {'ok': False, 'day_done': True}
         rec.write({'state': 'paired', 'paired_at': fields.Datetime.now()})
         # Pairing = "start working": open today's workday so the heartbeat begins.
         try:
@@ -215,6 +224,11 @@ class KpiPair(models.Model):
                 rec = self.sudo().search([('user_id', '=', user.id)], limit=1)
         state = rec.state if rec else 'none'
         mode = rec.mode if rec else 'start'
-        _logger.info("pair/status user=%s(%s) -> state=%s paired=%s mode=%s",
-                     user.login, user.id, state, state == 'paired', mode)
-        return {'state': state, 'paired': state == 'paired', 'mode': mode}
+        # One start + one end per day: tell the app when today is already ended
+        # by the developer, so it shows "Workday ended for today" instead of
+        # routing to the PIN screen. (Auto-closed days report day_done=False.)
+        day_done = self.env['kpi.work.session'].sudo()._day_done(user)
+        _logger.info("pair/status user=%s(%s) -> state=%s paired=%s mode=%s day_done=%s",
+                     user.login, user.id, state, state == 'paired', mode, day_done)
+        return {'state': state, 'paired': state == 'paired', 'mode': mode,
+                'day_done': day_done}

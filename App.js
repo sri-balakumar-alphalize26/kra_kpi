@@ -1,7 +1,7 @@
 // KRA/KPI app shell: spinning KPI-wheel Splash → Welcome → Login (Odoo connect)
 // → Home. A remembered Odoo session boots straight to Home after the splash.
 import React, { useState, useEffect, useRef } from 'react';
-import { BackHandler, View, ActivityIndicator, AppState } from 'react-native';
+import { BackHandler, View, ActivityIndicator, AppState, Alert } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -115,6 +115,11 @@ function AppInner() {
   const [alarmData, setAlarmData] = useState(null);
   const [devLocked, setDevLocked] = useState(false);  // this user is a developer who must pair
   const [devPaired, setDevPaired] = useState(false);  // developer's device is currently paired
+  // Pairing 'mode' ('resume' = workday still open but unpaired; 'start' = none) and
+  // 'dayDone' (developer ENDED today → one start + one end per day). Both come from
+  // pairingStatus(); they drive the Home read-only bar's Continue/Start/Ended label.
+  const [pairMode, setPairMode] = useState('start');
+  const [dayDone, setDayDone] = useState(false);
   const [gateReady, setGateReady] = useState(false);  // role gate resolved → avoids a Home flash before the PIN gate
   const [provisioned, setProvisioned] = useState(false); // device set up (server URL saved)
   const [forceSetup, setForceSetup] = useState(false);   // show Odoo device-setup over the app login
@@ -229,6 +234,7 @@ function AppInner() {
       try {
         await session.setReminder(a.task.id, {
           whenIso: new Date(whenMs).toISOString(), notifId, mode: 'alarm', reason,
+          snoozed: true,   // so the task shows a "Snoozed" state, not a plain reminder
         });
       } catch (_) {}
     }
@@ -335,24 +341,29 @@ function AppInner() {
         setIsClient(kpiRole ? kpiRole === 'client' : !!(info && info.is_client_only));
         setDevLocked(lock);
         let paired = true;   // non-developers are never gated
-        let pairMode = 'start';
+        let pmode = 'start';
+        let ddone = false;
         if (lock) {
           try {
             const st = await pairingStatus();
             paired = !!st?.paired;
-            pairMode = st?.mode || 'start';
+            pmode = st?.mode || 'start';
+            ddone = !!st?.dayDone;
           } catch (_) { paired = false; }
         }
         if (!alive) return;
         setDevPaired(paired);
+        setPairMode(pmode);
+        setDayDone(ddone);
         // Started-then-closed: the workday is still OPEN but the web tab was closed,
         // so the device un-paired with mode='resume'. Land straight on the PIN screen
         // to re-pair and continue. mode='start' (never started / already ended) stays
-        // read-only — no forced PIN. (Done before setGateReady, so no board flash.)
-        if (lock && !paired && pairMode === 'resume') {
+        // read-only — no forced PIN. Ended-for-today (day_done) also stays read-only:
+        // no restart until tomorrow, so never force the PIN there.
+        if (lock && !paired && pmode === 'resume' && !ddone) {
           setAppScreen((s) => (s === 'startworking' ? s : 'startworking'));
         }
-        log.info('role gate', { kpi_role: kpiRole, lock, paired, mode: pairMode, isAdmin, isDev });
+        log.info('role gate', { kpi_role: kpiRole, lock, paired, mode: pmode, day_done: ddone, isAdmin, isDev });
         saveRoleState(user?.uid, { kpiRole, paired });   // for the offline path below
       } catch (e) {
         // Offline / server unreachable. Reuse the last known answer rather than
@@ -375,6 +386,8 @@ function AppInner() {
     const id = setInterval(async () => {
       try {
         const st = await pairingStatus();
+        setPairMode(st?.mode || 'start');
+        setDayDone(!!st?.dayDone);
         setDevPaired((prev) => {
           const now = !!st?.paired;
           if (now !== prev) {
@@ -393,23 +406,25 @@ function AppInner() {
     return () => clearInterval(id);
   }, [user?.uid, devLocked]);
 
-  // On app FOREGROUND (open / resume): a developer whose web session was closed
-  // while the workday is still running is un-paired with mode='resume' — land them
-  // straight on the PIN screen so they re-pair and continue. mode='start' (never
-  // started / ended) stays read-only. Immediate check so it shows directly, without
-  // waiting for the 5s poll. Only on entry — never yanks someone mid-read.
+  // On app FOREGROUND (open / resume): just REFRESH the pairing state — do NOT
+  // force-navigate to the PIN screen. A developer who un-paired while the workday
+  // is still open (web tab closed / away) drops to a READ-ONLY board that now
+  // shows a "Continue Workday" button (utils/workdayState.js); they tap it when
+  // ready. This used to hard-redirect to the PIN screen on every resume, which
+  // yanked people there just for switching apps and back — the source of the
+  // intermittent "it keeps sending me to the PIN screen". The startup role gate
+  // still lands an already-open-but-unpaired developer on the PIN screen; only
+  // this mid-session resume no longer does.
   useEffect(() => {
     if (!user || !devLocked) return;
     const sub = AppState.addEventListener('change', async (state) => {
       if (state !== 'active') return;
       try {
         const st = await pairingStatus();
-        const paired = !!st?.paired;
-        setDevPaired(paired);
-        saveRoleState(user?.uid, { kpiRole: 'developer', paired });
-        if (!paired && (st?.mode || 'start') === 'resume') {
-          setAppScreen((s) => (s === 'startworking' ? s : 'startworking'));
-        }
+        setDevPaired(!!st?.paired);
+        setPairMode(st?.mode || 'start');
+        setDayDone(!!st?.dayDone);
+        saveRoleState(user?.uid, { kpiRole: 'developer', paired: !!st?.paired });
       } catch (_) { /* offline → keep current mode */ }
     });
     return () => sub.remove();
@@ -496,7 +511,23 @@ function AppInner() {
     setFocusInvoiceId(null);
     setDevLocked(false);
     setDevPaired(false);
+    setPairMode('start');
+    setDayDone(false);
     setGateReady(false);
+  };
+
+  // Confirm before logging out. A mis-tap on the log-out icon shouldn't end the
+  // session — and, per the one-start-one-end-per-day rule, logging out then back
+  // in must not become a backdoor to a second workday, so we warn about that too.
+  // Non-developers (never locked) get a plain confirm without the workday line.
+  const confirmLogout = () => {
+    const warn = devLocked
+      ? "You'll be signed out. If you've ended your workday, logging back in won't let you start another one today."
+      : "You'll be signed out of the app.";
+    Alert.alert('Log out?', warn, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Log out', style: 'destructive', onPress: () => { logout(); } },
+    ]);
   };
 
   // Splash keeps showing until both the animation and the session read finish.
@@ -570,10 +601,10 @@ function AppInner() {
           // Backing out returns to the board they were heading for (read-only),
           // not Home — a mis-tap shouldn't cost them their place.
           onBack={() => setAppScreen('actionboard')}
-          onLogout={logout}
+          onLogout={confirmLogout}
           // Nothing starts until the PIN is verified: /kpi_pair/verify is what
           // opens the workday, so walking away from here starts nothing.
-          onPaired={() => { setDevPaired(true); setAppScreen('actionboard'); }}
+          onPaired={() => { setDevPaired(true); setDayDone(false); setAppScreen('actionboard'); }}
         />
       );
     }
@@ -665,11 +696,19 @@ function AppInner() {
     return (
       <HomeScreen
         user={user}
+        // Home & Profile have their OWN logout confirmation modals (which now
+        // carry the one-per-day warning), so pass the raw logout — wrapping it in
+        // confirmLogout's Alert too would double-confirm. StartWorkingScreen has
+        // no modal, so it gets confirmLogout.
         onLogout={logout}
         onOpen={open}
-        // Drives the red "read-only" line under the name + its Start Workday
-        // button. False for admins/clients — they're never locked.
+        // Drives the red "read-only" line under the name + its Start/Continue/
+        // Ended button. False for admins/clients — they're never locked.
         workdayLocked={workdayLocked}
+        // workdayOpen: the session is still open (unpaired via tab-close/away) →
+        // the bar says "Continue Workday". dayDone: ended today → "ended" state.
+        workdayOpen={pairMode === 'resume'}
+        dayDone={dayDone}
         onNeedPair={() => setAppScreen('startworking')}
       />
     );

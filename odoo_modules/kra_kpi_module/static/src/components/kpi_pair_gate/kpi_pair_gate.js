@@ -14,6 +14,16 @@ export class KpiPairGate extends Component {
             <t t-if="state.loading">
                 <div class="text-muted">Loading…</div>
             </t>
+            <t t-elif="state.dayDone">
+                <div class="card shadow-sm border-0" style="max-width: 440px; width: 100%;">
+                    <div class="card-body p-4 text-center">
+                        <div style="font-size: 42px; line-height: 1;">✅</div>
+                        <h3 class="mt-3 mb-1 fw-bold">Workday ended for today</h3>
+                        <p class="text-muted small mb-0">You've already started and ended your workday
+                            today. It's one workday per day — come back tomorrow to start a new one.</p>
+                    </div>
+                </div>
+            </t>
             <t t-else="">
                 <div class="card shadow-sm border-0" style="max-width: 440px; width: 100%;">
                     <div class="card-body p-4 text-center">
@@ -59,13 +69,16 @@ export class KpiPairGate extends Component {
 
     setup() {
         this.action = useService("action");
-        this.state = useState({ loading: true, pin: "", error: "", verifying: false, mode: "start" });
+        this.state = useState({ loading: true, pin: "", error: "", verifying: false, mode: "start", dayDone: false });
         onWillStart(async () => {
             try {
                 const res = await rpc("/kpi_pair/status", {});
                 // Admins (system / owner / coordinator) skip the PIN entirely.
                 if (res?.bypass_gate) { this._openBoard(); return; }
                 if (res?.paired) { this._openBoard(); return; }
+                // Ended their own workday today → one start + one end per day: no
+                // PIN, show the "ended for today" card instead.
+                if (res?.day_done) { this.state.dayDone = true; this.state.loading = false; return; }
                 if (res?.mode) this.state.mode = res.mode;
             } catch (e) { /* fall through to gate */ }
             this.state.loading = false;
@@ -99,6 +112,7 @@ export class KpiPairGate extends Component {
         try {
             const res = await rpc("/kpi_pair/verify", { pin: this.state.pin });
             if (res?.ok) { this._openBoard(); return; }
+            if (res?.day_done) { this.state.dayDone = true; return; }
             if (res?.reason === "mobile") {
                 this.state.error = "Please open this on a computer's web browser — not a phone. Your PIN is still valid.";
                 this.state.pin = "";

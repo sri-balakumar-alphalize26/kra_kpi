@@ -237,17 +237,57 @@ class KpiWorkSession(models.Model):
                 rec.presence_seconds = 0.0
 
     # ------------------------------------------------------------------ #
+    # One start + one end per day                                        #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _ended_session_today(self, user=None):
+        """The session the developer EXPLICITLY ended today, if any — i.e. a
+        closed session (auto_closed=False) for today with NO open session left.
+
+        This is what enforces "one start + one end per day": once returned, the
+        day is done and must not be re-opened until local midnight. Auto-closed
+        sessions (idle / cross-midnight cron, auto_closed=True) are deliberately
+        EXCLUDED — a developer who was auto-ended can still restart the same day.
+        Returns the closed record (truthy) or an empty recordset.
+        """
+        user = user or self.env.user
+        today = fields.Date.context_today(self)
+        Session = self.sudo()
+        has_open = Session.search_count([
+            ('user_id',      '=', user.id),
+            ('session_date', '=', today),
+            ('state',        '=', 'open'),
+        ])
+        if has_open:
+            return Session.browse()          # still working → not done
+        return Session.search([
+            ('user_id',      '=', user.id),
+            ('session_date', '=', today),
+            ('state',        '=', 'closed'),
+            ('auto_closed',  '=', False),
+        ], limit=1)
+
+    @api.model
+    def _day_done(self, user=None):
+        """Boolean form of _ended_session_today — did the developer end their
+        own workday today (and so may not start another until tomorrow)?"""
+        return bool(self._ended_session_today(user=user))
+
+    # ------------------------------------------------------------------ #
     # Open / fetch today's session — idempotent                          #
     # ------------------------------------------------------------------ #
     @api.model
     def _get_or_open_today(self, user=None):
         """Return the currently OPEN session for (user, today), or create one.
 
-        Multiple sessions per day are now allowed (so a developer can restart
-        their workday after an accidental End Workday).  The invariant we
-        keep: at most ONE 'open' session per user per day.  Closed sessions
-        from earlier today are left intact and their time still counts in
-        the day-wide summary.
+        Multiple sessions per day are allowed (so a developer can restart their
+        workday after an *auto*-close), with ONE invariant: at most one 'open'
+        session per user per day.  BUT if the developer EXPLICITLY ended today
+        (End Workday), the day is done — return that closed session and do NOT
+        open a new one (one start + one end per day). Callers that open the
+        workday must treat a returned state=='closed' as "refuse to start".
+        Closed sessions from earlier today are left intact and their time still
+        counts in the day-wide summary.
         """
         user = user or self.env.user
         today = fields.Date.context_today(self)
@@ -259,6 +299,13 @@ class KpiWorkSession(models.Model):
         ], limit=1)
         if existing_open:
             return existing_open
+        # One start + one end per day: developer already ended today themselves →
+        # hand back the closed session instead of opening a fresh one. This is the
+        # single choke point every re-open path funnels through (ping, verify,
+        # today_summary), so the rule can't be bypassed by any one caller.
+        ended_today = self._ended_session_today(user=user)
+        if ended_today:
+            return ended_today
         # Take a row-exclusive lock to dodge double-create on parallel tab loads.
         self.env.cr.execute("LOCK TABLE kpi_work_session IN ROW EXCLUSIVE MODE")
         existing_open = self.sudo().search([
@@ -609,6 +656,15 @@ class KpiWorkSession(models.Model):
             'state':     'closed',
             'note':      (note or '').strip() or False,
         })
+        # Stop a task the developer left running when they pressed End Workday,
+        # so its timer is closed at logout instead of accruing forever. Same
+        # helper the idle/midnight auto-close use (they call it too), keeping the
+        # manual and automatic close paths consistent — without this the task
+        # stays in_progress with an open time log and its elapsed time bleeds.
+        try:
+            self._pause_running_task(reason='Workday ended')
+        except Exception as exc:
+            _logger.warning("end-workday pause failed for session %s: %s", self.id, exc)
         # Close everything still "running" (break/lunch, Meeting/Break block, idle
         # timers) and un-pair the device. Shared with the midnight auto-close so the
         # two paths can't drift — see _finalize_day_cleanup.

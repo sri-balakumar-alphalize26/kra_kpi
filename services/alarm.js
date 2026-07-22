@@ -37,12 +37,22 @@ try {
 const CHANNEL_ID = 'task-alarm';
 const VIBRATION = [300, 500, 300, 500];
 
+// The device's default ALARM ringtone. Passing 'default' as a notifee channel
+// sound gives the default NOTIFICATION sound (a short chime) — which is exactly
+// why alarms were ringing like a notification. This system URI is what
+// RingtoneManager.getDefaultUri(TYPE_ALARM) resolves to, so an alarm with no
+// custom sound chosen rings the real alarm tone instead.
+const DEFAULT_ALARM_URI = 'content://settings/system/alarm_alert';
+
 // A notifee channel's sound is IMMUTABLE once created, so each distinct chosen
 // sound needs its own channel id. Derive a short, stable key from the sound URI
 // ('default' when none is chosen) → channel id `task-alarm::<key>`.
 function soundKey(sound) {
   const uri = sound?.uri;
-  if (!uri) return 'default';
+  // 'alarmdef' (not 'default') so devices that already made the old notification-
+  // sound channel get a NEW channel carrying the alarm sound — a channel's sound
+  // is immutable once created, so the key must change to take effect.
+  if (!uri) return 'alarmdef';
   let h = 0;
   for (let i = 0; i < uri.length; i++) h = ((h << 5) - h + uri.charCodeAt(i)) | 0;
   return 'u' + (h >>> 0).toString(36);
@@ -89,7 +99,7 @@ export async function ensureAlarmPermission() {
 async function ensureAlarmChannel(sound) {
   if (!notifee) return undefined;
   const channelId = `${CHANNEL_ID}::${soundKey(sound)}`;
-  const soundVal = sound?.uri || 'default';   // content:// URI, or default alarm sound
+  const soundVal = sound?.uri || DEFAULT_ALARM_URI;   // chosen content:// URI, or the default ALARM tone
   const created = await notifee.createChannel({
     id: channelId,
     name: 'Task alarms',
@@ -115,7 +125,7 @@ export async function scheduleTaskAlarm(task, whenMs, reason = '') {
     // Read the chosen system sound HERE (not via a param) so snooze — which
     // re-schedules from only {id,name} — automatically rings the same sound.
     const sound = await getAlarmSound();
-    const soundVal = sound?.uri || 'default';
+    const soundVal = sound?.uri || DEFAULT_ALARM_URI;   // default ALARM tone, not the notification chime
     // ringMins: how long it rings before the OS auto-cancels it (0 = until Stop).
     const { ringMins } = await getAlarmSettings();
     log.info('schedule: requested', { task: task?.id, name: task?.name, whenMs, secsFromNow, sound: soundVal, soundTitle: sound?.title, ringMins });

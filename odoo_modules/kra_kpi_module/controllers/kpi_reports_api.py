@@ -2717,14 +2717,25 @@ class KpiReportsAPI(http.Controller):
             user = request.env.user
             Session = request.env['kpi.work.session'].sudo()
             today = fields.Date.context_today(request.env.user)
-            row = Session.search([
+            # Prefer the OPEN session so is_open stays correct even when a closed
+            # (e.g. auto-closed, then restarted) session from earlier today exists.
+            open_row = Session.search([
+                ('user_id', '=', user.id),
+                ('session_date', '=', today),
+                ('state', '=', 'open'),
+            ], limit=1)
+            row = open_row or Session.search([
                 ('user_id', '=', user.id),
                 ('session_date', '=', today),
             ], limit=1)
+            # day_done = developer ENDED today themselves → block restart (one
+            # start + one end per day). today_closed kept for older clients.
+            day_done = Session._day_done(user)
             return {
                 'status':       True,
-                'is_open':      bool(row and row.state == 'open'),
-                'today_closed': bool(row and row.state == 'closed'),
+                'is_open':      bool(open_row),
+                'today_closed': bool(row and row.state == 'closed' and not open_row),
+                'day_done':     day_done,
                 'session_id':   row.id if row else False,
                 'login_at':     fields.Datetime.to_string(row.login_at) if row and row.login_at else '',
             }
@@ -2743,11 +2754,22 @@ class KpiReportsAPI(http.Controller):
         try:
             user = request.env.user
             Session = request.env['kpi.work.session'].sudo()
+            # One start + one end per day: don't reopen a workday already ended
+            # today by the developer. (Auto-closed days can still restart.)
+            if Session._day_done(user):
+                return {'status': False, 'day_done': True,
+                        'message': 'Workday already ended for today'}
             existed = Session.search([
                 ('user_id', '=', user.id),
                 ('session_date', '=', fields.Date.context_today(request.env.user)),
+                ('state', '=', 'open'),
             ], limit=1)
             sess = Session._get_or_open_today(user=user)
+            if sess.state == 'closed':
+                # Defensive: the choke-point guard handed back a closed session
+                # (day done) — never report it as an opened workday.
+                return {'status': False, 'day_done': True,
+                        'message': 'Workday already ended for today'}
             return {
                 'status':     True,
                 'session_id': sess.id,

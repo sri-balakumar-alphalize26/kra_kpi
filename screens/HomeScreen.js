@@ -20,6 +20,7 @@ import ReorderableMenu from '../components/ReorderableMenu';
 import { jsonRpc } from '../api/odooApi';
 import { fetchUnreadCount } from '../services/notifications';
 import { fetchTasks, groupIntoLanes } from '../services/kpiActions';
+import { workdayButtonState } from '../utils/workdayState';
 // Clients aren't served by /kra_kpi/tasks/get (it returns nothing for them), so
 // their stats come from the same portal feed My Requests uses.
 import { getClientDashboard } from '../services/clientPortal';
@@ -297,7 +298,7 @@ function Greeting({ name }) {
   );
 }
 
-function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
+function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, onNeedPair }) {
   // Fetch the user's role so admin-only tiles can be hidden from regular users.
   // Default to admin=true optimistically until the role resolves, then correct —
   // but hold tile render until we know, to avoid a flash of admin tiles.
@@ -621,17 +622,26 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
         {/* Workday not started → say so up front, right under the name, instead of
             letting them discover it when a button is missing. Developer-only:
             admins and clients are never locked. */}
-        {workdayLocked ? (
-          <View style={s.roBar}>
-            <Ionicons name="lock-closed" size={14} color={COLORS.red} />
-            <Text style={s.roTxt}>
-              Read-only — everything except Profile.{'\n'}Start your workday to work on tasks.
-            </Text>
-            <TouchableOpacity style={s.roBtn} onPress={onNeedPair} activeOpacity={0.85}>
-              <Text style={s.roBtnTxt}>Start Workday</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
+        {workdayLocked ? (() => {
+          // Same decision as the Action Board button (utils/workdayState.js):
+          // Continue (workday still open, unpaired) / Start / ended-for-today.
+          const wd = workdayButtonState({ locked: true, workdayOpen: !!workdayOpen, dayDone: !!dayDone });
+          return (
+            <View style={s.roBar}>
+              <Ionicons name={dayDone ? 'checkmark-done' : 'lock-closed'} size={14} color={COLORS.red} />
+              <Text style={s.roTxt}>
+                {dayDone
+                  ? "Read-only — everything except Profile.\nWorkday ended for today."
+                  : 'Read-only — everything except Profile.\nStart your workday to work on tasks.'}
+              </Text>
+              {wd.disabled ? null : (
+                <TouchableOpacity style={s.roBtn} onPress={onNeedPair} activeOpacity={0.85}>
+                  <Text style={s.roBtnTxt}>{wd.label}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })() : null}
       </View>
 
       {/* Stats strip — role-aware live task-status counts. Tapping a card opens
@@ -811,7 +821,7 @@ function HomeTab({ name, onOpen, uid, workdayLocked, onNeedPair }) {
 }
 
 // PROFILE — user + Odoo connection details (like a rental-app account page) + logout.
-function ProfileTab({ user, onLogout, avatar, setAvatar }) {
+function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
   const rows = [
     { icon: 'person-outline',   label: 'Name',     value: user?.name || '—' },
     { icon: 'at-outline',       label: 'Username', value: user?.username || user?.login || '—' },
@@ -1211,7 +1221,10 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
             <Ionicons name="log-out-outline" size={34} color={COLORS.red} />
           </View>
           <Text style={s.logoutTitle}>Log out?</Text>
-          <Text style={s.logoutMsg}>You'll need to sign in again with your username and password.</Text>
+          <Text style={s.logoutMsg}>
+            You'll need to sign in again with your username and password.
+            {dayDone ? " You've ended your workday — logging out won't let you start another one today." : ''}
+          </Text>
           <View style={s.logoutBtns}>
             <TouchableOpacity style={[s.logoutBtn, s.logoutCancel]} onPress={() => setLogoutOpen(false)} activeOpacity={0.85}>
               <Text style={s.logoutCancelTxt}>Cancel</Text>
@@ -1315,7 +1328,7 @@ function ProfileTab({ user, onLogout, avatar, setAvatar }) {
   );
 }
 
-export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, onNeedPair }) {
+export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, workdayOpen, dayDone, onNeedPair }) {
   const [tab, setTab] = useState('home');
   const [logoutOpen, setLogoutOpen] = useState(false);
   const name = (user && user.name) ? user.name.split(' ')[0] : 'Sonia';
@@ -1341,10 +1354,10 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, onNe
         {tab === 'home'    && (
           <HomeTab
             name={name} onOpen={onOpen} uid={user?.uid}
-            workdayLocked={workdayLocked} onNeedPair={onNeedPair}
+            workdayLocked={workdayLocked} workdayOpen={workdayOpen} dayDone={dayDone} onNeedPair={onNeedPair}
           />
         )}
-        {tab === 'profile' && <ProfileTab user={user} onLogout={onLogout} avatar={avatar} setAvatar={setAvatar} />}
+        {tab === 'profile' && <ProfileTab user={user} onLogout={onLogout} dayDone={dayDone} avatar={avatar} setAvatar={setAvatar} />}
       </View>
       <TabBar active={tab} onChange={(t) => { log.info('tab switch', { from: tab, to: t }); setTab(t); }} onLogout={() => setLogoutOpen(true)} />
 
@@ -1356,7 +1369,10 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, onNe
               <Ionicons name="log-out-outline" size={34} color={COLORS.red} />
             </View>
             <Text style={s.logoutTitle}>Log out?</Text>
-            <Text style={s.logoutMsg}>You'll need to sign in again with your username and password.</Text>
+            <Text style={s.logoutMsg}>
+              You'll need to sign in again with your username and password.
+              {dayDone ? " You've ended your workday — logging out won't let you start another one today." : ''}
+            </Text>
             <View style={s.logoutBtns}>
               <TouchableOpacity style={[s.logoutBtn, s.logoutCancel]} onPress={() => setLogoutOpen(false)} activeOpacity={0.85}>
                 <Text style={s.logoutCancelTxt}>Cancel</Text>
