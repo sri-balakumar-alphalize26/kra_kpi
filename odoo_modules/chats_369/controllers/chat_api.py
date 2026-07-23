@@ -108,6 +108,8 @@ class Chat369API(http.Controller):
             return (msg.body or '')[:80]
         if msg.kind == 'system':
             return msg.body or ''
+        if msg.kind == 'poll':
+            return '📊 %s' % (msg.body or 'Poll')
         labels = {
             'image': 'Photo', 'video': 'Video',
             'audio': 'Voice message', 'document': 'Document',
@@ -183,6 +185,9 @@ class Chat369API(http.Controller):
         res = {'online': False, 'last_seen': False}
         if not other:
             return res
+        # No presence either way when one of you has blocked the other.
+        if other.id in me.chat_blocked_user_ids.ids or me.id in other.chat_blocked_user_ids.ids:
+            return res
         now = fields.Datetime.now()
         i_hide = (me.chat_last_seen_privacy == 'nobody')
         ls_ok = (other.chat_last_seen_privacy != 'nobody') and not i_hide
@@ -195,9 +200,24 @@ class Chat369API(http.Controller):
             res['last_seen'] = self._dt(other.chat_last_seen)
         return res
 
+    def _link_preview(self, msg):
+        """A fetched link-preview card for a text message, or False."""
+        if msg.deleted or not msg.link_done or not (msg.link_title or msg.link_image):
+            return False
+        return {
+            'url': msg.link_url or '', 'title': msg.link_title or '',
+            'desc': msg.link_desc or '', 'image': msg.link_image or '',
+        }
+
     def _serialize_message(self, msg, me_id, conv):
         media_kinds = ('image', 'video', 'audio', 'document')
         deleted = msg.deleted
+        # View once: media is served until it's been opened — never to the sender,
+        # and to a recipient only until they've viewed it a single time.
+        media_ok = bool(not deleted and msg.kind in media_kinds and msg.attachment)
+        if media_ok and msg.view_once:
+            if msg.author_id.id == me_id or me_id in msg.viewed_by_user_ids.ids:
+                media_ok = False
         reply = msg.reply_to_id
         reply_body = ''
         if reply:
@@ -217,18 +237,41 @@ class Chat369API(http.Controller):
             'mimetype': msg.mimetype or '',
             'file_size': msg.file_size or 0,
             'duration': msg.duration or 0,
-            'has_media': bool(not deleted and msg.kind in media_kinds and msg.attachment),
-            'media_url': ('/chats_369/media/%s' % msg.id) if (not deleted and msg.kind in media_kinds and msg.attachment) else False,
+            'has_media': media_ok,
+            'media_url': ('/chats_369/media/%s' % msg.id) if media_ok else False,
+            'view_once': msg.view_once,
+            'viewed': me_id in msg.viewed_by_user_ids.ids,
+            'link': self._link_preview(msg),
             'reply_to_id': reply.id if reply else False,
             'reply_to_author': reply.author_id.name if reply else '',
             'reply_to_body': reply_body,
             'edited': msg.edited,
             'forwarded': msg.forwarded,
             'is_meet': msg.is_meet,
+            'poll': self._serialize_poll(msg, me_id) if msg.kind == 'poll' else False,
             'starred': me_id in msg.starred_user_ids.ids,
             'reactions': self._reactions_of(msg, me_id),
             'created': self._dt(msg.create_date),
             'status': self._msg_status(msg, conv),
+        }
+
+    def _serialize_poll(self, msg, me_id):
+        """Live poll tally for a poll message: options with counts + my votes."""
+        poll = request.env['chat.poll'].sudo().search([('message_id', '=', msg.id)], limit=1)
+        if not poll:
+            return False
+        options = []
+        voters = set()
+        for opt in poll.option_ids:
+            uids = opt.vote_ids.mapped('user_id').ids
+            voters.update(uids)
+            options.append({
+                'id': opt.id, 'text': opt.text or '',
+                'votes': len(uids), 'mine': me_id in uids,
+            })
+        return {
+            'question': poll.question or '', 'multi': poll.multi,
+            'options': options, 'total': len(voters),
         }
 
     def _reactions_of(self, msg, me_id):
@@ -261,6 +304,7 @@ class Chat369API(http.Controller):
         member = conv._member_for(me_id)
         others = conv._other_members(me_id)
         other_mobile = ''
+        blocked_by_me = False
         presence = {'online': False, 'last_seen': False}
         if conv.is_self:
             me_user = request.env['res.users'].sudo().browse(me_id)
@@ -278,7 +322,9 @@ class Chat369API(http.Controller):
             other_user_id = other.id if other else False
             other_mobile = (other.kpi_mobile_number or '') if other else ''
             if other:
-                presence = self._presence(request.env['res.users'].sudo().browse(me_id), other)
+                me_user = request.env['res.users'].sudo().browse(me_id)
+                presence = self._presence(me_user, other)
+                blocked_by_me = other.id in me_user.chat_blocked_user_ids.ids
         last = conv.last_message_id
         return {
             'id': conv.id,
@@ -299,6 +345,7 @@ class Chat369API(http.Controller):
             'manual_unread': bool(member.manual_unread) if member else False,
             'other_user_id': other_user_id,
             'other_mobile': other_mobile,
+            'blocked_by_me': blocked_by_me,
             'member_count': len(conv.member_ids.filtered(lambda m: not m.left_at)),
         }
 
@@ -328,6 +375,8 @@ class Chat369API(http.Controller):
             if not tokens:
                 return
             preview = self._preview(msg)
+            if getattr(msg, 'is_meet', False):
+                preview = '📹 Please join the meeting'   # meet link → everyone gets a clear "join" push
             if conv.is_group:
                 title = conv.name or 'Group'
                 body = '%s: %s' % (author.name, preview)
@@ -349,6 +398,37 @@ class Chat369API(http.Controller):
             threading.Thread(target=self._push_send_async, args=(dbname, messages), daemon=True).start()
         except Exception as exc:
             _logger.warning("369chats push failed: %s", exc)
+
+    def _notify_mentions(self, conv, msg, author, body):
+        """Group @mentions → a distinct 'X mentioned you' push to those members
+        (@all = everyone). Best-effort, never raises."""
+        try:
+            if not conv.is_group or not body or '@' not in body:
+                return
+            low = body.lower()
+            others = conv._other_members(author.id).filtered(lambda m: not m.left_at)
+            if '@all' in low:
+                targets = others
+            else:
+                targets = others.filtered(
+                    lambda m: m.user_id and ('@' + (m.user_id.name or '')).lower() in low)
+            if not targets:
+                return
+            tokens = request.env['kpi.push.token'].sudo().tokens_for_users(targets.mapped('user_id').ids)
+            if not tokens:
+                return
+            gname = conv.name or 'Group'
+            messages = [{
+                'to': tok,
+                'title': '💬 %s' % gname[:110],
+                'body': '%s mentioned you' % (author.name or 'Someone')[:150],
+                'data': {'chat_id': conv.id, 'event': 'chat_mention'},
+                'sound': 'default', 'channelId': 'default',
+            } for tok in tokens]
+            dbname = request.env.cr.dbname
+            threading.Thread(target=self._push_send_async, args=(dbname, messages), daemon=True).start()
+        except Exception as exc:
+            _logger.warning("369chats mention notify failed: %s", exc)
 
     @staticmethod
     def _push_send_async(dbname, messages):
@@ -372,6 +452,66 @@ class Chat369API(http.Controller):
                         cr.commit()
             except Exception:
                 pass
+
+    @staticmethod
+    def _scrape_og(url):
+        """Fetch a URL and pull its Open Graph title/description/image. Best-effort;
+        returns {'title','desc','image'} (empty strings on any failure)."""
+        from urllib.parse import urljoin
+        out = {'title': '', 'desc': '', 'image': ''}
+        # Normalise a capitalized scheme (e.g. "Https://") so the fetch always works.
+        url = re.sub(r'^\s*(https?)://', lambda m: m.group(1).lower() + '://', url, flags=re.I)
+        try:
+            resp = requests.get(
+                url, timeout=6, allow_redirects=True, stream=True,
+                headers={'User-Agent': 'Mozilla/5.0 (369Chats link preview)'})
+            html = ''
+            if 'html' in (resp.headers.get('Content-Type') or ''):
+                raw = resp.raw.read(200000, decode_content=True) or b''
+                html = raw.decode(resp.encoding or 'utf-8', 'ignore')
+
+            def meta(prop):
+                p = re.escape(prop)
+                m = re.search(r'<meta[^>]+(?:property|name)=["\']%s["\'][^>]*content=["\']([^"\']*)["\']' % p, html, re.I)
+                if not m:
+                    m = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']%s["\']' % p, html, re.I)
+                return (m.group(1).strip() if m else '')
+
+            title = meta('og:title')
+            if not title:
+                tm = re.search(r'<title[^>]*>([^<]*)</title>', html, re.I)
+                title = tm.group(1).strip() if tm else ''
+            image = meta('og:image')
+            out['title'] = title
+            out['desc'] = meta('og:description') or meta('description')
+            out['image'] = urljoin(url, image) if image else ''
+        except Exception:
+            pass
+        return out
+
+    @classmethod
+    def _fetch_link_preview_async(cls, dbname, msg_id, url):
+        """Runs off-request: scrape the URL's card and store it on the message (the
+        client picks it up on its next poll). Best-effort."""
+        data = cls._scrape_og(url)
+        try:
+            with odoo.registry(dbname).cursor() as cr:
+                env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                msg = env['chat.message'].browse(msg_id)
+                if msg.exists():
+                    msg.write({
+                        'link_title': (data['title'] or '')[:200], 'link_desc': (data['desc'] or '')[:300],
+                        'link_image': (data['image'] or '')[:600], 'link_done': True,
+                    })
+                    cr.commit()
+        except Exception as exc:
+            _logger.warning("369chats link preview failed: %s", exc)
+
+    def _is_blocked(self, me, other):
+        """True if either side has blocked the other (1:1 messaging is refused)."""
+        if not other:
+            return False
+        return other.id in me.chat_blocked_user_ids.ids or me.id in other.chat_blocked_user_ids.ids
 
     # ================================================================== #
     # Avatars — served as cacheable images (no base64 in JSON payloads)   #
@@ -425,7 +565,22 @@ class Chat369API(http.Controller):
     def chat_conversations(self, **params):
         me = request.env.user
         me._chat_touch_presence()                 # polling this keeps my presence fresh
-        flt = params.get('filter') or 'all'      # all|unread|favourites|groups|archived|<list_id>
+        flt = params.get('filter') or 'all'      # all|unread|favourites|groups|archived|admin_all|<list_id>
+        # Admin oversight: monitor EVERY conversation in the system (read-only). Admins only.
+        if flt == 'admin_all':
+            if self._chat_role(me) != 'admin':
+                return {'status': True, 'conversations': [], 'unread_total': 0}
+            rows = []
+            for c in request.env['chat.conversation'].sudo().search(
+                    [('active', '=', True), ('is_self', '=', False)], order='last_message_at desc'):
+                if not (c.is_group or c.last_message_id):
+                    continue
+                r = self._serialize_conversation(c, me.id)
+                r['oversight'] = True                 # read-only monitor row (admin is not a member)
+                if c.is_group:
+                    r['title'] = c.name or 'Group'
+                rows.append(r)
+            return {'status': True, 'conversations': rows, 'unread_total': 0}
         members = request.env['chat.member'].sudo().search([
             ('user_id', '=', me.id),
             ('left_at', '=', False),
@@ -658,12 +813,22 @@ class Chat369API(http.Controller):
         me = request.env.user
         conv, member = self._member_conv(params.get('conversation_id'))
         if not conv:
-            return {'status': False, 'message': 'Not a member of this chat.'}
+            # Admin oversight: read-only monitoring of ANY conversation (admins only).
+            if self._chat_role(me) == 'admin':
+                conv = request.env['chat.conversation'].sudo().browse(int(params.get('conversation_id') or 0))
+                if not conv.exists():
+                    return {'status': False, 'message': 'Chat not found.'}
+                member = request.env['chat.member'].sudo().browse()   # empty → monitor, sees full history
+            else:
+                return {'status': False, 'message': 'Not a member of this chat.'}
         Message = request.env['chat.message'].sudo()
-        # Exclude messages this user "deleted for me".
-        domain = [('conversation_id', '=', conv.id), ('hidden_for_user_ids', 'not in', [me.id])]
+        # Exclude messages this user "deleted for me" + any disappearing message
+        # whose timer has already passed (belt-and-braces with the purge cron).
+        now = fields.Datetime.now()
+        domain = [('conversation_id', '=', conv.id), ('hidden_for_user_ids', 'not in', [me.id]),
+                  '|', ('expire_at', '=', False), ('expire_at', '>', now)]
         # "Send message history" off -> members only see messages from when they joined.
-        if conv.is_group and not conv.perm_send_history and member.joined_at:
+        if conv.is_group and not conv.perm_send_history and member and member.joined_at:
             domain.append(('create_date', '>=', member.joined_at))
         after_id = int(params.get('after_id') or 0)
         before_id = int(params.get('before_id') or 0)
@@ -679,7 +844,7 @@ class Chat369API(http.Controller):
         # Bump the caller's delivered cursor to the newest message they've now fetched
         # (stamps delivered_at + tells authors, over the bus, that it was delivered).
         me._chat_touch_presence()
-        if msgs:
+        if msgs and member:
             deliv = member._advance_cursors(delivered_id=msgs[-1].id)
             if deliv.get('delivered_up_to_message_id'):
                 self._bus_conv(conv, 'delivered',
@@ -699,6 +864,13 @@ class Chat369API(http.Controller):
             return {'status': False, 'message': 'Not a member of this chat.'}
         if conv.is_group and not member.is_admin and not conv.perm_send:
             return {'status': False, 'message': 'Only admins can send messages in this group.'}
+        if not conv.is_group and not conv.is_self:
+            other = conv._other_members(me.id)[:1].user_id
+            if self._is_blocked(me, other):
+                blocked_me = other and me.id in other.chat_blocked_user_ids.ids
+                return {'status': False, 'message':
+                        "You can't message this contact." if blocked_me
+                        else 'Unblock this contact to send a message.'}
         body = (params.get('body') or '').strip()
         if not body:
             return {'status': False, 'message': 'Empty message.'}
@@ -716,7 +888,14 @@ class Chat369API(http.Controller):
         msg = request.env['chat.message'].sudo().create(vals)
         # The author has, by definition, read + received their own message.
         member._advance_cursors(read_id=msg.id, delivered_id=msg.id)
+        # Link preview: fetch the first URL's Open Graph card off-request.
+        urls = _URL_RE.findall(body)
+        if urls:
+            msg.sudo().write({'link_url': urls[0]})
+            threading.Thread(target=self._fetch_link_preview_async,
+                             args=(request.env.cr.dbname, msg.id, urls[0]), daemon=True).start()
         self._push_chat(conv, msg, me)
+        self._notify_mentions(conv, msg, me, body)   # @mentions → 'X mentioned you' ping
         self._bus_message(conv, msg, 'message', exclude_uid=me.id)
         return {'status': True, 'message': self._serialize_message(msg, me.id, conv)}
 
@@ -732,6 +911,13 @@ class Chat369API(http.Controller):
             return {'status': False, 'message': 'Not a member of this chat.'}
         if conv.is_group and not member.is_admin and not conv.perm_send:
             return {'status': False, 'message': 'Only admins can send messages in this group.'}
+        if not conv.is_group and not conv.is_self:
+            other = conv._other_members(me.id)[:1].user_id
+            if self._is_blocked(me, other):
+                blocked_me = other and me.id in other.chat_blocked_user_ids.ids
+                return {'status': False, 'message':
+                        "You can't message this contact." if blocked_me
+                        else 'Unblock this contact to send a message.'}
         kind = params.get('kind') or 'document'
         if kind not in ('image', 'video', 'audio', 'document'):
             kind = 'document'
@@ -751,6 +937,8 @@ class Chat369API(http.Controller):
             'attachment': file_b64, 'file_name': (params.get('file_name') or '')[:200],
             'mimetype': (params.get('mimetype') or '')[:100], 'file_size': size,
             'duration': int(params.get('duration') or 0),
+            # View once (photos/videos only): opened a single time, then gone.
+            'view_once': bool(params.get('view_once')) and kind in ('image', 'video'),
         }
         rid = int(params.get('reply_to_id') or 0)
         if rid:
@@ -770,6 +958,9 @@ class Chat369API(http.Controller):
         if not msg.exists() or not msg.attachment or msg.deleted:
             return request.not_found()
         if me.id not in msg.conversation_id.member_ids.mapped('user_id').ids:
+            return request.not_found()
+        # View once: never serve to the sender, or to a recipient who already opened it.
+        if msg.view_once and (msg.author_id.id == me.id or me.id in msg.viewed_by_user_ids.ids):
             return request.not_found()
         data = base64.b64decode(msg.attachment)
         headers = [('Content-Type', msg.mimetype or 'application/octet-stream'),
@@ -1154,7 +1345,309 @@ class Chat369API(http.Controller):
         member._advance_cursors(read_id=msg.id, delivered_id=msg.id)
         self._push_chat(conv, msg, me)
         self._bus_message(conv, msg, 'message', exclude_uid=me.id)
+        # In a group, follow the link with an "@all Please join the meeting" line so
+        # the mention system pings everyone (@all) with a clear join prompt.
+        if conv.is_group:
+            join = request.env['chat.message'].sudo().create({
+                'conversation_id': conv.id, 'author_id': me.id, 'kind': 'text',
+                'body': '@all Please join the meeting'})
+            member._advance_cursors(read_id=join.id, delivered_id=join.id)
+            self._notify_mentions(conv, join, me, join.body)
+            self._bus_message(conv, join, 'message', exclude_uid=me.id)
         return {'status': True, 'message': self._serialize_message(msg, me.id, conv)}
+
+    # ================================================================== #
+    # Disappearing messages                                               #
+    # ================================================================== #
+    _DISAPPEAR_LABELS = {0: 'off', 86400: '24 hours', 604800: '7 days', 7776000: '90 days'}
+
+    @http.route('/chat/set_disappear', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_set_disappear(self, **params):
+        """Turn disappearing messages on/off for a chat. In a group only admins may
+        change it; 1:1 either person can. Posts a system line so everyone sees it."""
+        me = request.env.user
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv:
+            return {'status': False, 'message': 'Not a member of this chat.'}
+        if conv.is_group and not member.is_admin:
+            return {'status': False, 'message': 'Only admins can change disappearing messages.'}
+        secs = int(params.get('seconds') or 0)
+        if secs not in self._DISAPPEAR_LABELS:
+            secs = 0
+        conv.sudo().write({'disappear_seconds': secs})
+        label = self._DISAPPEAR_LABELS[secs]
+        if secs:
+            text = '%s turned on disappearing messages · %s' % (me.name, label)
+        else:
+            text = '%s turned off disappearing messages' % me.name
+        sysmsg = self._system_message(conv, me, text)
+        self._bus_message(conv, sysmsg, 'message', exclude_uid=me.id)
+        return {'status': True, 'disappear_seconds': secs}
+
+    # ================================================================== #
+    # Polls                                                               #
+    # ================================================================== #
+    @http.route('/chat/poll/create', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_poll_create(self, **params):
+        me = request.env.user
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv:
+            return {'status': False, 'message': 'Not a member of this chat.'}
+        if conv.is_group and not member.is_admin and not conv.perm_send:
+            return {'status': False, 'message': 'Only admins can send messages in this group.'}
+        question = (params.get('question') or '').strip()
+        options = [(o or '').strip() for o in (params.get('options') or []) if (o or '').strip()]
+        if not question or len(options) < 2:
+            return {'status': False, 'message': 'Add a question and at least 2 options.'}
+        options = options[:12]
+        msg = request.env['chat.message'].sudo().create({
+            'conversation_id': conv.id, 'author_id': me.id, 'kind': 'poll', 'body': question})
+        request.env['chat.poll'].sudo().create({
+            'message_id': msg.id, 'question': question, 'multi': bool(params.get('multi')),
+            'option_ids': [(0, 0, {'text': t, 'sequence': i * 10}) for i, t in enumerate(options)],
+        })
+        member._advance_cursors(read_id=msg.id, delivered_id=msg.id)
+        self._push_chat(conv, msg, me)
+        self._bus_message(conv, msg, 'message', exclude_uid=me.id)
+        return {'status': True, 'message': self._serialize_message(msg, me.id, conv)}
+
+    @http.route('/chat/poll/vote', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_poll_vote(self, **params):
+        me = request.env.user
+        option = request.env['chat.poll.option'].sudo().browse(int(params.get('option_id') or 0))
+        if not option.exists():
+            return {'status': False, 'message': 'Poll option not found.'}
+        poll = option.poll_id
+        msg = poll.message_id
+        conv, member = self._member_conv(msg.conversation_id.id)
+        if not conv:
+            return {'status': False, 'message': 'Not a member of this chat.'}
+        Vote = request.env['chat.poll.vote'].sudo()
+        mine = Vote.search([('option_id', '=', option.id), ('user_id', '=', me.id)], limit=1)
+        if mine:
+            mine.unlink()   # tap again to remove the vote
+        else:
+            if not poll.multi:
+                Vote.search([('poll_id', '=', poll.id), ('user_id', '=', me.id)]).unlink()
+            Vote.create({'option_id': option.id, 'user_id': me.id})
+        self._bus_message(conv, msg, 'update', exclude_uid=me.id)
+        return {'status': True, 'message': self._serialize_message(msg, me.id, conv)}
+
+    # ================================================================== #
+    # View once · Block contacts                                          #
+    # ================================================================== #
+    @http.route('/chat/view_once_seen', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_view_once_seen(self, **params):
+        """Mark a view-once message as opened by me — after this its media is gone."""
+        me = request.env.user
+        msg, conv, member = self._member_msg(params.get('message_id'))
+        if not msg:
+            return {'status': False, 'message': 'Not found.'}
+        if msg.view_once and msg.author_id.id != me.id and me.id not in msg.viewed_by_user_ids.ids:
+            msg.sudo().write({'viewed_by_user_ids': [(4, me.id)]})
+            self._bus_message(conv, msg, 'update', exclude_uid=me.id)
+        return {'status': True, 'message': self._serialize_message(msg, me.id, conv)}
+
+    @http.route('/chat/block', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_block(self, **params):
+        """Block / unblock a contact. Blocked = neither side can message the other."""
+        me = request.env.user
+        other = request.env['res.users'].sudo().browse(int(params.get('user_id') or 0))
+        if not other.exists() or other.id == me.id:
+            return {'status': False, 'message': 'User not found.'}
+        blocked = bool(params.get('blocked'))
+        op = (4, other.id) if blocked else (3, other.id)
+        me.sudo().write({'chat_blocked_user_ids': [op]})
+        return {'status': True, 'blocked': blocked}
+
+    @http.route('/chat/link_preview', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_link_preview(self, **params):
+        """Compose-time preview: scrape a URL's card so the client can show it above
+        the composer before sending (WhatsApp-style)."""
+        url = (params.get('url') or '').strip()
+        if not url.lower().startswith(('http://', 'https://')):
+            return {'status': False}
+        data = self._scrape_og(url)
+        if not (data['title'] or data['image']):
+            return {'status': False}
+        return {'status': True, 'url': url, 'title': data['title'],
+                'desc': data['desc'], 'image': data['image']}
+
+    # ================================================================== #
+    # Calls — in-app WebRTC (1:1), signaling relayed over the bus         #
+    # ================================================================== #
+    def _bus_to_user(self, user, event, payload):
+        data = dict(payload or {}); data['event'] = event
+        request.env['bus.bus'].sudo()._sendone(self._user_channel(user), 'chat369.event', data)
+
+    def _call_other(self, conv, me):
+        others = conv._other_members(me.id).filtered(lambda m: not m.left_at)
+        return others[:1].user_id if others else False
+
+    def _ice_servers(self):
+        P = request.env['ir.config_parameter'].sudo()
+        servers = [{'urls': P.get_param('chats_369.stun_url') or 'stun:stun.l.google.com:19302'}]
+        turn = P.get_param('chats_369.turn_url')
+        if turn:
+            servers.append({'urls': turn, 'username': P.get_param('chats_369.turn_user') or '',
+                            'credential': P.get_param('chats_369.turn_cred') or ''})
+        return servers
+
+    def _push_call(self, other, me, video):
+        try:
+            tokens = request.env['kpi.push.token'].sudo().tokens_for_users([other.id])
+            if not tokens:
+                return
+            messages = [{'to': t, 'title': me.name, 'body': '📞 Incoming %s call' % ('video' if video else 'voice'),
+                         'data': {'event': 'chat_call'}, 'sound': 'default', 'channelId': 'default'} for t in tokens]
+            threading.Thread(target=self._push_send_async, args=(request.env.cr.dbname, messages), daemon=True).start()
+        except Exception:
+            pass
+
+    @http.route('/chat/call/ice', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_call_ice(self, **params):
+        return {'status': True, 'ice': self._ice_servers()}
+
+    @http.route('/chat/call/start', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_call_start(self, **params):
+        me = request.env.user
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv or conv.is_group or conv.is_self:
+            return {'status': False, 'message': 'Calls are 1:1 only for now.'}
+        other = self._call_other(conv, me)
+        if not other:
+            return {'status': False, 'message': 'No one to call.'}
+        if self._is_blocked(me, other):
+            return {'status': False, 'message': "You can't call this contact."}
+        call_id = uuid.uuid4().hex
+        video = bool(params.get('video'))
+        self._bus_to_user(other, 'call_ring', {
+            'call_id': call_id, 'conversation_id': conv.id, 'video': video,
+            'from_id': me.id, 'name': me.name, 'avatar': self._avatar_url(me)})
+        self._push_call(other, me, video)
+        return {'status': True, 'call_id': call_id, 'ice': self._ice_servers()}
+
+    @http.route('/chat/call/accept', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_call_accept(self, **params):
+        me = request.env.user
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv:
+            return {'status': False}
+        other = self._call_other(conv, me)
+        if other:
+            self._bus_to_user(other, 'call_accept', {'call_id': params.get('call_id'), 'conversation_id': conv.id, 'from_id': me.id})
+        return {'status': True}
+
+    @http.route('/chat/call/reject', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_call_reject(self, **params):
+        me = request.env.user
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv:
+            return {'status': False}
+        other = self._call_other(conv, me)
+        if other:
+            self._bus_to_user(other, 'call_reject', {'call_id': params.get('call_id'), 'conversation_id': conv.id})
+        return {'status': True}
+
+    @http.route('/chat/call/signal', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_call_signal(self, **params):
+        me = request.env.user
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv:
+            return {'status': False}
+        other = self._call_other(conv, me)
+        if other:
+            self._bus_to_user(other, 'call_signal', {
+                'call_id': params.get('call_id'), 'conversation_id': conv.id,
+                'kind': params.get('kind'), 'data': params.get('data'), 'from_id': me.id})
+        return {'status': True}
+
+    @http.route('/chat/call/end', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_call_end(self, **params):
+        me = request.env.user
+        conv, member = self._member_conv(params.get('conversation_id'))
+        if not conv:
+            return {'status': False}
+        other = self._call_other(conv, me)
+        if other:
+            self._bus_to_user(other, 'call_end', {'call_id': params.get('call_id'), 'conversation_id': conv.id})
+        # Only the caller logs a history line + call record (avoids duplicates).
+        if params.get('log'):
+            missed = bool(params.get('missed'))
+            dur = int(params.get('duration') or 0)
+            text = '📞 Missed call' if missed else '📞 Call · %d:%02d' % divmod(dur, 60)
+            sysmsg = self._system_message(conv, me, text)
+            self._bus_message(conv, sysmsg, 'message', exclude_uid=me.id)
+            request.env['chat.call'].sudo().create({
+                'conversation_id': conv.id, 'caller_id': me.id, 'callee_id': other.id if other else False,
+                'video': bool(params.get('video')), 'status': 'missed' if missed else 'answered', 'duration': dur,
+            })
+        return {'status': True}
+
+    @http.route('/chat/calls', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_calls(self, **params):
+        """WhatsApp-style Calls tab data: recent history + favourite contacts + upcoming."""
+        me = request.env.user
+        recent = []
+        for c in request.env['chat.call'].sudo().search(
+                ['|', ('caller_id', '=', me.id), ('callee_id', '=', me.id)], limit=80):
+            outgoing = c.caller_id.id == me.id
+            other = c.callee_id if outgoing else c.caller_id
+            recent.append({
+                'id': c.id, 'conversation_id': c.conversation_id.id if c.conversation_id else False,
+                'user_id': other.id if other else False,
+                'name': other.name if other else 'Unknown', 'avatar': self._avatar_url(other) if other else False,
+                'outgoing': outgoing, 'video': c.video, 'missed': c.status == 'missed',
+                'duration': c.duration, 'created': self._dt(c.started_at),
+            })
+        favorites = []
+        for m in request.env['chat.member'].sudo().search([('user_id', '=', me.id), ('favourite', '=', True)]):
+            conv = m.conversation_id
+            if not conv or conv.is_group or conv.is_self:
+                continue
+            other = conv._other_members(me.id)[:1].user_id
+            if other:
+                favorites.append({'conversation_id': conv.id, 'user_id': other.id,
+                                  'name': other.name, 'avatar': self._avatar_url(other)})
+        now = fields.Datetime.now()
+        upcoming = []
+        for s in request.env['chat.call.schedule'].sudo().search(
+                ['&', ('scheduled_at', '>=', now - timedelta(hours=1)),
+                 '|', ('organizer_id', '=', me.id), ('invitee_ids', 'in', [me.id])]):
+            upcoming.append({
+                'id': s.id, 'title': s.title, 'when': self._dt(s.scheduled_at), 'video': s.video,
+                'mine': s.organizer_id.id == me.id, 'organizer': s.organizer_id.name,
+                'conversation_id': s.conversation_id.id if s.conversation_id else False,
+            })
+        return {'status': True, 'recent': recent, 'favorites': favorites, 'upcoming': upcoming}
+
+    @http.route('/chat/call/schedule', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_call_schedule(self, **params):
+        me = request.env.user
+        title = (params.get('title') or '').strip()
+        when = params.get('when') or ''
+        if not title or not when:
+            return {'status': False, 'message': 'Add a title and a time.'}
+        vals = {'title': title[:120], 'scheduled_at': when.replace('T', ' ').replace('Z', '')[:19],
+                'organizer_id': me.id, 'video': bool(params.get('video'))}
+        conv_id = int(params.get('conversation_id') or 0)
+        if conv_id:
+            conv, member = self._member_conv(conv_id)
+            if conv:
+                vals['conversation_id'] = conv.id
+                ids = conv._other_members(me.id).mapped('user_id').ids
+                if ids:
+                    vals['invitee_ids'] = [(6, 0, ids)]
+        sched = request.env['chat.call.schedule'].sudo().create(vals)
+        return {'status': True, 'id': sched.id}
+
+    @http.route('/chat/call/schedule/cancel', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_call_schedule_cancel(self, **params):
+        me = request.env.user
+        s = request.env['chat.call.schedule'].sudo().browse(int(params.get('id') or 0))
+        if s.exists() and s.organizer_id.id == me.id:
+            s.unlink()
+        return {'status': True}
 
     # ================================================================== #
     # Pin chat · Pin message · Delete message · Pinned list               #
@@ -1488,6 +1981,7 @@ class Chat369API(http.Controller):
             'conversation_id': conv.id, 'is_group': conv.is_group, 'is_self': conv.is_self,
             'title': self._conv_title(conv, me.id),
             'favourite': bool(member.favourite), 'muted': bool(member.muted),
+            'disappear_seconds': conv.disappear_seconds or 0,
             'media': {
                 'photos': Msg.search_count(base + [('kind', '=', 'image')]),
                 'videos': Msg.search_count(base + [('kind', '=', 'video')]),
@@ -1514,6 +2008,7 @@ class Chat369API(http.Controller):
                 'role': (self._chat_role(other) if other else ''),
                 'nickname': (self._nick_for(me.id, other.id) if other else ''),
                 'avatar_url': (self._avatar_url(other) if other else False),
+                'blocked_by_me': bool(other and other.id in me.chat_blocked_user_ids.ids),
             })
         return {'status': True, 'info': info}
 

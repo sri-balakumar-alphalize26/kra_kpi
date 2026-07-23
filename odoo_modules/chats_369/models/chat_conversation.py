@@ -38,6 +38,9 @@ class ChatConversation(models.Model):
     admin_approve = fields.Boolean(string='Admins Approve New Members', default=False)
     invite_token = fields.Char(string='Invite Token', index=True, copy=False)   # employee-only join link
 
+    # Disappearing messages: 0 = off, else seconds after which new messages self-delete.
+    disappear_seconds = fields.Integer(string='Disappearing Timer (s)', default=0)
+
     member_ids = fields.One2many('chat.member', 'conversation_id', string='Members')
     message_ids = fields.One2many('chat.message', 'conversation_id', string='Messages')
 

@@ -7,6 +7,8 @@ On create the parent conversation's last_message pointer + timestamp are bumped
 so the Chats dashboard can sort/preview cheaply.
 """
 
+from datetime import timedelta
+
 from odoo import api, fields, models
 
 
@@ -29,6 +31,7 @@ class ChatMessage(models.Model):
         ('video', 'Video'),
         ('audio', 'Audio'),
         ('document', 'Document'),
+        ('poll', 'Poll'),
         ('system', 'System'),
     ], string='Kind', default='text', required=True)
 
@@ -48,6 +51,22 @@ class ChatMessage(models.Model):
     edited = fields.Boolean(string='Edited', default=False)
     forwarded = fields.Boolean(string='Forwarded', default=False)   # shows a "Forwarded" tag
     is_meet = fields.Boolean(string='Google Meet Link', default=False)   # renders as a Join-meeting card
+    # Disappearing messages: when set, the message is auto-deleted by a cron once
+    # this moment passes (stamped on create from the conversation's timer).
+    expire_at = fields.Datetime(string='Disappears At', index=True)
+
+    # Link preview (fetched off-request from the first URL in a text message).
+    link_url = fields.Char(string='Link URL')
+    link_title = fields.Char(string='Link Title')
+    link_desc = fields.Char(string='Link Description')
+    link_image = fields.Char(string='Link Image URL')
+    link_done = fields.Boolean(string='Link Fetched', default=False)
+
+    # View once: media that can be opened a single time, then is gone.
+    view_once = fields.Boolean(string='View Once', default=False)
+    viewed_by_user_ids = fields.Many2many(
+        'res.users', 'chat_message_viewed_user_rel', 'message_id', 'user_id',
+        string='Viewed By')
     # "Delete for me": the message is hidden from these users' view only.
     hidden_for_user_ids = fields.Many2many(
         'res.users', 'chat_message_hidden_user_rel', 'message_id', 'user_id',
@@ -73,8 +92,20 @@ class ChatMessage(models.Model):
                 'last_message_id': msg.id,
                 'last_message_at': msg.create_date or fields.Datetime.now(),
             })
+            # Disappearing messages: stamp an expiry on new real messages when the
+            # chat has a timer set (system lines never disappear).
+            if not msg.expire_at and msg.kind != 'system' and conv.disappear_seconds:
+                msg.expire_at = fields.Datetime.now() + timedelta(seconds=conv.disappear_seconds)
             # A new message re-surfaces the chat for anyone who hid/archived it.
             resurf = conv.member_ids.filtered(lambda m: (m.hidden or m.archived) and not m.left_at)
             if resurf:
                 resurf.write({'hidden': False, 'archived': False})
         return msgs
+
+    @api.model
+    def _gc_expired(self):
+        """Cron: delete messages whose disappearing timer has passed."""
+        now = fields.Datetime.now()
+        expired = self.sudo().search([('expire_at', '!=', False), ('expire_at', '<', now)])
+        if expired:
+            expired.unlink()

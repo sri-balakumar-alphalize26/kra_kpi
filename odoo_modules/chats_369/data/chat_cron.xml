@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Disappearing messages: delete messages whose timer has passed. -->
+    <record id="cron_chat_disappearing_gc" model="ir.cron">
+        <field name="name">369Chats: delete expired messages</field>
+        <field name="model_id" ref="model_chat_message"/>
+        <field name="state">code</field>
+        <field name="code">model._gc_expired()</field>
+        <field name="interval_number">15</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+
+    <!-- Trim old call logs (keep 60 days). -->
+    <record id="cron_chat_call_gc" model="ir.cron">
+        <field name="name">369Chats: trim old call logs</field>
+        <field name="model_id" ref="model_chat_call"/>
+        <field name="state">code</field>
+        <field name="code">model._gc_calls()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="True"/>
+    </record>
+
+    <!-- Drop past scheduled calls (a day after their time). -->
+    <record id="cron_chat_call_sched_gc" model="ir.cron">
+        <field name="name">369Chats: clear past scheduled calls</field>
+        <field name="model_id" ref="model_chat_call_schedule"/>
+        <field name="state">code</field>
+        <field name="code">model._gc_schedules()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

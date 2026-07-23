@@ -24,6 +24,10 @@ class ResUsers(models.Model):
     chat_notif_groups = fields.Boolean(string='Notify Group Messages', default=True)
     chat_notif_sound = fields.Boolean(string='Notification Sound', default=True)
     chat_notif_preview = fields.Boolean(string='Notification Preview', default=True)
+    # People I have blocked (they can't message me and I can't message them).
+    chat_blocked_user_ids = fields.Many2many(
+        'res.users', 'chat_block_rel', 'blocker_id', 'blocked_id',
+        string='369Chats Blocked Users')
 
     def _chat_touch_presence(self):
         """Mark the caller active right now (cheap; called from poll/heartbeat)."""

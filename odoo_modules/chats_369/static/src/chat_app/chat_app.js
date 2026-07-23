@@ -14,12 +14,13 @@ import { useService } from "@web/core/utils/hooks";
 export class Chat369App extends Component {
 
     static template = xml/* xml */`
-        <div class="o369">
+        <div class="o369" t-att-class="'o369-theme-' + state.theme">
             <!-- ================= LEFT NAV RAIL ================= -->
             <div class="o369-rail">
-                <button class="o369-railbtn" t-att-class="{ 'o369-railon': state.pane === 'chats' }" t-on-click="() => this.switchPane('chats')" title="Chats"><i class="fa fa-comments"/></button>
+                <button class="o369-railbtn" t-att-class="{ 'o369-railon': state.pane === 'chats' }" t-on-click="() => this.switchPane('chats')" title="Chats"><i class="fa fa-comments"/><span class="o369-railbadge" t-if="totalUnread() > 0" t-esc="totalUnread() > 99 ? '99+' : totalUnread()"/></button>
                 <div class="o369-railgap"/>
                 <div class="o369-raildiv"/>
+                <button class="o369-railbtn" t-att-class="{ 'o369-railon': state.pane === 'calls' }" t-on-click="() => this.switchPane('calls')" title="Calls"><i class="fa fa-phone"/></button>
                 <button class="o369-railbtn" t-att-class="{ 'o369-railon': state.pane === 'media' }" t-on-click="() => this.switchPane('media')" title="Media"><i class="fa fa-picture-o"/></button>
                 <button class="o369-railav" t-att-class="{ 'o369-railon': state.pane === 'profile' }" t-on-click="() => this.switchPane('profile')" title="Profile">
                     <img t-if="state.me and state.me.avatar_url" t-att-src="state.me.avatar_url"/>
@@ -47,17 +48,30 @@ export class Chat369App extends Component {
                     <div class="o369-search">
                         <i class="fa fa-search"/>
                         <input type="text" placeholder="Search chats" t-model="state.search"/>
+                        <button class="o369-searchx" t-if="state.search" t-on-click="() => (state.search = '')" title="Clear"><i class="fa fa-times"/></button>
                     </div>
                     <div class="o369-chips">
                         <button class="o369-chip" t-att-class="{ 'o369-chip-on': state.filter === 'all' }" t-on-click="() => this.setFilter('all')">All</button>
                         <button class="o369-chip" t-att-class="{ 'o369-chip-on': state.filter === 'unread' }" t-on-click="() => this.setFilter('unread')">Unread</button>
                         <button class="o369-chip" t-att-class="{ 'o369-chip-on': state.filter === 'favourites' }" t-on-click="() => this.setFilter('favourites')">Favourites</button>
                         <button class="o369-chip" t-att-class="{ 'o369-chip-on': state.filter === 'groups' }" t-on-click="() => this.setFilter('groups')">Groups</button>
-                        <t t-foreach="state.lists" t-as="l" t-key="l.id">
-                            <button class="o369-chip" t-att-class="{ 'o369-chip-on': state.filter === l.id }" t-on-click="() => this.setFilter(l.id)"><t t-esc="l.emoji"/> <t t-esc="l.name"/></button>
-                        </t>
-                        <button class="o369-chip" t-att-class="{ 'o369-chip-on': state.filter === 'archived' }" t-on-click="() => this.setFilter('archived')">Archived</button>
-                        <button class="o369-chip o369-chipadd" t-on-click="openNewList" title="New list"><i class="fa fa-plus"/></button>
+                        <div class="o369-chipmore-wrap">
+                            <button class="o369-chip o369-chipmore" t-att-class="{ 'o369-chip-on': !['all','unread','favourites','groups'].includes(state.filter) }" t-on-click.stop="() => (state.chipMenuOpen = !state.chipMenuOpen)" title="More lists"><i class="fa fa-angle-down"/></button>
+                            <div class="o369-chipmenu" t-if="state.chipMenuOpen">
+                                <t t-foreach="state.lists" t-as="l" t-key="l.id">
+                                    <button class="o369-chipmenu-item" t-att-class="{ 'o369-chipmenu-on': state.filter === l.id }" t-on-click.stop="() => { this.setFilter(l.id); state.chipMenuOpen = false; }"><span><t t-esc="l.emoji"/> <t t-esc="l.name"/></span></button>
+                                </t>
+                                <button class="o369-chipmenu-item" t-att-class="{ 'o369-chipmenu-on': state.filter === 'archived' }" t-on-click.stop="() => { this.setFilter('archived'); state.chipMenuOpen = false; }"><span><i class="fa fa-archive"/> Archived</span></button>
+                                <button class="o369-chipmenu-item o369-chipmenu-admin" t-if="state.gmeet.is_admin" t-att-class="{ 'o369-chipmenu-on': state.filter === 'admin_all' }" t-on-click.stop="() => { this.setFilter('admin_all'); state.chipMenuOpen = false; }"><span><i class="fa fa-eye"/> All chats (monitor)</span></button>
+                                <div class="o369-chipmenu-sep"/>
+                                <button class="o369-chipmenu-item o369-chipmenu-add" t-on-click.stop="() => { this.openNewList(); state.chipMenuOpen = false; }"><span><i class="fa fa-plus"/> New list</span></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="o369-notifbanner" t-if="notifsBlocked()">
+                        <i class="fa fa-bell-slash-o o369-nb-ico"/>
+                        <span class="o369-nb-txt">Notifications are off. <button class="o369-nb-on" t-on-click="enableNotifsFromBanner">Turn on</button></span>
+                        <button class="o369-nb-x" t-on-click="() => (state.notifBannerHidden = true)" title="Dismiss"><i class="fa fa-times"/></button>
                     </div>
                     <div class="o369-list">
                         <t t-foreach="filteredConversations()" t-as="c" t-key="c.id">
@@ -65,6 +79,7 @@ export class Chat369App extends Component {
                                 <div class="o369-avatar">
                                     <img t-if="c.avatar_url" t-att-src="c.avatar_url"/>
                                     <span t-else="" t-esc="initials(c.title)"/>
+                                    <span class="o369-onlinedot" t-if="c.online and !c.is_group" title="Online"/>
                                 </div>
                                 <div class="o369-rowmain">
                                     <div class="o369-rowtop">
@@ -75,7 +90,8 @@ export class Chat369App extends Component {
                                         </span>
                                     </div>
                                     <div class="o369-rowbot">
-                                        <span class="o369-prev" t-esc="c.last_preview"/>
+                                        <span class="o369-prev" t-if="draftFor(c.id)"><span class="o369-draft">Draft:</span> <t t-esc="draftFor(c.id)"/></span>
+                                        <span class="o369-prev" t-else="" t-esc="c.last_preview"/>
                                         <span class="o369-rowicons">
                                             <i t-if="c.favourite" class="fa fa-heart o369-favicon"/>
                                             <i t-if="c.pinned" class="fa fa-thumb-tack o369-pinicon"/>
@@ -166,6 +182,8 @@ export class Chat369App extends Component {
                             <div class="o369-rsub" t-esc="currentSub()"/>
                         </div>
                         <span class="o369-rheadspace"/>
+                        <button class="o369-hbtn" t-if="canCall()" t-on-click.stop="() => this.startCall(false)" title="Voice call"><i class="fa fa-phone"/></button>
+                        <button class="o369-hbtn" t-if="canCall()" t-on-click.stop="() => this.startCall(true)" title="Video call"><i class="fa fa-video-camera"/></button>
                         <button class="o369-hbtn" t-on-click.stop="toggleSearch" title="Search"><i class="fa fa-search"/></button>
                         <span class="o369-hmenuwrap">
                             <button class="o369-hbtn" t-on-click.stop="toggleConvMenu" title="Menu"><i class="fa fa-ellipsis-v"/></button>
@@ -247,8 +265,27 @@ export class Chat369App extends Component {
                                         <span class="o369-deleted"><i class="fa fa-ban me-1"/>This message was deleted</span>
                                     </t>
                                     <t t-else="">
-                                        <img t-if="m.kind === 'image' and m.media_url" class="o369-msgimg" t-att-src="m.media_url" t-on-click.stop="() => this.openMsgViewer(m)"/>
-                                        <video t-if="m.kind === 'video' and m.media_url" class="o369-msgvid" controls="controls" t-att-src="m.media_url"/>
+                                        <div t-if="m._uploading" class="o369-uploading">
+                                            <img t-if="m._preview" class="o369-msgimg o369-upimg" t-att-src="m._preview"/>
+                                            <div t-else="" class="o369-upvid"><i class="fa fa-film"/></div>
+                                            <div class="o369-upoverlay">
+                                                <div class="o369-upring" t-attf-style="background: conic-gradient(#fff {{m._progress}}%, rgba(255,255,255,.35) 0);"><span class="o369-uppct"><t t-esc="m._progress"/>%</span></div>
+                                                <div class="o369-upmb"><t t-esc="m._upmb"/> / <t t-esc="m._totmb"/> MB</div>
+                                            </div>
+                                        </div>
+                                        <img t-if="m.kind === 'image' and m.media_url and !m.view_once" class="o369-msgimg" t-att-src="m.media_url" t-on-click.stop="() => this.openMsgViewer(m)"/>
+                                        <div t-if="m.kind === 'video' and m.media_url and !m.view_once" class="o369-msgvidwrap" t-on-click.stop="() => this.openMsgViewer(m)">
+                                            <video class="o369-msgvid" t-att-src="m.media_url" preload="metadata"/>
+                                            <span class="o369-vidplaybtn"><i class="fa fa-play"/></span>
+                                        </div>
+                                        <button t-if="m.view_once and (m.kind === 'image' or m.kind === 'video')" class="o369-viewonce" t-att-class="{ 'o369-viewonce-done': m.mine or m.viewed or !m.media_url }" t-on-click.stop="() => this.openViewOnce(m)">
+                                            <span class="o369-vo-ico"><i class="fa fa-circle-o"/><span class="o369-vo-one">1</span></span>
+                                            <span class="o369-vo-txt">
+                                                <t t-if="m.mine"><t t-esc="m.kind === 'video' ? 'Video' : 'Photo'"/> · view once</t>
+                                                <t t-elif="m.viewed or !m.media_url">Opened</t>
+                                                <t t-else=""><t t-esc="m.kind === 'video' ? 'Video' : 'Photo'"/> · tap to view</t>
+                                            </span>
+                                        </button>
                                         <div t-if="m.kind === 'audio' and m.media_url" class="o369-voice">
                                             <button class="o369-voiceplay" t-on-click.stop="() => this.toggleAudio(m)"><i class="fa" t-att-class="state.playingId === m.id and !state.audioPaused ? 'fa-pause' : 'fa-play'"/></button>
                                             <div class="o369-voicebar" t-on-pointerdown.stop="(ev) => this.startSeek(m, ev)">
@@ -258,8 +295,27 @@ export class Chat369App extends Component {
                                             <span class="o369-voicetime" t-esc="audioTimeLabel(m)"/>
                                         </div>
                                         <a t-if="m.kind === 'document' and m.media_url" class="o369-msgdoc" t-att-href="m.media_url" target="_blank"><i class="fa fa-file-o me-2"/><t t-esc="m.file_name or 'Document'"/></a>
+                                        <a t-if="m.link" class="o369-linkcard" t-att-href="m.link.url" target="_blank" rel="noopener noreferrer">
+                                            <img t-if="m.link.image" class="o369-linkimg" t-att-src="m.link.image" loading="lazy"/>
+                                            <span class="o369-linkmeta">
+                                                <span class="o369-linktitle" t-esc="m.link.title or m.link.url"/>
+                                                <span class="o369-linkdesc" t-if="m.link.desc" t-esc="m.link.desc"/>
+                                                <span class="o369-linkdomain" t-esc="linkDomain(m.link.url)"/>
+                                            </span>
+                                        </a>
                                         <span t-if="m.body and state.searchOpen and state.searchQ" class="o369-btext" t-out="highlightBody(m.body)"/>
-                                        <a t-elif="m.is_meet and m.body" class="o369-meetcard" t-att-href="m.body" target="_blank"><span class="o369-meetico"><i class="fa fa-video-camera"/></span><span class="o369-meetinfo"><span class="o369-meettitle">Google Meet</span><span class="o369-meetsub" t-esc="m.body"/></span></a>
+                                        <a t-elif="m.is_meet and m.body" class="o369-meetcard" t-att-href="m.body" target="_blank"><span class="o369-meetico"><i class="fa fa-video-camera"/></span><span class="o369-meetinfo"><span class="o369-meettitle">Google Meet</span><span class="o369-meetsub">Tap to join the meeting</span></span><span class="o369-meetjoin">Join</span></a>
+                                        <div t-elif="m.kind === 'poll' and m.poll" class="o369-poll">
+                                            <div class="o369-pollq"><i class="fa fa-bar-chart me-1"/><t t-esc="m.poll.question"/></div>
+                                            <t t-foreach="m.poll.options" t-as="opt" t-key="opt.id">
+                                                <button class="o369-pollopt" t-att-class="{ 'o369-pollopt-mine': opt.mine }" t-on-click.stop="() => this.votePoll(m, opt)">
+                                                    <span class="o369-pollbar" t-attf-style="width:{{pollPct(m.poll, opt)}}%"/>
+                                                    <span class="o369-polltext"><i class="fa" t-att-class="opt.mine ? 'fa-check-circle' : 'fa-circle-o'"/> <t t-esc="opt.text"/></span>
+                                                    <span class="o369-pollcount" t-esc="opt.votes"/>
+                                                </button>
+                                            </t>
+                                            <div class="o369-polltotal"><t t-esc="m.poll.total"/> <t t-esc="m.poll.total === 1 ? 'vote' : 'votes'"/><t t-if="m.poll.multi"> · Multiple answers</t></div>
+                                        </div>
                                         <span t-elif="m.body" class="o369-btext" t-out="linkifyBody(m.body)"/>
                                     </t>
                                     <div class="o369-reacts" t-if="m.reactions.length">
@@ -304,17 +360,50 @@ export class Chat369App extends Component {
                         <button class="o369-recsend" t-on-click="stopRecording" title="Send"><i class="fa fa-paper-plane"/></button>
                         <input type="file" t-ref="fileinput" style="display:none" t-on-change="onFileChosen"/>
                     </div>
-                    <div class="o369-input" t-if="!state.recording">
+                    <div class="o369-mentionbox" t-if="state.mentionOpen">
+                        <t t-foreach="state.mentionMatches" t-as="mm" t-key="mm.id">
+                            <button class="o369-mentionitem" t-att-class="{ 'o369-mentionitem-on': mm_index === state.mentionIdx }" t-on-click.stop="() => this.mentionPick(mm)">
+                                <span class="o369-mentionav" t-att-class="{ 'o369-mentionav-all': mm.id === 'all' }" t-esc="mm.id === 'all' ? '@' : initials(mm.name)"/>
+                                <span class="o369-mentionname" t-esc="mm.label || mm.name"/>
+                            </button>
+                        </t>
+                    </div>
+                    <div class="o369-complink" t-if="state.composerLink and !state.composerLinkHidden">
+                        <img t-if="state.composerLink.image" class="o369-complinkimg" t-att-src="state.composerLink.image"/>
+                        <div class="o369-complinkmeta">
+                            <div class="o369-complinktitle" t-esc="state.composerLink.title or state.composerLink.url"/>
+                            <div class="o369-complinkurl" t-if="state.composerLink.desc" t-esc="state.composerLink.desc"/>
+                            <div class="o369-complinkdomain" t-esc="linkDomain(state.composerLink.url)"/>
+                        </div>
+                        <button class="o369-complinkx" t-on-click="() => (state.composerLinkHidden = true)" title="Remove preview"><i class="fa fa-times"/></button>
+                    </div>
+                    <div class="o369-monitorbar" t-if="state.activeConv and state.activeConv.oversight">
+                        <i class="fa fa-eye"/> Monitoring (read-only) — you are not a member of this chat
+                    </div>
+                    <div class="o369-blockbar" t-if="state.activeConv and state.activeConv.blocked_by_me and !(state.activeConv and state.activeConv.oversight)">
+                        <span><i class="fa fa-ban me-1"/> You blocked this contact.</span>
+                        <button class="o369-blockunbtn" t-on-click="unblockFromBar">Unblock</button>
+                    </div>
+                    <div class="o369-input" t-if="!state.recording and !(state.activeConv and state.activeConv.oversight) and !(state.activeConv and state.activeConv.blocked_by_me)">
+                        <span class="o369-emojiwrap">
+                            <button class="o369-emojiopen" t-on-click.stop="toggleComposerEmoji" title="Emoji"><i class="fa fa-smile-o"/></button>
+                            <div class="o369-emojipop" t-if="state.composerEmojiOpen" t-on-click.stop="">
+                                <div class="o369-emojipopgrid">
+                                    <t t-foreach="EMOJIS" t-as="e" t-key="e"><button class="o369-emojibtn" t-on-click.stop="() => this.insertEmoji(e)"><t t-esc="e"/></button></t>
+                                </div>
+                            </div>
+                        </span>
                         <span class="o369-attachwrap">
                             <button class="o369-attachbtn" t-on-click.stop="toggleAttach" title="Attach"><i class="fa fa-plus"/></button>
                             <div class="o369-attachmenu" t-if="state.attachMenu">
                                 <button class="o369-menuitem" t-on-click.stop="() => this.pickFile('document')"><i class="fa fa-file-o"/> Document</button>
                                 <button class="o369-menuitem" t-on-click.stop="() => this.pickFile('image')"><i class="fa fa-picture-o"/> Photos &amp; videos</button>
                                 <button class="o369-menuitem" t-on-click.stop="() => this.pickFile('audio')"><i class="fa fa-headphones"/> Audio</button>
+                                <button class="o369-menuitem" t-if="currentIsGroup()" t-on-click.stop="openPollCreate"><i class="fa fa-bar-chart"/> Poll</button>
                                 <button class="o369-menuitem" t-if="state.gmeet.connected" t-on-click.stop="startMeet"><i class="fa fa-video-camera"/> Video meeting</button>
                             </div>
                         </span>
-                        <input type="text" placeholder="Type a message" t-att-value="state.draft" t-on-input="onDraftInput" t-on-keydown="onKeydown"/>
+                        <input type="text" t-ref="msgbox" placeholder="Type a message" t-att-value="state.draft" t-on-input="onDraftInput" t-on-keydown="onKeydown"/>
                         <button class="o369-send" t-on-click="micOrSend" t-att-title="state.draft ? 'Send' : 'Record voice'">
                             <i class="fa" t-att-class="state.draft ? 'fa-paper-plane' : 'fa-microphone'"/>
                         </button>
@@ -363,6 +452,56 @@ export class Chat369App extends Component {
                 </div>
             </div>
 
+            <!-- ================= CALLS ================= -->
+            <div class="o369-pane o369-callspane" t-if="state.pane === 'calls'">
+                <div class="o369-panehead">
+                    <div class="o369-panehc"><span class="o369-panetitle">Calls</span><span class="o369-panesub">Favourites, upcoming &amp; recent</span></div>
+                    <button class="o369-iconbtn o369-schedbtn" t-on-click="openSchedule" title="Schedule a call"><i class="fa fa-calendar-plus-o"/></button>
+                </div>
+                <div class="o369-list">
+                    <t t-if="state.calls.favorites.length">
+                        <div class="o369-callsect">Favourites</div>
+                        <t t-foreach="state.calls.favorites" t-as="fv" t-key="fv.conversation_id">
+                            <div class="o369-row" t-on-click="() => this.openCallChatId(fv.conversation_id, fv.name, fv.avatar)">
+                                <div class="o369-avatar"><img t-if="fv.avatar" t-att-src="fv.avatar"/><span t-else="" t-esc="initials(fv.name)"/></div>
+                                <div class="o369-rowmain"><div class="o369-rowtop"><span class="o369-title" t-esc="fv.name"/></div></div>
+                                <button class="o369-callbackbtn" t-on-click.stop="() => this.quickCall(fv, false)" title="Voice call"><i class="fa fa-phone"/></button>
+                                <button class="o369-callbackbtn" t-on-click.stop="() => this.quickCall(fv, true)" title="Video call"><i class="fa fa-video-camera"/></button>
+                            </div>
+                        </t>
+                    </t>
+                    <t t-if="state.calls.upcoming.length">
+                        <div class="o369-callsect">Upcoming</div>
+                        <t t-foreach="state.calls.upcoming" t-as="up" t-key="up.id">
+                            <div class="o369-row">
+                                <div class="o369-avatar o369-actionavatar"><i class="fa fa-calendar"/></div>
+                                <div class="o369-rowmain">
+                                    <div class="o369-rowtop"><span class="o369-title" t-esc="up.title"/><span class="o369-time" t-esc="fmtWhen(up.when)"/></div>
+                                    <div class="o369-rowbot"><span class="o369-prev"><i class="fa" t-att-class="up.video ? 'fa-video-camera' : 'fa-phone'"/> <t t-esc="up.mine ? 'You scheduled' : up.organizer"/></span></div>
+                                </div>
+                                <button class="o369-callbackbtn" t-if="up.conversation_id" t-on-click.stop="() => this.startScheduled(up)" title="Start now"><i class="fa fa-phone"/></button>
+                                <button class="o369-callbackbtn o369-schedcancel" t-if="up.mine" t-on-click.stop="() => this.cancelSchedule(up)" title="Cancel"><i class="fa fa-times"/></button>
+                            </div>
+                        </t>
+                    </t>
+                    <div class="o369-callsect">Recent</div>
+                    <t t-foreach="state.calls.recent" t-as="cl" t-key="cl.id">
+                        <div class="o369-row" t-on-click="() => this.openCallChatId(cl.conversation_id, cl.name, cl.avatar)">
+                            <div class="o369-avatar"><img t-if="cl.avatar" t-att-src="cl.avatar"/><span t-else="" t-esc="initials(cl.name)"/></div>
+                            <div class="o369-rowmain">
+                                <div class="o369-rowtop"><span class="o369-title" t-att-class="{ 'o369-callmissed': cl.missed }" t-esc="cl.name"/><span class="o369-time" t-esc="fmtRowTime(cl.created)"/></div>
+                                <div class="o369-rowbot"><span class="o369-prev o369-callmeta2">
+                                    <i class="fa" t-att-class="cl.missed ? 'fa-arrow-down o369-callic-missed' : (cl.outgoing ? 'fa-arrow-up o369-callic-out' : 'fa-arrow-down o369-callic-in')"/>
+                                    <t t-esc="cl.missed ? 'Missed' : (cl.outgoing ? 'Outgoing' : 'Incoming')"/><t t-if="!cl.missed and cl.duration"> · <t t-esc="fmtCallDur(cl.duration)"/></t>
+                                </span></div>
+                            </div>
+                            <button class="o369-callbackbtn" t-on-click.stop="() => this.callBack(cl)" title="Call back"><i class="fa" t-att-class="cl.video ? 'fa-video-camera' : 'fa-phone'"/></button>
+                        </div>
+                    </t>
+                    <div class="o369-hint" t-if="!state.calls.recent.length and !state.calls.favorites.length and !state.calls.upcoming.length">No calls yet — start one from any chat.</div>
+                </div>
+            </div>
+
             <!-- ================= PROFILE / SETTINGS ================= -->
             <div class="o369-pane o369-settingspane" t-if="state.pane === 'profile'">
                 <t t-if="state.settingsView === 'menu'">
@@ -376,6 +515,7 @@ export class Chat369App extends Component {
                         <button class="o369-setrow" t-on-click="() => this.settingsGo('profile')"><i class="fa fa-user-o"/><span>Profile</span><i class="fa fa-angle-right o369-setchev"/></button>
                         <button class="o369-setrow" t-on-click="() => this.settingsGo('privacy')"><i class="fa fa-lock"/><span>Privacy</span><i class="fa fa-angle-right o369-setchev"/></button>
                         <button class="o369-setrow" t-on-click="() => this.settingsGo('notif')"><i class="fa fa-bell-o"/><span>Notifications</span><i class="fa fa-angle-right o369-setchev"/></button>
+                        <button class="o369-setrow" t-on-click="() => this.settingsGo('theme')"><i class="fa fa-paint-brush"/><span>Theme</span><i class="fa fa-angle-right o369-setchev"/></button>
                         <button class="o369-setrow" t-if="state.gmeet.is_admin" t-on-click="openGmeetSettings"><i class="fa fa-video-camera"/><span>Google Meet</span><i class="fa fa-angle-right o369-setchev"/></button>
                         <button class="o369-setrow o369-setlogout" t-on-click="logout"><i class="fa fa-sign-out"/><span>Log out</span></button>
                     </div>
@@ -416,20 +556,64 @@ export class Chat369App extends Component {
                 </t>
                 <t t-elif="state.settingsView === 'gmeet'">
                     <div class="o369-panehead"><button class="o369-backbtn" t-on-click="() => this.settingsGo('menu')"><i class="fa fa-arrow-left"/></button><span class="o369-panetitle">Google Meet</span></div>
-                    <div class="o369-setbody">
-                        <div class="o369-setfield"><div class="o369-setflabel">Status</div><div class="o369-setfval"><span t-esc="state.gmeet.connected ? 'Connected ✓' : 'Not connected'"/></div></div>
-                        <div class="o369-setfield"><div class="o369-setflabel">Server / base URL (leave blank = auto)</div><div class="o369-setfedit"><input t-model="state.gmeetForm.base_url" placeholder="https://chat.yourcompany.com"/></div></div>
-                        <div class="o369-setfield"><div class="o369-setflabel">Redirect URI — paste this into Google</div><div class="o369-setfval"><span class="o369-redirecturi" t-esc="gmeetRedirect()"/><i class="fa fa-copy" t-on-click="copyRedirect"/></div></div>
-                        <div class="o369-setfield"><div class="o369-setflabel">Client ID</div><div class="o369-setfedit"><input t-model="state.gmeetForm.client_id" placeholder="xxxxx.apps.googleusercontent.com"/></div></div>
-                        <div class="o369-setfield"><div class="o369-setflabel">Client Secret</div><div class="o369-setfedit"><input type="password" t-model="state.gmeetForm.client_secret" placeholder="(hidden — leave blank to keep)"/></div></div>
-                        <div class="o369-setfield"><div class="o369-setflabel">Trigger words (comma-separated)</div><div class="o369-setfedit"><input t-model="state.gmeetForm.triggers" placeholder="meet, send link, gmeet"/></div></div>
-                        <div class="o369-privrow"><label>Where it works</label><select t-model="state.gmeetForm.scope"><option value="both">Groups &amp; 1:1</option><option value="groups">Groups only</option><option value="direct">1:1 only</option></select></div>
-                        <div class="o369-toggrow"><div class="o369-toglabel">Admins only</div><button class="o369-switch" t-att-class="{ 'o369-switch-on': state.gmeetForm.admin_only }" t-on-click="() => (state.gmeetForm.admin_only = !state.gmeetForm.admin_only)"><span/></button></div>
-                        <div class="o369-gmeetbtns">
-                            <button class="o369-savebtn" t-on-click="saveGmeet">Save settings</button>
-                            <button class="o369-bignbtn" t-on-click="connectGmeet"><i class="fa fa-google me-1"/> Connect Google account</button>
+                    <div class="o369-setbody o369-gmbody">
+                        <div class="o369-gmstatus">
+                            <div class="o369-gmstatus-l">
+                                <div class="o369-gmicon"><i class="fa fa-video-camera"/></div>
+                                <div><div class="o369-gmstatus-t">Google Meet</div><div class="o369-gmstatus-s">Auto-create meeting links in chat</div></div>
+                            </div>
+                            <span class="o369-gmpill" t-att-class="{ 'o369-gmpill-on': state.gmeet.connected }" t-esc="state.gmeet.connected ? 'Connected ✓' : 'Not connected'"/>
                         </div>
-                        <div class="o369-privhint">Create a free Google Cloud project + OAuth client, paste the Client ID/Secret, Save, then Connect the host Gmail once. Steps are in the deploy notes.</div>
+
+                        <div class="o369-gmsectitle">Google credentials</div>
+                        <div class="o369-gmfield"><label>Client ID</label><input t-model="state.gmeetForm.client_id" placeholder="xxxxx.apps.googleusercontent.com"/></div>
+                        <div class="o369-gmfield"><label>Client Secret</label><input type="password" t-model="state.gmeetForm.client_secret" placeholder="(hidden — leave blank to keep)"/></div>
+                        <div class="o369-gmfield"><label>Redirect URI <span class="o369-gmhint">— paste this into Google</span></label><div class="o369-gmuri"><span t-esc="gmeetRedirect()"/><i class="fa fa-copy" t-on-click="copyRedirect" title="Copy"/></div></div>
+                        <div class="o369-gmfield"><label>Server / base URL <span class="o369-gmhint">(leave blank = auto)</span></label><input t-model="state.gmeetForm.base_url" placeholder="https://chat.yourcompany.com"/></div>
+
+                        <div class="o369-gmsectitle">Behaviour</div>
+                        <div class="o369-gmfield"><label>Trigger words <span class="o369-gmhint">(comma-separated)</span></label><input t-model="state.gmeetForm.triggers" placeholder="meet, send link, gmeet"/></div>
+                        <div class="o369-gmrow"><label>Where it works</label><select t-model="state.gmeetForm.scope"><option value="both">Groups &amp; 1:1</option><option value="groups">Groups only</option><option value="direct">1:1 only</option></select></div>
+                        <div class="o369-gmrow"><label>Admins only</label><button class="o369-switch" t-att-class="{ 'o369-switch-on': state.gmeetForm.admin_only }" t-on-click="() => (state.gmeetForm.admin_only = !state.gmeetForm.admin_only)"><span/></button></div>
+
+                        <div class="o369-gmbtns">
+                            <button class="o369-gmsave" t-att-disabled="!gmeetDirty()" t-att-class="{ 'o369-gmsave-off': !gmeetDirty() }" t-on-click="saveGmeet">Save settings</button>
+                            <button class="o369-gmconnect" t-on-click="connectGmeet"><i class="fa fa-google"/> <span t-esc="state.gmeet.connected ? 'Reconnect Google account' : 'Connect Google account'"/></button>
+                        </div>
+
+                        <div class="o369-gmhelp">
+                            <button class="o369-gmhelp-head" t-on-click="() => (state.gmeetHelpOpen = !state.gmeetHelpOpen)">
+                                <span><i class="fa fa-lightbulb-o"/> How to set this up (first time)</span>
+                                <i class="fa" t-att-class="state.gmeetHelpOpen ? 'fa-angle-up' : 'fa-angle-down'"/>
+                            </button>
+                            <div class="o369-gmhelp-body" t-if="state.gmeetHelpOpen">
+                                <ol>
+                                    <li>Go to <b>console.cloud.google.com</b> → create a project (any name).</li>
+                                    <li>Search <b>Google Calendar API</b> → click <b>Enable</b>.</li>
+                                    <li>Open <b>OAuth consent screen</b> → <b>External</b> → add your host Gmail as a test user (or publish the app).</li>
+                                    <li>Open <b>Credentials → Create OAuth client ID → Web application</b>.</li>
+                                    <li>In <b>Authorized redirect URIs</b>, paste the <b>Redirect URI</b> shown above.</li>
+                                    <li>Copy the <b>Client ID</b> + <b>Client Secret</b> into the boxes here → <b>Save settings</b>.</li>
+                                    <li>Click <b>Connect Google account</b> → sign in with your host Gmail → Allow.</li>
+                                </ol>
+                                <div class="o369-gmhelp-tip"><i class="fa fa-info-circle"/> Use <b>localhost</b> in the Redirect URI — Google does not allow plain IP addresses.</div>
+                            </div>
+                        </div>
+                    </div>
+                </t>
+                <t t-elif="state.settingsView === 'theme'">
+                    <div class="o369-panehead"><button class="o369-backbtn" t-on-click="() => this.settingsGo('menu')"><i class="fa fa-arrow-left"/></button><span class="o369-panetitle">Theme</span></div>
+                    <div class="o369-setbody">
+                        <div class="o369-setsecttitle">Choose a colour theme</div>
+                        <div class="o369-themegrid">
+                            <t t-foreach="THEMES" t-as="th" t-key="th.id">
+                                <button class="o369-themecard" t-att-class="{ 'o369-themecard-on': state.theme === th.id }" t-on-click="() => this.setTheme(th.id)">
+                                    <span class="o369-themeswatch" t-attf-style="background: linear-gradient(135deg, {{th.a}}, {{th.b}});"><i class="fa fa-check o369-themeck" t-if="state.theme === th.id"/></span>
+                                    <span class="o369-themename" t-esc="th.name"/>
+                                </button>
+                            </t>
+                        </div>
+                        <div class="o369-privhint">Your theme is saved on this device.</div>
                     </div>
                 </t>
                 <t t-else="">
@@ -551,6 +735,42 @@ export class Chat369App extends Component {
                         <t t-foreach="EMOJIS" t-as="e" t-key="e"><button class="o369-emojibtn" t-on-click.stop="() => this.pickEmoji(e)"><t t-esc="e"/></button></t>
                     </div>
                     <button class="o369-modalcancel" t-on-click="closeEmojiPicker">Close</button>
+                </div>
+            </div>
+
+            <!-- Disappearing messages timer -->
+            <div class="o369-modal" t-if="state.disappearOpen" t-on-click.self="() => (state.disappearOpen = false)">
+                <div class="o369-modalcard">
+                    <div class="o369-modaltitle"><i class="fa fa-clock-o me-2"/>Disappearing messages</div>
+                    <div class="o369-disaphint">New messages in this chat will vanish after the time you pick. Everyone sees a note in the chat.</div>
+                    <button class="o369-modalopt" t-on-click="() => this.setDisappear(0)">Off</button>
+                    <button class="o369-modalopt" t-on-click="() => this.setDisappear(86400)">24 hours</button>
+                    <button class="o369-modalopt" t-on-click="() => this.setDisappear(604800)">7 days</button>
+                    <button class="o369-modalopt" t-on-click="() => this.setDisappear(7776000)">90 days</button>
+                    <button class="o369-modalcancel" t-on-click="() => (state.disappearOpen = false)">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Create poll -->
+            <div class="o369-modal" t-if="state.pollCreate" t-on-click.self="closePollCreate">
+                <div class="o369-modalcard o369-pollcard">
+                    <div class="o369-modaltitle"><i class="fa fa-bar-chart me-2"/>Create poll</div>
+                    <input class="o369-listinput" placeholder="Ask a question" t-att-value="state.pollCreate.question" t-on-input="(ev) => (state.pollCreate.question = ev.target.value)"/>
+                    <div class="o369-pollopts">
+                        <t t-foreach="state.pollCreate.options" t-as="o" t-key="o_index">
+                            <div class="o369-polloptrow">
+                                <input class="o369-listinput" placeholder="Option" t-att-value="o" t-on-input="(ev) => this.setPollOption(o_index, ev.target.value)"/>
+                                <button class="o369-polloptdel" t-if="state.pollCreate.options.length > 2" t-on-click.stop="() => this.removePollOption(o_index)"><i class="fa fa-times"/></button>
+                            </div>
+                        </t>
+                    </div>
+                    <button class="o369-polladd" t-if="state.pollCreate.options.length &lt; 12" t-on-click.stop="addPollOption"><i class="fa fa-plus"/> Add option</button>
+                    <div class="o369-pollmulti" t-on-click="() => (state.pollCreate.multi = !state.pollCreate.multi)">
+                        <span class="o369-switch" t-att-class="{ 'o369-switch-on': state.pollCreate.multi }"><span/></span>
+                        <span>Allow multiple answers</span>
+                    </div>
+                    <button class="o369-createbtn" t-on-click="submitPoll" t-att-disabled="!state.pollCreate.question">Send poll</button>
+                    <button class="o369-modalcancel" t-on-click="closePollCreate">Cancel</button>
                 </div>
             </div>
 
@@ -700,6 +920,10 @@ export class Chat369App extends Component {
                         <div class="o369-mediastats"><span><t t-esc="state.contactInfo.media.photos"/> photos</span><span><t t-esc="state.contactInfo.media.videos"/> videos</span><span><t t-esc="state.contactInfo.media.docs"/> docs</span></div>
                     </div>
                     <div class="o369-drawersection">
+                        <div class="o369-mediarow o369-mediarow-btn" t-on-click="openDisappear"><i class="fa fa-clock-o me-2"/>Disappearing messages <span class="o369-mediacount" t-esc="disappearLabel()"/><i class="fa fa-chevron-right o369-rowchev"/></div>
+                        <div class="o369-mediastats" t-if="state.contactInfo.is_group and !state.contactInfo.is_admin">Only admins can change this.</div>
+                    </div>
+                    <div class="o369-drawersection">
                         <button class="o369-drawaction" t-on-click="openStarred"><i class="fa fa-star"/> Starred messages</button>
                         <button class="o369-drawaction" t-on-click="favFromInfo"><i class="fa fa-heart-o"/> <t t-esc="state.contactInfo.favourite ? 'Remove from favourites' : 'Add to favourites'"/></button>
                         <button class="o369-drawaction" t-on-click="addToListFromInfo"><i class="fa fa-folder-o"/> Add to list</button>
@@ -718,6 +942,7 @@ export class Chat369App extends Component {
                         </t>
                     </div>
                     <div class="o369-drawersection">
+                        <button class="o369-drawaction o369-danger" t-if="!state.contactInfo.is_group and state.contactInfo.user_id" t-on-click="toggleBlock"><i class="fa fa-ban"/> <t t-esc="state.contactInfo.blocked_by_me ? 'Unblock' : 'Block'"/> <t t-esc="state.contactInfo.name"/></button>
                         <button class="o369-drawaction o369-danger" t-on-click="headerClear"><i class="fa fa-eraser"/> Clear chat</button>
                         <button class="o369-drawaction o369-danger" t-on-click="headerLeave"><i class="fa fa-trash"/> <t t-esc="state.contactInfo.is_group ? 'Exit group' : 'Delete chat'"/></button>
                     </div>
@@ -845,6 +1070,86 @@ export class Chat369App extends Component {
                 <img t-att-src="state.lightbox"/>
             </div>
 
+            <!-- Multi-photo review (captions + view-once) -->
+            <div class="o369-viewer o369-mediareview" t-if="state.mediaReview">
+                <div class="o369-vhead">
+                    <button class="o369-vtool" t-on-click="closeMediaReview" title="Cancel"><i class="fa fa-times"/></button>
+                    <span class="o369-mrtitle"><t t-esc="state.mediaReview.idx + 1"/> / <t t-esc="state.mediaReview.items.length"/></span>
+                    <button class="o369-vtool o369-mrvo" t-att-class="{ 'o369-mrvo-on': state.mediaReview.viewOnce }" t-on-click="() => (state.mediaReview.viewOnce = !state.mediaReview.viewOnce)" title="View once"><i class="fa fa-eye"/> View once</button>
+                </div>
+                <div class="o369-vstage">
+                    <img t-if="mrCur() and mrCur().kind === 'image'" t-att-src="mrCur().previewUrl"/>
+                    <video t-elif="mrCur()" t-att-src="mrCur().previewUrl" controls="controls"/>
+                </div>
+                <div class="o369-mrcapwrap">
+                    <input class="o369-mrcap" placeholder="Add a caption…" t-att-value="mrCur() and mrCur().caption" t-on-input="(ev) => this.setReviewCaption(ev.target.value)"/>
+                    <button class="o369-mrsend" t-on-click="sendMediaReview" title="Send"><i class="fa fa-paper-plane"/></button>
+                </div>
+                <div class="o369-vstrip" t-if="state.mediaReview.items.length > 1">
+                    <div class="o369-vthumb" t-foreach="state.mediaReview.items" t-as="it" t-key="it_index" t-att-class="{ 'o369-vthumb-on': it_index === state.mediaReview.idx }" t-on-click="() => (state.mediaReview.idx = it_index)">
+                        <img t-if="it.kind === 'image'" t-att-src="it.previewUrl"/>
+                        <div t-else="" class="o369-vthumbvid"><i class="fa fa-play"/></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule a call -->
+            <div class="o369-modal" t-if="state.scheduleForm" t-on-click.self="closeSchedule">
+                <div class="o369-modalcard">
+                    <div class="o369-modaltitle"><i class="fa fa-calendar me-2"/>Schedule a call</div>
+                    <input class="o369-listinput" placeholder="Call title" t-att-value="state.scheduleForm.title" t-on-input="(ev) => (state.scheduleForm.title = ev.target.value)"/>
+                    <select class="o369-listinput" t-on-change="(ev) => (state.scheduleForm.conversation_id = ev.target.value)">
+                        <option value="">Contact to call (optional)</option>
+                        <t t-foreach="oneToOneConvs()" t-as="c" t-key="c.id"><option t-att-value="c.id" t-esc="c.title"/></t>
+                    </select>
+                    <input class="o369-listinput" type="datetime-local" t-att-value="state.scheduleForm.when" t-on-input="(ev) => (state.scheduleForm.when = ev.target.value)"/>
+                    <div class="o369-pollmulti" t-on-click="() => (state.scheduleForm.video = !state.scheduleForm.video)">
+                        <span class="o369-switch" t-att-class="{ 'o369-switch-on': state.scheduleForm.video }"><span/></span>
+                        <span>Video call</span>
+                    </div>
+                    <button class="o369-createbtn" t-on-click="submitSchedule" t-att-disabled="!state.scheduleForm.title or !state.scheduleForm.when">Schedule</button>
+                    <button class="o369-modalcancel" t-on-click="closeSchedule">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Incoming call -->
+            <div class="o369-incoming" t-if="state.call and state.call.status === 'incoming'">
+                <div class="o369-incomingcard">
+                    <div class="o369-avatar o369-avatarxl o369-incomingav"><img t-if="state.call.avatar" t-att-src="state.call.avatar"/><span t-else="" t-esc="initials(state.call.name)"/></div>
+                    <div class="o369-incomingname" t-esc="state.call.name"/>
+                    <div class="o369-incomingsub" t-esc="state.call.video ? 'Incoming video call' : 'Incoming voice call'"/>
+                    <div class="o369-incomingbtns">
+                        <button class="o369-callbtn o369-callend" t-on-click="rejectCall" title="Decline"><i class="fa fa-phone"/></button>
+                        <button class="o369-callbtn o369-callaccept" t-on-click="acceptCall" title="Accept"><i class="fa" t-att-class="state.call.video ? 'fa-video-camera' : 'fa-phone'"/></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- In-call overlay -->
+            <div class="o369-calloverlay" t-if="state.call and state.call.status !== 'incoming'">
+                <video class="o369-callremote" t-ref="remoteVideo" autoplay="autoplay" playsinline="playsinline"/>
+                <div class="o369-callremoteph" t-if="!(state.call.status === 'connected' and state.call.video)">
+                    <div class="o369-avatar o369-avatarxl"><img t-if="state.call.avatar" t-att-src="state.call.avatar"/><span t-else="" t-esc="initials(state.call.name)"/></div>
+                    <div class="o369-callname" t-esc="state.call.name"/>
+                    <div class="o369-callstatus" t-esc="callStatusLabel()"/>
+                </div>
+                <div class="o369-calltop" t-if="state.call.status === 'connected'"><b t-esc="state.call.name"/> · <t t-esc="callTimeLabel()"/></div>
+                <video class="o369-calllocal" t-if="state.call.video" t-ref="localVideo" autoplay="autoplay" playsinline="playsinline" muted="muted" t-att-class="{ 'o369-calllocal-off': state.call.camOff }"/>
+                <div class="o369-callctrls">
+                    <button class="o369-callbtn" t-att-class="{ 'o369-callbtn-off': state.call.muted }" t-on-click="toggleMute" title="Mute"><i class="fa" t-att-class="state.call.muted ? 'fa-microphone-slash' : 'fa-microphone'"/></button>
+                    <button class="o369-callbtn" t-if="state.call.video" t-att-class="{ 'o369-callbtn-off': state.call.camOff }" t-on-click="toggleCam" title="Camera"><i class="fa fa-video-camera"/></button>
+                    <button class="o369-callbtn o369-callend" t-on-click="endCall" title="End call"><i class="fa fa-phone"/></button>
+                </div>
+            </div>
+
+            <!-- View-once fullscreen (consumed on close) -->
+            <div class="o369-lightbox o369-volightbox" t-if="state.viewOnceView" t-on-click.self="closeViewOnce">
+                <div class="o369-vo-banner"><i class="fa fa-eye me-1"/> View once — this disappears when you close it</div>
+                <img t-if="state.viewOnceView.kind === 'image'" t-att-src="state.viewOnceView.url"/>
+                <video t-else="" t-att-src="state.viewOnceView.url" controls="controls" autoplay="autoplay"/>
+                <button class="o369-vo-close" t-on-click.stop="closeViewOnce"><i class="fa fa-times"/></button>
+            </div>
+
             <!-- Rich media viewer (sender/date, download, prev/next, filmstrip) -->
             <div class="o369-viewer" t-if="state.viewer">
                 <div class="o369-vhead">
@@ -869,7 +1174,7 @@ export class Chat369App extends Component {
                     <video t-elif="viewerCur()" t-att-src="viewerCur().url" controls="controls" autoplay="autoplay"/>
                 </div>
                 <button class="o369-vnav o369-vnext" t-if="viewerHasNext()" t-on-click.stop="viewerNext"><i class="fa fa-chevron-right"/></button>
-                <div class="o369-vstrip">
+                <div class="o369-vstrip" t-if="state.viewer.list.length > 1">
                     <div class="o369-vthumb" t-foreach="state.viewer.list" t-as="v" t-key="v_index" t-att-class="{ 'o369-vthumb-on': v_index === state.viewer.idx }" t-on-click.stop="() => this.viewerGo(v_index)">
                         <img t-if="v.kind === 'image'" t-att-src="v.url" loading="lazy"/>
                         <div t-else="" class="o369-vthumbvid"><i class="fa fa-play"/></div>
@@ -882,6 +1187,14 @@ export class Chat369App extends Component {
     setup() {
         this.REACTIONS = ['\u{1F44D}','\u{2764}\u{FE0F}','\u{1F602}','\u{1F62E}','\u{1F622}','\u{1F64F}'];
         this.EMOJIS = [...new Set(['\u{1F600}','\u{1F603}','\u{1F604}','\u{1F601}','\u{1F606}','\u{1F605}','\u{1F602}','\u{1F923}','\u{1F60A}','\u{1F607}','\u{1F642}','\u{1F643}','\u{1F609}','\u{1F60C}','\u{1F60D}','\u{1F970}','\u{1F618}','\u{1F617}','\u{1F61A}','\u{1F60B}','\u{1F61B}','\u{1F61C}','\u{1F61D}','\u{1F92A}','\u{1F928}','\u{1F9D0}','\u{1F913}','\u{1F60E}','\u{1F929}','\u{1F60F}','\u{1F612}','\u{1F614}','\u{1F61E}','\u{1F61F}','\u{1F615}','\u{1F641}','\u{1F623}','\u{1F616}','\u{1F62B}','\u{1F629}','\u{1F97A}','\u{1F622}','\u{1F62D}','\u{1F624}','\u{1F620}','\u{1F621}','\u{1F92C}','\u{1F92F}','\u{1F633}','\u{1F975}','\u{1F976}','\u{1F631}','\u{1F628}','\u{1F630}','\u{1F625}','\u{1F613}','\u{1F917}','\u{1F92D}','\u{1F92B}','\u{1F914}','\u{1F610}','\u{1F611}','\u{1F636}','\u{1F644}','\u{1F62E}','\u{1F62F}','\u{1F632}','\u{1F971}','\u{1F634}','\u{1F924}','\u{1F62A}','\u{1F635}','\u{1F910}','\u{1F974}','\u{1F922}','\u{1F92E}','\u{1F927}','\u{1F637}','\u{1F912}','\u{1F915}','\u{1F925}','\u{1F44D}','\u{1F44E}','\u{1F44C}','\u{1F90F}','\u{1F91E}','\u{1F91F}','\u{1F918}','\u{1F919}','\u{1F448}','\u{1F449}','\u{1F446}','\u{1F447}','\u{1F44A}','\u{270A}','\u{1F91B}','\u{1F91C}','\u{1F44F}','\u{1F64C}','\u{1F450}','\u{1F932}','\u{1F91D}','\u{1F64F}','\u{1F4AA}','\u{1F933}','\u{1F440}','\u{1F44B}','\u{1F9E1}','\u{1F49B}','\u{1F49A}','\u{1F499}','\u{1F49C}','\u{1F5A4}','\u{1F90D}','\u{1F90E}','\u{1F494}','\u{1F495}','\u{1F49E}','\u{1F493}','\u{1F497}','\u{1F496}','\u{1F498}','\u{1F49D}','\u{1F49F}','\u{1F48B}','\u{1F525}','\u{2B50}','\u{1F31F}','\u{2728}','\u{1F4AF}','\u{1F389}','\u{1F38A}','\u{1F64B}','\u{1F3B6}','\u{1F480}','\u{1F47B}','\u{1F916}','\u{1F31E}','\u{1F319}','\u{2764}\u{FE0F}','\u{270C}\u{FE0F}','\u{261D}\u{FE0F}','\u{2705}','\u{274C}','\u{2757}','\u{2753}'])];
+        this.THEMES = [
+            { id: 'ocean', name: 'Ocean', a: '#1F5F9E', b: '#F47A20' },
+            { id: 'emerald', name: 'Emerald', a: '#0E8F53', b: '#F2A93B' },
+            { id: 'sunset', name: 'Sunset', a: '#C2410C', b: '#F59E0B' },
+            { id: 'violet', name: 'Violet', a: '#6D28D9', b: '#F472B6' },
+            { id: 'graphite', name: 'Graphite', a: '#334155', b: '#F59E0B' },
+            { id: 'rose', name: 'Rose', a: '#BE185D', b: '#FB7185' },
+        ];
         this.notification = useService("notification");
         this.bus = useService("bus_service");
         this.MEMBER_PERMS = [
@@ -911,6 +1224,12 @@ export class Chat369App extends Component {
             mediaAllTab: 'media', mediaAllItems: [], mediaAllBusy: false, viewer: null, menuPos: { top: 0, left: 0 },
             gmeet: { connected: false, has_creds: false, is_admin: false, triggers: [], scope: 'both', admin_only: true, client_id: '' },
             gmeetForm: { client_id: '', client_secret: '', triggers: '', scope: 'both', admin_only: true, base_url: '' },
+            gmeetSaved: '', gmeetHelpOpen: false, chipMenuOpen: false, notifBannerHidden: false,
+            drafts: {}, composerEmojiOpen: false, disappearOpen: false, pollCreate: null,
+            mediaReview: null, viewOnceView: null,
+            composerLink: null, composerLinkHidden: false, theme: 'ocean', call: null,
+            calls: { recent: [], favorites: [], upcoming: [] }, scheduleForm: null,
+            mentionOpen: false, mentionMatches: [], mentionIdx: 0, mentionMembers: [], mentionMembersConv: 0, mentionStart: 0, mentionEnd: 0,
             settingsView: 'menu', profileEdit: { field: null, val: '' },
             // Group info redesign / media viewer / permissions (Features 2-4)
             nameEditing: false, descEditing: false, descDraft: '',
@@ -920,6 +1239,11 @@ export class Chat369App extends Component {
         });
         this.scroller = useRef("scroller");
         this.fileinput = useRef("fileinput");
+        this.msgbox = useRef("msgbox");
+        this.localVideo = useRef("localVideo");
+        this.remoteVideo = useRef("remoteVideo");
+        try { this.state.drafts = JSON.parse(localStorage.getItem('o369_drafts') || '{}') || {}; } catch (e) { this.state.drafts = {}; }
+        try { this.state.theme = localStorage.getItem('o369_theme') || 'ocean'; } catch (e) {}
         this._scrollPending = false;
         this._timer = null;
         // Close any open menu when clicking elsewhere (caret/menu clicks use .stop).
@@ -928,11 +1252,16 @@ export class Chat369App extends Component {
         this.bus.subscribe("chat369.event", (payload) => this._onBus(payload));
         onWillStart(async () => {
             try { const r = await rpc('/chat/bus_channel', {}); if (r && r.channel) this.bus.addChannel(r.channel); } catch (e) {}
-            await this.loadConversations(true); this.loadLists(); this.loadMe(); this.loadGmeet();
+            await this.loadConversations(true); this.loadLists(); this.loadMe(); this.loadGmeet(); this.loadCalls();
         });
         onMounted(() => { this._timer = setInterval(() => this.tick(), 6000); });
-        onWillUnmount(() => { if (this._timer) { clearInterval(this._timer); this._timer = null; } });
+        onWillUnmount(() => { if (this._timer) { clearInterval(this._timer); this._timer = null; } this._teardownCall(); });
         onPatched(() => {
+            // Attach live call streams to their <video> elements once rendered.
+            if (this.state.call) {
+                if (this.localVideo.el && this._localStream && this.localVideo.el.srcObject !== this._localStream) this.localVideo.el.srcObject = this._localStream;
+                if (this.remoteVideo.el && this._remoteStream && this.remoteVideo.el.srcObject !== this._remoteStream) this.remoteVideo.el.srcObject = this._remoteStream;
+            }
             if (this._prependAdjust && this.scroller.el) {
                 // Keep the viewport steady after prepending older history.
                 this.scroller.el.scrollTop += this.scroller.el.scrollHeight - (this._prependOldHeight || 0);
@@ -944,7 +1273,7 @@ export class Chat369App extends Component {
         });
     }
 
-    closeMenus() { this.state.openMenuId = null; this.state.headerMenu = false; this.state.rowMenuId = null; this.state.convMenu = false; this.state.attachMenu = false; }
+    closeMenus() { this.state.openMenuId = null; this.state.headerMenu = false; this.state.rowMenuId = null; this.state.convMenu = false; this.state.attachMenu = false; this.state.chipMenuOpen = false; this.state.composerEmojiOpen = false; }
     toggleConvMenu() { this.closeMenus(); this.state.convMenu = !this.state.convMenu; }
     toggleMenu(id, ev) {
         this.state.headerMenu = false; this.state.rowMenuId = null;
@@ -979,6 +1308,21 @@ export class Chat369App extends Component {
         try { const res = await rpc('/chat/lists', convId ? { conversation_id: convId } : {}); if (res && res.status) this.state.lists = res.lists || []; } catch (e) {}
     }
     setFilter(f) { this.state.filter = f; this.loadConversations(); }
+    // Total unread across all chats — for the WhatsApp-style badge on the rail icon.
+    totalUnread() { return (this.state.conversations || []).reduce((s, c) => s + (c.unread_count || 0), 0); }
+    // Browser notifications are OFF → show the "turn on" banner atop the chat list.
+    notifsBlocked() {
+        try { return typeof Notification !== 'undefined' && Notification.permission !== 'granted' && !this.state.notifBannerHidden; }
+        catch (e) { return false; }
+    }
+    async enableNotifsFromBanner() {
+        try {
+            if (typeof Notification === 'undefined') { this.notify('This browser has no notifications.'); return; }
+            const p = await Notification.requestPermission();
+            if (p === 'granted') { this.state.notifBannerHidden = true; this.notify('Notifications turned on', 'success'); }
+            else { this.notify('Still blocked — allow notifications for this site in your browser.'); }
+        } catch (e) {}
+    }
     // ---- lists ----
     openNewList() { this.state.newListName = ''; this.state.newListSel = []; this.state.showNewList = true; }
     closeNewList() { this.state.showNewList = false; }
@@ -1017,13 +1361,25 @@ export class Chat369App extends Component {
         try { const res = await rpc('/chat/create_group', { name, member_ids: this.state.groupSel }); if (res && res.status && res.conversation) { this.closeContacts(); await this.select(res.conversation); await this.loadConversations(); } } catch (e) {}
     }
     async select(conv) {
+        this._saveDraft();   // keep the unsent text of the chat we're leaving
+        this._clearComposerLink();
         this.state.selectedId = conv.id; this.state.activeConv = conv; this.state.messages = [];
+        this.state.draft = this.state.drafts[conv.id] || '';   // restore this chat's draft
         this.state.replyTo = null; this.state.editing = null; this.state.typing = null; this.state.msgInfo = null;
         this._stopAudio(); this._noMoreOlder = false; this.state.showJumpBottom = false;
         this.closeContactInfo();   // don't leave the previous chat's info panel open on switch
         this.closeMenus();
         await this.reloadMessages(true); this.loadPinned();
     }
+    // ---- drafts (WhatsApp-style: unsent text kept per chat) ----
+    draftFor(id) { return (this.state.drafts[id] || '').trim(); }
+    _saveDraft() {
+        const id = this.state.selectedId; if (!id) return;
+        const d = this.state.draft || '';
+        if (d.trim()) this.state.drafts[id] = d; else delete this.state.drafts[id];
+        this._persistDrafts();
+    }
+    _persistDrafts() { try { localStorage.setItem('o369_drafts', JSON.stringify(this.state.drafts)); } catch (e) {} }
     async reloadMessages(scroll) {
         if (!this.state.selectedId) return;
         try { const res = await rpc('/chat/messages', { conversation_id: this.state.selectedId, limit: 60 }); if (res && res.status) { this.state.messages = res.messages || []; if (scroll) this._scrollPending = true; this.markRead(); } } catch (e) {}
@@ -1054,11 +1410,13 @@ export class Chat369App extends Component {
             try { const res = await rpc('/chat/edit_message', { message_id: id, body }); if (res && res.status === false) { this.notify(res.message); return; } this._applyMsg(res); this.loadConversations(); } catch (e) {}
             return;
         }
-        // Configured meeting trigger word -> generate a Google Meet link instead of sending text.
-        if (this._meetTriggered(body)) { this.state.draft = ''; this._stopTyping(); this.createMeet(); return; }
+        // Configured meeting trigger word -> post the typed word as a normal message,
+        // then generate a Google Meet link right after (so the chat shows the word first,
+        // then the Meet card). createMeet() is fired once the text send resolves below.
+        const isMeetTrigger = this._meetTriggered(body);
         const replyTo = this.state.replyTo;
         const replyId = replyTo ? replyTo.id : 0;
-        this.state.draft = ''; this.state.replyTo = null; this._stopTyping();
+        this.state.draft = ''; this._saveDraft(); this._clearComposerLink(); this.state.replyTo = null; this._stopTyping();
         // Optimistic: show the message instantly (a temp bubble with a clock), then
         // swap in the server copy — feels instant regardless of round-trip.
         const tempId = 'tmp-' + Date.now();
@@ -1084,16 +1442,93 @@ export class Chat369App extends Component {
                 if (!this.state.messages.some((m) => m.id === res.message.id)) this.state.messages.push(res.message);
                 this.loadConversations();
             }
+            // Trigger word was just posted as text — now drop the Meet card right below it.
+            if (isMeetTrigger) this.createMeet();
         } catch (e) {
             this.state.messages = this.state.messages.filter((m) => m.id !== tempId);
             this.notify('Message not sent'); this.state.draft = body; this.state.replyTo = replyTo || null;
         }
     }
-    onKeydown(ev) { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); this.send(); } }
-    onDraftInput(ev) { this.state.draft = this.sentenceCase(ev.target.value); this._emitTyping(); }
+    onKeydown(ev) {
+        if (this.state.mentionOpen && this.state.mentionMatches.length) {
+            if (ev.key === 'ArrowDown') { ev.preventDefault(); this.state.mentionIdx = (this.state.mentionIdx + 1) % this.state.mentionMatches.length; return; }
+            if (ev.key === 'ArrowUp') { ev.preventDefault(); this.state.mentionIdx = (this.state.mentionIdx - 1 + this.state.mentionMatches.length) % this.state.mentionMatches.length; return; }
+            if (ev.key === 'Enter' || ev.key === 'Tab') { ev.preventDefault(); this.mentionPick(this.state.mentionMatches[this.state.mentionIdx]); return; }
+            if (ev.key === 'Escape') { ev.preventDefault(); this.state.mentionOpen = false; return; }
+        }
+        if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); this.send(); }
+    }
+    onDraftInput(ev) { this.state.draft = this.sentenceCase(ev.target.value); this._saveDraft(); this._emitTyping(); this._mentionDetect(ev.target); this._detectComposerLink(); }
+    // ---- composer emoji picker (insert into the message box, not react) ----
+    toggleComposerEmoji() { const open = this.state.composerEmojiOpen; this.closeMenus(); this.state.composerEmojiOpen = !open; }
+    insertEmoji(e) {
+        const el = this.msgbox.el;
+        const d = this.state.draft || '';
+        if (el && typeof el.selectionStart === 'number') {
+            const s = el.selectionStart, en = el.selectionEnd;
+            this.state.draft = d.slice(0, s) + e + d.slice(en);
+            const np = s + e.length;
+            setTimeout(() => { try { el.focus(); el.selectionStart = el.selectionEnd = np; } catch (x) {} }, 0);
+        } else {
+            this.state.draft = d + e;
+        }
+        this._saveDraft();
+    }
+    // ---- @mention picker (groups only) ----
+    async _loadMentionMembers() {
+        const c = this.state.activeConv;
+        if (!c || !c.is_group) { this.state.mentionMembers = []; return; }
+        try {
+            const res = await rpc('/chat/contact_info', { conversation_id: c.id });
+            const info = (res && (res.info || res)) || {};
+            const meId = this.state.me && this.state.me.id;
+            this.state.mentionMembers = (info.members || []).filter((m) => m.id !== meId).map((m) => ({ id: m.id, name: m.name }));
+            this.state.mentionMembersConv = c.id;
+        } catch (e) { this.state.mentionMembers = []; }
+    }
+    _mentionDetect(inputEl) {
+        const c = this.state.activeConv;
+        if (!c || !c.is_group) { this.state.mentionOpen = false; return; }
+        this._lastInput = inputEl || this._lastInput;
+        const pos = inputEl ? (inputEl.selectionStart || 0) : (this.state.draft || '').length;
+        const upto = (this.state.draft || '').slice(0, pos);
+        const mm = upto.match(/(^|\s)@([\w]*)$/);   // '@' at a word boundary + the query typed so far
+        if (!mm) { this.state.mentionOpen = false; return; }
+        const q = (mm[2] || '').toLowerCase();
+        this.state.mentionStart = pos - mm[2].length - 1;   // index of the '@'
+        this.state.mentionEnd = pos;
+        const all = { id: 'all', name: 'all', label: 'Everyone  ·  @all' };
+        let matches = this.state.mentionMembers.filter((m) => m.name.toLowerCase().includes(q));
+        matches = (('all'.startsWith(q) || q === '') ? [all] : []).concat(matches).slice(0, 6);
+        this.state.mentionMatches = matches;
+        this.state.mentionIdx = 0;
+        this.state.mentionOpen = matches.length > 0;
+        if (this.state.mentionMembersConv !== c.id && !this._mentionLoading) {
+            this._mentionLoading = true;
+            this._loadMentionMembers().then(() => { this._mentionLoading = false; this._mentionDetect(this._lastInput); });
+        }
+    }
+    mentionPick(item) {
+        if (!item) return;
+        const d = this.state.draft || '';
+        const s = this.state.mentionStart != null ? this.state.mentionStart : d.length;
+        const e = this.state.mentionEnd != null ? this.state.mentionEnd : d.length;
+        const ins = '@' + item.name + ' ';
+        this.state.draft = d.slice(0, s) + ins + d.slice(e);
+        this.state.mentionOpen = false;
+        const el = this._lastInput, np = s + ins.length;
+        if (el) setTimeout(() => { try { el.focus(); el.selectionStart = el.selectionEnd = np; } catch (x) {} }, 0);
+    }
     sentenceCase(s) {
-        // Capitalize the first letter and the first letter after . ! ?
-        return (s || '').replace(/(^\s*[a-z])|([.!?]\s+[a-z])/g, (m) => m.toUpperCase());
+        s = s || '';
+        // Capitalize the first letter — UNLESS the text starts with a link (a
+        // capitalized "Https://" is an invalid/broken URL).
+        const f = /^(\s*)([a-z])([\s\S]*)$/.exec(s);
+        if (f && !/^(https?:\/\/|www\.)/i.test(f[2] + f[3])) {
+            s = f[1] + f[2].toUpperCase() + f[3];
+        }
+        // Capitalize after sentence enders (URLs have no space after their dots, so untouched).
+        return s.replace(/([.!?]\s+)([a-z])/g, (m, p, c) => p + c.toUpperCase());
     }
 
     // ---------------- message menu actions ----------------
@@ -1207,12 +1642,67 @@ export class Chat369App extends Component {
     }
     closeInvite() { this.state.inviteOpen = false; }
 
+    // ---- disappearing messages ----
+    disappearLabel() {
+        const s = (this.state.contactInfo && this.state.contactInfo.disappear_seconds) || 0;
+        return ({ 0: 'Off', 86400: '24 hours', 604800: '7 days', 7776000: '90 days' })[s] || 'Off';
+    }
+    openDisappear() {
+        const i = this.state.contactInfo; if (!i) return;
+        if (i.is_group && !i.is_admin) { this.notify('Only admins can change disappearing messages.'); return; }
+        this.state.disappearOpen = true;
+    }
+    async setDisappear(secs) {
+        const i = this.state.contactInfo; this.state.disappearOpen = false; if (!i) return;
+        try {
+            const res = await rpc('/chat/set_disappear', { conversation_id: i.conversation_id, seconds: secs });
+            if (res && res.status === false) { this.notify(res.message); return; }
+            i.disappear_seconds = res.disappear_seconds;
+            if (this.state.selectedId === i.conversation_id) this.reloadMessages(false);
+            this.notify('Disappearing messages updated', 'success');
+        } catch (e) {}
+    }
+
+    // ---- polls ----
+    openPollCreate() { this.state.attachMenu = false; this.state.pollCreate = { question: '', options: ['', ''], multi: false }; }
+    closePollCreate() { this.state.pollCreate = null; }
+    setPollOption(i, val) { if (this.state.pollCreate) this.state.pollCreate.options[i] = val; }
+    addPollOption() { const p = this.state.pollCreate; if (p && p.options.length < 12) p.options.push(''); }
+    removePollOption(i) { const p = this.state.pollCreate; if (p && p.options.length > 2) p.options.splice(i, 1); }
+    async submitPoll() {
+        const p = this.state.pollCreate; if (!p) return;
+        const question = (p.question || '').trim();
+        const options = p.options.map((o) => (o || '').trim()).filter(Boolean);
+        if (!question || options.length < 2) { this.notify('Add a question and at least 2 options.'); return; }
+        this.state.pollCreate = null;
+        try {
+            const res = await rpc('/chat/poll/create', { conversation_id: this.state.selectedId, question, options, multi: p.multi });
+            if (res && res.status === false) { this.notify(res.message); return; }
+            if (res && res.status && res.message) {
+                if (!this.state.messages.some((m) => m.id === res.message.id)) this.state.messages.push(res.message);
+                this._scrollPending = true; this.loadConversations();
+            }
+        } catch (e) { this.notify('Could not create poll'); }
+    }
+    pollPct(poll, opt) {
+        const mx = Math.max(1, ...(poll.options || []).map((o) => o.votes || 0));
+        return Math.round(((opt.votes || 0) / mx) * 100);
+    }
+    async votePoll(m, opt) {
+        try {
+            const res = await rpc('/chat/poll/vote', { option_id: opt.id });
+            if (res && res.status === false) { this.notify(res.message); return; }
+            this._applyMsg(res);
+        } catch (e) {}
+    }
+
     // ---------------- nav rail: chats / media / profile ----------------
     async switchPane(p) {
         this.state.pane = p;
         this.closeMenus();
         if (p === 'profile') { this.state.settingsView = 'menu'; await this.loadMe(); }
         else if (p === 'media') { await this.loadAllMedia(); }
+        else if (p === 'calls') { await this.loadCalls(); }
     }
     async loadMe() {
         try { const r = await rpc('/chat/me', {}); if (r && r.status) this.state.me = r.me; } catch (e) {}
@@ -1236,6 +1726,8 @@ export class Chat369App extends Component {
             if (res && res.status && res.message) {
                 if (!this.state.messages.some((m) => m.id === res.message.id)) this.state.messages.push(res.message);
                 this._scrollPending = true; this.loadConversations();
+                // In a group the server also posts "@all Please join the meeting" — pull it in.
+                if (this.currentIsGroup()) this.syncMessages();
             }
         } catch (e) { this.notify('Could not create the meeting'); }
     }
@@ -1244,7 +1736,12 @@ export class Chat369App extends Component {
         this.state.gmeetForm = { client_id: g.client_id || '', client_secret: '',
             triggers: (g.triggers || []).join(', '), scope: g.scope || 'both', admin_only: g.admin_only !== false,
             base_url: g.base_url || '' };
+        this.state.gmeetSaved = JSON.stringify(this.state.gmeetForm);  // baseline for the "changed?" check
         this.settingsGo('gmeet');
+    }
+    // Save button is active only when the form differs from what was last saved.
+    gmeetDirty() {
+        return JSON.stringify(this.state.gmeetForm) !== (this.state.gmeetSaved || '');
     }
     gmeetRedirect() {
         const b = (this.state.gmeetForm.base_url || '').trim().replace(/\/+$/, '');
@@ -1259,7 +1756,7 @@ export class Chat369App extends Component {
         try {
             const r = await rpc('/chat/gmeet/config', { client_id: f.client_id, client_secret: f.client_secret,
                 triggers: f.triggers, scope: f.scope, admin_only: f.admin_only, base_url: f.base_url });
-            if (r && r.status) { this.notify('Saved', 'success'); this.loadGmeet(); }
+            if (r && r.status) { this.notify('Saved', 'success'); this.state.gmeetSaved = JSON.stringify(this.state.gmeetForm); this.loadGmeet(); }
             else this.notify((r && r.message) || 'Save failed');
         } catch (e) {}
     }
@@ -1446,26 +1943,292 @@ export class Chat369App extends Component {
     pickFile(kind) {
         this.state.attachMenu = false; this._pendingGroupPhoto = false; this._pendingKind = kind;
         const el = this.fileinput.el;
-        if (el) { el.accept = kind === 'image' ? 'image/*,video/*' : (kind === 'audio' ? 'audio/*' : '*/*'); el.value = ''; el.click(); }
+        if (el) { el.accept = kind === 'image' ? 'image/*,video/*' : (kind === 'audio' ? 'audio/*' : '*/*'); el.multiple = (kind === 'image'); el.value = ''; el.click(); }
     }
     onFileChosen(ev) {
-        const file = ev.target.files && ev.target.files[0]; if (!file) return;
+        const files = Array.from(ev.target.files || []); if (!files.length) return;
         if (this._pendingGroupPhoto) {
             this._pendingGroupPhoto = false;
-            this._compressImage(file, 640, 0.7).then((b64) => this._setGroupPhoto(b64));
+            this._compressImage(files[0], 640, 0.7).then((b64) => this._setGroupPhoto(b64));
             return;
         }
-        let kind = this._pendingKind || 'document';
-        if (kind === 'image' && (file.type || '').startsWith('video')) kind = 'video';
-        // Images are recompressed client-side so we store small files on Odoo.
-        if (kind === 'image') {
-            this._compressImage(file, 1280, 0.7).then((b64) => this.sendMedia(kind, b64, this._renameImg(file.name), 'image/jpeg'));
-            return;
-        }
+        const kind = this._pendingKind || 'document';
+        // Photos & videos → a review tray (multiple, per-item caption, view-once toggle).
+        if (kind === 'image') { this._buildMediaReview(files); return; }
+        // Audio / document → send the single file as before.
+        const file = files[0];
         const reader = new FileReader();
         reader.onload = () => { const b64 = String(reader.result).split(',')[1] || ''; this.sendMedia(kind, b64, file.name, file.type); };
         reader.readAsDataURL(file);
     }
+    _readB64(file) { return new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.readAsDataURL(file); }); }
+    async _buildMediaReview(files) {
+        const items = [];
+        for (const file of files.slice(0, 10)) {
+            const isVideo = (file.type || '').startsWith('video');
+            if (isVideo) {
+                const b64 = await this._readB64(file);
+                items.push({ kind: 'video', b64, name: file.name, mime: file.type || 'video/mp4', caption: '', previewUrl: URL.createObjectURL(file) });
+            } else {
+                const b64 = await this._compressImage(file, 1280, 0.7);
+                items.push({ kind: 'image', b64, name: this._renameImg(file.name), mime: 'image/jpeg', caption: '', previewUrl: 'data:image/jpeg;base64,' + b64 });
+            }
+        }
+        if (items.length) this.state.mediaReview = { items, idx: 0, viewOnce: false };
+    }
+    mrCur() { const r = this.state.mediaReview; return r ? r.items[r.idx] : null; }
+    setReviewCaption(v) { const c = this.mrCur(); if (c) c.caption = v; }
+    closeMediaReview() {
+        const r = this.state.mediaReview; this.state.mediaReview = null;
+        if (r) r.items.forEach((it) => { if (it.kind === 'video' && it.previewUrl) { try { URL.revokeObjectURL(it.previewUrl); } catch (e) {} } });
+    }
+    async sendMediaReview() {
+        const r = this.state.mediaReview; if (!r) return;
+        const items = r.items, viewOnce = r.viewOnce; this.state.mediaReview = null;
+        for (const it of items) {
+            await this.sendMedia(it.kind, it.b64, it.name, it.mime, 0, it.caption, viewOnce);
+            if (it.kind === 'video' && it.previewUrl) { try { URL.revokeObjectURL(it.previewUrl); } catch (e) {} }
+        }
+    }
+    // ---- view once (open a single time, then it's gone) ----
+    openViewOnce(m) {
+        if (m.mine || m.viewed || !m.media_url) { this.notify('This can only be opened once.'); return; }
+        this.state.viewOnceView = { id: m.id, url: m.media_url, kind: m.kind };
+    }
+    async closeViewOnce() {
+        const v = this.state.viewOnceView; this.state.viewOnceView = null;
+        if (v) { try { const res = await rpc('/chat/view_once_seen', { message_id: v.id }); this._applyMsg(res); } catch (e) {} this.reloadMessages(false); }
+    }
+    // ---- block / unblock ----
+    async toggleBlock() {
+        const i = this.state.contactInfo; if (!i || !i.user_id) return;
+        const willBlock = !i.blocked_by_me;
+        if (willBlock && !await this.askConfirm({ title: 'Block ' + i.name, body: "Blocked contacts can't message you, and you can't message them.", okLabel: 'Block', danger: true })) return;
+        try {
+            const res = await rpc('/chat/block', { user_id: i.user_id, blocked: willBlock });
+            if (res && res.status === false) { this.notify(res.message); return; }
+            i.blocked_by_me = willBlock;
+            if (this.state.activeConv) this.state.activeConv.blocked_by_me = willBlock;
+            this.loadConversations();
+            this.notify(willBlock ? 'Contact blocked' : 'Contact unblocked', 'success');
+        } catch (e) {}
+    }
+    async unblockFromBar() {
+        const c = this.state.activeConv; if (!c) return;
+        let uid = this.state.contactInfo && this.state.contactInfo.user_id;
+        if (!uid) { try { const r = await rpc('/chat/contact_info', { conversation_id: c.id }); if (r && r.status) uid = r.info.user_id; } catch (e) {} }
+        if (!uid) return;
+        try {
+            const res = await rpc('/chat/block', { user_id: uid, blocked: false });
+            if (res && res.status === false) { this.notify(res.message); return; }
+            c.blocked_by_me = false;
+            if (this.state.contactInfo) this.state.contactInfo.blocked_by_me = false;
+            this.loadConversations(); this.notify('Contact unblocked', 'success');
+        } catch (e) {}
+    }
+    linkDomain(url) { try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return ''; } }
+    // ---- compose-time link preview (WhatsApp-style card above the input) ----
+    _detectComposerLink() {
+        const d = this.state.draft || '';
+        const m = d.match(/https?:\/\/[^\s]+/i);
+        const url = m ? m[0].replace(/[.,;:!?)\]]+$/, '') : '';
+        if (!url) { this._clearComposerLink(); return; }
+        if (url === this._composerLinkUrl) return;
+        this._composerLinkUrl = url;
+        this.state.composerLink = null; this.state.composerLinkHidden = false;
+        clearTimeout(this._complinkTimer);
+        this._complinkTimer = setTimeout(async () => {
+            try {
+                const res = await rpc('/chat/link_preview', { url });
+                if (res && res.status && (res.title || res.image) && this._composerLinkUrl === url) {
+                    this.state.composerLink = { url, title: res.title, desc: res.desc, image: res.image };
+                }
+            } catch (e) {}
+        }, 600);
+    }
+    _clearComposerLink() { this.state.composerLink = null; this.state.composerLinkHidden = false; this._composerLinkUrl = ''; clearTimeout(this._complinkTimer); }
+    // ---- theme ----
+    setTheme(t) { this.state.theme = t; try { localStorage.setItem('o369_theme', t); } catch (e) {} }
+
+    // ================= In-app calls (WebRTC, 1:1) =================
+    canCall() { const c = this.state.activeConv; return !!(c && !c.is_group && !c.oversight && !c.blocked_by_me); }
+    async _iceConfig() {
+        if (this._iceCache) return this._iceCache;
+        try { const r = await rpc('/chat/call/ice', {}); this._iceCache = (r && r.ice) || [{ urls: 'stun:stun.l.google.com:19302' }]; }
+        catch (e) { this._iceCache = [{ urls: 'stun:stun.l.google.com:19302' }]; }
+        return this._iceCache;
+    }
+    _getMedia(video) { return navigator.mediaDevices.getUserMedia({ audio: true, video: video ? { width: 1280, height: 720 } : false }); }
+    _createPc(ice) {
+        const pc = new RTCPeerConnection({ iceServers: ice });
+        if (this._localStream) this._localStream.getTracks().forEach((t) => pc.addTrack(t, this._localStream));
+        this._remoteStream = new MediaStream();
+        pc.ontrack = (ev) => { (ev.streams[0] || new MediaStream([ev.track])).getTracks().forEach((t) => this._remoteStream.addTrack(t)); };
+        pc.onicecandidate = (ev) => { if (ev.candidate) this._signal('ice', ev.candidate); };
+        pc.onconnectionstatechange = () => {
+            const c = this.state.call; if (!c) return;
+            if (pc.connectionState === 'connected' && c.status !== 'connected') { c.status = 'connected'; this._stopRing(); this._startCallTimer(); }
+            if (['failed', 'closed', 'disconnected'].includes(pc.connectionState) && c.status === 'connected') this.endCall();
+        };
+        this._pendingIce = [];
+        return pc;
+    }
+    async _signal(kind, data) {
+        const c = this.state.call; if (!c) return;
+        try { await rpc('/chat/call/signal', { conversation_id: c.convId, call_id: c.id, kind, data: JSON.stringify(data) }); } catch (e) {}
+    }
+    async startCall(video) {
+        if (this.state.call) return;
+        const conv = this.state.activeConv; if (!conv || conv.is_group) { this.notify('Calls are 1:1 only.'); return; }
+        if (!navigator.mediaDevices || !window.RTCPeerConnection) { this.notify('Calls are not supported in this browser.'); return; }
+        this.closeMenus();
+        try { this._localStream = await this._getMedia(video); }
+        catch (e) { this.notify('Camera/mic blocked — calls need HTTPS or localhost.'); return; }
+        const ice = await this._iceConfig();
+        this.state.call = { id: null, convId: conv.id, video, status: 'outgoing', caller: true,
+            name: conv.title, avatar: conv.avatar_url, muted: false, camOff: false, secs: 0 };
+        this._pc = this._createPc(ice);
+        this._startRing(true);
+        try {
+            const r = await rpc('/chat/call/start', { conversation_id: conv.id, video });
+            if (r && r.status === false) { this.notify(r.message); this._teardownCall(); return; }
+            this.state.call.id = r.call_id; if (r.ice) this._iceCache = r.ice;
+        } catch (e) { this.notify('Could not start the call'); this._teardownCall(); }
+    }
+    _onCallRing(p) {
+        if (this.state.call) { rpc('/chat/call/reject', { conversation_id: p.conversation_id, call_id: p.call_id }).catch(() => {}); return; }
+        this.state.call = { id: p.call_id, convId: p.conversation_id, video: p.video, status: 'incoming', caller: false,
+            name: p.name, avatar: p.avatar, from_id: p.from_id, muted: false, camOff: false, secs: 0 };
+        this._startRing(false);
+    }
+    async acceptCall() {
+        const c = this.state.call; if (!c || c.status !== 'incoming') return;
+        if (!navigator.mediaDevices) { this.rejectCall(); return; }
+        try { this._localStream = await this._getMedia(c.video); }
+        catch (e) { this.notify('Camera/mic blocked — calls need HTTPS or localhost.'); this.rejectCall(); return; }
+        const ice = await this._iceConfig();
+        this._pc = this._createPc(ice);
+        this._stopRing(); c.status = 'connecting';
+        try { await rpc('/chat/call/accept', { conversation_id: c.convId, call_id: c.id }); } catch (e) {}
+    }
+    async _onCallAccept(p) {
+        const c = this.state.call; if (!c || !c.caller || !this._pc) return;
+        try { const offer = await this._pc.createOffer(); await this._pc.setLocalDescription(offer); this._signal('offer', offer); } catch (e) {}
+    }
+    async _onCallSignal(p) {
+        const c = this.state.call; if (!c || !this._pc) return;
+        let data; try { data = JSON.parse(p.data); } catch (e) { return; }
+        try {
+            if (p.kind === 'offer') {
+                await this._pc.setRemoteDescription(new RTCSessionDescription(data));
+                await this._flushIce();
+                const answer = await this._pc.createAnswer(); await this._pc.setLocalDescription(answer); this._signal('answer', answer);
+            } else if (p.kind === 'answer') {
+                await this._pc.setRemoteDescription(new RTCSessionDescription(data)); await this._flushIce();
+            } else if (p.kind === 'ice') {
+                if (this._pc.remoteDescription && this._pc.remoteDescription.type) await this._pc.addIceCandidate(new RTCIceCandidate(data));
+                else (this._pendingIce = this._pendingIce || []).push(data);
+            }
+        } catch (e) {}
+    }
+    async _flushIce() {
+        if (!this._pendingIce || !this._pendingIce.length) return;
+        for (const cand of this._pendingIce) { try { await this._pc.addIceCandidate(new RTCIceCandidate(cand)); } catch (e) {} }
+        this._pendingIce = [];
+    }
+    async rejectCall() {
+        const c = this.state.call; if (!c) return;
+        try { await rpc('/chat/call/reject', { conversation_id: c.convId, call_id: c.id }); } catch (e) {}
+        this._teardownCall();
+    }
+    _onCallReject(p) { if (this.state.call && this.state.call.caller) { this.notify('Call declined'); this.endCall(); } }
+    _onCallEnd(p) { if (this.state.call) this._teardownCall(); }
+    async endCall() {
+        const c = this.state.call; if (!c) return;
+        const convId = c.convId, wasConnected = (c.status === 'connected'), dur = c.secs || 0, caller = c.caller, video = c.video;
+        this._teardownCall();
+        try { await rpc('/chat/call/end', { conversation_id: convId, call_id: c.id, duration: dur, missed: wasConnected ? 0 : 1, video: video ? 1 : 0, log: caller ? 1 : 0 }); } catch (e) {}
+        if (this.state.selectedId === convId) this.reloadMessages(false);
+        if (caller) this.loadCalls();
+    }
+    toggleMute() { const c = this.state.call; if (!c || !this._localStream) return; c.muted = !c.muted; this._localStream.getAudioTracks().forEach((t) => (t.enabled = !c.muted)); }
+    toggleCam() { const c = this.state.call; if (!c || !this._localStream) return; c.camOff = !c.camOff; this._localStream.getVideoTracks().forEach((t) => (t.enabled = !c.camOff)); }
+    _startCallTimer() { clearInterval(this._callTimer); this._callTimer = setInterval(() => { if (this.state.call) this.state.call.secs++; }, 1000); }
+    callTimeLabel() { const s = (this.state.call && this.state.call.secs) || 0; return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+    callStatusLabel() {
+        const c = this.state.call; if (!c) return '';
+        if (c.status === 'connected') return this.callTimeLabel();
+        if (c.status === 'outgoing') return 'Ringing…';
+        if (c.status === 'connecting') return 'Connecting…';
+        return c.video ? 'Incoming video call' : 'Incoming voice call';
+    }
+    _teardownCall() {
+        clearInterval(this._callTimer); this._callTimer = null; this._stopRing();
+        try { if (this._pc) { this._pc.onicecandidate = null; this._pc.ontrack = null; this._pc.onconnectionstatechange = null; this._pc.close(); } } catch (e) {}
+        this._pc = null;
+        try { if (this._localStream) this._localStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+        this._localStream = null; this._remoteStream = null; this._pendingIce = null; this.state.call = null;
+    }
+    _startRing(outgoing) {
+        this._stopRing();
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+            this._ringCtx = this._ringCtx || new Ctx(); const ctx = this._ringCtx;
+            const beep = () => {
+                if (!this._ringOn) return;
+                const o = ctx.createOscillator(), g = ctx.createGain();
+                o.frequency.value = outgoing ? 440 : 523; g.gain.value = 0.07;
+                o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.4);
+            };
+            this._ringOn = true; beep(); this._ringTimer = setInterval(beep, outgoing ? 1600 : 1100);
+        } catch (e) {}
+    }
+    _stopRing() { this._ringOn = false; if (this._ringTimer) { clearInterval(this._ringTimer); this._ringTimer = null; } }
+
+    // ---- Calls tab (history / favourites / scheduled) ----
+    async loadCalls() {
+        try { const r = await rpc('/chat/calls', {}); if (r && r.status) this.state.calls = { recent: r.recent || [], favorites: r.favorites || [], upcoming: r.upcoming || [] }; } catch (e) {}
+    }
+    oneToOneConvs() { return (this.state.conversations || []).filter((c) => !c.is_group); }
+    async openCallChatId(convId, name, avatar) {
+        if (!convId) return;
+        this.state.pane = 'chats';
+        let conv = this.state.conversations.find((c) => c.id === convId);
+        if (!conv) conv = { id: convId, is_group: false, title: name, avatar_url: avatar };
+        await this.select(conv);
+    }
+    async callBack(cl) { await this.openCallChatId(cl.conversation_id, cl.name, cl.avatar); if (cl.conversation_id) this.startCall(cl.video); }
+    async quickCall(fv, video) { await this.openCallChatId(fv.conversation_id, fv.name, fv.avatar); this.startCall(video); }
+    async startScheduled(up) { if (!up.conversation_id) return; await this.openCallChatId(up.conversation_id, up.title, false); this.startCall(up.video); }
+    openSchedule() { this.state.scheduleForm = { title: '', conversation_id: '', when: '', video: false }; }
+    closeSchedule() { this.state.scheduleForm = null; }
+    async submitSchedule() {
+        const f = this.state.scheduleForm; if (!f || !f.title || !f.when) return;
+        let whenIso; try { whenIso = new Date(f.when).toISOString(); } catch (e) { whenIso = f.when; }
+        this.state.scheduleForm = null;
+        try {
+            const r = await rpc('/chat/call/schedule', { title: f.title, when: whenIso, video: f.video, conversation_id: f.conversation_id ? parseInt(f.conversation_id) : 0 });
+            if (r && r.status === false) { this.notify(r.message); return; }
+            this.loadCalls(); this.notify('Call scheduled', 'success');
+        } catch (e) {}
+    }
+    async cancelSchedule(up) {
+        try { await rpc('/chat/call/schedule/cancel', { id: up.id }); this.loadCalls(); } catch (e) {}
+    }
+    _checkScheduledCalls() {
+        const up = (this.state.calls && this.state.calls.upcoming) || []; if (!up.length) return;
+        const now = Date.now(); this._remindedScheds = this._remindedScheds || {};
+        for (const s of up) {
+            const t = new Date(s.when).getTime();
+            if (!isNaN(t) && t <= now + 30000 && t >= now - 60000 && !this._remindedScheds[s.id]) {
+                this._remindedScheds[s.id] = true;
+                try { if (('Notification' in window) && Notification.permission === 'granted') new Notification('📞 Scheduled call', { body: s.title, tag: 'sched-' + s.id }); } catch (e) {}
+                this._beep(); this.notify('📞 Scheduled call now: ' + s.title, 'info');
+            }
+        }
+    }
+    fmtCallDur(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+    fmtWhen(iso) { if (!iso) return ''; const d = new Date(iso); if (isNaN(d.getTime())) return ''; return d.toLocaleString([], { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }
     _renameImg(name) { return (name || 'image').replace(/\.[^.]+$/, '') + '.jpg'; }
     // Downscale + JPEG-recompress an image in the browser to keep Odoo storage small.
     _compressImage(file, maxSide, quality) {
@@ -1486,18 +2249,55 @@ export class Chat369App extends Component {
             reader.readAsDataURL(file);
         });
     }
-    async sendMedia(kind, b64, name, mime, duration) {
+    // POST media over XHR so we get upload progress (the rpc helper can't report it).
+    _postMediaWithProgress(params, onProgress) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/chat/send_media', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded, e.total); };
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try { resolve(JSON.parse(xhr.responseText).result); } catch (err) { reject(err); }
+                } else { reject(new Error('HTTP ' + xhr.status)); }
+            };
+            xhr.onerror = () => reject(new Error('network'));
+            xhr.send(JSON.stringify({ jsonrpc: '2.0', method: 'call', params }));
+        });
+    }
+    async sendMedia(kind, b64, name, mime, duration, caption, viewOnce) {
         if (!this.state.selectedId || !b64) return;
         const replyId = this.state.replyTo ? this.state.replyTo.id : 0;
         this.state.replyTo = null;   // clear the reply bar so it can't imply a phantom reply
+        // Optimistic "uploading" bubble with a live % + MB ring.
+        const fileMB = (b64.length * 0.75) / (1024 * 1024);
+        const tempId = 'tmp-' + Date.now() + '-' + Math.round(fileMB * 1000);
+        const preview = (kind === 'image') ? ('data:' + (mime || 'image/jpeg') + ';base64,' + b64) : '';
+        this.state.messages.push({
+            id: tempId, mine: true, kind, deleted: false, pinned: false, starred: false, edited: false,
+            reactions: [], body: caption || '', author_name: 'You', created: new Date().toISOString(),
+            status: 'sent', _pending: true, _uploading: true, _progress: 0, _upmb: '0.0',
+            _totmb: fileMB.toFixed(1), _preview: preview, view_once: !!viewOnce, media_url: false, reply_to_id: false,
+        });
+        this._scrollPending = true;
+        const temp = this.state.messages[this.state.messages.length - 1];
+        const params = { conversation_id: this.state.selectedId, kind, file_b64: b64, file_name: name || '',
+            mimetype: mime || '', duration: duration || 0, reply_to_id: replyId, caption: caption || '', view_once: viewOnce ? 1 : 0 };
         try {
-            const res = await rpc('/chat/send_media', { conversation_id: this.state.selectedId, kind, file_b64: b64, file_name: name || '', mimetype: mime || '', duration: duration || 0, reply_to_id: replyId });
+            const res = await this._postMediaWithProgress(params, (loaded, total) => {
+                const pct = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+                temp._progress = pct; temp._upmb = ((pct / 100) * fileMB).toFixed(1);
+            });
+            this.state.messages = this.state.messages.filter((m) => m.id !== tempId);
             if (res && res.status === false) { this.notify(res.message); return; }
             if (res && res.status && res.message) {
                 if (!this.state.messages.some((m) => m.id === res.message.id)) this.state.messages.push(res.message);
                 this._scrollPending = true; this.loadConversations();
             }
-        } catch (e) { this.notify('Could not send file'); }
+        } catch (e) {
+            this.state.messages = this.state.messages.filter((m) => m.id !== tempId);
+            this.notify('Could not send file');
+        }
     }
     micOrSend() { if ((this.state.draft || '').trim()) this.send(); else if (this.state.recording) this.stopRecording(); else this.startRecording(); }
     async startRecording() {
@@ -1589,18 +2389,29 @@ export class Chat369App extends Component {
     linkifyBody(text) {
         const raw = String(text || '');
         const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        // escape, highlight @mentions (@all or @Capitalized name), then apply
+        // WhatsApp text formatting: *bold* _italic_ ~strike~ `mono`. All done on
+        // already-escaped text; the only HTML injected is our own safe tags.
+        const mark = (s) => {
+            let t = esc(s).replace(/@(all\b|[A-Z][\w]*(?:\s[A-Z][\w]*)*)/g, (mm) => '<span class="o369-mention">' + mm + '</span>');
+            t = t.replace(/(^|\s)\*(\S(?:[^*\n]*\S)?)\*(?=\s|[.,!?)]|$)/g, '$1<b>$2</b>')
+                 .replace(/(^|\s)_(\S(?:[^_\n]*\S)?)_(?=\s|[.,!?)]|$)/g, '$1<i>$2</i>')
+                 .replace(/(^|\s)~(\S(?:[^~\n]*\S)?)~(?=\s|[.,!?)]|$)/g, '$1<s>$2</s>')
+                 .replace(/`([^`\n]+?)`/g, '<code class="o369-mono">$1</code>');
+            return t;
+        };
         const re = /(https?:\/\/[^\s<"']+|www\.[^\s<"']+)/gi;
         let out = '', last = 0, m;
         while ((m = re.exec(raw)) !== null) {
-            out += esc(raw.slice(last, m.index));
+            out += mark(raw.slice(last, m.index));
             let url = m[0], tail = '';
             const tm = url.match(/[)\].,;:!?'"]+$/);   // trailing punctuation isn't part of the link
             if (tm) { tail = tm[0]; url = url.slice(0, url.length - tail.length); }
-            const href = url.startsWith('http') ? url : 'http://' + url;
-            out += '<a href="' + esc(href) + '" target="_blank" rel="noopener noreferrer" class="o369-link">' + esc(url) + '</a>' + esc(tail);
+            const href = /^https?:\/\//i.test(url) ? url : 'http://' + url;
+            out += '<a href="' + esc(href) + '" target="_blank" rel="noopener noreferrer" class="o369-link">' + esc(url) + '</a>' + mark(tail);
             last = m.index + m[0].length;
         }
-        out += esc(raw.slice(last));
+        out += mark(raw.slice(last));
         return markup(out);
     }
     highlightBody(text) {
@@ -1655,6 +2466,9 @@ export class Chat369App extends Component {
     async tick() {
         await this.loadConversations();
         if (this.state.selectedId) await this.syncMessages();
+        this._callTick = (this._callTick || 0) + 1;
+        if (this._callTick % 5 === 0) await this.loadCalls();   // refresh calls + upcoming ~every 30s
+        this._checkScheduledCalls();
     }
     async syncMessages() {
         if (!this.state.selectedId) return;
@@ -1724,6 +2538,11 @@ export class Chat369App extends Component {
     // Live events pushed from the server over the Odoo bus.
     _onBus(p) {
         if (!p || !p.event) return;
+        if (p.event === 'call_ring') { this._onCallRing(p); return; }
+        if (p.event === 'call_accept') { this._onCallAccept(p); return; }
+        if (p.event === 'call_signal') { this._onCallSignal(p); return; }
+        if (p.event === 'call_reject') { this._onCallReject(p); return; }
+        if (p.event === 'call_end') { this._onCallEnd(p); return; }
         const open = (p.conversation_id === this.state.selectedId);
         if (p.event === 'message') {
             if (open && p.message && !this.state.messages.some((m) => m.id === p.message.id)) {

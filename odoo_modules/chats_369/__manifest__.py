@@ -12,6 +12,7 @@
     "data": [
         "security/ir.model.access.csv",
         "security/chats_rules.xml",
+        "data/chat_cron.xml",
         "views/chat_views.xml",
     ],
 
