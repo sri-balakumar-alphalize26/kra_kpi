@@ -104,7 +104,6 @@ export class KpiClientCompletions extends Component {
                         <th style="width: 90px">Ref</th>
                         <th>Task</th>
                         <th>Project</th>
-                        <th style="width: 90px">Hours</th>
                         <th>Delivered By</th>
                         <th style="width: 140px">Submitted</th>
                         <th style="width: 170px">&#160;</th>
@@ -123,7 +122,6 @@ export class KpiClientCompletions extends Component {
                             </td>
                             <td class="fw-bold" t-esc="p.name"/>
                             <td t-esc="p.project_name"/>
-                            <td t-esc="p.actual_hours + 'h'"/>
                             <td t-esc="p.primary_assignee"/>
                             <td t-esc="p.completion_date"/>
                             <td>
@@ -153,7 +151,6 @@ export class KpiClientCompletions extends Component {
                             <strong>Task:</strong> <t t-esc="state.approval.data.kpi.name"/><br/>
                             <strong>Client:</strong> <t t-esc="state.approval.data.client_name"/><br/>
                             <strong>Project:</strong> <t t-esc="state.approval.data.project_name"/><br/>
-                            <strong>Total hours:</strong> <t t-esc="state.approval.data.total_hours"/>h<br/>
                             <strong>Submitted by:</strong> <t t-esc="state.approval.data.kpi.primary_assignee"/><br/>
                             <strong>Submitted on:</strong> <t t-esc="state.approval.data.kpi.completion_date"/>
                         </div>

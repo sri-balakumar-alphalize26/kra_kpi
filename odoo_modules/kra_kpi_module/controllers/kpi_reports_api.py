@@ -2257,7 +2257,10 @@ class KpiReportsAPI(http.Controller):
             kra_ids = list(kra_ids)
 
             state_filter = params.get('state') or ''
-            domain = [('kra_id', 'in', kra_ids), ('active', '=', True)]
+            # Only show the client tasks an admin has ACCEPTED into the official flow.
+            # A freshly-created / self-created task (admin_accepted=False) must not
+            # reach the client until an admin accepts it — matches the workflow rule.
+            domain = [('kra_id', 'in', kra_ids), ('active', '=', True), ('admin_accepted', '=', True)]
             if state_filter and state_filter != 'all':
                 domain.append(('task_state', '=', state_filter))
 
@@ -2310,9 +2313,10 @@ class KpiReportsAPI(http.Controller):
             ], order='completion_date desc')
             pending = [_kpi_summary(k) for k in pending_kpis]
 
-            # Totals (computed across ALL active tasks, not just the current filter)
+            # Totals (across all admin-accepted tasks — un-accepted ones are hidden
+            # from the client everywhere, same as the list above).
             all_active = request.env['kra.kpi'].sudo().search(
-                [('kra_id', 'in', kra_ids), ('active', '=', True)])
+                [('kra_id', 'in', kra_ids), ('active', '=', True), ('admin_accepted', '=', True)])
 
             def _kind_of(k):
                 nm = k.name or ''

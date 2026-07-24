@@ -87,7 +87,7 @@ function TaskCard({ t, highlight, onPress, pulse, onLayout }) {
       </View>
       {t.project_name ? <Text style={s.sub} numberOfLines={1}>📁 {t.project_name}</Text> : null}
       <Text style={s.sub} numberOfLines={1}>
-        👤 {t.primary_assignee || 'Unassigned'}   ·   ⏱ {t.actual_hours || 0}h / {t.estimate_hours || 0}h
+        👤 {t.primary_assignee || 'Unassigned'}
       </Text>
     </TouchableOpacity>
   );
@@ -582,7 +582,6 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 <DRow label="Project" value={detail?.project_name || detail?.client_name || '—'} />
                 <DRow label="Assigned to" value={detail?.primary_assignee || 'Not assigned yet'} />
                 <DRow label="Priority" value={PRIO_LABEL[detail?.priority] || '—'} />
-                <DRow label="Time spent" value={`${detail?.actual_hours || 0}h of ${detail?.estimate_hours || 0}h estimated`} />
                 {detail?.deadline ? <DRow label="Deadline" value={detail.deadline} /> : null}
                 {detail?.related_req_ref ? <DRow label="Linked to" value={detail.related_req_ref} /> : null}
                 {detail?.delivery_version ? <DRow label="Version" value={detail.delivery_version} /> : null}

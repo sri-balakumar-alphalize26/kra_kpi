@@ -118,10 +118,8 @@ export class KpiClientDashboard extends Component {
                 <!-- Total-duration summary across the current filter scope -->
                 <div t-if="filterSummary.show" class="mt-2 small">
                     <span class="badge bg-primary me-2">
-                        <i class="fa fa-hourglass-half me-1"/>
-                        Filtered total:
-                        <strong t-esc="filterSummary.hoursLabel"/>
-                        across <t t-esc="filterSummary.taskCount"/> task(s)
+                        <i class="fa fa-list me-1"/>
+                        <t t-esc="filterSummary.taskCount"/> task(s)
                     </span>
                     <span t-if="state.userFilter" class="badge bg-info me-2">
                         User: <t t-esc="this.userLabel(state.userFilter)"/>
@@ -164,9 +162,6 @@ export class KpiClientDashboard extends Component {
                                         <i class="fa fa-clock-o"/> <t t-esc="state.dashboard.by_type.requirement.open"/>
                                     </span>
                                 </div>
-                                <div class="small text-muted mt-1">
-                                    <i class="fa fa-hourglass-half"/> <t t-esc="state.dashboard.by_type.requirement.hours"/>h
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -186,9 +181,6 @@ export class KpiClientDashboard extends Component {
                                     <span class="badge bg-warning text-dark ms-1">
                                         <i class="fa fa-clock-o"/> <t t-esc="state.dashboard.by_type.update.open"/>
                                     </span>
-                                </div>
-                                <div class="small text-muted mt-1">
-                                    <i class="fa fa-hourglass-half"/> <t t-esc="state.dashboard.by_type.update.hours"/>h
                                 </div>
                             </div>
                         </div>
@@ -210,9 +202,6 @@ export class KpiClientDashboard extends Component {
                                         <i class="fa fa-clock-o"/> <t t-esc="state.dashboard.by_type.bug.open"/>
                                     </span>
                                 </div>
-                                <div class="small text-muted mt-1">
-                                    <i class="fa fa-hourglass-half"/> <t t-esc="state.dashboard.by_type.bug.hours"/>h
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -232,7 +221,7 @@ export class KpiClientDashboard extends Component {
                 <table class="table table-sm align-middle mb-0">
                     <thead class="table-light">
                         <tr>
-                            <th>Ref</th><th>Task</th><th>Project</th><th>Hours</th><th>By</th><th>Submitted</th><th>&#160;</th>
+                            <th>Ref</th><th>Task</th><th>Project</th><th>By</th><th>Submitted</th><th>&#160;</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -241,7 +230,6 @@ export class KpiClientDashboard extends Component {
                                 <td><span class="badge bg-secondary" t-esc="p.external_ref or '—'"/></td>
                                 <td class="fw-bold" t-esc="p.name"/>
                                 <td t-esc="p.project_name"/>
-                                <td t-esc="p.actual_hours + 'h'"/>
                                 <td t-esc="p.primary_assignee"/>
                                 <td t-esc="p.completion_date"/>
                                 <td>
@@ -279,7 +267,6 @@ export class KpiClientDashboard extends Component {
                             <th>Task</th>
                             <th>Project</th>
                             <th style="width: 130px">State</th>
-                            <th style="width: 80px">Hours</th>
                             <th style="width: 110px">Deadline</th>
                             <th style="width: 90px">Cert</th>
                             <th style="width: 100px">&#160;</th>
@@ -308,12 +295,6 @@ export class KpiClientDashboard extends Component {
                                 <td t-esc="k.project_name"/>
                                 <td>
                                     <span class="badge" t-att-class="this.stateBadge(k.task_state)" t-esc="k.task_state"/>
-                                </td>
-                                <td>
-                                    <t t-esc="k.actual_hours.toFixed(2)"/>h
-                                    <span t-if="k.estimate_hours > 0" class="text-muted small">
-                                        / <t t-esc="k.estimate_hours.toFixed(2)"/>h
-                                    </span>
                                 </td>
                                 <td t-esc="k.deadline or '—'"/>
                                 <td>
@@ -364,7 +345,6 @@ export class KpiClientDashboard extends Component {
                             <strong>Task:</strong> <t t-esc="state.approval.data.kpi.name"/><br/>
                             <strong>Client:</strong> <t t-esc="state.approval.data.client_name"/><br/>
                             <strong>Project:</strong> <t t-esc="state.approval.data.project_name"/><br/>
-                            <strong>Total hours:</strong> <t t-esc="state.approval.data.total_hours"/>h<br/>
                             <strong>Submitted by:</strong> <t t-esc="state.approval.data.kpi.primary_assignee"/><br/>
                             <strong>Submitted on:</strong> <t t-esc="state.approval.data.kpi.completion_date"/>
                         </div>
