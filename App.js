@@ -29,6 +29,7 @@ import ClientTasks from './screens/ClientTasks';
 import GenerateClientFiles from './screens/GenerateClientFiles';
 import ReassignmentHistory from './screens/ReassignmentHistory';
 import ClientTaskQueue from './screens/ClientTaskQueue';
+import UserManual from './screens/UserManual';
 import StartWorkingScreen from './screens/StartWorkingScreen';
 import AppLoginScreen from './screens/AppLoginScreen';
 import AlarmScreen from './screens/AlarmScreen';
@@ -677,6 +678,10 @@ function AppInner() {
       return <ReassignmentHistory onBack={home} />;
     if (appScreen === 'taskqueue')
       return <ClientTaskQueue onBack={home} />;
+    if (appScreen === 'usermanual')
+      // Every role: role-tagged PDF manuals (server-filtered). The screen
+      // self-gates admin add/edit/delete via app_bundle.can_edit.
+      return <UserManual onBack={home} />;
     // (A second `appScreen === 'startworking'` branch used to sit here. It was
     // unreachable — the live one above returns first — and still carried the
     // retired "locked developer: no back button" rule, contradicting it.)

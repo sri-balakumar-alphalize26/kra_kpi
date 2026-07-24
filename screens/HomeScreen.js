@@ -83,6 +83,9 @@ const QUICK = [
   { label: 'Company Branding',   lib: 'mc',  name: 'palette',          dest: 'companybranding',    adminOnly: true,  section: 'settings', bg: '#FCE7F3', fg: '#DB2777' },
   { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true,  section: 'settings', bg: '#E2E8F0', fg: '#475569' },
   { label: 'Requests',           lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
+  // Every role sees this (adminOnly:false → developers; whitelisted → clients;
+  // not excluded → admins). Role-tagged manuals are filtered server-side.
+  { label: 'User Manual',        lib: 'mc',  name: 'book-open-page-variant', dest: 'usermanual',   adminOnly: false, section: 'reports',  bg: '#EEF2FF', fg: '#4F46E5' },
 ];
 
 // Menu sections (sub-headings), shown in the drawer, the Quick Actions grid, and
@@ -460,7 +463,7 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, onNee
   const roleTiles = isAdmin
     ? QUICK.filter((q) => !['mytasks', 'myworkday', 'myinvoices', 'mysnapshots'].includes(q.dest))
     : role === 'client'
-      ? QUICK.filter((q) => ['upload:requirement', 'upload:update', 'upload:bug', 'mytasks', 'myinvoices'].includes(q.dest))
+      ? QUICK.filter((q) => ['upload:requirement', 'upload:update', 'upload:bug', 'mytasks', 'myinvoices', 'usermanual'].includes(q.dest))
       : QUICK.filter((q) => !q.adminOnly);
 
   // Quick Actions customization: which of the role tiles show on the Home grid.

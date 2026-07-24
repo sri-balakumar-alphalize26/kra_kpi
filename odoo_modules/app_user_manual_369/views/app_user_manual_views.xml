@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Form View -->
+    <record id="app_user_manual_form_view" model="ir.ui.view">
+        <field name="name">app.user.manual.form</field>
+        <field name="model">app.user.manual</field>
+        <field name="arch" type="xml">
+            <form string="User Manual Document">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name" string="Title"/>
+                        <h1>
+                            <field name="name" placeholder="e.g. Getting Started Guide"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <!-- Binary file widget: click to upload / replace the
+                             PDF; a download icon appears once a file is set.
+                             filename= keeps the original name for download. -->
+                        <field name="pdf_file" filename="pdf_filename"
+                               widget="binary"/>
+                        <field name="pdf_filename" invisible="1"/>
+                        <field name="role" widget="radio" options="{'horizontal': true}"/>
+                        <field name="sequence"/>
+                        <field name="active"/>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <!-- List View -->
+    <record id="app_user_manual_list_view" model="ir.ui.view">
+        <field name="name">app.user.manual.list</field>
+        <field name="model">app.user.manual</field>
+        <field name="arch" type="xml">
+            <list string="User Manual" default_order="sequence">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="role" widget="badge"/>
+                <field name="pdf_filename"/>
+                <field name="active" widget="boolean_toggle"/>
+                <field name="write_date" optional="show"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Action -->
+    <record id="app_user_manual_action" model="ir.actions.act_window">
+        <field name="name">User Manual</field>
+        <field name="res_model">app.user.manual</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Add your first manual document.</p>
+            <p>
+                The mobile app lists these PDFs when a user opens the User
+                Manual, and fetches a document from the database when opened or
+                downloaded. Add as many titled PDFs as you need; changes reach
+                every device automatically.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu -->
+    <menuitem id="app_user_manual_menu_root" name="User Manual"
+              action="app_user_manual_action" sequence="100"/>
+
+</odoo>

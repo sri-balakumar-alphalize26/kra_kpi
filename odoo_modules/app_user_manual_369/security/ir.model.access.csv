@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_app_user_manual_user,app.user.manual.user,model_app_user_manual,base.group_user,1,0,0,0
+access_app_user_manual_manager,app.user.manual.manager,model_app_user_manual,base.group_system,1,1,1,1
+access_app_user_manual_kra_owner,app.user.manual.kra.owner,model_app_user_manual,kra_kpi_module.group_kra_owner,1,1,1,1
+access_app_user_manual_kra_admin,app.user.manual.kra.admin,model_app_user_manual,kra_kpi_module.group_kra_admin,1,1,1,1
