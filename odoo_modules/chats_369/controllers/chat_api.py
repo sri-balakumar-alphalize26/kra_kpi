@@ -220,8 +220,13 @@ class Chat369API(http.Controller):
                 media_ok = False
         reply = msg.reply_to_id
         reply_body = ''
+        reply_author = reply.author_id.name if reply else ''
         if reply:
             reply_body = 'This message was deleted' if reply.deleted else (reply.body or self._preview(reply))[:120]
+        elif msg.quote_author or msg.quote_body:
+            # Cross-chat "reply privately" quote — render in the same quote block.
+            reply_author = msg.quote_author or ''
+            reply_body = (msg.quote_body or '')[:120]
         return {
             'id': msg.id,
             'conversation_id': msg.conversation_id.id,
@@ -243,8 +248,9 @@ class Chat369API(http.Controller):
             'viewed': me_id in msg.viewed_by_user_ids.ids,
             'link': self._link_preview(msg),
             'reply_to_id': reply.id if reply else False,
-            'reply_to_author': reply.author_id.name if reply else '',
+            'reply_to_author': reply_author,
             'reply_to_body': reply_body,
+            'quoted': bool(reply or msg.quote_author or msg.quote_body),
             'edited': msg.edited,
             'forwarded': msg.forwarded,
             'is_meet': msg.is_meet,
@@ -445,13 +451,32 @@ class Chat369API(http.Controller):
                        if isinstance(t, dict) and t.get('status') == 'error'
                        and (t.get('details') or {}).get('error') == 'DeviceNotRegistered']
                 if bad:
-                    with odoo.registry(dbname).cursor() as cr:
+                    from odoo.modules.registry import Registry
+                    with Registry(dbname).cursor() as cr:
                         env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
                         for tok in bad:
                             env['kpi.push.token'].deactivate(tok)
                         cr.commit()
             except Exception:
                 pass
+
+    @staticmethod
+    def _url_is_private(url):
+        """SSRF guard: True if the URL points at localhost / a private network,
+        so we never let a pasted link make the server fetch its own intranet."""
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or '').lower()
+        if not host or host == 'localhost' or host.endswith('.local') or host.endswith('.internal'):
+            return True
+        if host.startswith(('127.', '10.', '192.168.', '169.254.', '0.')):
+            return True
+        if host.startswith('172.'):
+            try:
+                if 16 <= int(host.split('.')[1]) <= 31:
+                    return True
+            except (ValueError, IndexError):
+                pass
+        return False
 
     @staticmethod
     def _scrape_og(url):
@@ -495,7 +520,8 @@ class Chat369API(http.Controller):
         client picks it up on its next poll). Best-effort."""
         data = cls._scrape_og(url)
         try:
-            with odoo.registry(dbname).cursor() as cr:
+            from odoo.modules.registry import Registry
+            with Registry(dbname).cursor() as cr:
                 env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
                 msg = env['chat.message'].browse(msg_id)
                 if msg.exists():
@@ -885,11 +911,17 @@ class Chat369API(http.Controller):
             r = request.env['chat.message'].sudo().browse(rid)
             if r.exists() and r.conversation_id.id == conv.id:
                 vals['reply_to_id'] = rid
+        if 'reply_to_id' not in vals:
+            qa = (params.get('quote_author') or '').strip()
+            qb = (params.get('quote_body') or '').strip()
+            if qa or qb:   # "reply privately" quote carried over from another chat
+                vals['quote_author'] = qa[:120]
+                vals['quote_body'] = qb[:200]
         msg = request.env['chat.message'].sudo().create(vals)
         # The author has, by definition, read + received their own message.
         member._advance_cursors(read_id=msg.id, delivered_id=msg.id)
         # Link preview: fetch the first URL's Open Graph card off-request.
-        urls = _URL_RE.findall(body)
+        urls = [u for u in _URL_RE.findall(body) if not self._url_is_private(u)]
         if urls:
             msg.sudo().write({'link_url': urls[0]})
             threading.Thread(target=self._fetch_link_preview_async,
@@ -1467,6 +1499,8 @@ class Chat369API(http.Controller):
         url = (params.get('url') or '').strip()
         if not url.lower().startswith(('http://', 'https://')):
             return {'status': False}
+        if self._url_is_private(url):   # SSRF guard: never fetch internal/loopback hosts
+            return {'status': False}
         data = self._scrape_og(url)
         if not (data['title'] or data['image']):
             return {'status': False}
@@ -2029,6 +2063,81 @@ class Chat369API(http.Controller):
             domain += [('create_date', '>=', date + ' 00:00:00'), ('create_date', '<=', date + ' 23:59:59')]
         msgs = Msg.search(domain, order='id desc', limit=100)
         return {'status': True, 'messages': [self._serialize_message(m, me.id, conv) for m in msgs]}
+
+    @http.route('/chat/search_all', type='json', auth='user', methods=['POST'], csrf=False)
+    def chat_search_all(self, **params):
+        """Global search: find my messages across every chat I'm a member of."""
+        me = request.env.user
+        q = (params.get('query') or '').strip()
+        if len(q) < 2:
+            return {'status': True, 'results': []}
+        conv_ids = request.env['chat.member'].sudo().search(
+            [('user_id', '=', me.id), ('left_at', '=', False)]).mapped('conversation_id').ids
+        if not conv_ids:
+            return {'status': True, 'results': []}
+        msgs = request.env['chat.message'].sudo().search([
+            ('conversation_id', 'in', conv_ids),
+            ('deleted', '=', False),
+            ('kind', '!=', 'system'),
+            ('body', 'ilike', q),
+            ('hidden_for_user_ids', 'not in', [me.id]),
+        ], order='id desc', limit=50)
+        results = []
+        for m in msgs:
+            body = m.body or self._preview(m)
+            results.append({
+                'msg_id': m.id,
+                'conv_id': m.conversation_id.id,
+                'conv_title': self._conv_title(m.conversation_id, me.id),
+                'author': 'You' if m.author_id.id == me.id else (m.author_id.name or ''),
+                'snippet': (body or '')[:90],
+                'created': self._dt(m.create_date),
+            })
+        return {'status': True, 'results': results}
+
+    @http.route('/chat/export/<int:conversation_id>', type='http', auth='user')
+    def chat_export(self, conversation_id, **kw):
+        """Download a plain-text transcript of one chat (office record-keeping)."""
+        me = request.env.user
+        conv, member = self._member_conv(conversation_id)
+        if not conv:
+            return request.not_found()
+        msgs = request.env['chat.message'].sudo().search([
+            ('conversation_id', '=', conv.id),
+            ('hidden_for_user_ids', 'not in', [me.id]),
+        ], order='id asc')
+        title = self._conv_title(conv, me.id)
+        lines = ['369Chats transcript', title,
+                 'Exported %s' % fields.Datetime.now().strftime('%Y-%m-%d %H:%M'), '']
+        for m in msgs:
+            ts = (m.create_date or fields.Datetime.now()).strftime('%Y-%m-%d %H:%M')
+            if m.kind == 'system':
+                lines.append('[%s] * %s' % (ts, m.body or ''))
+                continue
+            author = 'You' if m.author_id.id == me.id else (m.author_id.name or 'Unknown')
+            if m.deleted:
+                text = '[deleted]'
+            elif m.kind == 'image':
+                text = '[Photo]' + ((' ' + m.body) if m.body else '')
+            elif m.kind == 'video':
+                text = '[Video]' + ((' ' + m.body) if m.body else '')
+            elif m.kind == 'audio':
+                text = '[Voice message]'
+            elif m.kind == 'document':
+                text = '[Document: %s]' % (m.file_name or 'file')
+            elif m.kind == 'poll':
+                text = '[Poll] %s' % (m.body or '')
+            elif getattr(m, 'is_meet', False):
+                text = '[Meeting] %s' % (m.body or '')
+            else:
+                text = m.body or ''
+            lines.append('[%s] %s: %s' % (ts, author, text))
+        content = '\n'.join(lines)
+        safe = re.sub(r'[^A-Za-z0-9_-]+', '_', title).strip('_') or 'chat'
+        return request.make_response(content.encode('utf-8'), headers=[
+            ('Content-Type', 'text/plain; charset=utf-8'),
+            ('Content-Disposition', 'attachment; filename="369chats_%s.txt"' % safe),
+        ])
 
     @http.route('/chat/messages_around', type='json', auth='user', methods=['POST'], csrf=False)
     def chat_messages_around(self, **params):

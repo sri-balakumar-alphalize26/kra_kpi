@@ -43,6 +43,10 @@ class ChatMessage(models.Model):
     duration = fields.Integer(string='Duration (s)')   # audio / video
 
     reply_to_id = fields.Many2one('chat.message', string='Reply To', ondelete='set null')
+    # Cross-chat "reply privately": a free-text quote of a message from another chat
+    # (a real reply_to_id only points within one conversation).
+    quote_author = fields.Char(string='Quoted Author')
+    quote_body = fields.Char(string='Quoted Text')
 
     # WhatsApp-style extras
     pinned = fields.Boolean(string='Pinned', default=False, index=True)

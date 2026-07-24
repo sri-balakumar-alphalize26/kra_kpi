@@ -47,8 +47,8 @@ export class Chat369App extends Component {
                     </div>
                     <div class="o369-search">
                         <i class="fa fa-search"/>
-                        <input type="text" placeholder="Search chats" t-model="state.search"/>
-                        <button class="o369-searchx" t-if="state.search" t-on-click="() => (state.search = '')" title="Clear"><i class="fa fa-times"/></button>
+                        <input type="text" placeholder="Search chats and messages" t-model="state.search" t-on-input="onListSearch"/>
+                        <button class="o369-searchx" t-if="state.search" t-on-click="() => { state.search = ''; state.globalMsgs = []; }" title="Clear"><i class="fa fa-times"/></button>
                     </div>
                     <div class="o369-chips">
                         <button class="o369-chip" t-att-class="{ 'o369-chip-on': state.filter === 'all' }" t-on-click="() => this.setFilter('all')">All</button>
@@ -114,6 +114,15 @@ export class Chat369App extends Component {
                             </div>
                         </t>
                         <div class="o369-hint" t-if="filteredConversations().length === 0">No chats yet — tap the pencil to start one.</div>
+                        <div class="o369-gsearch" t-if="state.search and state.globalMsgs.length">
+                            <div class="o369-glabel">Messages</div>
+                            <t t-foreach="state.globalMsgs" t-as="gm" t-key="gm.msg_id">
+                                <button class="o369-grow" t-on-click="() => this.openGlobalHit(gm)">
+                                    <div class="o369-gtop"><span class="o369-gtitle" t-esc="gm.conv_title"/><span class="o369-gtime" t-esc="fmtRowTime(gm.created)"/></div>
+                                    <div class="o369-gsnip"><b t-esc="gm.author + ': '"/><t t-esc="gm.snippet"/></div>
+                                </button>
+                            </t>
+                        </div>
                     </div>
                 </t>
 
@@ -190,6 +199,7 @@ export class Chat369App extends Component {
                             <div class="o369-hdrmenu" t-if="state.convMenu">
                                 <button class="o369-menuitem" t-on-click.stop="openContactInfo"><i class="fa fa-info-circle"/> <t t-esc="currentIsGroup() ? 'Group info' : 'Contact info'"/></button>
                                 <button class="o369-menuitem" t-on-click.stop="toggleSearch"><i class="fa fa-search"/> Search</button>
+                                <button class="o369-menuitem" t-on-click.stop="exportChat"><i class="fa fa-download"/> Export chat</button>
                                 <button class="o369-menuitem" t-on-click.stop="headerClear"><i class="fa fa-eraser"/> Clear chat</button>
                                 <button class="o369-menuitem o369-danger" t-on-click.stop="headerLeave"><i class="fa fa-trash"/> <t t-esc="currentIsGroup() ? 'Exit group' : 'Delete chat'"/></button>
                             </div>
@@ -235,7 +245,10 @@ export class Chat369App extends Component {
                             <t t-else="">
                                 <t t-set="m" t-value="it.msg"/>
                                 <div t-if="m.kind === 'system'" class="o369-sys"><span t-esc="m.body"/></div>
-                                <div t-else="" class="o369-bubble" t-attf-id="o369m-{{m.id}}" t-att-class="(m.mine ? 'o369-out' : 'o369-in') + (state.flashId === m.id ? ' o369-flash' : '')">
+                                <div t-else="" class="o369-bubble" t-attf-id="o369m-{{m.id}}" t-att-class="(m.mine ? 'o369-out' : 'o369-in') + (state.flashId === m.id ? ' o369-flash' : '') + (state.selectMode and state.selectedIds.includes(m.id) ? ' o369-selected' : '')">
+                                    <div t-if="state.selectMode and !m._pending" class="o369-seloverlay" t-on-click.stop="() => this.toggleSelect(m)">
+                                        <span class="o369-selcheck" t-att-class="{ 'o369-selcheck-on': state.selectedIds.includes(m.id) }"><i class="fa fa-check"/></span>
+                                    </div>
                                     <button class="o369-caret" t-if="!m.deleted" t-on-click.stop="(ev) => this.toggleMenu(m.id, ev)" title="More"><i class="fa fa-chevron-down"/></button>
                                     <div class="o369-msgmenu" t-if="state.openMenuId === m.id" t-attf-style="top:{{state.menuPos.top}}px; left:{{state.menuPos.left}}px;">
                                         <div class="o369-reactbar">
@@ -245,7 +258,9 @@ export class Chat369App extends Component {
                                             <button class="o369-reactbtn o369-reactplus" t-on-click.stop="() => this.openEmojiPicker(m)" title="More emojis">+</button>
                                         </div>
                                         <button class="o369-menuitem" t-on-click.stop="() => this.startReply(m)"><i class="fa fa-reply"/> Reply</button>
+                                        <button class="o369-menuitem" t-if="!m.mine and currentIsGroup()" t-on-click.stop="() => this.replyPrivately(m)"><i class="fa fa-user-circle-o"/> Reply privately</button>
                                         <button class="o369-menuitem" t-on-click.stop="() => this.copyMsg(m)"><i class="fa fa-files-o"/> Copy</button>
+                                        <button class="o369-menuitem" t-if="!m._pending" t-on-click.stop="() => this.enterSelect(m)"><i class="fa fa-check-square-o"/> Select</button>
                                         <button class="o369-menuitem" t-on-click.stop="() => this.openForward(m)"><i class="fa fa-share"/> Forward</button>
                                         <button class="o369-menuitem" t-on-click.stop="() => this.menuPin(m)"><i class="fa fa-thumb-tack"/> <t t-esc="m.pinned ? 'Unpin' : 'Pin'"/></button>
                                         <button class="o369-menuitem" t-on-click.stop="() => this.toggleStar(m)"><i class="fa fa-star"/> <t t-esc="m.starred ? 'Unstar' : 'Star'"/></button>
@@ -256,7 +271,7 @@ export class Chat369App extends Component {
                                     </div>
 
                                     <div class="o369-sender" t-if="!m.mine and currentIsGroup()" t-esc="m.author_name"/>
-                                    <div class="o369-quote" t-if="m.reply_to_id">
+                                    <div class="o369-quote" t-if="m.quoted or m.reply_to_id">
                                         <span class="o369-qauthor" t-esc="m.reply_to_author"/>
                                         <span class="o369-qbody" t-esc="m.reply_to_body"/>
                                     </div>
@@ -295,12 +310,14 @@ export class Chat369App extends Component {
                                             <span class="o369-voicetime" t-esc="audioTimeLabel(m)"/>
                                         </div>
                                         <a t-if="m.kind === 'document' and m.media_url" class="o369-msgdoc" t-att-href="m.media_url" target="_blank"><i class="fa fa-file-o me-2"/><t t-esc="m.file_name or 'Document'"/></a>
-                                        <a t-if="m.link" class="o369-linkcard" t-att-href="m.link.url" target="_blank" rel="noopener noreferrer">
-                                            <img t-if="m.link.image" class="o369-linkimg" t-att-src="m.link.image" loading="lazy"/>
+                                        <t t-set="lc" t-value="linkCard(m)"/>
+                                        <a t-if="lc" class="o369-linkcard" t-att-href="lc.url" target="_blank" rel="noopener noreferrer">
+                                            <img t-if="lc.image" class="o369-linkimg" t-att-src="lc.image" loading="lazy"/>
+                                            <span t-else="" class="o369-linkfav"><i class="fa fa-globe"/></span>
                                             <span class="o369-linkmeta">
-                                                <span class="o369-linktitle" t-esc="m.link.title or m.link.url"/>
-                                                <span class="o369-linkdesc" t-if="m.link.desc" t-esc="m.link.desc"/>
-                                                <span class="o369-linkdomain" t-esc="linkDomain(m.link.url)"/>
+                                                <span class="o369-linktitle" t-esc="lc.title or lc.url"/>
+                                                <span class="o369-linkdesc" t-if="lc.desc" t-esc="lc.desc"/>
+                                                <span class="o369-linkdomain" t-esc="linkDomain(lc.url)"/>
                                             </span>
                                         </a>
                                         <span t-if="m.body and state.searchOpen and state.searchQ" class="o369-btext" t-out="highlightBody(m.body)"/>
@@ -345,7 +362,7 @@ export class Chat369App extends Component {
                         <button class="o369-iconbtn o369-replyx" t-on-click="cancelEdit" title="Cancel"><i class="fa fa-times"/></button>
                     </div>
                     <div class="o369-replybar" t-elif="state.replyTo">
-                        <div class="o369-replyinfo"><b t-esc="state.replyTo.author"/><span t-esc="state.replyTo.body"/></div>
+                        <div class="o369-replyinfo"><b t-esc="state.replyTo.author"/><small t-if="state.replyTo.external" class="o369-replyext"> · private reply</small><span t-esc="state.replyTo.body"/></div>
                         <button class="o369-iconbtn o369-replyx" t-on-click="cancelReply" title="Cancel"><i class="fa fa-times"/></button>
                     </div>
                     <!-- WhatsApp-style recording bar: delete . red dot . timer . waveform . pause . send -->
@@ -384,7 +401,16 @@ export class Chat369App extends Component {
                         <span><i class="fa fa-ban me-1"/> You blocked this contact.</span>
                         <button class="o369-blockunbtn" t-on-click="unblockFromBar">Unblock</button>
                     </div>
-                    <div class="o369-input" t-if="!state.recording and !(state.activeConv and state.activeConv.oversight) and !(state.activeConv and state.activeConv.blocked_by_me)">
+                    <div class="o369-selbar" t-if="state.selectMode">
+                        <button class="o369-selx" t-on-click="exitSelect" title="Cancel"><i class="fa fa-times"/></button>
+                        <span class="o369-selcount"><t t-esc="state.selectedIds.length"/> selected</span>
+                        <span class="o369-selactions">
+                            <button t-att-disabled="!state.selectedIds.length" t-on-click="bulkStar" title="Star"><i class="fa fa-star"/></button>
+                            <button t-att-disabled="!state.selectedIds.length" t-on-click="bulkForward" title="Forward"><i class="fa fa-share"/></button>
+                            <button t-att-disabled="!state.selectedIds.length" t-on-click="bulkDelete" title="Delete for me"><i class="fa fa-trash"/></button>
+                        </span>
+                    </div>
+                    <div class="o369-input" t-if="!state.selectMode and !state.recording and !(state.activeConv and state.activeConv.oversight) and !(state.activeConv and state.activeConv.blocked_by_me)">
                         <span class="o369-emojiwrap">
                             <button class="o369-emojiopen" t-on-click.stop="toggleComposerEmoji" title="Emoji"><i class="fa fa-smile-o"/></button>
                             <div class="o369-emojipop" t-if="state.composerEmojiOpen" t-on-click.stop="">
@@ -1213,7 +1239,8 @@ export class Chat369App extends Component {
             rowMenuId: null, muteConv: null,
             filter: 'all', lists: [], showNewList: false, newListName: '', newListSel: [], addToListConv: null,
             convMenu: false, infoOpen: false, contactInfo: null, nickDraft: '',
-            searchOpen: false, searchQ: '', searchResults: [], searchIdx: 0, flashId: 0,
+            searchOpen: false, searchQ: '', searchResults: [], searchIdx: 0, flashId: 0, globalMsgs: [],
+            selectMode: false, selectedIds: [], forwardSel: [],
             calOpen: false, calYear: 0, calMonth: 0,
             attachMenu: false, lightbox: null, recording: false, recPaused: false, recSecs: 0, memberMenu: null, groupNameEdit: '',
             confirm: null, typing: null, msgInfo: null,
@@ -1227,7 +1254,7 @@ export class Chat369App extends Component {
             gmeetSaved: '', gmeetHelpOpen: false, chipMenuOpen: false, notifBannerHidden: false,
             drafts: {}, composerEmojiOpen: false, disappearOpen: false, pollCreate: null,
             mediaReview: null, viewOnceView: null,
-            composerLink: null, composerLinkHidden: false, theme: 'ocean', call: null,
+            composerLink: null, composerLinkHidden: false, previews: {}, theme: 'ocean', call: null,
             calls: { recent: [], favorites: [], upcoming: [] }, scheduleForm: null,
             mentionOpen: false, mentionMatches: [], mentionIdx: 0, mentionMembers: [], mentionMembersConv: 0, mentionStart: 0, mentionEnd: 0,
             settingsView: 'menu', profileEdit: { field: null, val: '' },
@@ -1382,7 +1409,7 @@ export class Chat369App extends Component {
     _persistDrafts() { try { localStorage.setItem('o369_drafts', JSON.stringify(this.state.drafts)); } catch (e) {} }
     async reloadMessages(scroll) {
         if (!this.state.selectedId) return;
-        try { const res = await rpc('/chat/messages', { conversation_id: this.state.selectedId, limit: 60 }); if (res && res.status) { this.state.messages = res.messages || []; if (scroll) this._scrollPending = true; this.markRead(); } } catch (e) {}
+        try { const res = await rpc('/chat/messages', { conversation_id: this.state.selectedId, limit: 60 }); if (res && res.status) { this.state.messages = res.messages || []; if (scroll) this._scrollPending = true; this.markRead(); this._scanPreviews(); } } catch (e) {}
     }
     async loadPinned() {
         if (!this.state.selectedId) return;
@@ -1423,12 +1450,14 @@ export class Chat369App extends Component {
         this.state.messages.push({
             id: tempId, mine: true, body, kind: 'text', deleted: false, pinned: false, starred: false,
             edited: false, reactions: [], reply_to_id: replyId || false,
-            reply_to_author: replyTo ? replyTo.author : '', reply_to_body: replyTo ? replyTo.body : '',
+            reply_to_author: replyTo ? replyTo.author : '', reply_to_body: replyTo ? replyTo.body : '', quoted: !!replyTo,
             author_name: 'You', created: new Date().toISOString(), status: 'sent', _pending: true,
         });
         this._scrollPending = true;
         try {
-            const res = await rpc('/chat/send', { conversation_id: this.state.selectedId, body, reply_to_id: replyId });
+            const payload = { conversation_id: this.state.selectedId, body, reply_to_id: replyId };
+            if (replyTo && replyTo.external) { payload.quote_author = replyTo.quote_author || replyTo.author || ''; payload.quote_body = replyTo.quote_body || replyTo.body || ''; }
+            const res = await rpc('/chat/send', payload);
             // Remove the temp bubble, then add the real one only if the poll didn't already.
             this.state.messages = this.state.messages.filter((m) => m.id !== tempId);
             if (res && res.status === false) {
@@ -1441,6 +1470,7 @@ export class Chat369App extends Component {
             if (res && res.status && res.message) {
                 if (!this.state.messages.some((m) => m.id === res.message.id)) this.state.messages.push(res.message);
                 this.loadConversations();
+                this._scanPreviews();
             }
             // Trigger word was just posted as text — now drop the Meet card right below it.
             if (isMeetTrigger) this.createMeet();
@@ -1555,11 +1585,53 @@ export class Chat369App extends Component {
         } catch (e) {}
     }
     openForward(m) { this.closeMenus(); this.state.forwardMsg = m; }
-    closeForward() { this.state.forwardMsg = null; }
+    closeForward() { this.state.forwardMsg = null; this.state.forwardSel = []; }
     async doForward(c) {
-        const m = this.state.forwardMsg; this.state.forwardMsg = null;
-        if (!m) return;
-        try { const res = await rpc('/chat/forward', { message_id: m.id, to_conversation_id: c.id }); if (res && res.status === false) { this.notify(res.message); return; } this.notify('Forwarded', 'success'); this.loadConversations(); } catch (e) {}
+        const fm = this.state.forwardMsg; this.state.forwardMsg = null;
+        if (!fm) return;
+        const ids = fm._bulk ? [...(this.state.forwardSel || [])] : [fm.id];
+        this.state.forwardSel = [];
+        let ok = 0;
+        for (const id of ids) {
+            try { const res = await rpc('/chat/forward', { message_id: id, to_conversation_id: c.id }); if (!res || res.status !== false) ok++; else if (ids.length === 1) { this.notify(res.message); return; } } catch (e) {}
+        }
+        if (ok) this.notify(ok > 1 ? (ok + ' forwarded') : 'Forwarded', 'success');
+        this.loadConversations();
+        if (fm._bulk) this.exitSelect();
+    }
+    // ---------------- reply privately (group message -> a 1:1 with that person) ----------------
+    async replyPrivately(m) {
+        this.closeMenus();
+        const author = m.author_name || '';
+        const body = (m.body && m.body.trim())
+            ? m.body.slice(0, 120)
+            : ({ image: 'Photo', video: 'Video', audio: 'Voice message', document: 'Document', poll: 'Poll' }[m.kind] || '');
+        if (!m.author_id) { this.notify('Cannot reply privately to this message.'); return; }
+        await this.openDirect(m.author_id);   // switch to the 1:1 (this clears replyTo)
+        this.state.replyTo = { external: true, author, body, quote_author: author, quote_body: body };
+    }
+    // ---------------- multi-select (bulk forward / delete / star) ----------------
+    enterSelect(m) { this.closeMenus(); this.state.selectMode = true; this.state.selectedIds = (m && typeof m.id === 'number') ? [m.id] : []; }
+    exitSelect() { this.state.selectMode = false; this.state.selectedIds = []; this.state.forwardSel = []; }
+    toggleSelect(m) {
+        if (!m || typeof m.id !== 'number') return;
+        const i = this.state.selectedIds.indexOf(m.id);
+        if (i >= 0) this.state.selectedIds.splice(i, 1); else this.state.selectedIds.push(m.id);
+    }
+    async bulkStar() {
+        const ids = [...this.state.selectedIds]; if (!ids.length) return;
+        for (const id of ids) { try { await rpc('/chat/star', { message_id: id, starred: true }); } catch (e) {} }
+        this.notify(ids.length + ' starred', 'success'); this.exitSelect(); this.reloadMessages(false);
+    }
+    async bulkDelete() {
+        const ids = [...this.state.selectedIds]; if (!ids.length) return;
+        for (const id of ids) { try { await rpc('/chat/delete_message', { message_id: id, scope: 'me' }); } catch (e) {} }
+        this.notify(ids.length + ' deleted', 'success'); this.exitSelect(); this.reloadMessages(false); this.loadConversations();
+    }
+    bulkForward() {
+        if (!this.state.selectedIds.length) return;
+        this.state.forwardSel = [...this.state.selectedIds];
+        this.state.forwardMsg = { _bulk: true };   // opens the forward picker in bulk mode
     }
 
     // ---------------- header menu ----------------
@@ -2027,6 +2099,39 @@ export class Chat369App extends Component {
         } catch (e) {}
     }
     linkDomain(url) { try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return ''; } }
+    // First http(s) URL in a message body (drops trailing punctuation).
+    firstUrlIn(body) {
+        if (!body) return '';
+        const m = String(body).match(/https?:\/\/[^\s]+/i);
+        return m ? m[0].replace(/[.,;:!?)\]]+$/, '') : '';
+    }
+    // The link-preview card to render under a message: the server-fetched one if
+    // present, else a client-fetched one (kept in state.previews, keyed by URL).
+    linkCard(m) {
+        if (!m || m.deleted || m.is_meet) return null;
+        if (m.link) return m.link;
+        const u = this.firstUrlIn(m.body);
+        if (!u) return null;
+        const p = this.state.previews[u];
+        return (p && typeof p === 'object') ? p : null;
+    }
+    // For every loaded message with a URL but no card yet, fetch one (once per URL).
+    _scanPreviews() {
+        const todo = [];
+        for (const m of this.state.messages) {
+            if (!m || m.deleted || m.is_meet || m.link) continue;
+            const u = this.firstUrlIn(m.body);
+            if (u && !(u in this.state.previews)) todo.push(u);
+        }
+        for (const u of todo) {
+            this.state.previews[u] = false;   // mark in-flight so we only fetch once
+            rpc('/chat/link_preview', { url: u }).then((res) => {
+                if (res && res.status && (res.title || res.image)) {
+                    this.state.previews[u] = { url: u, title: res.title, desc: res.desc, image: res.image };
+                }
+            }).catch(() => {});
+        }
+    }
     // ---- compose-time link preview (WhatsApp-style card above the input) ----
     _detectComposerLink() {
         const d = this.state.draft || '';
@@ -2363,6 +2468,27 @@ export class Chat369App extends Component {
     // ---- in-chat search + calendar ----
     toggleSearch() { this.closeMenus(); this.state.searchOpen = !this.state.searchOpen; if (!this.state.searchOpen) this.closeSearch(); }
     closeSearch() { this.state.searchOpen = false; this.state.searchQ = ''; this.state.searchResults = []; this.state.calOpen = false; this.state.flashId = 0; }
+    // ---- global search: the left "Search chats" box also finds messages everywhere ----
+    onListSearch() {
+        const q = (this.state.search || '').trim();
+        clearTimeout(this._gsTimer);
+        if (q.length < 2) { this.state.globalMsgs = []; return; }
+        this._gsTimer = setTimeout(async () => {
+            try { const r = await rpc('/chat/search_all', { query: q }); if (r && r.status) this.state.globalMsgs = r.results || []; }
+            catch (e) {}
+        }, 300);
+    }
+    async openGlobalHit(gm) {
+        const conv = this.state.conversations.find((c) => c.id === gm.conv_id)
+            || { id: gm.conv_id, title: gm.conv_title, is_group: false };
+        this.state.search = ''; this.state.globalMsgs = [];
+        await this.select(conv);
+        this.jumpToMessage(gm.msg_id);
+    }
+    exportChat() {
+        this.closeMenus();
+        if (this.state.selectedId) window.open('/chat/export/' + this.state.selectedId, '_blank');
+    }
     onSearchKey(ev) { if (ev.key === 'Escape') { this.closeSearch(); return; } this.doSearch(); }
     async doSearch(date) {
         if (!this.state.selectedId) return;
@@ -2534,6 +2660,7 @@ export class Chat369App extends Component {
             if (atB) this._scrollPending = true;
             this.markRead();
         }
+        this._scanPreviews();
     }
     // Live events pushed from the server over the Odoo bus.
     _onBus(p) {

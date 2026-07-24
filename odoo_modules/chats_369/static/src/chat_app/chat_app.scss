@@ -1036,6 +1036,38 @@ $o369-green-deep: #0E8F53;
         &:hover { background: #eef3f8; }
     }
     .o369-linkimg { width: 100%; max-height: 160px; object-fit: cover; display: block; }
+    .o369-linkfav { display: flex; align-items: center; justify-content: center; height: 54px; background: #e9f1fb;
+        color: $o369-brand; font-size: 22px; }
+
+    /* ---- Global search (messages across all chats, under the chat list) ---- */
+    .o369-gsearch { border-top: 1px solid $o369-line; padding-bottom: 6px; }
+    .o369-glabel { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+        color: $o369-grey; padding: 10px 14px 4px; }
+    .o369-grow { display: block; width: 100%; text-align: left; background: transparent; border: 0;
+        padding: 7px 14px; cursor: pointer; &:hover { background: $o369-wall; } }
+    .o369-gtop { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    .o369-gtitle { font-weight: 600; color: #17324f; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .o369-gtime { font-size: 10px; color: $o369-grey; flex: none; }
+    .o369-gsnip { font-size: 12px; color: #55657a; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        b { color: #33475b; font-weight: 600; } }
+
+    /* ---- Multi-select (bulk forward / delete / star) ---- */
+    .o369-selected { outline: 2px solid $o369-brand; outline-offset: 2px; }
+    .o369-seloverlay { position: absolute; inset: 0; z-index: 25; display: flex; align-items: center;
+        justify-content: flex-start; padding-left: 8px; cursor: pointer; }
+    .o369-selcheck { width: 22px; height: 22px; border-radius: 50%; border: 2px solid $o369-grey;
+        background: rgba(255, 255, 255, .85); display: flex; align-items: center; justify-content: center;
+        color: transparent; font-size: 11px; }
+    .o369-selcheck-on { background: $o369-brand; border-color: $o369-brand; color: #fff; }
+    .o369-selbar { display: flex; align-items: center; gap: 12px; padding: 9px 14px; background: $o369-brand; color: #fff; }
+    .o369-selx { background: transparent; border: 0; color: #fff; font-size: 17px; cursor: pointer; padding: 2px 4px; }
+    .o369-selcount { font-weight: 600; flex: 1; }
+    .o369-selactions { display: flex; gap: 2px; }
+    .o369-selactions button { background: transparent; border: 0; color: #fff; font-size: 16px; padding: 6px 11px;
+        cursor: pointer; border-radius: 6px;
+        &:hover { background: rgba(255, 255, 255, .16); }
+        &:disabled { opacity: .4; cursor: default; } }
+    .o369-replyext { color: $o369-accent; font-weight: 700; }
     .o369-linkmeta { display: block; padding: 8px 10px; }
     .o369-linktitle { display: block; font-weight: 700; color: #17324f; font-size: 13px; line-height: 1.3;
         overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
