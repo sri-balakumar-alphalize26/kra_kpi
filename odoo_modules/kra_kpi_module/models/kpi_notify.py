@@ -108,6 +108,10 @@ _PERSIST_EVENTS = {
     # Re-nudged while unread (see _cron_check_idle_developers).
     'dev_no_task',
     'internal_rejected',    # dev: your work was sent back → rework
+    # Developer marked a task complete → admins (owner+coordinator) must review it
+    # and Approve/Reject. Previously excluded as "routine noise" so the admin was
+    # never told; now persisted so it reaches the Action Board owners in-app + push.
+    'complete',
     'final_approved',       # client signed off → the task is done
     'self_task_accepted',   # dev: admin accepted the task you created
     'self_task_rejected',   # dev: admin sent your task back
@@ -134,6 +138,7 @@ _NOTIF_TITLES = {
     'pre_approval_held':    'Client held approval',
     'internal_approved':    'Your sign-off needed',
     'internal_rejected':    'Rework needed',
+    'complete':             'Task ready for review',
     'final_approved':       'Client signed off',
     'self_task_accepted':   'Task accepted',
     'self_task_rejected':   'Task sent back',
@@ -204,6 +209,13 @@ _APP_TEMPLATES = {
         "📌 {title}\n"
         "👤 Developer: {dev} • Project: {project}\n\n"
         "The task waits for the client's decision."
+    ),
+    # Developer finished a task → admins must review it on the Action Board.
+    'complete': (
+        "✅ {dev} marked a task complete — please review.\n"
+        "📌 {title}\n"
+        "🏷 Project: {project}\n\n"
+        "Open the Action Board to Approve or Reject."
     ),
     # Attendance, nothing more — deliberately no task count or warning wording:
     # "no tasks" has its own path (dev_no_task), so saying it here too would just

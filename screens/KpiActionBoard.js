@@ -17,7 +17,8 @@ import KpiTaskDetail from './KpiTaskDetail';
 import {
   LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers,
   startTask, pauseTask, resumeTask, completeTask, reassignTask, createProgress,
-  CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
+  approveTask, rejectTask, getTaskChecklists,
+  CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
   getWorkdayStatus, startWorkday, endWorkday, selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
   acceptSelfCreated, rejectSelfCreated,
   IDLE_REASONS, setIdleReason, endNonTask, IDLE_NOTE_MAX,
@@ -274,6 +275,14 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
               {canPause && <Btn label="Pause" icon="pause" kind="amber" onPress={() => onAction('pause', task)} />}
               {canComplete && <Btn label="Complete" icon="checkmark-circle" kind="red" onPress={() => onAction('complete', task)} />}
               {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="ghostRed" onPress={() => onAction('partial', task)} />}
+              {/* Developer finished it → admin reviews: Approve (with QA checklist) sends it
+                  to the client; Reject sends it back to the same developer with a reason. */}
+              {isAdmin && st === 'partially_completed' && (
+                <Btn label="Approve" icon="checkmark-done" kind="green" onPress={() => onAction('approveDone', task)} />
+              )}
+              {isAdmin && st === 'partially_completed' && (
+                <Btn label="Reject" icon="close-circle" kind="ghostRed" onPress={() => onAction('rejectDone', task)} />
+              )}
               {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
               {/* Developer-only per-task alarm: set a local "wrap up" reminder so
                   you don't keep re-checking elapsed vs. estimate. */}
@@ -631,6 +640,12 @@ export default function KpiActionBoard({
   const [acceptType, setAcceptType] = useState('requirement');
   const [rejectFor, setRejectFor] = useState(null);
   const [rejectNote, setRejectNote] = useState('');
+  // Admin review of a developer-completed task: Approve (with QA checklist) → client; Reject → same dev.
+  const [approveFor, setApproveFor] = useState(null);
+  const [mgrChecklist, setMgrChecklist] = useState({});
+  const [empChecklist, setEmpChecklist] = useState(null);   // dev's submitted checklist (read-only)
+  const [rejectDoneFor, setRejectDoneFor] = useState(null);
+  const [rejectDoneNote, setRejectDoneNote] = useState('');
 
   // Filters
   const [filterAssignee, setFilterAssignee] = useState(null); // user id or null
@@ -1299,6 +1314,20 @@ export default function KpiActionBoard({
       setRejectNote('');
       return;
     }
+    // Admin reviewing a developer-completed (partially_completed) task.
+    if (kind === 'approveDone') {
+      setApproveFor(task);
+      setMgrChecklist({});
+      setEmpChecklist(null);
+      // Pull the developer's submitted checklist so the admin can see what was done.
+      getTaskChecklists(task.id).then((r) => { if (r && r.employee_checklist) setEmpChecklist(r.employee_checklist); }).catch(() => {});
+      return;
+    }
+    if (kind === 'rejectDone') {
+      setRejectDoneFor(task);
+      setRejectDoneNote('');
+      return;
+    }
 
     setBusyId(task.id);
     try {
@@ -1392,6 +1421,43 @@ export default function KpiActionBoard({
       await rejectSelfCreated(task.id, note, false);
       await load({ silent: true });
     } catch (e) { Alert.alert('Cannot send back', e.message || 'Failed'); }
+    finally { setBusyId(null); }
+  }
+
+  // Admin approves the developer's completed work → all QA boxes required → task
+  // goes to the client for sign-off (the client is notified server-side).
+  async function submitApproveDone() {
+    const task = approveFor;
+    const missing = MGR_CHECKLIST_ITEMS.filter((c) => !mgrChecklist[c.key]);
+    if (missing.length) {
+      return Alert.alert('Checklist incomplete', 'Please tick every QA item before approving.');
+    }
+    setApproveFor(null);
+    if (!task) return;
+    setBusyId(task.id);
+    try {
+      const checklistObj = MGR_CHECKLIST_ITEMS.reduce((o, c) => ({ ...o, [c.key]: true }), {});
+      const res = await approveTask(task.id, checklistObj);
+      if (res && res.status === false) Alert.alert('Cannot approve', res.message || 'Failed');
+      await load({ silent: true });
+    } catch (e) { Alert.alert('Error', e.message || 'Approve failed'); }
+    finally { setBusyId(null); }
+  }
+
+  // Admin rejects the developer's work → back to the SAME developer (paused) with
+  // the reason; they Resume to continue. A reason is required.
+  async function submitRejectDone() {
+    if (!rejectDoneNote.trim()) return;
+    const task = rejectDoneFor;
+    const note = rejectDoneNote.trim();
+    setRejectDoneFor(null);
+    if (!task) return;
+    setBusyId(task.id);
+    try {
+      const res = await rejectTask(task.id, note);
+      if (res && res.status === false) Alert.alert('Cannot reject', res.message || 'Failed');
+      await load({ silent: true });
+    } catch (e) { Alert.alert('Error', e.message || 'Reject failed'); }
     finally { setBusyId(null); }
   }
 
@@ -2298,6 +2364,97 @@ export default function KpiActionBoard({
               <TouchableOpacity
                 style={[s.footConfirm, { backgroundColor: COLORS.red }, !rejectNote.trim() && { opacity: 0.5 }]}
                 onPress={submitRejectSelf} disabled={!rejectNote.trim()}
+              >
+                <Text style={s.footConfirmTxt}>Send back</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Admin: Approve a developer-completed task (QA checklist) → goes to client. */}
+      <Modal visible={!!approveFor} transparent animationType="fade" onRequestClose={() => setApproveFor(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headGreen]}>
+              <Text style={s.headGreenTitle}>✓  Approve &amp; send to client</Text>
+              <TouchableOpacity onPress={() => setApproveFor(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ maxHeight: LANE_MAX_H }} keyboardShouldPersistTaps="handled">
+              <View style={s.modalPad}>
+                <Text style={s.kv}>Task: <Text style={s.kvStrong}>{approveFor?.name}</Text></Text>
+                {empChecklist ? (
+                  <>
+                    <Text style={s.fieldLabel}>📝 Developer's checklist (what they submitted)</Text>
+                    {CHECKLIST_ITEMS.map((c) => {
+                      const on = !!empChecklist[c.key];
+                      return (
+                        <View key={c.key} style={s.checkRow}>
+                          <Ionicons name={on ? 'checkmark-circle' : 'close-circle'} size={20} color={on ? COLORS.green : COLORS.faint} />
+                          <Text style={[s.checkTxt, !on && { color: COLORS.faint }]}>{c.label}</Text>
+                        </View>
+                      );
+                    })}
+                    <View style={{ height: 1, backgroundColor: '#eef1f5', marginVertical: 12 }} />
+                  </>
+                ) : null}
+                <Text style={s.fieldLabel}>QA checklist (all required)</Text>
+                {MGR_CHECKLIST_ITEMS.map((c) => {
+                  const on = !!mgrChecklist[c.key];
+                  return (
+                    <TouchableOpacity key={c.key} style={s.checkRow} onPress={() => setMgrChecklist((p) => ({ ...p, [c.key]: !p[c.key] }))}>
+                      <Ionicons name={on ? 'checkbox' : 'square-outline'} size={22} color={on ? COLORS.primary : COLORS.faint} />
+                      <Text style={s.checkTxt}>{c.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+                <View style={s.createdInfo}>
+                  <Ionicons name="information-circle-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
+                  <Text style={s.createdInfoTxt}>Approving sends the task to the client to sign off — they are notified.</Text>
+                </View>
+              </View>
+            </ScrollView>
+            <View style={s.modalFoot}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setApproveFor(null)}><Text style={s.footCancelTxt}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.footConfirm, { backgroundColor: COLORS.green }]} onPress={submitApproveDone}>
+                <Text style={s.footConfirmTxt}>✓  Approve</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Admin: Reject a developer-completed task → back to the same developer with a reason. */}
+      <Modal visible={!!rejectDoneFor} transparent animationType="fade" onRequestClose={() => setRejectDoneFor(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headAmber]}>
+              <Text style={s.headAmberTitle}>↩  Reject — send back to developer</Text>
+              <TouchableOpacity onPress={() => setRejectDoneFor(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#7a5200" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              <Text style={s.createdName} numberOfLines={2}>{rejectDoneFor?.name}</Text>
+              <Text style={s.modalLabel}>What needs to change? (required)</Text>
+              <TextInput
+                style={s.reasonInput}
+                placeholder="e.g. Deploy is missing the migration — please redo and resubmit"
+                placeholderTextColor={COLORS.faint}
+                value={rejectDoneNote} onChangeText={setRejectDoneNote} multiline
+              />
+              <View style={s.createdInfo}>
+                <Ionicons name="information-circle-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
+                <Text style={s.createdInfoTxt}>The task goes back to the same developer (paused) with this note — they Resume to continue.</Text>
+              </View>
+            </View>
+            <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setRejectDoneFor(null)}><Text style={s.footCancelTxt}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity
+                style={[s.footConfirm, { backgroundColor: COLORS.red }, !rejectDoneNote.trim() && { opacity: 0.5 }]}
+                onPress={submitRejectDone} disabled={!rejectDoneNote.trim()}
               >
                 <Text style={s.footConfirmTxt}>Send back</Text>
               </TouchableOpacity>

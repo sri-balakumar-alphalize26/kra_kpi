@@ -210,7 +210,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   const [rejectCode, setRejectCode] = useState('');    // chosen REJECT_REASONS code
   const [rejectNote, setRejectNote] = useState('');    // free text (required for 'other')
   const [toast, setToast] = useState('');
-  const [filter, setFilter] = useState('all');         // tapped status filter
+  const [filter, setFilter] = useState('pending');     // active tab: pending | in_progress | completed
   const [detail, setDetail] = useState(null);          // task tapped → detail popup
   // Stage-2 final sign-off (accepting the FINISHED work → signed certificate).
   const [signFor, setSignFor] = useState(null);        // task being signed off
@@ -378,19 +378,24 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   // filter, so "In Progress 3" always means exactly the 3 rows you get on tap —
   // server totals could disagree with the rows actually returned.
   const kpis = data.kpis || [];
-  const FILTERS = [
-    { key: 'all',                 label: 'All' },
-    { key: 'awaiting_client',     label: 'Awaiting You' },
-    { key: 'in_progress',         label: 'In Progress' },
-    { key: 'paused',              label: 'On Hold' },
-    { key: 'partially_completed', label: 'Verifying' },
-    { key: 'completed',           label: 'Completed' },
-  ].map((f) => ({
-    ...f,
-    n: f.key === 'all' ? kpis.length : kpis.filter((t) => t.task_state === f.key).length,
-  }));
-  const visible = filter === 'all' ? kpis : kpis.filter((t) => t.task_state === filter);
-  const activeLabel = (FILTERS.find((f) => f.key === filter) || FILTERS[0]).label;
+  // WhatsApp-style 3 tabs. Each tab is a bucket of task_states:
+  //   Pending      = raised / queued / waiting for approval, not started
+  //   In Progress  = being worked, on hold, verifying, or awaiting your sign-off
+  //   Completed    = done
+  const TAB_BUCKETS = {
+    pending: ['assigned', 'urgent', 'important', 'regular', 'queue_waiting',
+      'pre_approval_pending', 'pre_approval_approved', 'pre_approval_partial'],
+    in_progress: ['in_progress', 'paused', 'hold', 'rework', 'partially_completed', 'awaiting_client'],
+    completed: ['completed'],
+  };
+  const TABS = [
+    { key: 'pending', label: 'Pending' },
+    { key: 'in_progress', label: 'In Progress' },
+    { key: 'completed', label: 'Completed' },
+  ].map((t) => ({ ...t, n: kpis.filter((k) => TAB_BUCKETS[t.key].includes(k.task_state)).length }));
+  const bucket = TAB_BUCKETS[filter] || TAB_BUCKETS.pending;
+  const visible = kpis.filter((t) => bucket.includes(t.task_state));
+  const activeLabel = (TABS.find((t) => t.key === filter) || TABS[0]).label;
 
   return (
     <View style={s.root}>
@@ -400,7 +405,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
         <TouchableOpacity onPress={onBack} style={s.iconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Ionicons name="chevron-back" size={24} color={COLORS.navy} />
         </TouchableOpacity>
-        <Text style={s.title}>My Requests</Text>
+        <Text style={s.title}>Requests</Text>
         <TouchableOpacity onPress={() => load()} style={s.iconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Ionicons name="refresh" size={20} color={COLORS.navy} />
         </TouchableOpacity>
@@ -426,19 +431,21 @@ export default function ClientTasks({ onBack, focusTaskId }) {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}
           showsVerticalScrollIndicator={false}
         >
-          {/* Tap a chip to filter the list below. */}
-          <View style={s.chipRow}>
-            {FILTERS.map((f) => {
-              const on = filter === f.key;
+          {/* Three tabs — Pending · In Progress · Completed. Tap to switch. */}
+          <View style={s.tabRow}>
+            {TABS.map((t) => {
+              const on = filter === t.key;
               return (
                 <TouchableOpacity
-                  key={f.key}
-                  style={[s.totalChip, on && s.totalChipOn]}
-                  onPress={() => setFilter(f.key)}
+                  key={t.key}
+                  style={[s.tab, on && s.tabOn]}
+                  onPress={() => setFilter(t.key)}
                   activeOpacity={0.85}
                 >
-                  <Text style={[s.totalNum, on && s.chipOnTxt]}>{f.n}</Text>
-                  <Text style={[s.totalLbl, on && s.chipOnTxt]}>{f.label}</Text>
+                  <Text style={[s.tabTxt, on && s.tabTxtOn]}>{t.label}</Text>
+                  <View style={[s.tabBadge, on && s.tabBadgeOn]}>
+                    <Text style={[s.tabBadgeTxt, on && s.tabBadgeTxtOn]}>{t.n}</Text>
+                  </View>
                 </TouchableOpacity>
               );
             })}
@@ -687,6 +694,20 @@ const s = StyleSheet.create({
   chipOnTxt: { color: '#fff' },
   totalNum: { fontSize: 18, fontWeight: '900', color: COLORS.navy },
   totalLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '600' },
+  // 3-tab switcher (Pending / In Progress / Completed)
+  tabRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  tab: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: '#fff', borderRadius: 12, paddingVertical: 10,
+    shadowColor: '#0B2A6B', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
+  tabOn: { backgroundColor: COLORS.primary },
+  tabTxt: { fontSize: 13, fontWeight: '800', color: COLORS.navy },
+  tabTxtOn: { color: '#fff' },
+  tabBadge: { minWidth: 20, paddingHorizontal: 6, height: 20, borderRadius: 10, backgroundColor: '#EEF3F8', alignItems: 'center', justifyContent: 'center' },
+  tabBadgeOn: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  tabBadgeTxt: { fontSize: 11, fontWeight: '900', color: COLORS.muted },
+  tabBadgeTxtOn: { color: '#fff' },
   sectionTitle: { fontSize: 14, fontWeight: '800', color: COLORS.navy, marginTop: 6, marginBottom: 8 },
   emptyTxt: { color: COLORS.muted, fontStyle: 'italic', paddingVertical: 12 },
   card: { backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: '#EEF2F7' },

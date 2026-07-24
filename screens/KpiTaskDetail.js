@@ -566,6 +566,8 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
             <Ionicons name="lock-closed-outline" size={38} color={COLORS.red} />
             <Text style={[s.centerTxt, { color: COLORS.red, fontWeight: '800' }]}>{error}</Text>
           </View>
+        ) : !data ? (
+          <View style={s.center}><ActivityIndicator color={COLORS.primary} size="large" /><Text style={s.centerTxt}>Loading KPI details…</Text></View>
         ) : (
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <Animated.ScrollView

@@ -79,10 +79,10 @@ const QUICK = [
   { label: 'Work Report',        lib: 'mc',  name: 'chart-box-outline', dest: 'workreport',        adminOnly: true,  section: 'reports',  bg: '#E0F2FE', fg: '#0369A1' },
   { label: 'Client Invoices',    lib: 'mc',  name: 'receipt',          dest: 'clientinvoices',     adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },
   // Client-facing read-only invoices (whitelisted for clients below; adminOnly hides it from developers).
-  { label: 'My Invoices',        lib: 'mc',  name: 'receipt-text-outline', dest: 'myinvoices',      adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },
+  { label: 'Invoices',           lib: 'mc',  name: 'receipt-text-outline', dest: 'myinvoices',      adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },
   { label: 'Company Branding',   lib: 'mc',  name: 'palette',          dest: 'companybranding',    adminOnly: true,  section: 'settings', bg: '#FCE7F3', fg: '#DB2777' },
   { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true,  section: 'settings', bg: '#E2E8F0', fg: '#475569' },
-  { label: 'My Requests',        lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
+  { label: 'Requests',           lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
 ];
 
 // Menu sections (sub-headings), shown in the drawer, the Quick Actions grid, and

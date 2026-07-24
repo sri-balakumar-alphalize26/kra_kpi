@@ -132,15 +132,15 @@ export class KpiClientDashboard extends Component {
                 </div>
             </div>
 
-            <!-- Status totals (clickable filter chips) -->
+            <!-- Three tabs: Pending / In Progress / Completed (same buckets as the app) -->
             <div class="row g-2 mb-3">
                 <t t-foreach="statusChips" t-as="chip" t-key="chip.key">
                     <div class="col">
                         <button class="card p-3 w-100 border-0 text-center"
-                                t-att-class="state.dashboard.state_filter === chip.key ? 'bg-primary text-white' : 'bg-light'"
-                                t-on-click="() => this.setFilter(chip.key)">
+                                t-att-class="state.tab === chip.key ? 'bg-primary text-white' : 'bg-light'"
+                                t-on-click="() => (state.tab = chip.key)">
                             <div class="small" t-esc="chip.label"/>
-                            <div class="fs-4 fw-bold" t-esc="state.dashboard.totals[chip.key] !== undefined ? state.dashboard.totals[chip.key] : 0"/>
+                            <div class="fs-4 fw-bold" t-esc="tabCount(chip.key)"/>
                         </button>
                     </div>
                 </t>
@@ -260,8 +260,8 @@ export class KpiClientDashboard extends Component {
             <div class="card p-3 shadow-sm">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h5 class="fw-bold mb-0">
-                        <i class="fa fa-list me-2 text-info"/> My Tasks
-                        <span class="text-muted small">(state: <t t-esc="state.dashboard.state_filter"/><t t-if="state.projectFilter">, project: <t t-esc="this.projectLabel(state.projectFilter)"/></t>)</span>
+                        <i class="fa fa-list me-2 text-info"/> Requests
+                        <span class="text-muted small"><t t-if="state.projectFilter">(project: <t t-esc="this.projectLabel(state.projectFilter)"/>)</t></span>
                     </h5>
                     <div class="small text-muted">
                         Showing <strong t-esc="filteredKpis.length"/> task(s)
@@ -428,15 +428,20 @@ export class KpiClientDashboard extends Component {
     </div>
     `;
 
+    // Three tabs (same buckets as the mobile app): Pending / In Progress / Completed.
     get statusChips() {
         return [
-            { key: 'all',                 label: 'All' },
-            { key: 'assigned',            label: 'Pending' },
-            { key: 'in_progress',         label: 'In Progress' },
-            { key: 'paused',              label: 'Paused' },
-            { key: 'partially_completed', label: 'Awaiting You' },
-            { key: 'completed',           label: 'Completed' },
+            { key: 'pending', label: 'Pending', states: ['assigned', 'urgent', 'important', 'regular',
+                'queue_waiting', 'pre_approval_pending', 'pre_approval_approved', 'pre_approval_partial'] },
+            { key: 'in_progress', label: 'In Progress', states: ['in_progress', 'paused', 'hold', 'rework',
+                'partially_completed', 'awaiting_client'] },
+            { key: 'completed', label: 'Completed', states: ['completed'] },
         ];
+    }
+    tabCount(key) {
+        const c = this.statusChips.find(x => x.key === key);
+        const list = (this.state.dashboard && this.state.dashboard.kpis) || [];
+        return c ? list.filter(k => c.states.includes(k.task_state)).length : 0;
     }
     stateBadge(state) {
         const map = {
@@ -465,7 +470,9 @@ export class KpiClientDashboard extends Component {
         return this._applyFilters((this.state.dashboard && this.state.dashboard.pending_approvals) || []);
     }
     get filteredKpis() {
-        return this._applyFilters((this.state.dashboard && this.state.dashboard.kpis) || []);
+        const tab = this.statusChips.find(c => c.key === this.state.tab) || this.statusChips[0];
+        const base = this._applyFilters((this.state.dashboard && this.state.dashboard.kpis) || []);
+        return base.filter(k => tab.states.includes(k.task_state));
     }
     get userOptions() {
         const seen = new Map();
@@ -515,6 +522,7 @@ export class KpiClientDashboard extends Component {
         this.state = useState({
             dashboard: null,
             projects: [],
+            tab: 'pending',     // active tab: pending | in_progress | completed
             projectFilter: '',  // '' = all projects
             userFilter: '',     // '' = all users
             showAdd: false,
@@ -538,8 +546,8 @@ export class KpiClientDashboard extends Component {
     }
 
     async refresh() {
-        const filter = (this.state.dashboard && this.state.dashboard.state_filter) || 'all';
-        const r = await rpc('/kpi_client_portal/dashboard', { state: filter });
+        // Always load the full list; the 3 tabs bucket it client-side.
+        const r = await rpc('/kpi_client_portal/dashboard', { state: 'all' });
         if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
         this.state.dashboard = r;
     }

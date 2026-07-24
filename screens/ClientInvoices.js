@@ -319,7 +319,7 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     return (
       <View style={s.root}>
         <GradientBackground />
-        <Header title={portal ? 'My Invoices' : 'Client Invoices'} onLeft={onBack}
+        <Header title={portal ? 'Invoices' : 'Client Invoices'} onLeft={onBack}
           right={portal ? undefined : <TouchableOpacity onPress={startCreate} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.iconBtn}><Ionicons name="add" size={24} color={COLORS.primary} /></TouchableOpacity>} />
         <Banner />
         <View style={s.chipRow}>

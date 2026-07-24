@@ -269,6 +269,15 @@ export const reassignTask = (kpiId, userId, reason) =>
   action('/kra_kpi/task/reassign', { kpi_id: kpiId, user_id: userId, reason: reason || '' });
 export const completeTask = (kpiId, employeeChecklist = {}, partial = false) =>
   action('/kra_kpi/task/complete', { kpi_id: kpiId, employee_checklist: employeeChecklist, partial });
+// Admin reviews a developer-completed task (task_state === 'partially_completed').
+// Approve carries the manager QA checklist; reject sends it back to the SAME dev.
+export const approveTask = (kpiId, managerChecklist = {}) =>
+  action('/kra_kpi/task/approve', { kpi_id: kpiId, manager_checklist: managerChecklist });
+export const rejectTask = (kpiId, reason) =>
+  action('/kra_kpi/task/reject', { kpi_id: kpiId, reason: reason || '' });
+// Read the developer's + manager's checklist state for a task (shown read-only in the admin Approve modal).
+export const getTaskChecklists = (kpiId) =>
+  action('/kra_kpi/task/checklists', { kpi_id: kpiId });
 
 // Submit a progress summary. The server REQUIRES one before complete/partial.
 export const createProgress = (kpiId, summary) =>
@@ -365,6 +374,17 @@ export const CHECKLIST_ITEMS = [
   { key: 'user_manual', label: 'User manual uploaded' },
   { key: 'documentation', label: 'Documentation submitted' },
   { key: 'tested_code', label: 'Manually tested the code' },
+];
+
+// The manager/admin QA-checklist keys the server expects on Approve
+// (map to approve_task's manager_checklist_* fields).
+export const MGR_CHECKLIST_ITEMS = [
+  { key: 'task_reviewed', label: 'Task reviewed' },
+  { key: 'github_verified', label: 'GitHub verified' },
+  { key: 'testing_completed', label: 'Testing completed' },
+  { key: 'tested_successfully', label: 'Tested successfully' },
+  { key: 'manual_reviewed', label: 'User manual reviewed' },
+  { key: 'docs_approved', label: 'Documentation approved' },
 ];
 
 // Pause reason codes shown in the picker (subset of the model's selection).

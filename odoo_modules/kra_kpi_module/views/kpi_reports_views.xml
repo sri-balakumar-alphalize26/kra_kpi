@@ -329,20 +329,20 @@
     <!-- Client Portal — read-only invoice access for client users     -->
     <!-- ============================================================ -->
     <record id="action_kpi_client_invoice_portal" model="ir.actions.client">
-        <field name="name">My Invoices</field>
+        <field name="name">Invoices</field>
         <field name="tag">kpi_client_invoice_portal</field>
     </record>
 
     <record id="action_kpi_client_dashboard" model="ir.actions.client">
-        <field name="name">My Dashboard</field>
+        <field name="name">Requests</field>
         <field name="tag">kpi_client_dashboard</field>
     </record>
 
     <!-- menu_kpi_client_portal_root is declared above (before its first child reference). -->
 
-    <!-- Dashboard is the primary entry point — tasks, approvals, add new -->
+    <!-- Requests is the primary entry point — tasks (Pending/In Progress/Completed), approvals, add new -->
     <menuitem id="menu_kpi_client_dashboard"
-              name="My Dashboard"
+              name="Requests"
               parent="menu_kpi_client_portal_root"
               sequence="5"
               action="action_kpi_client_dashboard"
@@ -361,7 +361,11 @@
               action="action_kpi_client_completions"
               groups="kra_kpi_module.group_kra_client"/>
 
-    <!-- "My Invoices" menu intentionally removed from the Client Portal.
-         Clients flow through the Completions menu instead. Admin action is still defined above
-         in case it's needed elsewhere. -->
+    <!-- Invoices — the client's read-only invoice list (same as the app's Invoices). -->
+    <menuitem id="menu_kpi_client_invoices"
+              name="Invoices"
+              parent="menu_kpi_client_portal_root"
+              sequence="15"
+              action="action_kpi_client_invoice_portal"
+              groups="kra_kpi_module.group_kra_client"/>
 </odoo>
