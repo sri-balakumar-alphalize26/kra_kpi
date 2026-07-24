@@ -17,6 +17,7 @@ export class Chat369App extends Component {
         <div class="o369" t-att-class="'o369-theme-' + state.theme">
             <!-- ================= LEFT NAV RAIL ================= -->
             <div class="o369-rail">
+                <div class="o369-raillogo">369</div>
                 <button class="o369-railbtn" t-att-class="{ 'o369-railon': state.pane === 'chats' }" t-on-click="() => this.switchPane('chats')" title="Chats"><i class="fa fa-comments"/><span class="o369-railbadge" t-if="totalUnread() > 0" t-esc="totalUnread() > 99 ? '99+' : totalUnread()"/></button>
                 <div class="o369-railgap"/>
                 <div class="o369-raildiv"/>
@@ -32,10 +33,10 @@ export class Chat369App extends Component {
                 <t t-if="state.view === 'chats'">
                     <div class="o369-lhead">
                         <span class="o369-brandwrap">
-                            <img src="/chats_369/static/description/icon.png" class="o369-brandlogo"/>
                             <span class="o369-brand">369Chats</span>
                         </span>
                         <span class="o369-headbtns">
+                            <button class="o369-iconbtn" t-on-click="toggleDark" t-att-title="state.dark ? 'Switch to light' : 'Switch to dark'"><i class="fa" t-att-class="state.dark ? 'fa-sun-o' : 'fa-moon-o'"/></button>
                             <button class="o369-iconbtn" t-on-click="openContacts" title="New chat"><i class="fa fa-pencil-square-o"/></button>
                             <button class="o369-iconbtn" t-on-click.stop="toggleHeaderMenu" title="Menu"><i class="fa fa-ellipsis-v"/></button>
                             <div class="o369-hdrmenu" t-if="state.headerMenu">
@@ -549,7 +550,13 @@ export class Chat369App extends Component {
                 <t t-elif="state.settingsView === 'profile'">
                     <div class="o369-panehead"><button class="o369-backbtn" t-on-click="() => this.settingsGo('menu')"><i class="fa fa-arrow-left"/></button><span class="o369-panetitle">Profile</span></div>
                     <div class="o369-setbody" t-if="state.me">
-                        <div class="o369-profilehero"><div class="o369-avatar o369-avatarxl"><img t-if="state.me.avatar_url" t-att-src="state.me.avatar_url"/><span t-else="" t-esc="initials(state.me.name)"/></div></div>
+                        <div class="o369-profilehero">
+                            <button class="o369-avataredit" t-on-click="pickAvatar" title="Change photo">
+                                <span class="o369-avatar o369-avatarxl"><img t-if="state.me.avatar_url" t-att-src="state.me.avatar_url"/><span t-else="" t-esc="initials(state.me.name)"/></span>
+                                <span class="o369-avatarcam"><i class="fa fa-camera"/></span>
+                            </button>
+                            <input type="file" accept="image/*" t-ref="avatarinput" style="display:none" t-on-change="onAvatarChosen"/>
+                        </div>
                         <div class="o369-setfield">
                             <div class="o369-setflabel">Name</div>
                             <div class="o369-setfedit" t-if="state.profileEdit.field === 'name'"><input t-model="state.profileEdit.val"/><button t-on-click="() => this.saveProfileField('name', state.profileEdit.val)"><i class="fa fa-check"/></button></div>
@@ -559,10 +566,15 @@ export class Chat369App extends Component {
                             <div class="o369-setflabel">About</div>
                             <div class="o369-setfedit" t-if="state.profileEdit.field === 'about'"><input t-model="state.profileEdit.val"/><button t-on-click="() => this.saveProfileField('about', state.profileEdit.val)"><i class="fa fa-check"/></button></div>
                             <div class="o369-setfval" t-else=""><span t-esc="state.me.about or 'Available'"/><i class="fa fa-pencil" t-on-click="() => this.startProfileEdit('about')"/></div>
+                            <div class="o369-aboutpresets" t-if="state.profileEdit.field === 'about'">
+                                <t t-foreach="ABOUT_PRESETS" t-as="ap" t-key="ap">
+                                    <button class="o369-aboutopt" t-on-click="() => this.saveProfileField('about', ap)"><span t-esc="ap"/><i class="fa fa-check o369-optck" t-if="state.me.about === ap"/></button>
+                                </t>
+                            </div>
                         </div>
                         <div class="o369-setfield">
                             <div class="o369-setflabel">Phone</div>
-                            <div class="o369-setfval"><span t-esc="state.me.mobile or '—'"/><i class="fa fa-copy" t-if="state.me.mobile" t-on-click="copyMyMobile"/></div>
+                            <div class="o369-setfval"><span t-esc="state.me.mobile or '—'"/><button class="o369-copybtn" t-if="state.me.mobile" t-on-click="copyMyMobile" title="Copy number"><i class="fa fa-copy"/></button></div>
                         </div>
                     </div>
                 </t>
@@ -630,7 +642,11 @@ export class Chat369App extends Component {
                 <t t-elif="state.settingsView === 'theme'">
                     <div class="o369-panehead"><button class="o369-backbtn" t-on-click="() => this.settingsGo('menu')"><i class="fa fa-arrow-left"/></button><span class="o369-panetitle">Theme</span></div>
                     <div class="o369-setbody">
-                        <div class="o369-setsecttitle">Choose a colour theme</div>
+                        <div class="o369-setsecttitle">Display</div>
+                        <button class="o369-optrow" t-on-click="() => this.setThemeMode('system')"><span>System default</span><i class="fa fa-check o369-optck" t-if="state.themeMode === 'system'"/></button>
+                        <button class="o369-optrow" t-on-click="() => this.setThemeMode('light')"><span>Light</span><i class="fa fa-check o369-optck" t-if="state.themeMode === 'light'"/></button>
+                        <button class="o369-optrow" t-on-click="() => this.setThemeMode('dark')"><span>Dark</span><i class="fa fa-check o369-optck" t-if="state.themeMode === 'dark'"/></button>
+                        <div class="o369-setsecttitle" style="margin-top:16px">Accent colour</div>
                         <div class="o369-themegrid">
                             <t t-foreach="THEMES" t-as="th" t-key="th.id">
                                 <button class="o369-themecard" t-att-class="{ 'o369-themecard-on': state.theme === th.id }" t-on-click="() => this.setTheme(th.id)">
@@ -640,6 +656,7 @@ export class Chat369App extends Component {
                             </t>
                         </div>
                         <div class="o369-privhint">Your theme is saved on this device.</div>
+                        <button class="o369-resetbtn" t-on-click="resetAppearance"><i class="fa fa-refresh me-1"/> Reset to default</button>
                     </div>
                 </t>
                 <t t-else="">
@@ -1214,6 +1231,7 @@ export class Chat369App extends Component {
         this.REACTIONS = ['\u{1F44D}','\u{2764}\u{FE0F}','\u{1F602}','\u{1F62E}','\u{1F622}','\u{1F64F}'];
         this.EMOJIS = [...new Set(['\u{1F600}','\u{1F603}','\u{1F604}','\u{1F601}','\u{1F606}','\u{1F605}','\u{1F602}','\u{1F923}','\u{1F60A}','\u{1F607}','\u{1F642}','\u{1F643}','\u{1F609}','\u{1F60C}','\u{1F60D}','\u{1F970}','\u{1F618}','\u{1F617}','\u{1F61A}','\u{1F60B}','\u{1F61B}','\u{1F61C}','\u{1F61D}','\u{1F92A}','\u{1F928}','\u{1F9D0}','\u{1F913}','\u{1F60E}','\u{1F929}','\u{1F60F}','\u{1F612}','\u{1F614}','\u{1F61E}','\u{1F61F}','\u{1F615}','\u{1F641}','\u{1F623}','\u{1F616}','\u{1F62B}','\u{1F629}','\u{1F97A}','\u{1F622}','\u{1F62D}','\u{1F624}','\u{1F620}','\u{1F621}','\u{1F92C}','\u{1F92F}','\u{1F633}','\u{1F975}','\u{1F976}','\u{1F631}','\u{1F628}','\u{1F630}','\u{1F625}','\u{1F613}','\u{1F917}','\u{1F92D}','\u{1F92B}','\u{1F914}','\u{1F610}','\u{1F611}','\u{1F636}','\u{1F644}','\u{1F62E}','\u{1F62F}','\u{1F632}','\u{1F971}','\u{1F634}','\u{1F924}','\u{1F62A}','\u{1F635}','\u{1F910}','\u{1F974}','\u{1F922}','\u{1F92E}','\u{1F927}','\u{1F637}','\u{1F912}','\u{1F915}','\u{1F925}','\u{1F44D}','\u{1F44E}','\u{1F44C}','\u{1F90F}','\u{1F91E}','\u{1F91F}','\u{1F918}','\u{1F919}','\u{1F448}','\u{1F449}','\u{1F446}','\u{1F447}','\u{1F44A}','\u{270A}','\u{1F91B}','\u{1F91C}','\u{1F44F}','\u{1F64C}','\u{1F450}','\u{1F932}','\u{1F91D}','\u{1F64F}','\u{1F4AA}','\u{1F933}','\u{1F440}','\u{1F44B}','\u{1F9E1}','\u{1F49B}','\u{1F49A}','\u{1F499}','\u{1F49C}','\u{1F5A4}','\u{1F90D}','\u{1F90E}','\u{1F494}','\u{1F495}','\u{1F49E}','\u{1F493}','\u{1F497}','\u{1F496}','\u{1F498}','\u{1F49D}','\u{1F49F}','\u{1F48B}','\u{1F525}','\u{2B50}','\u{1F31F}','\u{2728}','\u{1F4AF}','\u{1F389}','\u{1F38A}','\u{1F64B}','\u{1F3B6}','\u{1F480}','\u{1F47B}','\u{1F916}','\u{1F31E}','\u{1F319}','\u{2764}\u{FE0F}','\u{270C}\u{FE0F}','\u{261D}\u{FE0F}','\u{2705}','\u{274C}','\u{2757}','\u{2753}'])];
         this.THEMES = [
+            { id: 'clean', name: 'Light', a: '#F4F6FA', b: '#DCE6F3' },
             { id: 'ocean', name: 'Ocean', a: '#1F5F9E', b: '#F47A20' },
             { id: 'emerald', name: 'Emerald', a: '#0E8F53', b: '#F2A93B' },
             { id: 'sunset', name: 'Sunset', a: '#C2410C', b: '#F59E0B' },
@@ -1221,6 +1239,8 @@ export class Chat369App extends Component {
             { id: 'graphite', name: 'Graphite', a: '#334155', b: '#F59E0B' },
             { id: 'rose', name: 'Rose', a: '#BE185D', b: '#FB7185' },
         ];
+        this.ABOUT_PRESETS = ['Available', 'Busy', 'At work', 'In a meeting', 'Urgent calls only',
+            'At the gym', 'Sleeping', 'Battery about to die', "Can't talk now", 'On holiday'];
         this.notification = useService("notification");
         this.bus = useService("bus_service");
         this.MEMBER_PERMS = [
@@ -1254,7 +1274,7 @@ export class Chat369App extends Component {
             gmeetSaved: '', gmeetHelpOpen: false, chipMenuOpen: false, notifBannerHidden: false,
             drafts: {}, composerEmojiOpen: false, disappearOpen: false, pollCreate: null,
             mediaReview: null, viewOnceView: null,
-            composerLink: null, composerLinkHidden: false, previews: {}, theme: 'ocean', call: null,
+            composerLink: null, composerLinkHidden: false, previews: {}, theme: 'ocean', themeMode: 'system', dark: false, call: null,
             calls: { recent: [], favorites: [], upcoming: [] }, scheduleForm: null,
             mentionOpen: false, mentionMatches: [], mentionIdx: 0, mentionMembers: [], mentionMembersConv: 0, mentionStart: 0, mentionEnd: 0,
             settingsView: 'menu', profileEdit: { field: null, val: '' },
@@ -1266,11 +1286,18 @@ export class Chat369App extends Component {
         });
         this.scroller = useRef("scroller");
         this.fileinput = useRef("fileinput");
+        this.avatarinput = useRef("avatarinput");
         this.msgbox = useRef("msgbox");
         this.localVideo = useRef("localVideo");
         this.remoteVideo = useRef("remoteVideo");
         try { this.state.drafts = JSON.parse(localStorage.getItem('o369_drafts') || '{}') || {}; } catch (e) { this.state.drafts = {}; }
-        try { this.state.theme = localStorage.getItem('o369_theme') || 'ocean'; } catch (e) {}
+        try { this.state.theme = localStorage.getItem('o369_theme') || 'clean'; } catch (e) {}
+        try { this.state.themeMode = localStorage.getItem('o369_thememode') || 'system'; } catch (e) {}
+        this._applyThemeMode();
+        try {
+            this._mqDark = window.matchMedia('(prefers-color-scheme: dark)');
+            this._mqDark.addEventListener('change', () => { if (this.state.themeMode === 'system') this._applyThemeMode(); });
+        } catch (e) {}
         this._scrollPending = false;
         this._timer = null;
         // Close any open menu when clicking elsewhere (caret/menu clicks use .stop).
@@ -1779,6 +1806,21 @@ export class Chat369App extends Component {
     async loadMe() {
         try { const r = await rpc('/chat/me', {}); if (r && r.status) this.state.me = r.me; } catch (e) {}
     }
+    // ---- change my profile picture ----
+    pickAvatar() { const el = this.avatarinput.el; if (el) { el.value = ''; el.click(); } }
+    async onAvatarChosen(ev) {
+        const file = (ev.target.files || [])[0]; if (!file) return;
+        try {
+            const b64 = await this._compressImage(file, 512, 0.85);
+            const res = await rpc('/chat/profile', { avatar: b64 });
+            if (res && res.status && this.state.me) {
+                const url = res.avatar_url || this.state.me.avatar_url || '';
+                this.state.me.avatar_url = url ? (url.split('?')[0] + '?t=' + Date.now()) : url;
+                this.notify('Profile photo updated', 'success');
+                this.loadConversations();
+            } else { this.notify('Could not update photo'); }
+        } catch (e) { this.notify('Could not update photo'); }
+    }
     // ---------------- Google Meet ----------------
     async loadGmeet() {
         try { const r = await rpc('/chat/gmeet/status', {}); if (r && r.status) this.state.gmeet = r; } catch (e) {}
@@ -2154,6 +2196,26 @@ export class Chat369App extends Component {
     _clearComposerLink() { this.state.composerLink = null; this.state.composerLinkHidden = false; this._composerLinkUrl = ''; clearTimeout(this._complinkTimer); }
     // ---- theme ----
     setTheme(t) { this.state.theme = t; try { localStorage.setItem('o369_theme', t); } catch (e) {} }
+    // Light / dark mode (WhatsApp-style: System default / Light / Dark).
+    _applyThemeMode() {
+        const m = this.state.themeMode;
+        let dark = (m === 'dark');
+        if (m === 'system') { try { dark = window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { dark = false; } }
+        this.state.dark = dark;
+    }
+    setThemeMode(mode) {
+        this.state.themeMode = mode;
+        try { localStorage.setItem('o369_thememode', mode); } catch (e) {}
+        this._applyThemeMode();
+    }
+    toggleDark() { this.setThemeMode(this.state.dark ? 'light' : 'dark'); }
+    // Reset all appearance choices back to the default 369Chats look.
+    resetAppearance() {
+        this.setThemeMode('system');
+        this.setTheme('clean');
+        try { localStorage.removeItem('o369_wallpaper'); } catch (e) {}
+        this.notify('Appearance reset to default', 'success');
+    }
 
     // ================= In-app calls (WebRTC, 1:1) =================
     canCall() { const c = this.state.activeConv; return !!(c && !c.is_group && !c.oversight && !c.blocked_by_me); }

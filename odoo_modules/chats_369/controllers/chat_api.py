@@ -1112,6 +1112,12 @@ class Chat369API(http.Controller):
             vals['name'] = params['name'].strip()[:120]
         if 'about' in params:
             vals['chat_about'] = (params.get('about') or '').strip()[:139]
+        avatar = params.get('avatar')
+        if avatar:
+            # Accept a raw base64 image (strip any data:...;base64, prefix) → user photo.
+            if ',' in avatar[:40] and avatar[:5].lower() == 'data:':
+                avatar = avatar.split(',', 1)[1]
+            vals['image_1920'] = avatar
         if vals:
             me.sudo().write(vals)
         return {'status': True, 'name': me.name, 'about': me.chat_about or '',

@@ -5,55 +5,65 @@ $o369-brand: var(--o369-brand, #1F5F9E);
 $o369-brand-deep: var(--o369-brand-deep, #16406e);
 $o369-accent: var(--o369-accent, #F47A20);
 $o369-accent-deep: var(--o369-accent-deep, #E85D1B);
-$o369-grey: #98A2AC;
+$o369-grey: var(--o369-grey, #98A2AC);
 $o369-wall: var(--o369-wall, #EEF3F8);
-$o369-line: #E6EDF5;
+$o369-line: var(--o369-line, #E6EDF5);
 
 .o369 {
     // ---- theme variables (defaults = Ocean / 369 brand) ----
     --o369-brand: #1F5F9E; --o369-brand-deep: #16406e;
     --o369-accent: #F47A20; --o369-accent-deep: #E85D1B; --o369-wall: #EEF3F8;
+    // Surface/text tokens (light defaults) — flipped as a set by .o369-dark below.
+    --o369-ground:#F6F8FB; --o369-panel:#FFFFFF; --o369-field:#F2F5F9;
+    --o369-line:#E6EDF5; --o369-grey:#8A94A3;
+    --o369-text:#141B24; --o369-text2:#5A6675;
+    --o369-ownbg:#E7F0FA; --o369-owntext:#14324e; --o369-convbg:#F1F4F9; --o369-accent-soft:#EAF1FA; --o369-inbg:#FFFFFF;
     &.o369-theme-emerald  { --o369-brand: #0E8F53; --o369-brand-deep: #0A6B3E; --o369-accent: #F2A93B; --o369-accent-deep: #DB9426; --o369-wall: #ECF5EF; }
     &.o369-theme-sunset   { --o369-brand: #C2410C; --o369-brand-deep: #9A3412; --o369-accent: #F59E0B; --o369-accent-deep: #D97706; --o369-wall: #FBF0EA; }
     &.o369-theme-violet   { --o369-brand: #6D28D9; --o369-brand-deep: #5B21B6; --o369-accent: #F472B6; --o369-accent-deep: #EC4899; --o369-wall: #F3EFFB; }
     &.o369-theme-graphite { --o369-brand: #334155; --o369-brand-deep: #1E293B; --o369-accent: #F59E0B; --o369-accent-deep: #D97706; --o369-wall: #EEF1F5; }
     &.o369-theme-rose     { --o369-brand: #BE185D; --o369-brand-deep: #9D174D; --o369-accent: #FB7185; --o369-accent-deep: #F43F5E; --o369-wall: #FBEEF3; }
+    &.o369-theme-clean    { --o369-brand: #2563A8; --o369-brand-deep: #1F5F9E; --o369-accent: #F47A20; --o369-accent-deep: #E85D1B; --o369-wall: #EEF2F8; }
     display: flex;
     position: relative;
     height: calc(100vh - 46px);
-    background: #fff;
+    background: var(--o369-panel);
     overflow: hidden;
     font-size: 14px;
 
     // ---------- left pane ----------
-    .o369-left { width: 360px; min-width: 300px; border-right: 1px solid $o369-line; display: flex; flex-direction: column; background: #fff; }
+    .o369-left { width: 360px; min-width: 300px; border-right: 1px solid $o369-line; display: flex; flex-direction: column; background: var(--o369-panel); }
     .o369-lhead {
-        background: linear-gradient(135deg, $o369-brand, $o369-brand-deep);
-        color: #fff; padding: 11px 14px;
+        background: var(--o369-panel); color: var(--o369-text); padding: 14px 16px;
         display: flex; align-items: center; justify-content: space-between; gap: 8px;
-        .o369-brand { font-weight: 800; font-size: 17px; letter-spacing: .3px; }
+        border-bottom: 1px solid $o369-line;
+        .o369-brand { font-weight: 700; font-size: 19px; letter-spacing: .2px; color: var(--o369-text); }
     }
     .o369-brandwrap { display: flex; align-items: center; gap: 9px; }
-    .o369-brandlogo { width: 28px; height: 28px; border-radius: 7px; background: #fff; object-fit: contain; padding: 2px; }
+    .o369-brandlogo { width: 28px; height: 28px; border-radius: 7px; background: var(--o369-panel); object-fit: contain; padding: 2px; }
     .o369-iconbtn {
-        background: rgba(255,255,255,.18); color: #fff; border: none;
-        width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
-        &:hover { background: rgba(255,255,255,.32); }
+        background: transparent; color: var(--o369-text2); border: none;
+        width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        &:hover { background: var(--o369-field); color: $o369-brand; }
     }
     .o369-search {
-        display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid $o369-line;
+        margin: 4px 14px 10px; padding: 9px 12px; border-bottom: none;
+        background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 11px;
+        display: flex; align-items: center; gap: 9px;
         .fa { color: $o369-grey; }
-        input { flex: 1; border: none; outline: none; background: #f2f5f9; border-radius: 18px; padding: 7px 12px; font-size: 13px; }
+        input { flex: 1; border: none; outline: none; background: transparent; padding: 0; font-size: 13.5px; color: var(--o369-text); }
     }
-    .o369-list { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #c3cedb transparent;
+    .o369-list { flex: 1; overflow-y: auto; padding: 4px 8px 10px; scrollbar-width: thin; scrollbar-color: #c3cedb transparent;
         &::-webkit-scrollbar { width: 7px; }
         &::-webkit-scrollbar-thumb { background: #c3cedb; border-radius: 4px; }
     }
     .o369-row {
-        display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer;
-        border-bottom: 1px solid #f2f5f9; position: relative;
+        display: flex; align-items: center; gap: 11px; padding: 9px 10px; cursor: pointer;
+        border-radius: 12px; margin-bottom: 2px; position: relative;
         &:hover { background: $o369-wall; }
-        &.o369-active { background: #E3ECF7; }
+        &.o369-active { background: var(--o369-accent-soft); }
+        &.o369-active::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: $o369-brand; }
         &:hover .o369-rowpin { opacity: 1; }
     }
     .o369-avatar {
@@ -63,8 +73,15 @@ $o369-line: #E6EDF5;
         img { width: 100%; height: 100%; object-fit: cover; }
     }
     .o369-rowmain { flex: 1; min-width: 0; }
+    // Editable profile avatar (Settings → Profile): a camera badge sits outside the circular clip.
+    .o369-avataredit { position: relative; display: inline-flex; border: none; background: transparent; padding: 0; cursor: pointer; }
+    .o369-avatarcam {
+        position: absolute; right: 0; bottom: 6px; width: 34px; height: 34px; border-radius: 50%;
+        background: $o369-accent; color: #fff; display: flex; align-items: center; justify-content: center;
+        font-size: 15px; border: 3px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.28);
+    }
     .o369-rowtop { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-    .o369-title { font-weight: 600; color: #1f2937; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .o369-title { font-weight: 600; color: var(--o369-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .o369-pinglyph { color: $o369-accent; font-size: 11px; margin-right: 4px; }
     .o369-time { font-size: 11px; color: $o369-grey; flex: 0 0 auto; }
     .o369-rowbot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 2px; }
@@ -89,12 +106,12 @@ $o369-line: #E6EDF5;
         background: linear-gradient(270deg, $o369-wall 62%, rgba($o369-wall, 0));
         &:hover { color: $o369-brand; }
     }
-    .o369-row.o369-active .o369-rowcaret { background: linear-gradient(270deg, #E3ECF7 62%, rgba(227,236,247,0)); }
+    .o369-row.o369-active .o369-rowcaret { background: linear-gradient(270deg, var(--o369-accent-soft) 62%, transparent); }
     .o369-row:hover .o369-rowcaret { opacity: 1; }
     .o369-rowpinmark { position: absolute; right: 12px; bottom: 11px; color: $o369-accent; font-size: 11px; }
     .o369-rowmenu {
         position: absolute; top: 30px; right: 8px; z-index: 25; min-width: 212px;
-        background: #fff; border: 1px solid $o369-line; border-radius: 10px; padding: 5px; box-shadow: 0 8px 26px rgba(0,0,0,.22);
+        background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 10px; padding: 5px; box-shadow: 0 8px 26px rgba(0,0,0,.22);
     }
     .o369-mutedicon { color: $o369-grey; margin-right: 3px; font-size: 11px; }
     .o369-unreaddot { width: 10px; height: 10px; border-radius: 50%; background: $o369-accent; display: inline-block; flex: 0 0 auto; }
@@ -113,9 +130,9 @@ $o369-line: #E6EDF5;
     // ---------- right pane (chat wallpaper + faint Alphalize watermark) ----------
     .o369-right {
         flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative;
-        background-color: #e8edf3;
-        background-image: radial-gradient(rgba(31,95,158,0.06) 1px, transparent 1px);
-        background-size: 20px 20px;
+        background-color: var(--o369-convbg);
+        background-image: radial-gradient(rgba(31,95,158,0.05) 1px, transparent 1px);
+        background-size: 22px 22px;
     }
     // Alphalize watermark ONLY when a chat is open (empty state keeps just the 369 logo).
     .o369-right.o369-hasconv::before {
@@ -130,15 +147,15 @@ $o369-line: #E6EDF5;
         p { font-size: 15px; }
     }
     .o369-rhead {
-        background: #fff; border-bottom: 1px solid $o369-line; padding: 8px 14px;
+        background: var(--o369-panel); border-bottom: 1px solid $o369-line; padding: 8px 14px;
         display: flex; align-items: center; gap: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.05); z-index: 2;
         .o369-avatar { width: 40px; height: 40px; font-size: 15px; }
     }
-    .o369-rtitle { font-weight: 700; color: #16306B; }
+    .o369-rtitle { font-weight: 700; color: var(--o369-text); }
     .o369-rsub { font-size: 12px; color: $o369-grey; }
 
     .o369-pinbar {
-        display: flex; align-items: center; gap: 4px; background: #fff7ef; border-bottom: 1px solid #f3ddc4;
+        display: flex; align-items: center; gap: 4px; background: var(--o369-panel)7ef; border-bottom: 1px solid #f3ddc4;
         padding: 6px 14px; color: #7a4c1e; font-size: 12.5px; z-index: 1;
         .fa-thumb-tack { color: $o369-accent; }
         .o369-pinbartxt { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -158,26 +175,26 @@ $o369-line: #E6EDF5;
     }
     .o369-datesep {
         align-self: center; margin: 10px 0;
-        span { background: #fff; color: #5b6b7d; font-size: 11.5px; font-weight: 600; padding: 4px 12px; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+        span { background: var(--o369-panel); color: var(--o369-text2); font-size: 11.5px; font-weight: 600; padding: 4px 12px; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
     }
     .o369-sys {
-        align-self: center; background: #dbe6f3; color: #45586e; font-size: 11.5px; padding: 3px 10px; border-radius: 10px; margin: 6px 0;
+        align-self: center; background: #dbe6f3; color: var(--o369-text2); font-size: 11.5px; padding: 3px 10px; border-radius: 10px; margin: 6px 0;
     }
     .o369-bubble {
-        max-width: 65%; padding: 6px 10px 5px; border-radius: 9px; box-shadow: 0 1px 1.5px rgba(11,42,91,.10);
+        max-width: 66%; padding: 8px 12px 7px; border-radius: 14px; box-shadow: 0 1px 2px rgba(11,42,91,.08);
         position: relative; word-wrap: break-word;
         // WhatsApp-style little tail on the first bubble corner.
         &::before { content: ''; position: absolute; top: 0; width: 9px; height: 13px; }
         &.o369-out { align-self: flex-end; background: color-mix(in srgb, #{$o369-brand} 14%, #fff); color: #14324e; border-top-right-radius: 3px;
             &::before { right: -7px; background: radial-gradient(circle at bottom left, transparent 12px, color-mix(in srgb, #{$o369-brand} 14%, #fff) 12px); } }
-        &.o369-in { align-self: flex-start; background: #fff; color: #1f2937; border-top-left-radius: 3px;
-            &::before { left: -7px; background: radial-gradient(circle at bottom right, transparent 12px, #fff 12px); } }
+        &.o369-in { align-self: flex-start; background: var(--o369-inbg); color: var(--o369-text); border-top-left-radius: 3px; border: 1px solid var(--o369-line);
+            &::before { left: -7px; background: radial-gradient(circle at bottom right, transparent 12px, var(--o369-inbg) 12px); } }
         &:hover .o369-msgact { opacity: 1; pointer-events: auto; }
     }
     .o369-msgact {
         position: absolute; top: -13px; right: 6px; display: flex; gap: 2px; opacity: 0; pointer-events: none; transition: opacity .12s;
-        background: #fff; border: 1px solid $o369-line; border-radius: 14px; padding: 3px 6px; box-shadow: 0 2px 6px rgba(0,0,0,.12); z-index: 3;
-        .fa { color: #5b6b7d; font-size: 12px; cursor: pointer; padding: 2px 4px; &:hover { color: $o369-brand; } }
+        background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 14px; padding: 3px 6px; box-shadow: 0 2px 6px rgba(0,0,0,.12); z-index: 3;
+        .fa { color: var(--o369-text2); font-size: 12px; cursor: pointer; padding: 2px 4px; &:hover { color: $o369-brand; } }
         .fa-trash:hover { color: $o369-accent-deep; }
         .o369-actpinned { color: $o369-accent; }
     }
@@ -193,12 +210,12 @@ $o369-line: #E6EDF5;
     .o369-btext { white-space: pre-wrap; }
     // Google Meet "Join meeting" card + admin buttons
     .o369-meetcard { display: flex; align-items: center; gap: 10px; text-decoration: none; padding: 8px 10px;
-        border-radius: 10px; background: #eef3f8; border: 1px solid $o369-line; min-width: 220px; max-width: 100%;
+        border-radius: 10px; background: var(--o369-wall); border: 1px solid $o369-line; min-width: 220px; max-width: 100%;
         &:hover { background: #e3ecf7; } }
     .o369-meetico { width: 38px; height: 38px; border-radius: 50%; background: #00897b; color: #fff; flex: 0 0 auto;
         display: flex; align-items: center; justify-content: center; font-size: 16px; }
     .o369-meetinfo { display: flex; flex-direction: column; min-width: 0; }
-    .o369-meettitle { font-weight: 700; color: #17324f; font-size: 13.5px; }
+    .o369-meettitle { font-weight: 700; color: var(--o369-text); font-size: 13.5px; }
     .o369-meetsub { font-size: 11px; color: $o369-brand; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .o369-redirecturi { font-family: monospace; font-size: 11.5px; color: $o369-brand; word-break: break-all; }
     .o369-gmeetbtns { display: flex; flex-direction: column; gap: 8px; padding: 14px 20px 4px;
@@ -213,7 +230,7 @@ $o369-line: #E6EDF5;
     .o369-gmstatus-l { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .o369-gmicon { width: 40px; height: 40px; border-radius: 50%; background: #00897b; color: #fff; flex: 0 0 auto;
         display: flex; align-items: center; justify-content: center; font-size: 17px; }
-    .o369-gmstatus-t { font-weight: 700; color: #17324f; font-size: 14px; }
+    .o369-gmstatus-t { font-weight: 700; color: var(--o369-text); font-size: 14px; }
     .o369-gmstatus-s { font-size: 11.5px; color: $o369-grey; }
     .o369-gmpill { flex: 0 0 auto; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 999px;
         background: #e7ebf0; color: #7b8794; white-space: nowrap;
@@ -224,23 +241,23 @@ $o369-line: #E6EDF5;
         label { font-size: 12.5px; font-weight: 600; color: #374151; }
         .o369-gmhint { font-weight: 400; color: $o369-grey; }
         input { border: 1px solid $o369-line; border-radius: 9px; padding: 9px 11px; font-size: 13px; outline: none;
-            background: #fff; transition: border-color .15s; &:focus { border-color: $o369-brand; } } }
+            background: var(--o369-panel); transition: border-color .15s; &:focus { border-color: $o369-brand; } } }
     .o369-gmuri { display: flex; align-items: center; gap: 8px; background: $o369-wall; border: 1px solid $o369-line;
         border-radius: 9px; padding: 8px 11px;
         span { flex: 1; font-family: monospace; font-size: 11.5px; color: $o369-brand; word-break: break-all; }
         .fa { color: $o369-grey; cursor: pointer; &:hover { color: $o369-brand; } } }
     .o369-gmrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px;
         label { font-size: 12.5px; font-weight: 600; color: #374151; }
-        select { border: 1px solid $o369-line; border-radius: 9px; padding: 8px 10px; font-size: 13px; outline: none; background: #fff; } }
+        select { border: 1px solid $o369-line; border-radius: 9px; padding: 8px 10px; font-size: 13px; outline: none; background: var(--o369-panel); } }
     .o369-gmbtns { display: flex; flex-direction: column; gap: 9px; margin: 18px 0 6px; }
     .o369-gmsave { border: none; background: $o369-accent; color: #fff; border-radius: 10px; padding: 11px;
         font-weight: 700; font-size: 14px; cursor: pointer; transition: background .15s;
         &:hover { background: $o369-accent-deep; }
         &.o369-gmsave-off { background: #cfd6de; color: #eef2f6; cursor: default; } }
-    .o369-gmconnect { border: 1px solid $o369-line; background: #fff; color: $o369-brand; border-radius: 10px; padding: 11px;
+    .o369-gmconnect { border: 1px solid $o369-line; background: var(--o369-panel); color: $o369-brand; border-radius: 10px; padding: 11px;
         font-weight: 700; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
         &:hover { background: $o369-wall; } .fa { color: #ea4335; } }
-    .o369-gmhelp { margin-top: 18px; border: 1px solid #f2d98c; background: #fff9e8; border-radius: 12px; overflow: hidden; }
+    .o369-gmhelp { margin-top: 18px; border: 1px solid #f2d98c; background: var(--o369-panel)9e8; border-radius: 12px; overflow: hidden; }
     .o369-gmhelp-head { width: 100%; display: flex; align-items: center; justify-content: space-between;
         background: #fbeeb8; border: none; padding: 11px 14px; cursor: pointer; font-weight: 700; font-size: 13px; color: #8a6d1a; }
     .o369-gmhelp-body { padding: 4px 16px 14px;
@@ -266,7 +283,7 @@ $o369-line: #E6EDF5;
     .o369-chipmore-wrap { position: relative; display: inline-flex; }
     .o369-chipmore .fa { font-size: 12px; }
     .o369-chipmenu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 180px;
-        background: #fff; border: 1px solid $o369-line; border-radius: 12px; box-shadow: 0 8px 24px rgba(22,64,110,.16);
+        background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 12px; box-shadow: 0 8px 24px rgba(22,64,110,.16);
         padding: 6px; animation: o369-pop .14s ease; }
     .o369-chipmenu-item { display: block; width: 100%; text-align: left; border: none; background: none; cursor: pointer;
         padding: 8px 10px; border-radius: 8px; font-size: 13px; color: #37414d; font: inherit;
@@ -298,13 +315,13 @@ $o369-line: #E6EDF5;
     /* ---- Admin oversight / monitor (#10) ---- */
     .o369-chipmenu-admin { color: #b45309; .fa { color: #b45309; } }
     .o369-monitorbar { display: flex; align-items: center; gap: 8px; padding: 12px 16px;
-        background: #fff7ed; border-top: 1px solid #fed7aa; color: #b45309; font-size: 12.5px; font-weight: 600;
+        background: var(--o369-panel)7ed; border-top: 1px solid #fed7aa; color: #b45309; font-size: 12.5px; font-weight: 600;
         .fa { font-size: 14px; } }
     /* ---- @mention picker + highlight (#6) ---- */
-    .o369-mentionbox { margin: 0 10px 6px; background: #fff; border: 1px solid $o369-line; border-radius: 12px;
+    .o369-mentionbox { margin: 0 10px 6px; background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 12px;
         box-shadow: 0 -6px 24px rgba(22,64,110,.12); overflow-y: auto; max-height: 240px; animation: o369-pop .14s ease; }
     .o369-mentionitem { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: none;
-        background: none; cursor: pointer; padding: 8px 12px; font-size: 13.5px; color: #1f2937;
+        background: none; cursor: pointer; padding: 8px 12px; font-size: 13.5px; color: var(--o369-text);
         &:hover, &.o369-mentionitem-on { background: $o369-wall; } }
     .o369-mentionav { width: 30px; height: 30px; border-radius: 50%; background: $o369-brand; color: #fff; flex: 0 0 auto;
         display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px;
@@ -338,13 +355,13 @@ $o369-line: #E6EDF5;
     // Message-info panel (delivered / read + times).
     .o369-infocard { width: 340px; max-width: 92vw; text-align: left; }
     .o369-infoprev {
-        background: #eef3f8; border-left: 3px solid $o369-accent; border-radius: 6px;
-        padding: 8px 10px; margin: 8px 0 12px; color: #33475b; font-size: 13px;
+        background: var(--o369-wall); border-left: 3px solid $o369-accent; border-radius: 6px;
+        padding: 8px 10px; margin: 8px 0 12px; color: var(--o369-text); font-size: 13px;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .o369-inforow { padding: 8px 0; border-top: 1px solid $o369-line; }
-    .o369-infohead { display: flex; align-items: center; gap: 8px; font-weight: 700; color: #33475b; font-size: 13px; margin-bottom: 6px; }
-    .o369-infoperson { display: flex; justify-content: space-between; align-items: center; padding: 3px 0 3px 26px; font-size: 13px; color: #1f2937; }
+    .o369-infohead { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--o369-text); font-size: 13px; margin-bottom: 6px; }
+    .o369-infoperson { display: flex; justify-content: space-between; align-items: center; padding: 3px 0 3px 26px; font-size: 13px; color: var(--o369-text); }
     .o369-infotime { color: $o369-grey; font-size: 12px; }
     .o369-infoempty { padding: 2px 0 2px 26px; color: $o369-grey; font-size: 12.5px; font-style: italic; }
 
@@ -353,9 +370,9 @@ $o369-line: #E6EDF5;
     .o369-privrow {
         display: flex; align-items: center; justify-content: space-between; gap: 12px;
         padding: 12px 0; border-top: 1px solid $o369-line;
-        label { font-weight: 600; color: #33475b; font-size: 13px; }
+        label { font-weight: 600; color: var(--o369-text); font-size: 13px; }
         select { flex: 0 0 auto; padding: 6px 10px; border: 1px solid $o369-line; border-radius: 8px;
-                 background: #fff; color: #1f2937; font-size: 13px; cursor: pointer; }
+                 background: var(--o369-panel); color: var(--o369-text); font-size: 13px; cursor: pointer; }
     }
     .o369-privhint { margin: 10px 0 4px; color: $o369-grey; font-size: 12px; line-height: 1.4; }
 
@@ -368,7 +385,7 @@ $o369-line: #E6EDF5;
         &:hover { background: $o369-brand-deep; }
     }
     .o369-voicebar { flex: 1 1 auto; height: 6px; border-radius: 3px; background: rgba(0,0,0,.15); cursor: pointer; position: relative; touch-action: none; }
-    .o369-voicespeed { flex: 0 0 auto; border: none; background: rgba(0,0,0,.10); color: #33475b; cursor: pointer;
+    .o369-voicespeed { flex: 0 0 auto; border: none; background: rgba(0,0,0,.10); color: var(--o369-text); cursor: pointer;
         font-size: 10.5px; font-weight: 700; border-radius: 10px; padding: 1px 6px; line-height: 1.6;
         &:hover { background: rgba(0,0,0,.18); } }
     .o369-voicefill {
@@ -382,9 +399,9 @@ $o369-line: #E6EDF5;
     .o369-jumpbtm {
         position: absolute; right: 18px; bottom: 84px; z-index: 4;
         width: 38px; height: 38px; border-radius: 50%; border: none; cursor: pointer;
-        background: #fff; color: $o369-brand; box-shadow: 0 2px 10px rgba(0,0,0,.22);
+        background: var(--o369-panel); color: $o369-brand; box-shadow: 0 2px 10px rgba(0,0,0,.22);
         display: flex; align-items: center; justify-content: center; font-size: 15px;
-        &:hover { background: #eef3f8; }
+        &:hover { background: var(--o369-wall); }
     }
 
     // Group invite link modal.
@@ -392,21 +409,21 @@ $o369-line: #E6EDF5;
     .o369-invitehint { color: $o369-grey; font-size: 12.5px; margin: 6px 0 12px; line-height: 1.4; }
     .o369-invitelinkrow { display: flex; gap: 8px; align-items: center; }
     .o369-invitelink { flex: 1 1 auto; min-width: 0; padding: 8px 10px; border: 1px solid $o369-line;
-        border-radius: 8px; background: #f6f9fc; color: #33475b; font-size: 12.5px; }
+        border-radius: 8px; background: #f6f9fc; color: var(--o369-text); font-size: 12.5px; }
     .o369-invitecopy { flex: 0 0 auto; border: none; background: $o369-brand; color: #fff; border-radius: 8px;
         padding: 8px 12px; cursor: pointer; &:hover { background: $o369-brand-deep; } }
-    .o369-inviteredo { margin-top: 12px; width: 100%; border: 1px solid $o369-line; background: #fff;
-        color: $o369-accent-deep; border-radius: 8px; padding: 8px; cursor: pointer; &:hover { background: #fff3ec; } }
+    .o369-inviteredo { margin-top: 12px; width: 100%; border: 1px solid $o369-line; background: var(--o369-panel);
+        color: $o369-accent-deep; border-radius: 8px; padding: 8px; cursor: pointer; &:hover { background: var(--o369-panel)3ec; } }
 
     .o369-replybar {
-        display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: #e7edf4; border-top: 1px solid $o369-line;
-        .o369-replyinfo { flex: 1; border-left: 3px solid $o369-accent; padding: 2px 8px; font-size: 12.5px; color: #45586e; overflow: hidden;
+        display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--o369-panel); border-top: 1px solid $o369-line;
+        .o369-replyinfo { flex: 1; border-left: 3px solid $o369-accent; padding: 2px 8px; font-size: 12.5px; color: var(--o369-text2); overflow: hidden;
             b { display: block; color: $o369-accent; } span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
-        .o369-replyx { background: #d4deea; color: #556; }
+        .o369-replyx { background: var(--o369-field); color: var(--o369-text2); }
     }
     .o369-input {
-        display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #eef2f7; border-top: 1px solid $o369-line;
-        input { flex: 1; border: 1px solid #d7e0ea; outline: none; background: #fff; border-radius: 22px; padding: 9px 16px; font-size: 14px; }
+        display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--o369-panel); border-top: 1px solid $o369-line;
+        input { flex: 1; border: 1px solid $o369-line; outline: none; background: var(--o369-field); border-radius: 22px; padding: 9px 16px; font-size: 14px; color: var(--o369-text); }
     }
     .o369-send {
         background: $o369-accent; color: #fff; border: none; width: 42px; height: 42px; border-radius: 50%; cursor: pointer; flex: 0 0 auto;
@@ -421,14 +438,14 @@ $o369-line: #E6EDF5;
         display: flex; align-items: center; justify-content: center; z-index: 20;
     }
     .o369-modalcard {
-        background: #fff; border-radius: 14px; padding: 18px; width: 320px; max-width: 90%;
+        background: var(--o369-panel); border-radius: 14px; padding: 18px; width: 320px; max-width: 90%;
         box-shadow: 0 12px 34px rgba(0,0,0,.28);
     }
-    .o369-modaltitle { font-weight: 700; color: #16306B; margin-bottom: 12px; font-size: 15px; }
+    .o369-modaltitle { font-weight: 700; color: var(--o369-text); margin-bottom: 12px; font-size: 15px; }
     .o369-modalopt {
         display: block; width: 100%; text-align: left; border: 1px solid $o369-line; background: #f7f9fd;
-        border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; cursor: pointer; font-size: 14px; color: #1f2937;
-        &:hover { background: #eef3f8; border-color: $o369-accent; }
+        border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; cursor: pointer; font-size: 14px; color: var(--o369-text);
+        &:hover { background: var(--o369-wall); border-color: $o369-accent; }
     }
     .o369-modalcancel {
         display: block; width: 100%; border: none; background: transparent; color: $o369-grey; padding: 6px; cursor: pointer; margin-top: 2px;
@@ -439,7 +456,7 @@ $o369-line: #E6EDF5;
     .o369-confirmbody { color: #475569; font-size: 14px; line-height: 1.5; margin-bottom: 18px; }
     .o369-confirmbtns { display: flex; gap: 10px; justify-content: flex-end; }
     .o369-confirmcancel {
-        border: 1px solid $o369-line; background: #fff; color: #475569; border-radius: 10px;
+        border: 1px solid $o369-line; background: var(--o369-panel); color: #475569; border-radius: 10px;
         padding: 9px 18px; cursor: pointer; font-size: 14px; font-weight: 600;
         &:hover { background: #f1f5f9; }
     }
@@ -456,11 +473,11 @@ $o369-line: #E6EDF5;
     .o369-pinitemtxt {
         flex: 1; min-width: 0; font-size: 13px;
         b { color: $o369-accent; margin-right: 4px; }
-        span { color: #1f2937; }
+        span { color: var(--o369-text); }
         small { display: block; color: $o369-grey; font-size: 11px; margin-top: 1px; }
     }
     .o369-pinitemx {
-        border: none; background: #f2f5f9; color: $o369-grey; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; flex: 0 0 auto;
+        border: none; background: var(--o369-field); color: $o369-grey; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; flex: 0 0 auto;
         &:hover { background: #fde3d0; color: $o369-accent-deep; }
     }
 
@@ -474,26 +491,26 @@ $o369-line: #E6EDF5;
         .fa { font-size: 13px; }
     }
     .o369-out .o369-caret { color: #35597e; background: linear-gradient(285deg, color-mix(in srgb, #{$o369-brand} 14%, #fff) 55%, transparent); }
-    .o369-in  .o369-caret { color: #5b6b7d; background: linear-gradient(285deg, #ffffff 55%, rgba(255,255,255,0)); }
+    .o369-in  .o369-caret { color: var(--o369-text2); background: linear-gradient(285deg, #ffffff 55%, rgba(255,255,255,0)); }
     .o369-bubble:hover .o369-caret { opacity: 1; }
 
     .o369-msgmenu {
         position: fixed; z-index: 3000; min-width: 195px;
-        background: #fff; border: 1px solid $o369-line; border-radius: 10px; padding: 5px;
+        background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 10px; padding: 5px;
         box-shadow: 0 8px 26px rgba(0,0,0,.22);
     }
     .o369-reactbar {
         display: flex; gap: 2px; padding: 4px 2px 6px; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px;
         .o369-reactbtn {
             border: none; background: transparent; cursor: pointer; font-size: 18px; padding: 3px 5px; border-radius: 8px; line-height: 1;
-            &:hover { background: #eef3f8; transform: scale(1.18); }
+            &:hover { background: var(--o369-wall); transform: scale(1.18); }
         }
     }
     .o369-menuitem {
         display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
         border: none; background: transparent; cursor: pointer; padding: 8px 12px; border-radius: 7px;
-        font-size: 13.5px; color: #1f2937;
-        .fa { width: 16px; color: #5b6b7d; }
+        font-size: 13.5px; color: var(--o369-text);
+        .fa { width: 16px; color: var(--o369-text2); }
         &:hover { background: $o369-wall; }
         &.o369-danger { color: $o369-accent-deep; .fa { color: $o369-accent-deep; } }
     }
@@ -514,7 +531,7 @@ $o369-line: #E6EDF5;
     .o369-headbtns { display: flex; align-items: center; gap: 6px; position: relative; }
     .o369-hdrmenu {
         position: absolute; top: 40px; right: 0; z-index: 30; min-width: 205px;
-        background: #fff; border: 1px solid $o369-line; border-radius: 10px; padding: 5px;
+        background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 10px; padding: 5px;
         box-shadow: 0 8px 26px rgba(0,0,0,.22);
     }
 
@@ -522,14 +539,14 @@ $o369-line: #E6EDF5;
     .o369-fwdrow { cursor: pointer; &:hover { background: $o369-wall; } }
 
     // full emoji picker
-    .o369-reactplus { font-weight: 700; color: #5b6b7d; font-size: 17px; }
+    .o369-reactplus { font-weight: 700; color: var(--o369-text2); font-size: 17px; }
     .o369-emojicard { width: 360px; max-width: 92%; }
     .o369-emojigrid {
         display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; max-height: 300px; overflow-y: auto; margin-bottom: 8px;
     }
     .o369-emojibtn {
         border: none; background: transparent; cursor: pointer; font-size: 20px; padding: 4px; border-radius: 6px; line-height: 1;
-        &:hover { background: #eef3f8; transform: scale(1.15); }
+        &:hover { background: var(--o369-wall); transform: scale(1.15); }
     }
 
     // filter chips + lists
@@ -538,7 +555,7 @@ $o369-line: #E6EDF5;
         flex-wrap: nowrap; overflow: visible; position: relative;
     }
     .o369-chip {
-        flex: 0 0 auto; border: 1px solid $o369-line; background: #f2f5f9; color: #45586e;
+        flex: 0 0 auto; border: 1px solid $o369-line; background: var(--o369-field); color: var(--o369-text2);
         border-radius: 16px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
         &:hover { background: #e6edf5; }
         &.o369-chip-on { background: $o369-brand; color: #fff; border-color: $o369-brand; }
@@ -553,27 +570,27 @@ $o369-line: #E6EDF5;
     .o369-rheadspace { flex: 1; }
     .o369-hmenuwrap { position: relative; }
     .o369-hbtn {
-        border: none; background: transparent; color: #5b6b7d; cursor: pointer; width: 34px; height: 34px; border-radius: 50%; flex: 0 0 auto;
-        &:hover { background: #eef3f8; color: $o369-brand; }
+        border: none; background: transparent; color: var(--o369-text2); cursor: pointer; width: 34px; height: 34px; border-radius: 50%; flex: 0 0 auto;
+        &:hover { background: var(--o369-wall); color: $o369-brand; }
     }
 
     // in-chat search bar + calendar
-    .o369-searchbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: #fff; border-bottom: 1px solid $o369-line; position: relative; z-index: 3; }
+    .o369-searchbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--o369-panel); border-bottom: 1px solid $o369-line; position: relative; z-index: 3; }
     .o369-searchfield {
-        flex: 1; display: flex; align-items: center; gap: 8px; background: #f2f5f9; border-radius: 18px; padding: 6px 12px;
+        flex: 1; display: flex; align-items: center; gap: 8px; background: var(--o369-field); border-radius: 18px; padding: 6px 12px;
         .fa { color: $o369-grey; }
         input { flex: 1; border: none; outline: none; background: transparent; font-size: 13px; }
     }
     .o369-searchcount { font-size: 12px; color: $o369-grey; white-space: nowrap; }
-    .o369-calpop { position: absolute; top: 46px; left: 8px; z-index: 40; width: 262px; background: #fff; border: 1px solid $o369-line; border-radius: 12px; padding: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.22); }
+    .o369-calpop { position: absolute; top: 46px; left: 8px; z-index: 40; width: 262px; background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 12px; padding: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.22); }
     .o369-calhead {
-        display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 700; color: #16306B;
-        button { border: none; background: transparent; cursor: pointer; color: #5b6b7d; padding: 4px 8px; border-radius: 6px; &:hover { background: #eef3f8; } }
+        display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 700; color: var(--o369-text);
+        button { border: none; background: transparent; cursor: pointer; color: var(--o369-text2); padding: 4px 8px; border-radius: 6px; &:hover { background: var(--o369-wall); } }
     }
     .o369-calgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
     .o369-caldow { text-align: center; font-size: 10px; color: $o369-grey; padding: 2px 0; }
     .o369-calday {
-        border: none; background: transparent; cursor: pointer; padding: 6px 0; border-radius: 50%; font-size: 12px; color: #1f2937;
+        border: none; background: transparent; cursor: pointer; padding: 6px 0; border-radius: 50%; font-size: 12px; color: var(--o369-text);
         &:hover { background: $o369-brand; color: #fff; }
         &.o369-calempty { visibility: hidden; }
     }
@@ -584,31 +601,31 @@ $o369-line: #E6EDF5;
     // contact / group info drawer
     .o369-drawer {
         position: absolute; top: 0; right: 0; bottom: 0; width: 380px; max-width: 92%; z-index: 45;
-        background: #fff; border-left: 1px solid $o369-line; box-shadow: -6px 0 24px rgba(0,0,0,.14);
+        background: var(--o369-panel); border-left: 1px solid $o369-line; box-shadow: -6px 0 24px rgba(0,0,0,.14);
         display: flex; flex-direction: column;
     }
-    .o369-drawerhead { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid $o369-line; font-weight: 700; color: #16306B; }
+    .o369-drawerhead { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid $o369-line; font-weight: 700; color: var(--o369-text); }
     .o369-drawerbody { flex: 1; overflow-y: auto; }
-    .o369-drawerprofile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 16px; border-bottom: 8px solid #f2f5f9; }
+    .o369-drawerprofile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 16px; border-bottom: 8px solid var(--o369-field); }
     .o369-avatarbig { width: 120px; height: 120px; font-size: 44px; }
-    .o369-drawername { font-size: 19px; font-weight: 700; color: #16306B; }
+    .o369-drawername { font-size: 19px; font-weight: 700; color: var(--o369-text); }
     .o369-drawersub { font-size: 13px; color: $o369-grey; }
-    .o369-drawersection { padding: 12px 16px; border-bottom: 8px solid #f2f5f9; }
+    .o369-drawersection { padding: 12px 16px; border-bottom: 8px solid var(--o369-field); }
     .o369-secttitle { font-size: 12px; color: $o369-accent; font-weight: 700; margin-bottom: 8px; }
     .o369-nickrow { display: flex; gap: 8px; }
     .o369-nickinput { flex: 1; border: 1px solid $o369-line; border-radius: 8px; padding: 8px 10px; outline: none; font-size: 14px; }
     .o369-savebtn { border: none; background: $o369-accent; color: #fff; border-radius: 8px; padding: 8px 14px; cursor: pointer; font-weight: 700; &:hover { background: $o369-accent-deep; } }
-    .o369-mediarow { display: flex; align-items: center; font-weight: 600; color: #1f2937; }
+    .o369-mediarow { display: flex; align-items: center; font-weight: 600; color: var(--o369-text); }
     .o369-mediacount { margin-left: auto; color: $o369-grey; font-weight: 700; }
     .o369-mediastats { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: $o369-grey; }
     .o369-drawaction {
-        display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: none; background: transparent; cursor: pointer; padding: 10px 4px; font-size: 14px; color: #1f2937;
-        .fa { width: 18px; color: #5b6b7d; }
+        display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: none; background: transparent; cursor: pointer; padding: 10px 4px; font-size: 14px; color: var(--o369-text);
+        .fa { width: 18px; color: var(--o369-text2); }
         &:hover { background: $o369-wall; border-radius: 8px; }
         &.o369-danger { color: $o369-accent-deep; .fa { color: $o369-accent-deep; } }
     }
     .o369-memrow { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
-    .o369-memtxt { flex: 1; b { display: block; font-size: 14px; color: #1f2937; } small { color: $o369-grey; font-size: 12px; } }
+    .o369-memtxt { flex: 1; b { display: block; font-size: 14px; color: var(--o369-text); } small { color: $o369-grey; font-size: 12px; } }
     .o369-adminbadge { font-size: 10px; color: $o369-brand; border: 1px solid $o369-brand; border-radius: 6px; padding: 1px 6px; }
 }
 @keyframes o369flash { 0%,100% { box-shadow: 0 1px 1px rgba(0,0,0,.06); } 30% { box-shadow: 0 0 0 3px #F47A20; } }
@@ -634,28 +651,33 @@ $o369-line: #E6EDF5;
         &:hover { background: #e7eef6; color: $o369-brand; }
     }
     .o369-attachmenu {
-        position: absolute; bottom: 46px; left: 0; background: #fff; border-radius: 12px; padding: 6px;
+        position: absolute; bottom: 46px; left: 0; background: var(--o369-panel); border-radius: 12px; padding: 6px;
         box-shadow: 0 6px 24px rgba(0,0,0,.18); z-index: 30; min-width: 190px;
         .o369-menuitem { display: flex; align-items: center; gap: 10px; width: 100%; border: none; background: transparent;
-            padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; color: #1f2937; text-align: left;
+            padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; color: var(--o369-text); text-align: left;
             i { width: 18px; color: $o369-brand; }
             &:hover { background: #f2f6fb; } }
     }
 
     // ---------- left nav rail (Chats / Media / Profile) ----------
     .o369-rail {
-        width: 60px; flex: 0 0 60px; background: $o369-brand-deep; display: flex; flex-direction: column;
-        align-items: center; padding: 14px 0 16px; gap: 8px;
+        width: 64px; flex: 0 0 64px; background: var(--o369-panel); border-right: 1px solid $o369-line;
+        display: flex; flex-direction: column; align-items: center; padding: 14px 0 16px; gap: 6px;
+    }
+    .o369-raillogo {
+        width: 38px; height: 38px; border-radius: 11px; margin-bottom: 10px;
+        background: linear-gradient(150deg, $o369-brand, $o369-brand-deep); color: #fff;
+        display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; letter-spacing: .3px;
     }
     .o369-railbtn {
-        width: 42px; height: 42px; border-radius: 50%; border: none; background: transparent; cursor: pointer;
-        color: rgba(255,255,255,.7); font-size: 19px; display: flex; align-items: center; justify-content: center;
+        width: 42px; height: 42px; border-radius: 12px; border: none; background: transparent; cursor: pointer;
+        color: var(--o369-grey); font-size: 19px; display: flex; align-items: center; justify-content: center;
         transition: background .15s, color .15s;
-        &:hover { background: rgba(255,255,255,.12); color: #fff; }
-        &.o369-railon { background: rgba(255,255,255,.2); color: #fff; }
+        &:hover { background: var(--o369-field); color: $o369-brand; }
+        &.o369-railon { background: var(--o369-accent-soft); color: $o369-brand; }
     }
     .o369-railgap { flex: 1; }
-    .o369-raildiv { width: 26px; height: 1px; background: rgba(255,255,255,.16); margin: 2px 0 6px; flex: 0 0 auto; }
+    .o369-raildiv { width: 26px; height: 1px; background: $o369-line; margin: 2px 0 6px; flex: 0 0 auto; }
     .o369-railav {
         width: 42px; height: 42px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; overflow: hidden;
         background: $o369-accent; color: #fff; display: flex; align-items: center; justify-content: center;
@@ -666,7 +688,7 @@ $o369-line: #E6EDF5;
     }
 
     // ---------- generic pane (media / settings) ----------
-    .o369-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #fff; overflow: hidden; }
+    .o369-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--o369-panel); overflow: hidden; }
     .o369-panehead {
         display: flex; align-items: center; gap: 12px; padding: 15px 20px; background: $o369-brand; color: #fff; flex: 0 0 auto;
     }
@@ -689,7 +711,7 @@ $o369-line: #E6EDF5;
     // scoped to the media PANE so it beats the group-info drawer's same-named grid.
     .o369-mediapane .o369-mediagrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); grid-auto-rows: 130px; gap: 4px; }
     .o369-mediapane .o369-mediacell {
-        position: relative; height: 130px; border-radius: 6px; overflow: hidden; cursor: pointer; background: #eef3f8;
+        position: relative; height: 130px; border-radius: 6px; overflow: hidden; cursor: pointer; background: var(--o369-wall);
         img, .o369-mediavidthumb { width: 100%; height: 100%; object-fit: cover; }
     }
     .o369-mediavid { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: $o369-brand; font-size: 26px; background: #dbe6f3; }
@@ -699,7 +721,7 @@ $o369-line: #E6EDF5;
     }
     .o369-doclist { display: flex; flex-direction: column; gap: 2px; }
     .o369-docrow {
-        display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; text-decoration: none; color: #1f2937;
+        display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; text-decoration: none; color: var(--o369-text);
         .fa { font-size: 18px; color: $o369-brand; flex: 0 0 auto; }
         &:hover { background: $o369-wall; }
     }
@@ -722,16 +744,16 @@ $o369-line: #E6EDF5;
         &::-webkit-scrollbar-thumb { background: #c3cedb; border-radius: 5px; }
     }
     .o369-setprofile {
-        display: flex; align-items: center; gap: 14px; padding: 18px 20px; cursor: pointer; border-bottom: 8px solid #f2f5f9;
+        display: flex; align-items: center; gap: 14px; padding: 18px 20px; cursor: pointer; border-bottom: 8px solid var(--o369-field);
         &:hover { background: $o369-wall; }
     }
     .o369-setpinfo { flex: 1; min-width: 0; }
-    .o369-setpname { font-weight: 700; font-size: 16px; color: #1f2937; }
+    .o369-setpname { font-weight: 700; font-size: 16px; color: var(--o369-text); }
     .o369-setpabout { font-size: 13px; color: $o369-grey; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .o369-setchev { color: $o369-grey; }
     .o369-setrow {
         display: flex; align-items: center; gap: 16px; width: 100%; border: none; background: transparent; cursor: pointer;
-        padding: 15px 20px; font-size: 15px; color: #1f2937; border-bottom: 1px solid #f2f5f9;
+        padding: 15px 20px; font-size: 15px; color: var(--o369-text); border-bottom: 1px solid var(--o369-field);
         > .fa:first-child { color: $o369-grey; font-size: 17px; width: 20px; }
         span { flex: 1; text-align: left; }
         &:hover { background: $o369-wall; }
@@ -739,9 +761,9 @@ $o369-line: #E6EDF5;
     .o369-setlogout { color: #d63b30; > .fa:first-child { color: #d63b30; } }
     .o369-profilehero { display: flex; justify-content: center; padding: 24px 0; }
     .o369-avatarxl { width: 120px; height: 120px; border-radius: 50%; font-size: 42px; }
-    .o369-setfield { padding: 14px 20px; border-bottom: 1px solid #f2f5f9; }
+    .o369-setfield { padding: 14px 20px; border-bottom: 1px solid var(--o369-field); }
     .o369-setflabel { font-size: 12px; color: $o369-brand; font-weight: 700; margin-bottom: 4px; }
-    .o369-setfval { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 15px; color: #1f2937;
+    .o369-setfval { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 15px; color: var(--o369-text);
         .fa { color: $o369-grey; cursor: pointer; &:hover { color: $o369-brand; } }
     }
     .o369-setfedit { display: flex; gap: 8px; align-items: center;
@@ -751,15 +773,26 @@ $o369-line: #E6EDF5;
     .o369-setsecttitle { font-size: 12px; font-weight: 700; color: $o369-brand; text-transform: uppercase; padding: 16px 20px 6px; }
     .o369-optrow {
         display: flex; align-items: center; justify-content: space-between; width: 100%; border: none; background: transparent;
-        cursor: pointer; padding: 12px 20px; font-size: 15px; color: #1f2937;
+        cursor: pointer; padding: 12px 20px; font-size: 15px; color: var(--o369-text);
         &:hover { background: $o369-wall; }
     }
     .o369-optck { color: $o369-brand; font-size: 15px; }
+    // Profile: About status presets (WhatsApp-style) + copy-number button
+    .o369-aboutpresets { display: flex; flex-direction: column; margin-top: 8px; border-top: 1px solid $o369-line; }
+    .o369-aboutopt { display: flex; align-items: center; justify-content: space-between; width: 100%; border: none;
+        background: transparent; cursor: pointer; padding: 10px 4px; font-size: 13.5px; color: var(--o369-text2);
+        &:hover { color: var(--o369-text); } }
+    .o369-copybtn { border: none; background: transparent; color: $o369-brand; cursor: pointer; padding: 4px 8px;
+        border-radius: 7px; font-size: 14px; &:hover { background: $o369-wall; } }
+    .o369-resetbtn { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 18px 20px 12px;
+        width: calc(100% - 40px); padding: 11px; border: 1px solid $o369-line; background: var(--o369-panel);
+        color: $o369-accent; border-radius: 10px; font-weight: 600; font-size: 13.5px; cursor: pointer;
+        &:hover { background: var(--o369-field); } }
     .o369-toggrow {
-        display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 20px; border-top: 1px solid #f2f5f9;
+        display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 20px; border-top: 1px solid var(--o369-field);
     }
     .o369-toginfo { min-width: 0; }
-    .o369-toglabel { font-size: 15px; color: #1f2937; }
+    .o369-toglabel { font-size: 15px; color: var(--o369-text); }
     .o369-toghint { font-size: 12px; color: $o369-grey; margin-top: 2px; }
     .o369-switch {
         flex: 0 0 auto; width: 42px; height: 24px; border-radius: 12px; border: none; background: #c9d3de; cursor: pointer; position: relative; transition: background .18s;
@@ -768,19 +801,19 @@ $o369-line: #E6EDF5;
     }
     .o369-bignbtn {
         display: block; margin: 18px 20px 6px; padding: 10px 16px; border: 1px solid $o369-line; border-radius: 10px;
-        background: #fff; color: $o369-brand; font-weight: 700; cursor: pointer;
-        &:hover { background: #eef3f8; }
+        background: var(--o369-panel); color: $o369-brand; font-weight: 700; cursor: pointer;
+        &:hover { background: var(--o369-wall); }
     }
 
     /* recording bar (369Chats brand style: light bar, blue waveform, orange send) */
     .o369-recbar {
         display: flex; align-items: center; gap: 12px; padding: 9px 16px; margin: 6px 8px;
-        background: #fff; border: 1px solid $o369-line; border-radius: 26px; box-shadow: 0 1px 4px rgba(0,0,0,.10);
+        background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 26px; box-shadow: 0 1px 4px rgba(0,0,0,.10);
         button { border: none; background: transparent; cursor: pointer; }
     }
     .o369-recdel { color: $o369-grey; font-size: 17px; &:hover { color: #d63b30; } }
     .o369-recdot { width: 11px; height: 11px; border-radius: 50%; background: #e53935; flex: 0 0 auto; animation: o369pulse 1.1s infinite; }
-    .o369-rectime { font-variant-numeric: tabular-nums; color: #33475b; font-size: 14px; min-width: 40px; }
+    .o369-rectime { font-variant-numeric: tabular-nums; color: var(--o369-text); font-size: 14px; min-width: 40px; }
     .o369-recwave {
         flex: 1; display: flex; align-items: center; gap: 3px; height: 26px; overflow: hidden;
         span {
@@ -835,13 +868,13 @@ $o369-line: #E6EDF5;
 /* generic option modal (member menu) */
 .o369 .o369-modalopt {
     display: block; width: 100%; border: none; background: transparent; text-align: left;
-    padding: 12px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; color: #1f2937;
+    padding: 12px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; color: var(--o369-text);
     &:hover { background: #f2f6fb; }
 }
 .o369 .o369-modalcancel {
     display: block; width: 100%; border: none; background: transparent; text-align: center;
     padding: 11px; margin-top: 4px; cursor: pointer; font-size: 14px; color: $o369-grey; border-top: 1px solid #eef1f5;
-    &:hover { color: #1f2937; }
+    &:hover { color: var(--o369-text); }
 }
 .o369 .o369-modaltitle { font-weight: 700; font-size: 15px; padding: 6px 14px 10px; color: $o369-brand; }
 
@@ -883,7 +916,7 @@ $o369-green-deep: #0E8F53;
     }
 
     /* Feature 2 — group description row */
-    .o369-descrow { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: #1f2937; }
+    .o369-descrow { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: var(--o369-text); }
     .o369-descrow-edit { cursor: pointer; }
     .o369-desctext { flex: 1; white-space: pre-wrap; }
     .o369-descpencil { color: $o369-grey; font-size: 13px; margin-top: 2px; }
@@ -899,7 +932,7 @@ $o369-green-deep: #0E8F53;
         &:focus { border-color: $o369-accent; }
     }
     .o369-descbtns { display: flex; gap: 8px; margin-top: 8px; }
-    .o369-drawcancel { border: 1px solid $o369-line; background: #fff; color: #475569; border-radius: 8px; padding: 8px 14px; cursor: pointer; font-weight: 600; &:hover { background: $o369-wall; } }
+    .o369-drawcancel { border: 1px solid $o369-line; background: var(--o369-panel); color: #475569; border-radius: 8px; padding: 8px 14px; cursor: pointer; font-weight: 600; &:hover { background: $o369-wall; } }
 
     /* row chevron (media / permissions rows) */
     .o369-rowchev { margin-left: auto; color: $o369-grey; font-size: 13px; }
@@ -907,7 +940,7 @@ $o369-green-deep: #0E8F53;
 
     /* Feature 3 — media viewer */
     .o369-mediatabs {
-        display: flex; border-bottom: 1px solid $o369-line; background: #fff;
+        display: flex; border-bottom: 1px solid $o369-line; background: var(--o369-panel);
         button {
             flex: 1; border: none; background: transparent; padding: 12px 6px; cursor: pointer; font-size: 13px;
             font-weight: 600; color: $o369-grey; border-bottom: 2px solid transparent;
@@ -926,8 +959,8 @@ $o369-green-deep: #0E8F53;
         &:hover { background: #e0e9f4; }
     }
     .o369-doclink {
-        display: flex; align-items: center; gap: 12px; padding: 10px 16px; text-decoration: none; color: #1f2937; font-size: 14px;
-        border-bottom: 1px solid #f2f5f9;
+        display: flex; align-items: center; gap: 12px; padding: 10px 16px; text-decoration: none; color: var(--o369-text); font-size: 14px;
+        border-bottom: 1px solid var(--o369-field);
         > .fa:first-child { color: $o369-brand; font-size: 18px; width: 20px; text-align: center; }
         .o369-docname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .o369-docdl { color: $o369-grey; }
@@ -935,14 +968,14 @@ $o369-green-deep: #0E8F53;
     }
 
     /* Feature 4 — permissions toggles */
-    .o369-permrow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; font-size: 14px; color: #1f2937;
+    .o369-permrow { display: flex; align-items: center; gap: 12px; padding: 10px 2px; font-size: 14px; color: var(--o369-text);
         span:first-child { flex: 1; }
     }
     .o369-toggle {
         position: relative; flex: 0 0 auto; width: 42px; height: 24px; border-radius: 999px; background: #cbd5e1;
         cursor: pointer; transition: background .15s ease;
         .o369-toggleknob {
-            position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff;
+            position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--o369-panel);
             box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .15s ease;
         }
         &.o369-toggle-on { background: $o369-green; .o369-toggleknob { left: 20px; } }
@@ -977,11 +1010,11 @@ $o369-green-deep: #0E8F53;
     .o369-emojiopen {
         border: none; background: none; cursor: pointer; color: $o369-grey; font-size: 20px;
         width: 38px; height: 38px; border-radius: 50%;
-        &:hover { color: $o369-accent; background: #eef3f8; }
+        &:hover { color: $o369-accent; background: var(--o369-wall); }
     }
     .o369-emojipop {
         position: absolute; bottom: 46px; left: 6px; z-index: 40; width: 320px; max-width: 78vw;
-        background: #fff; border: 1px solid $o369-line; border-radius: 12px;
+        background: var(--o369-panel); border: 1px solid $o369-line; border-radius: 12px;
         box-shadow: 0 10px 30px rgba(20, 42, 91, .18); padding: 8px; animation: o369-pop .12s ease;
     }
     .o369-emojipopgrid {
@@ -999,10 +1032,10 @@ $o369-green-deep: #0E8F53;
 
     /* ---- Polls (message bubble) ---- */
     .o369-poll { min-width: 240px; max-width: 100%; }
-    .o369-pollq { font-weight: 700; color: #17324f; font-size: 13.5px; margin-bottom: 8px; .fa { color: $o369-brand; } }
+    .o369-pollq { font-weight: 700; color: var(--o369-text); font-size: 13.5px; margin-bottom: 8px; .fa { color: $o369-brand; } }
     .o369-pollopt {
         position: relative; display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-        border: 1px solid $o369-line; background: #fff; border-radius: 9px; padding: 9px 11px; margin-bottom: 6px;
+        border: 1px solid $o369-line; background: var(--o369-panel); border-radius: 9px; padding: 9px 11px; margin-bottom: 6px;
         cursor: pointer; overflow: hidden;
         &:hover { border-color: $o369-brand; }
         &.o369-pollopt-mine { border-color: $o369-green; }
@@ -1011,7 +1044,7 @@ $o369-green-deep: #0E8F53;
         position: absolute; left: 0; top: 0; bottom: 0; background: rgba(18, 183, 106, .13);
         z-index: 0; transition: width .25s ease;
     }
-    .o369-polltext { position: relative; z-index: 1; flex: 1; font-size: 13px; color: #1f2937;
+    .o369-polltext { position: relative; z-index: 1; flex: 1; font-size: 13px; color: var(--o369-text);
         .fa { margin-right: 6px; color: $o369-green; } }
     .o369-pollcount { position: relative; z-index: 1; font-size: 12px; font-weight: 700; color: $o369-grey; }
     .o369-polltotal { font-size: 11.5px; color: $o369-grey; margin-top: 2px; }
@@ -1027,13 +1060,13 @@ $o369-green-deep: #0E8F53;
         padding: 4px 2px; font-size: 13.5px; .fa { margin-right: 4px; }
         &:hover { color: $o369-brand-deep; } }
     .o369-pollmulti { display: flex; align-items: center; gap: 10px; padding: 10px 2px 4px; cursor: pointer;
-        font-size: 13.5px; color: #1f2937; }
+        font-size: 13.5px; color: var(--o369-text); }
 
     /* ---- Link preview card ---- */
     .o369-linkcard {
         display: block; margin-top: 6px; border: 1px solid $o369-line; border-radius: 10px; overflow: hidden;
-        background: #f7fafd; text-decoration: none; max-width: 320px;
-        &:hover { background: #eef3f8; }
+        background: var(--o369-inbg); text-decoration: none; max-width: 320px;
+        &:hover { background: var(--o369-wall); }
     }
     .o369-linkimg { width: 100%; max-height: 160px; object-fit: cover; display: block; }
     .o369-linkfav { display: flex; align-items: center; justify-content: center; height: 54px; background: #e9f1fb;
@@ -1046,10 +1079,10 @@ $o369-green-deep: #0E8F53;
     .o369-grow { display: block; width: 100%; text-align: left; background: transparent; border: 0;
         padding: 7px 14px; cursor: pointer; &:hover { background: $o369-wall; } }
     .o369-gtop { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-    .o369-gtitle { font-weight: 600; color: #17324f; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .o369-gtitle { font-weight: 600; color: var(--o369-text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .o369-gtime { font-size: 10px; color: $o369-grey; flex: none; }
-    .o369-gsnip { font-size: 12px; color: #55657a; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        b { color: #33475b; font-weight: 600; } }
+    .o369-gsnip { font-size: 12px; color: var(--o369-text2); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        b { color: var(--o369-text); font-weight: 600; } }
 
     /* ---- Multi-select (bulk forward / delete / star) ---- */
     .o369-selected { outline: 2px solid $o369-brand; outline-offset: 2px; }
@@ -1069,15 +1102,15 @@ $o369-green-deep: #0E8F53;
         &:disabled { opacity: .4; cursor: default; } }
     .o369-replyext { color: $o369-accent; font-weight: 700; }
     .o369-linkmeta { display: block; padding: 8px 10px; }
-    .o369-linktitle { display: block; font-weight: 700; color: #17324f; font-size: 13px; line-height: 1.3;
+    .o369-linktitle { display: block; font-weight: 700; color: var(--o369-text); font-size: 13px; line-height: 1.3;
         overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-    .o369-linkdesc { display: block; font-size: 12px; color: #55657a; margin-top: 2px; line-height: 1.3;
+    .o369-linkdesc { display: block; font-size: 12px; color: var(--o369-text2); margin-top: 2px; line-height: 1.3;
         overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
     .o369-linkdomain { display: block; font-size: 11px; color: $o369-grey; margin-top: 4px; text-transform: lowercase; }
 
     /* ---- View once ---- */
     .o369-viewonce {
-        display: inline-flex; align-items: center; gap: 9px; border: 1px solid $o369-line; background: #fff;
+        display: inline-flex; align-items: center; gap: 9px; border: 1px solid $o369-line; background: var(--o369-panel);
         border-radius: 20px; padding: 8px 14px 8px 8px; cursor: pointer; min-width: 150px;
         &:hover { border-color: $o369-brand; }
         &.o369-viewonce-done { opacity: .6; cursor: default; &:hover { border-color: $o369-line; } }
@@ -1087,7 +1120,7 @@ $o369-green-deep: #0E8F53;
         .fa { font-size: 22px; }
         .o369-vo-one { position: absolute; font-size: 10px; font-weight: 800; color: $o369-brand; }
     }
-    .o369-vo-txt { font-size: 13px; color: #1f2937; }
+    .o369-vo-txt { font-size: 13px; color: var(--o369-text); }
     .o369-volightbox { flex-direction: column;
         img, video { max-width: 92vw; max-height: 80vh; border-radius: 8px; }
     }
@@ -1124,13 +1157,13 @@ $o369-green-deep: #0E8F53;
     /* ---- Compose-time link preview (above the input) ---- */
     .o369-complink {
         display: flex; align-items: stretch; gap: 10px; margin: 0 12px 8px; padding: 8px 10px;
-        background: #fff; border: 1px solid $o369-line; border-left: 4px solid $o369-brand; border-radius: 10px;
+        background: var(--o369-panel); border: 1px solid $o369-line; border-left: 4px solid $o369-brand; border-radius: 10px;
         box-shadow: 0 2px 8px rgba(20,42,91,.08);
     }
     .o369-complinkimg { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; flex: 0 0 auto; }
     .o369-complinkmeta { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-    .o369-complinktitle { font-weight: 700; color: #17324f; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .o369-complinkurl { font-size: 12px; color: #55657a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+    .o369-complinktitle { font-weight: 700; color: var(--o369-text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .o369-complinkurl { font-size: 12px; color: var(--o369-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
     .o369-complinkdomain { font-size: 11px; color: $o369-grey; margin-top: 2px; }
     .o369-complinkx { border: none; background: none; color: $o369-grey; cursor: pointer; padding: 0 4px; flex: 0 0 auto;
         &:hover { color: $o369-brand; } }
@@ -1169,7 +1202,7 @@ $o369-green-deep: #0E8F53;
         &.o369-themecard-on { border-color: $o369-brand; } }
     .o369-themeswatch { width: 100%; aspect-ratio: 1.4 / 1; border-radius: 10px; display: flex; align-items: center;
         justify-content: center; color: #fff; font-size: 18px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); }
-    .o369-themename { font-size: 12.5px; font-weight: 600; color: #1f2937; }
+    .o369-themename { font-size: 12.5px; font-weight: 600; color: var(--o369-text); }
     .o369-themeck { text-shadow: 0 1px 3px rgba(0,0,0,.4); }
 
     /* ================= Calls ================= */
@@ -1198,7 +1231,7 @@ $o369-green-deep: #0E8F53;
         transition: background .15s, transform .1s;
         &:hover { background: rgba(255,255,255,.28); }
         &:active { transform: scale(.94); }
-        &.o369-callbtn-off { background: #fff; color: #16324e; }
+        &.o369-callbtn-off { background: var(--o369-panel); color: #16324e; }
     }
     .o369-callend { background: #e5352b; &:hover { background: #cf2a20; } .fa { transform: rotate(135deg); } }
     .o369-callaccept { background: #12B76A; &:hover { background: #0E8F53; } }
@@ -1233,4 +1266,55 @@ $o369-green-deep: #0E8F53;
         &:hover { background: $o369-wall; }
         &.o369-schedcancel { color: $o369-grey; &:hover { color: #e5352b; } }
     }
+}
+
+/* On wide screens the contact/group info drawer becomes a persistent third
+   column beside the conversation (reference 3-column layout) instead of an
+   overlay. Narrow screens keep the slide-in drawer. */
+@media (min-width: 1300px) {
+    .o369 .o369-drawer {
+        position: static; width: 340px; max-width: 340px; box-shadow: none;
+        border-left: 1px solid $o369-line;
+    }
+}
+
+/* ===================================================================== */
+/* DARK MODE — flips the surface/text tokens as a set, plus the handful  */
+/* of surfaces that hardcode a light colour. Light mode is untouched.    */
+/* ===================================================================== */
+.o369.o369-dark {
+    --o369-ground:#0A0E13; --o369-panel:#141B22; --o369-field:#0E151D;
+    --o369-line:#232E3A; --o369-grey:#7C8896; --o369-wall:#1B2531;
+    --o369-text:#E7ECF3; --o369-text2:#9AA7B6;
+    --o369-ownbg:#1C3A57; --o369-owntext:#DDEBF8; --o369-convbg:#0C1218; --o369-accent-soft:#17293A; --o369-inbg:#202A35;
+    background: var(--o369-ground); color: var(--o369-text);
+
+    /* own message bubble (base uses color-mix with #fff → stays light) */
+    .o369-bubble.o369-out { background: var(--o369-ownbg); color: var(--o369-owntext); }
+    .o369-out .o369-btime { color: color-mix(in srgb, var(--o369-owntext) 62%, transparent); }
+    .o369-out .o369-quote { background: rgba(0,0,0,.22); }
+    .o369-out .o369-caret { color: #cfe0f2; background: linear-gradient(285deg, var(--o369-ownbg) 55%, transparent); }
+
+    /* conversation wallpaper */
+    .o369-right { background-color: var(--o369-convbg);
+        background-image: radial-gradient(rgba(255,255,255,.035) 1px, transparent 1px); }
+    .o369-row.o369-active { background: #16283a; }
+    .o369-row.o369-active .o369-rowcaret { background: linear-gradient(270deg, #16283a 62%, rgba(22,40,58,0)); }
+
+    /* light-grey fills that remain hardcoded elsewhere → tone them down */
+    .o369-datesep span { border: 1px solid var(--o369-line); }
+    .o369-search input::placeholder, .o369-input input::placeholder { color: var(--o369-grey); }
+    input, textarea, select { color: var(--o369-text); }
+    .o369-drawerprofile, .o369-drawersection { border-color: var(--o369-line); }
+
+    /* semantic-coloured surfaces that hardcode a light tint */
+    .o369-notifbanner { background: #12211a; border-color: #234634; }
+    .o369-nb-txt { color: #a9d8ba; } .o369-nb-ico { color: #37c979; }
+    .o369-blockbar { background: #291513; border-color: #4a221e; color: #f0a79e; }
+    .o369-linkfav { background: #22303c; }
+    .o369-linkico, .o369-mtab-on, .o369-circleico { background: var(--o369-accent-soft) !important; }
+    .o369-react-mine { background: #3a2a1c; }
+    .o369-pinbar { background: #241d12; border-color: #3a2f1a; }
+    .o369-hl, mark.o369-hl { background: #6a5300; color: #ffe08a; }
+    .o369-railbadge { box-shadow: 0 0 0 2px var(--o369-panel); }
 }
