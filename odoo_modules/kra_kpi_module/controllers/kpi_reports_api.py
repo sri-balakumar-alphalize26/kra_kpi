@@ -1903,13 +1903,18 @@ class KpiReportsAPI(http.Controller):
                           if kpi.task_state == 'pre_approval_pending' else ''))
                 return {'status': True, 'message': msg}
             kpi.write({'published': True})
-            # Ask the client to approve the assignment (auto-approves after the
-            # 5-min window if they stay silent). The write() override only fires
-            # this when a developer is NEWLY assigned, so a task that ALREADY had
-            # a developer would otherwise be published without ever asking the
-            # client — which is exactly why no client notification was sent.
+            # Ask the client to approve the assignment.  The client decides in
+            # their own time — silence is never treated as consent.  The write()
+            # override only fires this when a developer is NEWLY assigned, so a
+            # task that ALREADY had a developer would otherwise be published
+            # without ever asking the client.
+            #
+            # admin_accepted is required: publishing must not leapfrog the admin
+            # gate, which is the first step of the workflow.
             msg = f'Published: {kpi.name}'
-            if kpi.task_state in ('assigned', 'queue_waiting'):
+            if kpi.task_state in ('assigned', 'queue_waiting') and not kpi.admin_accepted:
+                msg += ' — waiting for admin acceptance before the client is asked.'
+            elif kpi.task_state in ('assigned', 'queue_waiting'):
                 try:
                     kpi.request_client_pre_approval()
                     msg += ' — client pre-approval requested.'

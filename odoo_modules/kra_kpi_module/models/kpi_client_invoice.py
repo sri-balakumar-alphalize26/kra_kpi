@@ -223,6 +223,9 @@ class KpiClientInvoice(models.Model):
             ('work_date', '>=', self.from_date),
             ('work_date', '<=', self.to_date),
             ('kpi_id.kra_id', 'in', kra_ids),
+            # Only bill work on tasks the CLIENT has signed off as complete.
+            ('kpi_id.task_state', '=', 'completed'),
+            ('kpi_id.client_final_approved', '=', True),
         ]
         if self.filter_user_ids:
             domain.append(('user_id', 'in', self.filter_user_ids.ids))
@@ -293,7 +296,13 @@ class KpiClientInvoice(models.Model):
         # line for a task the log pass didn't already add, with actual_hours = 0
         # (a 0-hour line adds 0 to an hourly total, so nothing existing changes).
         Kpi = self.env['kra.kpi']
-        task_domain = [('kra_id', 'in', kra_ids), ('active', '=', True)]
+        # Same rule as the time-log domain above: an invoice may only ever list
+        # tasks the client has signed off.  Without these two clauses every
+        # active task under the client was offered for billing, including
+        # in-progress and never-approved ones.
+        task_domain = [('kra_id', 'in', kra_ids), ('active', '=', True),
+                       ('task_state', '=', 'completed'),
+                       ('client_final_approved', '=', True)]
         if self.filter_kpi_ids:
             task_domain.append(('id', 'in', self.filter_kpi_ids.ids))
         if type_allowed_ids is not None:

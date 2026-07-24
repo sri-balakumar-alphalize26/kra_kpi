@@ -1678,9 +1678,16 @@ class KraKpiAPI(http.Controller):
         return {'status': True, 'id': rec.id, 'external_ref': rec.external_ref,
                 'message': 'Task created in your Pending Review lane.'}
 
-    @http.route('/kra_kpi/task/accept_self_created', type='json', auth='user', methods=['POST'], csrf=False)
+    @http.route(['/kra_kpi/task/admin_accept',
+                 '/kra_kpi/task/accept_self_created'],
+                type='json', auth='user', methods=['POST'], csrf=False)
     def accept_self_created(self, **params):
-        """Admin accepts a self-created task into the official flow.
+        """Admin accepts ANY task into the official flow.
+
+        This is now the single gate every task passes through: nothing reaches
+        the client until an admin has accepted it here.  The legacy
+        /accept_self_created route is kept as an alias so the existing OWL
+        screens keep working.
 
         Sets admin_accepted=True.  If the developer hasn't started it yet, fire
         the normal client pre-approval; if they've already started/worked it, we
@@ -1696,7 +1703,9 @@ class KraKpiAPI(http.Controller):
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
         if not rec.exists():
             return {'status': False, 'message': 'Task not found'}
-        if not rec.is_self_created or rec.admin_accepted:
+        # Applies to every task, not just self-created ones — admin acceptance
+        # is now the mandatory first step of the workflow.
+        if rec.admin_accepted:
             return {'status': False, 'message': 'This task is not awaiting acceptance.'}
 
         vals = {'admin_accepted': True}

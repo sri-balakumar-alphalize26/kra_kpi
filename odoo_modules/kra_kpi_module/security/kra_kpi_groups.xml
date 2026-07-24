@@ -43,5 +43,11 @@
             <field name="comment">Deprecated. Use 'KRA / KPI Coordinator' instead. Implies Coordinator for back-compat.</field>
             <field name="implied_ids" eval="[(4, ref('kra_kpi_module.group_kra_admin'))]"/>
         </record>
+        <!-- Administrators automatically get full KRA/KPI Owner access so the app menu
+             appears on every system without manual per-user group assignment. -->
+        <record id="base.group_system" model="res.groups">
+            <field name="implied_ids" eval="[(4, ref('kra_kpi_module.group_kra_owner'))]"/>
+        </record>
+
     </data>
 </odoo>

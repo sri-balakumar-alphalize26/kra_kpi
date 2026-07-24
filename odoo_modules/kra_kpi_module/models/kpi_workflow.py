@@ -150,6 +150,7 @@ class KpiWorkflow(models.Model):
                 'pre_approval_source':       False,
                 'pre_approval_feedback':     False,
                 'pre_approval_deadline_at':  now + timedelta(minutes=rec._client_approval_minutes()),
+                'pre_approval_reminder_count': 0,
                 'task_state':                'pre_approval_pending',
             })
             rec._log_action(
@@ -367,6 +368,7 @@ class KpiWorkflow(models.Model):
             ).encode('utf-8')
             vals = {
                 'task_state':                'completed',
+                'client_final_approved':     True,
                 'client_signature_text':     signer,
                 'client_signed_datetime':    now,
                 'client_approval_notes':     note,
@@ -534,23 +536,12 @@ class KpiWorkflow(models.Model):
                 except Exception:
                     pass
 
-            # Always trigger client pre-approval on creation so the client
-            # gets the Approve / Reject / Hold / Clarify buttons at the same
-            # time the owner gets the task_created notification.  Whether the
-            # developer is assigned yet or not, the approval question goes
-            # to the client first; the coordinator can pick the dev later.
-            if rec.task_state in ('assigned',) and not (rec.is_self_created and not rec.admin_accepted):
-                try:
-                    rec.request_client_pre_approval()
-                except Exception as exc:
-                    try:
-                        rec._log_action(
-                            'notification_failed',
-                            payload={'event': 'auto_pre_approval_on_create', 'error': str(exc)},
-                            success=False,
-                        )
-                    except Exception:
-                        pass
+            # DELIBERATELY NOT asking the client here.  The order is
+            # ADMIN accepts  →  THEN the client is asked to approve.
+            # Client pre-approval is fired exclusively by the admin-accept
+            # endpoint (/kra_kpi/task/admin_accept in controllers/kra_api.py).
+            # Firing it on create() asked the client before any admin had seen
+            # the task, which is the reverse of the intended workflow.
         return records
 
     def write(self, vals):
@@ -571,7 +562,10 @@ class KpiWorkflow(models.Model):
                     # task_state='rework') asks the client again when the admin
                     # assigns a DIFFERENT developer. Without it the reassignment
                     # would silently never re-request approval.
-                    if rec.task_state in ('assigned', 'queue_waiting', 'rework'):
+                    # Only once an admin has accepted the task: assigning a
+                    # developer must never leapfrog the admin gate.
+                    if (rec.task_state in ('assigned', 'queue_waiting', 'rework')
+                            and rec.admin_accepted):
                         will_request_pre_approval.append(rec.id)
 
         # When a coordinator assigns a developer, automatically publish the
@@ -640,6 +634,34 @@ class KpiWorkflow(models.Model):
             except Exception:
                 pass
 
+    # States that mean work is already legitimately underway, so Start/Resume
+    # is just picking it back up rather than beginning unapproved work.
+    _RESUMABLE_STATES = ('in_progress', 'paused', 'rework', 'partially_completed')
+
+    def _assert_startable(self):
+        """Refuse to start/resume work the client has not approved.
+
+        The workflow is: admin accepts -> client approves -> developer works.
+        Before this guard existed, start_task() only skipped already-finished
+        tasks, so a developer could start a task still sitting in
+        'pre_approval_pending' and the work was neither approved nor billable.
+        """
+        for rec in self:
+            if rec.task_state in rec._RESUMABLE_STATES:
+                continue        # already underway — resuming is fine
+            if not rec.admin_accepted:
+                raise ValidationError(
+                    "'%s' has not been accepted by an admin yet. "
+                    "An admin must accept the task before work can start."
+                    % (rec.external_ref or rec.name or rec.id)
+                )
+            if rec.pre_approval_decision != 'approve':
+                raise ValidationError(
+                    "'%s' is waiting for CLIENT approval (state: %s). "
+                    "Work cannot start until the client approves."
+                    % (rec.external_ref or rec.name or rec.id, rec.task_state)
+                )
+
     def _check_single_task_limit(self):
         """Block a 2nd concurrent in_progress task unless the assignee is allowed multitask."""
         for rec in self:
@@ -662,31 +684,15 @@ class KpiWorkflow(models.Model):
         # A developer may have at most ONE in_progress task at a time — unless
         # their kpi_allow_multitask flag is on (enforced in _check_single_task_limit).
         self._check_single_task_limit()
+        # Client approval is mandatory before any work begins.  The old
+        # 'start_prep' path (starting from pre_approval_partial) is gone: it
+        # let developers work on tasks the client had never approved.
+        self._assert_startable()
         prev = {rec.id: rec.task_state for rec in self}
         result = super().start_task()
         self._end_nontask_for_work('task started')
         for rec in self:
-            prev_state = prev.get(rec.id)
-            event = 'start_prep' if prev_state == 'pre_approval_partial' else 'start'
-            rec._wrap_lifecycle(event, prev_state=prev_state)
-            # If we just started on a PARTIAL-approved task, also remind the
-            # client to approve so the work can be billed.  Token is still
-            # live (the 5-min cron only changed state; approval_token_used
-            # stays False), so the tap-to-send buttons keep working.
-            if prev_state == 'pre_approval_partial' and not rec.approval_token_used:
-                try:
-                    rec._log_action('pre_approval_reminder',
-                                    source='web',
-                                    payload={'fired_on': 'start_prep'})
-                    rec._notify('pre_approval_reminder')
-                except Exception as exc:
-                    try:
-                        rec._log_action('notification_failed',
-                                        payload={'event': 'pre_approval_reminder',
-                                                 'error': str(exc)},
-                                        success=False)
-                    except Exception:
-                        pass
+            rec._wrap_lifecycle('start', prev_state=prev.get(rec.id))
         return result
 
     def pause_task(self, reason='', reason_code=False):
@@ -750,6 +756,9 @@ class KpiWorkflow(models.Model):
         # Same single-in-progress rule applies to Resume (closes the gap where a
         # dev could get two running tasks by resuming a paused one).
         self._check_single_task_limit()
+        # Resuming a genuinely-underway task is allowed; resuming something the
+        # client never approved is not (see _assert_startable).
+        self._assert_startable()
         result = super().resume_task()
         # Returning from a pause closes any open break/lunch for this user.
         self.env['kpi.break.log'].stop_break(self.env.user.id)
@@ -828,17 +837,22 @@ class KpiWorkflow(models.Model):
     # ------------------------------------------------------------------ #
     @api.model
     def _cron_pre_approval_timeout(self):
-        """Handle rows past their pre-approval deadline.
+        """Remind about overdue client approvals.  NEVER decides for the client.
 
-        Two behaviours, deliberately split:
-          * CLIENT-submitted tasks  → AUTO-APPROVE. The client was asked in-app to
-            sign off on the developer the admin assigned; silence means consent, so
-            the task proceeds as a normal approved task (per the user's spec).
-          * everything else         → the original flip to 'pre_approval_partial'
-            (prep-only / non-billable), unchanged.
+        This method used to auto-approve a task once the client stayed silent
+        past `client_approval_minutes` (default 5), stamping
+        "Auto-approved (no response)" — and, for non client-submitted rows,
+        flipped it to 'pre_approval_partial' so a developer could do "prep
+        work".  Both routes let work start and be billed without the client
+        ever consenting, which is exactly the bug this module was reported for.
 
-        Runs every minute (see data/kpi_partial_timeout_cron.xml).
-        Idempotent: only acts on rows still in 'pre_approval_pending'.
+        Silence is no longer consent.  A task now waits in
+        'pre_approval_pending' indefinitely; the only thing that moves it is a
+        real client decision.  We merely re-notify so nothing stalls unnoticed.
+
+        Kept as a live method (rather than deleted) because deployed databases
+        still hold the cron record and would error on a missing method — the
+        same reasoning as _cron_escalate_pre_approval below.
         """
         now = fields.Datetime.now()
         overdue = self.sudo().search([
@@ -846,47 +860,44 @@ class KpiWorkflow(models.Model):
             ('pre_approval_deadline_at', '!=', False),
             ('pre_approval_deadline_at', '<=', now),
         ])
+        sent = 0
         for rec in overdue:
-            if rec.client_submitted:
-                # Silence == approval. Stamp it like a real decision so the audit
-                # trail, the board and the client screens all read consistently.
-                rec.write({
-                    'task_state': 'pre_approval_approved',
-                    'pre_approval_decision': 'approve',
-                    'pre_approval_source': 'web',
-                    'pre_approval_decided_at': now,
-                    'pre_approval_decided_by_name': 'Auto-approved (no response)',
-                    'approval_token_used': True,
-                })
+            # Reminder only — no state, decision or token is ever written here.
+            #
+            # This cron ticks every minute, but pre_approval_deadline_at is
+            # pushed forward after each reminder so a given task is chased at
+            # most once per window, and PRE_APPROVAL_REMINDER_MAX times in
+            # total.  Without that throttle, leaving a task in
+            # 'pre_approval_pending' forever (which is now the whole point)
+            # would spam the client every 60 seconds.
+            if rec.pre_approval_reminder_count >= self.PRE_APPROVAL_REMINDER_MAX:
+                # Stop chasing: clearing the deadline drops it from this search.
+                rec.sudo().write({'pre_approval_deadline_at': False})
                 rec._log_action(
-                    'pre_approval_auto_approved',
+                    'pre_approval_reminder_exhausted',
                     source='cron',
-                    payload={'deadline_at': (rec.pre_approval_deadline_at
-                                             and rec.pre_approval_deadline_at.isoformat())},
+                    payload={'sent': rec.pre_approval_reminder_count},
                 )
-                event = 'pre_approval_decided'
-            else:
-                rec.task_state = 'pre_approval_partial'
-                rec._log_action(
-                    'partial_timeout',
-                    source='cron',
-                    payload={'deadline_at': rec.pre_approval_deadline_at and rec.pre_approval_deadline_at.isoformat()},
-                )
-                event = 'partial_timeout'
+                continue
             try:
-                # Tells the developer + admins either way (both events resolve to
-                # owner/coordinator/developer). `feedback` must be passed in ctx —
-                # {feedback} never reads the field — hence the explicit reason.
-                rec._notify(event, decision='approve' if event == 'pre_approval_decided' else None,
-                            decided_by='Auto-approved (no response)',
-                            feedback='No response within the approval window')
+                rec._notify('pre_approval_reminder',
+                            feedback='Still awaiting the client decision')
+                sent += 1
             except Exception as exc:
-                rec._log_action(
-                    'notification_failed',
-                    payload={'event': event, 'error': str(exc)},
-                    success=False,
-                )
-        return len(overdue)
+                try:
+                    rec._log_action(
+                        'notification_failed',
+                        payload={'event': 'pre_approval_reminder', 'error': str(exc)},
+                        success=False,
+                    )
+                except Exception:
+                    pass
+            rec.sudo().write({
+                'pre_approval_reminder_count': rec.pre_approval_reminder_count + 1,
+                'pre_approval_deadline_at': (
+                    now + timedelta(minutes=rec._client_approval_minutes())),
+            })
+        return sent
 
     # ------------------------------------------------------------------ #
     # Cron — RETIRED: 30-min sequential client escalation                 #
@@ -912,6 +923,9 @@ class KpiWorkflow(models.Model):
     # ------------------------------------------------------------------ #
     # Client Task Queue — re-nudge admins while the notification is unread #
     # ------------------------------------------------------------------ #
+    # Cap the client approval reminders the same way (see the timeout cron).
+    PRE_APPROVAL_REMINDER_MAX = 5
+
     # Cap the repeats so a task nobody ever opens can't nudge forever.
     QUEUE_NUDGE_MAX = 5
 

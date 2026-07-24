@@ -307,9 +307,24 @@ class KpiMaster(models.Model):
     # enters the normal flow and the already-accrued time carries over untouched.
     is_self_created = fields.Boolean(string='Self-Created', default=False, index=True,
         help='Task created by a developer via the board New Task button.')
-    admin_accepted = fields.Boolean(string='Admin Accepted', default=True,
-        help='False while a self-created task waits in the Pending Review lane; '
-             'set True when an admin accepts it into the official flow.')
+    # Default False: EVERY task now waits for an admin to accept it before the
+    # client is asked to approve.  Client pre-approval is fired by the admin
+    # accept endpoint, never by create() — see kpi_workflow.create().
+    admin_accepted = fields.Boolean(string='Admin Accepted', default=False,
+        help='False while a task waits for admin acceptance; set True when an '
+             'admin accepts it into the official flow, which then asks the client.')
+    # Set ONLY by a genuine client final sign-off (record_client_final_decision
+    # approve path, or approve_task when the client signed offline).  Invoicing
+    # keys off this, never off task_state alone.
+    # How many "client, please decide" reminders the cron has already sent for
+    # the CURRENT approval request.  Capped so a task nobody ever answers can
+    # not nudge forever; reset by request_client_pre_approval().
+    pre_approval_reminder_count = fields.Integer(
+        string='Approval Reminders Sent', default=0, copy=False)
+    client_final_approved = fields.Boolean(
+        string='Client Signed Off', default=False, index=True, copy=False,
+        help='True once the CLIENT has approved the completed task. Only tasks '
+             'with this flag are billable.')
     requested_by_id = fields.Many2one('res.users', string='Requested By', readonly=True,
         help='Developer who self-created the task.')
     self_review_note = fields.Char(string='Send-Back Note',
@@ -530,6 +545,8 @@ class KpiMaster(models.Model):
                 rec.task_state = 'completed'
                 rec.approved_by = self.env.user
                 rec.approval_date = self._now()
+                # A real client signature exists, so this is billable.
+                rec.client_final_approved = True
             else:
                 # Move to a dedicated 'awaiting client sign-off' state so the kanban
                 # transitions out of "Pending Approvals". Client portal picks this up.
