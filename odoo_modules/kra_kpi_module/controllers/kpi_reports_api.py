@@ -4312,6 +4312,11 @@ class KpiReportsAPI(http.Controller):
                 'approval_date': now,
                 # If admin hadn't run QA-approve yet, mark it now (client signed = effective approval)
                 'admin_approved': True,
+                # The client's signature IS the billable event — without this the task
+                # looks fully approved but can never be invoiced, because the invoice
+                # domain filters on client_final_approved (kpi_client_invoice.py:228).
+                # Matches the app path (kpi_workflow.py) and approve_task() (kpi.py).
+                'client_final_approved': True,
             })
             # Audit + notify owner / coordinator / developer that the client signed off.
             try:
