@@ -145,21 +145,21 @@ export class KpiClientDashboard extends Component {
             </div>
 
             <!-- Per-type breakdown (Requirements / Updates / Bugs) -->
-            <div class="row g-3 mb-3" t-if="state.dashboard.by_type">
+            <div class="row g-3 mb-3" t-if="state.dashboard">
                 <div class="col-md-4">
                     <div class="card p-3 shadow-sm border-primary border-start border-4">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <div class="text-muted small">Requirements</div>
-                                <div class="fs-3 fw-bold" t-esc="state.dashboard.by_type.requirement.total"/>
+                                <div class="fs-3 fw-bold" t-esc="byType.requirement.total"/>
                             </div>
                             <div class="text-end">
                                 <div class="small">
                                     <span class="badge bg-success">
-                                        <i class="fa fa-check"/> <t t-esc="state.dashboard.by_type.requirement.done"/>
+                                        <i class="fa fa-check"/> <t t-esc="byType.requirement.done"/>
                                     </span>
                                     <span class="badge bg-warning text-dark ms-1">
-                                        <i class="fa fa-clock-o"/> <t t-esc="state.dashboard.by_type.requirement.open"/>
+                                        <i class="fa fa-clock-o"/> <t t-esc="byType.requirement.open"/>
                                     </span>
                                 </div>
                             </div>
@@ -171,15 +171,15 @@ export class KpiClientDashboard extends Component {
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <div class="text-muted small">Updates / Amendments</div>
-                                <div class="fs-3 fw-bold" t-esc="state.dashboard.by_type.update.total"/>
+                                <div class="fs-3 fw-bold" t-esc="byType.update.total"/>
                             </div>
                             <div class="text-end">
                                 <div class="small">
                                     <span class="badge bg-success">
-                                        <i class="fa fa-check"/> <t t-esc="state.dashboard.by_type.update.done"/>
+                                        <i class="fa fa-check"/> <t t-esc="byType.update.done"/>
                                     </span>
                                     <span class="badge bg-warning text-dark ms-1">
-                                        <i class="fa fa-clock-o"/> <t t-esc="state.dashboard.by_type.update.open"/>
+                                        <i class="fa fa-clock-o"/> <t t-esc="byType.update.open"/>
                                     </span>
                                 </div>
                             </div>
@@ -191,15 +191,15 @@ export class KpiClientDashboard extends Component {
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <div class="text-muted small">Bugs</div>
-                                <div class="fs-3 fw-bold" t-esc="state.dashboard.by_type.bug.total"/>
+                                <div class="fs-3 fw-bold" t-esc="byType.bug.total"/>
                             </div>
                             <div class="text-end">
                                 <div class="small">
                                     <span class="badge bg-success">
-                                        <i class="fa fa-check"/> <t t-esc="state.dashboard.by_type.bug.done"/>
+                                        <i class="fa fa-check"/> <t t-esc="byType.bug.done"/>
                                     </span>
                                     <span class="badge bg-warning text-dark ms-1">
-                                        <i class="fa fa-clock-o"/> <t t-esc="state.dashboard.by_type.bug.open"/>
+                                        <i class="fa fa-clock-o"/> <t t-esc="byType.bug.open"/>
                                     </span>
                                 </div>
                             </div>
@@ -418,9 +418,11 @@ export class KpiClientDashboard extends Component {
             { key: 'completed', label: 'Completed', states: ['completed'] },
         ];
     }
+    // Counts must honour the Project / User filters, exactly like `filteredKpis` does —
+    // otherwise the tile and the "Showing N task(s)" line below it disagree.
     tabCount(key) {
         const c = this.statusChips.find(x => x.key === key);
-        const list = (this.state.dashboard && this.state.dashboard.kpis) || [];
+        const list = this._applyFilters((this.state.dashboard && this.state.dashboard.kpis) || []);
         return c ? list.filter(k => c.states.includes(k.task_state)).length : 0;
     }
     stateBadge(state) {
@@ -448,6 +450,24 @@ export class KpiClientDashboard extends Component {
     }
     get filteredPending() {
         return this._applyFilters((this.state.dashboard && this.state.dashboard.pending_approvals) || []);
+    }
+    // Per-type breakdown recomputed client-side from the FILTERED list. The payload's
+    // `by_type` is built server-side over the whole client scope (kpi_reports_api.py),
+    // so binding the tiles to it left them frozen whenever a filter was applied.
+    get byType() {
+        const out = {
+            requirement: { total: 0, done: 0, open: 0 },
+            update: { total: 0, done: 0, open: 0 },
+            bug: { total: 0, done: 0, open: 0 },
+        };
+        const list = this._applyFilters((this.state.dashboard && this.state.dashboard.kpis) || []);
+        for (const k of list) {
+            // Unknown kind falls back rather than throwing — a task must never vanish from the totals.
+            const b = out[k.kind] || out.requirement;
+            b.total++;
+            if (k.task_state === 'completed') b.done++; else b.open++;
+        }
+        return out;
     }
     get filteredKpis() {
         const tab = this.statusChips.find(c => c.key === this.state.tab) || this.statusChips[0];

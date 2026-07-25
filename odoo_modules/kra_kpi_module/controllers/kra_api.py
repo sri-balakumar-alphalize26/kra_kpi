@@ -981,9 +981,23 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kpi_app/config', type='json', auth='public', methods=['POST'], csrf=False)
     def app_config(self, **params):
-        """Public: the mobile app fetches the company's country dial code + local
-        mobile length (from the Configuration screen) so every number field in the
-        app shows the same +code and allows the same number of digits."""
+        """Public: the country dial code + local mobile length the app's number
+        fields should use, so the +code shown and the digit count allowed match
+        what Odoo holds.
+
+        Resolves the PERSON when the device says who it belongs to. The device is
+        bound to one Odoo account by the 7-tap setup and sends that account's id as
+        `setup_uid` (same value `/kpi_app/login_check` already uses), so the login
+        screen can show an Oman user +968/8 while others stay +91/10 — even though
+        nobody is signed in yet. Falls back to the company default when the device
+        isn't set up yet or the id doesn't resolve.
+        """
+        setup_uid = int(params.get('setup_uid') or 0)
+        if setup_uid:
+            user = request.env['res.users'].sudo().browse(setup_uid).exists()
+            if user:
+                dial, length = user._kpi_user_mobile_cfg()
+                return {'status': True, 'dial': dial or '91', 'mobile_length': length or 10}
         company = request.env.company or request.env['res.company'].sudo().search([], limit=1, order='id')
         dial, length = company.sudo()._kpi_mobile_cfg()
         return {'status': True, 'dial': dial or '91', 'mobile_length': length or 10}

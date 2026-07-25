@@ -25,13 +25,16 @@ async function formatLoginMobile(mobile) {
   }
 }
 
-// Country/mobile format from the Odoo Configuration screen, so every number
-// field in the app shows the same +dial code and allows the same digit count.
+// Country/mobile format for this device's number fields: the +dial code shown
+// and the digit count allowed. Sends the device's setup uid (the Odoo account the
+// 7-tap setup bound it to) so the server can answer with THAT person's country —
+// an Oman user gets +968/8 while others stay +91/10 — even before anyone signs in.
+// Without it, or with the server unreachable, the company default applies.
 export async function getMobileConfig() {
-  const { serverUrl, db } = await getConnection();
+  const { serverUrl, db, setupUid } = await getConnection();
   if (!serverUrl) return { dial: '91', length: 10 };
   try {
-    const res = await jsonRpc(serverUrl, '/kpi_app/config', {}, undefined, db);
+    const res = await jsonRpc(serverUrl, '/kpi_app/config', { setup_uid: setupUid || 0 }, undefined, db);
     return { dial: res?.dial || '91', length: res?.mobile_length || 10 };
   } catch (e) {
     log.warn('getMobileConfig failed', e?.message);
