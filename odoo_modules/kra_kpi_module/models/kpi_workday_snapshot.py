@@ -203,9 +203,16 @@ class KpiWorkdaySnapshot(models.Model):
             # and "over/under" says it plainly anyway. Colour carries it too.
             ('Presence (wall clock)', p.get('presence_display', '0m'), verdict,
              '%s %s standard' % ('over' if met else 'under', p.get('standard_display', ''))),
+            # Everything the day is accounted for by, in one number: task work +
+            # meeting + lunch + break + no-tasks (+ away/other). Accounted plus
+            # Other/Idle is exactly Presence.
+            ('Accounted', p.get('accounted_display', '0m'), C_INK,
+             'task+meet+lunch+break'),
             ('Tasks touched', str(p.get('task_count', 0)), C_INK, ''),
         ]
-        tw = (IMG_W - PAD * 2 - 2 * 12) / 3.0
+        # Width derived from the tile COUNT — it was hardcoded to 3, so adding a
+        # tile silently drew it off the edge of the image.
+        tw = (IMG_W - PAD * 2 - (len(tiles) - 1) * 12) / float(len(tiles))
         for i, (lbl, val, col, foot) in enumerate(tiles):
             x0 = PAD + i * (tw + 12)
             d.rounded_rectangle([x0, y, x0 + tw, y + 92], radius=10,
@@ -280,6 +287,14 @@ class KpiWorkdaySnapshot(models.Model):
                 dur = t.get('duration_display') or ''
                 text((IMG_W - PAD - 4 - width(dur, f_bold), y), dur, f_bold, C_INK)
                 y += 22
+                # Only worth a second line when the task was BOTH: time on its own
+                # and time shared with another task. A wholly-shared task already
+                # says so with the '*'.
+                if t.get('concurrent') and (t.get('solo_seconds') or 0) > 0:
+                    split = '%s alone + %s shared' % (t.get('solo_display') or '',
+                                                      t.get('shared_display') or '')
+                    text((PAD + 90, y), split, f_txt, C_MUTED)
+                    y += 18
         else:
             text((PAD + 4, y), 'No tasks were worked on this day.', f_txt, C_MUTED)
             y += 22

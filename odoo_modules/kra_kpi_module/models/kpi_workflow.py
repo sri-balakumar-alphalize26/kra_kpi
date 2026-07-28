@@ -149,6 +149,58 @@ class KpiWorkflow(models.Model):
     # ------------------------------------------------------------------ #
     # Client pre-approval — entry point                                  #
     # ------------------------------------------------------------------ #
+    def _client_approvers(self):
+        """The client users who would be asked to approve this task.
+
+        Mirrors how models/kpi_notify.py resolves the 'client' role, so the
+        question "is there anyone to ask?" is answered by the same rule that
+        decides who actually gets asked. Divergence here would mean waiting on a
+        notification that was never sent to anybody.
+        """
+        self.ensure_one()
+        # sudo: this is an existence check, and whether a developer is allowed to
+        # READ the client portal users must not decide whether their task waits
+        # for an approval. Nothing here is returned to a user.
+        rec = self.sudo()
+        if rec.client_submitted and rec.submitted_by_uid:
+            return rec.submitted_by_uid
+        client_kra = getattr(rec, 'client_kra_id', False) or rec.kra_id
+        return client_kra.client_user_ids if client_kra else self.env['res.users'].sudo()
+
+    def _release_without_client(self):
+        """No client is linked to this KRA → nothing to wait for, so don't wait.
+
+        A KRA with no client_user_ids has nobody who could ever answer. Putting
+        the task into 'pre_approval_pending' anyway sent the developer to the
+        back of a client_approval_minutes queue for an approval that could not
+        arrive, and then "released" it for the client's silence — silence from
+        a client who does not exist.
+
+        Lands in the SAME state the timeout release uses, for the same reason
+        given there: every board, lane map and the mobile app already treat
+        'pre_approval_approved' as startable, and a new state value would read as
+        unknown and make Start vanish rather than appear.
+
+        Records it as auto-released, NOT approved, and writes no decision, no
+        decided-by and no source — exactly like _sweep_pre_approval_release. The
+        distinction is carried by pre_approval_auto_released_after_min = 0 (no
+        window was ever waited out) and by the log event below.
+        """
+        self.ensure_one()
+        now = fields.Datetime.now()
+        self.sudo().write({
+            'task_state':                'pre_approval_approved',
+            'pre_approval_auto_released': True,
+            'pre_approval_auto_released_at': now,
+            'pre_approval_auto_released_after_min': 0,
+            'pre_approval_deadline_at':  False,
+            'pre_approval_release_at':   False,
+        })
+        self._log_action(
+            'pre_approval_skipped_no_client', source='system',
+            payload={'reason': 'KRA has no client users linked',
+                     'kra': (self.kra_id.name if self.kra_id else '')})
+
     def request_client_pre_approval(self):
         """Move the task into 'pre_approval_pending' and seed a token.
 
@@ -177,6 +229,14 @@ class KpiWorkflow(models.Model):
                     source='system',
                     payload={'reason': 'no developer assigned'},
                 )
+                continue
+            # Nobody to ask → nothing to wait for. Checked BEFORE the token and
+            # the clocks are issued, so the task never enters
+            # 'pre_approval_pending' at all: no reminder ladder chasing an empty
+            # recipient list, and no release cron work for a row that was never
+            # really pending.
+            if not rec._client_approvers():
+                rec._release_without_client()
                 continue
             token = rec._generate_approval_token()
             now = fields.Datetime.now()
@@ -614,9 +674,43 @@ class KpiWorkflow(models.Model):
             # endpoint (/kra_kpi/task/admin_accept in controllers/kra_api.py).
             # Firing it on create() asked the client before any admin had seen
             # the task, which is the reverse of the intended workflow.
+        # An ADMIN who creates a task has, by creating it, already made the
+        # decision the admin gate exists to capture.  Making them wait out
+        # admin_accept_minutes for their own approval — and leaving the task
+        # unpublished and therefore invisible to its developer the whole time —
+        # was pure dead time.  Accept it here instead, crediting the admin.
+        #
+        # Self-created rows are excluded on purpose: the "Pending Review" lane
+        # exists precisely so a developer's own task is seen by someone else.
+        #
+        # kpi_no_admin_arm is honoured for the same reason _arm_admin_accept_deadline
+        # honours it: a bulk restore/import must not re-run history, and accepting
+        # here would also fire a pre-approval request at every client on the way in.
+        if (not self.env.context.get('kpi_no_admin_arm')
+                and self._user_is_kpi_admin()
+                and _schema_ready(self.env.cr, 'admin_accept_deadline_at',
+                                  'admin_accepted_auto')):
+            for rec in records:
+                # No user_id check on purpose. An admin who creates a task and
+                # assigns the developer later has still made the acceptance
+                # decision at creation; requiring a developer here left the row
+                # un-accepted, so assigning one afterwards re-armed the gate and
+                # the admin waited on themselves a second time.
+                # _auto_admin_accept leaves a dev-less row unpublished and skips
+                # the client request — correct: there is no developer for the
+                # client to approve yet. write() fires that on assignment.
+                if rec.admin_accepted or rec.is_self_created or not rec.active:
+                    continue
+                try:
+                    rec._auto_admin_accept(by_user=self.env.user)
+                except Exception as exc:
+                    # A creation must never fail because the gate-skip did.
+                    # The row simply keeps its clock via the arm below.
+                    _logger.warning("admin-created accept failed for %s: %s", rec.id, exc)
         # ...but the admin gate is time-boxed, so start its clock now.  Without
         # this a task nobody triages blocks its developer forever and never even
-        # reaches the client.
+        # reaches the client.  Rows accepted just above are skipped in here
+        # (admin_accepted is already True).
         records._arm_admin_accept_deadline()
         return records
 
@@ -635,10 +729,27 @@ class KpiWorkflow(models.Model):
         # Client-portal tasks are created exactly like that, so their clock
         # starts here — the moment a coordinator assigns someone.
         will_arm_admin_accept = []
+        # Rows an ADMIN is assigning a developer to. Assigning the developer IS
+        # the admin's triage decision — it is the whole content of the admin gate
+        # — so the task must go straight on to the client, not sit out another
+        # admin_accept_minutes waiting for the admin who just acted.
+        #
+        # This is the client-submitted path: client raises a task -> it lands in
+        # the Client Task Queue with no developer -> admin assigns one -> client
+        # is asked to approve that developer. The middle step used to insert a
+        # five-minute wait for nobody.
+        will_admin_accept_now = []
         if 'user_id' in vals and vals.get('user_id'):
+            acting_admin = self._user_is_kpi_admin()
             for rec in self:
                 if not rec.admin_accepted:
-                    will_arm_admin_accept.append(rec.id)
+                    # Self-created rows are excluded: the "Pending Review" lane
+                    # exists so a developer's own task gets an explicit human
+                    # Accept, which reassigning it must not silently stand in for.
+                    if acting_admin and not rec.is_self_created:
+                        will_admin_accept_now.append(rec.id)
+                    else:
+                        will_arm_admin_accept.append(rec.id)
                 if not rec.user_id:
                     will_notify_assigned.append(rec.id)
                     # 'rework' included so that a task the CLIENT rejected (which
@@ -659,6 +770,21 @@ class KpiWorkflow(models.Model):
             vals = dict(vals, published=True)
 
         result = super().write(vals)
+
+        # Accept-on-assign runs FIRST: _auto_admin_accept publishes the row and
+        # fires the client pre-approval itself, which is exactly the hand-off
+        # this path owes the client. These ids are never in
+        # will_request_pre_approval (that list requires admin_accepted to have
+        # been true already), so the client is asked once, not twice.
+        for rid in will_admin_accept_now:
+            rec = self.browse(rid)
+            try:
+                rec._auto_admin_accept(by_user=self.env.user)
+            except Exception as exc:
+                # Fall back to the timed gate rather than losing the task: a
+                # failure here must not leave it un-accepted with no clock.
+                _logger.warning("accept-on-assign failed for %s: %s", rid, exc)
+                will_arm_admin_accept.append(rid)
 
         if will_arm_admin_accept:
             self.browse(will_arm_admin_accept)._arm_admin_accept_deadline()
@@ -974,8 +1100,69 @@ class KpiWorkflow(models.Model):
         return result
 
     # ------------------------------------------------------------------ #
+    # Admin delete — only a task nobody has worked on                     #
+    # ------------------------------------------------------------------ #
+    # States in which a task can still be considered "not started".  Anything
+    # else (in_progress, paused, partially_completed, awaiting_client,
+    # completed, hold) means work or a decision already happened.
+    _DELETABLE_STATES = (
+        'assigned', 'urgent', 'important', 'regular', 'queue_waiting',
+        'pre_approval_pending', 'pre_approval_approved', 'pre_approval_partial',
+        'rework',
+    )
+
+    def _may_admin_delete(self, logged_ids=None):
+        """(ok, reason) — may an admin delete this task outright?
+
+        Only when NOBODY has worked on it.  Deleting a task with recorded time
+        destroys kpi.time.log rows, which are what every report, the daily
+        summary and the invoice are built from — so the time check, not the
+        state, is the real gate here.  The state list is the second guard for
+        the cases where a decision (client sign-off, completion) exists without
+        much time behind it.
+
+        `logged_ids` is an optional pre-computed set of kpi ids that HAVE time
+        logs.  The task board calls this once per listed task, and without it
+        that is one COUNT query per row; pass the batch answer in and the rule
+        still lives here, in one place, rather than being re-derived by callers.
+        """
+        self.ensure_one()
+        if self.timer_start_datetime or self.timer_total_seconds:
+            return False, "'%s' has already been started — its recorded time would be lost." % (
+                self.external_ref or self.name or self.id)
+        if logged_ids is not None:
+            logged = 1 if self.id in logged_ids else 0
+        else:
+            logged = self.env['kpi.time.log'].sudo().search_count([('kpi_id', '=', self.id)])
+        if logged:
+            return False, "'%s' has recorded work against it — delete would destroy time logs." % (
+                self.external_ref or self.name or self.id)
+        if self.task_state not in self._DELETABLE_STATES:
+            label = dict(self._fields['task_state'].selection).get(
+                self.task_state, self.task_state)
+            return False, "'%s' is '%s' — only a task that was never started can be deleted." % (
+                self.external_ref or self.name or self.id, label)
+        return True, ''
+
+    # ------------------------------------------------------------------ #
     # Admin acceptance — arming, auto-accept, cron                        #
     # ------------------------------------------------------------------ #
+    @api.model
+    def _user_is_kpi_admin(self, user=None):
+        """Coordinator / Owner / System — the roles that may accept a task.
+
+        THE definition. The admin gate-skip on create and the delete guard must
+        agree on who counts as an admin, and this triple was previously copied
+        into half a dozen controllers where it could drift one at a time.
+        controllers/kra_api.py._is_kra_admin delegates here.
+        """
+        user = user or self.env.user
+        return (
+            user.has_group('kra_kpi_module.group_kra_admin')
+            or user.has_group('kra_kpi_module.group_kra_owner')
+            or user.has_group('base.group_system')
+        )
+
     def _arm_admin_accept_deadline(self, force=False):
         """Start the admin acceptance clock on rows that need one.
 
@@ -1011,15 +1198,25 @@ class KpiWorkflow(models.Model):
             except Exception:
                 pass
 
-    def _auto_admin_accept(self):
-        """Accept a task nobody triaged, then hand it to the client.
+    def _auto_admin_accept(self, by_user=None):
+        """Accept a task, categorise it, and hand it to the client.
 
         Mirrors /kra_kpi/task/admin_accept minus the human: same categorisation,
         same re-numbering, same "don't disturb a running timer" guard.  The
         admin keeps every power they had — re-categorise, reject, send back —
         they just no longer hold up the developer by not looking.
+
+        `by_user` is the admin who caused this acceptance, and it changes what
+        the row MEANS:
+          * None    — the acceptance window elapsed and nobody acted.  Recorded
+                      as admin_accepted_auto with no decider, and the developer
+                      is told the window ran out.
+          * a user  — an admin created the task themselves, so the acceptance IS
+                      their decision.  Making them wait on their own gate (and
+                      then filing it as "nobody looked at this") was the bug.
         """
         self.ensure_one()
+        auto = not by_user
         # The name is the only signal we have about type without a human, and
         # the bulk-import paths already encode it there.
         name = self.name or ''
@@ -1033,9 +1230,11 @@ class KpiWorkflow(models.Model):
         base_name = re.sub(r'^\[(Update|Bug)\]\s*', '', name, flags=re.IGNORECASE)
         vals = {
             'admin_accepted':           True,
-            'admin_accepted_auto':      True,
+            'admin_accepted_auto':      auto,
             'admin_accepted_at':        fields.Datetime.now(),
-            'admin_accepted_by_id':     False,   # nobody decided — that is the point
+            # Empty ONLY on the timeout path — nobody decided, and that is the
+            # point.  An admin-created task records the admin who created it.
+            'admin_accepted_by_id':     by_user.id if by_user else False,
             'admin_accept_deadline_at': False,
             'name': NAME_PREFIX_FOR_DOC_TYPE.get(doc_type, '') + base_name,
         }
@@ -1048,13 +1247,22 @@ class KpiWorkflow(models.Model):
         if not current_ref or current_ref.startswith('TASK-'):
             vals['external_ref'] = '%s-%03d' % (prefix, self._next_ref_for_prefix(prefix))
         # write()'s auto-publish only fires alongside a pre-approval request,
-        # which needs admin_accepted to ALREADY be true — so a client-submitted
-        # task armed at assignment was never published. Do it here or it stays
-        # invisible to the team while claiming to be accepted.
-        if self.client_submitted and not self.published:
+        # which needs admin_accepted to ALREADY be true — so a task armed at
+        # assignment was never published. Do it here or it stays invisible to the
+        # team while claiming to be accepted.
+        #
+        # This used to read `if self.client_submitted`, which made the hole
+        # client-only: a task an ADMIN created and assigned was accepted (here or
+        # by the cron) and STILL never published, and the employee record rule
+        # (security/kpi_security_rules.xml) filters on published=True — so its own
+        # developer could not see it at all, ever. Any accepted task that has a
+        # developer belongs on that developer's board.
+        if self.user_id and not self.published:
             vals['published'] = True
         self.sudo().write(vals)
-        self._log_action('admin_accept_auto', source='cron',
+        self._log_action('admin_accept_auto' if auto else 'admin_accept_on_create',
+                         source='cron' if auto else 'web',
+                         actor_user_id=by_user.id if by_user else None,
                          payload={'window_min': self._admin_accept_minutes(),
                                   'doc_type': doc_type, 'new_ref': self.external_ref})
         # Only ask the client if the developer hasn't already got going; a
@@ -1064,6 +1272,12 @@ class KpiWorkflow(models.Model):
                 self.request_client_pre_approval()
             except Exception as exc:
                 _logger.warning("auto-accept pre-approval failed for %s: %s", self.id, exc)
+        # Only the TIMEOUT path announces itself. On the admin-created path
+        # nothing timed out — create() has already fired 'task_created' to the
+        # developer, and telling them "no admin looked at this in time" about a
+        # task an admin had just written would be plainly false.
+        if not auto:
+            return
         try:
             self._notify('admin_accept_auto',
                          window_minutes=self._admin_accept_minutes())

@@ -44,6 +44,64 @@ NO_TASK_NUDGE_MIN = 15
 NO_TASK_NUDGE_MAX = 5
 
 
+# --------------------------------------------------------------------------- #
+# Interval arithmetic — the basis of every multi-task number                   #
+# --------------------------------------------------------------------------- #
+# A developer with kpi_allow_multitask can have two timers running at once, so
+# their kpi.time.log rows OVERLAP. Summing durations then answers the wrong
+# question twice over: it reports 4h of work for 2h of two concurrent tasks, and
+# it cannot tell a task's genuinely solo time apart from time it shared with
+# another task. Both are answered by measuring intervals rather than adding
+# durations, so the arithmetic lives here, once, in pure functions.
+
+def _merge_intervals(intervals):
+    """Sort and coalesce (start, end) pairs into non-overlapping spans.
+
+    Touching spans (a.end == b.start) are merged too: back-to-back work is one
+    continuous stretch, not two.
+    """
+    clean = sorted((s, e) for (s, e) in intervals if s and e and e > s)
+    merged = []
+    for start, end in clean:
+        if merged and start <= merged[-1][1]:
+            if end > merged[-1][1]:
+                merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _measure(intervals):
+    """Total seconds COVERED by intervals — overlapping time counted once."""
+    return sum((e - s).total_seconds() for (s, e) in _merge_intervals(intervals))
+
+
+def _intersect_seconds(intervals, others):
+    """Seconds of `intervals` that also fall inside `others`.
+
+    Both sides are merged first, so a task overlapping three others for the same
+    hour is credited with one shared hour, not three.
+    """
+    a = _merge_intervals(intervals)
+    b = _merge_intervals(others)
+    if not a or not b:
+        return 0.0
+    total = 0.0
+    i = j = 0
+    while i < len(a) and j < len(b):
+        lo = max(a[i][0], b[j][0])
+        hi = min(a[i][1], b[j][1])
+        if hi > lo:
+            total += (hi - lo).total_seconds()
+        # Advance whichever span ends first — neither can overlap anything later
+        # in the other list once it is behind.
+        if a[i][1] < b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return total
+
+
 def _to_user_tz_str(dt, user, fmt='%Y-%m-%d %H:%M:%S'):
     """Convert a UTC datetime to the user's timezone for display.
     Odoo stores datetimes naive-UTC; we localize then convert.
@@ -62,6 +120,50 @@ def _to_user_tz_str(dt, user, fmt='%Y-%m-%d %H:%M:%S'):
     except Exception as exc:
         _logger.warning("tz conversion failed (%s) — falling back to naive str: %s", exc, dt)
         return fields.Datetime.to_string(dt)
+
+
+def _local_day_start_utc(day, user=None):
+    """The naive-UTC instant at which `day` BEGINS in the user's timezone.
+
+    Same correction as _local_day_end_utc, for the other edge. Used to ask "did
+    this start before today?" — with a naive midnight that question was really
+    "before 05:30 IST today", so anything a developer started in the small hours
+    counted as yesterday's leftover and was force-closed out from under them.
+    """
+    try:
+        tz_name = (user.tz if user else None) or 'Asia/Kolkata'
+        local = pytz.timezone(tz_name).localize(datetime.combine(day, time(0, 0)))
+        return local.astimezone(pytz.UTC).replace(tzinfo=None)
+    except Exception as exc:
+        _logger.warning("day-start tz conversion failed (%s) for %s — using naive UTC", exc, day)
+        return datetime.combine(day, time(0, 0))
+
+
+def _local_day_end_utc(day, user=None):
+    """The naive-UTC instant at which `day` ENDS in the user's timezone.
+
+    `day` is a LOCAL date — session_date comes from fields.Date.context_today(),
+    which is the developer's calendar day, not UTC's.
+
+    The obvious spelling, datetime.combine(day, time(23, 59, 59)), builds a naive
+    datetime that Odoo then stores as UTC. For IST (+5:30) that instant is 05:29
+    the FOLLOWING morning local time, so every "cap this at the end of its day"
+    was capping 5h30m too late: an auto-closed cross-midnight workday had its
+    presence inflated by the whole offset, and a time log left running overnight
+    gained the same. It fed met_standard, the daily summary and the frozen
+    snapshot image.
+
+    Falls back to the naive combine only if tz handling itself fails — a wrong
+    cap is still better than no cap.
+    """
+    try:
+        tz_name = (user.tz if user else None) or 'Asia/Kolkata'
+        local = pytz.timezone(tz_name).localize(
+            datetime.combine(day, time(23, 59, 59)))
+        return local.astimezone(pytz.UTC).replace(tzinfo=None)
+    except Exception as exc:
+        _logger.warning("day-end tz conversion failed (%s) for %s — using naive UTC", exc, day)
+        return datetime.combine(day, time(23, 59, 59))
 
 
 def _fmt_hms(seconds):
@@ -228,7 +330,14 @@ class KpiWorkSession(models.Model):
             if rec.logout_at:
                 domain.append(('start_time', '<', rec.logout_at))
             logs = Log.search(domain)
-            rec.productive_seconds = sum(logs.mapped('duration_seconds'))
+            # Wall-clock covered by task work, NOT the sum of task durations.
+            # A multitasking developer's logs overlap, and summing them reported
+            # 4h productive for 2h of two concurrent tasks — more productive time
+            # than there was presence to hold it, which then made the other_idle
+            # residual (max(0, presence - productive - metered)) floor to zero and
+            # hide the contradiction instead of showing it.
+            rec.productive_seconds = _measure(
+                [(l.start_time, l.end_time) for l in logs])
             rec.task_count = len(set(logs.mapped('kpi_id').ids))
             end = rec.logout_at or fields.Datetime.now()
             try:
@@ -325,12 +434,12 @@ class KpiWorkSession(models.Model):
             for lg in self.env['kpi.time.log'].sudo().search([
                     ('user_id', '=', user.id), ('is_active', '=', True), ('work_date', '<', today)]):
                 lg.write({'is_active': False,
-                          'end_time': datetime.combine(lg.work_date, time(23, 59, 59))})
+                          'end_time': _local_day_end_utc(lg.work_date, user)})
             for bk in self.env['kpi.break.log'].sudo().search([
                     ('user_id', '=', user.id), ('is_active', '=', True),
-                    ('start_time', '<', datetime.combine(today, time(0, 0)))]):
+                    ('start_time', '<', _local_day_start_utc(today, user))]):
                 bk.write({'is_active': False,
-                          'end_time': datetime.combine(bk.start_time.date(), time(23, 59, 59))})
+                          'end_time': _local_day_end_utc(bk.work_date or bk.start_time.date(), user)})
         except Exception as exc:
             _logger.warning("_get_or_open_today heal stale-active failed for %s: %s", user.id, exc)
         new_sess = self.sudo().create({
@@ -452,19 +561,25 @@ class KpiWorkSession(models.Model):
         Log = self.env['kpi.time.log'].sudo()
         Break = self.env['kpi.break.log'].sudo()
 
-        active_log = Log.search([('user_id', '=', user.id), ('is_active', '=', True)], limit=1)
-        task = active_log.kpi_id if active_log else False
-        active_task = False
-        if task:
-            active_task = {
-                'id': task.id,
-                'name': task.name or '',
+        def _task_payload(t):
+            return {
+                'id': t.id,
+                'name': t.name or '',
                 # Same ISO+Z serialization the tasks payload uses so the client
                 # ticks it identically to getDisplayTime (UTC-safe).
-                'timer_start': (task.timer_start_datetime.isoformat() + 'Z') if task.timer_start_datetime else False,
-                'timer_total_seconds': task.timer_total_seconds or 0.0,
-                'task_state': task.task_state or '',
+                'timer_start': (t.timer_start_datetime.isoformat() + 'Z') if t.timer_start_datetime else False,
+                'timer_total_seconds': t.timer_total_seconds or 0.0,
+                'task_state': t.task_state or '',
             }
+
+        # A multitasking developer can have more than one timer running, so ship
+        # them all. `active_task` stays the first one for every existing caller
+        # (the live strip, the app); `active_tasks` is the complete list.
+        active_logs = Log.search([('user_id', '=', user.id), ('is_active', '=', True)],
+                                 order='start_time asc')
+        running_tasks = [l.kpi_id for l in active_logs if l.kpi_id]
+        active_tasks = [_task_payload(t) for t in running_tasks]
+        active_task = active_tasks[0] if active_tasks else False
 
         active_break = False
         brk = Break.search([('user_id', '=', user.id), ('is_active', '=', True)], limit=1)
@@ -488,7 +603,9 @@ class KpiWorkSession(models.Model):
         login_raw = (sess.login_at.isoformat() + 'Z') if sess and sess.login_at else False
         today = fields.Date.context_today(self)
         done_logs = Log.search([('user_id', '=', user.id), ('work_date', '=', today), ('is_active', '=', False)])
-        productive_base = sum(done_logs.mapped('duration_seconds'))
+        # Wall-clock covered, not the sum of durations — the live counter has to
+        # agree with the End Workday summary, which measures the same way.
+        productive_base = _measure([(l.start_time, l.end_time) for l in done_logs])
 
         # The open Meeting/Break block, so the board can show the pill. It rides
         # on this poll rather than a second one, which also means the pill
@@ -555,6 +672,7 @@ class KpiWorkSession(models.Model):
             'status': True,
             'workday_open': bool(sess),
             'active_task': active_task,
+            'active_tasks': active_tasks,   # every running timer (multitask)
             'active_break': active_break,
             'nontask': nontask,
             'idle_prompt': idle_prompt,
@@ -563,12 +681,61 @@ class KpiWorkSession(models.Model):
             'productive_base': productive_base,  # finished-log seconds; add running task live
         }
 
+    # Reasons the developer told us THEMSELVES that they'd be away from the desk.
+    # While one of these is open, a dead heartbeat is not evidence they vanished —
+    # a laptop that sleeps through a lunch hour is exactly what lunch looks like.
+    # Both stale-heartbeat crons (auto-away, idle workday close) skip these.
+    #
+    # 'away' is deliberately NOT in this list: it is the code auto-away itself
+    # writes, so excusing it would let the first auto-pause permanently immunise a
+    # session against the idle close. 'meeting' is out too — add it here (one word)
+    # if a meeting should also hold the timers off.
+    _DECLARED_BREAK_REASONS = ('break', 'lunch')
+
+    # Upper bound on the exemption above. A declared Break/Lunch still open after
+    # this long is no longer a break — it's a developer who declared lunch and went
+    # home — so the idle close is allowed to run again. Without it, the only thing
+    # that would ever end that workday is the midnight sweep, which caps logout at
+    # 23:59:59 and inflates the day's Presence with an evening nobody worked.
+    _MAX_DECLARED_BREAK_MINUTES = 180
+
+    def _on_declared_break(self):
+        """True while this session's developer has an OPEN Break/Lunch they declared
+        themselves — paused from a running task (kpi.break.log) or with no task
+        running (kpi.nontask.block) — and it started less than
+        _MAX_DECLARED_BREAK_MINUTES ago.
+
+        Never raises: a bookkeeping error must not be what decides whether someone's
+        workday gets closed underneath them."""
+        self.ensure_one()
+        floor = fields.Datetime.now() - timedelta(minutes=self._MAX_DECLARED_BREAK_MINUTES)
+        try:
+            if self.env['kpi.break.log'].sudo().search_count([
+                ('user_id', '=', self.user_id.id),
+                ('is_active', '=', True),
+                ('break_type', 'in', self._DECLARED_BREAK_REASONS),
+                ('start_time', '>=', floor),
+            ]):
+                return True
+            return bool(self.env['kpi.nontask.block'].sudo().search_count([
+                ('session_id', '=', self.id),
+                ('end_at', '=', False),
+                ('reason', 'in', self._DECLARED_BREAK_REASONS),
+                ('start_at', '>=', floor),
+            ]))
+        except Exception as exc:
+            _logger.warning("declared-break check failed for session %s: %s", self.id, exc)
+            return False
+
     @api.model
     def _cron_auto_away(self):
         """Pause the running task of any developer whose board heartbeat has gone
         stale (tab closed / idle) beyond company.away_after_minutes. The pause uses
         reason_code='away' → NON-productive time recorded in kpi.break.log, never
-        kpi.time.log. Records the paused task on the session so the board can Resume."""
+        kpi.time.log. Records the paused task on the session so the board can Resume.
+
+        Developers on a declared Break/Lunch are skipped — the guard lives in
+        _away_now so the leave-beacon path is covered by the same rule."""
         now = fields.Datetime.now()
         today = fields.Date.context_today(self)
         try:
@@ -583,6 +750,8 @@ class KpiWorkSession(models.Model):
             ('last_heartbeat', '<', cutoff),
         ])
         for s in stale:
+            if s._on_declared_break():
+                continue   # on Break/Lunch: being away IS the declared state
             try:
                 self._away_now(s.user_id, source='cron')
             except Exception as exc:
@@ -596,7 +765,13 @@ class KpiWorkSession(models.Model):
 
         Shared by the auto-away cron AND the on-demand /kpi_action/leave route
         (fired when the developer closes/leaves the board). Idempotent — a no-op
-        when there is no in-progress task. Never raises."""
+        when there is no in-progress task. Never raises.
+
+        A developer on a declared Break/Lunch is never put away by EITHER caller.
+        This is the single choke point for 'away', so guarding here covers the
+        stale-heartbeat cron and the leave beacon alike: a laptop that sleeps or a
+        tab that closes during lunch is the normal shape of lunch, and un-pairing
+        over it is what dumps the board back to the PIN gate when they return."""
         today = fields.Date.context_today(self)
         sess = self.sudo().search([
             ('user_id', '=', user.id),
@@ -605,10 +780,17 @@ class KpiWorkSession(models.Model):
         ], limit=1)
         if not sess:
             return False
+        if sess._on_declared_break():
+            _logger.info("away(%s): skipped — %s is on a declared break/lunch", source, user.login)
+            return False
         Log = self.env['kpi.time.log'].sudo()
-        active_log = Log.search([('user_id', '=', user.id), ('is_active', '=', True)], limit=1)
-        task = active_log.kpi_id if active_log else False
-        if not task or task.task_state != 'in_progress':
+        # EVERY running task, not just the first — a multitasking developer who
+        # walks away leaves two timers behind, and pausing one of them let the
+        # other keep accruing productive time for someone who wasn't there.
+        running = [l.kpi_id for l in Log.search([('user_id', '=', user.id),
+                                                 ('is_active', '=', True)])
+                   if l.kpi_id and l.kpi_id.task_state == 'in_progress']
+        if not running:
             # Still un-pair on an explicit leave so the device must re-pair, even
             # if nothing was actively running.
             if source != 'cron':
@@ -617,7 +799,12 @@ class KpiWorkSession(models.Model):
                 except Exception:
                     pass
             return False
-        task.with_user(user).pause_task(reason='Away (auto)', reason_code='away')
+        for rec in running:
+            rec.with_user(user).pause_task(reason='Away (auto)', reason_code='away')
+        # awayed_task_id stays single: it drives the one-click "Resume" nudge the
+        # board shows on return, and offering one task to resume is the right
+        # prompt even when two were paused.
+        task = running[0]
         sess.sudo().write({'awayed_task_id': task.id})
         # Un-pair: the developer "went away" → web board + app fall back to the
         # PIN gate; next pairing reads as 'resume' → "continue working".
@@ -774,6 +961,42 @@ class KpiWorkSession(models.Model):
                         'active': False,
                     })
 
+        # Fold in EVERY currently-running segment before anything is measured, so
+        # live work counts and a running task takes part in the concurrency split
+        # like any other. This used to happen after the grouping, with limit=1 —
+        # so a multitasking developer with two timers going had the second one
+        # dropped from Productive and from the Map until it stopped.
+        now_ts = fields.Datetime.now()
+        for log in Log.search([('user_id', '=', self.user_id.id), ('is_active', '=', True)]):
+            k = log.kpi_id
+            if not k or not log.start_time:
+                continue
+            running_secs = max(0.0, (now_ts - log.start_time).total_seconds())
+            if running_secs <= 0:
+                continue
+            d = per_task.setdefault(k.id, {
+                'kpi_id':           k.id,
+                'ref':              k.external_ref or f"#{k.id}",
+                'name':             k.name or '',
+                'duration_seconds': 0.0,
+                'intervals':        [],
+            })
+            d['duration_seconds'] += running_secs
+            d['intervals'].append((log.start_time, now_ts))
+            segments.append({
+                'kpi_id': k.id,
+                'ref':    k.external_ref or f"#{k.id}",
+                'name':   k.name or '',
+                'start':  log.start_time,
+                'end':    None,
+                'active': True,
+            })
+
+        # Every work interval of the day, kept aside now: the per-task dicts are
+        # stripped of their 'intervals' key further down (it must not reach the
+        # payload), and the day's Productive total is measured from this.
+        all_intervals = [iv for t in per_task.values() for iv in t['intervals']]
+
         # Concurrency grouping: link tasks whose time-log intervals overlap, so a
         # multi-task dev's summary can GROUP tasks that ran at the same time
         # (adjacent + flagged) instead of implying they were sequential.
@@ -806,57 +1029,54 @@ class KpiWorkSession(models.Model):
         ordered_groups = sorted(
             comps.values(),
             key=lambda g: min((t['_start'] for t in g if t['_start']), default=_far))
+        # Solo vs shared, measured PER INTERVAL rather than per task.
+        #
+        # The grouping above answers "which tasks ran alongside each other", and
+        # that is all it should answer. It used to also decide the concurrent
+        # FLAG, which made the whole of a task concurrent as soon as any one of
+        # its intervals overlapped: a task worked on solo for 20 minutes in the
+        # morning and then again for two hours alongside another task reported
+        # 2h20m entirely shared, and the solo 20 minutes vanished into the
+        # multitask block. The split below is what keeps them apart.
+        for t in task_list:
+            others = [iv for o in task_list if o['kpi_id'] != t['kpi_id'] for iv in o['_iv']]
+            shared = _intersect_seconds(t['_iv'], others)
+            # Cap at the measured span: duration_seconds is a SUM and can exceed
+            # the covered span if a task's own logs ever overlap each other.
+            own = _measure(t['_iv'])
+            t['shared_seconds'] = min(shared, own)
+            t['solo_seconds'] = max(0.0, own - t['shared_seconds'])
+
         tasks = []
         for gi, g in enumerate(ordered_groups):
-            concurrent = len(g) >= 2
             for t in sorted(g, key=lambda d: d['duration_seconds'], reverse=True):
                 t['group'] = gi
-                t['concurrent'] = concurrent
+                # Now derived from the task's OWN shared time, not from how many
+                # tasks happen to sit in its group.
+                t['concurrent'] = t['shared_seconds'] > 0
                 t['duration_display'] = _fmt_hms(t['duration_seconds'])
+                t['solo_display'] = _fmt_hms(t['solo_seconds'])
+                t['shared_display'] = _fmt_hms(t['shared_seconds'])
                 for _k in ('_iv', '_start', 'intervals'):
                     t.pop(_k, None)
                 tasks.append(t)
 
         # Aggregate totals across the bucketed sessions.
-        productive = sum(sessions.mapped('productive_seconds'))
+        #
+        # Productive is the WALL-CLOCK covered by task work — the union of every
+        # interval gathered above, running segments included — not the sum of the
+        # per-task durations. Summing counted two concurrent tasks twice, so a 2h
+        # multitasking stretch read as 4h productive against 2h of presence, and
+        # other_idle = max(0, presence - productive - metered) then floored to
+        # zero and hid it. Built from the same intervals the task rows are built
+        # from, so the summary can never disagree with its own task list.
+        #
+        # Per-task duration_seconds stays real elapsed time: if two tasks ran for
+        # 2h together, each of them genuinely took 2h. Only the day's total has
+        # to reconcile with the clock.
+        productive = _measure(all_intervals)
         presence   = sum(sessions.mapped('presence_seconds'))
 
-        # 🆕 Include the CURRENTLY-RUNNING segment so "Productive" reflects live
-        # work, not only closed segments — fixes "task time not getting calculated"
-        # when a task is still in progress at End Workday. (_compute_totals counts
-        # only is_active=False logs, so the open segment would otherwise be missing.)
-        active_log = Log.search([
-            ('user_id', '=', self.user_id.id),
-            ('is_active', '=', True),
-        ], limit=1)
-        if active_log and active_log.start_time:
-            running_secs = max(0.0, (fields.Datetime.now() - active_log.start_time).total_seconds())
-            if running_secs > 0:
-                productive += running_secs
-                rk = active_log.kpi_id
-                if rk:
-                    segments.append({
-                        'kpi_id': rk.id,
-                        'ref':    rk.external_ref or f"#{rk.id}",
-                        'name':   rk.name or '',
-                        'start':  active_log.start_time,
-                        'end':    None,
-                        'active': True,
-                    })
-                    row = next((t for t in tasks if t['kpi_id'] == rk.id), None)
-                    if row:
-                        row['duration_seconds'] += running_secs
-                        row['duration_display'] = _fmt_hms(row['duration_seconds'])
-                    else:
-                        tasks.append({
-                            'kpi_id': rk.id,
-                            'ref': rk.external_ref or f"#{rk.id}",
-                            'name': rk.name or '',
-                            'duration_seconds': running_secs,
-                            'duration_display': _fmt_hms(running_secs),
-                            'group': len(ordered_groups),
-                            'concurrent': False,
-                        })
         # First login + last logout across all of today's sessions for display.
         login_candidates  = [s.login_at  for s in sessions if s.login_at]
         logout_candidates = [s.logout_at for s in sessions if s.logout_at]
@@ -981,6 +1201,16 @@ class KpiWorkSession(models.Model):
             'presence_seconds':   float(presence),
             'productive_display': _fmt_hms(productive),
             'presence_display':   _fmt_hms(presence),
+            # ONE figure for "time that is accounted for": task work + meetings +
+            # lunch + breaks + no-tasks (+ away / other, which are metered the same
+            # way and would otherwise make this not add up).
+            #
+            # It is the counterpart to other_idle, and the two are what reconcile
+            # the day: accounted + other_idle == presence, always. Reading five
+            # separate buckets and adding them by eye was the only way to answer
+            # "is my day explained?" before this.
+            'accounted_seconds':  float(productive + metered),
+            'accounted_display':  _fmt_hms(productive + metered),
             # A normal working day vs what was actually here. Decided ONCE, server
             # side, so the app, the web popup and the saved image can never render
             # a different verdict for the same day.
@@ -1231,15 +1461,25 @@ class KpiWorkSession(models.Model):
         """
         # Build the task_lines + auto_note strings here (the template just
         # interpolates strings — no Jinja).
+        def _task_line(t):
+            line = (f"  {'⚡' if t.get('concurrent') else '•'} {t['ref']}  "
+                    f"{t['name'][:48]}  —  {t['duration_display']}")
+            # Spell out the split only when a task was worked BOTH alone and
+            # alongside something else — that is the case the flag alone gets
+            # wrong, and the one the developer will query.
+            if t.get('concurrent') and (t.get('solo_seconds') or 0) > 0:
+                line += f" ({t.get('solo_display')} alone + {t.get('shared_display')} shared)"
+            return line
+
         if payload['tasks']:
-            task_lines = "\n".join(
-                f"  {'⚡' if t.get('concurrent') else '•'} {t['ref']}  {t['name'][:48]}  —  {t['duration_display']}"
-                for t in payload['tasks']
-            )
+            task_lines = "\n".join(_task_line(t) for t in payload['tasks'])
         else:
             task_lines = "  (no task time logged)"
-        multitask_note = ("⚡ Multi-task on — tasks marked ⚡ overlapped in time; "
-                          "Productive may exceed Presence (expected).\n"
+        # Productive is now measured as wall-clock covered (overlap counted once),
+        # so it can no longer exceed Presence — the old note promised the opposite.
+        multitask_note = ("⚡ Multi-task on — tasks marked ⚡ overlapped in time. "
+                          "Productive counts that overlap ONCE, so it stays within "
+                          "Presence; each task still shows its own full duration.\n"
                           if payload.get('allow_multitask') else '')
         auto_note = ('(Auto-closed by system — dev did not press End Workday.)'
                      if payload['auto_closed'] else '')
@@ -1252,6 +1492,7 @@ class KpiWorkSession(models.Model):
             'logout_at':      payload['logout_at'] or '(open)',
             'productive':     payload['productive_display'],
             'presence':       payload['presence_display'],
+            'accounted':      payload['accounted_display'],
             'task_count':     payload['task_count'],
             'task_lines':     task_lines,
             'auto_note':      auto_note,
@@ -1290,15 +1531,21 @@ class KpiWorkSession(models.Model):
     # Cron — close stragglers at 23:55                                   #
     # ------------------------------------------------------------------ #
     def _pause_running_task(self, reason='Workday ended (auto)'):
-        """Pause this developer's in-progress task (if any), recorded as non-
-        productive 'away' time. Used by the midnight auto-close so a task left
-        running when the day rolls over is stopped."""
+        """Pause this developer's in-progress task(s), recorded as non-productive
+        'away' time. Used by the midnight auto-close so a task left running when
+        the day rolls over is stopped.
+
+        EVERY running task, not just the first: a developer with
+        kpi_allow_multitask can have two timers going, and pausing one of them
+        left the other's kpi.time.log open across the close — an open segment
+        with no end, which the next day then counts as live work."""
         self.ensure_one()
         Log = self.env['kpi.time.log'].sudo()
-        active_log = Log.search([('user_id', '=', self.user_id.id), ('is_active', '=', True)], limit=1)
-        task = active_log.kpi_id if active_log else False
-        if task and task.task_state == 'in_progress':
-            task.with_user(self.user_id).pause_task(reason=reason, reason_code='away')
+        for active_log in Log.search([('user_id', '=', self.user_id.id),
+                                      ('is_active', '=', True)]):
+            task = active_log.kpi_id
+            if task and task.task_state == 'in_progress':
+                task.with_user(self.user_id).pause_task(reason=reason, reason_code='away')
 
     def _fire_workday_auto_closed(self):
         """Tell the developer their workday was auto-closed at midnight (they
@@ -1331,8 +1578,11 @@ class KpiWorkSession(models.Model):
                 s._pause_running_task()
             except Exception as exc:
                 _logger.warning("overdue-close pause failed for session %s: %s", s.id, exc)
-            # logout_at = end of session_date (23:59:59) — caps presence growth.
-            eod = datetime.combine(s.session_date, time(23, 59, 59))
+            # logout_at = end of session_date IN THE DEVELOPER'S TIMEZONE — caps
+            # presence growth. session_date is a local date, so a naive combine
+            # stored as UTC put this 05:29 the next morning for IST and inflated
+            # every auto-closed cross-midnight day by the offset.
+            eod = _local_day_end_utc(s.session_date, s.user_id)
             s.write({
                 'logout_at':   eod,
                 'state':       'closed',
@@ -1376,6 +1626,10 @@ class KpiWorkSession(models.Model):
         logout_at is capped at last_heartbeat (when the dev was actually last
         present), NOT 'now', so presence isn't inflated by the idle window. A dev
         who keeps the board open keeps heartbeating and is never touched.
+
+        A dev on a declared Break/Lunch is never touched either, board open or not:
+        they told us they were stepping away, and a laptop asleep through lunch is
+        the normal case, not a forgotten workday. See _on_declared_break.
         Idempotent — safe to run every few minutes. Returns count closed."""
         try:
             minutes = int(self.env.company.workday_idle_close_minutes or 0)
@@ -1392,7 +1646,16 @@ class KpiWorkSession(models.Model):
             ('last_heartbeat', '!=', False),
             ('last_heartbeat', '<', cutoff),
         ])
+        closed = 0
         for s in idle:
+            # On a declared Break/Lunch → not a forgotten workday. Leave it open;
+            # the timer effectively restarts from the heartbeat they send the
+            # moment they're back at the board.
+            if s._on_declared_break():
+                _logger.info("idle-close: skipping session %s — %s is on a declared break/lunch",
+                             s.id, s.user_id.login)
+                continue
+            closed += 1
             try:
                 s._pause_running_task()
             except Exception as exc:
@@ -1418,9 +1681,9 @@ class KpiWorkSession(models.Model):
                 s._fire_workday_auto_closed()
             except Exception as exc:
                 _logger.warning("idle-close notify failed for session %s: %s", s.id, exc)
-        if idle:
-            _logger.info("idle-close: auto-ended %s forgotten workday(s) (>%s min idle)", len(idle), minutes)
-        return len(idle)
+        if closed:
+            _logger.info("idle-close: auto-ended %s forgotten workday(s) (>%s min idle)", closed, minutes)
+        return closed
 
     @api.model
     def _cron_close_idle_workdays(self):
@@ -1441,12 +1704,18 @@ class KpiWorkSession(models.Model):
         `_close_overdue`), then retro-create closed sessions for developers who
         logged task time today but never hit the Action Board (so their summary
         still fires).
+
+        Returns closed + retro-created. It used to `return len(stragglers)` — a
+        local of _close_overdue that does not exist here — so the cron did all of
+        its work and THEN raised NameError, was recorded as failed on every run,
+        and was on its way to being auto-deactivated for repeated failure.
         """
         today = fields.Date.context_today(self)
         Session = self.sudo()
 
         # Part 1: close stragglers (shared with the frequent midnight cron).
-        self._close_overdue()
+        closed = self._close_overdue() or 0
+        retro = 0
 
         # Part 2: retro-create sessions for users who logged time today
         # but never opened the dashboard.
@@ -1485,13 +1754,14 @@ class KpiWorkSession(models.Model):
                 'auto_closed': True,
                 'note':        'Retro-created by cron (dev never opened dashboard).',
             })
+            retro += 1
             try:
                 payload = new_s._daily_summary_payload()
                 new_s._fire_daily_summary(payload)
             except Exception as exc:
                 _logger.warning("auto_close retro-summary failed for user %s: %s", uid, exc)
 
-        return len(stragglers)
+        return closed + retro
 
     # ================================================================== #
     # Idle check — workday open, nothing in progress                      #

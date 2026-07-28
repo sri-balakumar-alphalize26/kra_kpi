@@ -562,6 +562,18 @@ class KraKpiAPI(http.Controller):
                     a.user_id.id, {'name': a.user_id.name, 'seconds': 0.0})
                 d['seconds'] += max(0.0, (now - a.start_time).total_seconds())
 
+        # Which listed tasks have ANY time log — one query for the whole board,
+        # fed to _may_admin_delete so the delete rule doesn't cost a COUNT per
+        # row. Only needed for admins; nobody else is offered the button.
+        logged_ids = set()
+        if is_manager_or_admin and kpis.ids:
+            logged_ids = {
+                r['kpi_id'][0]
+                for r in request.env['kpi.time.log'].sudo().read_group(
+                    [('kpi_id', 'in', kpis.ids)], ['kpi_id'], ['kpi_id'], lazy=False)
+                if r.get('kpi_id')
+            }
+
         def _fmt_dur(sec):
             sec = int(sec or 0)
             return f"{sec // 3600}h {(sec % 3600) // 60}m"
@@ -639,6 +651,11 @@ class KraKpiAPI(http.Controller):
                 # startable?" from a hand-maintained list of states — which is
                 # exactly how the UI drifted out of step with the server before.
                 **_gate_keys(k),
+                # Same principle as can_start: the server owns the rule and ships
+                # the answer, so the board never re-derives "is this deletable?"
+                # from a hand-maintained list of states.
+                'can_admin_delete': (
+                    is_manager_or_admin and k._may_admin_delete(logged_ids)[0]),
                 # Per-developer time (survives reassign); current holder flagged.
                 'time_by_user': _time_by_user(k),
             }
@@ -1718,12 +1735,13 @@ class KraKpiAPI(http.Controller):
     # Developer self-created tasks — "Pending Review" lane                #
     # ================================================================== #
     def _is_kra_admin(self, user):
-        """Coordinator / Owner / System — the roles allowed to accept/reject."""
-        return (
-            user.has_group('kra_kpi_module.group_kra_admin')
-            or user.has_group('kra_kpi_module.group_kra_owner')
-            or user.has_group('base.group_system')
-        )
+        """Coordinator / Owner / System — the roles allowed to accept/reject.
+
+        Delegates to kra.kpi._user_is_kpi_admin so the controllers, the admin
+        gate-skip on create and the delete guard can never disagree about who
+        counts as an admin.
+        """
+        return request.env['kra.kpi'].sudo()._user_is_kpi_admin(user)
 
     @http.route('/kra_kpi/task/self_create', type='json', auth='user', methods=['POST'], csrf=False)
     def self_create_task(self, **params):
@@ -1756,8 +1774,11 @@ class KraKpiAPI(http.Controller):
         kra = request.env['kra.master'].sudo().browse(int(kra_id))
         if not kra.exists():
             return {'status': False, 'message': 'Selected project not found.'}
-        if (est_h * 60 + est_m) <= 0:
-            return {'status': False, 'message': 'Estimate must be greater than zero.'}
+        # Estimate is OPTIONAL, matching the requirements-upload path
+        # (/kpi_requirements/create_bulk_tasks), which has never demanded one.
+        # A developer raising a task often does not yet know how long it takes,
+        # and forcing a number just produced invented ones. The admin sets or
+        # corrects the estimate when they accept it.
 
         # Provisional ref — a "+ New Task" gets TASK-### until an admin accepts it
         # and picks the real type (REQ/UPT/BUG), which re-numbers it.
@@ -1782,7 +1803,8 @@ class KraKpiAPI(http.Controller):
         try:
             rec._notify('self_task_submitted',
                         title=rec.name, dev=user.name, project=kra.name,
-                        estimate=f"{est_h}h {est_m}m", priority=priority)
+                        estimate=(f"{est_h}h {est_m}m" if (est_h or est_m) else 'not set'),
+                        priority=priority)
         except Exception as exc:
             _logger.warning("self_task_submitted notify failed: %s", exc)
 
@@ -2235,6 +2257,14 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kra_kpi/delete_kra', type='json', auth='user', methods=['POST'], csrf=False)
     def delete_kra(self, **params):
+        # This route had NO authorisation check while unlinking through sudo():
+        # any authenticated account — a developer, or a client portal user —
+        # could post a kra_id and destroy an entire client, every task under it,
+        # every child KRA and all their kpi.time.log rows. auth='user' is
+        # authentication, not authorisation, and sudo() bypasses the read-only
+        # ACL on kra.master that would otherwise have stopped it.
+        if not self._is_kra_admin(request.env.user):
+            return {"status": False, "message": "Not authorized"}
         kra_id = params.get("kra_id")
         if not kra_id:
             return {"status": False, "message": "kra_id missing"}
@@ -2242,6 +2272,28 @@ class KraKpiAPI(http.Controller):
         kra = request.env["kra.master"].sudo().browse(int(kra_id))
         if not kra.exists():
             return {"status": False, "message": "KRA not found"}
+
+        # Recorded work is not the admin's to discard by deleting its project.
+        # Same rule the per-task delete uses (kra.kpi._may_admin_delete), applied
+        # to the whole subtree: one task with time on it blocks the delete, and
+        # the message names it so the admin can go and look.
+        Kpi = request.env['kra.kpi'].sudo()
+        subtree_ids = kra._get_descendant_ids()
+        tasks = Kpi.search([('kra_id', 'in', subtree_ids)]) if subtree_ids else Kpi
+        worked = tasks.filtered(
+            lambda t: t.timer_start_datetime or t.timer_total_seconds)
+        if not worked and tasks:
+            # kra.kpi has no reverse link to its time logs, so ask the log side.
+            logged = request.env['kpi.time.log'].sudo().search(
+                [('kpi_id', 'in', tasks.ids)], limit=1)
+            worked = logged.kpi_id
+        if worked:
+            first = worked[0]
+            return {"status": False,
+                    "message": "'%s' has tasks with recorded work (e.g. %s). "
+                               "Delete would destroy their time logs."
+                               % (kra.name or kra_id,
+                                  first.external_ref or first.name or first.id)}
 
         kra.kpi_ids.unlink()
         kra.child_ids.unlink()
@@ -2251,6 +2303,11 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kra_kpi/delete_kpi', type='json', auth='user', methods=['POST'], csrf=False)
     def delete_kpi(self, **params):
+        # This route used to sudo()-unlink any id for ANY logged-in user — a
+        # developer could delete another team's completed task, time logs and
+        # all. auth='user' is authentication, not authorisation.
+        if not self._is_kra_admin(request.env.user):
+            return {"status": False, "message": "Not authorized"}
         kpi_id = params.get("kpi_id")
         if not kpi_id:
             return {"status": False, "message": "kpi_id missing"}
@@ -2261,6 +2318,62 @@ class KraKpiAPI(http.Controller):
 
         kpi.unlink()
         return {"status": True, "message": "KPI deleted"}
+
+    @http.route('/kra_kpi/task/admin_delete', type='json', auth='user', methods=['POST'], csrf=False)
+    def admin_delete_task(self, **params):
+        """Admin deletes a task that was never started.
+
+        Distinct from /kpi_pending_queue/delete, which only ever handled
+        UNPUBLISHED rows sitting in the Client Task Queue. Once a task is
+        assigned to a developer it is published, so that route could not touch
+        it and there was no way to remove a task raised by mistake.
+
+        The rule itself lives in kra.kpi._may_admin_delete so the board's
+        can_admin_delete flag and this endpoint cannot drift apart.
+        """
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        if not params.get('kpi_id'):
+            return {'status': False, 'message': 'kpi_id missing'}
+        kpi = request.env['kra.kpi'].sudo().browse(int(params['kpi_id']))
+        if not kpi.exists():
+            return {'status': False, 'message': 'Task not found'}
+        ok, reason = kpi._may_admin_delete()
+        if not ok:
+            return {'status': False, 'message': reason}
+
+        name = kpi.name or ''
+        ref = kpi.external_ref or ''
+        note = (params.get('reason') or '').strip()
+        # Tell the people who were waiting on it BEFORE it disappears: the
+        # developer it was published to, and the client who submitted it.
+        # kpi_id is deliberately False on these rows — kpi.notification.kpi_id
+        # is ondelete='cascade', so a notification pointing at this task would
+        # be deleted along with it and nobody would ever see it. Detached also
+        # means it isn't tappable, which is correct: the task is gone.
+        Notif = request.env['kpi.notification'].sudo()
+        targets = []
+        if kpi.published and kpi.user_id:
+            targets.append((kpi.user_id.id, 'developer'))
+        if kpi.client_submitted and kpi.submitted_by_uid:
+            targets.append((kpi.submitted_by_uid.id, 'client'))
+        body = "🗑 Task removed by an admin.\n📌 %s %s\n" % (ref, name)
+        if note:
+            body += "💬 Reason: %s\n" % note
+        for uid, role in targets:
+            try:
+                Notif.create({
+                    'user_id': uid, 'kpi_id': False, 'event': 'task_deleted',
+                    'role': role, 'title': 'Task removed', 'body': body,
+                })
+                # Push is an HTTP call, not a DB row, so it survives the unlink.
+                kpi._send_push('task_deleted', 'Task removed', body, [uid])
+            except Exception as exc:
+                _logger.warning("admin_delete notify failed for kpi %s user %s: %s",
+                                kpi.id, uid, exc)
+        kpi.unlink()
+        return {'status': True, 'message': 'Task deleted'}
     
     def _may_view_kpi_details(self, kpi):
         """Who may read a task's KPI details.
@@ -2901,8 +3014,17 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kpi/manual/delete', type='json', auth='user', methods=['POST'], csrf=False)
     def delete_user_manual(self, **params):
-        """Delete a user manual"""
+        """Delete a user manual — admin only.
+
+        The route had no role check, and ir.model.access.csv grants
+        base.group_user full CRUD on kpi.user.manual INCLUDING unlink, so any
+        employee could delete any manual. The ACL is left as-is (employees still
+        read/create/write manuals); this closes the one route that exposed the
+        delete.
+        """
         try:
+            if not self._is_kra_admin(request.env.user):
+                return {'status': False, 'message': 'Not authorized'}
             manual_id = params.get('manual_id')
             if not manual_id:
                 return {'status': False, 'message': 'manual_id is required'}

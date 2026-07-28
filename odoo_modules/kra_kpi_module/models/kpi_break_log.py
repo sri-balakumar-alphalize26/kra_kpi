@@ -1,3 +1,5 @@
+import pytz
+
 from odoo import api, models, fields
 
 
@@ -29,10 +31,22 @@ class KpiBreakLog(models.Model):
     # Codes we recognise; anything else is filed under 'other' so no reason is lost.
     _KNOWN_TYPES = ('break', 'lunch', 'meeting', 'other', 'away', 'leave', 'urgent')
 
-    @api.depends('start_time')
+    @api.depends('start_time', 'user_id')
     def _compute_work_date(self):
+        """Local (developer tz) date, matching kpi.time.log._compute_work_date
+        and kpi.work.session.session_date. start_time is naive-UTC, so `.date()`
+        filed a break taken in the small hours under the previous day while its
+        session said today — and the daily summary joins the two."""
         for rec in self:
-            rec.work_date = rec.start_time.date() if rec.start_time else False
+            if not rec.start_time:
+                rec.work_date = False
+                continue
+            tz_name = (rec.user_id.tz if rec.user_id else None) or self.env.user.tz or 'Asia/Kolkata'
+            try:
+                rec.work_date = pytz.UTC.localize(rec.start_time).astimezone(
+                    pytz.timezone(tz_name)).date()
+            except Exception:
+                rec.work_date = rec.start_time.date()
 
     @api.depends('start_time', 'end_time')
     def _compute_duration(self):

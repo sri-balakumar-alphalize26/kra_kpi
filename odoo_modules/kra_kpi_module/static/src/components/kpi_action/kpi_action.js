@@ -1045,12 +1045,20 @@ export class KpiAction extends Component {
                             <div class="card-body py-2 px-3">
                                 <div class="d-flex align-items-center flex-wrap gap-3">
                                     <span class="badge bg-danger"><i class="fa fa-circle me-1" style="font-size:.5rem;vertical-align:middle;"></i> LIVE</span>
-                                    <!-- Running task -->
+                                    <!-- Running task(s). Every one of them, not just the
+                                         first: with multitask on, two timers run at once
+                                         and showing one made the other look stopped. -->
                                     <t t-if="getActiveTask()">
-                                        <span class="text-success fw-bold">
-                                            <i class="fa fa-play me-1"></i> Working: "<t t-esc="getActiveTask().name"/>"
-                                            <span class="ms-1 font-monospace"><t t-esc="getDisplayTime(getActiveTask())"/></span>
+                                        <span class="text-success fw-bold" t-if="getActiveTasks().length > 1">
+                                            <i class="fa fa-bolt me-1"></i>
+                                            Multi-tasking <t t-esc="getActiveTasks().length"/> tasks:
                                         </span>
+                                        <t t-foreach="getActiveTasks()" t-as="at" t-key="at.id">
+                                            <span class="text-success fw-bold">
+                                                <i class="fa fa-play me-1"></i> Working: "<t t-esc="at.name"/>"
+                                                <span class="ms-1 font-monospace"><t t-esc="getDisplayTime(at)"/></span>
+                                            </span>
+                                        </t>
                                     </t>
                                     <t t-else="">
                                         <span class="text-muted"><i class="fa fa-pause me-1"></i> No task running</span>
@@ -1356,6 +1364,16 @@ export class KpiAction extends Component {
                                                                 <i class="fa fa-times"></i> Reject
                                                             </button>
                                                         </t>
+                                                        <!-- Admin: remove a task nobody has worked on. can_admin_delete
+                                                             is the SERVER's answer (kra.kpi._may_admin_delete), never
+                                                             re-derived here, so the button can't offer what the route
+                                                             would refuse. -->
+                                                        <button class="btn btn-sm btn-outline-danger"
+                                                                t-if="task.can_admin_delete"
+                                                                t-on-click="() => this.adminDeleteTask(task)"
+                                                                title="Delete this task — only possible while no time has been logged against it">
+                                                            <i class="fa fa-trash"></i> Delete
+                                                        </button>
                                                         <!-- Self-created Pending Review: admin Accept / send back -->
                                                         <t t-if="state.isAdmin and col.key === 'self_pending'">
                                                             <button class="btn btn-sm btn-success"
@@ -2570,7 +2588,12 @@ export class KpiAction extends Component {
                 <tr${t.concurrent ? ' style="border-left:4px solid #f59e0b;"' : ''}>
                     <td><b>${t.concurrent ? '⚡ ' : ''}${t.ref || ''}</b></td>
                     <td>${(t.name || '').replace(/</g,'&lt;')}</td>
-                    <td class="text-end">${t.duration_display || '0m'}</td>
+                    <td class="text-end">
+                        ${t.duration_display || '0m'}
+                        ${t.concurrent && t.solo_seconds > 0
+                            ? `<div class="text-muted" style="font-size:.72rem;">${t.solo_display} alone · ${t.shared_display} shared</div>`
+                            : ''}
+                    </td>
                 </tr>
             `).join('')
             : `<tr><td colspan="3" class="text-muted text-center">No task time logged yet today.</td></tr>`;
@@ -2650,6 +2673,14 @@ export class KpiAction extends Component {
                                          image can never disagree on the verdict. -->
                                     <div class="fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}" style="font-size:1.3rem;">${data.presence_display || '0m'}</div>
                                     ${data.standard_display ? `<div class="small fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}">${data.met_standard ? '✓' : '▾'} ${data.standard_display} standard</div>` : ''}
+                                </div>
+                                <!-- One figure for the whole day's accounted time, so
+                                     "is my day explained?" doesn't mean adding five
+                                     boxes up by eye. Accounted + Other/Idle = Presence. -->
+                                <div class="p-3 border rounded">
+                                    <div class="text-muted small">Accounted</div>
+                                    <div class="fw-bold text-primary" style="font-size:1.3rem;">${data.accounted_display || '0m'}</div>
+                                    <div class="small text-muted">task + meeting + lunch + break + no-tasks</div>
                                 </div>
                             </div>
                             ${(data.break_seconds || data.lunch_seconds || data.meeting_seconds || data.other_seconds || data.away_seconds || data.no_tasks_seconds || data.other_idle_seconds || (data.away_events && data.away_events.length)) ? `
@@ -3668,7 +3699,8 @@ export class KpiAction extends Component {
         const description = (g('ntDesc') && g('ntDesc').value) || '';
         if (!name) { alert('Please enter a task name.'); return; }
         if (!kra_id) { alert('Please choose a project (KRA).'); return; }
-        if ((estimate_hours * 60 + estimate_minutes) <= 0) { alert('Estimate must be greater than zero.'); return; }
+        // Estimate deliberately NOT required — same as the requirements upload.
+        // The admin fills it in when accepting.
         try {
             const res = await rpc('/kra_kpi/task/self_create', {
                 name, kra_id: parseInt(kra_id, 10),
@@ -3785,6 +3817,60 @@ export class KpiAction extends Component {
         });
     }
 
+    // Admin: permanently remove a task nobody has worked on. Deliberately
+    // modal-with-a-reason rather than a bare confirm() — the developer and the
+    // client who were waiting on the task are told, and the reason is what they
+    // actually read. The server re-checks _may_admin_delete, so a stale board
+    // (card rendered before someone started the task) is refused, not honoured.
+    async adminDeleteTask(task) {
+        const safeName = ((task.external_ref ? task.external_ref + ' ' : '') + (task.name || ''))
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const html = `
+            <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content border-danger shadow">
+                  <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title"><i class="fa fa-trash me-2"></i> Delete this task?</h5>
+                    <button type="button" class="btn-close btn-close-white" id="closeModalBtn"></button>
+                  </div>
+                  <div class="modal-body">
+                    <div class="alert alert-danger mb-3">
+                      <b>"${safeName}"</b> will be permanently deleted.
+                      <ul class="mb-0 mt-2">
+                        <li>This cannot be undone.</li>
+                        <li>Only possible because <b>no time has been logged</b> against it.</li>
+                        <li>The assigned developer and the client who raised it are notified.</li>
+                      </ul>
+                    </div>
+                    <label class="form-label fw-bold">Reason</label>
+                    <textarea id="delReason" class="form-control" rows="3"
+                              placeholder="e.g. Raised by mistake / duplicate of REQ-042…"></textarea>
+                    <small class="text-muted">Optional — shown to whoever was waiting on this task.</small>
+                  </div>
+                  <div class="modal-footer">
+                    <button class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
+                    <button class="btn btn-danger" id="confirmModalBtn"><i class="fa fa-trash me-1"></i> Delete</button>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        this._renderModal(html, async () => {
+            const el = document.getElementById('delReason');
+            const reason = (el && el.value || '').trim();
+            try {
+                const res = await rpc('/kra_kpi/task/admin_delete', { kpi_id: task.id, reason });
+                if (res && res.status) {
+                    this.closeModal();
+                    await this.refresh();
+                } else {
+                    alert((res && res.message) || 'Delete failed.');
+                }
+            } catch (e) {
+                alert('Delete failed: ' + ((e && e.message) || e));
+            }
+        });
+    }
+
     formatTime(sec) {
         const h = Math.floor(sec / 3600);
         const m = Math.floor((sec % 3600) / 60);
@@ -3803,8 +3889,15 @@ export class KpiAction extends Component {
     // =========================================================
     // 🆕 Part C — live activity strip helpers + heartbeat / auto-away
     // =========================================================
+    // EVERY running task. A developer with multitask enabled can have two
+    // timers going, and the live strip used to show only getActiveTask() —
+    // whichever the board happened to list first — so the second task was
+    // invisible while it was being worked on.
+    getActiveTasks() {
+        return (this.state.tasksByState && this.state.tasksByState['in_progress']) || [];
+    }
     getActiveTask() {
-        const list = (this.state.tasksByState && this.state.tasksByState['in_progress']) || [];
+        const list = this.getActiveTasks();
         return list.length ? list[0] : null;
     }
     _elapsedSince(rawIso, base = 0) {

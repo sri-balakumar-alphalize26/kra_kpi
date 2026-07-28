@@ -2,6 +2,8 @@ from odoo import api, models, fields
 from odoo.exceptions import ValidationError
 from datetime import datetime
 
+import pytz
+
 
 class KpiTimeLog(models.Model):
     """
@@ -78,14 +80,29 @@ class KpiTimeLog(models.Model):
         store=True
     )
 
-    @api.depends('start_time')
+    @api.depends('start_time', 'user_id')
     def _compute_work_date(self):
-        """Extract date from start_time for grouping"""
+        """The date this work belongs to, in the DEVELOPER'S timezone.
+
+        start_time is naive-UTC, so `.date()` gave the UTC calendar day. But
+        kpi.work.session.session_date comes from fields.Date.context_today() —
+        the local day — and the two are compared and joined all over the module.
+        For IST (+5:30) they disagreed for every log started between local
+        midnight and 05:30: the work was filed under YESTERDAY while the session
+        it belonged to was today, so early-morning work dropped out of the live
+        Productive counter (live_status filters work_date = local today).
+        """
         for rec in self:
-            if rec.start_time:
-                rec.work_date = rec.start_time.date()
-            else:
+            if not rec.start_time:
                 rec.work_date = False
+                continue
+            tz_name = (rec.user_id.tz if rec.user_id else None) or self.env.user.tz or 'Asia/Kolkata'
+            try:
+                rec.work_date = pytz.UTC.localize(rec.start_time).astimezone(
+                    pytz.timezone(tz_name)).date()
+            except Exception:
+                # Never let a bad tz string stop a timer from being recorded.
+                rec.work_date = rec.start_time.date()
 
     @api.depends('start_time', 'end_time')
     def _compute_duration(self):
