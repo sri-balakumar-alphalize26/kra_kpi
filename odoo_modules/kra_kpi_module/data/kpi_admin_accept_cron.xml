@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Every minute: accept tasks whose admin acceptance window has elapsed.
+
+             Admin acceptance is the FIRST gate — a task nobody accepts never
+             reaches the client either, because client pre-approval is fired on
+             accept.  So an un-triaged queue used to block its developer
+             indefinitely.  This cron closes that hole: past
+             res.company.admin_accept_minutes (editable in the app's
+             Configuration screen; 0 disables auto-accept and restores the
+             human-only behaviour) the task is accepted, categorised from its
+             name prefix, re-numbered REQ/UPT/BUG and handed to the client.
+
+             The admin loses nothing: they can still re-categorise, reject or
+             send the task back afterwards.  They just no longer hold the
+             developer up by not looking at it.
+
+             The 1-minute interval is only the sweep rate — the real gap lives
+             on res.company.  Rows per tick are capped by
+             kra.kpi.ADMIN_ACCEPT_BATCH_MAX so a backlog drains steadily rather
+             than re-numbering every task and notifying every client at once.
+
+             Kept SEPARATE from kpi_partial_timeout_cron.xml deliberately: each
+             ir.cron gets its own transaction, so a poisoned row here cannot
+             roll back the client auto-release sweep, and either gate can be
+             deactivated on its own during a rollout.
+
+             See models/kpi_workflow.py _cron_admin_accept_timeout. -->
+        <record id="ir_cron_kpi_admin_accept" model="ir.cron">
+            <field name="name">KRA/KPI: Auto-accept tasks no admin actioned</field>
+            <field name="model_id" ref="model_kra_kpi"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_admin_accept_timeout()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

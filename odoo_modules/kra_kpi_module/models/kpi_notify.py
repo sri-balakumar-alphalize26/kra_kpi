@@ -87,6 +87,13 @@ _PERSIST_EVENTS = {
     'client_task_rejected',
     # Client paused their own approval countdown → tell the dev not to wait.
     'pre_approval_held',
+    # The two auto-advance gates. Both are things that happened WITHOUT anyone
+    # deciding, so the people who didn't act have to be told — that notification
+    # is what preserves their power to re-categorise, reject or object after the
+    # fact, and it is the paper trail for a task that moved on its own.
+    'admin_accept_auto',            # nobody triaged it → accepted, sent to client
+    'pre_approval_auto_released',   # client never replied → dev may start (team)
+    'pre_approval_window_closed',   # ...the same event, told to the client
     # Stage 2: admin approved the dev's work → the CLIENT must sign off. Was
     # WhatsApp-only too, so clients got nothing in-app for it either.
     'internal_approved',
@@ -136,6 +143,9 @@ _NOTIF_TITLES = {
     'client_task_queued':   'New client task queued',
     'client_task_rejected': 'Task rejected — reassign',
     'pre_approval_held':    'Client held approval',
+    'admin_accept_auto':          'Accepted automatically',
+    'pre_approval_auto_released': 'No client reply — work may start',
+    'pre_approval_window_closed': 'Approval window closed',
     'internal_approved':    'Your sign-off needed',
     'internal_rejected':    'Rework needed',
     'complete':             'Task ready for review',
@@ -168,7 +178,9 @@ _APP_TEMPLATES = {
         "👤 Developer: {dev}\n"
         "🏷 Project: {project}\n\n"
         "Open My Tasks to Approve or Reject.\n"
-        "If you don't respond in time it is approved automatically."
+        "If we don't hear from you within {window_minutes} min the team may "
+        "start work — that is not an approval, and nothing is billed until you "
+        "sign off at the end. You can still object at any time."
     ),
     'pre_approval_decided': (
         "{decision_emoji} Client decision: {decision_caps}\n"
@@ -205,10 +217,38 @@ _APP_TEMPLATES = {
     ),
     # Client paused their own approval countdown — the dev must not sit waiting.
     'pre_approval_held': (
-        "⏸ Client put approval on hold — it will NOT auto-approve.\n"
+        "⏸ Client put approval on hold — it will NOT auto-release.\n"
         "📌 {title}\n"
         "👤 Developer: {dev} • Project: {project}\n\n"
         "The task waits for the client's decision."
+    ),
+    # Nobody triaged it within the window, so the system accepted it. Say that
+    # plainly: the admins who didn't act need to know it moved, and that they
+    # can still fix the category or reject it.
+    'admin_accept_auto': (
+        "⏱ Accepted automatically — no admin action within {window_minutes} min.\n"
+        "📌 {title}\n"
+        "👤 Developer: {dev} • Project: {project}\n\n"
+        "It has gone to the client for approval. You can still re-categorise or "
+        "reject it."
+    ),
+    # Two audiences, two messages. The TEAM is told they may start and that this
+    # is emphatically not the client's approval...
+    'pre_approval_auto_released': (
+        "🔓 No client reply within {window_minutes} min — you can start work.\n"
+        "📌 {title}\n"
+        "👤 Developer: {dev} • Project: {project}\n\n"
+        "This is NOT the client's approval. They can still object, and the task "
+        "is not billable until they sign off at completion."
+    ),
+    # ...and the CLIENT is told we stopped waiting and their door is still open.
+    'pre_approval_window_closed': (
+        "⏳ We didn't hear back within {window_minutes} min, so the team has "
+        "started work.\n"
+        "📌 {title}\n"
+        "👤 Developer: {dev} • Project: {project}\n\n"
+        "You have not approved anything and nothing is billed yet. Open My Tasks "
+        "to object or to approve."
     ),
     # Developer finished a task → admins must review it on the Action Board.
     'complete': (
@@ -307,18 +347,23 @@ _APP_TEMPLATES = {
         "👤 Developer: {dev} • ⏱ {elapsed}\n"
         "✍️ Signed by: {decided_by}"
     ),
+    # No live emitter since the 'prep work' state was retired in 19.0.2.3; kept
+    # only so an old queued row still renders. New silence-timeouts fire
+    # pre_approval_auto_released / pre_approval_window_closed instead.
     'partial_timeout': (
-        "⌛ No client reply in time — prep started automatically.\n"
+        "⌛ No client reply in time.\n"
         "📌 {title} ({ref})\n"
         "🏷 Project: {project} • 👤 {dev}\n\n"
-        "Prep only (not billable) until the client approves."
+        "Not billable until the client signs off."
     ),
     'pre_approval_reminder': (
         "⚠️ Reminder — this task still needs your approval.\n"
         "📌 {title}\n"
         "🏷 Project: {project} • Deadline: {deadline}\n"
-        "👤 {dev} has started prep work in non-billable mode.\n\n"
-        "Open My Tasks to Approve so it can be billed as a full task."
+        "👤 Waiting on you before {dev} is confirmed.\n\n"
+        "Open My Tasks to Approve. If we don't hear back the team may start "
+        "anyway — that is not an approval, and nothing is billed until you "
+        "sign off at the end."
     ),
     # Lead with WHO — the admin's first question is always "who needs help?".
     'urgent_pause': (
@@ -403,6 +448,10 @@ _EVENT_TO_TOGGLE = {
     'self_task_submitted':       'notify_task_created',
     'self_task_accepted':        'notify_internal_approved',
     'self_task_rejected':        'notify_internal_rejected',
+    # Auto-advance events reuse the toggle of the gate they belong to.
+    'admin_accept_auto':          'notify_task_created',
+    'pre_approval_auto_released': 'notify_pre_approval_request',
+    'pre_approval_window_closed': 'notify_pre_approval_request',
 }
 
 
@@ -423,6 +472,16 @@ _EVENT_RECIPIENTS = {
     'client_task_rejected':      ('owner', 'coordinator'),
     # Client paused their approval → the developer must know not to wait on it.
     'pre_approval_held':         ('owner', 'coordinator', 'developer'),
+    # Auto-advance events. Owner + coordinator BECAUSE they are the ones who
+    # didn't act: this is their accountability record and the thing that keeps
+    # their after-the-fact powers meaningful. The developer is told because
+    # their task just became official and its external_ref changed under them.
+    'admin_accept_auto':         ('owner', 'coordinator', 'developer'),
+    'pre_approval_auto_released': ('owner', 'coordinator', 'developer'),
+    # Same moment, told to the other side — hence a separate event with its own
+    # wording. One body cannot honestly say "you may start, this is not
+    # approved" and "we stopped waiting, you can still object" at once.
+    'pre_approval_window_closed': ('client',),
     # Late approval — owner is the primary recipient (they need to know the
     # decision came after the prep window).  Coord + dev also informed.
     'pre_approval_decided_late': ('owner', 'coordinator', 'developer'),
@@ -545,7 +604,8 @@ _TEMPLATES = {
         "💬 Clarify  →  {tap_clarify}\n\n"
         "Or type it manually: 1-{token_short} / 2-{token_short} / 3-{token_short} / 4-{token_short}\n"
         "Or tap to review on web → {url}\n"
-        "(Auto-prep starts in 5 min if no response.)"
+        "(No reply in {window_minutes} min and the team may start — that is not "
+        "an approval, and nothing is billed until you sign off.)"
     ),
     # Sent to client when developer presses Start on a pre_approval_partial task.
     # Token is still live (the cron only changed task_state, not the token), so
@@ -1241,6 +1301,15 @@ class KpiNotify(models.Model):
                                 or 'system'),
             # Urgent-pause / auto-away identity + note.
             'note':        (ctx.get('note') or '').strip() or '—',
+            # Auto-accept / auto-release windows. These MUST be present: a
+            # template referencing a key that isn't here raises KeyError, gets
+            # swallowed below, and ships the RAW template — braces and all — to
+            # the user. Falls back to the live config so a caller that forgets
+            # to pass window_minutes still renders a true number.
+            'window_minutes': (ctx.get('window_minutes')
+                               or self._client_approval_minutes()),
+            'released_at':    ctx.get('released_at') or now_str,
+            'accepted_at':    ctx.get('accepted_at') or now_str,
             'dev_number':  ((self.user_id.kpi_wa_number
                              or (self.user_id.partner_id.phone if self.user_id.partner_id else '')
                              or '—') if self.user_id else '—'),

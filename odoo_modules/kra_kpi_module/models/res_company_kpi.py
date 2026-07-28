@@ -57,12 +57,25 @@ class ResCompany(models.Model):
              "NO login once this hour has passed reads 'Absent'. 10.667 = 10:40. "
              "Read by /kpi_owner/live_tracking.")
 
+    admin_accept_minutes = fields.Integer(
+        string='Admin Accept Window (minutes)',
+        default=5,
+        help="How long a new task waits for a coordinator/owner to Accept it before it "
+             "is AUTO-ACCEPTED and moves on to client pre-approval. The admin keeps full "
+             "power afterwards — they can still re-categorise (REQ/UPT/BUG) or reject it; "
+             "auto-accept only stops an un-triaged task blocking the developer forever. "
+             "Set 0 to disable auto-accept and require a human Accept, as before. "
+             "Read by kra.kpi._admin_accept_minutes() / _cron_admin_accept_timeout.")
+
     client_approval_minutes = fields.Integer(
         string='Client Approval Window (minutes)',
         default=5,
         help="How long a client has to approve the developer assigned to their task "
-             "before it is auto-approved. Read by request_client_pre_approval() when "
-             "setting pre_approval_deadline_at.")
+             "before it is AUTO-RELEASED. Auto-release lets the developer start work; it "
+             "is NOT recorded as the client's approval (pre_approval_decision stays "
+             "empty) and the client can still object afterwards. Billing is unaffected: "
+             "an invoice still needs the real sign-off at completion. Read by "
+             "request_client_pre_approval() and _cron_pre_approval_timeout.")
 
     queue_nudge_minutes = fields.Integer(
         string='Queue Re-nudge Gap (minutes)',

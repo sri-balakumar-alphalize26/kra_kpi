@@ -313,6 +313,25 @@ class KpiMaster(models.Model):
     admin_accepted = fields.Boolean(string='Admin Accepted', default=False,
         help='False while a task waits for admin acceptance; set True when an '
              'admin accepts it into the official flow, which then asks the client.')
+    # Admin acceptance is time-boxed.  A task nobody triages used to block its
+    # developer forever — it never even reached the client, because pre-approval
+    # is only fired on accept.  The deadline is armed the moment a task exists
+    # with a developer but no acceptance (kpi_workflow._arm_admin_accept_deadline)
+    # and reaped by _cron_admin_accept_timeout.  Cleared by a manual accept, by a
+    # send-back (an explicit "no" must stop the clock), and by the auto-accept.
+    admin_accept_deadline_at = fields.Datetime(
+        string='Admin Accept Deadline', index=True, copy=False,
+        help='When this task auto-accepts if no admin has acted. Empty means no '
+             'clock is running (already accepted, sent back, or auto-accept off).')
+    admin_accepted_at = fields.Datetime(string='Admin Accepted At', readonly=True, copy=False)
+    admin_accepted_by_id = fields.Many2one(
+        'res.users', string='Admin Accepted By', readonly=True, copy=False,
+        help='Who accepted the task. Empty when the acceptance window elapsed and '
+             'the system let it through — see admin_accepted_auto.')
+    admin_accepted_auto = fields.Boolean(
+        string='Auto-Accepted (No Admin Action)', default=False, index=True, copy=False,
+        help='True when the admin acceptance window elapsed with nobody acting. NOT '
+             'an admin decision: the admin may still re-categorise or reject it.')
     # Set ONLY by a genuine client final sign-off (record_client_final_decision
     # approve path, or approve_task when the client signed offline).  Invoicing
     # keys off this, never off task_state alone.
@@ -403,7 +422,34 @@ class KpiMaster(models.Model):
         ('whatsapp', 'WhatsApp'),
     ], string='Pre-Approval Source', readonly=True)
     pre_approval_feedback = fields.Text(string='Pre-Approval Feedback')
+    # Two DIFFERENT clocks, deliberately separate:
+    #   pre_approval_deadline_at — the REMINDER tick. Pushed forward after every
+    #     nudge, so one task is chased at most once per gap and at most
+    #     PRE_APPROVAL_REMINDER_MAX times. Cleared once the reminders run out.
+    #   pre_approval_release_at  — the HARD release moment. Armed exactly once by
+    #     request_client_pre_approval() and never pushed forward, so the window
+    #     means what res.company.client_approval_minutes says it means.
+    # Folding them into one field would make the real wait window × (MAX + 1).
     pre_approval_deadline_at = fields.Datetime(string='Pre-Approval Deadline', index=True)
+    pre_approval_release_at = fields.Datetime(
+        string='Pre-Approval Auto-Release At', index=True, copy=False,
+        help="When the client's silence stops blocking the developer. Cleared by any "
+             'real decision, by Hold, and by the release itself.')
+    # Auto-release is permission to WORK, never permission to BILL.  When this is
+    # True the developer may start, but pre_approval_decision stays empty: the
+    # client never said yes, so nothing here may ever be read as consent.  The
+    # invoice gate is client_final_approved, set only by a real stage-2 sign-off.
+    pre_approval_auto_released = fields.Boolean(
+        string='Auto-Released (No Client Reply)', default=False, index=True, copy=False,
+        help='The approval window elapsed with no client answer, so work may start. '
+             'This is NOT consent: the task is still not billable until the client '
+             'signs off at completion, and they can still object in the meantime.')
+    pre_approval_auto_released_at = fields.Datetime(
+        string='Auto-Released At', readonly=True, copy=False)
+    pre_approval_auto_released_after_min = fields.Integer(
+        string='Auto-Released After (minutes)', readonly=True, copy=False, default=0,
+        help='The window that actually elapsed, snapshotted so a later change to '
+             'Client Approval Window never rewrites history.')
 
     pre_approval_notified_user_ids = fields.Many2many(
         'res.users',

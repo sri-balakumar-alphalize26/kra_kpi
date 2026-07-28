@@ -32,6 +32,20 @@ export class KpiConfiguration extends Component {
                         <small class="text-muted d-block mt-2">Minutes with no heartbeat (tab closed / machine asleep)
                             before a running task auto-pauses as "Away". Used by the browser AND the server.</small>
 
+                        <label class="form-label fw-semibold mt-4">Admin accept window (minutes)</label>
+                        <div class="input-group" style="max-width:180px;">
+                            <input type="number" min="0" class="form-control"
+                                   t-model.number="state.admin_accept_minutes"
+                                   t-on-change="() => this.saveAdminAccept()"/>
+                            <span class="input-group-text">min</span>
+                            <span t-if="state.savedAdminAccept" class="input-group-text text-success bg-white border-success">✓</span>
+                        </div>
+                        <small class="text-muted d-block mt-2">How long a new task waits for a coordinator to
+                            <b>Accept</b> it before it is accepted automatically and sent to the client for
+                            approval. You keep every power afterwards — re-categorise (Requirement / Update /
+                            Bug) or reject it. This only stops an un-triaged task blocking its developer.
+                            <b>Set 0</b> to switch auto-accept off and require a human Accept.</small>
+
                         <label class="form-label fw-semibold mt-4">Client approval window (minutes)</label>
                         <div class="input-group" style="max-width:180px;">
                             <input type="number" min="1" class="form-control"
@@ -41,8 +55,9 @@ export class KpiConfiguration extends Component {
                             <span t-if="state.savedClientApproval" class="input-group-text text-success bg-white border-success">✓</span>
                         </div>
                         <small class="text-muted d-block mt-2">How long a client has to approve the developer
-                            assigned to their task before it is auto-approved. Drives the countdown the client
-                            sees in the app.</small>
+                            assigned to their task before the task is <b>released</b> for work. Drives the
+                            countdown the client sees in the app. Releasing is not approving: the client can
+                            still object, and nothing is billable until they sign off at completion.</small>
 
                         <label class="form-label fw-semibold mt-4">Queue re-nudge gap (minutes)</label>
                         <div class="input-group" style="max-width:180px;">
@@ -203,7 +218,11 @@ export class KpiConfiguration extends Component {
     setup() {
         this.state = useState({
             away_after_minutes: 5,
-            // Client-workflow timers (same res.company fields the mobile app edits).
+            // Workflow gate timers (same res.company fields the mobile app edits).
+            // Nothing about these windows is hard-coded anywhere — the crons read
+            // res.company on every tick, so a change here takes effect within a
+            // minute with no restart or upgrade.
+            admin_accept_minutes: 5,
             client_approval_minutes: 5,
             queue_nudge_minutes: 30,
             urgent_nudge_minutes: 5,
@@ -211,6 +230,7 @@ export class KpiConfiguration extends Component {
             loading: true,
             error: "",
             savedAway: false,
+            savedAdminAccept: false,
             savedClientApproval: false,
             savedQueueNudge: false,
             savedUrgentNudge: false,
@@ -237,6 +257,7 @@ export class KpiConfiguration extends Component {
                 const cfg = await rpc("/kpi_config/get", {});
                 if (cfg?.status) {
                     if (cfg.away_after_minutes != null) this.state.away_after_minutes = cfg.away_after_minutes;
+                    if (cfg.admin_accept_minutes != null) this.state.admin_accept_minutes = cfg.admin_accept_minutes;
                     if (cfg.client_approval_minutes != null) this.state.client_approval_minutes = cfg.client_approval_minutes;
                     if (cfg.queue_nudge_minutes != null) this.state.queue_nudge_minutes = cfg.queue_nudge_minutes;
                     if (cfg.urgent_nudge_minutes != null) this.state.urgent_nudge_minutes = cfg.urgent_nudge_minutes;
@@ -308,8 +329,21 @@ export class KpiConfiguration extends Component {
         catch (e) { alert(e?.data?.message || "Failed to save."); }
     }
 
-    // Drives pre_approval_deadline_at (kpi_workflow.py _client_approval_minutes) —
-    // i.e. the live countdown the client sees on their approval card in the app.
+    // Drives admin_accept_deadline_at (kpi_workflow.py _admin_accept_minutes) —
+    // how long a task waits for a human Accept before the cron does it.
+    // Clamped at 0, not 1: 0 is the documented switch that turns auto-accept off
+    // entirely, so it must stay reachable from this screen.
+    async saveAdminAccept() {
+        const parsed = parseInt(this.state.admin_accept_minutes);
+        const val = Math.max(0, isNaN(parsed) ? 5 : parsed);
+        this.state.admin_accept_minutes = val;
+        try { await rpc("/kpi_config/set_admin_accept", { minutes: val }); this._flash(this.state, "savedAdminAccept"); }
+        catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+
+    // Drives pre_approval_release_at (kpi_workflow.py _client_approval_minutes) —
+    // i.e. the live countdown the client sees on their approval card in the app,
+    // and the point at which the task is released for work.
     async saveClientApproval() {
         const val = Math.max(1, parseInt(this.state.client_approval_minutes) || 5);
         this.state.client_approval_minutes = val;

@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.2.3",
+    "version": "19.0.2.4",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -13,6 +13,7 @@
         "security/kpi_client_invoice_record_rules.xml",
         "data/kpi_client_invoice_sequence.xml",
         "data/kpi_partial_timeout_cron.xml",
+        "data/kpi_admin_accept_cron.xml",
         "data/kpi_pre_approval_escalate_cron.xml",
         "data/kpi_workday_cron.xml",
         "data/kpi_notification_retry_cron.xml",

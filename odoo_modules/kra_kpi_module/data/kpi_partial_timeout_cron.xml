@@ -1,12 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <!-- Stays noupdate="1".  Flipping it to "0" to rename this record does NOT
+         work: ir_model_data.noupdate is stored per record at first install, and
+         an upgrade honours the stored flag, not this attribute — verified on a
+         live DB, where the rename silently did nothing.  Renaming an existing
+         noupdate record is a data change, so it lives in the migration script
+         (migrations/19.0.2.4/post-migrate.py §6) where it belongs.
+
+         Leaving it at "1" also keeps the usual benefit: an ops change to
+         `active` or the interval made in the UI survives the next upgrade. -->
     <data noupdate="1">
-        <!-- Every minute, flip any 'pre_approval_pending' task whose
-             pre_approval_deadline_at has passed to 'pre_approval_partial'.
-             Idempotent: the handler filters on task_state so re-runs
-             don't double-fire.  See models/kpi_workflow.py. -->
+        <!-- Every minute: chase clients sitting on a pending approval, then
+             stop blocking the developer.
+
+             Two sweeps over two independent clocks:
+               * reminders on pre_approval_deadline_at — spread across the
+                 window, capped by kra.kpi.PRE_APPROVAL_REMINDER_MAX;
+               * the hard release on pre_approval_release_at — once
+                 res.company.client_approval_minutes (editable in the app's
+                 Configuration screen) has elapsed with no answer.
+
+             Auto-release lets the developer START. It is NOT the client's
+             approval: no decision, no decided-by and no token burn is written,
+             the client can still object, and the invoice still waits for a real
+             sign-off at completion. This distinction is the whole point — the
+             predecessor of this cron recorded silence as consent and got
+             unapproved work billed, which 19.0.2.3 had to reverse.
+
+             The 1-minute interval is only the sweep rate; the real gaps live on
+             res.company. Rows released per tick are capped by
+             kra.kpi.AUTO_RELEASE_BATCH_MAX.
+
+             Idempotent: both sweeps filter on task_state and re-check under a
+             row lock, so re-runs and races with a real client decision are
+             no-ops. See models/kpi_workflow.py _cron_pre_approval_timeout. -->
         <record id="ir_cron_kpi_pre_approval_timeout" model="ir.cron">
-            <field name="name">KRA/KPI: Auto-flip pre-approval to partial after 5 min</field>
+            <field name="name">KRA/KPI: Client approval reminders + auto-release</field>
             <field name="model_id" ref="model_kra_kpi"/>
             <field name="state">code</field>
             <field name="code">model._cron_pre_approval_timeout()</field>

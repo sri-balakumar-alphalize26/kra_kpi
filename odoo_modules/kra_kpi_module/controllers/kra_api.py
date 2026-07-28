@@ -1,5 +1,10 @@
 from odoo import http, api, fields
+from odoo.exceptions import UserError, ValidationError
 from odoo.http import request
+from odoo.addons.kra_kpi_module.models.kpi_workflow import (
+    NAME_PREFIX_FOR_DOC_TYPE,
+    REF_PREFIX_FOR_DOC_TYPE,
+)
 import json
 import logging
 import base64
@@ -41,6 +46,45 @@ def normalize_wa(number, dial, length):
         return dial + digits
     # Anything else: leave the digits as-is (don't corrupt existing data).
     return digits
+
+
+def _gate_keys(k):
+    """Approval-gate state for one task, in the shape every board consumes.
+
+    Shared by get_tasks' map_rec and _serialize_task so the two near-duplicate
+    serializers cannot disagree about whether a task can start.
+
+    can_start is the SERVER's own answer (kra.kpi._start_block), not something
+    the caller re-derives from task_state. That re-derivation is what let the
+    boards offer a Start button the server then refused, and hide one it would
+    have allowed.
+
+    The two deadlines are emitted as raw UTC to match the `server_now` value on
+    the envelope — a countdown must compare like with like, so neither end is
+    converted to the user's timezone.
+    """
+    fmt = '%Y-%m-%d %H:%M:%S'
+    block = k._start_block()
+    return {
+        'can_start': not block,
+        'start_block_reason': block[0] if block else '',
+        'start_block_message': block[1] if block else '',
+        'pre_approval_decision': k.pre_approval_decision or '',
+        'pre_approval_auto_released': k.pre_approval_auto_released,
+        'pre_approval_auto_released_at': (
+            k.pre_approval_auto_released_at.strftime(fmt)
+            if k.pre_approval_auto_released_at else ''),
+        'pre_approval_held': k.pre_approval_held,
+        # Deadline the client is counting down against (empty once the reminder
+        # ladder is exhausted — the release clock below is the one that matters).
+        'pre_approval_deadline_at': (
+            k.pre_approval_deadline_at.strftime(fmt) if k.pre_approval_deadline_at else ''),
+        'pre_approval_release_at': (
+            k.pre_approval_release_at.strftime(fmt) if k.pre_approval_release_at else ''),
+        'admin_accept_deadline_at': (
+            k.admin_accept_deadline_at.strftime(fmt) if k.admin_accept_deadline_at else ''),
+        'admin_accepted_auto': k.admin_accepted_auto,
+    }
 
 
 def convert_to_user_tz(datetime_obj, user=None):
@@ -303,13 +347,32 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kra_kpi/task/start', type='json', auth='user', methods=['POST'], csrf=False)
     def task_start(self, **params):
+        """Start the timer, or explain in plain words why it can't start.
+
+        The guards in start_task raise ValidationError. Letting that escape
+        turns into a JSON-RPC fault, which every client renders as a generic
+        "Something went wrong" — hiding the one thing the developer needs to
+        know (waiting on the admin, waiting on the client, or another task is
+        already running). Catching it here is what makes those messages visible.
+        """
         kpi_id = params.get('kpi_id')
         if not kpi_id:
             return {'status': False, 'message': 'kpi_id missing'}
 
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
-        rec.start_task()
-        return {'status': True, 'message': 'Task started', 'id': rec.id}
+        if not rec.exists():
+            return {'status': False, 'message': 'Task not found'}
+        try:
+            rec.start_task()
+        except (ValidationError, UserError) as exc:
+            block = rec._start_block()
+            return {'status': False,
+                    'message': exc.args[0] if exc.args else 'Cannot start this task.',
+                    # 'admin' / 'client' when a gate is the blocker; 'multitask'
+                    # when the single-in-progress rule fired instead.
+                    'reason': block[0] if block else 'multitask'}
+        return {'status': True, 'message': 'Task started', 'id': rec.id,
+                'new_state': rec.task_state}
 
     @http.route('/kra_kpi/task/pause', type='json', auth='user', methods=['POST'], csrf=False)
     def task_pause(self, **params):
@@ -325,13 +388,24 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kra_kpi/task/resume', type='json', auth='user', methods=['POST'], csrf=False)
     def task_resume(self, **params):
+        """Resume the timer. Same error contract as /task/start — resume_task
+        runs the identical guards, so it needs the identical handling."""
         kpi_id = params.get('kpi_id')
         if not kpi_id:
             return {'status': False, 'message': 'kpi_id missing'}
 
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
-        rec.resume_task()
-        return {'status': True, 'message': 'Task resumed', 'id': rec.id}
+        if not rec.exists():
+            return {'status': False, 'message': 'Task not found'}
+        try:
+            rec.resume_task()
+        except (ValidationError, UserError) as exc:
+            block = rec._start_block()
+            return {'status': False,
+                    'message': exc.args[0] if exc.args else 'Cannot resume this task.',
+                    'reason': block[0] if block else 'multitask'}
+        return {'status': True, 'message': 'Task resumed', 'id': rec.id,
+                'new_state': rec.task_state}
 
     @http.route('/kra_kpi/task/resume_with_reason', type='json', auth='user', methods=['POST'], csrf=False)
     def task_resume_with_reason(self, **params):
@@ -355,7 +429,15 @@ class KraKpiAPI(http.Controller):
             'self_resume_by': user.name,
             'self_needs_resume_reason': False,
         })
-        rec.resume_task()
+        # The developer has answered the send-back, so the task is waiting on an
+        # admin again — restart the acceptance clock (force=True: the send-back
+        # cleared it, and a revised task must not sit un-timed forever).
+        rec._arm_admin_accept_deadline(force=True)
+        try:
+            rec.resume_task()
+        except (ValidationError, UserError) as exc:
+            return {'status': False,
+                    'message': exc.args[0] if exc.args else 'Cannot resume this task.'}
         return {'status': True, 'message': 'Resumed', 'id': rec.id}
 
     @http.route('/kra_kpi/task/complete', type='json', auth='user', methods=['POST'], csrf=False)
@@ -552,17 +634,30 @@ class KraKpiAPI(http.Controller):
                 'self_resume_note': k.self_resume_note or "",
                 'self_resume_by': k.self_resume_by or "",
                 'self_needs_resume_reason': k.self_needs_resume_reason,
+                # Gate state. can_start comes straight from the server's own rule
+                # (_start_block), so a board never has to re-derive "is this
+                # startable?" from a hand-maintained list of states — which is
+                # exactly how the UI drifted out of step with the server before.
+                **_gate_keys(k),
                 # Per-developer time (survives reassign); current holder flagged.
                 'time_by_user': _time_by_user(k),
             }
-        
+
         self_pending = kpis.filtered(lambda x: x.is_self_created and not x.admin_accepted)
+        company = request.env.company
         return {
             'status': True,
             'tasks': [map_rec(x) for x in kpis],
             'is_admin': is_manager_or_admin,
             'current_user_id': current_user.id,  # 🆕 NEW: Include current user ID for rejection checks
             'self_pending_count': len(self_pending),  # Pending Review lane badge
+            # Skew anchor for the countdown chips: clients must measure the two
+            # deadlines against the SERVER's clock, not the device's.
+            'server_now': fields.Datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'admin_accept_minutes': (company.admin_accept_minutes
+                                     if company.admin_accept_minutes not in (None, False, '')
+                                     else 5),
+            'client_approval_minutes': company.client_approval_minutes or 5,
         }
 
     def _task_time_by_user(self, k):
@@ -644,6 +739,8 @@ class KraKpiAPI(http.Controller):
             'self_resume_note': k.self_resume_note or "",
             'self_resume_by': k.self_resume_by or "",
             'self_needs_resume_reason': k.self_needs_resume_reason,
+            # Same gate keys as get_tasks — see _gate_keys.
+            **_gate_keys(k),
             'time_by_user': self._task_time_by_user(k),
         }
 
@@ -1722,11 +1819,22 @@ class KraKpiAPI(http.Controller):
         if rec.admin_accepted:
             return {'status': False, 'message': 'This task is not awaiting acceptance.'}
 
-        vals = {'admin_accepted': True}
+        vals = {
+            'admin_accepted': True,
+            # A human decided — stamp who, and stop the auto-accept clock in the
+            # same write so the cron cannot pick this row up in the gap between
+            # here and the commit.
+            'admin_accepted_auto': False,
+            'admin_accepted_at': fields.Datetime.now(),
+            'admin_accepted_by_id': user.id,
+            'admin_accept_deadline_at': False,
+        }
         # Admin categorizes the accepted task — re-number its provisional TASK-###
         # ref into the chosen sequence (REQ/UPT/BUG) and apply the name prefix.
-        _REF_PREFIX = {'requirement': 'REQ', 'update': 'UPT', 'bug': 'BUG'}
-        _NAME_PREFIX = {'requirement': '', 'update': '[Update] ', 'bug': '[Bug] '}
+        # Prefix tables are shared with _auto_admin_accept so the human and
+        # automatic paths cannot drift.
+        _REF_PREFIX = REF_PREFIX_FOR_DOC_TYPE
+        _NAME_PREFIX = NAME_PREFIX_FOR_DOC_TYPE
         doc_type = params.get('doc_type') or 'requirement'
         prefix = _REF_PREFIX.get(doc_type, 'REQ')
         n = request.env['kra.kpi']._next_ref_for_prefix(prefix)
@@ -1799,7 +1907,10 @@ class KraKpiAPI(http.Controller):
             pass
 
         if discard:
-            rec.write({'active': False})
+            # Clear the clock as well as archiving. The cron already filters on
+            # active=True, but leaving a live deadline on a discarded row is a
+            # trap for anyone who un-archives it later.
+            rec.write({'active': False, 'admin_accept_deadline_at': False})
             return {'status': True, 'discarded': True, 'message': 'Task discarded.'}
         # A sent-back task shouldn't keep clocking time — if the dev is actively
         # working it, pause it: stop the clock (preserve the accrued total) and
@@ -1818,6 +1929,11 @@ class KraKpiAPI(http.Controller):
             'self_review_note': note or 'Please revise',
             'self_review_by': user.name,
             'self_needs_resume_reason': True,
+            # STOP the auto-accept clock. Silence is what auto-accept answers;
+            # this admin did not stay silent, they said no. Without this the
+            # cron would accept the very task they just sent back, minutes
+            # later. Re-armed when the developer answers on Resume.
+            'admin_accept_deadline_at': False,
         })
         return {'status': True, 'discarded': False,
                 'message': 'Task sent back to the developer.'}
@@ -1884,7 +2000,12 @@ class KraKpiAPI(http.Controller):
             [('phone_code', '!=', 0), ('code', 'in', list(COUNTRY_MOBILE_LENGTH.keys()))], order='name')
         return {'status': True,
                 'away_after_minutes': c.away_after_minutes,
-                # Client-workflow timers (both editable in the app's Configuration).
+                # Workflow gate timers — all editable in the app's Configuration,
+                # nothing about these windows is hard-coded.  admin_accept can be
+                # 0 (auto-accept off), so `or 5` would silently re-enable it.
+                'admin_accept_minutes': (c.admin_accept_minutes
+                                         if c.admin_accept_minutes not in (None, False, '')
+                                         else 5),
                 'client_approval_minutes': c.client_approval_minutes or 5,
                 'queue_nudge_minutes': c.queue_nudge_minutes or 30,
                 'urgent_nudge_minutes': c.urgent_nudge_minutes or 5,
@@ -1932,12 +2053,32 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kpi_config/set_client_approval', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_set_client_approval(self, **params):
-        """Minutes a client has to approve the assigned developer before auto-approve."""
+        """Minutes a client has to approve the assigned developer before the task
+        is auto-RELEASED for work.  Release is not approval: the client can still
+        object, and billing still needs their sign-off at completion."""
         user = request.env.user
         if not self._is_kra_admin(user):
             return {'status': False, 'message': 'Not authorized'}
         request.env.company.sudo().client_approval_minutes = max(1, int(params.get('minutes') or 5))
         return {'status': True}
+
+    @http.route('/kpi_config/set_admin_accept', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_admin_accept(self, **params):
+        """Minutes a new task waits for an admin to Accept it before auto-accepting.
+
+        Clamped at 0, not 1 (unlike the client window): 0 is the documented kill
+        switch that restores human-only acceptance, and it needs to be reachable
+        from the Configuration screen without a code change.
+        """
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            minutes = max(0, int(params.get('minutes') or 0))
+        except (TypeError, ValueError):
+            minutes = 5
+        request.env.company.sudo().admin_accept_minutes = minutes
+        return {'status': True, 'minutes': minutes}
 
     @http.route('/kpi_config/set_standard_hours', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_set_standard_hours(self, **params):

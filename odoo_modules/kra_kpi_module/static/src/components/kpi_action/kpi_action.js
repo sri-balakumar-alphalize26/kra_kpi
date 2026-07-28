@@ -1247,6 +1247,36 @@ export class KpiAction extends Component {
                                                             <span class="badge bg-info text-dark">Self-Created · Pending Review</span>
                                                         </div>
                                                     </t>
+                                                    <!-- Why Start is greyed out, and when it will un-grey.
+                                                         Without this the button is simply dead with no
+                                                         explanation, which is what made the old workflow
+                                                         feel broken rather than merely slow. -->
+                                                    <t t-if="task.can_start === false">
+                                                        <div class="mt-1">
+                                                            <span class="badge bg-warning text-dark">
+                                                                <i class="fa fa-hourglass-half me-1"/><t t-esc="gateLabel(task)"/>
+                                                            </span>
+                                                        </div>
+                                                    </t>
+                                                    <!-- Released on silence, NOT approved. Say so on the card:
+                                                         the developer may work, but the client never agreed and
+                                                         the task is not billable until they sign off. -->
+                                                    <t t-if="task.pre_approval_auto_released and !task.pre_approval_decision">
+                                                        <div class="mt-1">
+                                                            <span class="badge bg-secondary"
+                                                                  title="The client did not reply within the approval window, so work was released. This is not their approval — they can still object, and sign-off is still required before billing.">
+                                                                <i class="fa fa-unlock me-1"/>Released — no client reply
+                                                            </span>
+                                                        </div>
+                                                    </t>
+                                                    <t t-if="task.admin_accepted_auto">
+                                                        <div class="mt-1">
+                                                            <span class="badge bg-light text-dark border"
+                                                                  title="No admin actioned this within the accept window, so it was accepted automatically. You can still re-categorise or reject it.">
+                                                                <i class="fa fa-clock-o me-1"/>Auto-accepted
+                                                            </span>
+                                                        </div>
+                                                    </t>
                                                     <!-- Send-back conversation: YOUR note is green, the OTHER person's is red -->
                                                     <t t-if="task.is_self_created and !task.admin_accepted and task.self_review_note">
                                                         <div t-att-class="(state.isAdmin ? 'text-success' : 'text-danger') + ' small mt-1'" style="white-space: pre-wrap;">
@@ -1292,6 +1322,8 @@ export class KpiAction extends Component {
                                                         <t t-set="btns" t-value="getButtonsForState(task)"/>
                                                         <button class="btn btn-sm btn-primary"
                                                                 t-if="btns.start"
+                                                                t-att-disabled="btns.startDisabled"
+                                                                t-att-title="btns.startTitle"
                                                                 t-on-click="() => openStartModal(task)">Start</button>
                                                         <button class="btn btn-sm btn-warning"
                                                                 t-if="btns.pause"
@@ -3501,7 +3533,46 @@ export class KpiAction extends Component {
         if (state === "paused") {
             return { start: false, pause: false, resume: true, complete: true };
         }
-        return { start: true, pause: false, resume: false, complete: false };
+        // Everything else offers Start — but DISABLED when the server says the
+        // task isn't startable yet, with the server's own reason as the tooltip.
+        // can_start comes from kra.kpi._start_block via /kra_kpi/tasks/get, so
+        // this button can never again offer an action the server will refuse.
+        // (Older payloads have no can_start; treat that as "allowed" so the
+        // button behaves exactly as it did before rather than locking up.)
+        const blocked = task.can_start === false;
+        return {
+            start: true,
+            startDisabled: blocked,
+            startTitle: blocked
+                ? (task.start_block_message || "This task can't start yet.")
+                : "Start working on this task",
+            pause: false, resume: false, complete: false,
+        };
+    }
+
+    /** Short "waiting on X" line for a task the server won't start yet. */
+    gateLabel(task) {
+        if (task.can_start !== false) return "";
+        if (task.start_block_reason === "admin") {
+            return task.admin_accept_deadline_at
+                ? `Waiting on admin — accepts automatically ${this._fmtWhen(task.admin_accept_deadline_at)}`
+                : "Waiting for an admin to accept this task";
+        }
+        if (task.pre_approval_held) return "Client put approval on hold";
+        return task.pre_approval_release_at
+            ? `Waiting on client — releases ${this._fmtWhen(task.pre_approval_release_at)}`
+            : "Waiting for the client to approve";
+    }
+
+    /** "at 14:35" for a server UTC timestamp, rendered in the browser's zone. */
+    _fmtWhen(serverTs) {
+        if (!serverTs) return "";
+        // Server sends 'YYYY-MM-DD HH:MM:SS' in UTC; Safari/iOS won't parse that
+        // form, so build the Date explicitly rather than trusting the string.
+        const m = String(serverTs).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+        if (!m) return "";
+        const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+        return "at " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
     // =========================================================
@@ -3570,8 +3641,11 @@ export class KpiAction extends Component {
                       <textarea id="ntDesc" class="form-control" rows="3"></textarea>
                     </div>
                     <div class="alert alert-info small mb-0">
-                      This goes to your <b>Pending Review</b> lane — start working it right away;
-                      an admin accepts it into the main flow (your time carries over).
+                      This goes to your <b>Pending Review</b> lane. <b>Start stays locked</b>
+                      until an admin accepts it — which happens automatically if nobody acts
+                      within the accept window. Your client is then asked to approve you, and
+                      the task releases for work once they do (or automatically if they don't
+                      reply in time). The card shows what it is waiting on.
                     </div>
                   </div>
                   <div class="modal-footer">

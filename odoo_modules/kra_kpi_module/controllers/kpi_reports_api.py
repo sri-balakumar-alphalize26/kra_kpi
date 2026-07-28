@@ -1913,7 +1913,14 @@ class KpiReportsAPI(http.Controller):
             # gate, which is the first step of the workflow.
             msg = f'Published: {kpi.name}'
             if kpi.task_state in ('assigned', 'queue_waiting') and not kpi.admin_accepted:
-                msg += ' — waiting for admin acceptance before the client is asked.'
+                # Say WHEN, not just that it is waiting — acceptance now happens
+                # by itself, so "waiting for admin acceptance" alone would read
+                # as "go find an admin" when in fact nobody needs to do anything.
+                msg += ' — the client is asked once the task is accepted'
+                if kpi.admin_accept_deadline_at:
+                    msg += (' (automatically by %s if no admin acts)'
+                            % kpi.admin_accept_deadline_at.strftime('%H:%M'))
+                msg += '.'
             elif kpi.task_state in ('assigned', 'queue_waiting'):
                 try:
                     kpi.request_client_pre_approval()
@@ -4110,12 +4117,21 @@ class KpiReportsAPI(http.Controller):
         """Tasks awaiting THIS client's approval (app 'Approval needed' section)."""
         try:
             kpis = request.env['kra.kpi'].sudo().search([
-                ('task_state', 'in', ('pre_approval_pending', 'pre_approval_partial')),
                 ('active', '=', True),
                 # A developer is mandatory — approving "Unassigned" is meaningless.
                 # Also hides rows created before request_client_pre_approval()
                 # started skipping dev-less tasks, with no data migration.
                 ('user_id', '!=', False),
+                '|',
+                ('task_state', 'in', ('pre_approval_pending', 'pre_approval_partial')),
+                # AUTO-RELEASED but still undecided. Without this arm the card
+                # disappears the instant the window closes and the client has no
+                # way left to object — which would make "you can still object"
+                # a lie. The work is unfinished, so their answer still matters.
+                '&', '&',
+                ('pre_approval_auto_released', '=', True),
+                ('pre_approval_decision', '=', False),
+                ('task_state', 'not in', ('completed', 'awaiting_client')),
             ], order='pre_approval_deadline_at asc, id desc')
             out = []
             for k in kpis:
@@ -4145,18 +4161,35 @@ class KpiReportsAPI(http.Controller):
                     'task_state': k.task_state or '',
                     # Who the admin assigned — the thing being approved.
                     'developer': k.user_id.name if k.user_id else '',
-                    # Drives the app's "auto-approves in mm:ss" countdown.
-                    'deadline_at': (k.pre_approval_deadline_at.strftime('%Y-%m-%d %H:%M:%S')
-                                    if k.pre_approval_deadline_at else ''),
+                    # Drives the app's countdown. The RELEASE clock, not the
+                    # reminder clock: the reminder deadline is cleared once the
+                    # nudges run out, which would freeze the countdown at 0
+                    # while the task was in fact still waiting.
+                    'deadline_at': (k.pre_approval_release_at.strftime('%Y-%m-%d %H:%M:%S')
+                                    if k.pre_approval_release_at
+                                    else (k.pre_approval_deadline_at.strftime('%Y-%m-%d %H:%M:%S')
+                                          if k.pre_approval_deadline_at else '')),
                     'server_now': fields.Datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    # Whether this task will ACTUALLY auto-approve, decided here so
-                    # the app never has to re-derive the rule (and never promises an
-                    # auto-approve that can't happen). Mirrors the exact cron domain
-                    # in _cron_pre_approval_timeout: client-submitted + still pending
-                    # + a live deadline. A held task has no deadline → False.
-                    'auto_approves': bool(k.client_submitted
-                                          and k.task_state == 'pre_approval_pending'
-                                          and k.pre_approval_deadline_at),
+                    # Whether this task will ACTUALLY auto-release, decided here so
+                    # the app never has to re-derive the rule (and never promises
+                    # something that can't happen). Mirrors the cron domain in
+                    # _sweep_pre_approval_release exactly. A held task has no
+                    # release clock → False.
+                    'auto_releases': bool(k.task_state == 'pre_approval_pending'
+                                          and not k.pre_approval_held
+                                          and k.pre_approval_release_at),
+                    # Legacy key, kept so an older mobile build keeps rendering
+                    # its countdown. Same value; the name is the lie we are
+                    # retiring — releasing is not approving.
+                    'auto_approves': bool(k.task_state == 'pre_approval_pending'
+                                          and not k.pre_approval_held
+                                          and k.pre_approval_release_at),
+                    # Already released: the window closed, work may have started,
+                    # and this client still hasn't answered. The app shows these
+                    # as "started without your reply — you can still object".
+                    'auto_released': bool(k.pre_approval_auto_released),
+                    'released_at': (k.pre_approval_auto_released_at.strftime('%Y-%m-%d %H:%M:%S')
+                                    if k.pre_approval_auto_released_at else ''),
                     'held': bool(k.pre_approval_held),
                 })
             return {'status': True, 'kpis': out}
@@ -4184,8 +4217,8 @@ class KpiReportsAPI(http.Controller):
                 return {'status': False, 'message': 'Not authorized for this task.'}
             feedback = (params.get('feedback') or '').strip()
 
-            # Hold / Resume are NOT decisions — they only start/stop the
-            # auto-approve clock, so they bypass record_client_pre_decision
+            # Hold / Resume are NOT decisions — they only stop/start the
+            # auto-release clock, so they bypass record_client_pre_decision
             # (whose 'hold' action would mark the token used and lock the client
             # out of ever approving). See _hold_pre_approval.
             if action in ('hold', 'resume'):
@@ -4193,16 +4226,19 @@ class KpiReportsAPI(http.Controller):
                     kpi._hold_pre_approval()
                 else:
                     kpi._resume_pre_approval()
+                auto = bool(kpi.task_state == 'pre_approval_pending'
+                            and not kpi.pre_approval_held
+                            and kpi.pre_approval_release_at)
                 return {'status': True,
                         'state': kpi.task_state,
                         'held': bool(kpi.pre_approval_held),
-                        'auto_approves': bool(kpi.client_submitted
-                                              and kpi.task_state == 'pre_approval_pending'
-                                              and kpi.pre_approval_deadline_at),
-                        'deadline_at': (kpi.pre_approval_deadline_at.strftime('%Y-%m-%d %H:%M:%S')
-                                        if kpi.pre_approval_deadline_at else ''),
+                        'auto_releases': auto,
+                        'auto_approves': auto,     # legacy key — see the list route
+                        'deadline_at': (kpi.pre_approval_release_at.strftime('%Y-%m-%d %H:%M:%S')
+                                        if kpi.pre_approval_release_at else ''),
                         'server_now': fields.Datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'message': 'Held.' if action == 'hold' else 'Resumed.'}
+                        'message': ('Held — the team will not start.' if action == 'hold'
+                                    else 'Resumed.')}
 
             # A reject must say why — the admin needs it to act. Enforced here
             # and not only in the UI: never trust the client.
