@@ -36,17 +36,23 @@ class ResCompany(models.Model):
 
     away_after_minutes = fields.Integer(
         string='Away After (minutes)',
-        default=5,
+        default=0,
         help="Minutes with no heartbeat (tab closed / machine asleep) before a "
-             "running task auto-pauses as 'Away'. Read by the browser and the server.")
+             "running task auto-pauses as 'Away'. 0 = OFF, which is the default: "
+             "a sleeping laptop is not evidence that someone stopped working, and "
+             "auto-pausing on it caused more trouble than it prevented. Set a "
+             "value AND re-activate the 'KPI: Auto-Away idle developers' cron to "
+             "turn strict idle pausing back on.")
 
     workday_idle_close_minutes = fields.Integer(
         string='Auto End Workday After (minutes)',
-        default=15,
+        default=0,
         help="Minutes with no heartbeat (board tab gone) before a workday the "
              "developer forgot to End is auto-closed with the full daily summary. "
-             "A dev who keeps the board open (even idle / on a break) still "
-             "heartbeats and is never closed. 0 disables. See _cron_close_idle_workdays.")
+             "0 = OFF, which is the default: the developer ends their own day, and "
+             "the midnight cron is the only safety net. Set a value AND re-activate "
+             "the 'Auto End forgotten workdays' cron to turn it back on. "
+             "See _cron_close_idle_workdays.")
 
     # ---- Attendance (Admin Live Tracking) -------------------------------- #
     attendance_cutoff_hour = fields.Float(

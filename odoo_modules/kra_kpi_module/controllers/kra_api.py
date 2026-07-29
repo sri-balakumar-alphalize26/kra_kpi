@@ -485,28 +485,11 @@ class KraKpiAPI(http.Controller):
         and tells the board if a task was auto-paused while the developer was gone."""
         return request.env['kpi.work.session'].sudo().touch_heartbeat(user=request.env.user)
 
-    @http.route('/kpi_action/leave', type='json', auth='user', methods=['POST'], csrf=False)
-    def kpi_action_leave(self, **params):
-        """Awaited by the board on a confirmed Back navigation: immediately put
-        the developer into 'away' (pause running task + un-pair + notify) BEFORE
-        the page navigates, so the pause is guaranteed to commit. JSON so the
-        board can `await rpc('/kpi_action/leave')`."""
-        try:
-            request.env['kpi.work.session'].sudo()._mark_leaving(request.env.user)
-        except Exception as exc:
-            _logger.warning("kpi_action/leave failed: %s", exc)
-        return {'status': True}
-
-    @http.route('/kpi_action/leave_beacon', type='http', auth='user', methods=['POST'], csrf=False)
-    def kpi_action_leave_beacon(self, **params):
-        """Fired via navigator.sendBeacon on a real tab close/reload (beforeunload),
-        where an awaited rpc is impossible. Same effect as /kpi_action/leave.
-        type='http' so sendBeacon (same-origin, sends the session cookie) works."""
-        try:
-            request.env['kpi.work.session'].sudo()._mark_leaving(request.env.user)
-        except Exception as exc:
-            _logger.warning("kpi_action/leave_beacon failed: %s", exc)
-        return request.make_response('ok', headers=[('Content-Type', 'text/plain')])
+    # /kpi_action/leave and /kpi_action/leave_beacon are gone. They stamped
+    # 'leaving' so the device would be un-paired and the running task paused a
+    # few seconds after the board tab closed. Closing a tab is not evidence that
+    # someone stopped working, and with auto-pause off there is nothing for them
+    # to trigger. The mobile app never called either one.
 
     @http.route('/kpi_action/live_status', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_action_live_status(self, **params):
@@ -1665,71 +1648,40 @@ class KraKpiAPI(http.Controller):
         return {'status': True}
 
     # ================================================================== #
-    # Device pairing (kpi.pair) — app generates a PIN, web enters it       #
+    # Device pairing — RETIRED. These three routes are COMPATIBILITY       #
+    # SHIMS for the mobile app, not live features.                         #
+    # ------------------------------------------------------------------ #
+    # The PIN gate is gone: a developer opens the board and presses Start
+    # Workday. But installed copies of the Expo app still poll these routes and
+    # will sit on their PIN screen forever if they 404 or report "not paired".
+    # So they stay, and they answer "there is nothing to pair".
+    #
+    # DO NOT delete them as dead code — nothing in this repo calls them, and
+    # that is exactly what makes them look deletable. They are the contract with
+    # an app build that is already on people's phones. They can go once every
+    # installed app has been updated past the PIN screen.
+    #
+    # `day_done` is still answered truthfully so the app keeps showing
+    # "Workday ended for today" correctly — that rule did not go away.
     # ================================================================== #
     @http.route('/kpi_pair/generate', type='json', auth='user', methods=['POST'], csrf=False)
     def pair_generate(self, **params):
-        """App calls this to get a fresh, short-lived pairing PIN."""
-        res = request.env['kpi.pair'].sudo().generate_for(request.env.user)
-        _logger.info("pair/generate user=%s(%s) mode=%s done=%s",
-                     request.env.user.login, request.env.user.id,
-                     res.get('mode'), res.get('done'))
-        # done=True → developer already ended today (one start + one end per day):
-        # no PIN issued; the app shows the "ended for today" state.
-        return {'status': True, 'expires_at': res.get('expires_at'),
-                'pin': res.get('pin'), 'mode': res.get('mode'),
-                'done': bool(res.get('done'))}
+        """Shim: no PIN is issued any more. See the block comment above."""
+        done = request.env['kpi.work.session'].sudo()._day_done(request.env.user)
+        return {'status': True, 'expires_at': False, 'pin': False,
+                'mode': 'start', 'done': bool(done)}
 
     @http.route('/kpi_pair/status', type='json', auth='user', methods=['POST'], csrf=False)
     def pair_status(self, **params):
-        """App polls this to learn when the web has entered the PIN.
-
-        `bypass_gate` = admins (system / owner / coordinator) open the board
-        directly without pairing a device or entering a PIN. Clients and plain
-        developers are NOT in this set, so they still go through the PIN gate."""
-        user = request.env.user
-        res = request.env['kpi.pair'].sudo().status_for(user)
-        bypass = (user.has_group('base.group_system')
-                  or user.has_group('kra_kpi_module.group_kra_owner')
-                  or user.has_group('kra_kpi_module.group_kra_admin'))
-        return {'status': True, 'state': res.get('state'),
-                'paired': res.get('paired'), 'mode': res.get('mode'),
-                'day_done': bool(res.get('day_done')),
-                'bypass_gate': bypass}
+        """Shim: always 'paired', so the app never shows the PIN screen."""
+        done = request.env['kpi.work.session'].sudo()._day_done(request.env.user)
+        return {'status': True, 'state': 'paired', 'paired': True,
+                'mode': 'start', 'day_done': bool(done), 'bypass_gate': True}
 
     @http.route('/kpi_pair/verify', type='json', auth='user', methods=['POST'], csrf=False)
     def pair_verify(self, **params):
-        """Web gate calls this. On a valid PIN → pair + open the workday.
-
-        Blocks pairing from a MOBILE browser: work-timing must happen on a
-        computer (where 'tab open' is a fair proxy). A phone User-Agent is
-        rejected WITHOUT consuming the PIN, so a later attempt from the
-        computer with the same PIN still works. (UA is spoofable by a technical
-        user forcing desktop mode — this is a deterrent, not a hard lock.)"""
-        try:
-            ua = request.httprequest.user_agent.string if request.httprequest.user_agent else ''
-        except Exception:
-            ua = ''
-        if self._is_mobile_ua(ua):
-            _logger.info("pair/verify REJECTED (mobile UA) user=%s(%s)",
-                         request.env.user.login, request.env.user.id)
-            return {'status': True, 'ok': False, 'reason': 'mobile'}
-        res = request.env['kpi.pair'].sudo().verify(request.env.user, params.get('pin'))
-        _logger.info("pair/verify user=%s(%s) ok=%s",
-                     request.env.user.login, request.env.user.id, res.get('ok'))
-        return {'status': True, 'ok': bool(res.get('ok'))}
-
-    def _is_mobile_ua(self, ua):
-        """True if the User-Agent looks like a phone (NOT a desktop/tablet).
-        iPad/tablets are treated as desktop (they can do real work)."""
-        if not ua:
-            return False
-        u = ua.lower()
-        if 'ipad' in u or 'tablet' in u:
-            return False
-        return bool(re.search(
-            r'android.*mobile|iphone|ipod|windows phone|blackberry|opera mini|iemobile|mobile safari',
-            u))
+        """Shim: accepts anything. Nothing is paired and no PIN is consumed."""
+        return {'status': True, 'ok': True}
 
     # ================================================================== #
     # Developer self-created tasks — "Pending Review" lane                #

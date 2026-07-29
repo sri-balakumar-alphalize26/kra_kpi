@@ -1430,7 +1430,6 @@ export class KpiAction extends Component {
             allTasks: [],  // 🆕 NEW: Store all tasks for filtering
             assignees: [], // 🆕 NEW: Store unique assignees for filter dropdown
             isAdmin: false,
-            gateBypass: false,    // admins (system/owner/coordinator) skip the PIN gate — never bounce them
             selfPendingCount: 0,  // 🆕 Self-created tasks awaiting admin Accept
             currentUserId: null,  // 🆕 NEW: Store current user ID from API
             showMyTasksOnly: false,  // 🆕 NEW: Toggle for My Tasks filter
@@ -1612,11 +1611,6 @@ export class KpiAction extends Component {
         this.kpiKanbanRow = useRef('kpiKanbanRow');
 
         onMounted(() => {
-            // Guard: if this device is not paired (e.g. auto-away un-paired it and
-            // the user hit browser-Back to a cached board), bounce to the PIN gate
-            // immediately so an unpaired board is never usable.
-            this._bounceToGateIfUnpaired();
-
             // Read the workday session state (DOES NOT create one).  This
             // drives whether we render the green Start Workday button or the
             // red End Workday button in the header.
@@ -1678,15 +1672,11 @@ export class KpiAction extends Component {
                 if (this.state.view === 'list') { this.loadLiveStatus(); }
             }, 30000);
             // Warn before CLOSING or RELOADING the tab (browser's native "Leave
-            // site?"). We flag `_unloading` so onWillUnmount can tell a full page
-            // unload (reload/close) apart from an in-app navigation (Back): a
-            // reload must NOT pause/un-pair (you stay working after refresh),
-            // while Back should pause. On real close the away-cron pauses the
-            // task later via the stale heartbeat.
-            this._unloading = false;
+            // site?") while a task is running, so nobody walks away from a live
+            // timer by accident. It is only a warning now — closing the tab no
+            // longer pauses anything or un-pairs anything, so coming back just
+            // shows the board again exactly as it was.
             this._beforeUnloadHandler = (e) => {
-                this._unloading = true;
-                setTimeout(() => { this._unloading = false; }, 3000); // cancelled reload → clear
                 if (this.getActiveTask() || this.state.workdayOpen) {
                     e.preventDefault();
                     e.returnValue = '';
@@ -1694,17 +1684,6 @@ export class KpiAction extends Component {
                 }
             };
             window.addEventListener('beforeunload', this._beforeUnloadHandler);
-
-            // On tab CLOSE / REFRESH, stamp 'leaving' so the app returns to the PIN
-            // screen a few seconds later. A refresh reloads and re-heartbeats within
-            // the grace, which CANCELS it (you stay paired). pagehide is the reliable
-            // "page is going away" event for sendBeacon.
-            this._pageHideHandler = () => {
-                if (this.getActiveTask() || this.state.workdayOpen) {
-                    this._sendLeaveBeacon();
-                }
-            };
-            window.addEventListener('pagehide', this._pageHideHandler);
         });
 
         // 🆕 NEW: Cleanup intervals when component is destroyed
@@ -1727,15 +1706,9 @@ export class KpiAction extends Component {
             if (this._beforeUnloadHandler) {
                 window.removeEventListener('beforeunload', this._beforeUnloadHandler);
             }
-            if (this._pageHideHandler) {
-                window.removeEventListener('pagehide', this._pageHideHandler);
-            }
-            // In-app navigation away (Back / menu) also stamps 'leaving' (pagehide
-            // covers close/refresh). The beacon only STAMPS it — the app un-pairs a
-            // few seconds later UNLESS a reload (refresh) re-heartbeats and clears it.
-            if (this.getActiveTask() || this.state.workdayOpen) {
-                this._sendLeaveBeacon();
-            }
+            // Navigating away used to fire a 'leaving' beacon that paused the task
+            // and un-paired the device. Both are gone: leaving the board is not a
+            // statement about whether you are working.
             if (this._scrollResizeHandler) {
                 window.removeEventListener('resize', this._scrollResizeHandler);
             }
@@ -2743,13 +2716,13 @@ export class KpiAction extends Component {
             try {
                 const res = await rpc("/kpi_workday/end", { note });
                 if (res && res.status) {
-                    // Workday ended → close the modal and fall back to the PIN gate
-                    // (stay logged into Odoo). The server also un-paired the device.
-                    // One start + one end per day: the gate and the phone app now
-                    // both show "Workday ended for today" — a new one waits until
-                    // tomorrow (an AUTO-close would instead allow a restart).
+                    // Workday ended → close the modal and refresh in place. There
+                    // is no PIN gate to fall back to any more; the header simply
+                    // flips back to Start Workday, which the server refuses for
+                    // the rest of the day (one start + one end per day).
                     this.closeModal();
-                    this._goToGate();
+                    this.state.workdayOpen = false;
+                    await this.refresh();
                 } else {
                     alert("End-workday failed: " + (res && res.message || 'unknown error'));
                     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-sign-out me-1"></i> End Workday &amp; Send Summary'; }
@@ -4047,50 +4020,19 @@ export class KpiAction extends Component {
         }
     }
 
+    // Keeps the workday session marked alive. It no longer decides whether the
+    // board may stay on screen: the PIN gate is gone, so there is nothing to be
+    // bounced back to, and a heartbeat can no longer take the board away from a
+    // developer who is sitting right in front of it.
     async sendHeartbeat() {
         try {
             const res = await rpc('/kpi_action/heartbeat', {});
-            // Un-paired (auto-away) → fall back to the PIN gate. Do this first so
-            // we never keep showing a board the device is no longer paired to.
-            // Admins bypass the gate entirely, so never bounce them.
-            if (res && res.paired === false && !this.state.gateBypass) {
-                this._goToGate();
-                return;
-            }
             if (res && res.was_away && res.awayed_task_id) {
                 this._showAwayReturnNudge(res.awayed_task_id, res.awayed_task_name || 'your task');
                 await this.refresh();
                 await this.loadLiveStatus();
             }
         } catch (e) { /* offline / non-fatal */ }
-    }
-
-    // Fire-and-forget "I'm leaving the board" (in-app Back / menu navigation) →
-    // server pauses the task (away) + un-pairs + app push. sendBeacon is
-    // delivered even as the component tears down.
-    _sendLeaveBeacon() {
-        try {
-            if (navigator && navigator.sendBeacon) {
-                navigator.sendBeacon('/kpi_action/leave_beacon', new Blob([], { type: 'text/plain' }));
-            }
-        } catch (e) { /* non-fatal */ }
-    }
-
-    // Redirect to the PIN gate, clearing history so browser-Back can't return.
-    _goToGate() {
-        try {
-            this.actionService.doAction("kra_kpi_module.action_kpi_action_gate", { clearBreadcrumbs: true });
-        } catch (e) { /* non-fatal */ }
-    }
-
-    // On mount / back-navigation: verify the device is still paired; if not,
-    // bounce to the gate. Prevents viewing a cached board after an un-pair.
-    async _bounceToGateIfUnpaired() {
-        try {
-            const res = await rpc("/kpi_pair/status", {});
-            if (res && res.bypass_gate) this.state.gateBypass = true;   // admin: never bounce to the gate
-            if (res && res.paired === false && !this.state.gateBypass) this._goToGate();
-        } catch (e) { /* if the check fails, leave the board as-is */ }
     }
 
     _showAwayReturnNudge(taskId, taskName) {

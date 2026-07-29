@@ -1,15 +1,23 @@
-"""kpi.pair — device-pairing PIN linking the mobile app (key) to the web board.
+"""kpi.pair — RETIRED. Device-pairing PIN, no longer part of any flow.
 
-Flow: the mobile app generates a fresh, short-lived PIN (per session). The
-developer opens the KPI Action Board on their computer, which shows a PIN gate.
-Entering the app's PIN pairs the two devices AND opens the workday — from that
-moment the web's heartbeat detects "working". The app polls status_for() to
-learn the pairing succeeded.
+It used to work like this: the mobile app generated a short-lived PIN, the
+developer typed it into a gate in front of the KPI Action Board on their
+computer, and that both paired the devices and opened the workday. The PIN was
+the proof that the developer had their phone with them.
 
-Security: PINs are short, single-use, expire fast, and are scoped to the
-logged-in user (both the app and the web are already authenticated as the same
-Odoo user via the session cookie — the PIN just binds *their* two devices).
-Never log the PIN value.
+It is gone because the cost outweighed the proof. Auto-away un-paired the device
+after five minutes of a stale heartbeat, so a closed laptop lid meant fetching
+your phone and re-entering a code to get your own board back — several times a
+day. The workday now starts from the board's own Start Workday button, which
+already enforced one start + one end per day on its own.
+
+The model and its table are kept ON PURPOSE:
+  * security/ir.model.access.csv references model_kpi_pair,
+  * historical rows are harmless,
+  * dropping a model needs a migration and buys nothing.
+Nothing writes to it any more. The routes in controllers/kra_api.py that the
+mobile app still calls are shims that answer "nothing to pair" — see the comment
+there before deleting anything.
 """
 
 import logging
@@ -168,67 +176,20 @@ class KpiPair(models.Model):
         rec = self.sudo().search([('user_id', '=', user.id)], limit=1)
         return bool(rec and rec.state == 'paired')
 
-    # Seconds after the board signals it's leaving (close / Back) before we
-    # un-pair. Comfortably above a page-refresh reload (which re-heartbeats and
-    # clears the 'leaving' stamp), so a refresh never falsely un-pairs.
-    _LEAVE_GRACE_SECONDS = 8
-
-    @api.model
-    def _left_and_gone(self, user):
-        """True if the board signalled 'leaving' (close/Back) and hasn't come back
-        (a heartbeat would have cleared the stamp) within the grace — i.e. the tab
-        is really gone, not a quick refresh. This is an explicit signal, NOT a
-        heartbeat-timeout, so it can't misfire on a live board."""
-        sess = self.env['kpi.work.session'].sudo().search([
-            ('user_id', '=', user.id),
-            ('session_date', '=', fields.Date.context_today(self)),
-            ('state', '=', 'open'),
-        ], limit=1)
-        if not sess or not sess.leaving_at:
-            return False
-        return (fields.Datetime.now() - sess.leaving_at).total_seconds() >= self._LEAVE_GRACE_SECONDS
-
     @api.model
     def status_for(self, user):
-        """App polls this. Returns {'state', 'paired', 'mode'}.
+        """RETIRED — reports 'paired' unconditionally.
 
-        A record is only genuinely 'paired' while TODAY's workday session is OPEN.
-        If the session was closed (End Workday / midnight auto-close) or a cross-day
-        stale pair was left behind WITHOUT un-pairing, the record is expired here so
-        the app (and its read-only gate) falls back to the PIN screen — otherwise a
-        stuck 'paired' row makes a developer look like their workday is running when
-        it isn't. If the board tab was left (a 'leaving' beacon not cancelled by a
-        refresh's heartbeat), un-pair + pause the running task instead.
+        Pairing is gone, so there is no state left to report. The method is kept
+        only because the model is kept; the live answer the app gets now comes
+        from the /kpi_pair/status shim in controllers/kra_api.py.
+
+        What used to live here, and why it is gone: a branch that expired a stale
+        pair when no workday was open, and another that called
+        kpi.work.session._away_now() when the board tab had been closed for more
+        than a grace period — pausing the running task and un-pairing the device.
+        That second branch is what sent a developer back to the PIN screen for
+        closing a tab, and _away_now no longer exists.
         """
-        self._sweep_expired(user)
-        rec = self.sudo().search([('user_id', '=', user.id)], limit=1)  # _order = newest first
-        if rec and rec.state == 'paired':
-            open_sess = self.env['kpi.work.session'].sudo().search([
-                ('user_id', '=', user.id),
-                ('session_date', '=', fields.Date.context_today(self)),
-                ('state', '=', 'open'),
-            ], limit=1)
-            if not open_sess:
-                # Paired but no open workday today → not actually working (stale pair
-                # from a closed / midnight-auto-closed session, or a cross-day leak).
-                # Expire it so the app returns to the read-only "Start Workday" gate.
-                _logger.info("pair/status: stale 'paired' with no open session -> un-pair user=%s(%s) rec=%s",
-                             user.login, user.id, rec.id)
-                self._unpair(user, mode='start')
-                rec = self.sudo().search([('user_id', '=', user.id)], limit=1)
-            elif self._left_and_gone(user):
-                try:
-                    self.env['kpi.work.session'].sudo()._away_now(user, source='leave')
-                except Exception:
-                    self._unpair(user, mode='resume')
-                rec = self.sudo().search([('user_id', '=', user.id)], limit=1)
-        state = rec.state if rec else 'none'
-        mode = rec.mode if rec else 'start'
-        # One start + one end per day: tell the app when today is already ended
-        # by the developer, so it shows "Workday ended for today" instead of
-        # routing to the PIN screen. (Auto-closed days report day_done=False.)
-        day_done = self.env['kpi.work.session'].sudo()._day_done(user)
-        _logger.info("pair/status user=%s(%s) -> state=%s paired=%s mode=%s day_done=%s",
-                     user.login, user.id, state, state == 'paired', mode, day_done)
-        return {'state': state, 'paired': state == 'paired', 'mode': mode,
-                'day_done': day_done}
+        return {'state': 'paired', 'paired': True, 'mode': 'start',
+                'day_done': self.env['kpi.work.session'].sudo()._day_done(user)}

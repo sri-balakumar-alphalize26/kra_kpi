@@ -29,12 +29,14 @@
               groups="kra_kpi_module.group_kra_manager,base.group_system"/>
     
     <!-- KPI Actions: Developers + admins. Clients explicitly excluded.
-         Points at the PIN gate; once the device is paired the gate forwards
-         straight to the board (action_kpi_action_screen). -->
+         Opens the board directly. This used to point at a PIN gate that made the
+         developer generate a code on their phone before they could see the
+         board; the workday now starts from the board's own Start Workday
+         button, which already enforces one start + one end per day. -->
     <menuitem id="menu_kpi_action_screen"
               parent="menu_kra_root"
               name="KPI Actions"
-              action="kra_kpi_module.action_kpi_action_gate"
+              action="kra_kpi_module.action_kpi_action_screen"
               sequence="30"
               groups="kra_kpi_module.group_kra_developer"/>
 

@@ -207,16 +207,16 @@ class KpiWorkSession(models.Model):
     )
     note = fields.Text(string='End-of-day note')
 
-    # 🆕 Part C: auto-away. The board POSTs a heartbeat ~every 60s; the auto-away
-    # cron pauses the running task when this goes stale. awayed_task_id lets the
-    # board offer a one-click Resume when the developer comes back.
+    # The board POSTs a heartbeat every 15s. It is now purely a liveness stamp
+    # for reporting — the admin Live Tracking screen shows a developer as "at the
+    # desk" while it is fresh. It no longer pauses tasks or ends workdays.
     last_heartbeat = fields.Datetime(string='Last Heartbeat', index=True)
+    # RETIRED, kept only so the column survives without a migration. Nothing
+    # writes it. It used to be stamped when the board tab closed, which un-paired
+    # the device and paused the running task a few seconds later.
     leaving_at = fields.Datetime(
-        string='Board Leaving At', readonly=True,
-        help="Stamped when the board tab is closed/left (a beacon). If the board "
-             "doesn't re-appear (heartbeat) within a few seconds, the device is "
-             "un-paired so the app returns to the PIN screen. A refresh re-heartbeats "
-             "and clears this → stays paired.")
+        string='Board Leaving At (unused)', readonly=True,
+        help="Unused. Left in place so removing it does not require a migration.")
     awayed_task_id = fields.Many2one(
         'kra.kpi', string='Auto-awayed Task', readonly=True, ondelete='set null',
         help='Set by the auto-away cron to the task it paused; cleared once the board '
@@ -507,9 +507,16 @@ class KpiWorkSession(models.Model):
     # ------------------------------------------------------------------ #
     @api.model
     def touch_heartbeat(self, user=None):
-        """Bump today's open session heartbeat. If the auto-away cron paused a task
-        while the developer was gone, report it once (and clear the flag) so the
-        board can offer a one-click Resume.
+        """Bump today's open session heartbeat.
+
+        The heartbeat is now only a liveness stamp for reporting (the admin Live
+        Tracking screen reads its freshness). It no longer decides anything: with
+        auto-pause off nothing pauses a task for a stale heartbeat, and with the
+        PIN gone there is no pairing state to report back.
+
+        `was_away` is still answered because sessions paused by the old auto-away
+        cron may still carry awayed_task_id, and the board's one-click Resume
+        nudge should keep working for them.
 
         Does NOT open a session — a heartbeat must never auto-start a workday
         (that only happens on the explicit Start Workday button)."""
@@ -527,29 +534,10 @@ class KpiWorkSession(models.Model):
         vals = {'last_heartbeat': fields.Datetime.now()}
         if was_away:
             vals['awayed_task_id'] = False
-        if sess.leaving_at:
-            vals['leaving_at'] = False   # board is present → cancel any pending leave
         sess.sudo().write(vals)
-        # Tell the web board whether the device is still paired — if auto-away
-        # un-paired it, the board falls back to the PIN gate.
-        paired = self.env['kpi.pair'].sudo().is_paired(user)
-        return {'status': True, 'was_away': was_away, 'paired': paired,
+        # `paired` is reported as True for any older client still checking it.
+        return {'status': True, 'was_away': was_away, 'paired': True,
                 'awayed_task_id': awayed_id, 'awayed_task_name': awayed_name}
-
-    @api.model
-    def _mark_leaving(self, user):
-        """The board tab is leaving (close / Back / nav away). Stamp `leaving_at`
-        so kpi.pair un-pairs the device in a few seconds → the app returns to the
-        PIN screen. A page REFRESH reloads and heartbeats within that window,
-        clearing the stamp so it stays paired. Never opens a session."""
-        sess = self.sudo().search([
-            ('user_id', '=', user.id),
-            ('session_date', '=', fields.Date.context_today(self)),
-            ('state', '=', 'open'),
-        ], limit=1)
-        if sess and not sess.leaving_at:
-            sess.sudo().write({'leaving_at': fields.Datetime.now()})
-        return {'status': True}
 
     @api.model
     def live_status(self, user=None):
@@ -730,18 +718,26 @@ class KpiWorkSession(models.Model):
     @api.model
     def _cron_auto_away(self):
         """Pause the running task of any developer whose board heartbeat has gone
-        stale (tab closed / idle) beyond company.away_after_minutes. The pause uses
-        reason_code='away' → NON-productive time recorded in kpi.break.log, never
-        kpi.time.log. Records the paused task on the session so the board can Resume.
+        stale, past company.away_after_minutes.
 
-        Developers on a declared Break/Lunch are skipped — the guard lives in
-        _away_now so the leave-beacon path is covered by the same rule."""
+        DISABLED BY DEFAULT — away_after_minutes ships as 0, and the cron record
+        itself is inactive. A sleeping laptop is not evidence that someone stopped
+        working, and pausing on it (plus the un-pairing that used to follow) was
+        the single biggest source of daily friction: five minutes with the lid
+        shut cost you your board.
+
+        Left in place, not deleted, so a company that WANTS strict idle pausing
+        can set away_after_minutes and re-activate the cron. 0 now genuinely means
+        off — it used to be swallowed by `max(1, x or 5)`, so the setting could
+        never actually disable the thing it claimed to control."""
+        try:
+            minutes = int(self.env.company.away_after_minutes or 0)
+        except Exception:
+            minutes = 0
+        if minutes <= 0:
+            return 0
         now = fields.Datetime.now()
         today = fields.Date.context_today(self)
-        try:
-            minutes = max(1, int(self.env.company.away_after_minutes or 5))
-        except Exception:
-            minutes = 5
         cutoff = now - timedelta(minutes=minutes)
         stale = self.sudo().search([
             ('state', '=', 'open'),
@@ -749,82 +745,16 @@ class KpiWorkSession(models.Model):
             ('last_heartbeat', '!=', False),
             ('last_heartbeat', '<', cutoff),
         ])
+        paused = 0
         for s in stale:
             if s._on_declared_break():
                 continue   # on Break/Lunch: being away IS the declared state
             try:
-                self._away_now(s.user_id, source='cron')
+                s._pause_running_task(reason='Away (auto)')
+                paused += 1
             except Exception as exc:
                 _logger.warning("auto-away failed for session %s: %s", s.id, exc)
-
-    @api.model
-    def _away_now(self, user, source='cron'):
-        """Put `user` into 'away': pause their running task (non-productive),
-        record it on the open session for one-click Resume, un-pair the device
-        (→ PIN gate on web / PIN screen on app), and notify (→ app push).
-
-        Shared by the auto-away cron AND the on-demand /kpi_action/leave route
-        (fired when the developer closes/leaves the board). Idempotent — a no-op
-        when there is no in-progress task. Never raises.
-
-        A developer on a declared Break/Lunch is never put away by EITHER caller.
-        This is the single choke point for 'away', so guarding here covers the
-        stale-heartbeat cron and the leave beacon alike: a laptop that sleeps or a
-        tab that closes during lunch is the normal shape of lunch, and un-pairing
-        over it is what dumps the board back to the PIN gate when they return."""
-        today = fields.Date.context_today(self)
-        sess = self.sudo().search([
-            ('user_id', '=', user.id),
-            ('session_date', '=', today),
-            ('state', '=', 'open'),
-        ], limit=1)
-        if not sess:
-            return False
-        if sess._on_declared_break():
-            _logger.info("away(%s): skipped — %s is on a declared break/lunch", source, user.login)
-            return False
-        Log = self.env['kpi.time.log'].sudo()
-        # EVERY running task, not just the first — a multitasking developer who
-        # walks away leaves two timers behind, and pausing one of them let the
-        # other keep accruing productive time for someone who wasn't there.
-        running = [l.kpi_id for l in Log.search([('user_id', '=', user.id),
-                                                 ('is_active', '=', True)])
-                   if l.kpi_id and l.kpi_id.task_state == 'in_progress']
-        if not running:
-            # Still un-pair on an explicit leave so the device must re-pair, even
-            # if nothing was actively running.
-            if source != 'cron':
-                try:
-                    self.env['kpi.pair'].sudo()._unpair(user, mode='resume')
-                except Exception:
-                    pass
-            return False
-        for rec in running:
-            rec.with_user(user).pause_task(reason='Away (auto)', reason_code='away')
-        # awayed_task_id stays single: it drives the one-click "Resume" nudge the
-        # board shows on return, and offering one task to resume is the right
-        # prompt even when two were paused.
-        task = running[0]
-        sess.sudo().write({'awayed_task_id': task.id})
-        # Un-pair: the developer "went away" → web board + app fall back to the
-        # PIN gate; next pairing reads as 'resume' → "continue working".
-        try:
-            self.env['kpi.pair'].sudo()._unpair(user, mode='resume')
-        except Exception:
-            pass
-        _logger.info("away(%s): paused task %s for user %s", source, task.id, user.id)
-        # Notify the developer (WhatsApp + app push) that their task was paused.
-        try:
-            task.with_user(user)._notify(
-                'task_auto_away',
-                dev=user.name,
-                ref=task.external_ref or task.name,
-                name=task.name,
-                time=fields.Datetime.now().strftime('%H:%M'),
-            )
-        except Exception:
-            pass  # never let a notification failure break the flow
-        return True
+        return paused
 
     # ------------------------------------------------------------------ #
     # End-of-day                                                         #
@@ -888,10 +818,8 @@ class KpiWorkSession(models.Model):
             self._stop_idle_tracking('workday ended')
         except Exception as exc:
             _logger.warning("finalize cleanup: nontask/idle failed for session %s: %s", self.id, exc)
-        try:
-            self.env['kpi.pair'].sudo()._unpair(self.user_id, mode='start')
-        except Exception as exc:
-            _logger.warning("finalize cleanup: un-pair failed for session %s: %s", self.id, exc)
+        # There used to be an _unpair() here, to send the device back to the PIN
+        # screen at end of day. Pairing is retired — see models/kpi_pair.py.
 
     def _capture_snapshot(self, payload):
         """Draw + save today's summary image. Deliberately swallows everything: a

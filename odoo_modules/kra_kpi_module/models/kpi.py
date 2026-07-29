@@ -511,8 +511,10 @@ class KpiMaster(models.Model):
             rec.paused_reason = False
 
     def pause_task(self, reason='', reason_code=''):
-        # reason_code (e.g. 'away') is passed by _away_now and the /kra_kpi/task/pause
-        # route; accept it here (was missing → TypeError on tab-close away + manual pause).
+        # reason_code (e.g. 'break', 'lunch', 'away') comes from the
+        # /kra_kpi/task/pause route and from the workday-close paths in
+        # kpi_work_session (_pause_running_task); accept it here (was missing →
+        # TypeError when a pause carried a reason).
         for rec in self:
             if rec.timer_start_datetime:
                 self._add_elapsed(rec)
