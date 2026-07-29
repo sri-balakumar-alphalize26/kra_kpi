@@ -123,8 +123,26 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kra_kpi/get_users', type='json', auth='user')
     def get_users(self):
-        users = request.env['res.users'].sudo().search([])
-        return [{"id": u.id, "name": u.name} for u in users]
+        """People a task can actually be ASSIGNED to — developers and admins.
+
+        This was `search([])`: every res.users row in the database. That put
+        clients in the Reassign picker (they don't do the work — they request it
+        and approve it), along with portal accounts and OdooBot. Assigning a task
+        to a client would leave it with an assignee who cannot open the board.
+
+        Filtered by kpi_role, the module's own role vocabulary
+        (res.users._compute_kpi_role), so this agrees with what Login Management
+        shows and with the role the developer/client gates test elsewhere.
+        `share` excludes portal accounts and uid 1 is OdooBot — neither is a person
+        who works tasks.
+        """
+        users = request.env['res.users'].sudo().search([
+            ('active', '=', True),
+            ('share', '=', False),
+            ('id', '!=', 1),
+        ])
+        assignable = users.filtered(lambda u: u.kpi_role != 'client')
+        return [{"id": u.id, "name": u.name} for u in assignable.sorted('name')]
     
     @http.route('/kra_kpi/task/reassign', type='json', auth='user', methods=['POST'], csrf=False)
     def task_reassign(self, **params):
@@ -374,6 +392,66 @@ class KraKpiAPI(http.Controller):
         return {'status': True, 'message': 'Task started', 'id': rec.id,
                 'new_state': rec.task_state}
 
+    @http.route('/kra_kpi/task/pause_all', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_pause_all(self, **params):
+        """Pause every task the caller has running, with one shared reason.
+
+        Scoped to the CALLER's own running tasks by the model method — there is no
+        task id in the payload, so this cannot be aimed at anyone else's timers.
+        """
+        return request.env['kra.kpi'].sudo().with_user(request.env.user).pause_all_running(
+            reason=(params.get('reason') or '').strip(),
+            reason_code=params.get('reason_code') or 'break')
+
+    @http.route('/kra_kpi/task/revert_signoff', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_revert_signoff(self, **params):
+        """Admin pulls a task back out of Awaiting Client Sign-off.
+
+        Admin-only: this takes work off a client's desk and withdraws a QA
+        verdict. The rule itself lives in kra.kpi.revert_from_client_signoff.
+        """
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Only a coordinator/owner can revert a task.'}
+        if not params.get('kpi_id'):
+            return {'status': False, 'message': 'kpi_id missing'}
+        rec = request.env['kra.kpi'].sudo().browse(int(params['kpi_id']))
+        if not rec.exists():
+            return {'status': False, 'message': 'Task not found'}
+        try:
+            return rec.revert_from_client_signoff(reason=(params.get('reason') or '').strip())
+        except (ValidationError, UserError) as exc:
+            return {'status': False,
+                    'message': exc.args[0] if exc.args else 'Cannot revert this task.'}
+
+    @http.route('/kra_kpi/task/switch', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_switch(self, **params):
+        """Move to the next task in one action: stop what's running, start this.
+
+        Deliberately ONE endpoint rather than the board calling pause then start.
+        Two calls can half-apply — the pause commits, the start is refused by a
+        gate, and the developer is left stopped with nothing running. Here the
+        target is validated first and the whole thing is one transaction.
+
+        The rule lives in kra.kpi.switch_to_task; this just carries the result.
+        """
+        kpi_id = params.get('kpi_id')
+        if not kpi_id:
+            return {'status': False, 'message': 'kpi_id missing'}
+        rec = request.env['kra.kpi'].browse(int(kpi_id))
+        if not rec.exists():
+            return {'status': False, 'message': 'Task not found'}
+        try:
+            # from_kpi_id = the task being handed over. Sent by the per-card
+            # Switch button so that, under multitask, the OTHER running task
+            # carries on untouched. Absent → every running task pauses.
+            return rec.switch_to_task(
+                from_kpi_id=params.get('from_kpi_id') or None,
+                note=(params.get('note') or '').strip())
+        except (ValidationError, UserError) as exc:
+            # A gate raised on start/resume — report it, don't 500 the board.
+            return {'status': False,
+                    'message': exc.args[0] if exc.args else 'Cannot switch to this task.'}
+
     @http.route('/kra_kpi/task/pause', type='json', auth='user', methods=['POST'], csrf=False)
     def task_pause(self, **params):
         kpi_id = params.get('kpi_id')
@@ -461,13 +539,22 @@ class KraKpiAPI(http.Controller):
             return {'status': False,
                     'message': 'Please submit a Progress Summary before completing this task.'}
 
-        # A full "Complete" (not a Partial Finish) requires every checklist item.
+        # A full "Complete" needs AT LEAST ONE checklist item confirmed.
+        #
+        # It used to demand all five. Not every task has a user manual to upload
+        # or anything to deploy, so people either ticked boxes that weren't true
+        # or escaped through Partial Finish — and the stored flags are exactly
+        # what the manager reviews, so a checklist you must lie to is worse than
+        # none. Each box is still saved separately, so "deployed but not
+        # documented" stays visible to the approver.
+        #
+        # Kept as a server check and not left to the button: the board is not the
+        # only caller, and 'no boxes at all' is what Partial Finish is for.
         if not is_partial:
             required = ('verify_github', 'deployed_task', 'user_manual', 'documentation', 'tested_code')
-            missing = [k for k in required if not employee_checklist.get(k)]
-            if missing:
+            if not any(employee_checklist.get(k) for k in required):
                 return {'status': False,
-                        'message': 'Please confirm all checklist items before completing '
+                        'message': 'Confirm at least one checklist item before completing '
                                    '(or use "Partial Finish" to send a summary only).'}
 
         rec.complete_task(employee_checklist)
@@ -520,6 +607,24 @@ class KraKpiAPI(http.Controller):
             domain = [('user_id', '=', current_user.id)]  # Show only user's tasks
         
         kpis = request.env['kra.kpi'].search(domain)
+
+        # Resolve "is this developer's workday open?" ONCE for the whole board and
+        # carry it in the context. _start_block asks it per task (it is the first
+        # thing that decides can_start), and without this that is one session
+        # query per row. The rule itself stays in kra.kpi._actor_workday_open.
+        _wd_open, _wd_paused = True, False
+        if not is_manager_or_admin:
+            _sess = request.env['kpi.work.session'].sudo().search([
+                ('user_id', '=', current_user.id),
+                ('session_date', '=', fields.Date.context_today(request.env.user)),
+                ('state', '=', 'open'),
+            ], limit=1)
+            # Paused counts as not-open for starting work; the separate flag only
+            # picks which message the card shows ("Start" vs "Resume" your day).
+            _wd_paused = bool(_sess and _sess.is_paused)
+            _wd_open = bool(_sess) and not _wd_paused
+        kpis = kpis.with_context(kpi_workday_open=_wd_open,
+                                 kpi_workday_paused=_wd_paused)
 
         # Per-developer time on each task (survives reassignment — kpi.time.log
         # rows are kept per user). One batched read_group for all listed tasks,
@@ -584,7 +689,22 @@ class KraKpiAPI(http.Controller):
             return {
                 'id': k.id,
                 'name': k.name or "",
+                # REQ-014 / BUG-001 / UPT-007 — how people actually refer to a
+                # task out loud. The app renders it in five places (the Switch
+                # picker and its sort order, the Revert dialog title, the admin
+                # delete confirmation) and it was never in this payload, so all
+                # five silently fell back to blank or to the long name. Cheap to
+                # send, and a confirmation that cannot name what it is about to
+                # delete is worse than no confirmation.
+                'external_ref': k.external_ref or "",
                 'priority': k.priority or "regular",
+                # What the developer asked for when they raised it themselves.
+                # Shown to the admin on Accept so they set the real priority
+                # against it, instead of deciding blind.
+                'requested_priority': k.requested_priority or '',
+                'requested_doc_type': k.requested_doc_type or '',
+                'reverted_from': k.reverted_from or '',
+                'revert_reason': k.revert_reason or '',
                 'task_state': k.task_state or "assigned",
                 'user_id': (k.user_id.id if k.user_id else False),
                 'user_name': (k.user_id.name if k.user_id else ""),
@@ -700,7 +820,15 @@ class KraKpiAPI(http.Controller):
         return {
             'id': k.id,
             'name': k.name or "",
+            # Same as get_tasks' map_rec — the two serializers must agree, or a
+            # task opened on its own (from a notification, or the detail pane)
+            # renders differently from the same task on the board.
+            'external_ref': k.external_ref or "",
             'priority': k.priority or "regular",
+            'requested_priority': k.requested_priority or '',
+            'requested_doc_type': k.requested_doc_type or '',
+            'reverted_from': k.reverted_from or '',
+            'revert_reason': k.revert_reason or '',
             'task_state': k.task_state or "assigned",
             'user_id': (k.user_id.id if k.user_id else False),
             'user_name': (k.user_id.name if k.user_id else ""),
@@ -741,6 +869,14 @@ class KraKpiAPI(http.Controller):
             'self_needs_resume_reason': k.self_needs_resume_reason,
             # Same gate keys as get_tasks — see _gate_keys.
             **_gate_keys(k),
+            # And the same delete answer. Without it a task opened on its own —
+            # from a notification, or the details pane — served a payload with no
+            # can_admin_delete, so the app read it as False and the Delete button
+            # simply wasn't there on a task the board offered it for. Called
+            # without a logged_ids set because this serializes ONE record, so
+            # there is no batch to amortise.
+            'can_admin_delete': (self._is_kra_admin(request.env.user)
+                                 and k._may_admin_delete()[0]),
             'time_by_user': self._task_time_by_user(k),
         }
 
@@ -827,7 +963,16 @@ class KraKpiAPI(http.Controller):
 
         user = request.env.user
         is_admin = self._is_kra_admin(user)
-        is_assignee = bool(kpi.user_id and kpi.user_id.id == user.id)
+        # Anyone actually ON the task, not just the primary assignee.
+        #
+        # This used to be `kpi.user_id.id == user.id`, which is what made the
+        # Complete panel come and go: a developer added as a CONTRIBUTOR does the
+        # work and logs time like anyone else, but was not the primary, so the
+        # panel simply never rendered for them and the button looked missing.
+        # effective_contributor_ids is the module's own union of assignee +
+        # contributors + role lists (kpi.py) — the same set that decides who may
+        # start a timer, so the person who can work a task can now finish it.
+        is_assignee = bool(user.id in kpi.sudo().effective_contributor_ids.ids)
         # Type derived from the name prefix — same rule as /kpi_action/details.
         nm, ref = (kpi.name or ''), (kpi.external_ref or '').upper()
         if nm.startswith('[Update]') or ref.startswith('UPD'):
@@ -1420,22 +1565,35 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kpi_user_access/reset_password', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_reset_password(self, **params):
-        """Reset a user's app password. Optional {password} sets a unique initial
-        password; otherwise the default '1111'. Either way forces a change on next
-        login (must_change=True)."""
+        """Reset a user's APP PIN (mobile + PIN login). Optional {password} sets a
+        unique initial PIN; otherwise the default '1111'. Either way forces a
+        change on next app login (must_change=True).
+
+        Does NOT touch the user's Odoo login password — that is a separate
+        credential, changed under Settings -> Users -> Security.
+        """
         if not self._is_kra_admin(request.env.user):
             return {'status': False, 'message': 'Not authorized'}
         user = request.env['res.users'].sudo().browse(int(params.get('user_id') or 0))
         if not user.exists():
             return {'status': False, 'message': 'User not found'}
-        if user.has_group('base.group_system'):
-            return {'status': False, 'message': "The Odoo administrator's password can't be reset here."}
+        # An Odoo system administrator's access may only be reset by another Odoo
+        # system administrator. Without this, holding the KRA/KPI admin role would
+        # be enough to reset the superuser's credentials and take the instance —
+        # every database, every module, not just this one.
+        #
+        # It used to refuse for ANY system admin, including the one making the
+        # request, so a system admin could not even reset their own.
+        if (user.has_group('base.group_system')
+                and not request.env.user.has_group('base.group_system')):
+            return {'status': False,
+                    'message': "Only an Odoo system administrator can reset another "
+                               "administrator's access."}
         custom = (params.get('password') or '').strip()
         if custom:
             user.write({
                 'kpi_app_password_hash': user._crypt_context().hash(custom),
                 'kpi_app_must_change_password': True,
-                'password': custom,   # keep the Odoo login password in sync (see _set_app_password)
             })
         else:
             user._seed_default_app_password()
@@ -1717,6 +1875,11 @@ class KraKpiAPI(http.Controller):
         except (TypeError, ValueError):
             est_h, est_m = 0, 0
         priority = params.get('priority') or 'regular'
+        # The developer's view of the type. Unknown values fall back to
+        # 'requirement' rather than being stored raw — this feeds a Selection.
+        req_doc_type = params.get('doc_type')
+        if req_doc_type not in ('requirement', 'update', 'bug'):
+            req_doc_type = 'requirement'
         description = (params.get('description') or '').strip()
 
         if not name:
@@ -1741,6 +1904,16 @@ class KraKpiAPI(http.Controller):
             'estimate_hours': est_h,
             'estimate_minutes': est_m,
             'priority': priority,
+            # Record what the developer ASKED for as well as what is in force.
+            # They start equal; the admin may change `priority` on Accept, and
+            # keeping the request means they can see what they are overruling
+            # instead of deciding blind.
+            'requested_priority': priority,
+            # The developer's view of what this is (REQ / UPT / BUG). Unlike
+            # priority this has no live counterpart to seed — the type only
+            # becomes real when the admin picks it on Accept and the ref is
+            # numbered — so it is stored purely as the request.
+            'requested_doc_type': req_doc_type,
             'description': description,
             'task_state': 'assigned',
             'published': True,
@@ -1827,6 +2000,13 @@ class KraKpiAPI(http.Controller):
                 vals['estimate_minutes'] = int(params.get('estimate_minutes') or 0)
             except (TypeError, ValueError):
                 pass
+        # The admin sets the REAL priority here, having seen what the developer
+        # asked for (requested_priority, shipped to both boards). Optional: leave
+        # it out and the developer's choice stands. requested_priority is never
+        # written — it is the record of the request, not a second live value.
+        _prio = params.get('priority')
+        if _prio in ('urgent', 'important', 'regular'):
+            vals['priority'] = _prio
         rec.write(vals)
 
         # Only fire the pre-work client approval if the dev hasn't started yet;
@@ -2019,10 +2199,17 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kpi_config/set_away', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_set_away(self, **params):
-        user = request.env.user
-        if not self._is_kra_admin(user):
+        """RETIRED — idle auto-pause is off and there is nothing to configure.
+
+        Kept as a no-op rather than deleted: an installed copy of the mobile app
+        may still POST here, and a 404 would surface as a failed save on a screen
+        that otherwise worked. Answers success and changes nothing.
+
+        The old body did `max(1, minutes or 5)`, which is also why 0 could never
+        switch the feature off from this screen.
+        """
+        if not self._is_kra_admin(request.env.user):
             return {'status': False, 'message': 'Not authorized'}
-        request.env.company.sudo().away_after_minutes = max(1, int(params.get('minutes') or 5))
         return {'status': True}
 
     @http.route('/kpi_config/set_client_approval', type='json', auth='user', methods=['POST'], csrf=False)
@@ -3493,17 +3680,36 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/task_documents/list', type='json', auth='user', methods=['POST'], csrf=False)
     def get_task_documents_list(self, **params):
-        """Get list of all KPI tasks with document counts"""
+        """Tasks + their document counts, SCOPED to what the caller may see.
+
+        Admin / coordinator / owner: every task. Everyone else: only tasks they
+        are actually on — effective_contributor_ids unions the assignee with the
+        contributor and role lists, the same rule _may_view_kpi_details applies
+        to a single task.
+
+        This used to be `sudo().search([])` — every task belonging to everybody,
+        for any logged-in user. The sudo() is what did the damage: it bypassed the
+        employee record rule that already scopes kra.kpi to your own published
+        tasks, so a developer opening Task Related Documents saw the whole
+        company's task list, assignee names included.
+        """
         try:
+            user = request.env.user
+            is_admin = self._is_kra_admin(user)
             # ✅ Get filter parameter
             assignee_id = params.get('assignee_id')
-            
+
             # Build domain
             domain = []
             if assignee_id:
                 domain.append(('user_id', '=', int(assignee_id)))
-            
-            # ✅ Get ALL KPI tasks (not just with documents)
+            if not is_admin:
+                # A client has no business in the internal task list at all —
+                # same stance _may_view_kpi_details takes.
+                if user.has_group('kra_kpi_module.group_kra_client'):
+                    return {'status': True, 'tasks': [], 'assignees': []}
+                domain.append(('effective_contributor_ids', 'in', [user.id]))
+
             kpis = request.env['kra.kpi'].sudo().search(domain)
             
             tasks = []
@@ -3609,10 +3815,17 @@ class KraKpiAPI(http.Controller):
                 return {'status': False, 'message': 'task_id is required'}
             
             kpi = request.env['kra.kpi'].sudo().browse(int(task_id))
-            
+
             if not kpi.exists():
                 return {'status': False, 'message': 'Task not found'}
-            
+            # Scope check, not just existence: this browses by id under sudo(), so
+            # without it any logged-in user could read any task's files, links and
+            # manuals by guessing an id — the list being filtered is no protection
+            # when the detail route answers for anything.
+            _denied = self._may_view_kpi_details(kpi)
+            if _denied:
+                return {'status': False, 'message': _denied}
+
             # Get attached files from progress updates
             progress_with_files = request.env['kpi.progress'].sudo().search([
                 ('kpi_id', '=', int(task_id)),

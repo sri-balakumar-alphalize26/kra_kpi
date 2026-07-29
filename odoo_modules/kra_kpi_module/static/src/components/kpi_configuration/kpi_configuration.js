@@ -10,29 +10,23 @@ export class KpiConfiguration extends Component {
                 <h2 class="mb-0"><i class="fa fa-cog me-2 text-secondary"></i> Configuration</h2>
                 <span class="badge bg-light text-muted border">Changes save automatically</span>
             </div>
-            <p class="text-muted small mb-4">Away timers, urgent-pause recipients, and per-developer WhatsApp numbers.</p>
+            <p class="text-muted small mb-4">Approval timers, urgent-pause recipients, and per-developer WhatsApp numbers.</p>
 
             <t t-if="state.loading"><div class="text-muted">Loading…</div></t>
             <t t-elif="state.error"><div class="alert alert-danger" t-esc="state.error"/></t>
             <t t-else="">
 
-                <!-- Timers & Away -->
+                <!-- Timers -->
                 <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #0ea5e9 !important; border-left-style: solid;">
                     <div class="card-header bg-white fw-bold d-flex align-items-center">
-                        <i class="fa fa-clock-o me-2 text-info"></i> Timers &amp; Away
+                        <i class="fa fa-clock-o me-2 text-info"></i> Timers
                     </div>
                     <div class="card-body">
-                        <label class="form-label fw-semibold">Away after (minutes)</label>
-                        <div class="input-group" style="max-width:180px;">
-                            <input type="number" min="1" class="form-control"
-                                   t-model.number="state.away_after_minutes" t-on-change="() => this.saveAway()"/>
-                            <span class="input-group-text">min</span>
-                            <span t-if="state.savedAway" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <small class="text-muted d-block mt-2">Minutes with no heartbeat (tab closed / machine asleep)
-                            before a running task auto-pauses as "Away". Used by the browser AND the server.</small>
-
-                        <label class="form-label fw-semibold mt-4">Admin accept window (minutes)</label>
+                        <!-- "Away after (minutes)" used to lead this card. Idle
+                             auto-pause is retired — a sleeping machine is not evidence
+                             that someone stopped working — so there is nothing left to
+                             configure for it. -->
+                        <label class="form-label fw-semibold">Admin accept window (minutes)</label>
                         <div class="input-group" style="max-width:180px;">
                             <input type="number" min="0" class="form-control"
                                    t-model.number="state.admin_accept_minutes"
@@ -217,7 +211,6 @@ export class KpiConfiguration extends Component {
 
     setup() {
         this.state = useState({
-            away_after_minutes: 5,
             // Workflow gate timers (same res.company fields the mobile app edits).
             // Nothing about these windows is hard-coded anywhere — the crons read
             // res.company on every tick, so a change here takes effect within a
@@ -229,7 +222,6 @@ export class KpiConfiguration extends Component {
             developers: [],
             loading: true,
             error: "",
-            savedAway: false,
             savedAdminAccept: false,
             savedClientApproval: false,
             savedQueueNudge: false,
@@ -256,7 +248,6 @@ export class KpiConfiguration extends Component {
             try {
                 const cfg = await rpc("/kpi_config/get", {});
                 if (cfg?.status) {
-                    if (cfg.away_after_minutes != null) this.state.away_after_minutes = cfg.away_after_minutes;
                     if (cfg.admin_accept_minutes != null) this.state.admin_accept_minutes = cfg.admin_accept_minutes;
                     if (cfg.client_approval_minutes != null) this.state.client_approval_minutes = cfg.client_approval_minutes;
                     if (cfg.queue_nudge_minutes != null) this.state.queue_nudge_minutes = cfg.queue_nudge_minutes;
@@ -322,12 +313,6 @@ export class KpiConfiguration extends Component {
         setTimeout(() => { try { obj[key] = false; } catch (e) { /* unmounted */ } }, 1500);
     }
 
-    async saveAway() {
-        const val = Math.max(1, parseInt(this.state.away_after_minutes) || 5);
-        this.state.away_after_minutes = val;
-        try { await rpc("/kpi_config/set_away", { minutes: val }); this._flash(this.state, "savedAway"); }
-        catch (e) { alert(e?.data?.message || "Failed to save."); }
-    }
 
     // Drives admin_accept_deadline_at (kpi_workflow.py _admin_accept_minutes) —
     // how long a task waits for a human Accept before the cron does it.

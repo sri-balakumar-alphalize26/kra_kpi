@@ -851,6 +851,58 @@ class KpiWorkflow(models.Model):
     # is just picking it back up rather than beginning unapproved work.
     _RESUMABLE_STATES = ('in_progress', 'paused', 'rework', 'partially_completed')
 
+    def _actor_workday_open(self):
+        """Does the user acting right now have an OPEN workday session today?
+
+        Admins are exempt, matching every other gate in this module: they act on
+        other people's tasks and do not keep a developer's workday themselves.
+        (The retired PIN gate exempted them for the same reason.)
+
+        `kpi_workday_open` in the context short-circuits the lookup. The task
+        board calls _start_block once per listed task, and without this that is
+        one session query per row; the controller resolves it once and passes it
+        down. The rule still lives here — the context only carries the answer.
+        """
+        cached = self.env.context.get('kpi_workday_open')
+        if cached is not None:
+            return bool(cached)
+        try:
+            if self._user_is_kpi_admin():
+                return True
+            # is_paused counts as "not open": a paused workday means the
+            # developer has stopped, so nothing may start inside it.
+            return bool(self.env['kpi.work.session'].sudo().search_count([
+                ('user_id', '=', self.env.user.id),
+                ('session_date', '=', fields.Date.context_today(self)),
+                ('state', '=', 'open'),
+                ('is_paused', '=', False),
+            ]))
+        except Exception as exc:
+            # Never let a lookup failure be the thing that stops someone working.
+            _logger.warning("workday-open check failed for user %s: %s",
+                            self.env.user.id, exc)
+            return True
+
+    def _actor_workday_paused(self):
+        """Is the acting user's workday open but PAUSED?
+
+        Only asked when _actor_workday_open() already said no, purely to choose
+        the right message. Same context short-circuit as that method, so a board
+        full of blocked tasks does not run one query per row.
+        """
+        cached = self.env.context.get('kpi_workday_paused')
+        if cached is not None:
+            return bool(cached)
+        try:
+            return bool(self.env['kpi.work.session'].sudo().search_count([
+                ('user_id', '=', self.env.user.id),
+                ('session_date', '=', fields.Date.context_today(self)),
+                ('state', '=', 'open'),
+                ('is_paused', '=', True),
+            ]))
+        except Exception:
+            return False
+
     def _start_block(self):
         """Why this task cannot start, or None if it can.
 
@@ -859,8 +911,8 @@ class KpiWorkflow(models.Model):
         turn it into a readable message — so the UI cannot drift from the server
         the way a hand-maintained list of startable states always does.
 
-        Returns (reason_key, message) with reason_key in {'admin', 'client'},
-        or None when the task is free to start.
+        Returns (reason_key, message) with reason_key in {'workday', 'admin',
+        'client'}, or None when the task is free to start.
 
         The workflow is: admin accepts -> client approves -> developer works.
         Neither gate blocks forever: an unactioned task auto-accepts after
@@ -875,6 +927,31 @@ class KpiWorkflow(models.Model):
         """
         self.ensure_one()
         ref = self.external_ref or self.name or self.id
+        # FIRST, before anything about approvals: is this developer working today?
+        #
+        # Nothing used to ask. The web board was only reachable through the PIN
+        # gate, and pairing opened the workday as a side effect — so "you must
+        # start your day before you can work" was enforced by a screen rather than
+        # by a rule. Removing the PIN removed the enforcement with it, and a
+        # developer could start a task on the web having never pressed Start
+        # Workday: their time logged against no session, and Presence never
+        # covering it.
+        #
+        # Here it applies to BOTH boards and to the API, and it ships to them as
+        # can_start=False with this message, so neither has to re-derive it.
+        if not self._actor_workday_open():
+            # Paused and never-started are different problems with different
+            # fixes, so they get different messages. Telling someone to "start
+            # your workday" when they have one open but paused sends them
+            # looking for a button that is showing Resume.
+            if self._actor_workday_paused():
+                return ('workday_paused',
+                        "Your workday is paused. Resume it before working on "
+                        "'%s'." % ref)
+            return ('workday',
+                    "Start your workday before working on '%s'. Your task time "
+                    "has to land inside a workday session, or it is recorded "
+                    "against nothing." % ref)
         # A client "no" on work that has never actually run blocks it, whatever
         # the state says.  This check comes FIRST because a pre-approval reject
         # lands the task in 'rework', which is a resumable state — 'rework' means
@@ -936,6 +1013,201 @@ class KpiWorkflow(models.Model):
                     f"{other.external_ref or other.name} in progress. "
                     "Pause that task first before starting a new one."
                 )
+
+    @api.model
+    def pause_all_running(self, reason='', reason_code='break'):
+        """Pause EVERY task the current user has running, with one shared reason.
+
+        For "I'm stopping now" — lunch, a meeting, end of the day — when
+        multitask means there is more than one timer to stop. Pausing them one at
+        a time leaves the others accruing productive time for minutes nobody
+        worked, and it is easy to forget the second one entirely.
+
+        One reason for all of them on purpose. A developer stopping for different
+        reasons at the same instant is not a real situation; when it is, the
+        per-task Pause button is still there. (And "pause this one because I'm
+        moving to another" is Switch, which keeps the others running.)
+
+        PRESENCE IS NOT DOUBLE-COUNTED. kpi.break.log keeps one active break per
+        user (see kpi_break_log.start_break), so the first pause opens the break
+        and the rest join it. That is deliberate: a 20-minute lunch with two
+        tasks open is 20 minutes away from the desk, not 40, and inflating it
+        would break the Accounted + Other/Idle = Presence reconciliation.
+
+        Each task still gets its OWN kpi.time.log interval closed with its own
+        start/end/date by pause_task, plus an audit line here — so "which tasks
+        stopped, and when" stays answerable per task.
+
+        Returns a dict so a refusal renders as a message, not a traceback.
+        """
+        user = self.env.user
+        Log = self.env['kpi.time.log'].sudo()
+        running = [l.kpi_id for l in Log.search([('user_id', '=', user.id),
+                                                 ('is_active', '=', True)])
+                   if l.kpi_id and l.kpi_id.task_state == 'in_progress']
+        if not running:
+            return {'status': False, 'message': 'You have no running tasks to pause.'}
+
+        reason = (reason or '').strip()
+        code = reason_code or 'break'
+        paused = []
+        for rec in running:
+            try:
+                rec.with_user(user).pause_task(reason=reason, reason_code=code)
+                paused.append(rec.external_ref or rec.name or str(rec.id))
+                try:
+                    rec._log_action('paused_bulk', source='web',
+                                    actor_user_id=user.id,
+                                    payload={'reason_code': code, 'reason': reason,
+                                             'of_total': len(running)})
+                except Exception:
+                    pass
+            except Exception as exc:
+                # One bad row must not strand the rest still running — that is the
+                # very state this action exists to avoid.
+                _logger.warning("pause-all failed for task %s: %s", rec.id, exc)
+        if not paused:
+            return {'status': False, 'message': 'Could not pause your running tasks.'}
+        return {'status': True,
+                'paused_count': len(paused),
+                'message': 'Paused %s task%s.' % (len(paused), '' if len(paused) == 1 else 's')}
+
+    def revert_from_client_signoff(self, reason=''):
+        """Admin pulls a task back out of Awaiting Client Sign-off.
+
+        The client stops seeing it and the developer gets it back, paused, with
+        the reason on the card.
+
+        CLEARING admin_approved IS THE POINT, not housekeeping. The client portal
+        selects on TWO branches (controllers/kpi_reports_api.py):
+
+            task_state = 'awaiting_client'
+            OR (task_state = 'partially_completed' AND admin_approved = True)
+
+        so moving the state alone does not hide anything — the task would simply
+        reappear to the client through the second branch. Withdrawing the QA
+        verdict is also the honest thing to record: the admin no longer stands
+        behind it.
+
+        Only from 'awaiting_client'. A completed, client-signed task is NOT
+        revertable here: its signature is what invoicing is built on, and taking
+        that back is a billing decision, not a workflow one.
+
+        Returns a dict so a refusal renders as a message, not a traceback.
+        """
+        self.ensure_one()
+        if self.task_state != 'awaiting_client':
+            return {'status': False,
+                    'message': "Only a task waiting for client sign-off can be "
+                               "reverted (this one is '%s')." % (self.task_state or '—')}
+        # Belt and braces. client_final_approved is False for anything in
+        # awaiting_client, so this should be unreachable — but destroying the
+        # basis of a raised invoice is bad enough to check rather than reason
+        # about from two files away.
+        if self.is_invoiced:
+            return {'status': False,
+                    'message': "This task is already on a finalized invoice and "
+                               "cannot be reverted."}
+
+        reason = (reason or '').strip()
+        self.sudo().write({
+            'reverted_from':   'awaiting_client',
+            'reverted_at':     fields.Datetime.now(),
+            'reverted_by_id':  self.env.user.id,
+            'revert_reason':   reason,
+            # Back to the developer, stopped. Mirrors reject_task: land in paused
+            # with the timer cleared so nothing auto-runs on the next page load.
+            'task_state':            'paused',
+            'timer_start_datetime':  False,
+            'paused_reason': ('↩ Reverted from client sign-off by %s%s'
+                              % (self.env.user.name,
+                                 (' — %s' % reason) if reason else '')),
+            # Withdraw the QA verdict — see the docstring. This is what actually
+            # takes it off the client's screen.
+            'admin_approved':       False,
+            'admin_approved_by':    False,
+            'admin_approved_date':  False,
+            # It is no longer an approved/closed task either.
+            'approved_by':   False,
+            'approval_date': False,
+        })
+        try:
+            self._log_action('reverted_from_awaiting_client', source='web',
+                             actor_user_id=self.env.user.id,
+                             payload={'reason': reason})
+        except Exception:
+            pass
+        # Tell the developer. They believed this was finished; without a message
+        # it silently reappears in their lane with no explanation.
+        try:
+            self._notify('task_reverted',
+                         admin=self.env.user.name,
+                         reason=reason or 'No reason given')
+        except Exception as exc:
+            _logger.warning("task_reverted notify failed for %s: %s", self.id, exc)
+        return {'status': True,
+                'message': 'Reverted — sent back to %s.' % (self.user_id.name or 'the developer'),
+                'new_state': self.task_state}
+
+    def switch_to_task(self, from_kpi_id=None, note=''):
+        """Swap ONE running task for this one. Anything else keeps running.
+
+        `from_kpi_id` is the task being handed over. Pass it and only that task
+        pauses — which is the whole point under multitask: working task 1 and
+        task 2, switching task 1 to task 3 must leave task 2 running without a
+        break in its timer. Omit it and every running task pauses, which is what
+        the single-task case means by "switch".
+
+        THE ORDER MATTERS, and it is why this is server-side rather than the board
+        calling pause then start: the target is checked for startability BEFORE
+        anything is paused. A task can be refused now — workday not open, admin
+        hasn't accepted, client hasn't approved — and if we paused first and the
+        start was then refused, the developer would be left with their old task
+        stopped and nothing running. Strictly worse than where they began.
+
+        The pause is recorded as 'priority_task' ("Another Priority Task"), which
+        already exists and is precisely this situation. Without a reason the gap
+        would land on the Workday Map as unexplained idle.
+
+        Returns a dict rather than raising, so a refusal shows as a message
+        instead of a traceback: {status, message, reason, from_ids, to_id}.
+        """
+        self.ensure_one()
+        # 1. Can we even start the target? Refuse before touching anything.
+        block = self._start_block()
+        if block:
+            return {'status': False, 'reason': block[0], 'message': block[1]}
+
+        user = self.env.user
+        Log = self.env['kpi.time.log'].sudo()
+        # 2. Which timers to stop. Only ever this user's own running tasks — the
+        #    from_kpi_id arrives from a client, so it is filtered against what
+        #    they actually have running rather than trusted to name a task.
+        running = [l.kpi_id for l in Log.search([('user_id', '=', user.id),
+                                                 ('is_active', '=', True)])
+                   if l.kpi_id and l.kpi_id.id != self.id
+                   and l.kpi_id.task_state == 'in_progress']
+        if from_kpi_id:
+            running = [r for r in running if r.id == int(from_kpi_id)]
+        for rec in running:
+            rec.with_user(user).pause_task(
+                reason=note or 'Switched to another task',
+                reason_code='priority_task')
+
+        # 3. Start (or resume) the target. Both routes re-assert the gates.
+        if self.task_state in ('paused', 'rework', 'partially_completed'):
+            self.with_user(user).resume_task()
+        else:
+            self.with_user(user).start_task()
+
+        self._log_action('task_switched', source='web',
+                         actor_user_id=user.id,
+                         payload={'from': [r.id for r in running], 'to': self.id,
+                                  'note': note or ''})
+        return {'status': True,
+                'message': 'Switched to %s' % (self.external_ref or self.name),
+                'from_ids': [r.id for r in running], 'to_id': self.id,
+                'new_state': self.task_state}
 
     def start_task(self):
         # A developer may have at most ONE in_progress task at a time — unless

@@ -210,6 +210,11 @@ class KpiWorkdaySnapshot(models.Model):
              'task+meet+lunch+break'),
             ('Tasks touched', str(p.get('task_count', 0)), C_INK, ''),
         ]
+        # Only when the day was actually paused — an always-present "0m Paused"
+        # tile would just make every normal day look like it had a gap.
+        if (p.get('paused_seconds') or 0) > 0:
+            tiles.append(('Workday paused', p.get('paused_display', '0m'), C_MUTED,
+                          'outside Presence'))
         # Width derived from the tile COUNT — it was hardcoded to 3, so adding a
         # tile silently drew it off the edge of the image.
         tw = (IMG_W - PAD * 2 - (len(tiles) - 1) * 12) / float(len(tiles))

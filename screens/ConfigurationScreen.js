@@ -1,7 +1,7 @@
 // CONFIGURATION — mobile port of the Odoo web "Configuration" screen
 // (kpi_configuration.js). Four sections, all auto-save:
 //   1. Country & Mobile Format — country picker → dial code + digit length
-//   2. Timers & Away — away-after minutes
+//   2. Timers — client approval window
 //   3. Urgent-pause recipients — extra WhatsApp numbers (local, dial added)
 //   4. Developers — Multi-task toggle + per-dev WhatsApp number
 // Admin-only (opened from a Home Quick Action tile).
@@ -16,7 +16,7 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import {
-  fetchConfig, setAway, setUrgentNudge, setUserCountry, setMultitask, setDevWa,
+  fetchConfig, setUrgentNudge, setUserCountry, setMultitask, setDevWa,
   setClientApproval, setQueueNudge, setStandardHours,
   setSnapshotRetention, setReportRetention, setDailyReport,
 } from '../services/config';
@@ -58,7 +58,6 @@ function Card({ color, icon, iconLib, title, children }) {
 export default function ConfigurationScreen({ onBack }) {
   const [loading, setLoading] = useState(true);
   const [isMock, setIsMock] = useState(false);
-  const [away, setAwayVal] = useState('5');
   const [clientApproval, setClientApprovalVal] = useState('5');
   const [queueNudge, setQueueNudgeVal] = useState('30');
   const [standardHours, setStandardHoursVal] = useState('9');
@@ -90,7 +89,6 @@ export default function ConfigurationScreen({ onBack }) {
     try {
       const c = await fetchConfig();
       setIsMock(c.isMock);
-      setAwayVal(String(c.away_after_minutes));
       setClientApprovalVal(String(c.client_approval_minutes));
       setQueueNudgeVal(String(c.queue_nudge_minutes));
       setStandardHoursVal(String(c.standard_workday_hours ?? 9));
@@ -120,11 +118,6 @@ export default function ConfigurationScreen({ onBack }) {
   }, [load]);
 
   // ── Savers ────────────────────────────────────────────────────────────────
-  const saveAway = async () => {
-    const v = Math.max(1, parseInt(away) || 5);
-    setAwayVal(String(v));
-    try { await setAway(v); flash('away'); } catch (e) { log.warn('saveAway', e?.message); }
-  };
   const saveClientApproval = async () => {
     const v = Math.max(1, parseInt(clientApproval) || 5);
     setClientApprovalVal(String(v));
@@ -256,21 +249,12 @@ export default function ConfigurationScreen({ onBack }) {
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
 
-          {/* 2. Timers & Away */}
-          <Card color="#0ea5e9" iconLib="mc" icon="clock-outline" title="Timers & Away">
-            <Text style={s.label}>Away after (minutes)</Text>
-            <View style={s.inlineRow}>
-              <TextInput
-                style={[s.input, { width: 90 }]} keyboardType="number-pad"
-                value={away} onChangeText={setAwayVal} onEndEditing={saveAway}
-              />
-              <Text style={s.unit}>min</Text>
-              {savedFlash === 'away' && <Text style={s.savedTick}>✓</Text>}
-            </View>
-            <Text style={s.hint}>Minutes with no heartbeat (app closed / device asleep) before a running
-              task auto-pauses as "Away". Used by the app and the server.</Text>
-
-            <Text style={[s.label, { marginTop: 16 }]}>Client approval window (minutes)</Text>
+          {/* 2. Timers — the "Away after (minutes)" field used to lead this card.
+              Idle auto-pause is retired: a sleeping device is not evidence that
+              somebody stopped working, and pausing on it cost people their board
+              several times a day. There is nothing left to configure. */}
+          <Card color="#0ea5e9" iconLib="mc" icon="clock-outline" title="Timers">
+            <Text style={s.label}>Client approval window (minutes)</Text>
             <View style={s.inlineRow}>
               <TextInput
                 style={[s.input, { width: 90 }]} keyboardType="number-pad"

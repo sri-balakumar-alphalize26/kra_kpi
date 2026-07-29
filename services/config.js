@@ -8,14 +8,13 @@ import { createLogger } from '../api/logger';
 
 const log = createLogger('Config');
 
-// Load away-minutes, urgent recipients, country/mobile format, and developers.
+// Load timers, urgent recipients, country/mobile format, and developers.
 export async function fetchConfig() {
   const { serverUrl } = await getConnection();
   if (!serverUrl) {
     log.info('fetchConfig — no server, mock');
     return {
       isMock: true,
-      away_after_minutes: 5,
       client_approval_minutes: 5,
       queue_nudge_minutes: 30,
       urgent_nudge_minutes: 5,
@@ -43,7 +42,6 @@ export async function fetchConfig() {
   const devs = await jsonRpc(serverUrl, '/kpi_multitask/list', {});
   return {
     isMock: false,
-    away_after_minutes: cfg?.away_after_minutes ?? 5,
     client_approval_minutes: cfg?.client_approval_minutes ?? 5,
     queue_nudge_minutes: cfg?.queue_nudge_minutes ?? 30,
     urgent_nudge_minutes: cfg?.urgent_nudge_minutes ?? 5,
@@ -62,12 +60,6 @@ export async function fetchConfig() {
     countries: cfg?.countries || [],
     developers: (devs?.developers) || [],
   };
-}
-
-export async function setAway(minutes) {
-  const { serverUrl } = await getConnection();
-  if (!serverUrl) return { status: true };
-  return jsonRpc(serverUrl, '/kpi_config/set_away', { minutes });
 }
 
 // Minutes a client has to approve the assigned developer before auto-approve.

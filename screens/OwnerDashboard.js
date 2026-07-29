@@ -306,7 +306,7 @@ function DrillModal({ drill, setDrill, onInvoice }) {
   const totalQuoted = tasks.reduce((a, t) => a + Number(t.quoted_hours || 0), 0);
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={() => setDrill(null)}>
+    <Modal visible transparent animationType="fade" onRequestClose={() => setDrill(null)}>
       <View style={s.drillWrap}>
         <View style={s.drillCard}>
           <View style={s.drillHead}>
@@ -431,8 +431,9 @@ const s = StyleSheet.create({
   pickTxt: { fontSize: 15.5, color: COLORS.ink },
 
   // Drill modal
-  drillWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'flex-end' },
-  drillCard: { backgroundColor: '#fff', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 16, paddingBottom: 24 },
+  // Centred, matching the rest of the app's modals (see KraKpiDashboard).
+  drillWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'center', padding: 20 },
+  drillCard: { backgroundColor: '#fff', borderRadius: 20, padding: 16, paddingBottom: 18, maxHeight: '85%' },
   drillHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   drillTitle: { flex: 1, fontSize: 17, fontWeight: '900', color: COLORS.navy, marginRight: 10 },
   searchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F5F8FD', borderWidth: 1.5, borderColor: '#E7ECF3', borderRadius: 12, paddingHorizontal: 12, height: 44, marginBottom: 12 },

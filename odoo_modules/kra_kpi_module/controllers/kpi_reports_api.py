@@ -2752,6 +2752,9 @@ class KpiReportsAPI(http.Controller):
                 'is_open':      bool(open_row),
                 'today_closed': bool(row and row.state == 'closed' and not open_row),
                 'day_done':     day_done,
+                # Paused = open but frozen. The board needs both: is_open drives
+                # Start vs End, is_paused drives Pause vs Resume and the banner.
+                'is_paused':    bool(open_row and open_row.is_paused),
                 'session_id':   row.id if row else False,
                 'login_at':     fields.Datetime.to_string(row.login_at) if row and row.login_at else '',
             }
@@ -2889,6 +2892,44 @@ class KpiReportsAPI(http.Controller):
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"workday_end_nontask: {e}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_workday/pause', type='json', auth='user', methods=['POST'], csrf=False)
+    def workday_pause(self, **params):
+        """Freeze today's workday: stop running tasks, stop accruing Presence.
+
+        Scoped to the caller's own session — no id in the payload, so it cannot
+        be aimed at anybody else's day.
+        """
+        try:
+            sess = request.env['kpi.work.session'].sudo().search([
+                ('user_id', '=', request.env.user.id),
+                ('session_date', '=', fields.Date.context_today(request.env.user)),
+                ('state', '=', 'open'),
+            ], limit=1)
+            if not sess:
+                return {'status': False, 'message': 'You have no open workday to pause.'}
+            return sess.action_pause_workday(note=(params.get('note') or '').strip())
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"workday_pause: {e}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_workday/resume', type='json', auth='user', methods=['POST'], csrf=False)
+    def workday_resume(self, **params):
+        """Un-freeze today's workday. Presence counts again from now."""
+        try:
+            sess = request.env['kpi.work.session'].sudo().search([
+                ('user_id', '=', request.env.user.id),
+                ('session_date', '=', fields.Date.context_today(request.env.user)),
+                ('state', '=', 'open'),
+            ], limit=1)
+            if not sess:
+                return {'status': False, 'message': 'You have no open workday to resume.'}
+            return sess.action_resume_workday()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"workday_resume: {e}")
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_workday/end', type='json', auth='user', methods=['POST'], csrf=False)

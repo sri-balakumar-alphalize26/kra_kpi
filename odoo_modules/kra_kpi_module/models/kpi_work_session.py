@@ -167,8 +167,16 @@ def _local_day_end_utc(day, user=None):
 
 
 def _fmt_hms(seconds):
-    """Format an integer number of seconds as 'Hh Mm'."""
-    s = int(seconds or 0)
+    """Format an integer number of seconds as 'Hh Mm'.
+
+    Negatives are floored to zero. Python's divmod rounds toward negative
+    infinity, so divmod(-1, 3600) is (-1, 3599) and a single negative second
+    used to render as "-1h 59m" — a two-hour error from one second of clock
+    skew, shown in the End Workday summary and the app's Accounted tile.
+    A duration display has no meaningful negative value, so clamp rather than
+    propagate: the raw *_seconds fields are still in the payload for debugging.
+    """
+    s = max(0, int(seconds or 0))
     h, rem = divmod(s, 3600)
     m = rem // 60
     if h and m:
@@ -206,6 +214,29 @@ class KpiWorkSession(models.Model):
         help='True when the 23:55 cron closed this session because the developer never pressed End Workday.',
     )
     note = fields.Text(string='End-of-day note')
+
+    # ---- Pause Workday --------------------------------------------------- #
+    # Freezing the whole day without ending it. A developer who works to 04:00,
+    # stops, and returns at 10:00 the SAME date has no other option: End Workday
+    # buries the day (one start + one end), and leaving it open counts the six
+    # idle hours as Presence, which is untrue.
+    #
+    # Deliberately a FLAG beside state='open' rather than a new state value.
+    # `state = 'open'` is searched in a dozen places — _get_or_open_today,
+    # _day_done, the crons, live_status — and adding 'paused' would silently
+    # change every one of them. A flag keeps the blast radius to the code that
+    # should actually care.
+    is_paused = fields.Boolean(
+        string='Workday Paused', default=False, copy=False,
+        help="The developer paused their whole workday. Tasks cannot run and "
+             "Presence does not accrue until they resume.")
+    paused_at = fields.Datetime(
+        string='Paused At', readonly=True, copy=False,
+        help="Start of the CURRENT pause. Empty while the workday is running.")
+    paused_seconds = fields.Float(
+        string='Paused (seconds)', default=0.0, readonly=True, copy=False,
+        help="Total of COMPLETED pauses. The open pause is added on the fly by "
+             "_compute_totals so a running clock is never written to the row.")
 
     # The board POSTs a heartbeat every 15s. It is now purely a liveness stamp
     # for reporting — the admin Live Tracking screen shows a developer as "at the
@@ -309,7 +340,8 @@ class KpiWorkSession(models.Model):
     # ------------------------------------------------------------------ #
     # Compute                                                            #
     # ------------------------------------------------------------------ #
-    @api.depends('user_id', 'session_date', 'login_at', 'logout_at', 'state')
+    @api.depends('user_id', 'session_date', 'login_at', 'logout_at', 'state',
+                 'is_paused', 'paused_at', 'paused_seconds')
     def _compute_totals(self):
         """Per-session totals: only count time-logs whose start_time falls
         inside this session's login_at..logout_at window.  This way two
@@ -341,7 +373,15 @@ class KpiWorkSession(models.Model):
             rec.task_count = len(set(logs.mapped('kpi_id').ids))
             end = rec.logout_at or fields.Datetime.now()
             try:
-                rec.presence_seconds = max(0.0, (end - rec.login_at).total_seconds())
+                span = (end - rec.login_at).total_seconds()
+                # Presence is time AT WORK, so a paused workday must not count.
+                # Completed pauses are stored; the one still open is added here
+                # rather than written to the row, so nothing has to tick a value
+                # into the database every few seconds.
+                paused = rec.paused_seconds or 0.0
+                if rec.is_paused and rec.paused_at:
+                    paused += max(0.0, (end - rec.paused_at).total_seconds())
+                rec.presence_seconds = max(0.0, span - paused)
             except Exception:
                 rec.presence_seconds = 0.0
 
@@ -646,8 +686,18 @@ class KpiWorkSession(models.Model):
         #
         # A pause with NO reason writes no break-log, so it correctly still asks:
         # nothing was declared, so the question genuinely stands.
+        #
+        # A PAUSED workday is the same miss one level up. Pausing stops every
+        # timer by design, so `active_task` is false and the prompt fired the
+        # instant the day was frozen — asking "why is nothing running?" of
+        # someone who just answered that question by pausing. Worse than noise:
+        # the answers open a break or a non-task block, and action_pause_workday
+        # deliberately CLOSES both so the same minutes are not counted as paused
+        # and as lunch. Taking the popup up on its offer would recreate the exact
+        # double-count the pause code exists to prevent.
         idle_prompt = bool(
-            sess and not active_task and not nontask and not active_break
+            sess and not sess.is_paused
+            and not active_task and not nontask and not active_break
             and not sess.no_task_nudge_count
         )
         # WHICH ask this is. 1 = the one at workday start (the cron hasn't run yet);
@@ -667,6 +717,14 @@ class KpiWorkSession(models.Model):
             'idle_prompt_seq': idle_prompt_seq,
             'login_raw': login_raw,           # anchor for live Presence (now - login)
             'productive_base': productive_base,  # finished-log seconds; add running task live
+            # The live strip ticks Presence as (now - login_raw) in the browser, so
+            # it has to be told about pauses or it keeps counting a frozen day.
+            # paused_base = pauses already banked; paused_since = the open one, which
+            # the client uses to STOP the clock rather than keep subtracting.
+            'is_paused': bool(sess and sess.is_paused),
+            'paused_base': float(sess.paused_seconds or 0.0) if sess else 0.0,
+            'paused_since': ((sess.paused_at.isoformat() + 'Z')
+                             if sess and sess.is_paused and sess.paused_at else False),
         }
 
     # Reasons the developer told us THEMSELVES that they'd be away from the desk.
@@ -755,6 +813,101 @@ class KpiWorkSession(models.Model):
             except Exception as exc:
                 _logger.warning("auto-away failed for session %s: %s", s.id, exc)
         return paused
+
+    # ------------------------------------------------------------------ #
+    # Pause / resume the whole workday                                    #
+    # ------------------------------------------------------------------ #
+    def action_pause_workday(self, note=''):
+        """Freeze the day: stop every running task and stop accruing Presence.
+
+        The gap between End Workday and leaving the day open. Ending buries the
+        date (one start + one end), and leaving it open books idle hours as
+        Presence — neither is true of "I stopped at 4am and I'm back at 10".
+
+        Reuses _pause_running_task rather than looping over timers again, so the
+        multitask handling lives in exactly one place.
+        """
+        self.ensure_one()
+        if self.state != 'open':
+            return {'status': False, 'message': 'Your workday is not open.'}
+        if self.is_paused:
+            return {'status': False, 'message': 'Your workday is already paused.'}
+        try:
+            self._pause_running_task(reason=('Workday paused'
+                                             + (' — %s' % note if note else '')))
+        except Exception as exc:
+            _logger.warning("pause-workday: stopping tasks failed for %s: %s", self.id, exc)
+        # STAMP THE CLOCK **AFTER** PAUSING, NOT BEFORE.
+        #
+        # _pause_running_task opens an 'away' break using its own, later, now().
+        # Taking `now` first and then passing it to stop_break below closed that
+        # break at an instant BEFORE it started, writing a negative
+        # duration_seconds — which then flowed into `metered` and made the whole
+        # day's Accounted total negative ("-1h 59m" in the End Workday summary,
+        # because divmod() of a negative rounds the wrong way).
+        #
+        # It only ever cost a second or two, which is exactly why it survived:
+        # big enough to corrupt a sum, too small to notice in a break list.
+        now = fields.Datetime.now()
+        # STOP EVERYTHING, not just the task timers. An open Break/Lunch or a
+        # non-task block would otherwise keep running through the pause, so the
+        # same minutes would be counted twice — once as paused, once as lunch —
+        # and Accounted would exceed the day. Note _pause_running_task itself
+        # opens an 'away' break when it stops a task, so this also closes that.
+        try:
+            self.env['kpi.break.log'].stop_break(self.user_id.id, at=now)
+        except Exception as exc:
+            _logger.warning("pause-workday: stop_break failed for %s: %s", self.id, exc)
+        try:
+            self._close_nontask_block(at=now)
+        except Exception as exc:
+            _logger.warning("pause-workday: close nontask failed for %s: %s", self.id, exc)
+        self.sudo().write({'is_paused': True, 'paused_at': now})
+        try:
+            self._log_paused_action('workday_paused', note)
+        except Exception:
+            pass
+        return {'status': True, 'is_paused': True,
+                'message': 'Workday paused. Presence has stopped.'}
+
+    def action_resume_workday(self):
+        """Un-freeze the day. Presence starts counting again from NOW.
+
+        Tasks stay paused on purpose: resuming the DAY is not the same as
+        resuming a TASK, and which one to pick up is the developer's choice.
+        """
+        self.ensure_one()
+        if self.state != 'open':
+            return {'status': False, 'message': 'Your workday is not open.'}
+        if not self.is_paused:
+            return {'status': False, 'message': 'Your workday is not paused.'}
+        # Bank the pause that just ended. The elapsed time is added here and the
+        # marker cleared, so it can never be counted twice.
+        banked = (self.paused_seconds or 0.0)
+        if self.paused_at:
+            banked += max(0.0, (fields.Datetime.now() - self.paused_at).total_seconds())
+        self.sudo().write({'is_paused': False, 'paused_at': False,
+                           'paused_seconds': banked})
+        try:
+            self._log_paused_action('workday_resumed', '')
+        except Exception:
+            pass
+        return {'status': True, 'is_paused': False,
+                'message': 'Workday resumed.'}
+
+    def _log_paused_action(self, event, note):
+        """Audit pause/resume on any task this developer owns.
+
+        kpi.action.log hangs off a task, not a session, so there is nowhere else
+        to put it. Best-effort and never raises: an audit line must not be what
+        stops somebody pausing their day.
+        """
+        self.ensure_one()
+        kpi = self.env['kra.kpi'].sudo().search(
+            [('user_id', '=', self.user_id.id)], order='id desc', limit=1)
+        if kpi:
+            kpi._log_action(event, source='web', actor_user_id=self.user_id.id,
+                            payload={'session_id': self.id, 'note': note or ''})
 
     # ------------------------------------------------------------------ #
     # End-of-day                                                         #
@@ -1004,6 +1157,16 @@ class KpiWorkSession(models.Model):
         # to reconcile with the clock.
         productive = _measure(all_intervals)
         presence   = sum(sessions.mapped('presence_seconds'))
+        # Time the developer deliberately froze the day for. Reported on its own
+        # line rather than dropped: a six-hour hole with no explanation reads as
+        # a tracking failure to whoever reviews the day. Presence already
+        # excludes it, so Presence + Paused is the wall-clock span.
+        paused_secs = 0.0
+        for _s in sessions:
+            paused_secs += (_s.paused_seconds or 0.0)
+            if _s.is_paused and _s.paused_at:
+                _end = _s.logout_at or fields.Datetime.now()
+                paused_secs += max(0.0, (_end - _s.paused_at).total_seconds())
 
         # First login + last logout across all of today's sessions for display.
         login_candidates  = [s.login_at  for s in sessions if s.login_at]
@@ -1139,6 +1302,10 @@ class KpiWorkSession(models.Model):
             # "is my day explained?" before this.
             'accounted_seconds':  float(productive + metered),
             'accounted_display':  _fmt_hms(productive + metered),
+            # Workday paused (e.g. stopped at 04:00, back at 10:00). NOT inside
+            # Presence — Presence + Paused is the span from login to logout.
+            'paused_seconds':     float(paused_secs),
+            'paused_display':     _fmt_hms(paused_secs),
             # A normal working day vs what was actually here. Decided ONCE, server
             # side, so the app, the web popup and the saved image can never render
             # a different verdict for the same day.
@@ -1511,6 +1678,17 @@ class KpiWorkSession(models.Model):
             # stored as UTC put this 05:29 the next morning for IST and inflated
             # every auto-closed cross-midnight day by the offset.
             eod = _local_day_end_utc(s.session_date, s.user_id)
+            # Bank a pause that was never resumed BEFORE anything reads presence.
+            # "Paused at 04:00 and went to bed" is the case this exists for: the
+            # pause has to end at the same instant the day does, or presence for
+            # the date is computed against a pause with no end.
+            if s.is_paused and s.paused_at:
+                s.sudo().write({
+                    'is_paused': False,
+                    'paused_at': False,
+                    'paused_seconds': (s.paused_seconds or 0.0)
+                                      + max(0.0, (eod - s.paused_at).total_seconds()),
+                })
             s.write({
                 'logout_at':   eod,
                 'state':       'closed',

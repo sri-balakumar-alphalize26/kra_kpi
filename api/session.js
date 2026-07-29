@@ -83,7 +83,9 @@ export async function getRoleState(uid) {
   try {
     const raw = await AsyncStorage.getItem(`${K_ROLE}:${uid ?? 'me'}`);
     const o = raw ? JSON.parse(raw) : null;
-    return (o && typeof o === 'object') ? o : null;   // { kpiRole, paired }
+    // { kpiRole }. A `paired` key used to ride along here; pairing is retired, and
+    // read-only is now decided by the live workday state, never from this cache.
+    return (o && typeof o === 'object') ? o : null;
   } catch (_) {
     return null;
   }

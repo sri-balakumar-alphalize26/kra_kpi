@@ -97,6 +97,15 @@ class KpiBreakLog(models.Model):
             user_id = self.env.user.id
         active = self.search([('user_id', '=', user_id), ('is_active', '=', True)], limit=1)
         if active:
-            active.write({'end_time': at or fields.Datetime.now(), 'is_active': False})
+            end = at or fields.Datetime.now()
+            # A caller's `at` must never predate the break's own start, or this
+            # writes a negative duration that then poisons every total built on
+            # it. Callers capture a timestamp and do work before getting here, so
+            # a stale `at` is an easy mistake to make (action_pause_workday made
+            # exactly it). Cheaper to refuse it once here than to find a negative
+            # Accounted total later and trace it back to a break row.
+            if end < active.start_time:
+                end = active.start_time
+            active.write({'end_time': end, 'is_active': False})
             return {'break_id': active.id, 'duration_seconds': active.duration_seconds}
         return {'break_id': False, 'duration_seconds': 0}

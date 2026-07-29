@@ -66,6 +66,43 @@ class KpiMaster(models.Model):
         ('regular', 'Regular'),
     ], string="Priority", default='regular')
 
+    # What the DEVELOPER asked for when they raised the task themselves, kept
+    # separately from the priority that is actually in force.
+    #
+    # Both start equal, so nothing is lost and a fresh self-created task behaves
+    # as the developer expects. They diverge the moment an admin decides
+    # otherwise on Accept — and that divergence is the point: "asked Urgent, set
+    # Regular" is a real, reviewable fact, whereas overwriting `priority` in
+    # place threw the request away and left the admin deciding blind.
+    #
+    # Empty on tasks nobody self-created (client submissions, bulk uploads) —
+    # there was no developer request to record.
+    requested_priority = fields.Selection([
+        ('urgent', 'Urgent'),
+        ('important', 'Important'),
+        ('regular', 'Regular'),
+    ], string="Priority Requested by Developer", copy=False,
+        help="The priority the developer chose when creating this task. Shown to "
+             "the admin on Accept so they can set the real priority against it. "
+             "Never changed after creation — it is a record of what was asked.")
+
+    # Same idea as requested_priority, for the REQ / UPT / BUG classification.
+    #
+    # There is no `doc_type` field to mirror: the type is expressed through
+    # external_ref (REQ-012 / UPT-004 / BUG-021) and the name prefix, both of
+    # which the admin sets on Accept. So this is purely the developer's opinion —
+    # they know whether they are writing a bug or an update — captured so the
+    # admin decides with it in front of them rather than guessing from a title.
+    # The ADMIN's choice is what gets saved; this never overrides it.
+    requested_doc_type = fields.Selection([
+        ('requirement', 'Requirement'),
+        ('update', 'Update'),
+        ('bug', 'Bug'),
+    ], string="Type Requested by Developer", copy=False,
+        help="What the developer said this task is when they created it. Shown to "
+             "the admin on Accept and used to pre-select the type; the admin's "
+             "choice is what is actually applied.")
+
     user_group_id = fields.Many2one('res.groups', string='User Group')
     user_id = fields.Many2one('res.users', string='Assignee')
 
@@ -380,6 +417,25 @@ class KpiMaster(models.Model):
     ], string='Task State', default='assigned')
 
     # 🆕 NEW: Approval fields
+    # ---- Revert out of "Awaiting Client Sign-off" ------------------------ #
+    # An admin can pull a task back off the client's desk when the work turns
+    # out to need more doing. Only from 'awaiting_client' — a fully completed,
+    # client-signed task is deliberately NOT revertable, because its signature
+    # is what invoicing is built on.
+    #
+    # Modelled as a Selection with one value rather than a boolean so that adding
+    # 'completed' later is a value, not a migration.
+    reverted_from = fields.Selection([
+        ('awaiting_client', 'Reverted from Awaiting Client'),
+    ], string='Reverted From', readonly=True, copy=False,
+        help="Set when an admin pulls a task back out of client sign-off. Cleared "
+             "when the task is completed again, so the badge marks a task that IS "
+             "back, not one that once was.")
+    reverted_at = fields.Datetime(string='Reverted On', readonly=True, copy=False)
+    reverted_by_id = fields.Many2one('res.users', string='Reverted By',
+                                     readonly=True, copy=False, ondelete='set null')
+    revert_reason = fields.Text(string='Revert Reason', readonly=True, copy=False)
+
     completed_by = fields.Many2one('res.users', string='Completed By', readonly=True)
     completion_date = fields.Datetime(string='Completion Date', readonly=True)
     approved_by = fields.Many2one('res.users', string='Approved By', readonly=True)
@@ -540,6 +596,13 @@ class KpiMaster(models.Model):
     def complete_task(self, employee_checklist=None):
         """Employee marks task as complete with checklist - goes to Partially Completed"""
         for rec in self:
+            # A reverted task that has been worked and re-submitted is no longer
+            # "back from client sign-off" — it is on its way forward again. The
+            # badge marks a task that IS back, not one that once was, so it is
+            # cleared here rather than left as permanent history (the audit trail
+            # lives in kpi.action.log).
+            if rec.reverted_from:
+                rec.reverted_from = False
             if rec.timer_start_datetime:
                 self._add_elapsed(rec)
                 rec.timer_start_datetime = False
@@ -595,6 +658,26 @@ class KpiMaster(models.Model):
                 rec.approval_date = self._now()
                 # A real client signature exists, so this is billable.
                 rec.client_final_approved = True
+            elif not rec._client_approvers():
+                # NOBODY can ever sign this off — the KRA has no client users
+                # linked. Parking it in 'awaiting_client' would leave it sitting
+                # in a queue waiting on a person who does not exist, showing
+                # "waiting for the client" on a card that is, in fact, finished.
+                #
+                # Closed as completed on the ADMIN's approval, which is the last
+                # real decision available. client_final_approved stays FALSE: no
+                # client signed, so nothing here may be treated as their consent —
+                # the same line drawn by the pre-approval no-client path.
+                rec.task_state = 'completed'
+                rec.approved_by = self.env.user
+                rec.approval_date = self._now()
+                try:
+                    rec._log_action(
+                        'completed_no_client', source='web',
+                        payload={'reason': 'KRA has no client users linked',
+                                 'kra': rec.kra_id.name if rec.kra_id else ''})
+                except Exception:
+                    pass
             else:
                 # Move to a dedicated 'awaiting client sign-off' state so the kanban
                 # transitions out of "Pending Approvals". Client portal picks this up.

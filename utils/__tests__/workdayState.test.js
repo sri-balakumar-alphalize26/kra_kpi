@@ -1,51 +1,49 @@
 const { workdayButtonState } = require('../workdayState');
 
 describe('workdayButtonState', () => {
-  // Paired developer, workday open → the only action is End.
-  test('paired + open → End Workday', () => {
-    expect(workdayButtonState({ locked: false, workdayOpen: true, dayDone: false }))
+  // Workday open → the only action is End.
+  test('open → End Workday', () => {
+    expect(workdayButtonState({ workdayOpen: true, dayDone: false }))
       .toEqual({ label: 'End Workday', action: 'end', disabled: false });
   });
 
-  // Unpaired but the server session is still OPEN (tab closed / auto-away):
-  // this is the bug we fixed — it must read "Continue", never "Start".
-  test('locked + open → Continue Workday', () => {
-    expect(workdayButtonState({ locked: true, workdayOpen: true, dayDone: false }))
-      .toEqual({ label: 'Continue Workday', action: 'pair', disabled: false });
-  });
-
-  // Fresh day, nothing open, nothing ended → Start.
-  test('locked + not open → Start Workday', () => {
-    expect(workdayButtonState({ locked: true, workdayOpen: false, dayDone: false }))
-      .toEqual({ label: 'Start Workday', action: 'pair', disabled: false });
+  // Nothing open, nothing ended → start the day. With the PIN gone this opens
+  // the workday directly instead of routing anywhere.
+  test('not open → Start Workday (opens directly)', () => {
+    expect(workdayButtonState({ workdayOpen: false, dayDone: false }))
+      .toEqual({ label: 'Start Workday', action: 'start', disabled: false });
   });
 
   // Explicit End today → one-per-day: disabled "ended" state, no restart.
   test('dayDone → Workday ended for today (disabled)', () => {
-    expect(workdayButtonState({ locked: true, workdayOpen: false, dayDone: true }))
+    expect(workdayButtonState({ workdayOpen: false, dayDone: true }))
       .toEqual({ label: 'Workday ended for today', action: 'none', disabled: true });
   });
 
-  // dayDone wins over a stale/incoherent "open" flag so a restart is never offered.
-  test('dayDone takes priority over a lingering open flag while locked', () => {
-    expect(workdayButtonState({ locked: true, workdayOpen: true, dayDone: true }))
-      .toEqual({ label: 'Workday ended for today', action: 'none', disabled: true });
-  });
-
-  // A paired + open session always ends first, even if dayDone somehow raced true.
-  test('paired + open beats dayDone (still End)', () => {
-    expect(workdayButtonState({ locked: false, workdayOpen: true, dayDone: true }))
+  // The ordering that matters: a session flag left true after the day was ended
+  // must not resurrect an End button, and must never offer a restart.
+  test('open + dayDone → End wins (still working)', () => {
+    expect(workdayButtonState({ workdayOpen: true, dayDone: true }))
       .toEqual({ label: 'End Workday', action: 'end', disabled: false });
   });
 
-  // Already paired but no open session (rare edge) → open directly (action 'start').
-  test('not locked + not open → Start Workday (direct open)', () => {
-    expect(workdayButtonState({ locked: false, workdayOpen: false, dayDone: false }))
-      .toEqual({ label: 'Start Workday', action: 'start', disabled: false });
+  // dayDone beats the default start case — the whole point of checking it second.
+  test('dayDone beats the Start default', () => {
+    expect(workdayButtonState({ workdayOpen: false, dayDone: true }).action).toBe('none');
+    expect(workdayButtonState({ workdayOpen: false, dayDone: false }).action).toBe('start');
   });
 
-  // Defensive: missing/undefined inputs must not throw. Nothing locked/open →
-  // the not-locked branch → direct 'start'.
+  // 'pair' is gone with the PIN screen — no input may ever produce it again.
+  test('never returns the retired pair action', () => {
+    for (const workdayOpen of [true, false]) {
+      for (const dayDone of [true, false]) {
+        expect(workdayButtonState({ workdayOpen, dayDone }).action).not.toBe('pair');
+      }
+    }
+  });
+
+  // Defensive: missing/undefined inputs must not throw. Nothing open, nothing
+  // done → the start case.
   test('no args → Start Workday (safe default)', () => {
     expect(workdayButtonState()).toEqual({ label: 'Start Workday', action: 'start', disabled: false });
     expect(workdayButtonState({})).toEqual({ label: 'Start Workday', action: 'start', disabled: false });

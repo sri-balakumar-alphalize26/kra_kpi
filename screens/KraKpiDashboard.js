@@ -324,11 +324,11 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit }) {
   };
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={close}>
+    <Modal visible transparent animationType="fade" onRequestClose={close}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={close}>
           <TouchableOpacity activeOpacity={1} style={s.sheet}>
-            <View style={s.sheetHandle} />
+            {/* drag handle removed: these are centred dialogs now, not bottom sheets — a grab bar on a dialog you cannot drag is just noise */}
             <Text style={s.sheetTitle}>{title}</Text>
 
             <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 420 }}>
@@ -393,7 +393,7 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit }) {
         <Modal visible transparent animationType="fade" onRequestClose={() => setPicker(null)}>
           <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={() => setPicker(null)}>
             <TouchableOpacity activeOpacity={1} style={s.sheet}>
-              <View style={s.sheetHandle} />
+              {/* drag handle removed: these are centred dialogs now, not bottom sheets — a grab bar on a dialog you cannot drag is just noise */}
               <Text style={s.sheetTitle}>Select</Text>
               <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
                 {pickerItems().length === 0 ? (
@@ -468,9 +468,11 @@ const s = StyleSheet.create({
   retryTxt: { color: '#fff', fontSize: 15, fontWeight: '800' },
 
   // Modal
-  backdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'flex-end' },
-  sheet: { backgroundColor: '#fff', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 18, paddingBottom: 26 },
-  sheetHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#D5DCE8', marginBottom: 14 },
+  // Centred dialog, not a bottom sheet: a popup that slides up from the edge
+  // of the screen puts its content under the thumb and, on a short screen,
+  // partly behind the keyboard. Centre + fade matches every other modal here.
+  backdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'center', padding: 20 },
+  sheet: { backgroundColor: '#fff', borderRadius: 20, padding: 18, paddingBottom: 20, maxHeight: '85%' },
   sheetTitle: { fontSize: 18, fontWeight: '900', color: COLORS.navy, marginBottom: 8 },
 
   mLabel: { fontSize: 13, fontWeight: '700', color: COLORS.muted, marginTop: 12, marginBottom: 6 },

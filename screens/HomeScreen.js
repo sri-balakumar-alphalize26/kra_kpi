@@ -19,6 +19,7 @@ import { getConnection, saveSession, getQuickActions, saveQuickActions, getMenuO
 import ReorderableMenu from '../components/ReorderableMenu';
 import { jsonRpc } from '../api/odooApi';
 import { fetchUnreadCount } from '../services/notifications';
+import { startWorkday } from '../services/kpiActions';
 import { fetchTasks, groupIntoLanes } from '../services/kpiActions';
 import { workdayButtonState } from '../utils/workdayState';
 // Clients aren't served by /kra_kpi/tasks/get (it returns nothing for them), so
@@ -301,7 +302,28 @@ function Greeting({ name }) {
   );
 }
 
-function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, onNeedPair }) {
+function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, onWorkdayStarted }) {
+  // Starting the workday straight from the read-only bar. Previously this bar's
+  // button only routed to the PIN screen; opening the day is now a plain call.
+  const [roBusy, setRoBusy] = useState(false);
+  const startWorkdayNow = useCallback(async () => {
+    if (roBusy) return;
+    setRoBusy(true);
+    try {
+      const res = await startWorkday();
+      if (res && res.status === false) {
+        Alert.alert(res.day_done ? 'Workday ended' : "Can't start workday",
+                    res.message || 'Failed to start your workday.');
+        return;
+      }
+      onWorkdayStarted && onWorkdayStarted();
+    } catch (e) {
+      Alert.alert('Something went wrong', e?.message || 'Failed to start your workday.');
+    } finally {
+      setRoBusy(false);
+    }
+  }, [roBusy, onWorkdayStarted]);
+
   // Fetch the user's role so admin-only tiles can be hidden from regular users.
   // Default to admin=true optimistically until the role resolves, then correct —
   // but hold tile render until we know, to avoid a flash of admin tiles.
@@ -627,8 +649,9 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, onNee
             admins and clients are never locked. */}
         {workdayLocked ? (() => {
           // Same decision as the Action Board button (utils/workdayState.js):
-          // Continue (workday still open, unpaired) / Start / ended-for-today.
-          const wd = workdayButtonState({ locked: true, workdayOpen: !!workdayOpen, dayDone: !!dayDone });
+          // Start, or ended-for-today. The button now OPENS the workday directly —
+          // it used to route to a PIN screen and wait for a code from the phone.
+          const wd = workdayButtonState({ workdayOpen: !!workdayOpen, dayDone: !!dayDone });
           return (
             <View style={s.roBar}>
               <Ionicons name={dayDone ? 'checkmark-done' : 'lock-closed'} size={14} color={COLORS.red} />
@@ -638,8 +661,13 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, onNee
                   : 'Read-only — everything except Profile.\nStart your workday to work on tasks.'}
               </Text>
               {wd.disabled ? null : (
-                <TouchableOpacity style={s.roBtn} onPress={onNeedPair} activeOpacity={0.85}>
-                  <Text style={s.roBtnTxt}>{wd.label}</Text>
+                <TouchableOpacity
+                  style={[s.roBtn, roBusy && { opacity: 0.6 }]}
+                  disabled={roBusy}
+                  onPress={startWorkdayNow}
+                  activeOpacity={0.85}
+                >
+                  <Text style={s.roBtnTxt}>{roBusy ? 'Starting…' : wd.label}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -1331,7 +1359,7 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
   );
 }
 
-export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, workdayOpen, dayDone, onNeedPair }) {
+export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, workdayOpen, dayDone, onWorkdayStarted }) {
   const [tab, setTab] = useState('home');
   const [logoutOpen, setLogoutOpen] = useState(false);
   const name = (user && user.name) ? user.name.split(' ')[0] : 'Sonia';
@@ -1357,7 +1385,7 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, work
         {tab === 'home'    && (
           <HomeTab
             name={name} onOpen={onOpen} uid={user?.uid}
-            workdayLocked={workdayLocked} workdayOpen={workdayOpen} dayDone={dayDone} onNeedPair={onNeedPair}
+            workdayLocked={workdayLocked} workdayOpen={workdayOpen} dayDone={dayDone} onWorkdayStarted={onWorkdayStarted}
           />
         )}
         {tab === 'profile' && <ProfileTab user={user} onLogout={onLogout} dayDone={dayDone} avatar={avatar} setAvatar={setAvatar} />}

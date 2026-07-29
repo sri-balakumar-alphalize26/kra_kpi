@@ -213,11 +213,13 @@ export async function fetchTaskDetails(kpiId) {
 // applies the name prefix, so the admin is really CATEGORISING it. The server
 // then fires client pre-approval only if the dev hasn't started — a running
 // timer and its accrued time are never disturbed.
-export async function acceptSelfCreated(kpiId, docType = 'requirement') {
+// `priority` is the admin's decision, made against the developer's request
+// (task.requested_priority). Omit it and the developer's choice stands.
+export async function acceptSelfCreated(kpiId, docType = 'requirement', priority) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true };
   const res = await jsonRpc(serverUrl, '/kra_kpi/task/accept_self_created', {
-    kpi_id: kpiId, doc_type: docType,
+    kpi_id: kpiId, doc_type: docType, priority,
   });
   if (!res || res.status === false) throw new Error(res?.message || 'Could not accept the task');
   log.info('acceptSelfCreated ←', { kpiId, docType });
@@ -267,6 +269,40 @@ export const pauseTask   = (kpiId, reason, reasonCode) =>
   action('/kra_kpi/task/pause', { kpi_id: kpiId, reason: reason || '', reason_code: reasonCode || false });
 export const reassignTask = (kpiId, userId, reason) =>
   action('/kra_kpi/task/reassign', { kpi_id: kpiId, user_id: userId, reason: reason || '' });
+
+// "I'm moving on to the next thing" — stop one task and start another in ONE
+// call. Deliberately not pause-then-start from here: two calls can half-apply,
+// leaving the developer stopped with nothing running when the start is refused.
+// The server validates the target BEFORE it pauses anything (kra.kpi.switch_to_task).
+//
+// fromKpiId names the task being handed over. Pass it and ONLY that task pauses —
+// which is the whole point under multitask: switching task 1 to task 3 must leave
+// task 2's timer ticking. Omit it and every running task pauses.
+export const switchTask = (kpiId, fromKpiId, note) =>
+  action('/kra_kpi/task/switch', {
+    kpi_id: kpiId, from_kpi_id: fromKpiId || null, note: note || '',
+  });
+
+// Stop EVERY running timer at once with one shared reason. No task id in the
+// payload — the model scopes it to the caller's own running tasks, so it cannot
+// be aimed at anyone else. Presence is not double-counted: kpi.break.log keeps
+// one active break per user, so a 20-min lunch with two tasks open is 20 minutes.
+export const pauseAllTasks = (reason, reasonCode) =>
+  action('/kra_kpi/task/pause_all', {
+    reason: reason || '', reason_code: reasonCode || 'break',
+  });
+
+// Admin pulls a task back out of Awaiting Client Sign-off. Clearing
+// admin_approved is what actually takes it off the client's screen — the portal
+// selects on two branches, so moving the state alone would leave it visible.
+// That rule lives on the server; this only carries the reason, which is required.
+export const revertSignoff = (kpiId, reason) =>
+  action('/kra_kpi/task/revert_signoff', { kpi_id: kpiId, reason: reason || '' });
+// Admin deletes a task NOBODY has worked on. The server owns the rule
+// (kra.kpi._may_admin_delete) and ships its answer per task as can_admin_delete —
+// never re-derive it here, or the button will offer what the route refuses.
+export const adminDeleteTask = (kpiId, reason) =>
+  action('/kra_kpi/task/admin_delete', { kpi_id: kpiId, reason: reason || '' });
 export const completeTask = (kpiId, employeeChecklist = {}, partial = false) =>
   action('/kra_kpi/task/complete', { kpi_id: kpiId, employee_checklist: employeeChecklist, partial });
 // Admin reviews a developer-completed task (task_state === 'partially_completed').
@@ -433,6 +469,11 @@ export async function getWorkdayStatus() {
 }
 export const startWorkday = () => action('/kpi_workday/ping', {});
 export const endWorkday = (note = '') => action('/kpi_workday/end', { note });
+// Freeze the whole day without ending it — tasks stop, Presence stops, and it can
+// be resumed the SAME date. End Workday cannot be undone (one start + one end),
+// which is why pausing is a separate action.
+export const pauseWorkday = (note = '') => action('/kpi_workday/pause', { note });
+export const resumeWorkday = () => action('/kpi_workday/resume', {});
 
 // ── Not on a task: Meeting / Break / No tasks ────────────────────────────────
 // Why this exists: a 9:30 start with a 9:31 meeting must not look like idling.
@@ -462,7 +503,9 @@ export const endNonTask = () => action('/kpi_workday/end_nontask', {});
 // Live activity strip: running task + active break + presence/productive anchors.
 export async function getLiveStatus() {
   const { serverUrl } = await getConnection();
-  if (!serverUrl) return { status: true, workday_open: false, active_task: false, active_break: false };
+  // active_tasks = EVERY running timer (multitask); active_task is the first of
+  // them, kept so an older server that doesn't send the list still renders.
+  if (!serverUrl) return { status: true, workday_open: false, active_task: false, active_tasks: [], active_break: false };
   return jsonRpc(serverUrl, '/kpi_action/live_status', {});
 }
 

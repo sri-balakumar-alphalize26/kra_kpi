@@ -16,10 +16,12 @@ import GradientBackground from '../components/GradientBackground';
 import KpiTaskDetail from './KpiTaskDetail';
 import {
   LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers,
-  startTask, pauseTask, resumeTask, completeTask, reassignTask, createProgress,
+  startTask, pauseTask, resumeTask, completeTask, reassignTask, adminDeleteTask, createProgress,
+  switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists,
   CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
-  getWorkdayStatus, startWorkday, endWorkday, selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
+  getWorkdayStatus, startWorkday, endWorkday, pauseWorkday, resumeWorkday,
+  selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
   acceptSelfCreated, rejectSelfCreated,
   IDLE_REASONS, setIdleReason, endNonTask, IDLE_NOTE_MAX,
 } from '../services/kpiActions';
@@ -29,6 +31,9 @@ import { scheduleTaskAlarm, stopAlarm, alarmAvailable, pickAlarmSound, titleFrom
 import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets, getAlarmSound, setAlarmSound, getAlarmSettings, setAlarmSettings } from '../api/session';
 import DurationTimePicker from '../components/DurationTimePicker';
 import { workdayButtonState } from '../utils/workdayState';
+// Why a blocked task is blocked, in the server's words. Pure + unit-tested
+// against real payloads (utils/__tests__/taskGate.test.js).
+import { gateLabel } from '../utils/taskGate';
 
 const log = createLogger('ActionBoard');
 
@@ -150,6 +155,30 @@ function productiveLive(live, nowMs) {
   return base;
 }
 
+// Live Presence — a port of the web board's livePresenceDisplay (kpi_action.js).
+//
+// Presence is time AT WORK, so paused time has to come off. This clock ticks on
+// the device from a login anchor, so without the two paused_* values the strip
+// kept counting a workday the developer had explicitly frozen: the server's own
+// presence_seconds was already right, only the live strip was lying — and it is
+// the number they are looking at while deciding whether pausing worked.
+//
+// paused_base is pauses already banked. paused_since is the OPEN one, and when
+// it is set we freeze at the instant the pause began rather than subtracting a
+// growing number, so the clock visibly STOPS instead of merely slowing.
+function presenceLive(live, nowMs) {
+  if (!live?.login_raw) return 0;
+  const banked = live.paused_base || 0;
+  if (live.is_paused && live.paused_since) {
+    const start = Date.parse(live.login_raw);
+    const pausedAt = Date.parse(live.paused_since);
+    if (!Number.isNaN(start) && !Number.isNaN(pausedAt)) {
+      return Math.max(0, (pausedAt - start) / 1000 - banked);
+    }
+  }
+  return Math.max(0, secsSince(live.login_raw, nowMs) - banked);
+}
+
 const PRIORITY = {
   urgent:    { label: 'Urgent',    bg: COLORS.redBg,   fg: COLORS.red },
   important: { label: 'Important', bg: '#EDE9FE',      fg: '#7C3AED' },
@@ -214,6 +243,13 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
   const canResume = ['paused', 'hold', 'rework'].includes(st);
   const canComplete = ['in_progress', 'paused', 'hold', 'rework'].includes(st);
   const canPause = st === 'in_progress';
+  // The SERVER's answer on whether work may begin (kra.kpi._start_block, shipped
+  // as can_start), not a second opinion derived from task_state. A paused or
+  // never-started workday, an unaccepted task and an unapproved client all land
+  // here. Payloads from an older server have no can_start — treat that as
+  // allowed, so the button behaves as it always did rather than locking up.
+  const startBlocked = task.can_start === false;
+  const gate = gateLabel(task);
   // Exactly the "Pending Review" lane rule (laneForTask in services/kpiActions.js)
   // and the same condition the server enforces on accept/reject_self_created.
   // Independent of task_state: the dev may already be working it.
@@ -222,6 +258,17 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
     <>
       {/* Meta */}
       <View style={s.metaBlock}>
+        {/* What the developer asked for, while it still differs from what is set.
+            Once an admin agrees (or never changes it) the two match and this
+            would be noise, so it hides itself. */}
+        {task.requested_priority && task.requested_priority !== task.priority ? (
+          <View style={s.metaRow}>
+            <Ionicons name="flag-outline" size={14} color={COLORS.muted} />
+            <Text style={[s.metaValue, { flex: 1 }]} numberOfLines={1}>
+              Developer asked for {PRIORITIES.find((p) => p.code === task.requested_priority)?.label || task.requested_priority}
+            </Text>
+          </View>
+        ) : null}
         {task.time_by_user && task.time_by_user.length ? (
           task.time_by_user.map((tu) => (
             <View key={tu.user_id} style={s.metaRow}>
@@ -250,6 +297,18 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
         </View>
       ) : null}
 
+      {/* Why Start is dimmed, and when it will un-dim. Without it the button is
+          just dead with no explanation, which is what made the workflow feel
+          broken rather than merely waiting. Driven by the LABEL and not by
+          can_start, because gateLabel deliberately returns '' for finished work
+          — gating on can_start alone rendered an empty badge there. */}
+      {!readOnly && gate ? (
+        <View style={s.gatePill}>
+          <Ionicons name="hourglass-outline" size={13} color="#92400E" />
+          <Text style={s.gatePillTxt} numberOfLines={2}>{gate}</Text>
+        </View>
+      ) : null}
+
       {/* Actions. Hidden entirely while the workday hasn't started: every one of
           these changes a task, which is exactly what read-only withholds. The
           whole row goes (not just the buttons) so there's no dead gap, and the
@@ -270,9 +329,19 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
               {isAdmin && awaitingReview && (
                 <Btn label="Reject" icon="close-circle" kind="ghostRed" onPress={() => onAction('rejectSelf', task)} />
               )}
-              {canStart && <Btn label="Start" icon="play" kind="primary" onPress={() => onAction('start', task)} />}
-              {canResume && <Btn label="Resume" icon="play" kind="green" onPress={() => onAction('resume', task)} />}
+              {/* Dimmed when the server says no, but still TAPPABLE on purpose.
+                  The web disables it and puts the reason in a tooltip; a phone
+                  has no hover, so a truly disabled button would refuse silently
+                  and read as a bug. Tapping a blocked one shows the server's own
+                  message immediately, with no round-trip. */}
+              {canStart && <Btn label="Start" icon="play" kind="primary" blocked={startBlocked} onPress={() => onAction('start', task)} />}
+              {canResume && <Btn label="Resume" icon="play" kind="green" blocked={startBlocked} onPress={() => onAction('resume', task)} />}
               {canPause && <Btn label="Pause" icon="pause" kind="amber" onPress={() => onAction('pause', task)} />}
+              {/* Hand THIS task over to another one. Sits next to Pause because
+                  it is the same decision made differently: stop this, and say
+                  what you moved to. Per-card on purpose — with multitask running
+                  only this task pauses and the others carry on ticking. */}
+              {canPause && <Btn label="Switch" icon="swap-horizontal" kind="ghost" onPress={() => onAction('switch', task)} />}
               {canComplete && <Btn label="Complete" icon="checkmark-circle" kind="red" onPress={() => onAction('complete', task)} />}
               {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="ghostRed" onPress={() => onAction('partial', task)} />}
               {/* Developer finished it → admin reviews: Approve (with QA checklist) sends it
@@ -283,7 +352,19 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
               {isAdmin && st === 'partially_completed' && (
                 <Btn label="Reject" icon="close-circle" kind="ghostRed" onPress={() => onAction('rejectDone', task)} />
               )}
+              {/* Admin pulls a task back off the client's desk. Only from
+                  Awaiting Client — a completed, client-signed task is a billing
+                  decision, not a workflow one, and the server refuses it. */}
+              {isAdmin && st === 'awaiting_client' && (
+                <Btn label="Revert" icon="arrow-undo" kind="amber" onPress={() => onAction('revertSignoff', task)} />
+              )}
               {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
+              {/* Remove a task nobody has worked on. can_admin_delete is the
+                  SERVER's answer (kra.kpi._may_admin_delete) — never re-derived
+                  here, so the button can't offer what the route would refuse. */}
+              {isAdmin && task.can_admin_delete && (
+                <Btn label="Delete" icon="trash-outline" kind="ghostRed" onPress={() => onAction('adminDelete', task)} />
+              )}
               {/* Developer-only per-task alarm: set a local "wrap up" reminder so
                   you don't keep re-checking elapsed vs. estimate. */}
               {!isAdmin ? (() => {
@@ -492,10 +573,17 @@ function AnimatedLane({ index, style, onLayout, children }) {
   );
 }
 
-function Btn({ label, icon, kind, onPress }) {
+// `blocked` = the server won't allow this yet. Dimmed, but deliberately still
+// pressable: the handler answers with the reason instead of the action, which is
+// the only way to explain a gated button on a device with no tooltips.
+function Btn({ label, icon, kind, onPress, blocked = false }) {
   return (
-    <TouchableOpacity style={[s.btn, s[`btn_${kind}`]]} onPress={onPress} activeOpacity={0.85}>
-      <Ionicons name={icon} size={14} color={s[`btnTxt_${kind}`].color} />
+    <TouchableOpacity
+      style={[s.btn, s[`btn_${kind}`], blocked && s.btnBlocked]}
+      onPress={onPress}
+      activeOpacity={0.85}
+    >
+      <Ionicons name={blocked ? 'lock-closed' : icon} size={14} color={s[`btnTxt_${kind}`].color} />
       <Text style={[s.btnTxt, s[`btnTxt_${kind}`]]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -572,12 +660,12 @@ function FilterDropdown({ label, open, onToggle, options, selected, getKey, getL
 
 export default function KpiActionBoard({
   onBack, focusTaskId, onFocusHandled, focusStatus,
-  // workdayLocked: a developer whose workday hasn't started (device unpaired).
-  // The board stays fully BROWSABLE — lanes, filters, search, details — but every
-  // task ACTION is hidden, because starting work requires pairing at the computer.
-  // onNeedPair: send them to the PIN screen (the only thing that opens a workday).
-  // onWorkdayEnded: End Workday un-pairs server-side → flip to read-only at once.
-  workdayLocked = false, onNeedPair, onWorkdayEnded,
+  // workdayLocked: a developer whose workday is not open. The board stays fully
+  // BROWSABLE — lanes, filters, search, details — but every task ACTION is hidden
+  // until they start their day. Reading isn't work.
+  // onWorkdayStarted / onWorkdayEnded: flip App's read-only state immediately
+  // instead of waiting up to 5s for its workday poll.
+  workdayLocked = false, onWorkdayStarted, onWorkdayEnded,
 }) {
   const [raw, setRaw] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -613,6 +701,26 @@ export default function KpiActionBoard({
   const [pauseNote, setPauseNote] = useState('');
   const [pauseDropdown, setPauseDropdown] = useState(false);
 
+  // Switch modal. `switchFrom` is the task being HANDED OVER — the card the
+  // button was pressed on. It is sent as from_kpi_id so that under multitask only
+  // that timer stops. `false` means the picker is closed; `null` means "switch
+  // whatever I'm on" (the strip button, only offered with one task running).
+  const [switchFrom, setSwitchFrom] = useState(false);
+  const [switchBusy, setSwitchBusy] = useState(false);
+
+  // Pause all — one shared reason for every running timer.
+  const [pauseAllOpen, setPauseAllOpen] = useState(false);
+  const [pauseAllCode, setPauseAllCode] = useState('break');
+  const [pauseAllNote, setPauseAllNote] = useState('');
+  const [pauseAllBusy, setPauseAllBusy] = useState(false);
+
+  // Admin revert from Awaiting Client. The reason is REQUIRED: this reopens work
+  // someone believed was finished, and "why is this back?" with no answer is what
+  // wastes everyone's time.
+  const [revertFor, setRevertFor] = useState(null);
+  const [revertReason, setRevertReason] = useState('');
+  const [revertBusy, setRevertBusy] = useState(false);
+
   // Finish (Complete / Partial) modal
   const [finishFor, setFinishFor] = useState(null);
   const [finishPartial, setFinishPartial] = useState(false);
@@ -638,6 +746,9 @@ export default function KpiActionBoard({
   // task a developer created themselves.
   const [acceptFor, setAcceptFor] = useState(null);
   const [acceptType, setAcceptType] = useState('requirement');
+  // The priority the ADMIN is setting on accept. Seeded from the developer's
+  // requested_priority when the modal opens.
+  const [acceptPriority, setAcceptPriority] = useState('regular');
   const [rejectFor, setRejectFor] = useState(null);
   const [rejectNote, setRejectNote] = useState('');
   // Admin review of a developer-completed task: Approve (with QA checklist) → client; Reject → same dev.
@@ -689,6 +800,9 @@ export default function KpiActionBoard({
   // Seed from the cache so re-entry shows the right label immediately; null until
   // the first getWorkdayStatus() of the session resolves (button shows a spinner).
   const [workdayOpen, setWorkdayOpenState] = useState(WORKDAY_CACHE);
+  // Open but frozen: Presence has stopped and no task may start until resumed.
+  const [workdayPaused, setWorkdayPaused] = useState(false);
+  const [workdayPauseBusy, setWorkdayPauseBusy] = useState(false);
   const setWorkdayOpen = (v) => { WORKDAY_CACHE = v; setWorkdayOpenState(v); };
   const [workdayBusy, setWorkdayBusy] = useState(false);
   const [endSummary, setEndSummary] = useState(null); // payload for the End Workday popup
@@ -963,6 +1077,7 @@ export default function KpiActionBoard({
     getWorkdayStatus().then((r) => {
       setWorkdayOpen(!!r?.is_open);
       setDayDone(!!r?.day_done);
+      setWorkdayPaused(!!r?.is_paused);
     }).catch(() => {});
   }, []);
 
@@ -970,6 +1085,12 @@ export default function KpiActionBoard({
   // after-an-action refresh can never drift apart on when to ask.
   const applyLive = useCallback((r) => {
     setLive(r);
+    // Keep the paused banner and the Resume button honest between mounts. The
+    // mount read of /kpi_workday/status is a one-shot, so without this a pause
+    // or resume made on the WEB never reached a board that was already open, and
+    // coming back from the background left a stale banner until the next remount.
+    // live_status carries is_paused for exactly this reason — no extra request.
+    if (r && typeof r.is_paused === 'boolean') setWorkdayPaused(r.is_paused);
     log.info('live ←', {
       workday_open: !!r?.workday_open,
       active_task: !!r?.active_task,
@@ -982,7 +1103,11 @@ export default function KpiActionBoard({
     // cron re-ask bumps the number so a dismissed #1 can't swallow #2 and #3.
     const seq = r?.idle_prompt_seq || 0;
     const snoozed = Date.now() < idleSnoozeRef.current;
-    if (r?.idle_prompt && !snoozed && seq > idleAskedRef.current) {
+    // A paused workday never asks. The server suppresses this too, so this is
+    // belt-and-braces for an app talking to an older build — but it is cheap and
+    // the failure it prevents is not: every answer in that popup opens a break or
+    // a non-task block, and pausing deliberately closed both.
+    if (r?.idle_prompt && !r?.is_paused && !snoozed && seq > idleAskedRef.current) {
       idleAskedRef.current = seq;
       log.info('idle prompt → opening popup', { seq });
       setIdlePopup(true);
@@ -1181,9 +1306,15 @@ export default function KpiActionBoard({
   const shownTasks = filtered.length;
   const runningCount = useMemo(() => raw.filter((t) => t.task_state === 'in_progress').length, [raw]);
 
-  // New Task is valid only with a name, a project, and a non-zero estimate.
-  const ntValid = !!ntName.trim() && !!ntProject &&
-    ((parseInt(ntHours, 10) || 0) * 60 + (parseInt(ntMinutes, 10) || 0)) > 0;
+  // A name and a project. The ESTIMATE IS OPTIONAL — a developer raising a task
+  // often doesn't know yet how long it will take, and demanding a number here
+  // only produced invented ones; the admin sets or corrects it on Accept.
+  //
+  // This clause outlived its removal elsewhere: the Alert in submitNewTask was
+  // dropped, but the button is disabled={!ntValid}, so a blank estimate left
+  // Create Task permanently dead with nothing on screen saying why. Half a rule
+  // removed is worse than the whole rule — at least the Alert explained itself.
+  const ntValid = !!ntName.trim() && !!ntProject;
 
   // Distinct assignees present in the data, for the Assignee filter.
   const assigneeOptions = useMemo(() => {
@@ -1194,13 +1325,10 @@ export default function KpiActionBoard({
 
   async function toggleWorkday() {
     // ONE decision, shared with the Home read-only bar (utils/workdayState.js).
-    const { action } = workdayButtonState({ locked: workdayLocked, workdayOpen: workdayOpen === true, dayDone });
+    const { action } = workdayButtonState({ workdayOpen: workdayOpen === true, dayDone });
     log.info('workday toggle', { action, currentlyOpen: workdayOpen, workdayLocked, dayDone });
     // Ended for today → button is disabled; nothing to do (one start + one end).
     if (action === 'none') return;
-    // Unpaired: starting/continuing the workday IS pairing. Route to the PIN
-    // screen — only a verified PIN opens the workday, so nothing starts here.
-    if (action === 'pair') { onNeedPair && onNeedPair(); return; }
     setWorkdayBusy(true);
     try {
       if (action === 'end') {
@@ -1208,16 +1336,44 @@ export default function KpiActionBoard({
         const payload = await getTodaySummary();
         setEndNote('');
         setEndSummary(payload || {});
-      } else { // action === 'start': already paired, session not open → open directly.
+      } else {
+        // 'start' — open the workday directly. This used to route to a PIN screen
+        // and wait for a code typed on the computer; the button does the thing now.
         const res = await startWorkday();
         if (res && res.status === false) {
           // Backend refused because today was already ended (one per day).
           if (res.day_done) { setDayDone(true); setWorkdayOpen(false); showError('Workday ended', res.message || 'You already ended your workday today.'); }
           else showError("Can't start workday", res.message || 'Failed');
-        } else { setWorkdayOpen(true); setDayDone(false); }
+        } else {
+          setWorkdayOpen(true);
+          setDayDone(false);
+          // Lift read-only immediately rather than waiting up to 5s for App's poll.
+          onWorkdayStarted && onWorkdayStarted();
+        }
       }
     } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
     finally { setWorkdayBusy(false); }
+  }
+
+  // Freeze / un-freeze the whole day. Separate from End Workday because ending
+  // is final for the date (one start + one end) — this is for "back in a few
+  // hours", e.g. stopping at 4am and picking up again at 10.
+  async function toggleWorkdayPause() {
+    if (workdayPauseBusy) return;
+    setWorkdayPauseBusy(true);
+    try {
+      const res = workdayPaused ? await resumeWorkday() : await pauseWorkday();
+      if (res && res.status === false) {
+        showError(workdayPaused ? "Can't resume" : "Can't pause", res.message || 'Failed');
+        return;
+      }
+      setWorkdayPaused(!workdayPaused);
+      await load({ silent: true });
+    } catch (e) {
+      showError('Something went wrong', e.message || 'Failed');
+    } finally {
+      setWorkdayPauseBusy(false);
+    }
   }
 
   async function confirmEndWorkday() {
@@ -1232,10 +1388,10 @@ export default function KpiActionBoard({
       // no restartable "Start Workday" in between.
       setDayDone(true);
       setEndSummary(null);
-      // Ending the workday UN-PAIRS the device server-side (action_end_day →
-      // _unpair). Tell App now instead of waiting up to 5s for the pairing poll
-      // to notice — otherwise the board keeps showing Start/Pause/Complete on a
-      // device that can no longer work, and a tap in that window would stick.
+      // Ending the workday returns the app to read-only. Tell App now instead of
+      // waiting up to 5s for its workday poll — otherwise the board keeps showing
+      // Start/Pause/Complete after the day is over, and a tap in that window
+      // would fail server-side.
       onWorkdayEnded && onWorkdayEnded();
       await load({ silent: true });
     } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
@@ -1254,7 +1410,10 @@ export default function KpiActionBoard({
     if (!ntProject) return Alert.alert('Project required', 'Choose a project (KRA).');
     const h = parseInt(ntHours, 10) || 0;
     const m = parseInt(ntMinutes, 10) || 0;
-    if (h * 60 + m <= 0) return Alert.alert('Estimate required', 'Estimate must be greater than zero.');
+    // Estimate is OPTIONAL, matching the server and the web board. A developer
+    // raising a task often doesn't know yet how long it will take, and demanding
+    // a number here only produced invented ones. The admin sets or corrects it
+    // when they accept the task.
     log.info('new task submit', { name: ntName.trim(), kraId: ntProject.id, h, m, priority: ntPriority });
     setNtBusy(true);
     try {
@@ -1287,6 +1446,41 @@ export default function KpiActionBoard({
       if (users.length === 0) fetchUsers().then(setUsers).catch(() => {});
       return;
     }
+    if (kind === 'adminDelete') {
+      // Permanent and irreversible, so it asks — and it names what it is about to
+      // remove rather than saying "this task".
+      Alert.alert(
+        'Delete this task?',
+        `${task.external_ref || ''} ${task.name || ''}\n\n` +
+        'This cannot be undone. It is only possible because no time has been ' +
+        'logged against it. The assigned developer and the client who raised it ' +
+        'are notified.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              setBusyId(task.id);
+              try {
+                const res = await adminDeleteTask(task.id);
+                if (res && res.status === false) {
+                  // The server re-checks: a board rendered before someone started
+                  // the task is refused here, not honoured.
+                  showError("Can't delete", res.message || 'Failed');
+                  return;
+                }
+                setDetailTask(null);
+                await load({ silent: true });
+              } catch (e) {
+                showError('Something went wrong', e.message || 'Failed');
+              } finally { setBusyId(null); }
+            },
+          },
+        ],
+      );
+      return;
+    }
     if (kind === 'pause') {
       setPauseFor(task);
       setPauseCode('break');
@@ -1306,7 +1500,23 @@ export default function KpiActionBoard({
     // type; rejecting asks for a note the developer will see.
     if (kind === 'acceptSelf') {
       setAcceptFor(task);
-      setAcceptType('requirement');
+      // Seed BOTH pickers with what the DEVELOPER asked for, so accepting
+      // without touching them honours the request and overriding it is
+      // deliberate. The type chips used to be hard-coded to 'requirement',
+      // which quietly re-filed every bug report the moment it was accepted.
+      setAcceptType(task.requested_doc_type || 'requirement');
+      setAcceptPriority(task.requested_priority || task.priority || 'regular');
+      return;
+    }
+    if (kind === 'switch') {
+      // The card this was pressed on is the one handing over; everything else
+      // the developer has running is deliberately left alone.
+      setSwitchFrom(task);
+      return;
+    }
+    if (kind === 'revertSignoff') {
+      setRevertFor(task);
+      setRevertReason('');
       return;
     }
     if (kind === 'rejectSelf') {
@@ -1329,6 +1539,16 @@ export default function KpiActionBoard({
       return;
     }
 
+    // The server already told us this one is blocked (can_start, from
+    // kra.kpi._start_block). Answer with its reason rather than sending a request
+    // we know it will refuse — the developer gets the same words, instantly, and
+    // a paused workday no longer costs a round-trip per tap.
+    if ((kind === 'start' || kind === 'resume') && task.can_start === false) {
+      showError(kind === 'start' ? "Can't start this task" : "Can't resume this task",
+        task.start_block_message || gateLabel(task) || "This task can't start yet.");
+      return;
+    }
+
     setBusyId(task.id);
     try {
       const fn = kind === 'start' ? startTask : resumeTask;
@@ -1341,6 +1561,81 @@ export default function KpiActionBoard({
       showError('Something went wrong', e.message || 'Action failed');
     } finally {
       setBusyId(null);
+    }
+  }
+
+  // Switch: stop the handed-over task and start the chosen one, in ONE server
+  // call. Never pause-then-start from here — see services/kpiActions.switchTask.
+  async function submitSwitch(target) {
+    const from = switchFrom;                 // the card Switch was pressed on
+    setSwitchFrom(false);
+    setSwitchBusy(true);
+    setBusyId(target.id);
+    try {
+      const res = await switchTask(target.id, from ? from.id : null);
+      if (res && res.status === false) {
+        showError("Can't switch", res.message || 'Failed');
+        return;
+      }
+      setDetailTask(null);
+      await load({ silent: true });
+      await refreshLive();
+    } catch (e) {
+      showError('Something went wrong', e.message || 'Failed');
+    } finally {
+      setSwitchBusy(false);
+      setBusyId(null);
+    }
+  }
+
+  // Pause all: one reason for every running timer. Same note rule as the single
+  // Pause, so the two can't disagree about when a reason needs explaining.
+  async function submitPauseAll() {
+    const noteRequired = pauseAllCode === 'other' || pauseAllCode === 'urgent';
+    if (noteRequired && !pauseAllNote.trim()) {
+      return Alert.alert('Note required', 'Please add a note for this pause reason.');
+    }
+    const label = (PAUSE_REASONS.find((r) => r.code === pauseAllCode) || {}).label || 'Paused';
+    const reason = pauseAllNote.trim() || label;
+    setPauseAllBusy(true);
+    try {
+      const res = await pauseAllTasks(reason, pauseAllCode);
+      if (res && res.status === false) {
+        showError("Can't pause your tasks", res.message || 'Failed');
+        return;
+      }
+      setPauseAllOpen(false);
+      await load({ silent: true });
+      await refreshLive();
+    } catch (e) {
+      showError('Something went wrong', e.message || 'Failed');
+    } finally {
+      setPauseAllBusy(false);
+    }
+  }
+
+  // Revert from Awaiting Client. The reason is required on both sides — the
+  // developer reads it on the card, so an empty one helps nobody.
+  async function submitRevert() {
+    const task = revertFor;
+    const reason = revertReason.trim();
+    if (!reason) {
+      return Alert.alert('Reason required', 'Please say why it is going back to the developer.');
+    }
+    setRevertBusy(true);
+    try {
+      const res = await revertSignoff(task.id, reason);
+      if (res && res.status === false) {
+        showError("Can't revert", res.message || 'Failed');
+        return;
+      }
+      setRevertFor(null);
+      setDetailTask(null);
+      await load({ silent: true });
+    } catch (e) {
+      showError('Something went wrong', e.message || 'Failed');
+    } finally {
+      setRevertBusy(false);
     }
   }
 
@@ -1397,11 +1692,12 @@ export default function KpiActionBoard({
   async function submitAcceptSelf() {
     const task = acceptFor;
     const docType = acceptType;
+    const priority = acceptPriority;
     setAcceptFor(null);
     if (!task) return;
     setBusyId(task.id);
     try {
-      await acceptSelfCreated(task.id, docType);
+      await acceptSelfCreated(task.id, docType, priority);
       await load({ silent: true });
     } catch (e) { Alert.alert('Cannot accept', e.message || 'Failed'); }
     finally { setBusyId(null); }
@@ -1539,12 +1835,28 @@ export default function KpiActionBoard({
             <Text style={s.newTaskTxt}>New Task</Text>
           </TouchableOpacity>
         )}
+        {/* Only RESUME in the header. Pause lives inside the End Workday dialog,
+            where the stop-for-now vs stop-for-good choice is made. Resume has to
+            be out here: when the day is frozen it is the one thing you need, and
+            burying it behind "End Workday" would mean opening an end-my-day
+            dialog in order to carry on working. */}
+        {workdayOpen === true && workdayPaused && (
+          <TouchableOpacity
+            style={[s.pauseDayBtn, s.pauseDayBtnOn, workdayPauseBusy && { opacity: 0.6 }]}
+            onPress={toggleWorkdayPause}
+            disabled={workdayPauseBusy}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="play-circle" size={16} color="#fff" />
+            <Text style={[s.pauseDayTxt, { color: '#fff' }]}>Resume</Text>
+          </TouchableOpacity>
+        )}
         {/* Label + action come from the shared decision helper so this button and
             the Home read-only bar can never disagree: End / Continue / Start /
-            "Workday ended for today" (disabled). Locked → routes to the PIN screen. */}
+            "Workday ended for today" (disabled). */}
         {(() => {
           const showSpinner = !readOnly && (workdayBusy || workdayOpen === null);
-          const wd = workdayButtonState({ locked: readOnly, workdayOpen: workdayOpen === true, dayDone });
+          const wd = workdayButtonState({ workdayOpen: workdayOpen === true, dayDone });
           const icon = wd.action === 'end' ? 'stop-circle'
             : wd.action === 'none' ? 'checkmark-done-circle' : 'play-circle';
           return (
@@ -1579,6 +1891,18 @@ export default function KpiActionBoard({
         </View>
       )}
 
+      {/* Paused: the board looks normal but nothing will start, so say so.
+          Without this the refused Start buttons read as a bug. */}
+      {workdayPaused ? (
+        <View style={s.pausedBar}>
+          <Ionicons name="pause-circle" size={18} color="#475569" />
+          <Text style={s.pausedBarTxt}>
+            <Text style={{ fontWeight: '800' }}>Your workday is paused.</Text>{' '}
+            Presence has stopped and tasks can't be started. Tap Resume when you're back.
+          </Text>
+        </View>
+      ) : null}
+
       {/* Live activity strip + idle warning (when a workday is open) */}
       {live?.workday_open ? (
         <>
@@ -1590,11 +1914,39 @@ export default function KpiActionBoard({
                 <Text style={s.liveBadgeTxt}>LIVE</Text>
               </View>
               {live.active_task ? (
+                // EVERY running timer, not just the first. A developer with
+                // multitask enabled can have two going at once, and showing one
+                // made the other look stopped. active_tasks is the full list
+                // (earliest first); active_task is kept for older servers.
                 <View style={s.liveWorking}>
-                  <Ionicons name="play" size={13} color={COLORS.green} />
-                  <Text style={s.liveWorkingTxt} numberOfLines={1}>
-                    Working: "{live.active_task.name}"  {fmtHMS(liveFromAnchor(live.active_task.timer_start, live.active_task.timer_total_seconds, nowMs))}
-                  </Text>
+                  <Ionicons name={(live.active_tasks?.length || 1) > 1 ? 'flash' : 'play'} size={13} color={COLORS.green} />
+                  <View style={{ flex: 1 }}>
+                    {(live.active_tasks?.length || 0) > 1 ? (
+                      <Text style={s.liveWorkingTxt} numberOfLines={1}>
+                        Multi-tasking {live.active_tasks.length} tasks
+                      </Text>
+                    ) : null}
+                    {(live.active_tasks?.length ? live.active_tasks : [live.active_task]).map((at) => (
+                      <Text key={at.id} style={s.liveWorkingTxt} numberOfLines={1}>
+                        Working: "{at.name}"  {fmtHMS(liveFromAnchor(at.timer_start, at.timer_total_seconds, nowMs))}
+                      </Text>
+                    ))}
+                  </View>
+                  {/* Stop every timer at once, one reason for all of them. Only
+                      with 2+ running: with a single task the card's own Pause is
+                      the same thing and says which task it is. Switch is NOT here
+                      — it is per-card, because it hands over one task and leaves
+                      the rest ticking. */}
+                  {!readOnly && (live.active_tasks?.length || 0) > 1 ? (
+                    <TouchableOpacity
+                      style={s.pauseAllBtn}
+                      onPress={() => { setPauseAllCode('break'); setPauseAllNote(''); setPauseAllOpen(true); }}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="pause" size={12} color="#92400E" />
+                      <Text style={s.pauseAllTxt}>Pause all ({live.active_tasks.length})</Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
               ) : (
                 <View style={s.liveWorking}>
@@ -1677,15 +2029,18 @@ export default function KpiActionBoard({
 
             {/* Row 3: Presence · Productive */}
             <Text style={s.livePresence}>
-              Presence {fmtHMS(secsSince(live.login_raw, nowMs))} · Productive <Text style={s.liveProductive}>{fmtHMS(productiveLive(live, nowMs))}</Text>
+              Presence {fmtHMS(presenceLive(live, nowMs))} · Productive <Text style={s.liveProductive}>{fmtHMS(productiveLive(live, nowMs))}</Text>
+              {live.is_paused ? <Text style={s.livePausedNote}>  · paused</Text> : null}
             </Text>
           </View>
-          <View style={s.idleWarn}>
-            <Ionicons name="warning" size={14} color={COLORS.red} />
-            <Text style={s.idleWarnTxt} numberOfLines={2}>
-              A task is running — if you go idle it auto-pauses after 5 min and that time is logged as Away (never Productive).
-            </Text>
-          </View>
+          {/* The red "if you go idle it auto-pauses after 5 min" warning used to
+              sit here, unconditionally, whenever a workday was open. Idle
+              auto-pause is retired — away_after_minutes is 0 and both crons are
+              inactive — so it described a thing that can no longer happen, and
+              told developers their time was at risk when it was not. A warning
+              nobody can act on is worse than no warning: it trains people to
+              ignore the strip. Removed rather than reworded; there is nothing
+              left to warn about. */}
         </>
       ) : null}
 
@@ -2038,6 +2393,178 @@ export default function KpiActionBoard({
         </View>
       </Modal>
 
+      {/* Switch — pick what to work on next. The list is filtered on can_start,
+          the SERVER's own answer, so the picker never offers something the switch
+          would then refuse. Tasks already running are excluded: switching to what
+          you are already doing is a no-op worth not offering. */}
+      <Modal visible={switchFrom !== false} transparent animationType="fade" onRequestClose={() => setSwitchFrom(false)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headBlueSoft]}>
+              <Text style={s.headBlueSoftTitle}>⇄  Switch to another task</Text>
+              <TouchableOpacity onPress={() => setSwitchFrom(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#1E3A8A" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              <Text style={s.switchIntro}>
+                {switchFrom
+                  ? <><Text style={{ fontWeight: '800' }}>{switchFrom.external_ref || switchFrom.name}</Text> pauses as <Text style={{ fontWeight: '800' }}>Another Priority Task</Text> and the one you pick starts straight away. Anything else you have running is left alone. Time already logged is kept.</>
+                  : 'Your current task pauses as Another Priority Task and the one you pick starts straight away. Time already logged is kept.'}
+              </Text>
+              {(() => {
+                const runningIds = new Set(
+                  (live?.active_tasks?.length ? live.active_tasks : (live?.active_task ? [live.active_task] : []))
+                    .map((t) => t.id));
+                const options = (raw || [])
+                  .filter((t) => !runningIds.has(t.id) && t.can_start !== false)
+                  .sort((a, b) => String(a.external_ref || '').localeCompare(String(b.external_ref || '')));
+                if (!options.length) {
+                  return (
+                    <Text style={[s.centerTxt, { paddingVertical: 20 }]}>
+                      Nothing else is ready to start. A task has to be accepted and
+                      approved before you can switch to it.
+                    </Text>
+                  );
+                }
+                return (
+                  <ScrollView style={{ maxHeight: 380 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                    {options.map((t) => (
+                      <TouchableOpacity
+                        key={t.id} style={s.switchCard} activeOpacity={0.85}
+                        disabled={switchBusy}
+                        onPress={() => submitSwitch(t)}
+                      >
+                        <View style={s.switchCardTop}>
+                          <Text style={s.switchRef}>{t.external_ref || ''}</Text>
+                          <Text style={s.switchPrio}>
+                            {PRIORITIES.find((p) => p.code === t.priority)?.label || t.priority || 'Regular'}
+                          </Text>
+                        </View>
+                        <Text style={s.switchName} numberOfLines={2}>{t.name}</Text>
+                        <Text style={s.switchMeta} numberOfLines={1}>
+                          {t.user_name || 'Unassigned'} · Time {fmtHMS(t.timer_total_seconds || 0)} · Est {t.estimate_display || '—'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                );
+              })()}
+            </View>
+            <View style={s.modalFoot}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setSwitchFrom(false)}>
+                <Text style={s.footCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Pause all — every running timer, one shared reason. */}
+      <Modal visible={pauseAllOpen} transparent animationType="fade" onRequestClose={() => setPauseAllOpen(false)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headAmber]}>
+              <Text style={s.headAmberTitle}>⏸  Pause all running tasks</Text>
+              <TouchableOpacity onPress={() => setPauseAllOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#7a5200" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              <Text style={s.pauseHelp}>One reason for all of them. Time logged so far is kept.</Text>
+              {(live?.active_tasks || []).map((at) => (
+                <Text key={at.id} style={s.pauseAllItem} numberOfLines={1}>•  {at.name}</Text>
+              ))}
+              <Text style={[s.whyTitle, { marginTop: 12 }]}>Why are you pausing?</Text>
+              <View style={s.typeRow}>
+                {PAUSE_REASONS.filter((r) => r.quick).map((r) => {
+                  const on = pauseAllCode === r.code;
+                  return (
+                    <TouchableOpacity
+                      key={r.code} style={[s.typeChip, on && s.typeChipOn]}
+                      onPress={() => setPauseAllCode(r.code)} activeOpacity={0.85}
+                    >
+                      <Text style={[s.typeChipTxt, on && s.typeChipTxtOn]}>{r.emoji} {r.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <TextInput
+                style={s.pauseNote}
+                placeholder="Optional note (required for 'Other' and 'Urgent')…"
+                placeholderTextColor={COLORS.faint}
+                value={pauseAllNote}
+                onChangeText={setPauseAllNote}
+                maxLength={IDLE_NOTE_MAX}
+                multiline
+              />
+              <Text style={s.idleNoteHint}>
+                Keep it short — this shows on your Workday Map. {pauseAllNote.length}/{IDLE_NOTE_MAX}
+              </Text>
+            </View>
+            <View style={s.modalFoot}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setPauseAllOpen(false)}>
+                <Text style={s.footCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.footConfirm, { backgroundColor: COLORS.amber }, pauseAllBusy && { opacity: 0.6 }]}
+                disabled={pauseAllBusy}
+                onPress={submitPauseAll}
+              >
+                <Text style={s.footConfirmTxt}>{pauseAllBusy ? 'Pausing…' : 'Pause all'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Admin revert from Awaiting Client Sign-off. */}
+      <Modal visible={!!revertFor} transparent animationType="fade" onRequestClose={() => setRevertFor(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headAmber]}>
+              <Text style={s.headAmberTitle}>↩  Revert from client sign-off?</Text>
+              <TouchableOpacity onPress={() => setRevertFor(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#7a5200" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              <Text style={s.createdName} numberOfLines={2}>
+                {revertFor?.external_ref ? `${revertFor.external_ref} ` : ''}{revertFor?.name}
+              </Text>
+              <View style={s.revertBox}>
+                <Text style={s.revertBoxTxt}>This goes back to the developer:</Text>
+                <Text style={s.revertBullet}>•  The client stops seeing it straight away.</Text>
+                <Text style={s.revertBullet}>•  It returns to Paused with your reason on the card.</Text>
+                <Text style={s.revertBullet}>•  The developer is notified. Time already logged is kept.</Text>
+                <Text style={s.revertBullet}>•  Completing it again goes through admin review, then the client.</Text>
+              </View>
+              <Text style={s.modalLabel}>Why is it going back?</Text>
+              <TextInput
+                style={s.pauseNote}
+                placeholder="e.g. Client reported the export is still wrong"
+                placeholderTextColor={COLORS.faint}
+                value={revertReason}
+                onChangeText={setRevertReason}
+                multiline
+              />
+            </View>
+            <View style={s.modalFoot}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setRevertFor(null)}>
+                <Text style={s.footCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.footConfirm, { backgroundColor: COLORS.amber }, revertBusy && { opacity: 0.6 }]}
+                disabled={revertBusy}
+                onPress={submitRevert}
+              >
+                <Text style={s.footConfirmTxt}>{revertBusy ? 'Reverting…' : 'Revert'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Finish modal — Partial Finish (amber, summary) or Complete (green, checklist) */}
       <Modal visible={!!finishFor} transparent animationType="fade" onRequestClose={() => setFinishFor(null)}>
         <View style={s.modalWrap}>
@@ -2256,7 +2783,7 @@ export default function KpiActionBoard({
               <View style={s.createdInfo}>
                 <Ionicons name="information-circle-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
                 <Text style={s.createdInfoTxt}>
-                  Starting your workday pairs this device with your computer — you'll get a PIN to enter there.
+                  Starting your workday unlocks your tasks. You can end it whenever you're done — once per day.
                 </Text>
               </View>
             </View>
@@ -2266,7 +2793,7 @@ export default function KpiActionBoard({
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.footConfirm, { backgroundColor: COLORS.green }]}
-                onPress={() => { setStartPrompt(false); onNeedPair && onNeedPair(); }}
+                onPress={() => { setStartPrompt(false); toggleWorkday(); }}
               >
                 <Text style={s.footConfirmTxt}>Start Workday</Text>
               </TouchableOpacity>
@@ -2291,6 +2818,15 @@ export default function KpiActionBoard({
             <View style={s.modalPad}>
               <Text style={s.createdName} numberOfLines={2}>{acceptFor?.name}</Text>
               <Text style={s.modalLabel}>Task type</Text>
+              {/* What the developer filed it as. The chips below are pre-selected
+                  to it, so accepting untouched keeps a bug report a bug report. */}
+              {acceptFor?.requested_doc_type ? (
+                <Text style={s.askedLine}>
+                  The developer said this is a{' '}
+                  {{ requirement: 'Requirement', update: 'Update', bug: 'Bug Report' }[acceptFor.requested_doc_type]
+                    || acceptFor.requested_doc_type}.
+                </Text>
+              ) : null}
               <View style={s.typeRow}>
                 {[
                   { key: 'requirement', label: 'Requirement', ref: 'REQ' },
@@ -2305,6 +2841,28 @@ export default function KpiActionBoard({
                     >
                       <Text style={[s.typeChipTxt, on && s.typeChipTxtOn]}>{t.label}</Text>
                       <Text style={[s.typeChipRef, on && s.typeChipTxtOn]}>{t.ref}-###</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={s.modalLabel}>Priority</Text>
+              {/* What the developer asked for, stated plainly so the admin decides
+                  against it rather than blind. The chips below are pre-selected to
+                  it, so accepting untouched honours the request. */}
+              {acceptFor?.requested_priority ? (
+                <Text style={s.askedLine}>
+                  Developer asked for {PRIORITIES.find((p) => p.code === acceptFor.requested_priority)?.label || acceptFor.requested_priority}
+                </Text>
+              ) : null}
+              <View style={s.typeRow}>
+                {PRIORITIES.map((p) => {
+                  const on = acceptPriority === p.code;
+                  return (
+                    <TouchableOpacity
+                      key={p.code} style={[s.typeChip, on && s.typeChipOn]}
+                      onPress={() => setAcceptPriority(p.code)} activeOpacity={0.85}
+                    >
+                      <Text style={[s.typeChipTxt, on && s.typeChipTxtOn]}>{p.label}</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -2847,6 +3405,30 @@ export default function KpiActionBoard({
                       </Text>
                     ) : null}
                   </View>
+                  {/* One figure for the whole day's accounted time, so "is my day
+                      explained?" doesn't mean adding five boxes up by eye.
+                      Accounted + Other/Idle = Presence, always. */}
+                  <View style={s.statTile}>
+                    <Text style={s.statTileLbl}>Accounted</Text>
+                    <Text style={[s.statTileBig, { color: COLORS.blue || '#2563EB' }]}>
+                      {endSummary?.accounted_display || '0m'}
+                    </Text>
+                    <Text style={s.statTileFoot}>task + meeting + lunch + break + no-tasks</Text>
+                  </View>
+                  {/* Only when the day was actually frozen. Reported on its own
+                      line rather than dropped, because a six-hour hole with no
+                      explanation reads as a tracking failure to whoever reviews
+                      the day. It sits OUTSIDE Presence — Presence + Paused is the
+                      wall-clock span from login to logout. */}
+                  {(endSummary?.paused_seconds || 0) > 0 ? (
+                    <View style={s.statTile}>
+                      <Text style={s.statTileLbl}>Workday paused</Text>
+                      <Text style={[s.statTileBig, { color: '#B45309' }]}>
+                        {endSummary?.paused_display || '0m'}
+                      </Text>
+                      <Text style={s.statTileFoot}>not counted in Presence</Text>
+                    </View>
+                  ) : null}
                 </View>
 
                 {/* Away time breakdown */}
@@ -2914,8 +3496,19 @@ export default function KpiActionBoard({
                   <Text style={[s.centerTxt, { paddingVertical: 12 }]}>No task time logged.</Text>
                 ) : (endSummary.tasks).map((t) => (
                   <View key={t.kpi_id} style={s.taskRow}>
-                    <Text style={s.tdRef}>{t.ref}</Text>
-                    <Text style={s.tdTitle} numberOfLines={1}>{t.name}</Text>
+                    <Text style={s.tdRef}>{t.concurrent ? '⚡ ' : ''}{t.ref}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.tdTitle} numberOfLines={1}>{t.name}</Text>
+                      {/* Spelled out only when a task was worked BOTH alone and
+                          alongside another. That is the case a single total gets
+                          wrong: 20 minutes solo in the morning plus 2 hours shared
+                          in the afternoon is not "2h20m of multitasking". */}
+                      {t.concurrent && (t.solo_seconds || 0) > 0 ? (
+                        <Text style={[s.tdTitle, { fontSize: 11, opacity: 0.7 }]} numberOfLines={1}>
+                          {t.solo_display} alone · {t.shared_display} shared
+                        </Text>
+                      ) : null}
+                    </View>
                     <Text style={s.tdTime}>{t.duration_display}</Text>
                   </View>
                 ))}
@@ -2924,6 +3517,27 @@ export default function KpiActionBoard({
                 <TextInput style={[s.textInput, { minHeight: 60, textAlignVertical: 'top' }]} multiline value={endNote} onChangeText={setEndNote} placeholder="Anything to add…" placeholderTextColor={COLORS.faint} />
               </View>
             </ScrollView>
+
+            {/* Pause sits HERE, next to End, because this is where the choice is
+                actually made: stop for now, or stop for good. Ending is final for
+                the date (one start + one end); pausing is not — which is what a
+                4am finish needs. Not the same as "Pause all" on the tasks, which
+                stops the TIMERS and leaves the workday running. */}
+            <View style={s.pauseInstead}>
+              <Ionicons name="pause-circle-outline" size={18} color="#92400E" />
+              <Text style={s.pauseInsteadTxt}>
+                Coming back later today? <Text style={{ fontWeight: '800' }}>Pause</Text> instead —
+                your day stays open and Presence stops until you return.
+              </Text>
+              <TouchableOpacity
+                style={[s.pauseInsteadBtn, workdayPauseBusy && { opacity: 0.6 }]}
+                disabled={workdayPauseBusy}
+                onPress={async () => { setEndSummary(null); await toggleWorkdayPause(); }}
+                activeOpacity={0.85}
+              >
+                <Text style={s.pauseInsteadBtnTxt}>Pause</Text>
+              </TouchableOpacity>
+            </View>
 
             <View style={s.modalFoot}>
               <TouchableOpacity style={s.footCancel} onPress={() => setEndSummary(null)}>
@@ -3088,8 +3702,9 @@ const s = StyleSheet.create({
   idleLater: { fontSize: 13, fontWeight: '700', color: COLORS.faint, textAlign: 'center', paddingVertical: 8 },
   livePresence: { fontSize: 12, color: COLORS.muted, fontWeight: '600' },
   liveProductive: { color: COLORS.green, fontWeight: '800' },
-  idleWarn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginHorizontal: 14, marginTop: 6, backgroundColor: COLORS.redBg, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
-  idleWarnTxt: { flex: 1, fontSize: 11.5, color: '#8a1c14', fontWeight: '600' },
+  // Marks the live strip while the workday is frozen, so a Presence clock that
+  // has deliberately stopped doesn't read as a stuck display.
+  livePausedNote: { fontSize: 12, fontWeight: '800', color: '#B45309' },
 
   toggleRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, marginTop: 8, marginBottom: 2 },
   toggle: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, height: 38, borderRadius: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: COLORS.line },
@@ -3182,6 +3797,80 @@ const s = StyleSheet.create({
   empty: { alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 60 },
   retry: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, backgroundColor: COLORS.primary, borderRadius: 12, paddingHorizontal: 22, height: 44 },
   retryTxt: { color: '#fff', fontSize: 15, fontWeight: '800' },
+
+  // A blocked action button: dimmed, but still pressable so the tap can explain
+  // itself (see Btn). Not `disabled` — that would refuse in silence.
+  btnBlocked: { opacity: 0.45 },
+  // "Waiting on X" badge under a card whose Start the server won't allow yet.
+  gatePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FDE68A',
+    borderRadius: 8, paddingHorizontal: 9, paddingVertical: 6, marginTop: 8,
+  },
+  gatePillTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: '#92400E', lineHeight: 15 },
+
+  // "Pause all (N)" — only in the live strip, only with 2+ timers running.
+  pauseAllBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+    backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FDE68A',
+    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, marginLeft: 8,
+  },
+  pauseAllTxt: { fontSize: 11, fontWeight: '800', color: '#92400E' },
+  pauseAllItem: { fontSize: 12.5, color: COLORS.muted, marginTop: 3 },
+
+  // Switch picker.
+  headBlueSoft: { backgroundColor: '#DBEAFE' },
+  headBlueSoftTitle: { flex: 1, fontSize: 16.5, fontWeight: '900', color: '#1E3A8A' },
+  switchIntro: { fontSize: 12.5, color: COLORS.muted, lineHeight: 18, marginBottom: 12 },
+  // A full card per option, not a bare title: you are choosing what to work on
+  // next, and a name alone is not enough to choose on. Read-only detail plus the
+  // one tap that selects it — nothing here can start or pause anything else.
+  switchCard: {
+    borderWidth: 1, borderColor: '#E7ECF3', borderRadius: 12,
+    padding: 12, marginBottom: 8, backgroundColor: '#FBFCFE',
+  },
+  switchCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 },
+  switchRef: { fontSize: 12, fontWeight: '900', color: COLORS.primary },
+  switchPrio: { fontSize: 10.5, fontWeight: '800', color: COLORS.muted, textTransform: 'uppercase' },
+  switchName: { fontSize: 14, fontWeight: '700', color: COLORS.navy, lineHeight: 19, marginBottom: 4 },
+  switchMeta: { fontSize: 11.5, color: COLORS.muted },
+
+  // Revert confirmation.
+  revertBox: {
+    backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E7ECF3',
+    borderRadius: 12, padding: 12, marginTop: 10, marginBottom: 14,
+  },
+  revertBoxTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy, marginBottom: 6 },
+  revertBullet: { fontSize: 12, color: COLORS.muted, lineHeight: 18 },
+
+  // Pause/Resume Workday, sat beside End Workday in the header.
+  pauseDayBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10,
+    backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FDE68A', marginRight: 8,
+  },
+  pauseDayBtnOn: { backgroundColor: COLORS.green, borderColor: COLORS.green },
+  pauseDayTxt: { fontSize: 12.5, fontWeight: '800', color: '#92400E' },
+  // "Pause instead" row inside the End Workday dialog.
+  pauseInstead: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#FEF3C7', borderTopWidth: 1, borderTopColor: '#FDE68A',
+    paddingHorizontal: 16, paddingVertical: 10,
+  },
+  pauseInsteadTxt: { flex: 1, fontSize: 12, color: '#78350F', lineHeight: 16.5 },
+  pauseInsteadBtn: {
+    backgroundColor: '#F59E0B', paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: 9,
+  },
+  pauseInsteadBtnTxt: { color: '#fff', fontWeight: '800', fontSize: 12.5 },
+  // Paused banner — the board looks normal but nothing will start, so say why.
+  pausedBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#F1F5F9', borderLeftWidth: 4, borderLeftColor: '#94A3B8',
+    paddingHorizontal: 12, paddingVertical: 9, marginHorizontal: 12, marginBottom: 8,
+    borderRadius: 10,
+  },
+  pausedBarTxt: { flex: 1, fontSize: 12.5, color: COLORS.navy, lineHeight: 17 },
 
   modalWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'center', padding: 24 },
   modal: { backgroundColor: '#fff', borderRadius: 18, padding: 20 },
@@ -3278,6 +3967,10 @@ const s = StyleSheet.create({
   createdName: { fontSize: 15, fontWeight: '700', color: COLORS.ink, marginBottom: 12 },
   createdInfo: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   createdInfoTxt: { flex: 1, fontSize: 12.5, color: COLORS.muted, lineHeight: 18 },
+  // Same look, WITHOUT flex:1. createdInfoTxt lives inside a row (s.createdInfo)
+  // where flex makes it fill the line; reused standalone in a column it collapses
+  // to nothing, which is why the "developer asked for…" lines rendered blank.
+  askedLine: { fontSize: 12.5, color: COLORS.muted, lineHeight: 18, marginBottom: 6 },
 
   // End Workday summary
   statTiles: { flexDirection: 'row', gap: 8, marginTop: 12 },

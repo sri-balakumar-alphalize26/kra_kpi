@@ -521,7 +521,7 @@ export class KpiAction extends Component {
                                 <div t-if="state.progressUpdates.length === 0" class="alert alert-warning py-2">
                                     <i class="fa fa-info-circle"></i> Submit a <strong>Progress Summary</strong> above before you can complete this task.
                                 </div>
-                                <p class="text-muted mb-2">Confirm each item — all are required to send this task for approval:</p>
+                                <p class="text-muted mb-2">Tick everything that applies — at least one is needed to send this for approval. Your manager sees exactly which:</p>
                                 <div class="form-check mb-2">
                                     <input class="form-check-input" type="checkbox" id="cc_github" t-model="state.completeChecklist.verify_github"/>
                                     <label class="form-check-label" for="cc_github"><strong>1. Verify GitHub URL</strong><small class="d-block text-muted">All code pushed to the correct repository</small></label>
@@ -549,7 +549,7 @@ export class KpiAction extends Component {
                                     <t t-else=""><i class="fa fa-paper-plane"></i> Complete &amp; Send for Approval</t>
                                 </button>
                                 <div t-if="state.progressUpdates.length > 0 and !canCompleteDetail() and !state.completeSubmitting" class="text-muted small mt-2">
-                                    Tick all five items to enable completion.
+                                    Tick at least one item to enable completion.
                                 </div>
                             </div>
                         </t>
@@ -1027,6 +1027,23 @@ export class KpiAction extends Component {
                                     <t t-else="">Start Workday</t>
                                 </button>
                             </t>
+                            <!-- Pause / Resume the whole day. Sits with End Workday
+                                 because it is the same decision made softer: End
+                                 buries the date (one start + one end), Pause freezes
+                                 it so you can come back the same day. -->
+                            <!-- Only RESUME lives in the header. Pause sits inside the
+                                 End Workday dialog, where the choice between "stop for
+                                 now" and "stop for good" is actually made. Resume has
+                                 to be here instead: when the day is frozen it is the
+                                 one thing you need, and burying it behind End Workday
+                                 would mean opening an "end my day" dialog to carry on
+                                 working. -->
+                            <button t-if="state.workdayOpen and state.workdayPaused"
+                                    class="btn btn-sm btn-success fw-bold"
+                                    title="Start the clock again"
+                                    t-on-click="() => this.resumeWorkday()">
+                                <i class="fa fa-play-circle me-1"></i> Resume Workday
+                            </button>
                             <!-- RED End Workday button — visible while session is open. -->
                             <button t-if="state.workdayOpen"
                                     class="btn btn-sm btn-outline-danger"
@@ -1041,7 +1058,12 @@ export class KpiAction extends Component {
                     <!-- 🆕 Part C: LIVE ACTIVITY STRIP + auto-away banner -->
                     <!-- ============================================ -->
                     <t t-if="state.workdayOpen">
-                        <div class="kpi-live-strip card mb-2" style="border:1px solid #d1d5db;">
+                        <!-- Sticky: with 85 tasks the strip used to scroll away exactly
+                             when you needed it — the running timer, Presence/Productive
+                             and Switch are all most useful while you are looking down
+                             the board, not at the top of it. -->
+                        <div class="kpi-live-strip card mb-2"
+                             style="border:1px solid #d1d5db; position:sticky; top:0; z-index:1020;">
                             <div class="card-body py-2 px-3">
                                 <div class="d-flex align-items-center flex-wrap gap-3">
                                     <span class="badge bg-danger"><i class="fa fa-circle me-1" style="font-size:.5rem;vertical-align:middle;"></i> LIVE</span>
@@ -1117,6 +1139,25 @@ export class KpiAction extends Component {
                                             · <span class="font-monospace"><t t-esc="liveBreakDisplay()"/></span>
                                         </span>
                                     </t>
+                                    <!-- Move to the next task in one action. Only offered
+                                         while something is actually running — with nothing
+                                         running there is nothing to switch FROM, and the
+                                         normal Start button is the right control. -->
+                                    <!-- No Switch button here. It lives on the task card
+                                         instead: the card names WHICH task is handing over,
+                                         which a single strip button cannot when two tasks
+                                         are running.
+                                         Pause all IS here, because it is the one action that
+                                         is genuinely about all of them at once — and it only
+                                         appears when there is more than one to pause. -->
+                                    <t t-if="getActiveTasks().length > 1">
+                                        <button class="btn btn-sm btn-outline-warning py-0 px-2"
+                                                style="font-size:.75rem;"
+                                                t-on-click="() => this.openPauseAll()"
+                                                title="Stop every running task at once, with one reason">
+                                            <i class="fa fa-pause me-1"></i> Pause all (<t t-esc="getActiveTasks().length"/>)
+                                        </button>
+                                    </t>
                                     <!-- Day totals (live) -->
                                     <span class="ms-auto small text-muted">
                                         Presence <span class="fw-bold text-primary font-monospace"><t t-esc="livePresenceDisplay()"/></span>
@@ -1125,12 +1166,30 @@ export class KpiAction extends Component {
                                 </div>
                             </div>
                         </div>
-                        <!-- Red banner while a task is in progress -->
+                        <!-- Reminder while a task is in progress.
+                             It used to threaten an auto-pause after
+                             state.awayAfterMinutes. Idle auto-pause is retired, so
+                             with the setting at 0 it was reading "auto-pauses after
+                             0 min" — a warning about something that no longer
+                             happens, stating a nonsense number. The honest risk now
+                             is the opposite one: nothing stops your timer for you. -->
                         <t t-if="getActiveTask()">
-                            <div class="alert alert-danger py-1 px-3 mb-2 small d-flex align-items-center" role="alert">
-                                <i class="fa fa-exclamation-triangle me-2"></i>
-                                A task is running — if you close this tab or go idle, it auto-pauses after
-                                <b class="mx-1"><t t-esc="state.awayAfterMinutes"/> min</b> and that time is logged as Away (never Productive).
+                            <div class="alert alert-warning py-1 px-3 mb-2 small d-flex align-items-center" role="alert">
+                                <i class="fa fa-clock-o me-2"></i>
+                                A task is running. It keeps counting until you Pause, Complete,
+                                <b class="mx-1">Switch task</b> or End Workday — closing this tab
+                                will not stop it.
+                            </div>
+                        </t>
+                        <!-- Paused: say so loudly. The board looks normal but nothing
+                             will start, and without this the refusals look like a bug. -->
+                        <t t-if="state.workdayPaused">
+                            <div class="alert alert-secondary py-2 px-3 mb-2 small d-flex align-items-center" role="alert">
+                                <i class="fa fa-pause-circle me-2"></i>
+                                <span>
+                                    <b>Your workday is paused.</b> Presence has stopped and tasks
+                                    cannot be started. Press <b>Resume Workday</b> when you're back.
+                                </span>
                             </div>
                         </t>
                     </t>
@@ -1187,6 +1246,7 @@ export class KpiAction extends Component {
                                         style="width: auto; min-width: 140px; height: 32px; font-size: 0.85rem;"
                                         t-on-change="onStatusChange">
                                     <option value="">All Statuses</option>
+                                    <option value="self_pending" t-att-selected="state.filters.status === 'self_pending'">🆕 Pending Review</option>
                                     <option value="regular" t-att-selected="state.filters.status === 'regular'">📋 Regular</option>
                                     <option value="important" t-att-selected="state.filters.status === 'important'">⚠️ Important</option>
                                     <option value="urgent" t-att-selected="state.filters.status === 'urgent'">🚨 Urgent</option>
@@ -1199,13 +1259,66 @@ export class KpiAction extends Component {
                                 
                                 <!-- Clear All Button (only shows when filters active) -->
                                 <t t-if="hasActiveFilters()">
-                                    <button class="btn btn-outline-secondary btn-sm" 
+                                    <button class="btn btn-outline-secondary btn-sm"
                                             style="height: 32px; font-size: 0.8rem;"
                                             t-on-click="clearAllFilters">
                                         <i class="fa fa-times me-1"></i> Clear
                                     </button>
                                 </t>
                             </div>
+
+                            <!-- Active filter chips. The dropdowns alone don't say what is
+                                 in force: scroll the board and the selects are off screen,
+                                 leaving a filtered list that looks like the whole list —
+                                 which reads as "tasks are missing". Each chip names one
+                                 filter and drops it on its own; Clear drops them all.
+                                 clearAssigneeFilter / clearPriorityFilter /
+                                 clearStatusFilter already existed for exactly this. -->
+                            <t t-if="hasActiveFilters()">
+                                <div class="d-flex align-items-center flex-wrap gap-2 mt-2">
+                                    <span class="text-muted" style="font-size: 0.8rem; font-weight: 500;">Active filters:</span>
+
+                                    <t t-if="state.searchQuery">
+                                        <span class="badge d-inline-flex align-items-center gap-1"
+                                              style="background:#dbeafe; color:#1e40af; border-radius:9999px; padding:.35rem .65rem; font-size:.78rem;">
+                                            <i class="fa fa-search" style="font-size:.7rem;"></i>
+                                            "<t t-esc="state.searchQuery"/>"
+                                            <button class="btn btn-link p-0 ms-1" style="color:#1e40af; font-size:.72rem; text-decoration:none;"
+                                                    t-on-click="clearSearch"><i class="fa fa-times"></i></button>
+                                        </span>
+                                    </t>
+
+                                    <t t-if="state.filters.assignee">
+                                        <span class="badge d-inline-flex align-items-center gap-1"
+                                              style="background:#dcfce7; color:#166534; border-radius:9999px; padding:.35rem .65rem; font-size:.78rem;">
+                                            <i class="fa fa-user" style="font-size:.7rem;"></i>
+                                            <t t-esc="getAssigneeName(state.filters.assignee)"/>
+                                            <button class="btn btn-link p-0 ms-1" style="color:#166534; font-size:.72rem; text-decoration:none;"
+                                                    t-on-click="clearAssigneeFilter"><i class="fa fa-times"></i></button>
+                                        </span>
+                                    </t>
+
+                                    <t t-if="state.filters.priority">
+                                        <span class="badge d-inline-flex align-items-center gap-1"
+                                              style="background:#fef3c7; color:#92400e; border-radius:9999px; padding:.35rem .65rem; font-size:.78rem;">
+                                            <i class="fa fa-flag" style="font-size:.7rem;"></i>
+                                            <t t-esc="priorityLabel(state.filters.priority)"/>
+                                            <button class="btn btn-link p-0 ms-1" style="color:#92400e; font-size:.72rem; text-decoration:none;"
+                                                    t-on-click="clearPriorityFilter"><i class="fa fa-times"></i></button>
+                                        </span>
+                                    </t>
+
+                                    <t t-if="state.filters.status">
+                                        <span class="badge d-inline-flex align-items-center gap-1"
+                                              style="background:#e0e7ff; color:#3730a3; border-radius:9999px; padding:.35rem .65rem; font-size:.78rem;">
+                                            <i class="fa fa-list-ul" style="font-size:.7rem;"></i>
+                                            <t t-esc="filterStatusLabel(state.filters.status)"/>
+                                            <button class="btn btn-link p-0 ms-1" style="color:#3730a3; font-size:.72rem; text-decoration:none;"
+                                                    t-on-click="clearStatusFilter"><i class="fa fa-times"></i></button>
+                                        </span>
+                                    </t>
+                                </div>
+                            </t>
                         </div>
                     </div>
 
@@ -1255,11 +1368,43 @@ export class KpiAction extends Component {
                                                             <span class="badge bg-info text-dark">Self-Created · Pending Review</span>
                                                         </div>
                                                     </t>
+                                                    <!-- What the developer asked for, shown while it still
+                                                         differs from what is set. Once an admin agrees (or
+                                                         never changes it) the two match and this is noise,
+                                                         so it hides itself. -->
+                                                    <!-- Why this finished task is back in the developer's
+                                                         lane. Without it, work they believed was done
+                                                         simply reappears with no explanation. -->
+                                                    <t t-if="task.reverted_from">
+                                                        <div class="mt-1">
+                                                            <!-- White with a dark border rather than solid
+                                                                 black: this badge lands on the amber Paused
+                                                                 card, and dark-on-dark hid the text it
+                                                                 exists to show. White reads on every lane
+                                                                 colour, which is the point of a badge that
+                                                                 can appear anywhere. -->
+                                                            <span class="badge bg-white text-dark border border-2 border-warning">
+                                                                <i class="fa fa-undo me-1"/>Reverted from Awaiting Client
+                                                            </span>
+                                                            <div t-if="task.revert_reason" class="text-muted small mt-1" style="white-space:pre-wrap;">
+                                                                <t t-esc="task.revert_reason"/>
+                                                            </div>
+                                                        </div>
+                                                    </t>
+                                                    <t t-if="task.requested_priority and task.requested_priority !== task.priority">
+                                                        <div class="text-muted small mt-1">
+                                                            <i class="fa fa-flag me-1"/>Developer asked for
+                                                            <b><t t-esc="priorityLabel(task.requested_priority)"/></b>
+                                                        </div>
+                                                    </t>
                                                     <!-- Why Start is greyed out, and when it will un-grey.
                                                          Without this the button is simply dead with no
                                                          explanation, which is what made the old workflow
                                                          feel broken rather than merely slow. -->
-                                                    <t t-if="task.can_start === false">
+                                                    <!-- Driven by the LABEL, not by can_start: gateLabel
+                                                         returns '' for finished work, and gating on
+                                                         can_start alone rendered an empty badge there. -->
+                                                    <t t-if="gateLabel(task)">
                                                         <div class="mt-1">
                                                             <span class="badge bg-warning text-dark">
                                                                 <i class="fa fa-hourglass-half me-1"/><t t-esc="gateLabel(task)"/>
@@ -1336,6 +1481,17 @@ export class KpiAction extends Component {
                                                         <button class="btn btn-sm btn-warning"
                                                                 t-if="btns.pause"
                                                                 t-on-click="() => openPauseModal(task)">Pause</button>
+                                                        <!-- Hand THIS task over to another one. Sits next to
+                                                             Pause because it is the same decision made
+                                                             differently: stop this, and say what you moved to.
+                                                             Per-card on purpose — with multitask running, only
+                                                             this task pauses and the others carry on. -->
+                                                        <button class="btn btn-sm btn-outline-primary"
+                                                                t-if="btns.pause"
+                                                                title="Pause this and start another task — anything else you're running keeps going"
+                                                                t-on-click="() => openSwitchTask(task)">
+                                                            <i class="fa fa-exchange me-1"/>Switch
+                                                        </button>
                                                         <button class="btn btn-sm btn-success"
                                                                 t-if="btns.resume"
                                                                 t-on-click="() => openResumeModal(task)">Resume</button>
@@ -1350,8 +1506,12 @@ export class KpiAction extends Component {
                                                                 title="Send a summary now and finish this task without the full checklist">
                                                             <i class="fa fa-flag-checkered"></i> Partial Finish
                                                         </button>
+                                                        <!-- Not on finished work. Reassigning a COMPLETED task
+                                                             moves whose name is on work that is already done
+                                                             and signed off — it rewrites history rather than
+                                                             changing who does something. -->
                                                         <button class="btn btn-sm btn-secondary"
-                                                                t-if="state.isAdmin"
+                                                                t-if="state.isAdmin and task.task_state !== 'completed'"
                                                                 t-on-click="() => openReassignModal(task)">Reassign</button>
                                                         <!-- 🆕 NEW: Manager-only approval buttons -->
                                                         <t t-if="state.isAdmin and col.key === 'partially_completed'">
@@ -1374,6 +1534,22 @@ export class KpiAction extends Component {
                                                                 title="Delete this task — only possible while no time has been logged against it">
                                                             <i class="fa fa-trash"></i> Delete
                                                         </button>
+                                                        <!-- Pull a task back off the client's desk. Admin only,
+                                                             and only while it is actually waiting on the client:
+                                                             a task the client has already signed is the basis of
+                                                             an invoice and is not revertable here. -->
+                                                        <t t-if="state.isAdmin and task.task_state === 'awaiting_client'">
+                                                            <!-- Amber, not black: this sits on the blue
+                                                                 Awaiting-Client card, where a solid dark
+                                                                 button swallowed its own label. Amber also
+                                                                 reads as "send back", distinct from the
+                                                                 red destructive actions. -->
+                                                            <button class="btn btn-sm btn-warning text-dark fw-semibold"
+                                                                    title="Send this back to the developer — the client stops seeing it"
+                                                                    t-on-click="() => this.openRevertSignoff(task)">
+                                                                <i class="fa fa-undo"></i> Revert
+                                                            </button>
+                                                        </t>
                                                         <!-- Self-created Pending Review: admin Accept / send back -->
                                                         <t t-if="state.isAdmin and col.key === 'self_pending'">
                                                             <button class="btn btn-sm btn-success"
@@ -1434,6 +1610,7 @@ export class KpiAction extends Component {
             currentUserId: null,  // 🆕 NEW: Store current user ID from API
             showMyTasksOnly: false,  // 🆕 NEW: Toggle for My Tasks filter
             workdayOpen:    false,   // green Start Workday button visible while false
+            workdayPaused:  false,   // open but frozen — Presence stopped, tasks blocked
             workdayClosed:  false,   // a closed session today with no open one (e.g. cron auto-closed)
             dayDone:        false,   // developer ENDED today themselves → one start + one end per day (no restart)
             // 🆕 NEW: Filter state variables
@@ -1551,6 +1728,10 @@ export class KpiAction extends Component {
         this.confirmPause = this.confirmPause.bind(this);
         this.confirmResume = this.confirmResume.bind(this);
         this.confirmComplete = this.confirmComplete.bind(this);
+        // Switch task. Bound like every other template-invoked method: OWL calls
+        // these off the context, so an unbound one arrives with `this` undefined
+        // and dies on the first this.* it touches.
+        this.openSwitchTask = this.openSwitchTask.bind(this);
         // 🆕 Part B: wrap-up actions
         this.openCompleteFromCard = this.openCompleteFromCard.bind(this);
         this.openPartialFinishModal = this.openPartialFinishModal.bind(this);
@@ -1620,6 +1801,7 @@ export class KpiAction extends Component {
                         this.state.workdayOpen   = !!res.is_open;
                         this.state.workdayClosed = !!res.today_closed;
                         this.state.dayDone       = !!res.day_done;
+                        this.state.workdayPaused = !!res.is_paused;
                     }
                 }).catch(() => {});
             } catch (e) {}
@@ -2202,8 +2384,19 @@ export class KpiAction extends Component {
     canCompleteDetail() {
         const hasSummary = (this.state.progressUpdates || []).length > 0;
         const c = this.state.completeChecklist || {};
-        const allTicked = c.verify_github && c.deployed_task && c.user_manual && c.documentation && c.tested_code;
-        return !!(hasSummary && allTicked && !this.state.completeSubmitting);
+        // ONE tick is enough, not all five.
+        //
+        // Requiring every box meant a task with no user manual to upload, or
+        // nothing to deploy, could not be completed at all — the developer either
+        // ticked boxes that weren't true, or used Partial Finish to get around it.
+        // A checklist people are forced to lie to is worse than no checklist: the
+        // stored flags are what the manager reviews.
+        //
+        // Each box is still recorded individually, so "deployed but not
+        // documented" stays visible to whoever approves it.
+        const anyTicked = !!(c.verify_github || c.deployed_task || c.user_manual
+                             || c.documentation || c.tested_code);
+        return !!(hasSummary && anyTicked && !this.state.completeSubmitting);
     }
 
     async confirmCompleteFromDetail() {
@@ -2277,6 +2470,14 @@ export class KpiAction extends Component {
                             <div class="mb-2">
                                 <label class="form-label">Why are you pausing?</label>
                                 <div class="d-flex flex-wrap gap-2 mb-2 align-items-center">
+                                    <!-- First, because it is the commonest reason a developer
+                                         pauses: they have not stopped working, they have moved
+                                         to a different task. It was buried in the dropdown as
+                                         "Another Priority Task", so people reached for Break —
+                                         which files real work time under a break on the
+                                         Workday Map and makes the day read wrong. -->
+                                    <button type="button" class="btn btn-sm btn-outline-primary pause-quick" data-code="priority_task"
+                                            title="You're still working — just on something else">🔀 Moved to another task</button>
                                     <button type="button" class="btn btn-sm btn-outline-secondary pause-quick" data-code="break">☕ Break</button>
                                     <button type="button" class="btn btn-sm btn-outline-secondary pause-quick" data-code="lunch">🍽 Lunch</button>
                                     <button type="button" class="btn btn-sm btn-outline-secondary pause-quick" data-code="meeting">👥 Meeting</button>
@@ -2285,10 +2486,10 @@ export class KpiAction extends Component {
                                             title="Pause and immediately notify the owner / configured recipients with your note">🚨 Urgent</button>
                                 </div>
                                 <select id="pauseReasonCode" class="form-select form-select-sm mb-2">
+                                    <option value="priority_task">🔀 Moved to another task</option>
                                     <option value="break">Break</option>
                                     <option value="lunch">Lunch</option>
                                     <option value="meeting">Meeting</option>
-                                    <option value="priority_task">Another Priority Task</option>
                                     <option value="awaiting_approval">Waiting for Approval</option>
                                     <option value="technical_issue">Technical Issue</option>
                                     <option value="leave">Leave</option>
@@ -2517,6 +2718,39 @@ export class KpiAction extends Component {
     // session via /kpi_workday/ping (which also fires workday_started WA
     // to owner + coordinator), then swaps the button to End Workday.
     // ------------------------------------------------------------------ //
+    // Freeze the day without ending it: tasks stop, Presence stops, and it can be
+    // resumed the same date. End Workday cannot be undone (one start + one end),
+    // which is why this exists separately.
+    async pauseWorkday() {
+        try {
+            const res = await rpc('/kpi_workday/pause', {});
+            if (res && res.status) {
+                this.state.workdayPaused = true;
+                await this.refresh();
+                await this.loadLiveStatus();
+            } else {
+                alert((res && res.message) || 'Could not pause your workday.');
+            }
+        } catch (err) {
+            alert('Pause Workday failed: ' + ((err && err.message) || err));
+        }
+    }
+
+    async resumeWorkday() {
+        try {
+            const res = await rpc('/kpi_workday/resume', {});
+            if (res && res.status) {
+                this.state.workdayPaused = false;
+                await this.refresh();
+                await this.loadLiveStatus();
+            } else {
+                alert((res && res.message) || 'Could not resume your workday.');
+            }
+        } catch (err) {
+            alert('Resume Workday failed: ' + ((err && err.message) || err));
+        }
+    }
+
     async startWorkday() {
         try {
             const res = await rpc("/kpi_workday/ping", {});
@@ -2524,6 +2758,7 @@ export class KpiAction extends Component {
                 this.state.workdayOpen = true;
                 this.state.workdayClosed = false;
                 this.state.dayDone = false;
+                this.state.workdayPaused = false;
                 // Refresh task list so any newly-pending items show up at top.
                 if (typeof this.refresh === 'function') {
                     await this.refresh();
@@ -2655,6 +2890,15 @@ export class KpiAction extends Component {
                                     <div class="fw-bold text-primary" style="font-size:1.3rem;">${data.accounted_display || '0m'}</div>
                                     <div class="small text-muted">task + meeting + lunch + break + no-tasks</div>
                                 </div>
+                                ${(data.paused_seconds || 0) > 0 ? `
+                                <!-- Outside Presence, not inside it: Presence + Paused is the
+                                     span from first login to logout. Shown so a long gap reads
+                                     as a deliberate pause rather than missing data. -->
+                                <div class="p-3 border rounded">
+                                    <div class="text-muted small">Workday paused</div>
+                                    <div class="fw-bold text-secondary" style="font-size:1.3rem;">${data.paused_display || '0m'}</div>
+                                    <div class="small text-muted">not counted in Presence</div>
+                                </div>` : ''}
                             </div>
                             ${(data.break_seconds || data.lunch_seconds || data.meeting_seconds || data.other_seconds || data.away_seconds || data.no_tasks_seconds || data.other_idle_seconds || (data.away_events && data.away_events.length)) ? `
                             <div class="border rounded p-2 mb-3" style="background:#fff8e1;">
@@ -2694,6 +2938,25 @@ export class KpiAction extends Component {
                                 dialog and keeps your session open.
                             </p>
                         </div>
+                        <!-- Pause lives HERE, next to End, because they are the two
+                             ways to stop for the day and the choice between them is
+                             the thing people get wrong. Ending is final for the date
+                             (one start + one end); pausing is not. Offering Pause at
+                             the moment someone reaches for End is what stops a 4am
+                             finish from burying the day.
+                             NOT to be confused with "Pause all" on the live strip,
+                             which stops the TASKS and leaves the workday running. -->
+                        <div class="alert alert-warning py-2 px-3 mx-3 mb-0 small d-flex align-items-center justify-content-between gap-2">
+                            <span>
+                                <i class="fa fa-pause-circle me-1"></i>
+                                Coming back later today? <b>Pause</b> instead — your day stays
+                                open and Presence stops until you return.
+                            </span>
+                            <button type="button" class="btn btn-sm btn-warning text-dark fw-semibold flex-shrink-0"
+                                    id="pauseWorkdayBtn">
+                                <i class="fa fa-pause me-1"></i> Pause Workday
+                            </button>
+                        </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-outline-secondary" id="continueWorkdayBtn">
                                 <i class="fa fa-arrow-left me-1"></i> Continue Working
@@ -2709,6 +2972,10 @@ export class KpiAction extends Component {
         document.getElementById("modalContainer").innerHTML = modalHTML;
         document.getElementById("closeModalBtn").addEventListener("click", () => this.closeModal());
         document.getElementById("continueWorkdayBtn").addEventListener("click", () => this.closeModal());
+        document.getElementById("pauseWorkdayBtn").addEventListener("click", async () => {
+            this.closeModal();
+            await this.pauseWorkday();
+        });
         document.getElementById("endWorkdayConfirmBtn").addEventListener("click", async () => {
             const note = document.getElementById("endWorkdayNote")?.value || '';
             const btn = document.getElementById("endWorkdayConfirmBtn");
@@ -3557,6 +3824,27 @@ export class KpiAction extends Component {
     /** Short "waiting on X" line for a task the server won't start yet. */
     gateLabel(task) {
         if (task.can_start !== false) return "";
+        // Finished work has nothing to wait for. can_start is false for a
+        // COMPLETED task too — you cannot start it because it is done — so this
+        // used to fall through and stamp "Waiting for the client to approve" on
+        // finished cards. The badge answers "why is Start greyed out?", which is
+        // not a question anyone is asking about a completed task.
+        if (["completed", "awaiting_client", "partially_completed"].includes(task.task_state)) {
+            return "";
+        }
+        // Checked FIRST because it is about the viewer, not the task: without it
+        // this fell through to "Waiting for the client to approve", which is
+        // simply untrue when the real reason is that they haven't started their
+        // own day. Blaming the client for the developer's own gate is the kind
+        // of wrong message that generates a support question.
+        if (task.start_block_reason === "workday") {
+            return "Start your workday to work on tasks";
+        }
+        // Paused is a different fix from never-started: the button they need
+        // says Resume, so telling them to "start" sends them hunting.
+        if (task.start_block_reason === "workday_paused") {
+            return "Resume your workday to work on tasks";
+        }
         if (task.start_block_reason === "admin") {
             return task.admin_accept_deadline_at
                 ? `Waiting on admin — accepts automatically ${this._fmtWhen(task.admin_accept_deadline_at)}`
@@ -3641,6 +3929,16 @@ export class KpiAction extends Component {
                       </select>
                     </div>
                     <div class="mb-2">
+                      <label class="form-label fw-bold">Type</label>
+                      <select id="ntDocType" class="form-select">
+                        <option value="requirement">Requirement</option>
+                        <option value="update">Update</option>
+                        <option value="bug">Bug</option>
+                      </select>
+                      <small class="text-muted">What you think this is. The admin sees your
+                        answer when they accept it and makes the final call.</small>
+                    </div>
+                    <div class="mb-2">
                       <label class="form-label fw-bold">Description</label>
                       <textarea id="ntDesc" class="form-control" rows="3"></textarea>
                     </div>
@@ -3669,6 +3967,7 @@ export class KpiAction extends Component {
         const estimate_hours = parseInt((g('ntHours') && g('ntHours').value) || '0', 10) || 0;
         const estimate_minutes = parseInt((g('ntMinutes') && g('ntMinutes').value) || '0', 10) || 0;
         const priority = (g('ntPriority') && g('ntPriority').value) || 'regular';
+        const doc_type = (g('ntDocType') && g('ntDocType').value) || 'requirement';
         const description = (g('ntDesc') && g('ntDesc').value) || '';
         if (!name) { alert('Please enter a task name.'); return; }
         if (!kra_id) { alert('Please choose a project (KRA).'); return; }
@@ -3677,7 +3976,7 @@ export class KpiAction extends Component {
         try {
             const res = await rpc('/kra_kpi/task/self_create', {
                 name, kra_id: parseInt(kra_id, 10),
-                estimate_hours, estimate_minutes, priority, description,
+                estimate_hours, estimate_minutes, priority, doc_type, description,
             });
             if (res && res.status) {
                 this.closeModal();
@@ -3707,11 +4006,35 @@ export class KpiAction extends Component {
                   </div>
                   <div class="modal-body">
                     <p class="mb-1">Accept <b>"${safe}"</b> into the main flow — what type is it?</p>
-                    <p class="text-muted small mb-3">This sets its reference id — the current <b>${(task.external_ref || 'TASK-###')}</b> becomes REQ / UPT / BUG.</p>
+                    <p class="text-muted small mb-2">This sets its reference id — the current <b>${(task.external_ref || 'TASK-###')}</b> becomes REQ / UPT / BUG.</p>
+                    ${task.requested_doc_type ? `
+                      <div class="alert alert-light border small py-2 mb-3">
+                        <i class="fa fa-user me-1"></i>
+                        The developer said this is a <b>${this.docTypeLabel(task.requested_doc_type)}</b>.
+                        Their choice is highlighted below — yours is what gets saved.
+                      </div>` : ''}
+                    <!-- The developer's own choice, shown so the admin decides
+                         against it rather than blind. Pre-selected below, so
+                         accepting without touching it honours their request. -->
+                    <div class="mb-3">
+                      <label class="form-label fw-bold mb-1">Priority</label>
+                      ${task.requested_priority ? `
+                        <div class="small text-muted mb-1">
+                          Developer asked for <b>${this.priorityLabel(task.requested_priority)}</b>
+                        </div>` : ''}
+                      <select id="acceptPriority" class="form-select">
+                        <option value="urgent">🔴 Urgent</option>
+                        <option value="important">🟡 Important</option>
+                        <option value="regular">⚪ Regular</option>
+                      </select>
+                    </div>
+                    <!-- The developer's answer is highlighted (solid, not outline) so
+                         the admin sees it without it being pre-clicked: the type is
+                         only saved when the admin actually presses one. -->
                     <div class="d-grid gap-2">
-                      <button class="btn btn-outline-primary" data-type="requirement"><b>Requirement</b> <span class="text-muted small">→ REQ-###</span></button>
-                      <button class="btn btn-outline-warning" data-type="update"><b>Update</b> <span class="text-muted small">→ UPT-###</span></button>
-                      <button class="btn btn-outline-danger" data-type="bug"><b>Bug Report</b> <span class="text-muted small">→ BUG-###</span></button>
+                      <button class="btn ${task.requested_doc_type === 'requirement' ? 'btn-primary' : 'btn-outline-primary'}" data-type="requirement"><b>Requirement</b> <span class="small">→ REQ-###</span></button>
+                      <button class="btn ${task.requested_doc_type === 'update' ? 'btn-warning' : 'btn-outline-warning'}" data-type="update"><b>Update</b> <span class="small">→ UPT-###</span></button>
+                      <button class="btn ${task.requested_doc_type === 'bug' ? 'btn-danger' : 'btn-outline-danger'}" data-type="bug"><b>Bug Report</b> <span class="small">→ BUG-###</span></button>
                     </div>
                   </div>
                   <div class="modal-footer">
@@ -3723,12 +4046,17 @@ export class KpiAction extends Component {
         const close = () => { container.innerHTML = ""; };
         document.getElementById("acceptTypeClose").addEventListener("click", close);
         document.getElementById("acceptTypeCancel").addEventListener("click", close);
+        // Default the picker to what the developer asked for: accepting without
+        // touching it honours their request, and changing it is a deliberate act.
+        const prioSel = document.getElementById("acceptPriority");
+        if (prioSel) prioSel.value = task.requested_priority || task.priority || 'regular';
         container.querySelectorAll('button[data-type]').forEach((btn) => {
             btn.addEventListener("click", async () => {
                 const docType = btn.getAttribute("data-type");
+                const priority = (prioSel && prioSel.value) || undefined;
                 close();
                 try {
-                    const res = await rpc('/kra_kpi/task/accept_self_created', { kpi_id: task.id, doc_type: docType });
+                    const res = await rpc('/kra_kpi/task/accept_self_created', { kpi_id: task.id, doc_type: docType, priority });
                     if (res && res.status) {
                         await this.refresh();
                     } else {
@@ -3844,6 +4172,244 @@ export class KpiAction extends Component {
         });
     }
 
+    // "I'm moving on to the next thing": pick a task, the running one stops and
+    // the chosen one starts — one action instead of pause → reason → find → start.
+    //
+    // The list is filtered on can_start, the SERVER's own answer (kra.kpi
+    // ._start_block), so the picker never offers something the switch would then
+    // refuse. Tasks already running are excluded — switching to what you are
+    // already doing is a no-op worth not offering.
+    // `fromTask` is the card the button was pressed on. With multitask running,
+    // ONLY that task hands over — task 1 → task 3 leaves task 2 ticking without a
+    // break. Called with no argument from the top strip, which means "switch
+    // whatever I'm on" and is only offered when a single task is running.
+    openSwitchTask(fromTask) {
+        const running = new Set(this.getActiveTasks().map((t) => t.id));
+        const options = (this.state.allTasks || [])
+            .filter((t) => !running.has(t.id) && t.can_start !== false)
+            .sort((a, b) => (a.external_ref || '').localeCompare(b.external_ref || ''));
+
+        const esc = (x) => (x == null ? '' : String(x))
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // Full cards, same shape as the board — you are choosing what to work on
+        // next, and a bare title is not enough to choose on. Every card is
+        // read-only detail plus ONE action, so there is no way to accidentally
+        // start/pause something from inside the picker.
+        const rows = options.length
+            ? `<div class="row g-2">${options.map((t) => `
+                <div class="col-12 col-md-6">
+                  <div class="card h-100 shadow-sm" style="border:1px solid #e5e7eb;">
+                    <div class="card-body p-3">
+                      <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
+                        <b class="text-primary">${esc(t.external_ref || '')}</b>
+                        <span class="badge ${this.priorityBadgeClass(t.priority)}">${esc(this.priorityLabel(t.priority))}</span>
+                      </div>
+                      <div class="fw-semibold mb-2" style="line-height:1.3;">${esc(t.name || '')}</div>
+                      <div class="small text-muted">
+                        <div><i class="fa fa-user me-1"></i>${esc(t.user_name || 'Unassigned')}</div>
+                        <div><i class="fa fa-clock-o me-1"></i>Time: ${esc(this.formatTime(t.timer_total_seconds || 0))}
+                             · Est: ${esc(t.estimate_display || '—')}</div>
+                        ${t.deadline ? `<div><i class="fa fa-calendar me-1"></i>Due ${esc(t.deadline)}</div>` : ''}
+                        ${t.task_state ? `<div><i class="fa fa-tag me-1"></i>${esc(this.filterStatusLabel(t.task_state))}</div>` : ''}
+                      </div>
+                      <button class="btn btn-sm btn-primary w-100 mt-3" data-switch-id="${t.id}">
+                        <i class="fa fa-check me-1"></i> Select this task
+                      </button>
+                    </div>
+                  </div>
+                </div>`).join('')}</div>`
+            : `<div class="text-muted text-center py-4">
+                   Nothing else is ready to start. A task has to be accepted and approved
+                   before you can switch to it.
+               </div>`;
+
+        const html = `
+            <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
+              <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+                <div class="modal-content shadow">
+                  <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="fa fa-exchange me-2"></i> Switch to another task</h5>
+                    <button type="button" class="btn-close btn-close-white" id="swClose"></button>
+                  </div>
+                  <div class="modal-body">
+                    <p class="text-muted small">
+                      ${fromTask
+                        ? `<b>${esc(fromTask.external_ref || fromTask.name || 'This task')}</b> pauses as
+                           <b>Another Priority Task</b> and the one you pick starts straight away.
+                           Anything else you have running is left alone.`
+                        : `Your current task pauses as <b>Another Priority Task</b> and the one you
+                           pick starts straight away.`}
+                      Time already logged is kept.
+                    </p>
+                    <div class="list-group">${rows}</div>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-light" id="swCancel">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+
+        const container = document.getElementById("modalContainer");
+        if (!container) { alert("Could not open the task picker."); return; }
+        container.innerHTML = html;
+        const close = () => { container.innerHTML = ''; };
+        document.getElementById('swClose').addEventListener('click', close);
+        document.getElementById('swCancel').addEventListener('click', close);
+        container.querySelectorAll('button[data-switch-id]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const id = parseInt(btn.getAttribute('data-switch-id'), 10);
+                close();
+                try {
+                    const res = await rpc('/kra_kpi/task/switch', {
+                        kpi_id: id,
+                        from_kpi_id: fromTask ? fromTask.id : null,
+                    });
+                    if (res && res.status) {
+                        await this.refresh();
+                        await this.loadLiveStatus();
+                    } else {
+                        alert((res && res.message) || 'Could not switch task.');
+                    }
+                } catch (e) {
+                    alert('Switch failed: ' + ((e && e.message) || e));
+                }
+            });
+        });
+    }
+
+    // Stop every running timer at once, with ONE reason. Only offered while more
+    // than one task is running — with a single task the ordinary Pause button on
+    // its card is the same thing and says which task it is.
+    // Called as `this.openPauseAll()` from the template, so no bind() is needed.
+    async openPauseAll() {
+        const tasks = this.getActiveTasks();
+        if (!tasks.length) return;
+        const esc = (x) => (x == null ? '' : String(x))
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const list = tasks.map((t) => `<li>${esc(t.external_ref || '')} ${esc(t.name || '')}</li>`).join('');
+        const html = `
+            <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content shadow">
+                  <div class="modal-header bg-warning">
+                    <h5 class="modal-title"><i class="fa fa-pause me-2"></i> Pause all ${tasks.length} tasks</h5>
+                    <button type="button" class="btn-close" id="paClose"></button>
+                  </div>
+                  <div class="modal-body">
+                    <p class="text-muted small mb-2">One reason for all of them. Time logged so far is kept.</p>
+                    <ul class="small mb-3">${list}</ul>
+                    <label class="form-label fw-bold">Why are you pausing?</label>
+                    <select id="paCode" class="form-select form-select-sm mb-2">
+                      <option value="break">☕ Break</option>
+                      <option value="lunch">🍽 Lunch</option>
+                      <option value="meeting">👥 Meeting</option>
+                      <option value="priority_task">🔀 Moved to another task</option>
+                      <option value="awaiting_approval">Waiting for Approval</option>
+                      <option value="technical_issue">Technical Issue</option>
+                      <option value="leave">Leave</option>
+                      <option value="other">✍ Other</option>
+                    </select>
+                    <textarea id="paNote" class="form-control" rows="2"
+                              placeholder="Optional note"></textarea>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-light" id="paCancel">Cancel</button>
+                    <button type="button" class="btn btn-warning" id="paConfirm">
+                      <i class="fa fa-pause me-1"></i> Pause all
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        const container = document.getElementById("modalContainer");
+        if (!container) { alert('Could not open the pause dialog.'); return; }
+        container.innerHTML = html;
+        const close = () => { container.innerHTML = ''; };
+        document.getElementById('paClose').addEventListener('click', close);
+        document.getElementById('paCancel').addEventListener('click', close);
+        document.getElementById('paConfirm').addEventListener('click', async () => {
+            const code = document.getElementById('paCode').value;
+            const note = (document.getElementById('paNote').value || '').trim();
+            close();
+            try {
+                const res = await rpc('/kra_kpi/task/pause_all', { reason_code: code, reason: note });
+                if (res && res.status) {
+                    await this.refresh();
+                    await this.loadLiveStatus();
+                } else {
+                    alert((res && res.message) || 'Could not pause your tasks.');
+                }
+            } catch (e) {
+                alert('Pause all failed: ' + ((e && e.message) || e));
+            }
+        });
+    }
+
+    // Admin pulls a task back out of Awaiting Client Sign-off. The reason is
+    // REQUIRED: this reopens work someone believed was finished, and "why is
+    // this back?" with no answer is the thing that wastes everyone's time.
+    // Invoked as `this.openRevertSignoff(...)` from the template, so no bind()
+    // is needed — unlike a bare-named handler, which arrives with `this`
+    // undefined (see openSwitchTask).
+    async openRevertSignoff(task) {
+        const safe = ((task.external_ref ? task.external_ref + ' ' : '') + (task.name || ''))
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const html = `
+            <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content shadow">
+                  <div class="modal-header bg-warning">
+                    <h5 class="modal-title text-dark"><i class="fa fa-undo me-2"></i> Revert from client sign-off?</h5>
+                    <button type="button" class="btn-close" id="rvClose"></button>
+                  </div>
+                  <div class="modal-body">
+                    <div class="alert alert-secondary mb-3">
+                      <b>"${safe}"</b> goes back to the developer:
+                      <ul class="mb-0 mt-2">
+                        <li>The <b>client stops seeing it</b> straight away.</li>
+                        <li>It returns to <b>Paused</b> with your reason on the card.</li>
+                        <li>The developer is notified. Time already logged is kept.</li>
+                        <li>Completing it again sends it through admin review, then the client.</li>
+                      </ul>
+                    </div>
+                    <label class="form-label fw-bold">Why is it going back?</label>
+                    <textarea id="rvReason" class="form-control" rows="3"
+                              placeholder="e.g. Client reported the export is still wrong"></textarea>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-light" id="rvCancel">Cancel</button>
+                    <button type="button" class="btn btn-warning text-dark fw-semibold" id="rvConfirm">
+                      <i class="fa fa-undo me-1"></i> Revert
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        const container = document.getElementById("modalContainer");
+        if (!container) { alert('Could not open the revert dialog.'); return; }
+        container.innerHTML = html;
+        const close = () => { container.innerHTML = ''; };
+        document.getElementById('rvClose').addEventListener('click', close);
+        document.getElementById('rvCancel').addEventListener('click', close);
+        document.getElementById('rvConfirm').addEventListener('click', async () => {
+            const el = document.getElementById('rvReason');
+            const reason = (el && el.value || '').trim();
+            if (!reason) { alert('Please say why it is going back.'); return; }
+            close();
+            try {
+                const res = await rpc('/kra_kpi/task/revert_signoff', { kpi_id: task.id, reason });
+                if (res && res.status) {
+                    await this.refresh();
+                } else {
+                    alert((res && res.message) || 'Could not revert this task.');
+                }
+            } catch (e) {
+                alert('Revert failed: ' + ((e && e.message) || e));
+            }
+        });
+    }
+
     formatTime(sec) {
         const h = Math.floor(sec / 3600);
         const m = Math.floor((sec % 3600) / 60);
@@ -3852,6 +4418,11 @@ export class KpiAction extends Component {
     }
 
     // Colored priority chip on cards (replaces plain "Priority: x" text).
+    /** Human label for a REQ/UPT/BUG code (the developer's requested type). */
+    docTypeLabel(t) {
+        return ({ requirement: 'Requirement', update: 'Update', bug: 'Bug' })[t] || (t || '');
+    }
+
     priorityLabel(p) {
         return ({ urgent: '🔴 Urgent', important: '🟡 Important', regular: '⚪ Regular' })[p] || (p || 'Regular');
     }
@@ -3888,7 +4459,21 @@ export class KpiAction extends Component {
     livePresenceDisplay() {
         const ls = this.state.liveStatus;
         if (!ls || !ls.login_raw) return this.formatTime(0);
-        return this.formatTime(this._elapsedSince(ls.login_raw, 0));
+        // Presence is time AT WORK, so paused time must come off. This ticks in
+        // the browser from a login anchor, so without this it kept counting a
+        // workday that was explicitly frozen — the server's own presence_seconds
+        // was already correct, only the live strip was lying.
+        let secs = this._elapsedSince(ls.login_raw, 0) - (ls.paused_base || 0);
+        if (ls.is_paused && ls.paused_since) {
+            // Currently paused: freeze at the instant the pause began, rather than
+            // subtracting a growing number, so the clock visibly STOPS.
+            const start = new Date(ls.login_raw).getTime();
+            const pausedAt = new Date(ls.paused_since).getTime();
+            if (!isNaN(start) && !isNaN(pausedAt)) {
+                secs = Math.floor((pausedAt - start) / 1000) - (ls.paused_base || 0);
+            }
+        }
+        return this.formatTime(Math.max(0, secs));
     }
     liveProductiveDisplay() {
         const ls = this.state.liveStatus;
@@ -4590,14 +5175,19 @@ export class KpiAction extends Component {
         // 4. Status Filter - only show tasks in the filtered status column
         if (this.state.filters.status) {
             const statusKey = this.state.filters.status;
-            // Map status filter value to column key
+            // Map status filter value to column key. EVERY lane must appear here:
+            // a value offered by the dropdown but missing from this map resolves
+            // to undefined, never matches a column, and silently returns an empty
+            // board — which is exactly what 'awaiting_client' was doing.
             const statusMapping = {
+                'self_pending': 'self_pending',
                 'regular': 'regular',
                 'important': 'important',
                 'urgent': 'urgent',
                 'in_progress': 'in_progress',
                 'paused': 'paused',
                 'partially_completed': 'partially_completed',
+                'awaiting_client': 'awaiting_client',
                 'completed': 'completed',
             };
             if (statusMapping[statusKey] !== columnKey) {
@@ -4668,6 +5258,29 @@ export class KpiAction extends Component {
     
     clearStatusFilter() {
         this.state.filters.status = '';
+    }
+
+    /** Human label for the status filter chip.
+     *
+     * Deliberately its own map rather than reusing the lane/column titles: the
+     * Status dropdown offers values the kanban has no lane for (awaiting_client,
+     * paused), so borrowing the lane titles would leave those chips blank —
+     * a chip that says nothing is worse than no chip. Falls back to the raw
+     * value so a status added to the <select> without touching this still
+     * renders something readable.
+     */
+    filterStatusLabel(code) {
+        return ({
+            self_pending: '🆕 Pending Review',
+            regular: '📋 Regular',
+            important: '⚠️ Important',
+            urgent: '🚨 Urgent',
+            in_progress: '🔄 In Progress',
+            paused: '⏸️ Paused',
+            partially_completed: '⏳ Pending',
+            awaiting_client: '📤 Awaiting Client',
+            completed: '✅ Completed',
+        })[code] || code;
     }
     
     clearAllFilters() {

@@ -115,6 +115,10 @@ _PERSIST_EVENTS = {
     # Re-nudged while unread (see _cron_check_idle_developers).
     'dev_no_task',
     'internal_rejected',    # dev: your work was sent back → rework
+    # dev: an admin pulled a finished task back off the client's desk. They
+    # believed it was done, so this must reach them rather than the task
+    # quietly reappearing in their lane.
+    'task_reverted',
     # Developer marked a task complete → admins (owner+coordinator) must review it
     # and Approve/Reject. Previously excluded as "routine noise" so the admin was
     # never told; now persisted so it reaches the Action Board owners in-app + push.
@@ -148,6 +152,7 @@ _NOTIF_TITLES = {
     'pre_approval_window_closed': 'Approval window closed',
     'internal_approved':    'Your sign-off needed',
     'internal_rejected':    'Rework needed',
+    'task_reverted':        'Sent back from client sign-off',
     'complete':             'Task ready for review',
     'final_approved':       'Client signed off',
     'self_task_accepted':   'Task accepted',
@@ -341,6 +346,13 @@ _APP_TEMPLATES = {
         "🏷 Project: {project}\n"
         "💬 Reason: {feedback}"
     ),
+    'task_reverted': (
+        "↩ Sent back from client sign-off — more work needed.\n"
+        "📌 {title} ({ref})\n"
+        "🏷 Project: {project}\n"
+        "👤 Reverted by: {admin}\n"
+        "💬 Reason: {reason}"
+    ),
     'final_approved': (
         "🎉 The client signed off — task complete!\n"
         "📌 {title} ({ref})\n"
@@ -497,6 +509,7 @@ _EVENT_RECIPIENTS = {
     # coordinator. The client message carries tap-to-send buttons for final sign-off.
     'internal_approved':         ('client', 'owner', 'coordinator'),
     'internal_rejected':         ('coordinator', 'developer'),
+    'task_reverted':             ('coordinator', 'developer'),
     # Client signed off → notify everyone (Section 7 + Section 9 trigger)
     'final_approved':            ('owner', 'coordinator', 'developer'),
     # Reassignment - new developer needs the WhatsApp ping; owner observes.
@@ -686,6 +699,7 @@ _TEMPLATES = {
         "(The phone number that replies will be recorded as the approver.)"
     ),
     'internal_rejected':  "❌ Coordinator rejected — {title}\nFeedback: {feedback}",
+    'task_reverted':      "↩ Sent back from client sign-off — {title}\nBy: {admin}\nReason: {reason}",
     'final_approved': (
         "🎉 CLIENT APPROVED — {title}\n"
         "Project: {project} • Ref: {ref}\n"
@@ -1165,6 +1179,7 @@ class KpiNotify(models.Model):
             } for tok in tokens]
 
             # Expo accepts up to 100 messages per request.
+            delivered = 0
             for i in range(0, len(messages), 100):
                 batch = messages[i:i + 100]
                 resp = requests.post(
@@ -1176,10 +1191,14 @@ class KpiNotify(models.Model):
                     },
                     timeout=10,
                 )
-                self._handle_push_receipts(batch, resp)
+                delivered += self._handle_push_receipts(batch, resp) or 0
 
-            self._log_action('push_sent', payload={
-                'event': event, 'channel': 'expo', 'devices': len(tokens)})
+            # 'devices' is what Expo ACCEPTED, not how many rows we had a token
+            # for. Logging the token count made a wholly-rejected send read as a
+            # complete success, which is how a broken FCM setup stayed hidden.
+            self._log_action('push_sent', success=bool(delivered), payload={
+                'event': event, 'channel': 'expo',
+                'devices': delivered, 'attempted': len(tokens)})
         except Exception as exc:
             try:
                 self._log_action('push_failed',
@@ -1189,16 +1208,68 @@ class KpiNotify(models.Model):
                 pass
 
     def _handle_push_receipts(self, batch, resp):
-        """Deactivate tokens Expo reports as DeviceNotRegistered."""
+        """Act on Expo's per-message tickets, and SAY what went wrong.
+
+        This used to handle exactly one error — DeviceNotRegistered — and silently
+        drop every other one, while _send_push logged 'push_sent' regardless. So a
+        push that Expo rejected outright looked identical to a delivered one, and
+        the most common real failure was invisible:
+
+          * MismatchSenderId  — the FCM credentials on EAS don't match the
+                                google-services.json baked into the build. This is
+                                what a fresh build hits when EAS credentials were
+                                never re-uploaded, and it silently killed EVERY
+                                push while the logs said everything was fine.
+          * InvalidCredentials — the FCM service-account key is missing/expired.
+
+        Neither is fixable from Odoo — they live in the EAS account — so the least
+        this can do is name them instead of hiding them. Returns the count Expo
+        actually accepted, so the caller can stop over-reporting successes.
+        """
+        # A non-200 means Expo rejected the whole batch (bad JSON, rate limit,
+        # outage). Previously ignored entirely, so a total failure logged as a
+        # complete success.
+        status_code = getattr(resp, 'status_code', 200)
+        if status_code != 200:
+            body = (getattr(resp, 'text', '') or '')[:300]
+            _logger.warning("expo push HTTP %s for %s message(s): %s",
+                            status_code, len(batch), body)
+            self._log_action('push_failed', success=False, payload={
+                'channel': 'expo', 'http_status': status_code, 'body': body,
+                'devices': len(batch)})
+            return 0
         try:
             data = resp.json().get('data') or []
-        except Exception:
-            return
+        except Exception as exc:
+            _logger.warning("expo push: unreadable response: %s", exc)
+            return 0
+
+        ok = 0
+        errors = {}      # error code -> how many devices hit it
         for msg, ticket in zip(batch, data):
-            if isinstance(ticket, dict) and ticket.get('status') == 'error':
-                err = (ticket.get('details') or {}).get('error')
-                if err == 'DeviceNotRegistered':
-                    self.env['kpi.push.token'].sudo().deactivate(msg.get('to'))
+            if not isinstance(ticket, dict):
+                continue
+            if ticket.get('status') != 'error':
+                ok += 1
+                continue
+            err = (ticket.get('details') or {}).get('error') or 'Unknown'
+            errors[err] = errors.get(err, 0) + 1
+            if err == 'DeviceNotRegistered':
+                # Expected and self-healing: the app was uninstalled or the token
+                # rotated. Retire the token quietly, it is not a fault.
+                self.env['kpi.push.token'].sudo().deactivate(msg.get('to'))
+            else:
+                _logger.warning("expo push rejected (%s): %s", err,
+                                ticket.get('message') or '')
+
+        # Report anything that is NOT the routine dead-token case, once per batch
+        # with counts, so the log names the cause rather than repeating a line.
+        real = {k: v for k, v in errors.items() if k != 'DeviceNotRegistered'}
+        if real:
+            self._log_action('push_failed', success=False, payload={
+                'channel': 'expo', 'errors': real, 'delivered': ok,
+                'devices': len(batch)})
+        return ok
 
     def _format_message(self, event, ctx, templates=None):
         """Build the text body for an event from a template dict.

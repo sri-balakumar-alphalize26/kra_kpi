@@ -153,7 +153,19 @@ class ResUsers(models.Model):
 
     # ---- Password hashing (reuses Odoo's own passlib crypt context) ------ #
     def _set_app_password(self, raw):
-        """Hash + store the app password; clears the must-change flag."""
+        """Hash + store the app PIN; clears the must-change flag.
+
+        The app PIN and the Odoo login password are SEPARATE credentials and this
+        deliberately does not touch `password`.
+
+        It used to write both, so setting a 4-digit PIN silently became the user's
+        Odoo password too. That made the Odoo password as weak as a PIN, and it
+        overwrote whatever an admin had set under Settings -> Users -> Security
+        without telling anybody. The two answer different questions: the PIN
+        unlocks the phone app (mobile + PIN via /kpi_app/login, which checks this
+        hash and nothing else), while the Odoo password is for the web and the
+        device-setup screen (/web/session/authenticate).
+        """
         self.ensure_one()
         raw = (raw or '').strip()
         if not raw:
@@ -162,11 +174,6 @@ class ResUsers(models.Model):
         self.sudo().write({
             'kpi_app_password_hash': hashed,
             'kpi_app_must_change_password': False,
-            # Mirror Odoo's own Security -> Change Password: the same value also
-            # becomes the Odoo login password, so username + password works on the
-            # connect/device-setup screen (/web/session/authenticate), not just
-            # mobile + PIN on the app screen. Keeps the two credentials in sync.
-            'password': raw,
         })
 
     def _check_app_password(self, raw):
@@ -189,15 +196,18 @@ class ResUsers(models.Model):
         return 'ready'
 
     def _seed_default_app_password(self):
-        """Give the user the default password + force-change flag (admin onboard/reset)."""
+        """Give the user the default app PIN + force-change flag (admin onboard/reset).
+
+        Only the app PIN. This used to set the Odoo login password to the same
+        default, which meant every onboarded or reset user had an Odoo password of
+        '1111' until they next opened the phone app — a real Odoo login, on the
+        web, guessable in one try. Resetting someone's app access must not touch
+        their Odoo password.
+        """
         for u in self:
             u.sudo().write({
                 'kpi_app_password_hash': u._crypt_context().hash(_DEFAULT_APP_PASSWORD),
                 'kpi_app_must_change_password': True,
-                # Keep the Odoo login password in sync with the default PIN, so
-                # username + 1111 works on the connect screen too (must-change still
-                # forces a real one on first app login, which re-syncs both).
-                'password': _DEFAULT_APP_PASSWORD,
             })
 
     # ---- Hard cut-off: block disabled app users at the Odoo login layer -- #

@@ -217,7 +217,16 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
   const head = HEADS[step] || HEADS.mobile;
 
   return (
-    <View style={s.root}>
+    // KeyboardAvoidingView must be the ROOT, wrapping the hero art and the sheet.
+    // It used to sit three levels down (root > sheet > sheetBody > here), where
+    // shrinking it did nothing visible: the hero image and the wave sheet above
+    // still claimed their full height, so the form never moved and the keyboard
+    // covered whatever you were typing. LoginScreen has always had it at the root,
+    // which is exactly why the Odoo login behaved and this one didn't.
+    <KeyboardAvoidingView
+      style={s.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
       <StatusBar style="dark" />
 
       {/* Illustration up top */}
@@ -249,8 +258,11 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
             <Circle cx={SW * 0.55} cy={174} r={62} fill={WATER} opacity={0.04} />
           </Svg>
 
-          <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            <ScrollView contentContainerStyle={s.formScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <ScrollView
+              contentContainerStyle={s.formScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
               <Animated.View style={enterStyle}>
                 {/* 369 logo under the wave — tap it 7× → Odoo device setup (hidden) */}
                 <TouchableOpacity activeOpacity={1} onPress={onLogoTap} style={s.logoWrap}>
@@ -393,7 +405,6 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
                 </Animated.View>
               </Animated.View>
             </ScrollView>
-          </KeyboardAvoidingView>
 
           {/* Footer — pinned above the phone's nav/gesture bar. */}
           <View style={[s.footer, { paddingBottom: 14 + insets.bottom }]}>
@@ -402,7 +413,7 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
           </View>
         </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -416,7 +427,11 @@ const s = StyleSheet.create({
   bottomDeco: { position: 'absolute', left: 0, right: 0, bottom: 0 },
 
   // Sit the form near the top (just under the water flow), moved up.
-  formScroll: { flexGrow: 1, paddingHorizontal: 28, paddingTop: 20 },
+  // Modest bottom breathing room only. The scroll range that lifts a focused
+  // field above the keyboard comes from KeyboardAvoidingView shrinking this box
+  // when the keyboard opens — padding it out permanently would leave dead white
+  // space on screen the rest of the time.
+  formScroll: { flexGrow: 1, paddingHorizontal: 28, paddingTop: 20, paddingBottom: 28 },
   form: { width: '100%' },
   logoWrap: { alignSelf: 'center', marginBottom: 2 },
   logo: { width: 168, height: 90 },
