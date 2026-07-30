@@ -34,6 +34,20 @@ function summarize(tree) {
   return { kras, subKras, kpis };
 }
 
+// A node and every KRA under it. Used by the delete dialog to name the real
+// cascade — the server deletes the whole subtree, so "all its sub-KRAs" was
+// asking someone to accept an unknown number.
+function countKras(node) {
+  let n = 1;
+  for (const c of node.child_ids || []) n += countKras(c);
+  return n;
+}
+function countKpis(node) {
+  let n = (node.kpi_ids || []).length;
+  for (const c of node.child_ids || []) n += countKpis(c);
+  return n;
+}
+
 function Stat({ icon, lib, value, label }) {
   const IconCmp = lib === 'mc' ? MaterialCommunityIcons : Ionicons;
   return (
@@ -65,6 +79,9 @@ export default function KraKpiDashboard({ onBack }) {
   // { kraId, kraName, picked: number[], original: number[], loading }
   const [assign, setAssign] = useState(null);
   const [clientUsers, setClientUsers] = useState([]);
+
+  // Delete confirmation: { kind:'kra'|'kpi', name, subKras, kpis, run }
+  const [confirm, setConfirm] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,11 +144,17 @@ export default function KraKpiDashboard({ onBack }) {
   // Parity with the web's 👥 button on a client KRA. Which logins are attached
   // here decides what that client can see, so it is a visibility control, not a
   // label — hence the confirm before clearing the last one.
-  async function onAssignClients(node) {
+  async function onAssignClients(node, inheritedFrom) {
     const current = (node.client_user_ids || []).map((u) => Number(u.id)).filter(Boolean);
     // Seed the ticks from the tree we already hold, so the list opens with the
     // right boxes checked even if the fetch below is slow or fails outright.
-    setAssign({ kraId: node.id, kraName: node.name, picked: current, original: current, loading: true });
+    setAssign({
+      kraId: node.id, kraName: node.name, picked: current, original: current,
+      // Only worth saying when this KRA has none of its own — otherwise its own
+      // logins are the answer and the ancestor is a detail.
+      inheritedFrom: current.length === 0 ? (inheritedFrom || null) : null,
+      loading: true,
+    });
     try {
       const { users } = await svc.getClientUsers();
       setClientUsers(users || []);
@@ -145,7 +168,7 @@ export default function KraKpiDashboard({ onBack }) {
 
   function saveAssign() {
     if (!assign) return;
-    const { kraId, kraName, picked, original } = assign;
+    const { kraId, kraName, picked, original, inheritedFrom } = assign;
     const commit = () => {
       setAssign(null);
       runMutation(
@@ -156,9 +179,11 @@ export default function KraKpiDashboard({ onBack }) {
       );
     };
     // Saving an empty list CLEARS the set server-side (it writes the full 6,0
-    // value). Going from "some" to "none" hides this KRA from its own client, so
-    // it gets asked about; every other change applies straight away.
-    if (picked.length === 0 && original.length > 0) {
+    // value). Going from "some" to "none" gets asked about — but only when it
+    // actually costs someone their access. Under a KRA that already grants it,
+    // detaching a login here changes nothing a client can see, so warning about
+    // it would be crying wolf on the one dialog that needs to be believed.
+    if (picked.length === 0 && original.length > 0 && !inheritedFrom) {
       Alert.alert(
         'Remove all client access?',
         `Nobody will be able to see “${kraName}” from the client portal until a login is assigned again.`,
@@ -170,25 +195,31 @@ export default function KraKpiDashboard({ onBack }) {
   }
 
   // ---- Delete (with confirm) ---------------------------------------------
+  // These were Alert.alert. A native alert is the wrong control for this one:
+  // deleting a KRA cascades to every sub-KRA and KPI under it, and an OS dialog
+  // can only offer a title, one line of body, and two buttons — so the row that
+  // says "and 23 KPIs with it" had nowhere to go. It also looks nothing like the
+  // rest of this screen, and the destructive button sits where the harmless one
+  // does on the other dialogs.
   function onDeleteKra(node) {
-    Alert.alert(
-      'Delete KRA?',
-      `"${node.name}" and all its sub-KRAs and KPIs will be permanently deleted.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => runMutation(() => svc.deleteKra(node.id), 'KRA deleted') },
-      ]
-    );
+    setConfirm({
+      kind: 'kra',
+      name: node.name,
+      // Counted from the tree in hand, so the dialog states the real blast
+      // radius instead of the word "all".
+      subKras: countKras(node) - 1,
+      kpis: countKpis(node),
+      run: () => runMutation(() => svc.deleteKra(node.id), 'KRA deleted'),
+    });
   }
   function onDeleteKpi(kpi) {
-    Alert.alert(
-      'Delete KPI?',
-      `"${kpi.name}" will be permanently deleted.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => runMutation(() => svc.deleteKpi(kpi.id), 'KPI deleted') },
-      ]
-    );
+    setConfirm({
+      kind: 'kpi',
+      name: kpi.name,
+      subKras: 0,
+      kpis: 0,
+      run: () => runMutation(() => svc.deleteKpi(kpi.id), 'KPI deleted'),
+    });
   }
 
   // Run a create/edit/delete, then refresh the tree.
@@ -344,7 +375,87 @@ export default function KraKpiDashboard({ onBack }) {
         users={clientUsers}
         onSave={saveAssign}
       />
+
+      {/* Delete confirmation */}
+      <ConfirmDeleteModal confirm={confirm} setConfirm={setConfirm} />
     </View>
+  );
+}
+
+// ---- Delete confirmation ---------------------------------------------------
+// Replaces Alert.alert for both deletes. The point of a custom dialog here is
+// the cascade: a KRA takes its whole subtree with it, and that count is the one
+// fact someone needs before tapping Delete.
+
+function ConfirmDeleteModal({ confirm, setConfirm }) {
+  if (!confirm) return null;
+  const close = () => setConfirm(null);
+  const isKra = confirm.kind === 'kra';
+  const { subKras, kpis } = confirm;
+  const cascades = isKra && (subKras > 0 || kpis > 0);
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={close}>
+      <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={close}>
+        <TouchableOpacity activeOpacity={1} style={s.sheet}>
+          <View style={s.delHead}>
+            <View style={s.delIcon}>
+              <Ionicons name="trash" size={20} color={COLORS.red} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.delTitle}>Delete this {isKra ? 'KRA' : 'KPI'}?</Text>
+              <Text style={s.delName} numberOfLines={3}>{confirm.name}</Text>
+            </View>
+          </View>
+
+          {/* Spell the cascade out as rows. This is what the OS alert could not
+              show, and it is the whole reason for the change. */}
+          {cascades ? (
+            <View style={s.delCascade}>
+              <Text style={s.delCascadeHead}>This also deletes</Text>
+              {subKras > 0 ? (
+                <View style={s.delRow}>
+                  <Ionicons name="git-branch" size={15} color={COLORS.red} />
+                  <Text style={s.delRowTxt}>
+                    <Text style={s.delRowNum}>{subKras}</Text> sub-KRA{subKras === 1 ? '' : 's'}
+                  </Text>
+                </View>
+              ) : null}
+              {kpis > 0 ? (
+                <View style={s.delRow}>
+                  <MaterialCommunityIcons name="target" size={15} color={COLORS.red} />
+                  <Text style={s.delRowTxt}>
+                    <Text style={s.delRowNum}>{kpis}</Text> KPI{kpis === 1 ? '' : 's'}, with their time logs and history
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={s.delPlain}>
+              {isKra
+                ? 'It has no sub-KRAs or KPIs, so nothing else is affected.'
+                : 'Its time logs and history go with it.'}
+            </Text>
+          )}
+
+          <Text style={s.delWarn}>This cannot be undone.</Text>
+
+          <View style={s.sheetBtns}>
+            <TouchableOpacity style={s.cancelBtn} onPress={close} activeOpacity={0.85}>
+              <Text style={s.cancelTxt}>Cancel</Text>
+            </TouchableOpacity>
+            {/* Destructive action sits on the right, same slot as Save on every
+                other dialog on this screen — a delete button where muscle memory
+                expects "confirm" is worse than one that simply looks dangerous. */}
+            <TouchableOpacity style={s.delBtn} activeOpacity={0.85}
+              onPress={() => { const run = confirm.run; setConfirm(null); run(); }}>
+              <Ionicons name="trash-outline" size={17} color="#fff" />
+              <Text style={s.delBtnTxt}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
   );
 }
 
@@ -375,6 +486,20 @@ function AssignClientsModal({ assign, setAssign, users, onSave }) {
           <TouchableOpacity activeOpacity={1} style={s.sheet}>
             <Text style={s.sheetTitle}>Assign clients</Text>
             <Text style={s.assignSub} numberOfLines={2}>{assign.kraName}</Text>
+
+            {/* Access already flows down from an ancestor, so an empty list here
+                is not a gap. Said up front, because the obvious reading of "no
+                boxes ticked" is that somebody forgot. */}
+            {assign.inheritedFrom ? (
+              <View style={s.inheritNote}>
+                <Ionicons name="git-branch-outline" size={15} color={COLORS.link} />
+                <Text style={s.inheritTxt}>
+                  Already visible to whoever is assigned on <Text style={s.inheritName}>{assign.inheritedFrom}</Text>.
+                  Access reaches every KRA beneath it, so this one needs nothing. Adding logins here narrows nothing —
+                  it only grants extra people access to this branch.
+                </Text>
+              </View>
+            ) : null}
 
             {assign.loading ? (
               <View style={s.assignLoading}>
@@ -417,9 +542,13 @@ function AssignClientsModal({ assign, setAssign, users, onSave }) {
             )}
 
             <Text style={s.assignCount}>
-              {assign.picked.length === 0
-                ? 'Nobody selected — saving clears client access.'
-                : `${assign.picked.length} selected`}
+              {assign.picked.length > 0
+                ? `${assign.picked.length} selected`
+                : assign.inheritedFrom
+                  // Saving nothing here is a genuine no-op, and saying "clears
+                  // client access" would be a lie — the ancestor still grants it.
+                  ? 'Nothing selected — access still comes from the parent KRA.'
+                  : 'Nobody selected — no client will be able to see this KRA.'}
             </Text>
 
             <View style={s.sheetBtns}>
@@ -664,4 +793,33 @@ const s = StyleSheet.create({
   assignLogin: { fontSize: 12, color: COLORS.faint, marginTop: 1 },
   assignWarn: { fontSize: 12, color: COLORS.amber, fontWeight: '700', paddingVertical: 10, lineHeight: 17 },
   assignCount: { fontSize: 12.5, fontWeight: '700', color: COLORS.muted, marginTop: 12 },
+  inheritNote: {
+    flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+    backgroundColor: '#EFF6FF', borderRadius: 12, padding: 11, marginBottom: 10,
+  },
+  inheritTxt: { flex: 1, fontSize: 12, color: COLORS.ink, lineHeight: 17 },
+  inheritName: { fontWeight: '900', color: COLORS.link },
+
+  // Delete dialog
+  delHead: { flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginBottom: 14 },
+  delIcon: {
+    width: 40, height: 40, borderRadius: 12, backgroundColor: COLORS.redBg,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  delTitle: { fontSize: 17.5, fontWeight: '900', color: COLORS.navy },
+  delName: { fontSize: 13.5, fontWeight: '700', color: COLORS.muted, marginTop: 3 },
+  delCascade: {
+    backgroundColor: COLORS.redBg, borderRadius: 12, padding: 12, gap: 8,
+  },
+  delCascadeHead: { fontSize: 11.5, fontWeight: '900', color: COLORS.red, letterSpacing: 0.4, textTransform: 'uppercase' },
+  delRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  delRowTxt: { flex: 1, fontSize: 13, color: COLORS.ink, lineHeight: 18 },
+  delRowNum: { fontWeight: '900', color: COLORS.red },
+  delPlain: { fontSize: 13, color: COLORS.muted, lineHeight: 18 },
+  delWarn: { fontSize: 12.5, fontWeight: '800', color: COLORS.muted, marginTop: 12 },
+  delBtn: {
+    flex: 1.4, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    height: 50, borderRadius: 13, backgroundColor: COLORS.red,
+  },
+  delBtnTxt: { color: '#fff', fontSize: 15.5, fontWeight: '800' },
 });

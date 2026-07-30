@@ -40,7 +40,7 @@ function KpiRow({ kpi, depth, onEditKpi, onDeleteKpi }) {
   );
 }
 
-export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra, onDeleteKra, onEditKpi, onDeleteKpi, onAssignClients }) {
+export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra, onDeleteKra, onEditKpi, onDeleteKpi, onAssignClients, inheritedFrom = null }) {
   const isOpen = expanded.has(node.id);
   const children = node.child_ids || [];
   const kpis = node.kpi_ids || [];
@@ -50,6 +50,19 @@ export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra
   // client_user_ids; the app just never drew them, so the web had an
   // assign-clients button the app didn't.
   const assigned = (node.client_user_ids || []).length;
+  // A client KRA with none of its own is NOT necessarily hidden: the server
+  // authorises a KPI against ANY ancestor KRA (_is_client_authorized_for_kpi
+  // walks parent_id up), and _get_descendant_ids expands the other way. So the
+  // usual shape here — client at the root, same-named project beneath it — is
+  // fully covered with zero logins on the child.
+  //
+  // Showing a bare count would call that project unassigned and invite someone
+  // to "fix" 21 rows that were already correct. Three states, not two.
+  const inherits = assigned === 0 && !!inheritedFrom;
+  const orphaned = assigned === 0 && !inheritedFrom;
+  // What the children inherit: this KRA if it has logins, otherwise whatever
+  // this one was already inheriting.
+  const childInherits = assigned > 0 ? (node.name || 'a parent KRA') : inheritedFrom;
 
   return (
     <View>
@@ -82,16 +95,23 @@ export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra
             <Ionicons name="pencil" size={16} color={COLORS.muted} />
           </TouchableOpacity>
         ) : null}
-        {/* Assign client logins — client KRAs only, same rule as the web. The
-            count rides on the icon so you can see an UNASSIGNED client KRA
-            without opening it; those are invisible to their own client. */}
+        {/* Assign client logins — client KRAs only, same rule as the web.
+            green + count = logins of its own
+            grey outline    = covered by an ancestor, nothing to do here
+            amber outline   = no client can see this, anywhere in its ancestry */}
         {onAssignClients && node.is_client ? (
-          <TouchableOpacity onPress={() => onAssignClients(node)} hitSlop={HIT} style={s.actBtn}>
+          <TouchableOpacity onPress={() => onAssignClients(node, inheritedFrom)} hitSlop={HIT} style={s.actBtn}>
             <View style={s.assignWrap}>
-              <Ionicons name="people" size={16} color={COLORS.green} />
+              <Ionicons
+                name={assigned > 0 ? 'people' : 'people-outline'}
+                size={16}
+                color={assigned > 0 ? COLORS.green : orphaned ? COLORS.amber : COLORS.faint}
+              />
               {assigned > 0 ? (
                 <View style={s.assignBadge}><Text style={s.assignTxt}>{assigned}</Text></View>
               ) : null}
+              {/* A dot, not a number: inherited access has no count of its own. */}
+              {inherits ? <View style={s.inheritDot} /> : null}
             </View>
           </TouchableOpacity>
         ) : null}
@@ -108,7 +128,7 @@ export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra
             <KraNode
               key={c.id} node={c} depth={depth + 1} expanded={expanded} onToggle={onToggle}
               onEditKra={onEditKra} onDeleteKra={onDeleteKra} onEditKpi={onEditKpi} onDeleteKpi={onDeleteKpi}
-              onAssignClients={onAssignClients}
+              onAssignClients={onAssignClients} inheritedFrom={childInherits}
             />
           ))}
           {kpis.map((k) => (
@@ -153,6 +173,10 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   assignTxt: { fontSize: 9, fontWeight: '900', color: '#fff' },
+  inheritDot: {
+    position: 'absolute', top: -3, right: -4, width: 7, height: 7, borderRadius: 3.5,
+    backgroundColor: COLORS.faint,
+  },
 
   kpiRow: {
     flexDirection: 'row', alignItems: 'center', paddingRight: 12, gap: 6,
