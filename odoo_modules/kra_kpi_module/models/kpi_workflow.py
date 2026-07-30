@@ -1219,28 +1219,72 @@ class KpiWorkflow(models.Model):
         self._assert_startable()
         prev = {rec.id: rec.task_state for rec in self}
         result = super().start_task()
+        # Starting work closes any open break/lunch — the same rule resume_task and
+        # complete_task already applied. start_task did not, so pausing one task
+        # and then STARTING a fresh one (which is what Switch does when the target
+        # has never run) left the break open across the new task's interval. That
+        # break then counted in `metered` while the task counted in `productive`,
+        # putting `accounted` above `presence` — the same double-count as pausing
+        # under multitask, reached by the other door.
+        self.env['kpi.break.log'].stop_break(self.env.user.id)
+        # ...and any open non-task block, for the same reason.
         self._end_nontask_for_work('task started')
         for rec in self:
             rec._wrap_lifecycle('start', prev_state=prev.get(rec.id))
         return result
 
-    def pause_task(self, reason='', reason_code=False):
+    def pause_task(self, reason='', reason_code=False, at=None):
+        # `at` MUST be forwarded to super(), which is where the timer and the
+        # kpi.time.log actually close. This override is the one MRO resolves, so
+        # without the parameter here `_pause_running_task(at=eod)` raised
+        # TypeError — and because that call site wraps itself in a broad
+        # `except Exception: log a warning`, the midnight close would have gone on
+        # to close the session while silently NOT pausing the task at all. Leaving
+        # a task running past its own close is worse than the overrun this fix
+        # exists to prevent, so the signatures have to stay in step.
         if reason_code:
             # Pass through to write so the field updates regardless of the original method
             self.sudo().write({'pause_reason_code': reason_code})
-        result = super().pause_task(reason=reason)
+        result = super().pause_task(reason=reason, at=at)
         for rec in self:
             rec._wrap_lifecycle('pause', payload={'reason': reason, 'reason_code': reason_code or rec.pause_reason_code})
         # ANY reason (break/lunch/meeting/other/away/typed) starts a metered interval —
         # recorded ONLY in kpi.break.log, never in kpi.time.log, so it shows in Presence
         # but never in Productive time. The task it was paused FROM + the typed note are
         # kept so the live panel / summary can show "(from <task>)".
-        if reason_code:
+        # A break means AWAY FROM THE DESK, so it must not open while the
+        # developer is still working on something else. Under multitask, pausing
+        # task A while task B runs used to open one anyway — and because
+        # kpi.break.log keeps a single active row per user, that break overlapped
+        # B's productive interval and got counted twice: once in `productive`
+        # (the union of task intervals) and again in `metered`. `accounted` then
+        # exceeded `presence`, which is impossible, and other_idle floored to 0 and
+        # hid it. Measured on real data: a 192s break inside a running task pushed
+        # accounted 42s past presence.
+        #
+        # super() has already closed THIS task's log by now, so an is_active log
+        # here means a genuinely different task is still running.
+        still_working = bool(self.env['kpi.time.log'].sudo().search_count([
+            ('user_id', '=', self.env.user.id), ('is_active', '=', True),
+        ]))
+        if reason_code and not still_working:
+            # `at` matters here for the same reason as above. kpi.break.log's
+            # work_date is computed from start_time, so an auto-close firing after
+            # midnight would open this break stamped now() and file it against the
+            # NEXT day — away time on a date with no session, missing from the day
+            # it belongs to.
             self.env['kpi.break.log'].start_break(
                 reason_code, self.env.user.id,
                 source_task_id=self.id if len(self) == 1 else False,
                 reason_note=reason or False,
+                at=at,
             )
+        elif reason_code:
+            # The reason is still recorded on the task (pause_reason_code above);
+            # only the away-time interval is skipped, because there is none.
+            _logger.info(
+                "pause: not opening a '%s' break for %s — another task is still "
+                "running, so this is not away-time", reason_code, self.env.user.login)
         # 🚨 Urgent pause — tell owner + coordinator IN-APP (bell + push), naming
         # the developer, and arm the re-nudge so it keeps reminding them every few
         # minutes until one of them actually reads it.
@@ -1265,7 +1309,7 @@ class KpiWorkflow(models.Model):
         only, and resume_task never got a copy — so declaring a Meeting and then
         RESUMING a paused task left the meeting running alongside the work. The
         same minutes were then counted twice (meeting_seconds AND productive), and
-        because other_idle is max(0, presence - productive - metered) the
+        because other_idle is max(0, presence - productive - metered - paused) the
         contradiction was silently floored to zero instead of showing up. End
         Workday froze that into the image. One helper, two callers, no drift.
 

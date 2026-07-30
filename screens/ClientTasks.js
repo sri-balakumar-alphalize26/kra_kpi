@@ -100,6 +100,40 @@ const DRow = ({ label, value }) => (
   </View>
 );
 
+// Collapsible section header — label + count + chevron. Used by the two ACTION
+// sections only ("Approval needed", "Awaiting your sign-off"); the tab-filtered
+// list below them keeps its plain heading.
+//
+// Children are conditionally rendered rather than height-animated:
+// LayoutAnimation is avoided deliberately on this screen — see the Fabric note
+// on the notification-focus effect below. Only the chevron animates, via a
+// native-driver rotate, which Fabric handles fine.
+function CollapsibleSection({ icon, label, count, open, onToggle, children }) {
+  const spin = useRef(new Animated.Value(open ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(spin, {
+      toValue: open ? 1 : 0,
+      duration: 180,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [open, spin]);
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
+
+  return (
+    <>
+      <TouchableOpacity style={s.secHead} onPress={onToggle} activeOpacity={0.8}>
+        <Text style={s.secHeadTxt}>{icon} {label}</Text>
+        <View style={s.secCount}><Text style={s.secCountTxt}>{count}</Text></View>
+        <Animated.View style={{ transform: [{ rotate }] }}>
+          <Ionicons name="chevron-down" size={18} color={COLORS.navy} />
+        </Animated.View>
+      </TouchableOpacity>
+      {open ? children : null}
+    </>
+  );
+}
+
 // Parse the server's 'YYYY-MM-DD HH:MM:SS' (UTC) into ms. Built explicitly rather
 // than via `new Date(str)` — RN/iOS parses that format inconsistently.
 function parseServerTs(s) {
@@ -217,6 +251,10 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   const [signName, setSignName] = useState('');        // typed signature
   const [signTicks, setSignTicks] = useState({ delivered: false, works: false, authorized: false });
   const [signBusy, setSignBusy] = useState(false);
+  // The two action sections collapse by default — their counts stay visible in
+  // the headers, so the client reaches their task list without a long scroll.
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [signoffOpen, setSignoffOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -260,6 +298,15 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   );
   const [pulseId, setPulseId] = useState(null);
 
+  // A notification can point at a card inside a COLLAPSED section. Open it first
+  // — a collapsed section renders no children, so the card never mounts, never
+  // reports an offset, and the scroll below would silently no-op.
+  useEffect(() => {
+    if (!focusTaskId) return;
+    if (approvals.some((t) => t.id === focusTaskId)) setApprovalOpen(true);
+    if ((data.pending_approvals || []).some((t) => t.id === focusTaskId)) setSignoffOpen(true);
+  }, [focusTaskId, approvals, data.pending_approvals]);
+
   useEffect(() => {
     if (!focusTaskId || loading) return undefined;
     // Wait a beat for the row to mount so its layout has been reported.
@@ -274,7 +321,9 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     // Clear so the flash can re-run if the same task is tapped again later.
     const clear = setTimeout(() => setPulseId(null), 3000);
     return () => { clearTimeout(t); clearTimeout(clear); };
-  }, [focusTaskId, loading, approvals.length, data.kpis]);
+    // approvalOpen/signoffOpen are deps so the 320ms timer restarts once a
+    // section has expanded and its rows have laid out.
+  }, [focusTaskId, loading, approvals.length, data.kpis, approvalOpen, signoffOpen]);
 
   const flashToast = useCallback((msg) => {
     setToast(msg);
@@ -454,8 +503,10 @@ export default function ClientTasks({ onBack, focusTaskId }) {
           {/* Stage 1 — approve the developer the admin assigned. The only place
               a client acts; auto-approves if they don't. */}
           {approvals.length > 0 ? (
-            <>
-              <Text style={s.sectionTitle}>✋ Approval needed ({approvals.length})</Text>
+            <CollapsibleSection
+              icon="✋" label="Approval needed" count={approvals.length}
+              open={approvalOpen} onToggle={() => setApprovalOpen((v) => !v)}
+            >
               {approvals.map((t) => (
                 <ApprovalCard
                   key={'ap' + t.id} t={t} busy={busyId === t.id}
@@ -463,12 +514,14 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                   pulse={pulseId === t.id} onLayout={onRowLayout(t.id)}
                 />
               ))}
-            </>
+            </CollapsibleSection>
           ) : null}
 
           {(data.pending_approvals || []).length > 0 ? (
-            <>
-              <Text style={s.sectionTitle}>⚠ Awaiting your sign-off ({data.pending_approvals.length})</Text>
+            <CollapsibleSection
+              icon="⚠" label="Awaiting your sign-off" count={data.pending_approvals.length}
+              open={signoffOpen} onToggle={() => setSignoffOpen((v) => !v)}
+            >
               {data.pending_approvals.map((t) => (
                 // onLayout goes on the WRAPPER, not the card: layout.y is relative
                 // to the parent, so measuring the inner card here would report ~0
@@ -483,7 +536,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                   </TouchableOpacity>
                 </View>
               ))}
-            </>
+            </CollapsibleSection>
           ) : null}
 
           <Text style={s.sectionTitle}>
@@ -708,6 +761,17 @@ const s = StyleSheet.create({
   tabBadgeTxt: { fontSize: 11, fontWeight: '900', color: COLORS.muted },
   tabBadgeTxtOn: { color: '#fff' },
   sectionTitle: { fontSize: 14, fontWeight: '800', color: COLORS.navy, marginTop: 6, marginBottom: 8 },
+  // Collapsible section header — same card + shadow as a tab so the two action
+  // sections read as controls, not as headings.
+  secHead: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#fff', borderRadius: 12,
+    paddingHorizontal: 12, paddingVertical: 10, marginTop: 6, marginBottom: 8,
+    shadowColor: '#0B2A6B', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
+  secHeadTxt: { flex: 1, fontSize: 14, fontWeight: '800', color: COLORS.navy },
+  secCount: { minWidth: 20, paddingHorizontal: 6, height: 20, borderRadius: 10, backgroundColor: '#EEF3F8', alignItems: 'center', justifyContent: 'center' },
+  secCountTxt: { fontSize: 11, fontWeight: '900', color: COLORS.muted },
   emptyTxt: { color: COLORS.muted, fontStyle: 'italic', paddingVertical: 12 },
   card: { backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: '#EEF2F7' },
   cardHi: { borderColor: '#0891B2', borderWidth: 1.5, backgroundColor: '#F0FDFF' },

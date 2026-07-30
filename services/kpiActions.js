@@ -429,6 +429,11 @@ export const PAUSE_REASONS = [
   { code: 'break', label: 'Break', emoji: '☕', quick: true },
   { code: 'lunch', label: 'Lunch', emoji: '🍽', quick: true },
   { code: 'meeting', label: 'Meeting', emoji: '👥', quick: true },
+  // Stopping for the day. A quick chip because it is used at a predictable
+  // moment every single day, and filing it as Break or Lunch was untrue and
+  // polluted those buckets. It ONLY labels the pause — the workday stays open
+  // until End Workday, which is a separate and irreversible decision.
+  { code: 'day_end', label: 'Day End', emoji: '🌙', quick: true },
   { code: 'priority_task', label: 'Another Priority Task' },
   { code: 'awaiting_approval', label: 'Waiting for Approval' },
   { code: 'technical_issue', label: 'Technical Issue' },

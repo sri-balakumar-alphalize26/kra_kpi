@@ -17,6 +17,9 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/clientInvoices';
+import {
+  fmtYMD as fmt, parseYMD, monthGrid, shiftMonth, monthTitle, WEEKDAY_LABELS,
+} from '../utils/dateGrid';
 
 const log = createLogger('ClientInvoices');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -45,9 +48,6 @@ const TASK_TYPES = [
 ];
 const TYPE_COLOR = { REQ: '#2563EB', UPT: '#0891B2', BUG: '#DC2626' };
 
-function fmt(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 function presetRange(key) {
   const now = new Date();
   const sod = (dt) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
@@ -89,6 +89,7 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
   const [currencies, setCurrencies] = useState([]);
   const [cForm, setCForm] = useState(null);     // create form state
   const [pick, setPick] = useState(null);       // { title, options, current, onPick }
+  const [datePick, setDatePick] = useState(null); // { field:'from'|'to', title }
   const [prompt, setPrompt] = useState(null);   // { title, fields:[{key,label,val}], onOk }
   const [banner, setBanner] = useState(null);   // { kind:'ok'|'err', msg }
 
@@ -607,14 +608,35 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
           <Text style={[s.fLbl, { marginTop: 14 }]}>Period</Text>
           <View style={s.pillWrap}>
             {PRESETS.map((p) => (
-              <TouchableOpacity key={p.key} style={[s.pill, f.preset === p.key && s.pillOn]} onPress={() => { const r = presetRange(p.key); setCForm((x) => ({ ...x, preset: p.key, from: r.from, to: r.to })); }} activeOpacity={0.85}>
+              // 'custom' has no range of its own — presetRange returns null for
+              // it, which used to throw on r.from. It means "I'll pick the dates
+              // myself", so it opens the From picker and leaves the range alone.
+              <TouchableOpacity key={p.key} style={[s.pill, f.preset === p.key && s.pillOn]} onPress={() => {
+                if (p.key === 'custom') { setCForm((x) => ({ ...x, preset: 'custom' })); setDatePick({ field: 'from', title: 'Period from' }); return; }
+                const r = presetRange(p.key);
+                setCForm((x) => ({ ...x, preset: p.key, from: r.from, to: r.to }));
+              }} activeOpacity={0.85}>
                 <Text style={[s.pillTxt, f.preset === p.key && s.pillTxtOn]}>{p.label}</Text>
               </TouchableOpacity>
             ))}
           </View>
+          {/* Tap-to-pick rather than free text: these go straight to the server
+              as from_date/to_date, and a typo used to sail through unvalidated. */}
           <View style={s.dateRow}>
-            <View style={{ flex: 1 }}><Text style={s.miniLbl}>From</Text><TextInput style={s.input} value={f.from} onChangeText={(t) => setCForm((p) => ({ ...p, preset: 'custom', from: t }))} placeholder="YYYY-MM-DD" placeholderTextColor={COLORS.faint} /></View>
-            <View style={{ flex: 1 }}><Text style={s.miniLbl}>To</Text><TextInput style={s.input} value={f.to} onChangeText={(t) => setCForm((p) => ({ ...p, preset: 'custom', to: t }))} placeholder="YYYY-MM-DD" placeholderTextColor={COLORS.faint} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.miniLbl}>From</Text>
+              <TouchableOpacity style={s.select} activeOpacity={0.8} onPress={() => setDatePick({ field: 'from', title: 'Period from' })}>
+                <Text style={s.selectTxt} numberOfLines={1}>{f.from || 'Pick a date'}</Text>
+                <Ionicons name="calendar-outline" size={17} color={COLORS.muted} />
+              </TouchableOpacity>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.miniLbl}>To</Text>
+              <TouchableOpacity style={s.select} activeOpacity={0.8} onPress={() => setDatePick({ field: 'to', title: 'Period to' })}>
+                <Text style={s.selectTxt} numberOfLines={1}>{f.to || 'Pick a date'}</Text>
+                <Ionicons name="calendar-outline" size={17} color={COLORS.muted} />
+              </TouchableOpacity>
+            </View>
           </View>
 
           <Text style={[s.fLbl, { marginTop: 14 }]}>Billing method</Text>
@@ -689,6 +711,23 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
         </View>
       </ScrollView>
       {renderPickModal()}
+      {datePick ? (
+        <DateGridModal
+          title={datePick.title}
+          value={datePick.field === 'from' ? f.from : f.to}
+          // Keep the range the right way round at the point of choosing, rather
+          // than rejecting it after the fact: picking a From after the current
+          // To (or vice versa) is almost always a mis-tap.
+          maxDate={datePick.field === 'from' ? (f.to || undefined) : undefined}
+          minDate={datePick.field === 'to' ? (f.from || undefined) : undefined}
+          onCancel={() => setDatePick(null)}
+          onPick={(iso) => {
+            const field = datePick.field;
+            setDatePick(null);
+            setCForm((p) => ({ ...p, preset: 'custom', [field]: iso }));
+          }}
+        />
+      ) : null}
     </View>
   );
 
@@ -785,6 +824,79 @@ function CheckList({ label, help, items, sel, onToggle }) {
         );
       })}
     </View>
+  );
+}
+
+// Month-grid date picker. Hand-rolled because the app ships no date library and
+// no native picker module; the calendar maths lives in utils/dateGrid so it can
+// be tested without rendering. Reuses the same modal chrome as the client and
+// currency pickers so the create form has one consistent way to choose things.
+function DateGridModal({ title, value, minDate, maxDate, onCancel, onPick }) {
+  // Open on the month of the current value, falling back to today for a blank
+  // or malformed field.
+  const [cursor, setCursor] = useState(() => {
+    const d = parseYMD(value) || new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+  const cells = monthGrid(cursor.year, cursor.month);
+  const todayIso = fmt(new Date());
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
+      <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={onCancel}>
+        <TouchableOpacity style={[s.modalSheet, { paddingBottom: 16 }]} activeOpacity={1}>
+          <View style={s.modalHead}>
+            <Text style={s.modalTitle}>{title}</Text>
+            <TouchableOpacity onPress={onCancel} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={s.modalClose}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={s.calNav}>
+            <TouchableOpacity style={s.calNavBtn} activeOpacity={0.7}
+              onPress={() => setCursor((c) => shiftMonth(c.year, c.month, -1))}>
+              <Ionicons name="chevron-back" size={20} color={COLORS.primary} />
+            </TouchableOpacity>
+            <Text style={s.calTitle}>{monthTitle(cursor.year, cursor.month)}</Text>
+            <TouchableOpacity style={s.calNavBtn} activeOpacity={0.7}
+              onPress={() => setCursor((c) => shiftMonth(c.year, c.month, 1))}>
+              <Ionicons name="chevron-forward" size={20} color={COLORS.primary} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={s.calGrid}>
+            {WEEKDAY_LABELS.map((w, i) => (
+              // Index in the key, not the letter: T/T and S/S repeat.
+              <Text key={`wd-${i}`} style={s.calWeekday}>{w}</Text>
+            ))}
+            {cells.map((c) => {
+              if (!c.day) return <View key={c.key} style={s.calCell} />;
+              // Out-of-range days stay visible but unpickable — hiding them
+              // makes the month look wrong; greying says why it won't respond.
+              const blocked = (minDate && c.iso < minDate) || (maxDate && c.iso > maxDate);
+              const sel = c.iso === value;
+              return (
+                <TouchableOpacity key={c.key} style={s.calCell} activeOpacity={blocked ? 1 : 0.7}
+                  disabled={blocked} onPress={() => onPick(c.iso)}>
+                  <View style={[s.calDay, sel && s.calDayOn, !sel && c.iso === todayIso && s.calDayToday]}>
+                    <Text style={[s.calDayTxt, sel && s.calDayTxtOn, blocked && s.calDayTxtOff]}>{c.day}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <View style={s.calFoot}>
+            <TouchableOpacity onPress={() => onPick(todayIso)}>
+              <Text style={s.promptOk}>Today</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onCancel}>
+              <Text style={s.promptCancel}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
   );
 }
 
@@ -955,4 +1067,20 @@ const s = StyleSheet.create({
   ccRowTick: { color: COLORS.primary, fontSize: 15, fontWeight: '900' },
   promptCancel: { fontSize: 15, fontWeight: '700', color: COLORS.muted },
   promptOk: { fontSize: 15, fontWeight: '900', color: COLORS.primary },
+
+  // Date grid. Cells are 1/7th of the row so the columns line up with the
+  // weekday header on any width without measuring anything.
+  calNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 6 },
+  calNavBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F0F5FF' },
+  calTitle: { flex: 1, textAlign: 'center', fontSize: 15, fontWeight: '800', color: COLORS.navy },
+  calGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingBottom: 6 },
+  calWeekday: { width: `${100 / 7}%`, textAlign: 'center', fontSize: 11, fontWeight: '800', color: COLORS.faint, paddingVertical: 6 },
+  calCell: { width: `${100 / 7}%`, alignItems: 'center', justifyContent: 'center', paddingVertical: 3 },
+  calDay: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  calDayOn: { backgroundColor: COLORS.primary },
+  calDayToday: { borderWidth: 1.5, borderColor: COLORS.primary },
+  calDayTxt: { fontSize: 14, fontWeight: '700', color: COLORS.ink },
+  calDayTxtOn: { color: '#fff', fontWeight: '900' },
+  calDayTxtOff: { color: COLORS.faint, fontWeight: '600' },
+  calFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 10, borderTopWidth: 1, borderTopColor: COLORS.line },
 });

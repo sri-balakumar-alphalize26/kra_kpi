@@ -168,24 +168,38 @@ class KpiTimeLog(models.Model):
         return session.id
 
     @api.model
-    def stop_session(self, kpi_id, user_id=None):
+    def stop_session(self, kpi_id, user_id=None, at=None):
         """
         Stop the active work session for a task
         Called when employee clicks 'Pause Task' or 'Complete Task'
+
+        `at` CAPS the end time (default = now), mirroring kpi.break.log.stop_break.
+        The midnight auto-close needs it: it sets the session's logout_at to the
+        local day-end, but this used to stamp now() regardless. A cron that fired
+        late then recorded task time AFTER the session had already ended — one
+        real case ran a log to 13h07m against a 5h20m session, which made
+        Accounted exceed Presence and floored other_idle to 0, hiding the
+        contradiction on the one screen meant to reconcile with a wristwatch.
         """
         if not user_id:
             user_id = self.env.user.id
-        
+
         # Find active session
         active_session = self.search([
             ('kpi_id', '=', kpi_id),
             ('user_id', '=', user_id),
             ('is_active', '=', True)
         ], limit=1)
-        
+
         if active_session:
+            end = at or fields.Datetime.now()
+            # Never end before the interval began. A caller's `at` is computed
+            # elsewhere and can predate a session started after it; a negative
+            # duration would flow straight into Productive.
+            if active_session.start_time and end < active_session.start_time:
+                end = active_session.start_time
             active_session.write({
-                'end_time': fields.Datetime.now(),
+                'end_time': end,
                 'is_active': False,
             })
             return {

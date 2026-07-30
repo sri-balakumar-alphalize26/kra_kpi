@@ -3170,14 +3170,21 @@ class KpiReportsAPI(http.Controller):
             from collections import defaultdict
             bucket = defaultdict(lambda: {
                 'productive_seconds': 0.0, 'presence_seconds': 0.0,
+                'paused_seconds': 0.0,
                 'task_count': 0, 'sessions': [], 'tasks': {}, 'user_name': '',
             })
             for s in sessions:
                 key, label = _period_key(s.session_date)
                 slot_id = (s.user_id.id, key)
                 slot = bucket[slot_id]
+                # Presence is the raw login->logout clock, so a week with 15h of
+                # deliberate pauses reports 15h more Presence than time worked.
+                # Carrying paused alongside it is what keeps that readable rather
+                # than looking like inflated hours.
+                s_paused = s._paused_total()
                 slot['productive_seconds'] += float(s.productive_seconds or 0.0)
                 slot['presence_seconds']   += float(s.presence_seconds or 0.0)
+                slot['paused_seconds']     += s_paused
                 slot['user_name']           = s.user_id.name or s.user_id.login or '—'
                 slot['label']               = label
                 slot['period_key']          = key
@@ -3189,6 +3196,7 @@ class KpiReportsAPI(http.Controller):
                     'logout_at':          fields.Datetime.to_string(s.logout_at) if s.logout_at else '',
                     'productive_seconds': float(s.productive_seconds or 0.0),
                     'presence_seconds':   float(s.presence_seconds or 0.0),
+                    'paused_seconds':     s_paused,
                     'task_count':         int(s.task_count or 0),
                     'auto_closed':        bool(s.auto_closed),
                 })
@@ -3290,8 +3298,10 @@ class KpiReportsAPI(http.Controller):
                     'user_name':           slot.get('user_name', ''),
                     'productive_seconds':  slot['productive_seconds'],
                     'presence_seconds':    slot['presence_seconds'],
+                    'paused_seconds':      slot['paused_seconds'],
                     'productive_display':  _fmt(slot['productive_seconds']),
                     'presence_display':    _fmt(slot['presence_seconds']),
+                    'paused_display':      _fmt(slot['paused_seconds']),
                     'task_count':          len(tasks),
                     'sessions':            slot['sessions'],
                     'tasks':               tasks,
@@ -3957,13 +3967,18 @@ class KpiReportsAPI(http.Controller):
             Session = request.env['kpi.work.session'].sudo()
             Log = request.env['kpi.time.log'].sudo()
 
-            days = defaultdict(lambda: {'presence': 0.0, 'productive': 0.0, 'tasks': {}, 'sessions': 0})
+            days = defaultdict(lambda: {'presence': 0.0, 'productive': 0.0, 'paused': 0.0,
+                                        'tasks': {}, 'sessions': 0})
             for s in Session.search([('user_id', '=', uid),
                                      ('session_date', '>=', from_date),
                                      ('session_date', '<=', to_date)]):
                 d = str(s.session_date)
                 days[d]['presence'] += float(s.presence_seconds or 0.0)
                 days[d]['productive'] += float(s.productive_seconds or 0.0)
+                # Presence counts paused time (it is the raw login->logout clock),
+                # so a day the developer froze for hours reads long here. Carried
+                # alongside so they can see why, instead of doubting the figure.
+                days[d]['paused'] += s._paused_total()
                 days[d]['sessions'] += 1
 
             for log in Log.search([('user_id', '=', uid), ('is_active', '=', False),
@@ -3989,6 +4004,8 @@ class KpiReportsAPI(http.Controller):
                     'date': d,
                     'presence_display': _fmt(info['presence']),
                     'productive_display': _fmt(info['productive']),
+                    'paused_seconds': info['paused'],
+                    'paused_display': _fmt(info['paused']),
                     'session_count': info['sessions'],
                     'task_count': len(tasks),
                     'tasks': [{'ref': t['ref'], 'name': t['name'], 'hours_display': _fmt(t['secs'])} for t in tasks],

@@ -43,6 +43,19 @@ function renderPreview(tpl, subs) {
   ));
 }
 
+// Body of the "country changed" popup, minus the leading name. A number is only
+// CLEARED when one was stored, but the prompt to type one is worth showing
+// either way — the required digit count has just changed.
+function countryChangeBody(info) {
+  const c = (info && info.cleared) || [];
+  const wa = c.includes('whatsapp');
+  const mob = c.includes('mobile');
+  if (wa && mob) return "'s mobile and WhatsApp numbers were cleared because the country code changed — the number of digits changes with it.";
+  if (wa) return "'s WhatsApp number was cleared because the country code changed — the number of digits changes with it.";
+  if (mob) return "'s mobile number was cleared because the country code changed — the number of digits changes with it.";
+  return ' has no mobile number saved, and the country code just changed.';
+}
+
 function Card({ color, icon, iconLib, title, children }) {
   return (
     <View style={[s.card, { borderLeftColor: color }]}>
@@ -74,6 +87,8 @@ export default function LoginManagementScreen({ onBack }) {
   const [roleForUser, setRoleForUser] = useState(null); // user whose role is being picked
   const [resetForUser, setResetForUser] = useState(null); // user whose password reset is being confirmed
   const [disconnectOpen, setDisconnectOpen] = useState(false); // WhatsApp disconnect confirm
+  // Country change wiped the stored number(s) — tell the admin to retype.
+  const [clearedInfo, setClearedInfo] = useState(null); // { name, cleared[], dial, length }
 
   // WhatsApp session
   const [waState, setWaState] = useState('none');
@@ -160,10 +175,31 @@ export default function LoginManagementScreen({ onBack }) {
       if (res?.status) {
         const nd = String(res.dial || dial || '91');
         const nl = Number(res.mobile_length) || mobileLen || 10;
+        // The server CLEARS the stored numbers on a country change (digits
+        // issued under the old dial code aren't valid under the new one), so
+        // blank the field here too — otherwise the row keeps showing a number
+        // that no longer exists in the database.
         setUsers((list) => list.map((x) => (x.id === u.id
-          ? { ...x, country_id: res.country_id || false, dial: nd, mobile_length: nl }
+          ? { ...x, country_id: res.country_id || false, dial: nd, mobile_length: nl, mobile: '', _mobile: '' }
           : x)));
         flash('country:' + u.id);
+        // The digits change with the country, so the old number can't carry
+        // over — say so rather than leaving a silently empty box. `cleared` is
+        // empty when there was no number stored to begin with, which is why the
+        // popup correctly stays away on a user who never had one.
+        log.info('setUserCountry ←', { user: u.id, cleared: res.cleared, dial: nd, length: nl });
+        // Always prompt, not just when something was wiped: the required digit
+        // count changes with the country either way, so a user who had no
+        // number still needs telling what to type. `cleared` only decides the
+        // wording.
+        const info = { name: u.name, cleared: res.cleared || [], dial: nd, length: nl };
+        // The country picker is itself a <Modal>, dismissed at the top of this
+        // function. On Android, presenting a second Modal while the first is
+        // still animating out silently drops it — the state flips to true but
+        // no window ever appears. The RPC returns faster than the fade, so wait
+        // the dismissal out before showing this one.
+        log.info('country popup →', info);
+        setTimeout(() => setClearedInfo(info), 400);
       }
     } catch (e) { log.warn('setUserCountry', e?.message); }
   };
@@ -503,6 +539,39 @@ export default function LoginManagementScreen({ onBack }) {
           </View>
         </View>
       </Modal>
+
+      {/* Number cleared by a country change — informational, one button. Same
+          card as the confirm popups above, amber instead of red (nothing has
+          gone wrong; there's just something left to do). */}
+      <Modal visible={!!clearedInfo} transparent animationType="fade" onRequestClose={() => setClearedInfo(null)}>
+        <View style={s.confirmWrap}>
+          <View style={s.confirmCard}>
+            <View style={[s.confirmIcon, s.noticeIcon]}>
+              <Ionicons name="call-outline" size={30} color={COLORS.amber} />
+            </View>
+            <Text style={s.confirmTitle}>
+              {clearedInfo?.cleared?.length ? 'Enter a new number' : 'Enter a number'}
+            </Text>
+            <Text style={s.confirmMsg}>
+              <Text style={{ fontWeight: '900', color: COLORS.navy }}>{clearedInfo?.name}</Text>
+              {countryChangeBody(clearedInfo)}
+              {'\n\n'}Please enter an{' '}
+              <Text style={{ fontWeight: '900', color: COLORS.navy }}>{clearedInfo?.length}-digit</Text>
+              {' '}number for{' '}
+              <Text style={{ fontWeight: '900', color: COLORS.navy }}>+{clearedInfo?.dial}</Text>.
+            </Text>
+            <View style={s.confirmBtns}>
+              <TouchableOpacity
+                style={[s.confirmBtn, s.noticeDo]}
+                onPress={() => setClearedInfo(null)} activeOpacity={0.85}
+              >
+                <Ionicons name="checkmark" size={17} color="#fff" />
+                <Text style={s.confirmDoTxt}>Got it</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -607,4 +676,8 @@ const s = StyleSheet.create({
   confirmCancelTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 15 },
   confirmDo: { backgroundColor: COLORS.red },
   confirmDoTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
+
+  // "Number cleared" notice — same card, amber icon, single primary button.
+  noticeIcon: { backgroundColor: COLORS.amberBg },
+  noticeDo: { backgroundColor: COLORS.primary },
 });

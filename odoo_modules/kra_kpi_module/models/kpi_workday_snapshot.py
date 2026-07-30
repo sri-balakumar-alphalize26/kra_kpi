@@ -103,6 +103,13 @@ class KpiWorkdaySnapshot(models.Model):
     # kpi.work.session will drift; these must not.
     presence_seconds = fields.Float(string='Presence (s)')
     productive_seconds = fields.Float(string='Productive (s)')
+    # Presence became the raw login->logout clock (pauses included) in 19.0.2.6.
+    # Rows written before that used the old meaning, where paused time was
+    # subtracted out, and cannot be recomputed — the underlying sessions may be
+    # gone and paused was never stored. Deliberately NOT backfilled: an old row
+    # reads 0.0 here, which is how you tell the two eras apart. Read a
+    # zero-paused row as "unknown", not as "the day had no pauses".
+    paused_seconds = fields.Float(string='Paused (s)')
     standard_hours = fields.Float(string='Standard Day (h)')
     met_standard = fields.Boolean(string='Met the Standard Day')
     task_count = fields.Integer(string='Tasks Touched')
@@ -204,17 +211,17 @@ class KpiWorkdaySnapshot(models.Model):
             ('Presence (wall clock)', p.get('presence_display', '0m'), verdict,
              '%s %s standard' % ('over' if met else 'under', p.get('standard_display', ''))),
             # Everything the day is accounted for by, in one number: task work +
-            # meeting + lunch + break + no-tasks (+ away/other). Accounted plus
-            # Other/Idle is exactly Presence.
+            # meeting + lunch + break + no-tasks (+ away/other) + paused.
+            # Accounted plus Other/Idle is exactly Presence.
             ('Accounted', p.get('accounted_display', '0m'), C_INK,
-             'task+meet+lunch+break'),
+             'task+meet+lunch+break+paused'),
             ('Tasks touched', str(p.get('task_count', 0)), C_INK, ''),
         ]
         # Only when the day was actually paused — an always-present "0m Paused"
         # tile would just make every normal day look like it had a gap.
         if (p.get('paused_seconds') or 0) > 0:
             tiles.append(('Workday paused', p.get('paused_display', '0m'), C_MUTED,
-                          'outside Presence'))
+                          'inside Presence'))
         # Width derived from the tile COUNT — it was hardcoded to 3, so adding a
         # tile silently drew it off the edge of the image.
         tw = (IMG_W - PAD * 2 - (len(tiles) - 1) * 12) / float(len(tiles))
@@ -234,7 +241,7 @@ class KpiWorkdaySnapshot(models.Model):
         away = [
             ('Break', p.get('break_display')), ('Lunch', p.get('lunch_display')),
             ('Meeting', p.get('meeting_display')), ('No tasks', p.get('no_tasks_display')),
-            ('Other', p.get('other_display')), ('Away (auto)', p.get('away_display')),
+            ('Other', p.get('other_display')), ('Away (system)', p.get('away_display')),
             ('Other / Idle', p.get('other_idle_display')),
         ]
         aw = (IMG_W - PAD * 2 - 6 * 8) / 7.0
@@ -342,6 +349,7 @@ class KpiWorkdaySnapshot(models.Model):
                 session.user_id.login or session.user_id.id, session.session_date),
             'presence_seconds': payload.get('presence_seconds') or 0.0,
             'productive_seconds': payload.get('productive_seconds') or 0.0,
+            'paused_seconds': payload.get('paused_seconds') or 0.0,
             'standard_hours': payload.get('standard_hours') or 0.0,
             'met_standard': bool(payload.get('met_standard')),
             'task_count': payload.get('task_count') or 0,

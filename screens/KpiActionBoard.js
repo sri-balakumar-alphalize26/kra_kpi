@@ -124,8 +124,26 @@ const POLL_MS = 20000;   // silent live refresh interval
 // used to duck the question for the rest of the day.
 const IDLE_SNOOZE_MS = 60000;
 const TICK_MS = 1000;    // live-timer tick for in-progress cards
-const { height: SH } = Dimensions.get('window');
+const { width: SW, height: SH } = Dimensions.get('window');
 const LANE_MAX_H = Math.round(SH * 0.78); // lane card-scroll height, adapts to screen
+
+// Phone vs tablet. Read once, like LANE_MAX_H — so it does NOT follow a rotation;
+// that is a known limitation, not an oversight.
+//
+// This exists because "looks right" was only ever true at tablet width. The End
+// Workday popup is the worst of it: its tiles and footer were laid out as fixed
+// horizontal rows that happen to fit 1200px, and on a phone the text clipped and
+// the footer spilled off the left edge.
+const IS_NARROW = SW < 480;
+
+// A modal body cannot use LANE_MAX_H. That is 78% of the screen and correct for
+// the lane card-scrolls, which sit on a plain page — but a modal body also has to
+// leave room for everything around it: modalWrap padding (48), the header (~50),
+// the footer (~72) and the End Workday "Pause instead" strip (~60). At 0.78·SH
+// plus 230 the card came to 854dp on an 800dp phone, so the footer was pushed off
+// the bottom of the screen. On a 1280dp tablet the same sum fits, which is why it
+// looked perfect there and broken on a phone.
+const MODAL_BODY_MAX_H = Math.max(240, Math.round(SH * 0.78) - 230);
 
 // Live elapsed seconds: base accrued time + (now − start) while running.
 function liveSeconds(task, nowMs) {
@@ -155,28 +173,20 @@ function productiveLive(live, nowMs) {
   return base;
 }
 
-// Live Presence — a port of the web board's livePresenceDisplay (kpi_action.js).
+// Live Presence — the raw clock since login, matching the server's
+// presence_seconds exactly (kpi.work.session._compute_totals).
 //
-// Presence is time AT WORK, so paused time has to come off. This clock ticks on
-// the device from a login anchor, so without the two paused_* values the strip
-// kept counting a workday the developer had explicitly frozen: the server's own
-// presence_seconds was already right, only the live strip was lying — and it is
-// the number they are looking at while deciding whether pausing worked.
+// This used to subtract paused_base and freeze at paused_since, because Presence
+// then MEANT time-at-work. It no longer does: Presence is now login -> now, so a
+// 09:30 start reads 12h at 21:30 whatever happened in between, and paused time is
+// reported on its own line and inside Accounted instead. Subtracting here would
+// put the strip back in disagreement with the summary it introduces.
 //
-// paused_base is pauses already banked. paused_since is the OPEN one, and when
-// it is set we freeze at the instant the pause began rather than subtracting a
-// growing number, so the clock visibly STOPS instead of merely slowing.
+// The `· paused` marker beside this is what tells the developer the day is frozen;
+// the clock itself is deliberately still moving, because wall-clock time is.
 function presenceLive(live, nowMs) {
   if (!live?.login_raw) return 0;
-  const banked = live.paused_base || 0;
-  if (live.is_paused && live.paused_since) {
-    const start = Date.parse(live.login_raw);
-    const pausedAt = Date.parse(live.paused_since);
-    if (!Number.isNaN(start) && !Number.isNaN(pausedAt)) {
-      return Math.max(0, (pausedAt - start) / 1000 - banked);
-    }
-  }
-  return Math.max(0, secsSince(live.login_raw, nowMs) - banked);
+  return Math.max(0, secsSince(live.login_raw, nowMs));
 }
 
 const PRIORITY = {
@@ -1898,7 +1908,7 @@ export default function KpiActionBoard({
           <Ionicons name="pause-circle" size={18} color="#475569" />
           <Text style={s.pausedBarTxt}>
             <Text style={{ fontWeight: '800' }}>Your workday is paused.</Text>{' '}
-            Presence has stopped and tasks can't be started. Tap Resume when you're back.
+            Tasks can't be started, and paused time won't count as worked time. Tap Resume when you're back.
           </Text>
         </View>
       ) : null}
@@ -2255,7 +2265,7 @@ export default function KpiActionBoard({
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={{ maxHeight: LANE_MAX_H }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
               <View style={s.modalPad}>
                 <View style={s.bannerBlue}>
                   <Text style={s.bannerBlueTxt}>
@@ -2578,7 +2588,7 @@ export default function KpiActionBoard({
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={{ maxHeight: LANE_MAX_H }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
               <View style={s.modalPad}>
                 <Text style={s.kv}>Task: <Text style={s.kvStrong}>{finishFor?.name}</Text></Text>
 
@@ -2638,7 +2648,7 @@ export default function KpiActionBoard({
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={{ maxHeight: LANE_MAX_H }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
               <View style={s.modalPad}>
                 <Text style={s.fieldLabel}>Task Name *</Text>
                 <TextInput style={[s.textInput, !ntName.trim() && s.inputErr]} placeholder="What needs doing?" placeholderTextColor={COLORS.faint} value={ntName} onChangeText={setNtName} />
@@ -2940,7 +2950,7 @@ export default function KpiActionBoard({
                 <Ionicons name="close" size={22} color="#fff" />
               </TouchableOpacity>
             </View>
-            <ScrollView style={{ maxHeight: LANE_MAX_H }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
               <View style={s.modalPad}>
                 <Text style={s.kv}>Task: <Text style={s.kvStrong}>{approveFor?.name}</Text></Text>
                 {empChecklist ? (
@@ -3374,20 +3384,31 @@ export default function KpiActionBoard({
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={{ maxHeight: LANE_MAX_H }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
               <View style={s.modalPad}>
                 {/* Three stat tiles */}
                 <View style={s.statTiles}>
                   <View style={s.statTile}>
                     <Text style={s.statTileLbl}>Login</Text>
-                    <Text style={s.statTileVal}>{endSummary?.login_at || '—'}</Text>
+                    {/* On a phone the tile is ~114dp of content and the server's
+                        '%Y-%m-%d %H:%M:%S' is ~124dp, so the full stamp clipped.
+                        The date is redundant here anyway — this is a summary of
+                        today — so drop it and keep the part that carries meaning. */}
+                    <Text style={s.statTileVal} numberOfLines={1}>
+                      {IS_NARROW
+                        ? ((endSummary?.login_at || '—').split(' ')[1] || endSummary?.login_at || '—')
+                        : (endSummary?.login_at || '—')}
+                    </Text>
                   </View>
                   <View style={s.statTile}>
-                    <Text style={s.statTileLbl}>Productive (task time)</Text>
+                    {/* The parenthetical is what tips these two labels over the
+                        line on a phone. It is implied by the figure itself, and
+                        the tablet keeps the fuller wording. */}
+                    <Text style={s.statTileLbl}>{IS_NARROW ? 'Productive' : 'Productive (task time)'}</Text>
                     <Text style={[s.statTileBig, { color: COLORS.green }]}>{endSummary?.productive_display || '0m'}</Text>
                   </View>
                   <View style={s.statTile}>
-                    <Text style={s.statTileLbl}>Presence (wall clock)</Text>
+                    <Text style={s.statTileLbl}>{IS_NARROW ? 'Presence' : 'Presence (wall clock)'}</Text>
                     {/* Green at/over the standard day, red under it. The verdict is
                         decided server-side (met_standard) so the app, the web popup
                         and the saved image always agree. */}
@@ -3413,20 +3434,29 @@ export default function KpiActionBoard({
                     <Text style={[s.statTileBig, { color: COLORS.blue || '#2563EB' }]}>
                       {endSummary?.accounted_display || '0m'}
                     </Text>
-                    <Text style={s.statTileFoot}>task + meeting + lunch + break + no-tasks</Text>
+                    {/* 48 chars wraps to three lines in a 114dp tile. The full
+                        breakdown is a nicety; on a phone the one term a reader
+                        would not have guessed is the one worth keeping. */}
+                    <Text style={s.statTileFoot}>
+                      {IS_NARROW ? '+ paused' : 'task + meeting + lunch + break + no-tasks + paused'}
+                    </Text>
                   </View>
                   {/* Only when the day was actually frozen. Reported on its own
                       line rather than dropped, because a six-hour hole with no
                       explanation reads as a tracking failure to whoever reviews
-                      the day. It sits OUTSIDE Presence — Presence + Paused is the
-                      wall-clock span from login to logout. */}
+                      the day. It sits INSIDE Presence — Presence is the raw
+                      login→logout clock — but is not worked time, which is why
+                      it lands in Accounted and is taken off the standard-day
+                      check. */}
                   {(endSummary?.paused_seconds || 0) > 0 ? (
                     <View style={s.statTile}>
                       <Text style={s.statTileLbl}>Workday paused</Text>
                       <Text style={[s.statTileBig, { color: '#B45309' }]}>
                         {endSummary?.paused_display || '0m'}
                       </Text>
-                      <Text style={s.statTileFoot}>not counted in Presence</Text>
+                      <Text style={s.statTileFoot}>
+                        {IS_NARROW ? 'in Presence' : 'inside Presence, not worked time'}
+                      </Text>
                     </View>
                   ) : null}
                 </View>
@@ -3443,7 +3473,9 @@ export default function KpiActionBoard({
                       // developer's fault and must not read as idling.
                       ['No tasks', endSummary?.no_tasks_display],
                       ['Other', endSummary?.other_display],
-                      ['Away (auto)', endSummary?.away_display],
+                      // Not idle auto-detection (retired) — time a task was stopped by
+                      // the system: Pause Workday, or the midnight close.
+                      ['Away (system)', endSummary?.away_display],
                       ['Other/Idle', endSummary?.other_idle_display],
                     ].map(([lbl, val]) => (
                       <View key={lbl} style={s.awayCell}>
@@ -3527,7 +3559,7 @@ export default function KpiActionBoard({
               <Ionicons name="pause-circle-outline" size={18} color="#92400E" />
               <Text style={s.pauseInsteadTxt}>
                 Coming back later today? <Text style={{ fontWeight: '800' }}>Pause</Text> instead —
-                your day stays open and Presence stops until you return.
+                your day stays open, and the time away won't count as worked time.
               </Text>
               <TouchableOpacity
                 style={[s.pauseInsteadBtn, workdayPauseBusy && { opacity: 0.6 }]}
@@ -3906,7 +3938,6 @@ const s = StyleSheet.create({
   reasonChipTxt: { fontSize: 12.5, fontWeight: '700', color: COLORS.ink },
   checkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9 },
   checkTxt: { flex: 1, fontSize: 14, color: COLORS.ink, fontWeight: '600' },
-  modalBtns: { flexDirection: 'row', gap: 10, marginTop: 18 },
   modalBtn: { flex: 1, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   modalCancel: { backgroundColor: '#EEF2F8' }, modalCancelTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 15 },
   modalOk: { backgroundColor: COLORS.primary }, modalOkTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
@@ -3939,10 +3970,19 @@ const s = StyleSheet.create({
   pauseNote: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, padding: 12, minHeight: 72, fontSize: 14.5, color: COLORS.ink, textAlignVertical: 'top', marginTop: 12 },
   pauseHelp: { fontSize: 12, color: COLORS.muted, marginTop: 12, marginBottom: 6, lineHeight: 17 },
 
-  modalFoot: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, paddingHorizontal: 18, paddingVertical: 14, borderTopWidth: 1, borderTopColor: COLORS.line, marginTop: 6 },
-  footCancel: { paddingHorizontal: 18, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF2F8' },
+  // MUST WRAP. These are two intrinsically-sized buttons, and the longest pair
+  // ("← Continue Working" + "Logout & Send Summary") comes to ~474dp with gaps
+  // and padding — against ~312dp of phone width. With justifyContent:'flex-end'
+  // the overflow spilled off the LEFT, which is why Continue Working was the
+  // half-hidden one. Wrapping stacks them, still right-aligned, on a phone and
+  // leaves them side by side on a tablet.
+  //
+  // Deliberately no flexGrow: growing would stretch both to full width on the
+  // tablet, changing a layout that is already correct.
+  modalFoot: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10, paddingHorizontal: 18, paddingVertical: 14, borderTopWidth: 1, borderTopColor: COLORS.line, marginTop: 6 },
+  footCancel: { flexShrink: 1, paddingHorizontal: 18, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF2F8' },
   footCancelTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 14.5 },
-  footConfirm: { paddingHorizontal: 20, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F5A623' },
+  footConfirm: { flexShrink: 1, paddingHorizontal: 20, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F5A623' },
   footConfirmTxt: { color: '#fff', fontWeight: '900', fontSize: 14.5 },
 
   // Colored modal headers
@@ -3973,7 +4013,19 @@ const s = StyleSheet.create({
   askedLine: { fontSize: 12.5, color: COLORS.muted, lineHeight: 18, marginBottom: 6 },
 
   // End Workday summary
-  statTiles: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  // The End Workday summary tiles. MUST WRAP: this row holds up to five tiles
+  // (Login, Productive, Presence, Accounted, and Workday paused when the day was
+  // frozen), and as a fixed `flexDirection: row` of flex:1 children they simply
+  // divided whatever width existed. On a tablet that is ~220px each and looks
+  // right; on a phone it is ~58px, minus 20px of padding — too narrow for a
+  // 19px figure, let alone the label above it. It was the fifth tile added for
+  // Pause Workday that pushed it past readable on small screens.
+  //
+  // flexBasis is the wrap threshold, not a fixed width: flexGrow lets tiles
+  // fill the row they land on. 128 puts two per row on a 320dp phone and still
+  // fits all five across a tablet, so the layout that already looked right is
+  // unchanged and only narrow screens reflow.
+  statTiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
 
   // Workday Map (End Workday popup) — flowing chips: start → task → break → … → end.
   mapBox: { marginTop: 12, backgroundColor: '#F8FAFC', borderRadius: 10, padding: 10 },
@@ -3984,10 +4036,16 @@ const s = StyleSheet.create({
   mapChipLabel: { fontSize: 12, fontWeight: '700', color: COLORS.ink },
   mapChipTime: { fontSize: 10.5, color: COLORS.muted, marginTop: 1 },
   mapChipNote: { fontSize: 10.5, color: '#374151', fontStyle: 'italic', marginTop: 1 },
-  statTile: { flex: 1, backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, padding: 10 },
+  // flexBasis is the WRAP THRESHOLD, not a fixed width — flexGrow still lets a
+  // tile fill whatever row it lands on, so nothing looks half-empty. `flex: 1`
+  // could not do this: it sets flexBasis to 0, so five tiles always "fit" and
+  // the row never wrapped no matter how narrow the screen got.
+  statTile: { flexGrow: 1, flexBasis: 128, minWidth: 128, backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, padding: 10 },
   statTileLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '700' },
   statTileVal: { fontSize: 13, color: COLORS.ink, fontWeight: '800', marginTop: 4 },
-  statTileBig: { fontSize: 19, fontWeight: '900', marginTop: 4 },
+  // 19 is right in a ~220dp tablet tile; in a ~134dp phone tile it crowds the
+  // label above it. Two points back is enough and keeps the figure dominant.
+  statTileBig: { fontSize: IS_NARROW ? 17 : 19, fontWeight: '900', marginTop: 4 },
   // The standard-day verdict under Presence — green at/over, red under.
   statTileFoot: { fontSize: 10.5, fontWeight: '800', marginTop: 2 },
   awayBox: { backgroundColor: '#FEF9E7', borderRadius: 12, padding: 12, marginTop: 14 },

@@ -380,9 +380,22 @@ export class KpiConfiguration extends Component {
         } catch (e) { alert(e?.data?.message || "Failed to save."); }
     }
 
+    // "Ravi's WhatsApp number and app-login mobile were cleared because the
+    // country code changed." Both numbers hang off the one per-person country,
+    // and BOTH screens call the same route, so the server says which ones it
+    // actually wiped — changing it here also clears their app-login mobile.
+    _clearedMsg(name, res) {
+        const what = { whatsapp: "WhatsApp number", mobile: "app-login mobile" };
+        const list = (res.cleared || []).map((k) => what[k] || k).join(" and ");
+        const verb = (res.cleared || []).length > 1 ? "were" : "was";
+        return `${name}'s ${list} ${verb} cleared because the country code changed.\n\n`
+             + `Please enter the new ${res.mobile_length}-digit number (+${res.dial}).`;
+    }
+
     // Set this developer's country code (Oman +968 / India +91 / …). Shares the
-    // per-person route with Login Management and re-normalizes their WhatsApp
-    // number to the new dial. Empty = the company default.
+    // per-person route with Login Management. The server clears both stored
+    // numbers — digits issued under the old dial code don't belong to the new
+    // country — so empty the box and say so. Empty = the company default.
     async saveDevCountry(dev, ev) {
         const cid = ev?.target?.value ? parseInt(ev.target.value) : false;
         try {
@@ -391,9 +404,17 @@ export class KpiConfiguration extends Component {
                 dev.country_id = res.country_id || false;
                 dev.dial = res.dial || this.state.dial;
                 dev.mobile_length = res.mobile_length || this.state.mobileLength;
-                if (res.wa_number !== undefined) dev.wa_number = res.wa_number;
-                dev._invalid = false;
+                dev.wa_number = "";
+                // The input binds with t-att-value, which sets the ATTRIBUTE —
+                // once it has been typed in, its value property is dirty and no
+                // longer follows that attribute, so state alone leaves the old
+                // digits on screen. ev.target is the <select>, not the box, so
+                // reach across to the one input in this cell.
+                const box = ev.target?.closest("td")?.querySelector("input");
+                if (box) box.value = "";
+                dev._invalid = false;     // don't flag the now-empty box
                 this._flash(dev, "_savedCountry");
+                if ((res.cleared || []).length) alert(this._clearedMsg(dev.name, res));
             } else { alert(res?.message || "Not authorized."); if (ev?.target) ev.target.value = dev.country_id || ""; }
         } catch (e) { alert(e?.data?.message || "Failed to save."); if (ev?.target) ev.target.value = dev.country_id || ""; }
     }

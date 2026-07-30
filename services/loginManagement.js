@@ -42,7 +42,11 @@ export async function setMobile(userId, mobile) {
 
 // Set this person's OWN country (dial + local length) — Oman +968 / 8 digits,
 // India +91 / 10, etc. Empty countryId clears the override (company default).
-// Returns { dial, mobile_length, country_id, wa_number }.
+// The server CLEARS both stored numbers on a change (digits issued under the old
+// dial code aren't valid under the new one).
+// Returns { dial, mobile_length, country_id, wa_number, mobile, cleared[] } —
+// `cleared` names which numbers were wiped ('mobile' / 'whatsapp') so the screen
+// can tell the admin what to retype.
 export async function setUserCountry(userId, countryId) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true, dial: '91', mobile_length: 10, country_id: countryId || false, wa_number: '' };

@@ -70,6 +70,15 @@ export default function MyWorkday({ onBack }) {
               <Text style={styles.metricLabel}>Present</Text>
               <Text style={[styles.metricVal, { color: '#2563EB' }]}>{item.presence_display}</Text>
             </View>
+            {/* Present is the raw login→logout clock, so a day paused for hours
+                reads long. Shown only when there was a pause — an always-on "0h"
+                would make every ordinary day look like it had a gap. */}
+            {(item.paused_seconds || 0) > 0 ? (
+              <View style={styles.metric}>
+                <Text style={styles.metricLabel}>Paused</Text>
+                <Text style={[styles.metricVal, { color: '#B45309' }]}>{item.paused_display}</Text>
+              </View>
+            ) : null}
             <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color="#94A3B8" style={{ marginLeft: 6 }} />
           </View>
         </TouchableOpacity>

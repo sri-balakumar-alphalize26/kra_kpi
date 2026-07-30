@@ -360,8 +360,11 @@ const s = StyleSheet.create({
   pickBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: COLORS.primary, borderStyle: 'dashed', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12 },
   pickTxt: { flex: 1, fontSize: 13.5, fontWeight: '600', color: COLORS.primary },
   hint: { fontSize: 11.5, color: COLORS.faint, marginTop: 6 },
-  modalActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 18, marginTop: 22 },
+  // Wraps rather than overflowing: a non-wrapping flex-end row pushes the first
+  // button off the left edge on a narrow screen instead of dropping it to a
+  // second line.
+  modalActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 18, marginTop: 22 },
   cancelTxt: { fontSize: 14.5, fontWeight: '700', color: COLORS.muted },
-  saveBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primary, paddingHorizontal: 22, paddingVertical: 11, borderRadius: 10 },
+  saveBtn: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primary, paddingHorizontal: 22, paddingVertical: 11, borderRadius: 10 },
   saveTxt: { fontSize: 14.5, fontWeight: '800', color: '#fff' },
 });

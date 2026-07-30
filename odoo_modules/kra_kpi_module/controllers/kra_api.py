@@ -1485,16 +1485,17 @@ class KraKpiAPI(http.Controller):
         """Set a PERSON's mobile country — the dial code (+968 Oman, +91 India, …)
         and local length that apply to BOTH their app-login mobile and their
         WhatsApp number. Empty country clears the override (back to the company
-        default). Re-keys the stored WhatsApp number to the new dial so it stops
-        routing to the old country. Shared by the Configuration screen (developer
-        WhatsApp) and Login Management, since both act on res.users by id.
-        Returns the resolved dial/length so the screen updates live."""
+        default). CLEARS both stored numbers, because digits issued under the old
+        dial code do not belong to the new country. Shared by the Configuration
+        screen (developer WhatsApp) and Login Management, since both act on
+        res.users by id. Returns the resolved dial/length so the screen updates
+        live, plus `cleared` naming which numbers were wiped so the screen can
+        tell the admin what to re-enter."""
         if not self._is_kra_admin(request.env.user):
             return {'status': False, 'message': 'Not authorized'}
         user = request.env['res.users'].sudo().browse(int(params.get('user_id') or 0))
         if not user.exists():
             return {'status': False, 'message': 'User not found'}
-        old_dial, old_length = user._kpi_user_mobile_cfg()
         cid = params.get('country_id')
         user.kpi_mobile_country_id = int(cid) if cid else False
         # Auto-fill the local length from the country map (onchange doesn't run on
@@ -1503,26 +1504,23 @@ class KraKpiAPI(http.Controller):
         code = user.kpi_mobile_country_id.code if user.kpi_mobile_country_id else None
         user.kpi_mobile_length = COUNTRY_MOBILE_LENGTH.get(code, 0) if code else 0
         dial, length = user._kpi_user_mobile_cfg()
-        # The WhatsApp number is stored WITH its dial prefix. Recover the local
-        # part using the OLD dial, then re-prefix the NEW one — but ONLY when the
-        # local part still fits the new country's length. A 10-digit India number
-        # cannot be expressed as an 8-digit Oman number, so rather than store a
-        # dial-less / misrouting value we CLEAR it and the admin re-enters the
-        # number in the new format.
+        # Both stored numbers were issued under the OLD dial code, so neither
+        # survives the move. Re-keying was tried and is wrong: the old test only
+        # compared LENGTHS, so India -> US (both 10 digits) silently re-labelled
+        # an Indian number as American and mis-routed its OTPs. A number belongs
+        # to the country that issued it, so whenever one is present we clear it
+        # and the admin types the new one — both screens pop up saying so.
+        cleared = []
         if user.kpi_wa_number:
-            digits = re.sub(r'\D', '', user.kpi_wa_number)
-            if old_dial and digits.startswith(old_dial) and len(digits) == len(old_dial) + old_length:
-                local = digits[len(old_dial):]
-            else:
-                local = digits
-            if len(local) == length:
-                user.kpi_wa_number = normalize_wa(local, dial, length) or False
-            else:
-                user.kpi_wa_number = False
+            user.kpi_wa_number = False
+            cleared.append('whatsapp')
+        if user.kpi_mobile_number:
+            user.kpi_mobile_number = False
+            cleared.append('mobile')
         return {'status': True,
                 'country_id': user.kpi_mobile_country_id.id if user.kpi_mobile_country_id else False,
                 'dial': dial, 'mobile_length': length,
-                'wa_number': user.kpi_wa_number or ''}
+                'wa_number': '', 'mobile': '', 'cleared': cleared}
 
     @http.route('/kpi_user_access/set_role', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_set_role(self, **params):

@@ -282,7 +282,7 @@ _APP_TEMPLATES = {
         "🌙 {dev} ended their workday — you can check the tasks done.\n"
         "🕘 {login_at} → {logout_at}\n"
         "⏱ Presence {presence} • Productive {productive}\n"
-        "📋 Accounted {accounted} (task + meeting + lunch + break + no-tasks)\n"
+        "📋 Accounted {accounted} (task + meeting + lunch + break + no-tasks + paused)\n"
         "✅ Tasks worked: {task_count}\n"
         "{session_note}"
         "{auto_note}"

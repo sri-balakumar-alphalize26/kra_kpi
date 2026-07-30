@@ -116,12 +116,17 @@ class KpiDailyReport(models.Model):
                     'logout_at': s.logout_at,
                     'presence_seconds': 0.0,
                     'productive_seconds': 0.0,
+                    'paused_seconds': 0.0,
                     'sessions': 0,
                     'auto_closed': False,
                     'notes': [],
                 }
             a['presence_seconds'] += s.presence_seconds or 0.0
             a['productive_seconds'] += s.productive_seconds or 0.0
+            # Presence is the raw login->logout clock and counts paused time, so
+            # a frozen day reports long. Carried through to the PDF so whoever
+            # reviews it can see the gap was declared, not unexplained.
+            a['paused_seconds'] += s._paused_total()
             a['sessions'] += 1
             a['auto_closed'] = a['auto_closed'] or bool(s.auto_closed)
             if s.login_at and (not a['login_at'] or s.login_at < a['login_at']):
@@ -147,6 +152,8 @@ class KpiDailyReport(models.Model):
                 'logout_display': _ist_hm(a.get('logout_at')) if a.get('logout_at') else 'open',
                 'presence_display': _fmt_secs(a.get('presence_seconds')),
                 'productive_display': _fmt_secs(a.get('productive_seconds')),
+                'paused_seconds': a.get('paused_seconds') or 0.0,
+                'paused_display': _fmt_secs(a.get('paused_seconds')),
                 'sessions': a.get('sessions', 0),
                 'auto_closed': a.get('auto_closed', False),
                 'notes': a.get('notes', []),
@@ -325,16 +332,25 @@ class KpiDailyReport(models.Model):
             s_meta))
         story.append(Spacer(1, 10))
 
-        head = ['Employee', 'Login → Logout', 'Presence', 'Productive', 'Tasks', 'Done']
+        # Paused sits next to Presence because it is the thing that explains it:
+        # Presence is the raw login->logout clock, so without this column a day
+        # deliberately frozen for hours is indistinguishable from a long one.
+        # Blank rather than '0m' on ordinary days — a column of zeroes just adds
+        # noise to the common case.
+        head = ['Employee', 'Login → Logout', 'Presence', 'Paused', 'Productive', 'Tasks', 'Done']
         rows = [head]
         for e in p['employees']:
             rows.append([
                 Paragraph(_esc(e['name']), cell_b),
                 Paragraph('%s → %s' % (_esc(e['login_display']), _esc(e['logout_display'])), cell),
-                e['presence_display'], e['productive_display'],
+                e['presence_display'],
+                e['paused_display'] if (e.get('paused_seconds') or 0) > 0 else '',
+                e['productive_display'],
                 str(e['total_tasks']), str(e['completed_tasks']),
             ])
-        summary = Table(rows, colWidths=[46 * mm, 40 * mm, 24 * mm, 24 * mm, 14 * mm, 14 * mm], repeatRows=1)
+        # Widths total 172mm; A4 (210mm) less the 48pt margins leaves ~176mm, so
+        # Employee and Login->Logout give up 4mm each to make room for Paused.
+        summary = Table(rows, colWidths=[42 * mm, 36 * mm, 24 * mm, 18 * mm, 24 * mm, 14 * mm, 14 * mm], repeatRows=1)
         summary.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), brand),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -364,6 +380,8 @@ class KpiDailyReport(models.Model):
                     e['total_tasks'], e['completed_tasks'],
                     e['in_progress_tasks'], e['pending_tasks']),
             ]
+            if (e.get('paused_seconds') or 0) > 0:
+                meta_bits.insert(2, 'Paused %s' % e['paused_display'])
             if e['auto_closed']:
                 meta_bits.append('workday auto-closed')
             story.append(Paragraph(' • '.join(meta_bits), s_meta))

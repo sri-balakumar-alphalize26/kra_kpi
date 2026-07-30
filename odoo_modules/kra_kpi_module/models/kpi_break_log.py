@@ -15,7 +15,10 @@ class KpiBreakLog(models.Model):
                               default=lambda self: self.env.user, index=True)
     break_type = fields.Selection([('break', 'Break'), ('lunch', 'Lunch'),
                                    ('meeting', 'Meeting'), ('other', 'Other'),
-                                   ('away', 'Away (auto)'), ('leave', 'Leave'),
+                                   # 'away' is no longer idle auto-detection (retired) — it is
+                                   # now time a task was stopped by the SYSTEM: Pause Workday
+                                   # and the midnight close both pause with reason_code='away'.
+                                   ('away', 'Away (system)'), ('leave', 'Leave'),
                                    ('urgent', 'Urgent')],
                                   string='Type', required=True, default='break')
     start_time = fields.Datetime(string='Start Time', required=True, default=fields.Datetime.now)
@@ -52,15 +55,32 @@ class KpiBreakLog(models.Model):
     def _compute_duration(self):
         for rec in self:
             if rec.start_time and rec.end_time:
-                rec.duration_seconds = (rec.end_time - rec.start_time).total_seconds()
+                # Floored at zero. stop_break() already refuses an `at` that
+                # predates the start, but it only guards the one path it owns —
+                # a direct write(), a cron auto-close or an import can still
+                # invert the pair, and a negative duration does not stay local:
+                # it flows into Accounted and the presence residual, where it
+                # shows up as time appearing from nowhere. At least one row in
+                # production (-354s) got in this way before the stop_break guard
+                # existed. A clamp here cannot fix bad timestamps, but it stops
+                # them corrupting every total computed downstream.
+                rec.duration_seconds = max(
+                    0.0, (rec.end_time - rec.start_time).total_seconds())
             else:
                 rec.duration_seconds = 0.0
 
     @api.model
-    def start_break(self, break_type, user_id=None, source_task_id=None, reason_note=None):
+    def start_break(self, break_type, user_id=None, source_task_id=None, reason_note=None,
+                    at=None):
         """Start a non-productive interval (break/lunch/meeting/other/away/leave)
         for the user. Reuse an active one if present (one active per user). Unknown
-        codes are filed under 'other' so no reason is ever lost."""
+        codes are filed under 'other' so no reason is ever lost.
+
+        `at` sets the start (default = now), mirroring stop_break's `at` cap. The
+        auto-closes need it: work_date is computed FROM start_time, so a cron
+        firing after midnight would stamp now() and file the break against the
+        next day — away time on a date with no session, absent from the day it
+        actually belongs to."""
         if not user_id:
             user_id = self.env.user.id
         btype = break_type if break_type in self._KNOWN_TYPES else 'other'
@@ -79,7 +99,7 @@ class KpiBreakLog(models.Model):
         rec = self.create({
             'user_id': user_id,
             'break_type': btype,
-            'start_time': fields.Datetime.now(),
+            'start_time': at or fields.Datetime.now(),
             'is_active': True,
             'source_task_id': source_task_id or False,
             'reason_note': reason_note or False,

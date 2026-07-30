@@ -454,8 +454,21 @@ class KpiMaster(models.Model):
         ('leave',               'Leave'),
         ('lunch',               'Lunch'),
         ('meeting',             'Meeting'),
+        # Stopping for the day. Deliberately only a LABEL — it does not end the
+        # workday, because End Workday cannot be undone for the date and a
+        # mis-tap in a reason list must not be able to bury someone's day.
+        #
+        # There is no matching kpi.break.log type on purpose: start_break files
+        # any code outside its _KNOWN_TYPES under 'other', which is already
+        # inside `other_secs` and therefore already metered. A reason that
+        # reached the break log as an unmetered type would drop out of
+        # `metered` and surface as unexplained idle instead.
+        ('day_end',             'Day End'),
         ('other',               'Other'),
-        ('away',                'Away (auto)'),
+        # Not idle auto-detection any more — that is retired. This is now time a
+        # task was stopped by the SYSTEM rather than by the developer: Pause
+        # Workday and the midnight close both pause via reason_code='away'.
+        ('away',                'Away (system)'),
         ('urgent',              'Urgent'),
     ], string='Pause Reason Code')
 
@@ -566,17 +579,23 @@ class KpiMaster(models.Model):
             rec.task_state = 'in_progress'
             rec.paused_reason = False
 
-    def pause_task(self, reason='', reason_code=''):
+    def pause_task(self, reason='', reason_code='', at=None):
         # reason_code (e.g. 'break', 'lunch', 'away') comes from the
         # /kra_kpi/task/pause route and from the workday-close paths in
         # kpi_work_session (_pause_running_task); accept it here (was missing →
         # TypeError when a pause carried a reason).
+        #
+        # `at` CAPS when the work stopped (default = now). It must reach BOTH
+        # sinks or they disagree: _add_elapsed grows timer_total_seconds, and
+        # stop_session closes the kpi.time.log interval. The midnight close passes
+        # the local day-end so a late cron cannot credit task time to a session
+        # that had already ended.
         for rec in self:
             if rec.timer_start_datetime:
-                self._add_elapsed(rec)
+                self._add_elapsed(rec, now_dt=at)
                 rec.timer_start_datetime = False
                 # Log time session stop
-                self.env['kpi.time.log'].stop_session(rec.id, self.env.user.id)
+                self.env['kpi.time.log'].stop_session(rec.id, self.env.user.id, at=at)
             rec.task_state = 'paused'
             rec.paused_reason = reason or rec.paused_reason
             if reason_code:

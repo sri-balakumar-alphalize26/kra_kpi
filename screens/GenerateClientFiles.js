@@ -604,9 +604,13 @@ const s = StyleSheet.create({
   modalFileTxt: { fontSize: 12.5, fontWeight: '700', color: COLORS.ink },
   modalNote: { flexDirection: 'row', gap: 7, alignItems: 'flex-start', marginTop: 12 },
   modalNoteTxt: { flex: 1, fontSize: 12.5, color: COLORS.muted, lineHeight: 17 },
-  modalFoot: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, paddingHorizontal: 18, paddingVertical: 14, borderTopWidth: 1, borderTopColor: COLORS.line, marginTop: 8 },
-  footCancel: { paddingHorizontal: 18, height: 46, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF2F8' },
+  // flexWrap + flexShrink, not a plain flex-end row: when the two buttons are
+  // wider than the card, a non-wrapping row pushes the FIRST one off the left
+  // edge, where it cannot be tapped or even seen. Wrapping drops it to a second
+  // line instead, which is merely ugly.
+  modalFoot: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 12, paddingHorizontal: 18, paddingVertical: 14, borderTopWidth: 1, borderTopColor: COLORS.line, marginTop: 8 },
+  footCancel: { flexShrink: 1, paddingHorizontal: 18, height: 46, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF2F8' },
   footCancelTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 14.5 },
-  footConfirm: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 20, height: 46, borderRadius: 11, justifyContent: 'center', backgroundColor: COLORS.green },
+  footConfirm: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 20, height: 46, borderRadius: 11, justifyContent: 'center', backgroundColor: COLORS.green },
   footConfirmTxt: { color: '#fff', fontWeight: '900', fontSize: 14.5 },
 });

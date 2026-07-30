@@ -335,8 +335,21 @@ export class KpiUserAccess extends Component {
         } catch (e) { alert(e?.data?.message || "Failed to save."); }
     }
 
+    // "Ravi's app-login mobile was cleared because the country code changed."
+    // Both numbers hang off the one per-person country, and BOTH screens call
+    // the same route, so the server says which ones it actually wiped.
+    _clearedMsg(name, res) {
+        const what = { whatsapp: "WhatsApp number", mobile: "app-login mobile" };
+        const list = (res.cleared || []).map((k) => what[k] || k).join(" and ");
+        const verb = (res.cleared || []).length > 1 ? "were" : "was";
+        return `${name}'s ${list} ${verb} cleared because the country code changed.\n\n`
+             + `Please enter the new ${res.mobile_length}-digit number (+${res.dial}).`;
+    }
+
     // Set this person's country code (Oman +968 / India +91 / …). Drives their
-    // login mobile AND WhatsApp number; empty = the company default.
+    // login mobile AND WhatsApp number; empty = the company default. The server
+    // clears both stored numbers — digits issued under the old dial code don't
+    // belong to the new country — so empty the box and say so.
     async saveCountry(u, ev) {
         const cid = parseInt(ev.target.value, 10) || false;
         try {
@@ -345,7 +358,16 @@ export class KpiUserAccess extends Component {
                 u.country_id = res.country_id || false;
                 u.dial = res.dial || this.state.dial;
                 u.mobile_length = res.mobile_length || this.state.mobile_length;
+                u.mobile = "";
+                // The input binds with t-att-value, which sets the ATTRIBUTE —
+                // once it has been typed in, its value property is dirty and no
+                // longer follows that attribute, so state alone leaves the old
+                // digits on screen. ev.target is the <select>, not the box, so
+                // reach across to the one input in this cell.
+                const box = ev.target?.closest("td")?.querySelector("input");
+                if (box) box.value = "";
                 this._flash(u, "_savedCountry");
+                if ((res.cleared || []).length) alert(this._clearedMsg(u.name, res));
             } else { alert(res.message || "Not authorized."); ev.target.value = u.country_id || ""; }
         } catch (e) { alert(e?.data?.message || "Failed to save."); ev.target.value = u.country_id || ""; }
     }

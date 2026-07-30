@@ -71,6 +71,10 @@ export class KpiDeveloperSummary extends Component {
                                     <th>Developer</th>
                                     <th class="text-end">Productive</th>
                                     <th class="text-end">Presence</th>
+                                    <!-- Presence is the raw login->logout clock, pauses included.
+                                         Without this column a developer who pauses a few hours a
+                                         day just looks like they logged more hours. -->
+                                    <th class="text-end">Paused</th>
                                     <th class="text-end">Tasks</th>
                                     <th class="text-end">Sessions</th>
                                 </tr>
@@ -86,13 +90,17 @@ export class KpiDeveloperSummary extends Component {
                                         <td t-esc="row.user_name"/>
                                         <td class="text-end text-success fw-bold" t-esc="row.productive_display"/>
                                         <td class="text-end text-primary fw-bold" t-esc="row.presence_display"/>
+                                        <!-- Muted, and blank when zero: an always-on "0m" would
+                                             make every normal day look like it had a gap. -->
+                                        <td class="text-end text-muted"
+                                            t-esc="(row.paused_seconds || 0) > 0 ? row.paused_display : ''"/>
                                         <td class="text-end" t-esc="row.task_count"/>
                                         <td class="text-end" t-esc="row.sessions.length"/>
                                     </tr>
                                     <t t-if="state.expanded[row.user_id + '|' + row.period_key]">
                                         <tr>
                                             <td></td>
-                                            <td colspan="6" class="bg-light">
+                                            <td colspan="7" class="bg-light">
                                                 <div class="row">
                                                     <div class="col-md-7">
                                                         <h6 class="mb-2"><i class="fa fa-tasks me-1"></i> Tasks worked</h6>

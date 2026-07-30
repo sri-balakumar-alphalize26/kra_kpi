@@ -1187,8 +1187,9 @@ export class KpiAction extends Component {
                             <div class="alert alert-secondary py-2 px-3 mb-2 small d-flex align-items-center" role="alert">
                                 <i class="fa fa-pause-circle me-2"></i>
                                 <span>
-                                    <b>Your workday is paused.</b> Presence has stopped and tasks
-                                    cannot be started. Press <b>Resume Workday</b> when you're back.
+                                    <b>Your workday is paused.</b> Tasks cannot be started, and
+                                    paused time will not count as worked time. Press
+                                    <b>Resume Workday</b> when you're back.
                                 </span>
                             </div>
                         </t>
@@ -1494,6 +1495,8 @@ export class KpiAction extends Component {
                                                         </button>
                                                         <button class="btn btn-sm btn-success"
                                                                 t-if="btns.resume"
+                                                                t-att-disabled="btns.resumeDisabled"
+                                                                t-att-title="btns.resumeTitle"
                                                                 t-on-click="() => openResumeModal(task)">Resume</button>
                                                         <button class="btn btn-sm btn-danger"
                                                                 t-if="btns.complete"
@@ -2490,6 +2493,9 @@ export class KpiAction extends Component {
                                     <option value="break">Break</option>
                                     <option value="lunch">Lunch</option>
                                     <option value="meeting">Meeting</option>
+                                    <!-- Stopping for the day. Labels the pause only; the workday
+                                         stays open until End Workday, which is irreversible. -->
+                                    <option value="day_end">🌙 Day End</option>
                                     <option value="awaiting_approval">Waiting for Approval</option>
                                     <option value="technical_issue">Technical Issue</option>
                                     <option value="leave">Leave</option>
@@ -2888,16 +2894,18 @@ export class KpiAction extends Component {
                                 <div class="p-3 border rounded">
                                     <div class="text-muted small">Accounted</div>
                                     <div class="fw-bold text-primary" style="font-size:1.3rem;">${data.accounted_display || '0m'}</div>
-                                    <div class="small text-muted">task + meeting + lunch + break + no-tasks</div>
+                                    <div class="small text-muted">task + meeting + lunch + break + no-tasks + paused</div>
                                 </div>
                                 ${(data.paused_seconds || 0) > 0 ? `
-                                <!-- Outside Presence, not inside it: Presence + Paused is the
-                                     span from first login to logout. Shown so a long gap reads
-                                     as a deliberate pause rather than missing data. -->
+                                <!-- Inside Presence: Presence is the raw login->logout clock,
+                                     so paused time is already in it. Shown on its own line so a
+                                     long gap reads as a deliberate pause rather than missing
+                                     data, and so the standard-day verdict (which excludes it)
+                                     is explicable. -->
                                 <div class="p-3 border rounded">
                                     <div class="text-muted small">Workday paused</div>
                                     <div class="fw-bold text-secondary" style="font-size:1.3rem;">${data.paused_display || '0m'}</div>
-                                    <div class="small text-muted">not counted in Presence</div>
+                                    <div class="small text-muted">inside Presence, not worked time</div>
                                 </div>` : ''}
                             </div>
                             ${(data.break_seconds || data.lunch_seconds || data.meeting_seconds || data.other_seconds || data.away_seconds || data.no_tasks_seconds || data.other_idle_seconds || (data.away_events && data.away_events.length)) ? `
@@ -2909,7 +2917,7 @@ export class KpiAction extends Component {
                                     <div class="p-2 border rounded bg-white text-center"><div class="text-muted small">Meeting</div><div class="fw-bold">${data.meeting_display || '0m'}</div></div>
                                     <div class="p-2 border rounded bg-white text-center"><div class="text-muted small">No tasks</div><div class="fw-bold">${data.no_tasks_display || '0m'}</div></div>
                                     <div class="p-2 border rounded bg-white text-center"><div class="text-muted small">Other</div><div class="fw-bold">${data.other_display || '0m'}</div></div>
-                                    <div class="p-2 border rounded bg-white text-center"><div class="text-muted small">Away (auto)</div><div class="fw-bold">${data.away_display || '0m'}</div></div>
+                                    <div class="p-2 border rounded bg-white text-center"><div class="text-muted small">Away (system)</div><div class="fw-bold">${data.away_display || '0m'}</div></div>
                                     <div class="p-2 border rounded bg-white text-center"><div class="text-muted small">Other / Idle</div><div class="fw-bold">${data.other_idle_display || '0m'}</div></div>
                                 </div>
                                 ${(data.away_events && data.away_events.length) ? `<ul class="list-unstyled mb-0 small">${data.away_events.map(e => {
@@ -2950,7 +2958,7 @@ export class KpiAction extends Component {
                             <span>
                                 <i class="fa fa-pause-circle me-1"></i>
                                 Coming back later today? <b>Pause</b> instead — your day stays
-                                open and Presence stops until you return.
+                                open, and the time away will not count as worked time.
                             </span>
                             <button type="button" class="btn btn-sm btn-warning text-dark fw-semibold flex-shrink-0"
                                     id="pauseWorkdayBtn">
@@ -3802,7 +3810,25 @@ export class KpiAction extends Component {
             return { start: false, pause: true, resume: false, complete: true };
         }
         if (state === "paused") {
-            return { start: false, pause: false, resume: true, complete: true };
+            // Resume is gated exactly like Start. _start_block checks the workday
+            // BEFORE its resumable-states early return, so resuming a paused task
+            // with no workday open already raised server-side — the button simply
+            // did not know, so it offered an action that could only fail after a
+            // round-trip. This is the one Resume path in this method; 'rework' and
+            // 'hold' fall through to the Start branch, which was already gated.
+            //
+            // Complete stays enabled on purpose: finishing is not starting work,
+            // the server does not gate it on the workday, and someone who
+            // finished before ending their day must still be able to submit.
+            const resumeBlocked = task.can_start === false;
+            return {
+                start: false, pause: false, complete: true,
+                resume: true,
+                resumeDisabled: resumeBlocked,
+                resumeTitle: resumeBlocked
+                    ? (task.start_block_message || "This task can't resume yet.")
+                    : "Pick this task back up",
+            };
         }
         // Everything else offers Start — but DISABLED when the server says the
         // task isn't startable yet, with the server's own reason as the tooltip.
@@ -4304,6 +4330,7 @@ export class KpiAction extends Component {
                       <option value="break">☕ Break</option>
                       <option value="lunch">🍽 Lunch</option>
                       <option value="meeting">👥 Meeting</option>
+                      <option value="day_end">🌙 Day End</option>
                       <option value="priority_task">🔀 Moved to another task</option>
                       <option value="awaiting_approval">Waiting for Approval</option>
                       <option value="technical_issue">Technical Issue</option>
@@ -4459,21 +4486,15 @@ export class KpiAction extends Component {
     livePresenceDisplay() {
         const ls = this.state.liveStatus;
         if (!ls || !ls.login_raw) return this.formatTime(0);
-        // Presence is time AT WORK, so paused time must come off. This ticks in
-        // the browser from a login anchor, so without this it kept counting a
-        // workday that was explicitly frozen — the server's own presence_seconds
-        // was already correct, only the live strip was lying.
-        let secs = this._elapsedSince(ls.login_raw, 0) - (ls.paused_base || 0);
-        if (ls.is_paused && ls.paused_since) {
-            // Currently paused: freeze at the instant the pause began, rather than
-            // subtracting a growing number, so the clock visibly STOPS.
-            const start = new Date(ls.login_raw).getTime();
-            const pausedAt = new Date(ls.paused_since).getTime();
-            if (!isNaN(start) && !isNaN(pausedAt)) {
-                secs = Math.floor((pausedAt - start) / 1000) - (ls.paused_base || 0);
-            }
-        }
-        return this.formatTime(Math.max(0, secs));
+        // The raw clock since login, matching the server's presence_seconds.
+        //
+        // This used to subtract paused_base and freeze at paused_since, because
+        // Presence then MEANT time-at-work. It no longer does: Presence is
+        // login -> now, so a 09:30 start reads 12h at 21:30 whatever happened in
+        // between, and paused time is reported separately and inside Accounted.
+        // Subtracting here would put this strip back in disagreement with the
+        // End Workday summary it leads into.
+        return this.formatTime(Math.max(0, this._elapsedSince(ls.login_raw, 0)));
     }
     liveProductiveDisplay() {
         const ls = this.state.liveStatus;
