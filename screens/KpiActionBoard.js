@@ -3043,7 +3043,14 @@ export default function KpiActionBoard({
                 <Ionicons name="close" size={22} color="#7a5200" />
               </TouchableOpacity>
             </View>
-            <View style={{ padding: 18 }}>
+            {/* SCROLLABLE. Four reason cards, a note box and a hint make this the
+                tallest dialog on the screen: on a phone it did not fit, and as a
+                plain View there was nothing to scroll — the card grew past the
+                viewport and pushed its own header off the top, so you could not
+                read the title or reach the buttons at the bottom. */}
+            <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }}
+                        contentContainerStyle={{ padding: 18 }}
+                        keyboardShouldPersistTaps="handled">
               <Text style={s.idleIntro}>
                 Nothing is running. Tell us why so your time is recorded correctly.
               </Text>
@@ -3094,7 +3101,7 @@ export default function KpiActionBoard({
               <TouchableOpacity onPress={snoozeIdle} disabled={!!idleBusy}>
                 <Text style={s.idleLater}>I have a task — let me start it</Text>
               </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -3600,7 +3607,18 @@ const s = StyleSheet.create({
   subtitle: { fontSize: 12, color: COLORS.muted, marginTop: 1, fontWeight: '600' },
 
   // Toolbar
-  toolbar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, marginTop: 6 },
+  // MUST WRAP, for the third time in this file — same fault as modalFoot and
+  // statTiles. This row holds the All/My segment, the role badge, a flex spacer,
+  // New Task and Start/End Workday: about 482dp of content against ~332dp on a
+  // 360dp phone. Without wrapping the spacer collapsed to nothing and the two
+  // buttons pushed off the right edge — "New Task" was clipped mid-word and the
+  // workday button, the single most important control on the screen, was
+  // completely unreachable.
+  //
+  // The flex spacer has flexBasis 0, so it never triggers the wrap itself; it
+  // just fills whatever is left of the line it lands on. Tablet: everything fits
+  // one line and the spacer still right-aligns the buttons, exactly as now.
+  toolbar: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, rowGap: 8, paddingHorizontal: 14, marginTop: 6 },
   segment: { flexDirection: 'row', backgroundColor: '#E7ECF3', borderRadius: 10, padding: 3 },
   seg: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, height: 30, borderRadius: 8 },
   segOn: { backgroundColor: COLORS.primary },
@@ -3943,7 +3961,13 @@ const s = StyleSheet.create({
   modalOk: { backgroundColor: COLORS.primary }, modalOkTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
 
   // Web-style dialog (Pause Task)
-  modalCard: { backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden' },
+  // maxHeight so a card can never be taller than the screen. modalWrap centres
+  // it, so an over-tall card pushed its own HEADER off the top of the viewport —
+  // you could not see what the dialog even was. Only the modals that already had
+  // a capped ScrollView body were safe; the rest (11 of them) relied on their
+  // content happening to be short enough, which is true on a tablet and false on
+  // a phone. This bounds all of them at once.
+  modalCard: { backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', maxHeight: '92%' },
   modalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   modalHeadTitle: { fontSize: 17, fontWeight: '900', color: COLORS.navy },
   modalPad: { paddingHorizontal: 18, paddingTop: 14 },
