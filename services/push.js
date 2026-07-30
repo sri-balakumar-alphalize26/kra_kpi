@@ -81,8 +81,14 @@ export async function registerForPushAsync() {
         token,
         platform: Platform.OS,
         device: Device.deviceName || Device.modelName || '',
+        // Which EAS project minted this token. The server groups its Expo
+        // requests by it, because Expo rejects a request whose messages span two
+        // projects — and rejects the WHOLE request, so one token left behind by an
+        // older projectId took everyone else's notification down with it. We
+        // already had this value for getExpoPushTokenAsync; it was just never sent.
+        project_id: projectId,
       });
-      log.info('registered push token with server');
+      log.info('registered push token with server', { projectId });
     }
     return token;
   } catch (e) {

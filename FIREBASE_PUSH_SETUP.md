@@ -152,6 +152,36 @@ If either one is missing, notifications do not work.
   (Part 3 + Part 5) and reinstall the newly built APK, then open the app and allow
   notifications so it re-registers.
 
+- **Receipt says `InvalidCredentials`**
+  Expo cannot authenticate to FCM at all: the **FCM V1 service-account key is missing,
+  expired, or was revoked** in Firebase. **No rebuild or reinstall will fix this** — the
+  fault is in the EAS account, not on the phone. Redo **Part 4** (`eas credentials` →
+  FCM V1) for the EAS project that `app.json`'s `extra.eas.projectId` names. Suspect
+  this one when push stopped working on a date with no app change.
+
+- **Receipt says `MismatchSenderId`**
+  The FCM credentials on EAS belong to a **different Firebase project** than the
+  `google-services.json` baked into the build. Typical after switching Firebase or EAS
+  projects and rebuilding without re-uploading the key. Make both refer to the same
+  project (`kra-kpi-3efd5`, `project_number` 775288217466), then redo Part 4 and rebuild.
+
+- **HTTP 400 `PUSH_TOO_MANY_EXPERIENCE_IDS`** — *"All push notification messages in the
+  same request must be for the same project"*
+  Not a credentials problem, and not fixable by rebuilding. Some registered tokens were
+  minted under an **older `projectId`** than others, and Expo rejects a mixed request
+  **whole** — so nobody in that send gets a notification, including devices running the
+  newest build. It looks intermittent because sends that happen to hit one project's
+  devices still succeed.
+
+  The server now groups its Expo requests by project (`kpi.push.token.project_id`,
+  populated at registration) and retries a mixed batch one token at a time, so a stale
+  token can only cost itself and gets retired on its own `DeviceNotRegistered` ticket.
+  Tokens registered before that field existed have no project recorded; they backfill on
+  the next login. To clear them immediately, deactivate the stale rows:
+  ```sql
+  select id, user_id, project_id, active, create_date from kpi_push_token where active;
+  ```
+
 - **The EAS project changed (new `projectId`)**
   Push credentials are tied to the EAS project. If the project changes, redo **Part 4**
   (upload the FCM V1 key again) for the new project, then rebuild.

@@ -1173,9 +1173,15 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'error': 'missing token'}
         platform = params.get('platform')
         device = params.get('device')
-        request.env['kpi.push.token'].sudo().upsert(current_user, token, platform, device)
-        _logger.info("push/register user=%s(%s) platform=%s token=%s...",
-                     current_user.login, current_user.id, platform, token[:24])
+        # The EAS projectId this token was minted under. Sent by app builds that
+        # know it; absent from older builds, which land in the '' group and are
+        # kept apart from every known project rather than guessed at.
+        project_id = (params.get('project_id') or '').strip() or None
+        request.env['kpi.push.token'].sudo().upsert(
+            current_user, token, platform, device, project_id)
+        _logger.info("push/register user=%s(%s) platform=%s project=%s token=%s...",
+                     current_user.login, current_user.id, platform,
+                     project_id or '(unknown)', token[:24])
         return {'status': True}
 
     @http.route('/kpi_push/unregister', type='json', auth='user', methods=['POST'], csrf=False)

@@ -1146,9 +1146,12 @@ class KpiNotify(models.Model):
             config = self.env['whatsapp.config'].sudo().get_config()
             if not getattr(config, 'kpi_push_enabled', True):
                 return
-            tokens = self.env['kpi.push.token'].sudo().tokens_for_users(user_ids)
-            if not tokens:
+            # Grouped by EAS project: Expo rejects a request whose messages span
+            # two projects and delivers to NOBODY in it, so one send per group.
+            groups = self.env['kpi.push.token'].sudo().token_groups_for_users(user_ids)
+            if not groups:
                 return
+            token_count = sum(len(v) for v in groups.values())
             # First line of the body is the most banner-friendly summary; keep
             # the push body short.
             short = (body or '').strip().split('\n')
@@ -1169,36 +1172,33 @@ class KpiNotify(models.Model):
             _inv_id = self.env.context.get('kpi_invoice_id')
             if _inv_id:
                 _push_data['invoice_id'] = _inv_id
-            messages = [{
-                'to': tok,
-                'title': title,
-                'body': short_body,
-                'data': _push_data,
-                'sound': 'default',
-                'channelId': 'default',
-            } for tok in tokens]
+            def _msg(tok):
+                return {
+                    'to': tok,
+                    'title': title,
+                    'body': short_body,
+                    'data': _push_data,
+                    'sound': 'default',
+                    'channelId': 'default',
+                }
 
-            # Expo accepts up to 100 messages per request.
+            # One request per project, each still chunked at Expo's 100-message
+            # ceiling. Mixing projects in a single request is what made a single
+            # stale token silently suppress everyone else's notification.
             delivered = 0
-            for i in range(0, len(messages), 100):
-                batch = messages[i:i + 100]
-                resp = requests.post(
-                    _EXPO_PUSH_URL,
-                    data=json.dumps(batch),
-                    headers={
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                    },
-                    timeout=10,
-                )
-                delivered += self._handle_push_receipts(batch, resp) or 0
+            for tokens in groups.values():
+                messages = [_msg(tok) for tok in tokens]
+                for i in range(0, len(messages), 100):
+                    batch = messages[i:i + 100]
+                    delivered += self._post_push(batch) or 0
 
             # 'devices' is what Expo ACCEPTED, not how many rows we had a token
             # for. Logging the token count made a wholly-rejected send read as a
             # complete success, which is how a broken FCM setup stayed hidden.
             self._log_action('push_sent', success=bool(delivered), payload={
                 'event': event, 'channel': 'expo',
-                'devices': delivered, 'attempted': len(tokens)})
+                'devices': delivered, 'attempted': token_count,
+                'projects': len(groups)})
         except Exception as exc:
             try:
                 self._log_action('push_failed',
@@ -1206,6 +1206,60 @@ class KpiNotify(models.Model):
                                  success=False)
             except Exception:
                 pass
+
+    # How many single-token retries one mixed-project batch may cost. Bounds the
+    # fan-out: a big batch of unknown-project tokens must not turn into hundreds of
+    # requests inside a task write.
+    _PUSH_SPLIT_MAX = 16
+
+    def _post_push(self, batch):
+        """POST one batch to Expo and return how many messages it accepted.
+
+        Split out of _send_push so the mixed-project retry below can reuse the
+        exact same request and receipt handling instead of a second copy.
+        """
+        resp = requests.post(
+            _EXPO_PUSH_URL,
+            data=json.dumps(batch),
+            headers={
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            },
+            timeout=10,
+        )
+        return self._handle_push_receipts(batch, resp) or 0
+
+    def _retry_push_one_by_one(self, batch):
+        """Re-send a mixed-project batch as one message per request.
+
+        Grouping by project fixes this for tokens whose project we KNOW. Tokens
+        registered before that field existed all share the '' group, so two of them
+        from different projects still collide — and Expo's answer is to reject the
+        whole request, which costs every good device in it.
+
+        Sending them individually means each token stands alone: the good ones are
+        delivered, and each bad one finally gets its OWN error ticket, so the
+        DeviceNotRegistered branch can retire it. Previously a whole-batch 400 was
+        attributed to no token at all, so nothing self-healed and the same
+        collision recurred on every send.
+        """
+        if len(batch) <= 1:
+            return 0        # already atomic — splitting cannot help
+        if len(batch) > self._PUSH_SPLIT_MAX:
+            _logger.warning(
+                "expo push: mixed-project batch of %s exceeds the %s retry cap; "
+                "not splitting. Re-register these devices so their project is known.",
+                len(batch), self._PUSH_SPLIT_MAX)
+            return 0
+        _logger.info("expo push: retrying %s message(s) individually after a "
+                     "mixed-project rejection", len(batch))
+        delivered = 0
+        for msg in batch:
+            try:
+                delivered += self._post_push([msg]) or 0
+            except Exception as exc:
+                _logger.warning("expo push: single-token retry failed: %s", exc)
+        return delivered
 
     def _handle_push_receipts(self, batch, resp):
         """Act on Expo's per-message tickets, and SAY what went wrong.
@@ -1234,10 +1288,29 @@ class KpiNotify(models.Model):
             body = (getattr(resp, 'text', '') or '')[:300]
             _logger.warning("expo push HTTP %s for %s message(s): %s",
                             status_code, len(batch), body)
-            self._log_action('push_failed', success=False, payload={
-                'channel': 'expo', 'http_status': status_code, 'body': body,
-                'devices': len(batch)})
-            return 0
+            # This one rejection is recoverable: the request mixed two projects, so
+            # the messages are fine individually. Retry them one at a time rather
+            # than dropping a whole send because one token is from an old build.
+            #
+            # The retry runs BEFORE the log line so the entry can say whether it
+            # was recovered. Logging the failure first read as an unresolved
+            # failure sitting next to a success, which is the same
+            # can't-trust-the-log problem this function was written to end.
+            recovered = 0
+            mixed = 'PUSH_TOO_MANY_EXPERIENCE_IDS' in body
+            if mixed:
+                recovered = self._retry_push_one_by_one(batch)
+            payload = {'channel': 'expo', 'http_status': status_code,
+                       'body': body, 'devices': len(batch)}
+            if mixed:
+                payload['recovered'] = recovered
+                payload['hint'] = ('tokens span >1 EAS project; they re-register '
+                                   'with a project_id on next login')
+            # Recovered in full → not a failure any more. Still logged, because a
+            # mixed batch means stale tokens are in play and worth seeing.
+            self._log_action('push_failed', success=bool(recovered == len(batch)),
+                             payload=payload)
+            return recovered
         try:
             data = resp.json().get('data') or []
         except Exception as exc:
