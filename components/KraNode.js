@@ -40,12 +40,16 @@ function KpiRow({ kpi, depth, onEditKpi, onDeleteKpi }) {
   );
 }
 
-export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra, onDeleteKra, onEditKpi, onDeleteKpi }) {
+export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra, onDeleteKra, onEditKpi, onDeleteKpi, onAssignClients }) {
   const isOpen = expanded.has(node.id);
   const children = node.child_ids || [];
   const kpis = node.kpi_ids || [];
   const kpiTotal = countKpis(node);
   const hasContent = children.length > 0 || kpis.length > 0;
+  // Client KRAs only. get_kra_tree() has always sent is_client and
+  // client_user_ids; the app just never drew them, so the web had an
+  // assign-clients button the app didn't.
+  const assigned = (node.client_user_ids || []).length;
 
   return (
     <View>
@@ -66,12 +70,29 @@ export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra
           style={{ marginLeft: 4 }}
         />
         <Text style={[s.name, depth === 0 && s.nameRoot]} numberOfLines={1}>{node.name}</Text>
+        {/* Says WHY this row has a people button and the others don't. */}
+        {node.is_client ? (
+          <View style={s.clientBadge}><Text style={s.clientTxt}>Client</Text></View>
+        ) : null}
         {kpiTotal > 0 ? (
           <View style={s.countBadge}><Text style={s.countTxt}>{kpiTotal}</Text></View>
         ) : null}
         {onEditKra ? (
           <TouchableOpacity onPress={() => onEditKra(node)} hitSlop={HIT} style={s.actBtn}>
             <Ionicons name="pencil" size={16} color={COLORS.muted} />
+          </TouchableOpacity>
+        ) : null}
+        {/* Assign client logins — client KRAs only, same rule as the web. The
+            count rides on the icon so you can see an UNASSIGNED client KRA
+            without opening it; those are invisible to their own client. */}
+        {onAssignClients && node.is_client ? (
+          <TouchableOpacity onPress={() => onAssignClients(node)} hitSlop={HIT} style={s.actBtn}>
+            <View style={s.assignWrap}>
+              <Ionicons name="people" size={16} color={COLORS.green} />
+              {assigned > 0 ? (
+                <View style={s.assignBadge}><Text style={s.assignTxt}>{assigned}</Text></View>
+              ) : null}
+            </View>
           </TouchableOpacity>
         ) : null}
         {onDeleteKra ? (
@@ -87,6 +108,7 @@ export default function KraNode({ node, depth = 0, expanded, onToggle, onEditKra
             <KraNode
               key={c.id} node={c} depth={depth + 1} expanded={expanded} onToggle={onToggle}
               onEditKra={onEditKra} onDeleteKra={onDeleteKra} onEditKpi={onEditKpi} onDeleteKpi={onDeleteKpi}
+              onAssignClients={onAssignClients}
             />
           ))}
           {kpis.map((k) => (
@@ -115,6 +137,22 @@ const s = StyleSheet.create({
     backgroundColor: '#EAF1FE', alignItems: 'center', justifyContent: 'center',
   },
   countTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
+
+  clientBadge: {
+    borderRadius: 7, paddingHorizontal: 6, paddingVertical: 2, marginRight: 4,
+    backgroundColor: '#E0F2FE',
+  },
+  clientTxt: { fontSize: 9.5, fontWeight: '900', color: '#0369A1', letterSpacing: 0.3 },
+
+  // The count sits on the icon's corner, so it can't widen the row — every
+  // fixed-width row in this app was already a phone-layout problem.
+  assignWrap: { position: 'relative' },
+  assignBadge: {
+    position: 'absolute', top: -6, right: -8, minWidth: 14, height: 14, borderRadius: 7,
+    paddingHorizontal: 3, backgroundColor: COLORS.green,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  assignTxt: { fontSize: 9, fontWeight: '900', color: '#fff' },
 
   kpiRow: {
     flexDirection: 'row', alignItems: 'center', paddingRight: 12, gap: 6,

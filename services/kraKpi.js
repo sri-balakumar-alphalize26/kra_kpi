@@ -120,6 +120,41 @@ export async function getUsers() {
   return { isMock: false, users: res || [] };
 }
 
+// Client-role portal logins (the KRA / KPI Client group) → [{id, name, login}].
+//
+// Deliberately NOT getUsers(): that returns INTERNAL users for the KPI assignee
+// picker. The two lists look interchangeable and are not — assigning an internal
+// user here would hand them a client's filtered view of the board.
+export async function getClientUsers() {
+  const base = await server();
+  if (!base) {
+    return { isMock: true, users: [
+      { id: 91, name: 'Demo Client', login: 'demo@client.test' },
+      { id: 92, name: 'Sample Buyer', login: 'sample@buyer.test' },
+    ] };
+  }
+  log.info('getClientUsers → /kra_kpi/kra/get_client_users');
+  const res = await jsonRpc(base, '/kra_kpi/kra/get_client_users', {});
+  if (!res || res.status === false) throw new Error(res?.message || 'Could not load client logins');
+  log.info('getClientUsers ←', { count: (res.users || []).length });
+  return { isMock: false, users: res.users || [] };
+}
+
+// Replace a client KRA's assigned portal logins.
+//
+// The server writes (6, 0, ids) — the FULL set, not a delta. An empty array
+// therefore CLEARS every assignment rather than doing nothing, which is why the
+// caller must send the complete list of ticked boxes every time.
+export async function assignKraClients({ kraId, userIds }) {
+  const base = await server();
+  const ids = (userIds || []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (!base) { log.info('assignKraClients (mock)', { kraId, ids }); await delay(250); return { isMock: true, count: ids.length }; }
+  log.info('assignKraClients → /kra_kpi/kra/assign_clients', { kra_id: kraId, user_ids: ids });
+  const res = await jsonRpc(base, '/kra_kpi/kra/assign_clients', { kra_id: Number(kraId), user_ids: ids });
+  if (!res || res.status === false) throw new Error(res?.message || 'Could not assign clients');
+  return { isMock: false, count: (res.client_user_ids || ids).length };
+}
+
 // ---- Create ---------------------------------------------------------------
 
 // Create a KRA (root when parentId falsy, else a sub-KRA). Returns new id.

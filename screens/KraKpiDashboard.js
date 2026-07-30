@@ -60,6 +60,12 @@ export default function KraKpiDashboard({ onBack }) {
   // Modal: { type:'kra'|'kpi'|'editKra'|'editKpi', ... }
   const [modal, setModal] = useState(null);
 
+  // Assign-clients dialog, kept separate from `modal` because it isn't a
+  // name-and-submit form — it's a multi-select whose value is a list.
+  // { kraId, kraName, picked: number[], original: number[], loading }
+  const [assign, setAssign] = useState(null);
+  const [clientUsers, setClientUsers] = useState([]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -116,6 +122,52 @@ export default function KraKpiDashboard({ onBack }) {
   // ---- Edit (rename) ------------------------------------------------------
   function onEditKra(node) { setModal({ type: 'editKra', id: node.id, name: node.name }); }
   function onEditKpi(kpi) { setModal({ type: 'editKpi', id: kpi.id, name: kpi.name }); }
+
+  // ---- Assign client logins (client KRAs only) ---------------------------
+  // Parity with the web's 👥 button on a client KRA. Which logins are attached
+  // here decides what that client can see, so it is a visibility control, not a
+  // label — hence the confirm before clearing the last one.
+  async function onAssignClients(node) {
+    const current = (node.client_user_ids || []).map((u) => Number(u.id)).filter(Boolean);
+    // Seed the ticks from the tree we already hold, so the list opens with the
+    // right boxes checked even if the fetch below is slow or fails outright.
+    setAssign({ kraId: node.id, kraName: node.name, picked: current, original: current, loading: true });
+    try {
+      const { users } = await svc.getClientUsers();
+      setClientUsers(users || []);
+    } catch (e) {
+      log.warn('client users load failed', e?.message);
+      Alert.alert('Error', e?.message || 'Could not load client logins');
+    } finally {
+      setAssign((a) => (a ? { ...a, loading: false } : a));
+    }
+  }
+
+  function saveAssign() {
+    if (!assign) return;
+    const { kraId, kraName, picked, original } = assign;
+    const commit = () => {
+      setAssign(null);
+      runMutation(
+        () => svc.assignKraClients({ kraId, userIds: picked }),
+        picked.length
+          ? `${picked.length} client login${picked.length === 1 ? '' : 's'} assigned to “${kraName}”`
+          : `Cleared every client login on “${kraName}”`,
+      );
+    };
+    // Saving an empty list CLEARS the set server-side (it writes the full 6,0
+    // value). Going from "some" to "none" hides this KRA from its own client, so
+    // it gets asked about; every other change applies straight away.
+    if (picked.length === 0 && original.length > 0) {
+      Alert.alert(
+        'Remove all client access?',
+        `Nobody will be able to see “${kraName}” from the client portal until a login is assigned again.`,
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove all', style: 'destructive', onPress: commit }],
+      );
+      return;
+    }
+    commit();
+  }
 
   // ---- Delete (with confirm) ---------------------------------------------
   function onDeleteKra(node) {
@@ -269,6 +321,7 @@ export default function KraKpiDashboard({ onBack }) {
                 key={n.id} node={n} depth={0} expanded={expanded} onToggle={toggle}
                 onEditKra={onEditKra} onDeleteKra={onDeleteKra}
                 onEditKpi={onEditKpi} onDeleteKpi={onDeleteKpi}
+                onAssignClients={onAssignClients}
               />
             ))}
           </View>
@@ -283,7 +336,106 @@ export default function KraKpiDashboard({ onBack }) {
         users={users}
         onSubmit={submitModal}
       />
+
+      {/* Assign client logins to a client KRA */}
+      <AssignClientsModal
+        assign={assign}
+        setAssign={setAssign}
+        users={clientUsers}
+        onSave={saveAssign}
+      />
     </View>
+  );
+}
+
+// ---- Assign client logins --------------------------------------------------
+// A multi-select, not a form: the value is the whole ticked set, because that is
+// what the server stores (it replaces client_user_ids outright).
+
+function AssignClientsModal({ assign, setAssign, users, onSave }) {
+  if (!assign) return null;
+
+  const close = () => setAssign(null);
+  const toggle = (id) => setAssign((a) => {
+    if (!a) return a;
+    const n = Number(id);
+    return { ...a, picked: a.picked.includes(n) ? a.picked.filter((x) => x !== n) : [...a.picked, n] };
+  });
+
+  // Anyone already attached but missing from the group list — deactivated, or
+  // dropped out of the client group while still assigned. Hiding them would make
+  // Save silently detach someone the operator never saw.
+  const known = new Set(users.map((u) => Number(u.id)));
+  const orphans = assign.picked.filter((id) => !known.has(id));
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={close}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={close}>
+          <TouchableOpacity activeOpacity={1} style={s.sheet}>
+            <Text style={s.sheetTitle}>Assign clients</Text>
+            <Text style={s.assignSub} numberOfLines={2}>{assign.kraName}</Text>
+
+            {assign.loading ? (
+              <View style={s.assignLoading}>
+                <ActivityIndicator color={COLORS.primary} />
+                <Text style={s.assignLoadTxt}>Loading client logins…</Text>
+              </View>
+            ) : users.length === 0 ? (
+              <View style={s.assignLoading}>
+                <Ionicons name="people-outline" size={34} color={COLORS.faint} />
+                <Text style={s.assignLoadTxt}>No client logins exist yet. Create one in Login Management.</Text>
+              </View>
+            ) : (
+              <ScrollView style={s.assignList} showsVerticalScrollIndicator={false}>
+                {users.map((u) => {
+                  const on = assign.picked.includes(Number(u.id));
+                  return (
+                    <TouchableOpacity key={u.id} style={s.assignRow} activeOpacity={0.7}
+                      onPress={() => toggle(u.id)}>
+                      <Ionicons
+                        name={on ? 'checkbox' : 'square-outline'}
+                        size={21}
+                        color={on ? COLORS.primary : COLORS.faint}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.assignName} numberOfLines={1}>{u.name || u.login}</Text>
+                        {u.login && u.login !== u.name ? (
+                          <Text style={s.assignLogin} numberOfLines={1}>{u.login}</Text>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+                {orphans.length > 0 ? (
+                  <Text style={s.assignWarn}>
+                    {orphans.length} assigned login{orphans.length === 1 ? '' : 's'} no longer in the client
+                    group — saving now will detach {orphans.length === 1 ? 'it' : 'them'}.
+                  </Text>
+                ) : null}
+              </ScrollView>
+            )}
+
+            <Text style={s.assignCount}>
+              {assign.picked.length === 0
+                ? 'Nobody selected — saving clears client access.'
+                : `${assign.picked.length} selected`}
+            </Text>
+
+            <View style={s.sheetBtns}>
+              <TouchableOpacity style={s.cancelBtn} onPress={close} activeOpacity={0.85}>
+                <Text style={s.cancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.saveBtn, assign.loading && { opacity: 0.6 }]}
+                onPress={onSave} activeOpacity={0.85} disabled={assign.loading}>
+                <Ionicons name="checkmark" size={18} color="#fff" />
+                <Text style={s.saveTxt}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 
@@ -496,4 +648,20 @@ const s = StyleSheet.create({
   pickItem: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F3F8' },
   pickTxt: { fontSize: 15.5, color: COLORS.ink },
   pickEmpty: { color: COLORS.muted, fontSize: 14, paddingVertical: 14 },
+
+  // Assign-clients dialog
+  assignSub: { fontSize: 13.5, fontWeight: '700', color: COLORS.muted, marginBottom: 10 },
+  assignLoading: { alignItems: 'center', gap: 10, paddingVertical: 28 },
+  assignLoadTxt: { fontSize: 13.5, color: COLORS.muted, textAlign: 'center', paddingHorizontal: 10 },
+  // Capped, not flex: this dialog is centred, so an unbounded list pushes its own
+  // title and buttons off the screen on a phone.
+  assignList: { maxHeight: 340 },
+  assignRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 11,
+    borderBottomWidth: 1, borderBottomColor: '#F0F3F8',
+  },
+  assignName: { fontSize: 15, fontWeight: '700', color: COLORS.ink },
+  assignLogin: { fontSize: 12, color: COLORS.faint, marginTop: 1 },
+  assignWarn: { fontSize: 12, color: COLORS.amber, fontWeight: '700', paddingVertical: 10, lineHeight: 17 },
+  assignCount: { fontSize: 12.5, fontWeight: '700', color: COLORS.muted, marginTop: 12 },
 });
