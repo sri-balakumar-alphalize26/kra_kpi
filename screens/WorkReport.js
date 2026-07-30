@@ -5,7 +5,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Switch,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, Switch,
   ActivityIndicator, Modal, Platform, StatusBar as RNStatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,9 @@ import * as Sharing from 'expo-sharing';
 
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
+// The same picker New Invoice uses. Dates were hand-typed here, which is the one
+// remaining way to get a malformed range into a report.
+import DateGridModal from '../components/DateGridModal';
 import { fetchWorkReport, fetchWorkReportClients, fetchWorkReportPdf } from '../services/workReport';
 import { createLogger } from '../api/logger';
 
@@ -55,6 +58,8 @@ function presetRange(key) {
 export default function WorkReport({ onBack }) {
   const init = presetRange('this_month');
   const [preset, setPreset] = useState('this_month');
+  // { field: 'from' | 'to' } while the calendar is open; null when closed.
+  const [datePick, setDatePick] = useState(null);
   const [fromDate, setFromDate] = useState(init.from);
   const [toDate, setToDate] = useState(init.to);
   const [groupBy, setGroupBy] = useState('task');
@@ -223,17 +228,19 @@ export default function WorkReport({ onBack }) {
         <View style={s.dateRow}>
           <View style={{ flex: 1 }}>
             <Text style={s.miniLbl}>From</Text>
-            <TextInput
-              style={s.dateInput} value={fromDate} placeholder="YYYY-MM-DD" placeholderTextColor={COLORS.faint}
-              onChangeText={(t) => { setPreset('custom'); setFromDate(t); }}
-            />
+            <TouchableOpacity style={s.dateBtn} activeOpacity={0.8}
+              onPress={() => setDatePick({ field: 'from' })}>
+              <Text style={s.dateBtnTxt} numberOfLines={1}>{fromDate || 'Pick a date'}</Text>
+              <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
+            </TouchableOpacity>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={s.miniLbl}>To</Text>
-            <TextInput
-              style={s.dateInput} value={toDate} placeholder="YYYY-MM-DD" placeholderTextColor={COLORS.faint}
-              onChangeText={(t) => { setPreset('custom'); setToDate(t); }}
-            />
+            <TouchableOpacity style={s.dateBtn} activeOpacity={0.8}
+              onPress={() => setDatePick({ field: 'to' })}>
+              <Text style={s.dateBtnTxt} numberOfLines={1}>{toDate || 'Pick a date'}</Text>
+              <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -388,6 +395,25 @@ export default function WorkReport({ onBack }) {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {datePick ? (
+        <DateGridModal
+          title={datePick.field === 'from' ? 'Report from' : 'Report to'}
+          value={datePick.field === 'from' ? fromDate : toDate}
+          // Keep the range the right way round while choosing rather than
+          // rejecting it afterwards: a From after the To is nearly always a
+          // mis-tap, and a backwards range returns an empty report with no clue.
+          maxDate={datePick.field === 'from' ? (toDate || undefined) : undefined}
+          minDate={datePick.field === 'to' ? (fromDate || undefined) : undefined}
+          onCancel={() => setDatePick(null)}
+          onPick={(iso) => {
+            const field = datePick.field;
+            setDatePick(null);
+            setPreset('custom');
+            if (field === 'from') setFromDate(iso); else setToDate(iso);
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -415,7 +441,10 @@ const s = StyleSheet.create({
 
   dateRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
   miniLbl: { fontSize: 11, fontWeight: '700', color: COLORS.muted, marginBottom: 5 },
-  dateInput: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 42, paddingHorizontal: 10, fontSize: 14, color: COLORS.ink, backgroundColor: '#fff' },
+  // Was a TextInput (dateInput). Now a button that opens the calendar, so the
+  // field is readable but not typable — a malformed range is no longer possible.
+  dateBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 42, paddingHorizontal: 10, backgroundColor: '#fff' },
+  dateBtnTxt: { flex: 1, fontSize: 14, color: COLORS.ink, fontWeight: '600' },
 
   rowBetween: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 14 },
   toggle: { flexDirection: 'row', borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, overflow: 'hidden' },
