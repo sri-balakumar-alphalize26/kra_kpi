@@ -102,11 +102,29 @@ const rStyles = StyleSheet.create({
 // Last-known workday-open state, cached across board remounts so re-entering the
 // board shows the correct Start/End label instantly (no 2–3s "Start Workday"
 // flash while getWorkdayStatus() resolves). null = not resolved yet this session.
+//
+// Module scope means it outlives the component — which is the point — but it also
+// outlives the LOGIN, and it carries no user identity. Left alone, the next person
+// to sign in on this device inherits the previous one's workday: seeded `true`,
+// they get live action buttons that every server call then refuses. So logout
+// clears it (see resetWorkdayCache below) and nothing else may write it.
 let WORKDAY_CACHE = null;
-// Last-known "day done" (developer ended their own workday today → no restart
-// until tomorrow). Cached the same way so re-entry shows "Workday ended for
-// today" instantly instead of flashing a tappable Start button.
-let DAYDONE_CACHE = false;
+
+// Called from App's logout(). Module state is per-BUNDLE, not per-session, so
+// without this the cache crosses from one account to the next; Expo Go keeps the
+// same JS context alive across a sign-out.
+//
+// There used to be a DAYDONE_CACHE next to it, with the same lifetime and the
+// same lack of a user or a date stamp — and a worse failure. Ending your workday
+// set it, and nothing ever unset it: not logging out, not the date rolling over.
+// The next user, or the same user the next morning, opened the board to a
+// DISABLED "Workday ended for today" — and because that state also suppresses the
+// "you haven't started your workday" prompt, there was no way forward on screen.
+// The one thing that corrected it was a single mount fetch whose failure was
+// swallowed. It's gone: `dayDone` is App's, passed in as a prop.
+export function resetWorkdayCache() {
+  WORKDAY_CACHE = null;
+}
 
 // Smooth layout transitions for the accordion expand/collapse (needs enabling on
 // Android). animateNext() is called right before the toggle state changes.
@@ -675,7 +693,10 @@ export default function KpiActionBoard({
   // until they start their day. Reading isn't work.
   // onWorkdayStarted / onWorkdayEnded: flip App's read-only state immediately
   // instead of waiting up to 5s for its workday poll.
-  workdayLocked = false, onWorkdayStarted, onWorkdayEnded,
+  // dayDone: App's answer to "did this developer end their own workday today?".
+  // App owns it — it polls /kpi_workday/status every 5s, re-reads on foreground,
+  // and resets it on logout — so the board reads it instead of keeping a copy.
+  workdayLocked = false, dayDone: dayDoneApp = false, onWorkdayStarted, onWorkdayEnded,
 }) {
   const [raw, setRaw] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -741,10 +762,24 @@ export default function KpiActionBoard({
   // so it's a prompt, not a trap: Cancel keeps them browsing read-only.
   const [startPrompt, setStartPrompt] = useState(false);
   // "Day done" = developer ended their own workday today → one start + one end
-  // per day, no restart until tomorrow. Cached across remounts like workdayOpen.
+  // per day, no restart until tomorrow.
+  //
+  // Two sources, deliberately: the PROP is App's polled truth, and the echo is
+  // this board's own answer for the moment before App catches up — the tick after
+  // End Workday returns, the server refusing a restart, and admins (App's
+  // onWorkdayEnded returns early for anyone who isn't a locked developer, so for
+  // them the echo is the only source).
+  //
+  // The echo yields to the prop the instant the prop changes, which is the whole
+  // fix: "not done" now propagates. A new date or a different user makes App
+  // report false, and that false lands. The old module-scope cache had no way to
+  // hear it — only ever set, never cleared.
+  //
   // Declared here (before startPrompt's effect) because that effect reads it.
-  const [dayDone, setDayDoneState] = useState(DAYDONE_CACHE);
-  const setDayDone = (v) => { DAYDONE_CACHE = !!v; setDayDoneState(!!v); };
+  const [dayDoneEcho, setDayDoneEcho] = useState(false);
+  const dayDone = dayDoneApp || dayDoneEcho;
+  const setDayDone = (v) => setDayDoneEcho(!!v);
+  useEffect(() => { setDayDoneEcho(false); }, [dayDoneApp]);
   // Don't nag "you haven't started your workday" when they actually ENDED it
   // today — that would invite a restart the one-per-day rule forbids.
   useEffect(() => { if (workdayLocked && !dayDone) setStartPrompt(true); }, [workdayLocked, dayDone]);
@@ -1088,7 +1123,15 @@ export default function KpiActionBoard({
       setWorkdayOpen(!!r?.is_open);
       setDayDone(!!r?.day_done);
       setWorkdayPaused(!!r?.is_paused);
-    }).catch(() => {});
+    }).catch((e) => {
+      // Say so. This used to be `.catch(() => {})`, and it was the only thing that
+      // corrected a stale cached "day done" — so when it failed (offline, or the
+      // server mid-restart during a module deploy) the board sat on a disabled
+      // "Workday ended for today" with nothing on screen explaining why. The
+      // cache is gone, so a failure here now just leaves App's polled value in
+      // charge, but a silent network error is still worth a line in the log.
+      log.warn('mount workday status failed, using App\'s value', e?.message);
+    });
   }, []);
 
   // ONE place that reacts to a live_status payload, so the 15s poll and the
@@ -1101,6 +1144,11 @@ export default function KpiActionBoard({
     // coming back from the background left a stale banner until the next remount.
     // live_status carries is_paused for exactly this reason — no extra request.
     if (r && typeof r.is_paused === 'boolean') setWorkdayPaused(r.is_paused);
+    // Same argument for workday_open, which was already in the payload and
+    // ignored: the mount read was the board's ONLY source, so a day started or
+    // ended on the WEB — or a date rollover on a board left open overnight — kept
+    // showing yesterday's button until someone remounted the screen.
+    if (r && typeof r.workday_open === 'boolean') setWorkdayOpen(r.workday_open);
     log.info('live ←', {
       workday_open: !!r?.workday_open,
       active_task: !!r?.active_task,

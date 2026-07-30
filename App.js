@@ -11,7 +11,7 @@ import LoginScreen from './screens/LoginScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import HomeScreen from './screens/HomeScreen';
 import KraKpiDashboard from './screens/KraKpiDashboard';
-import KpiActionBoard from './screens/KpiActionBoard';
+import KpiActionBoard, { resetWorkdayCache } from './screens/KpiActionBoard';
 import UploadAmendments from './screens/UploadAmendments';
 import OwnerDashboard from './screens/OwnerDashboard';
 import LiveTracking from './screens/LiveTracking';
@@ -491,6 +491,10 @@ function AppInner() {
     setPairMode('start');
     setDayDone(false);
     setGateReady(false);
+    // The board's workday cache is module scope, so it survives this sign-out —
+    // the JS context doesn't reload. Clearing these state hooks without clearing
+    // it left the next account inheriting the previous one's workday.
+    resetWorkdayCache();
   };
 
   // Confirm before logging out. A mis-tap on the log-out icon shouldn't end the
@@ -587,7 +591,7 @@ function AppInner() {
       return (
         <KpiActionBoard
           onBack={home} focusTaskId={focusTaskId} onFocusHandled={() => setFocusTaskId(null)}
-          workdayLocked={workdayLocked}
+          workdayLocked={workdayLocked} dayDone={dayDone}
           onWorkdayStarted={onWorkdayStarted}
           onWorkdayEnded={onWorkdayEnded}
         />
@@ -661,7 +665,7 @@ function AppInner() {
       return (
         <KpiActionBoard
           onBack={home} focusStatus={appScreen.split(':')[1]}
-          workdayLocked={workdayLocked}
+          workdayLocked={workdayLocked} dayDone={dayDone}
           onWorkdayStarted={onWorkdayStarted}
           onWorkdayEnded={onWorkdayEnded}
         />
