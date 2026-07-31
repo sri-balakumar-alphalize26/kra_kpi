@@ -1288,12 +1288,63 @@ class KpiWorkSession(models.Model):
                            if b.break_type in ('other', 'leave', 'urgent'))
         metered = (break_secs + lunch_secs + meeting_secs + away_secs
                    + other_secs + no_tasks_secs)
+
+        # The day's total is MEASURED, not added up.
+        #
+        # `productive` is already a de-duplicated union (see above), but `metered`
+        # is a plain SUM of break-log and block durations, and nothing kept the two
+        # from covering the same minutes. Adding them counted a pause left open
+        # across task work twice: a real day reported Accounted 12h29m against
+        # Presence 9h38m, and the max(0.0, ...) below floored the negative residual
+        # to zero so nothing ever said so. It is the same defect the per-task sum
+        # had, one level up — and the same cure: measure the union.
+        #
+        # Clipped to the presence spans so a break still running past logout, or a
+        # block that outlived its session, cannot inflate the day beyond the clock.
+        spans = [(s.login_at, s.logout_at or _now) for s in sessions if s.login_at]
+
+        def _clip(intervals):
+            out = []
+            for start, end in intervals:
+                if not start:
+                    continue
+                end = end or _now
+                for span_start, span_end in spans:
+                    lo, hi = max(start, span_start), min(end, span_end)
+                    if hi > lo:
+                        out.append((lo, hi))
+            return out
+
+        explained = _clip(
+            list(all_intervals)
+            + [(b.start_time, _now if b.is_active else b.end_time)
+               for b in blogs if b.start_time]
+            + [(bk['start_at'], _now if bk.get('open') else bk.get('end_at'))
+               for bk in blocks if bk.get('start_at')]
+        )
+        # Paused cannot join the union: only COMPLETED pauses are kept, and as a
+        # single total on the session rather than intervals (see _paused_total), so
+        # there is nothing to merge. It is added, and the result held to the clock.
+        accounted = _measure(explained) + paused_secs
+        if accounted > presence:
+            # Previously invisible: the overshoot landed in a negative residual
+            # that max(0.0, ...) silently swallowed, so the only symptom was a
+            # total that looked wrong to a human. Say it out loud instead — this
+            # line is what identifies the workflow path that left an interval
+            # open, which the arithmetic below can correct but not prevent.
+            _logger.warning(
+                "workday accounted (%.0fs) exceeds presence (%.0fs) by %.0fs for "
+                "user=%s date=%s — some interval is counted twice; look for a "
+                "break or block left open across task work",
+                accounted, presence, accounted - presence,
+                self.user_id.login, self.session_date)
+            accounted = presence
         # Residual idle = presence not covered by productive work OR any metered
-        # reason. `paused_secs` is subtracted here because presence now INCLUDES
-        # paused time (it is the raw login->logout clock); leaving it out would
-        # report every deliberate pause as unexplained idle — the opposite of
-        # what the developer told us by pausing.
-        other_idle = max(0.0, presence - productive - metered - paused_secs)
+        # reason. Paused is part of `accounted` because presence INCLUDES paused
+        # time (it is the raw login->logout clock); leaving it out would report
+        # every deliberate pause as unexplained idle — the opposite of what the
+        # developer told us by pausing.
+        other_idle = max(0.0, presence - accounted)
 
         # The company's standard working day. `or 9.0` covers a company row that
         # predates the field (a stored 0 would make every day green).
@@ -1335,20 +1386,21 @@ class KpiWorkSession(models.Model):
             'presence_seconds':   float(presence),
             'productive_display': _fmt_hms(productive),
             'presence_display':   _fmt_hms(presence),
-            # ONE figure for "time that is accounted for": task work + meetings +
-            # lunch + breaks + no-tasks (+ away / other, which are metered the same
-            # way and would otherwise make this not add up) + PAUSED.
+            # ONE figure for "time that is accounted for": the wall clock COVERED
+            # by task work, meetings, lunch, breaks, no-tasks and away/other, plus
+            # PAUSED. Measured as a union above — minutes explained by two things
+            # at once (a pause left open across task work) are counted once.
             #
             # Paused belongs here now that presence is the raw login->logout clock.
             # Leave it out and every deliberate pause reappears as unexplained
             # idle, which is the exact opposite of what pausing communicated.
             #
             # It is the counterpart to other_idle, and the two are what reconcile
-            # the day: accounted + other_idle == presence, always. Reading five
-            # separate buckets and adding them by eye was the only way to answer
-            # "is my day explained?" before this.
-            'accounted_seconds':  float(productive + metered + paused_secs),
-            'accounted_display':  _fmt_hms(productive + metered + paused_secs),
+            # the day: accounted + other_idle == presence, always. That now holds
+            # by construction rather than by trusting the buckets not to overlap,
+            # which is what it used to rest on — and what broke it.
+            'accounted_seconds':  float(accounted),
+            'accounted_display':  _fmt_hms(accounted),
             # Workday paused (e.g. stopped at 04:00, back at 10:00). INSIDE
             # presence (presence is the whole span) but NOT worked time — which is
             # why met_standard below measures presence minus this.
