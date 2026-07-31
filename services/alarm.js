@@ -8,6 +8,14 @@
 // button calls stopAlarm() to cancel it (which stops the loop).
 import { Platform } from 'react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
+// The alarm CHANNEL is created through expo-notifications, not notifee — see
+// ensureAlarmChannel below for why. notifee still posts the notification.
+import * as Notifications from 'expo-notifications';
+import {
+  AndroidAudioUsage,
+  AndroidImportance as ExpoImportance,
+  AndroidNotificationVisibility as ExpoVisibility,
+} from 'expo-notifications';
 import { createLogger } from '../api/logger';
 import { getAlarmSound, getAlarmSettings } from '../api/session';
 
@@ -20,13 +28,14 @@ const log = createLogger('Alarm');
 // the app keeps running and every call below simply falls through until the rebuild
 // lands the native module.
 let notifee = null;
-let AndroidImportance = {}, AndroidCategory = {}, AndroidVisibility = {}, TriggerType = {}, AuthorizationStatus = {};
+// AndroidVisibility is gone from this list on purpose: lockscreen visibility now
+// travels with the channel, which expo-notifications creates (ExpoVisibility).
+let AndroidImportance = {}, AndroidCategory = {}, TriggerType = {}, AuthorizationStatus = {};
 try {
   const nf = require('@notifee/react-native');
   notifee = nf.default;
   AndroidImportance = nf.AndroidImportance;
   AndroidCategory = nf.AndroidCategory;
-  AndroidVisibility = nf.AndroidVisibility;
   TriggerType = nf.TriggerType;
   AuthorizationStatus = nf.AuthorizationStatus;
   log.info('notifee loaded (native module present)');
@@ -34,7 +43,13 @@ try {
   log.warn('notifee unavailable — alarm disabled until the app is rebuilt', e?.message);
 }
 
-const CHANNEL_ID = 'task-alarm';
+// Bumped from 'task-alarm' when the channel moved to the ALARM audio stream.
+// A channel's audio attributes are frozen at creation exactly like its sound, so
+// every device already carrying a 'task-alarm::*' channel would have kept ringing
+// on the NOTIFICATION stream forever. Changing the prefix abandons all of them at
+// once — including the custom-sound `u<hash>` ones, which a soundKey()-only bump
+// would have missed.
+const CHANNEL_ID = 'task-alarm-v2';
 const VIBRATION = [300, 500, 300, 500];
 
 // The device's default ALARM ringtone. Passing 'default' as a notifee channel
@@ -93,25 +108,51 @@ export async function ensureAlarmPermission() {
   }
 }
 
-// Create the alarm channel for a given chosen `sound` (idempotent). HIGH importance
+// Create the alarm channel for a given chosen `sound` (idempotent). MAX importance
 // + ALARM category so it rings loud and can bypass Do-Not-Disturb. One channel per
 // sound (see soundKey) because a channel's sound can't change after creation.
+//
+// Created via EXPO-NOTIFICATIONS, not notifee, for one reason: audioAttributes.
+// notifee's AndroidChannel type has no field for them at all (only `sound`), so a
+// notifee-made channel lands on the default NOTIFICATION stream — which meant the
+// alarm went silent whenever notification volume was 0, leaving vibration only,
+// and made bypassDnd meaningless. usage: ALARM puts it on the alarm stream, so it
+// behaves like the clock app: independent of notification volume.
+//
+// Channels are app-global, so notifee happily posts to a channel someone else
+// created; it only needs the id back. The notification-mode reminder
+// (services/reminders.js) is unaffected and keeps the normal notification sound.
 async function ensureAlarmChannel(sound) {
   if (!notifee) return undefined;
   const channelId = `${CHANNEL_ID}::${soundKey(sound)}`;
   const soundVal = sound?.uri || DEFAULT_ALARM_URI;   // chosen content:// URI, or the default ALARM tone
-  const created = await notifee.createChannel({
-    id: channelId,
+  await Notifications.setNotificationChannelAsync(channelId, {
     name: 'Task alarms',
-    importance: AndroidImportance.HIGH,
+    importance: ExpoImportance.MAX,
     sound: soundVal,
-    vibration: true,
+    audioAttributes: { usage: AndroidAudioUsage.ALARM },
     vibrationPattern: VIBRATION,
+    enableVibrate: true,
     bypassDnd: true,
-    visibility: AndroidVisibility.PUBLIC,
+    lockscreenVisibility: ExpoVisibility.PUBLIC,
+    showBadge: false,
   });
-  log.info('channel ready', { channelId: created, sound: soundVal, title: sound?.title });
-  return created;
+  // Read back rather than trust the write: `sound` is the one field that can be
+  // rejected (Android resolves it against res/raw on some paths), and a channel
+  // that silently landed with no sound is precisely the bug being fixed here.
+  try {
+    const ch = await Notifications.getNotificationChannelAsync(channelId);
+    log.info('channel ready', {
+      channelId, sound: soundVal, title: sound?.title,
+      readBackSound: ch?.sound, usage: ch?.audioAttributes?.usage,
+    });
+    if (ch && !ch.sound) {
+      log.warn('alarm channel has NO sound — it will only vibrate', { channelId, requested: soundVal });
+    }
+  } catch (e) {
+    log.warn('channel read-back failed', e?.message);
+  }
+  return channelId;
 }
 
 // Schedule a ringing alarm for `whenMs` (epoch ms). Returns the notification id
