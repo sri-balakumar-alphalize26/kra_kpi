@@ -1,8 +1,19 @@
 // Tiny tagged logger for debugging the login / Odoo flow.
-// Logs only in development (__DEV__) so production builds stay silent.
 // Usage: const log = createLogger('Login'); log.info('step', {...});
+//
+// info() is development-only, so a release build stays quiet during normal
+// operation.  warn() and error() ALWAYS emit, in every build.
+//
+// The split exists because gating all three on __DEV__ made release builds
+// silent about their own failures: services/push.js reports every dead end
+// through log.warn ('push permission not granted', 'no Expo push token
+// returned', 'registerForPushAsync failed'), then returns null, and the caller
+// in App.js ignores null.  A device that never registered for push therefore
+// looked exactly like a healthy one, on-screen AND in logcat — diagnosing it
+// meant reading Android's own FCM plumbing to infer what the app already knew.
+// Routine chatter is not worth shipping; a swallowed failure is.
 
-const ENABLED = typeof __DEV__ === 'undefined' ? true : __DEV__;
+const DEV = typeof __DEV__ === 'undefined' ? true : __DEV__;
 
 // Keys whose values must never be printed in full.
 const SECRET_KEYS = ['password', 'pw', 'pass', 'session_id', 'token'];
@@ -24,11 +35,10 @@ export function redact(obj) {
 
 export function createLogger(tag) {
   const prefix = `[${tag}]`;
-  const emit = (fn, args) => { if (ENABLED) fn(prefix, ...args); };
   return {
-    info: (...a) => emit(console.log, a),
-    warn: (...a) => emit(console.warn, a),
-    error: (...a) => emit(console.error, a),
+    info: (...a) => { if (DEV) console.log(prefix, ...a); },
+    warn: (...a) => console.warn(prefix, ...a),
+    error: (...a) => console.error(prefix, ...a),
     redact,
   };
 }
