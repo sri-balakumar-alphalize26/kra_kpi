@@ -1042,7 +1042,8 @@ class KpiNotify(models.Model):
                     _add(own.phone, role='owner')
             owner_grp = self.env.ref('kra_kpi_module.group_kra_owner', raise_if_not_found=False)
             if owner_grp:
-                for u in owner_grp.user_ids:
+                # all_user_ids, NOT user_ids: see _notif_recipient_users.
+                for u in owner_grp.all_user_ids:
                     p = u.partner_id
                     if p:
                         _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=u.id, role='owner')
@@ -1050,7 +1051,7 @@ class KpiNotify(models.Model):
         if 'coordinator' in roles:
             coord_grp = self.env.ref('kra_kpi_module.group_kra_admin', raise_if_not_found=False)
             if coord_grp:
-                for u in coord_grp.user_ids:
+                for u in coord_grp.all_user_ids:
                     p = u.partner_id
                     if p:
                         _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=u.id, role='coordinator')
@@ -1104,16 +1105,25 @@ class KpiNotify(models.Model):
                 seen.add(user.id)
                 out.append({'user_id': user.id, 'role': role})
 
+        # all_user_ids, NOT user_ids. In Odoo 19 res.groups.user_ids is DIRECT
+        # membership only; users who hold the group by implication live in
+        # all_user_ids. Both admin groups here are held by implication and their
+        # direct lists are empty, so iterating user_ids added nobody and every
+        # owner/coordinator event — task_created, daily_summary, daily_report,
+        # invoice_client_paid, client_task_queued, dev_no_task — was delivered to
+        # an empty recipient list. No feed row, no push, and no error either.
+        # Everywhere else in this module tests membership with has_group(), which
+        # honours implication; these loops were the one place that did not.
         if 'owner' in roles:
             grp = self.env.ref('kra_kpi_module.group_kra_owner', raise_if_not_found=False)
             if grp:
-                for u in grp.user_ids:
+                for u in grp.all_user_ids:
                     _add(u, 'owner')
 
         if 'coordinator' in roles:
             grp = self.env.ref('kra_kpi_module.group_kra_admin', raise_if_not_found=False)
             if grp:
-                for u in grp.user_ids:
+                for u in grp.all_user_ids:
                     _add(u, 'coordinator')
 
         if 'developer' in roles:
