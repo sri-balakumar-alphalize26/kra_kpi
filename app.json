@@ -70,8 +70,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "0a997e07-b838-4445-b1e9-2d381c617135"      }
+        "projectId": "7fd7b0cb-203d-4859-952e-58dbfa288ebe"
+      }
     },
-    "owner": "jicol"
+    "owner": "tajafiy"
   }
 }
