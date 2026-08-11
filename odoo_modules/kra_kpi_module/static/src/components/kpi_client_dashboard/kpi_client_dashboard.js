@@ -288,6 +288,15 @@ export class KpiClientDashboard extends Component {
                                 </td>
                                 <td class="fw-bold">
                                     <div t-esc="k.name"/>
+                                    <!-- The client's own list showed a bare title: the summary
+                                         payload never carried the description, so the only place
+                                         they ever saw what a task was for was the approval
+                                         modal at sign-off time. Clamped to two lines; the
+                                         title attribute holds the full text. -->
+                                    <div t-if="k.description" class="text-muted small fw-normal"
+                                         style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;"
+                                         t-att-title="k.description"
+                                         t-esc="k.description"/>
                                     <div t-if="k.primary_assignee" class="text-muted small fw-normal">
                                         <i class="fa fa-user me-1"/>By: <t t-esc="k.primary_assignee"/>
                                     </div>

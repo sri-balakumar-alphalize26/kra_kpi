@@ -215,6 +215,21 @@ class KpiWorkSession(models.Model):
     )
     note = fields.Text(string='End-of-day note')
 
+    # ---- Revert (admin undo of End Workday) ------------------------------ #
+    # End Workday was one-way by design: "one start + one end per day". It still
+    # is for the DEVELOPER — these are only ever written by action_revert_day,
+    # which is admin-only. They exist so a reopened day is visibly a reopened
+    # day and not indistinguishable from one that never ended, because the
+    # summary notification for the original close has already gone out and
+    # cannot be recalled.
+    reverted = fields.Boolean(
+        string='Reopened by admin', default=False, readonly=True, copy=False,
+        help='An admin reopened this day after it had been explicitly ended.')
+    reverted_at = fields.Datetime(string='Reopened At', readonly=True, copy=False)
+    reverted_by_id = fields.Many2one(
+        'res.users', string='Reopened By', readonly=True, copy=False, ondelete='set null')
+    revert_reason = fields.Text(string='Reason for reopening', copy=False)
+
     # ---- Pause Workday --------------------------------------------------- #
     # Freezing the whole day without ending it. A developer who works to 04:00,
     # stops, and returns at 10:00 the SAME date has no other option: End Workday
@@ -990,6 +1005,119 @@ class KpiWorkSession(models.Model):
         snap = self._capture_snapshot(payload)
         self._fire_daily_summary(payload, snapshot=snap)
         return payload
+
+    # ------------------------------------------------------------------ #
+    # Revert — admin reopens a day that was explicitly ended               #
+    # ------------------------------------------------------------------ #
+    def action_revert_day(self, reason=''):
+        """Reopen a CLOSED session so the developer can carry on working.
+
+        End Workday is one-way for the developer, and stays that way: this is an
+        admin action, for the case where somebody pressed it by accident or was
+        asked to come back. Everything it can honestly undo, it undoes; the rest
+        it declares rather than hides:
+
+        * The session reopens (state/logout_at) and the idle clock is re-armed.
+        * The task that End Workday paused is deliberately LEFT paused. Its timer
+          was closed at logout_at, and silently restarting it would book time
+          nobody worked. The developer presses Resume, which is one click and is
+          also the honest record of when they actually resumed.
+        * The frozen snapshot is kept and marked superseded, not deleted — it is
+          the only record of what the day looked like when it was ended, and
+          notifications already point at it (kpi.notification.snapshot_id).
+        * The daily summary WhatsApp/push has ALREADY been sent to the owner and
+          coordinator. It cannot be recalled, so a follow-up goes out saying the
+          day was reopened. A silent revert would leave them holding a summary
+          that quietly stopped being true.
+
+        Same date only: reopening an older day would let time land on a date the
+        reporting has already closed over.
+        """
+        self.ensure_one()
+        if not self.env['kra.kpi'].sudo()._user_is_kpi_admin(self.env.user):
+            return {'status': False,
+                    'message': 'Only an admin can reopen a workday.'}
+        if self.state != 'closed':
+            return {'status': False,
+                    'message': 'That workday is already open.'}
+        if self.session_date != fields.Date.context_today(self):
+            return {'status': False,
+                    'message': "Only today's workday can be reopened."}
+        # An open session for the same developer+date would break the "at most
+        # one open session per user per day" invariant _get_or_open_today keeps.
+        clash = self.sudo().search_count([
+            ('user_id', '=', self.user_id.id),
+            ('session_date', '=', self.session_date),
+            ('state', '=', 'open'),
+        ])
+        if clash:
+            return {'status': False,
+                    'message': 'That developer already has an open workday today.'}
+
+        now = fields.Datetime.now()
+        reason = (reason or '').strip()
+        self.sudo().write({
+            'state':          'open',
+            'logout_at':      False,
+            # `note` is deliberately KEPT. It is what the developer typed when
+            # they ended the day; deleting it destroys their words to tidy up a
+            # field that action_end_day will overwrite on the next close anyway.
+            'last_heartbeat': now,
+            'idle_check_at':  now + timedelta(minutes=IDLE_CHECK_MIN),
+            'reverted':       True,
+            'reverted_at':    now,
+            'reverted_by_id': self.env.user.id,
+            'revert_reason':  reason or False,
+        })
+
+        # Keep the frozen image, but stop it being read as the final word. The
+        # snapshot is keyed by developer + day (one row per day, redrawn on each
+        # close), not by session. _capture clears the flag on the next close.
+        try:
+            self.env['kpi.workday.snapshot'].sudo().search([
+                ('user_id', '=', self.user_id.id),
+                ('session_date', '=', self.session_date),
+            ]).write({'superseded': True})
+        except Exception as exc:
+            _logger.warning("revert: snapshot supersede failed for session %s: %s",
+                            self.id, exc)
+
+        try:
+            self._log_paused_action('workday_reverted', reason)
+        except Exception:
+            pass
+
+        try:
+            self._fire_workday_reverted(reason)
+        except Exception as exc:
+            _logger.warning("workday_reverted notification failed: %s", exc)
+
+        return {'status': True,
+                'session_id': self.id,
+                'message': 'Workday reopened. The paused task can be resumed.'}
+
+    def _fire_workday_reverted(self, reason=''):
+        """Tell the developer and the admins that an ended day was reopened.
+
+        The developer needs it because their day silently became live again; the
+        admins need it because they are holding a daily summary that has just
+        stopped being final.
+        """
+        self.ensure_one()
+        u = self.user_id
+        ctx = {
+            'dev':          u.name or u.login or '—',
+            'session_date': str(self.session_date),
+            'admin':        self.env.user.name or self.env.user.login or '—',
+            'reason':       reason or 'no reason given',
+        }
+        Kpi = self.env['kra.kpi'].sudo()
+        any_kpi = Kpi.search([('user_id', '=', u.id)], order='id desc', limit=1) \
+            or Kpi.search([], order='id desc', limit=1)
+        if not any_kpi:
+            _logger.info("workday_reverted: no kra.kpi to anchor _notify on")
+            return
+        any_kpi._notify('workday_reverted', extra_users=[u.id], **ctx)
 
     def _finalize_day_cleanup(self):
         """Close everything still 'running' when a workday ends, and un-pair.

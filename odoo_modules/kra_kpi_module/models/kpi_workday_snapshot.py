@@ -115,6 +115,16 @@ class KpiWorkdaySnapshot(models.Model):
     task_count = fields.Integer(string='Tasks Touched')
     generated_at = fields.Datetime(string='Generated At')
 
+    # Set when an admin reopens the day this image was drawn for. The image is
+    # kept, not deleted: it is the only record of what the day looked like at
+    # End Workday, and notifications already link to it. This flag is what stops
+    # it being read as the final word once work resumed. It is cleared again by
+    # _capture, so the next close overwrites the row and un-supersedes it.
+    superseded = fields.Boolean(
+        string='Superseded by a reopened day', default=False, copy=False,
+        help='An admin reopened this workday after this summary was frozen, so '
+             'the numbers here are no longer the whole day.')
+
     # ONE image per developer per day. A restart after an accidental End Workday
     # redraws this same row rather than adding a second, so the last redraw is the
     # complete day.
@@ -354,6 +364,11 @@ class KpiWorkdaySnapshot(models.Model):
             'met_standard': bool(payload.get('met_standard')),
             'task_count': payload.get('task_count') or 0,
             'generated_at': fields.Datetime.now(),
+            # A redraw is a complete, current picture of the day, so it clears
+            # any supersede left by an earlier reopen. Without this, a day that
+            # was reopened and then properly re-ended would keep warning that
+            # its summary is stale when it is the freshest thing there is.
+            'superseded': False,
         }
         rec = self.sudo().search([
             ('user_id', '=', session.user_id.id),

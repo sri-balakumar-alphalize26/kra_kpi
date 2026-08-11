@@ -164,9 +164,16 @@ export class KpiPendingQueue extends Component {
                                                             </select>
                                                         </div>
 
-                                                        <div class="col-12" t-if="q.description">
+                                                        <!-- Always rendered. The t-if on q.description meant an
+                                                             empty description hid the field entirely, so an admin
+                                                             could neither read what the developer wrote nor add
+                                                             one themselves — the field only appeared once it was
+                                                             already filled in, which is backwards. -->
+                                                        <div class="col-12">
                                                             <label class="form-label small fw-bold">Description</label>
-                                                            <textarea class="form-control form-control-sm" rows="2" t-model="q.description"/>
+                                                            <textarea class="form-control form-control-sm" rows="2"
+                                                                      placeholder="No description was given — you can add one here."
+                                                                      t-model="q.description"/>
                                                         </div>
 
                                                         <!-- Actions -->

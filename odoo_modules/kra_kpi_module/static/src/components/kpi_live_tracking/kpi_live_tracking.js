@@ -47,6 +47,7 @@ export class KpiLiveTracking extends Component {
                                 <th>Employee</th>
                                 <th style="width:210px">Attendance</th>
                                 <th>Doing now</th>
+                                <th style="width:150px"/>
                             </tr>
                         </thead>
                         <tbody>
@@ -72,7 +73,23 @@ export class KpiLiveTracking extends Component {
                                         <i class="fa fa-circle me-2" style="font-size:8px"
                                            t-att-class="row.active ? 'text-success' : 'text-muted'"/>
                                         <t t-if="row.activity_kind === 'task'">
-                                            <span class="badge text-bg-primary"><i class="fa fa-clipboard me-1"/><t t-esc="row.activity_label"/> (<t t-esc="fmtElapsed(row.elapsed_seconds)"/>)</span>
+                                            <!-- One badge per running timer. A multitasking
+                                                 developer used to show a single arbitrary task
+                                                 here, so the board under-reported what people
+                                                 were actually doing. The t-else keeps the old
+                                                 single badge if active_tasks ever arrives empty
+                                                 on a 'task' row, so this can't render blank. -->
+                                            <t t-if="row.active_tasks and row.active_tasks.length">
+                                                <span class="badge text-bg-dark me-1" t-if="row.active_task_count > 1">
+                                                    <i class="fa fa-clone me-1"/>Multi-tasking <t t-esc="row.active_task_count"/>
+                                                </span>
+                                                <t t-foreach="row.active_tasks" t-as="at" t-key="at.id">
+                                                    <span class="badge text-bg-primary me-1"><i class="fa fa-clipboard me-1"/><t t-esc="at.name"/> (<t t-esc="fmtElapsed(at.elapsed_seconds)"/>)</span>
+                                                </t>
+                                            </t>
+                                            <t t-else="">
+                                                <span class="badge text-bg-primary"><i class="fa fa-clipboard me-1"/><t t-esc="row.activity_label"/> (<t t-esc="fmtElapsed(row.elapsed_seconds)"/>)</span>
+                                            </t>
                                         </t>
                                         <t t-elif="row.activity_kind === 'break'">
                                             <span class="badge text-bg-warning"><i class="fa fa-coffee me-1"/>Break (<t t-esc="fmtElapsed(row.elapsed_seconds)"/>)</span>
@@ -93,6 +110,22 @@ export class KpiLiveTracking extends Component {
                                             <span class="text-muted">Not started</span>
                                         </t>
                                     </td>
+                                    <td class="text-end">
+                                        <!-- End Workday is one-way for the developer. This is the
+                                             only way back, and it lives here because this is the
+                                             screen where an admin can see WHOSE day ended. -->
+                                        <button t-if="row.day_done"
+                                                class="btn btn-sm btn-outline-warning"
+                                                t-att-disabled="state.reverting === row.user_id"
+                                                t-on-click="() => this.revertDay(row)">
+                                            <t t-if="state.reverting === row.user_id">
+                                                <i class="fa fa-spinner fa-spin me-1"/>Reopening…
+                                            </t>
+                                            <t t-else="">
+                                                <i class="fa fa-undo me-1"/>Reopen day
+                                            </t>
+                                        </button>
+                                    </td>
                                 </tr>
                             </t>
                         </tbody>
@@ -110,6 +143,7 @@ export class KpiLiveTracking extends Component {
         this.state = useState({
             rows: [], loading: true, error: '', as_of: '', cutoff: '',
             total: 0, present: 0, active: 0, absent: 0, late: 0,
+            reverting: 0,   // user_id currently being reopened
         });
         this._timer = null;
         onWillStart(async () => { await this.load(false); });
@@ -139,6 +173,32 @@ export class KpiLiveTracking extends Component {
             this.state.error = (e && e.message) || String(e);
         } finally {
             this.state.loading = false;
+        }
+    }
+
+    // Reopen a developer's explicitly-ended workday. Asks for a reason, because
+    // the day's summary has already reached the owner and coordinator and they
+    // are about to be told it no longer stands.
+    async revertDay(row) {
+        const reason = window.prompt(
+            `Reopen ${row.name}'s workday?\n\n` +
+            "Their day's summary has already been sent — everyone who received it " +
+            'will be told it was reopened. Any task they had running stays paused ' +
+            'until they resume it.\n\nReason:');
+        if (reason === null) { return; }
+        this.state.reverting = row.user_id;
+        try {
+            const res = await rpc('/kpi_workday/revert', { user_id: row.user_id, reason });
+            if (!res || !res.status) {
+                this.state.error = (res && res.message) || 'Could not reopen that workday.';
+            } else {
+                this.state.error = '';
+            }
+            await this.load(true);
+        } catch (e) {
+            this.state.error = (e && e.message) || String(e);
+        } finally {
+            this.state.reverting = 0;
         }
     }
 

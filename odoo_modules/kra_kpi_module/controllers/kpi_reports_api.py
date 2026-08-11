@@ -2288,6 +2288,10 @@ class KpiReportsAPI(http.Controller):
                 return {
                     'id': k.id,
                     'name': k.name or '',
+                    # What was actually asked for. The client could previously only
+                    # see a description inside the pre-approval / completion modals,
+                    # so their own task list showed a bare title and nothing else.
+                    'description': k.description or '',
                     'kind': kind,
                     'external_ref': k.external_ref or '',
                     'related_req_ref': k.related_req_ref or '',
@@ -2950,6 +2954,34 @@ class KpiReportsAPI(http.Controller):
             logging.getLogger(__name__).error(f"workday_end: {e}")
             return {'status': False, 'message': str(e)}
 
+    @http.route('/kpi_workday/revert', type='json', auth='user', methods=['POST'], csrf=False)
+    def workday_revert(self, **params):
+        """Admin reopens a workday that was explicitly ended today.
+
+        params: user_id (optional — defaults to the caller), reason (optional).
+        The model method owns every rule, including the admin check; this only
+        resolves which session is meant.
+        """
+        try:
+            Session = request.env['kpi.work.session'].sudo()
+            try:
+                target_uid = int(params.get('user_id') or request.env.user.id)
+            except (TypeError, ValueError):
+                return {'status': False, 'message': 'Invalid developer.'}
+            # _ended_session_today is the same helper that decides "day done", so
+            # revert can only ever undo exactly what that reports — the two can't
+            # disagree about which session is the one that ended the day.
+            sess = Session._ended_session_today(
+                user=request.env['res.users'].sudo().browse(target_uid))
+            if not sess:
+                return {'status': False,
+                        'message': 'No ended workday to reopen for today.'}
+            return sess.action_revert_day(reason=params.get('reason') or '')
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"workday_revert: {e}")
+            return {'status': False, 'message': str(e)}
+
     # ------------------------------------------------------------------ #
     # Workday Snapshots — the frozen End-Workday images, for admins       #
     # ------------------------------------------------------------------ #
@@ -3480,17 +3512,35 @@ class KpiReportsAPI(http.Controller):
 
                 # ---- current activity (only meaningful with an open session) ----
                 activity_kind, activity_label, elapsed, active_flag = 'offline', '', 0, False
+                active_tasks = []
                 if open_sess:
                     s = open_sess
                     active_flag = bool(s.last_heartbeat and s.last_heartbeat >= stale_cutoff)
-                    active_log = Log.search([('user_id', '=', u.id), ('is_active', '=', True)], limit=1)
+                    # A developer with kpi_allow_multitask can have several timers
+                    # running at once. This searched limit=1 with no order, so it
+                    # picked one of them arbitrarily and the rest were invisible to
+                    # whoever was watching the board — the whole point of which is
+                    # seeing what people are actually doing. Ordered and unbounded
+                    # now, shaped like kra.kpi.work.session.live_status so both
+                    # live views agree: `active_tasks` is the full list, and the
+                    # scalar fields stay the first task for older app builds.
+                    active_logs = Log.search([('user_id', '=', u.id), ('is_active', '=', True)],
+                                             order='start_time asc')
                     brk = Break.search([('user_id', '=', u.id), ('is_active', '=', True)], limit=1)
-                    if active_log and active_log.kpi_id:
-                        task = active_log.kpi_id
+                    running_logs = [l for l in active_logs if l.kpi_id]
+                    if running_logs:
+                        for lg in running_logs:
+                            t = lg.kpi_id
+                            secs = max(0, int((now - lg.start_time).total_seconds())) if lg.start_time else 0
+                            active_tasks.append({
+                                'id': t.id,
+                                'name': t.name or (t.external_ref or ("#%s" % t.id)),
+                                'elapsed_seconds': secs,
+                                'elapsed_display': _fmt_hms(secs) if secs else '',
+                            })
                         activity_kind = 'task'
-                        activity_label = task.name or (task.external_ref or ("#%s" % task.id))
-                        if active_log.start_time:
-                            elapsed = max(0, int((now - active_log.start_time).total_seconds()))
+                        activity_label = active_tasks[0]['name']
+                        elapsed = active_tasks[0]['elapsed_seconds']
                     elif brk:
                         bt = brk.break_type
                         activity_kind = bt if bt in ('break', 'lunch', 'meeting') else 'break'
@@ -3511,11 +3561,23 @@ class KpiReportsAPI(http.Controller):
                     'attendance': attendance,          # present | late | absent | pending
                     'arrival': arrival,                # local "12:00"
                     'started': bool(open_sess),        # workday currently open
+                    # Explicitly ended today and so unable to restart — the same
+                    # rule as kpi.work.session._ended_session_today (no open
+                    # session + a closed one that the cron did NOT auto-close),
+                    # restated over the sessions already fetched above rather
+                    # than re-querying per developer on a 15s poll.
+                    'day_done': bool(not open_sess and sessions.filtered(
+                        lambda s: s.state == 'closed' and not s.auto_closed)),
                     'active': active_flag,             # heartbeat fresh (at desk)
                     'activity_kind': activity_kind,    # task|break|lunch|meeting|no_tasks|idle|offline
-                    'activity_label': activity_label,  # e.g. "abc"
+                    'activity_label': activity_label,  # e.g. "abc" — first task when multitasking
                     'elapsed_seconds': elapsed,
                     'elapsed_display': _fmt_hms(elapsed) if elapsed else '',
+                    # Every running timer, oldest first. Empty unless activity_kind
+                    # is 'task'. Clients that only know the scalars above still
+                    # render exactly as before.
+                    'active_tasks': active_tasks,
+                    'active_task_count': len(active_tasks),
                 })
 
             return {

@@ -108,6 +108,11 @@ _PERSIST_EVENTS = {
     # (attendance: "X started their workday"). It's fired already, with the right
     # recipients and ctx — it was only ever missing from this set.
     'workday_started',
+    # An admin reopened a day that had already been ended. MUST persist: the
+    # daily summary for that day has already gone out, so without this the
+    # recipients are left holding a summary that quietly stopped being true, and
+    # the developer's own day silently became live again underneath them.
+    'workday_reverted',
     # A developer 10 min into their workday with nothing in progress — asked BEFORE
     # any admin is told, so a 9:31 meeting doesn't raise a false alarm.
     'dev_idle_check',
@@ -161,6 +166,7 @@ _NOTIF_TITLES = {
     'pre_approval_reminder': 'Approval reminder',
     'urgent_pause':         '🚨 Urgent',
     'workday_started':      'Workday started',
+    'workday_reverted':     'Workday reopened',
     'daily_summary':        'Workday ended',
     'daily_report':         'Daily report ready',
     'invoice_ready':        'Invoice ready',
@@ -270,6 +276,15 @@ _APP_TEMPLATES = {
     'workday_started': (
         "🌅 {dev} started their workday\n"
         "🕘 {login_at}"
+    ),
+    # An ended day was reopened. Says who did it and why, because the summary
+    # for that day has already been delivered and this is the correction to it.
+    # PASSTHROUGH event → ctx keys only ({dev}, {admin}, {session_date}, {reason}).
+    'workday_reverted': (
+        "↩️ {dev}'s workday was reopened by {admin}\n"
+        "📅 {session_date}\n"
+        "📝 {reason}\n\n"
+        "The day's summary you already received is no longer final."
     ),
     # Developer ended their workday — admins. TAPPING this opens that day's frozen
     # summary image (kpi.notification.snapshot_id), which is the whole reason it is
@@ -449,6 +464,10 @@ _EVENT_TO_TOGGLE = {
     'daily_summary':             'notify_daily_summary',
     # Workday-started — fires the first time the dev opens the dashboard each day.
     'workday_started':           'notify_workday_started',
+    # Reopening a day is the daily summary being retracted, so it rides the
+    # same toggle as the summary it corrects — anyone who opted in to hearing
+    # the day ended must hear that it un-ended.
+    'workday_reverted':          'notify_daily_summary',
     # Workday auto-closed at midnight — reuse the daily-summary toggle.
     'workday_auto_closed':       'notify_daily_summary',
     # Auto-away — mutable dev notice when the idle cron pauses their task.
@@ -526,6 +545,10 @@ _EVENT_RECIPIENTS = {
     'invoice_client_paid':       ('owner', 'coordinator'),
     # Workday-started — owner + coordinator hear "dev X started their day".
     'workday_started':           ('owner', 'coordinator'),
+    # Same admins who were told the day ended. The DEVELOPER is added by the
+    # caller via extra_users — the 'developer' role here resolves to the anchor
+    # task's assignee, which need not be the person whose day was reopened.
+    'workday_reverted':          ('owner', 'coordinator'),
     # Asked of the DEVELOPER first — a 10-min silence is usually a meeting, not a
     # problem, and telling the admins about it would cry wolf.
     #
@@ -743,6 +766,11 @@ _TEMPLATES = {
         "Login: {login_at}\n"
         "(Daily summary will follow at logout.)"
     ),
+    # NOTE: 'workday_reverted' deliberately has NO WhatsApp template, for the same
+    # reason 'daily_summary' has none: it corrects the end-of-day summary, which is
+    # in-app only. Sending the retraction down a channel the original never used
+    # would be the only WhatsApp anyone got about that day. _notify no-ops the
+    # WhatsApp leg on an empty body.
     # Workday auto-closed at midnight (dev never pressed End Workday) — sent to the dev.
     'workday_auto_closed': (
         "🌙 Workday auto-closed — {dev}\n"
@@ -758,7 +786,7 @@ _TEMPLATES = {
 # kra.kpi-anchored events like daily_summary / workday_started.
 _PASSTHROUGH_EVENTS = ('daily_summary', 'daily_report',
                        'invoice_ready', 'invoice_paid', 'invoice_client_paid',
-                       'workday_started', 'workday_auto_closed',
+                       'workday_started', 'workday_reverted', 'workday_auto_closed',
                        'task_auto_away', 'self_task_submitted', 'self_task_accepted',
                        'self_task_rejected', 'task_reassigned',
                        # Both are about a DEVELOPER, not about the task they're

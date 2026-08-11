@@ -342,12 +342,30 @@ export class KpiAction extends Component {
                                             <small class="text-muted">Supported: PDF, DOC, DOCX</small>
                                         </div>
                                         
+                                        <t t-if="state.manualForm.error">
+                                            <div class="alert alert-danger py-2">
+                                                <i class="fa fa-exclamation-triangle me-1"></i><t t-esc="state.manualForm.error"/>
+                                            </div>
+                                        </t>
                                         <t t-if="state.manualForm.file_name">
                                             <div class="alert alert-info">
                                                 <i class="fa fa-file"></i> Selected: <t t-esc="state.manualForm.file_name"/>
+                                                <span t-if="state.manualForm.size_display" class="text-muted ms-1">
+                                                    (<t t-esc="state.manualForm.size_display"/>)
+                                                </span>
                                             </div>
                                         </t>
-                                        
+                                        <!-- Real transfer progress. Without it a big file looked like
+                                             a dead button: nothing moved until the whole thing landed. -->
+                                        <t t-if="state.manualForm.uploading">
+                                            <div class="progress mb-3" style="height:20px;">
+                                                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                                     t-att-style="'width:' + state.manualForm.percent + '%'">
+                                                    <t t-esc="state.manualForm.percent"/>%
+                                                </div>
+                                            </div>
+                                        </t>
+
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">Description (optional)</label>
                                             <textarea class="form-control" 
@@ -388,12 +406,23 @@ export class KpiAction extends Component {
                                         </div>
                                         
                                         <div class="d-flex gap-2">
-                                            <button class="btn btn-primary" 
+                                            <!-- Gated on the File itself, which is set the instant the
+                                                 picker closes. It used to gate on file_data, which only
+                                                 appeared once an async FileReader finished, so on a
+                                                 large file the button sat disabled with nothing on
+                                                 screen to say why. -->
+                                            <button class="btn btn-primary"
                                                     t-on-click="submitUserManual"
-                                                    t-att-disabled="!state.manualForm.file_data">
-                                                <i class="fa fa-upload"></i> Upload Manual
+                                                    t-att-disabled="!state.manualForm.file or state.manualForm.uploading">
+                                                <t t-if="state.manualForm.uploading">
+                                                    <i class="fa fa-spinner fa-spin"></i> Uploading…
+                                                </t>
+                                                <t t-else="">
+                                                    <i class="fa fa-upload"></i> Upload Manual
+                                                </t>
                                             </button>
                                             <button class="btn btn-secondary"
+                                                    t-att-disabled="state.manualForm.uploading"
                                                     t-on-click="() => this.state.showManualUpload = false">
                                                 Cancel
                                             </button>
@@ -995,9 +1024,14 @@ export class KpiAction extends Component {
                                 Showing <strong t-esc="getTotalFilteredCount()"/> of <strong t-esc="getTotalTaskCount()"/> tasks
                             </span>
                             <!-- ➕ New Task — any developer can create their own task; it lands in
-                                 the Pending Review lane (workable now) until an admin accepts it. -->
-                            <button class="btn btn-sm btn-primary fw-bold"
-                                    title="Create your own task (goes to Pending Review)"
+                                 the Pending Review lane (workable now) until an admin accepts it.
+                                 Hidden for a developer whose workday isn't open: creating a task is
+                                 work, which is exactly what the read-only day withholds — the app
+                                 has always hidden it, and the web offering it was the odd one out.
+                                 Admins keep it, because they file work for other people. -->
+                            <button t-if="state.isAdmin or state.workdayOpen"
+                                    class="btn btn-sm btn-primary fw-bold"
+                                    title="Create a task (goes to Pending Review)"
                                     t-on-click="() => this.openNewTaskModal()">
                                 <i class="fa fa-plus me-1"></i> New Task
                             </button>
@@ -1015,6 +1049,16 @@ export class KpiAction extends Component {
                                         class="btn btn-sm btn-secondary fw-bold" disabled="disabled"
                                         title="One workday per day — start a new one tomorrow">
                                     <i class="fa fa-check-circle me-1"></i> Workday ended for today
+                                </button>
+                                <!-- The one way back from an explicit End Workday, and only
+                                     for an admin. Sits next to the disabled button it undoes,
+                                     because that button is where someone stands when they
+                                     realise the day was ended by mistake. -->
+                                <button t-if="state.dayDone and state.isAdmin"
+                                        class="btn btn-sm btn-outline-warning fw-bold"
+                                        title="Reopen this ended workday (admin only)"
+                                        t-on-click="() => this.revertWorkday()">
+                                    <i class="fa fa-undo me-1"></i> Reopen Workday
                                 </button>
                                 <!-- GREEN Start Workday — a fresh day, or a restart after an
                                      AUTO-close (idle/midnight). An explicit End is final for the day. -->
@@ -1354,6 +1398,18 @@ export class KpiAction extends Component {
                                                             <t t-esc="priorityLabel(task.priority)"/>
                                                         </span>
                                                     </div>
+                                                    <!-- What the task is actually for. The payload has carried
+                                                         the description all along; the card just never read it,
+                                                         so whatever the developer typed on New Task was invisible
+                                                         until someone opened the detail pane. Clamped to two
+                                                         lines so a long one can't push the buttons off the card
+                                                         — the detail pane still shows it in full. -->
+                                                    <t t-if="task.description">
+                                                        <div class="text-muted small mb-1"
+                                                             style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;"
+                                                             t-att-title="task.description"
+                                                             t-esc="task.description"/>
+                                                    </t>
                                                     <t t-if="task.time_by_user and task.time_by_user.length">
                                                         <div t-foreach="task.time_by_user" t-as="tu" t-key="tu.user_id" class="text-muted small">
                                                             <i class="fa fa-user me-1"/><t t-esc="tu.user_name"/><t t-if="tu.is_current"> <span class="text-success fw-semibold">(currently working)</span></t> — <span class="fw-semibold" t-esc="tu.display"/>
@@ -1640,11 +1696,16 @@ export class KpiAction extends Component {
             manualsList: [],
             
             manualForm: {
-                file_data: null,
+                file: null,           // the File itself — posted as multipart
+                file_data: null,      // legacy base64 slot, no longer written
                 file_name: '',
+                size_display: '',
                 description: '',
                 related_links: [],    // 🆕 NEW: For user manual links
                 link_input: '',
+                uploading: false,
+                percent: 0,
+                error: '',
             },
             showManualUpload: false,
             selectedKpi: null,
@@ -1798,16 +1859,7 @@ export class KpiAction extends Component {
             // Read the workday session state (DOES NOT create one).  This
             // drives whether we render the green Start Workday button or the
             // red End Workday button in the header.
-            try {
-                rpc("/kpi_workday/status", {}).then((res) => {
-                    if (res && res.status) {
-                        this.state.workdayOpen   = !!res.is_open;
-                        this.state.workdayClosed = !!res.today_closed;
-                        this.state.dayDone       = !!res.day_done;
-                        this.state.workdayPaused = !!res.is_paused;
-                    }
-                }).catch(() => {});
-            } catch (e) {}
+            this._loadWorkdayStatus();
 
             // Sync the top scrollbar with the kanban row
             this._setupTopScrollSync();
@@ -2724,9 +2776,30 @@ export class KpiAction extends Component {
     // session via /kpi_workday/ping (which also fires workday_started WA
     // to owner + coordinator), then swaps the button to End Workday.
     // ------------------------------------------------------------------ //
+    // The ONE place the four workday flags are written from the server. Every
+    // handler used to set them by hand from what it believed it had just done,
+    // which is how End Workday left dayDone=false and the green Start button
+    // came straight back: the server was right, the header had simply never
+    // asked it again. refresh() calls this, so the header re-syncs on every
+    // poll and a handler that forgets a flag can no longer strand the UI.
+    async _loadWorkdayStatus() {
+        try {
+            const res = await rpc("/kpi_workday/status", {});
+            if (res && res.status) {
+                this.state.workdayOpen   = !!res.is_open;
+                this.state.workdayClosed = !!res.today_closed;
+                this.state.dayDone       = !!res.day_done;
+                this.state.workdayPaused = !!res.is_paused;
+            }
+        } catch (e) {
+            // Leave the last known state alone — a dropped poll must not make
+            // the header claim the day is over, nor offer to restart it.
+        }
+    }
+
     // Freeze the day without ending it: tasks stop, Presence stops, and it can be
-    // resumed the same date. End Workday cannot be undone (one start + one end),
-    // which is why this exists separately.
+    // resumed the same date. End Workday can only be undone by an admin
+    // (action_revert_day), which is why this exists separately.
     async pauseWorkday() {
         try {
             const res = await rpc('/kpi_workday/pause', {});
@@ -2754,6 +2827,30 @@ export class KpiAction extends Component {
             }
         } catch (err) {
             alert('Resume Workday failed: ' + ((err && err.message) || err));
+        }
+    }
+
+    // Admin-only undo of an explicit End Workday. Asks for a reason first: the
+    // day's summary has already been delivered to the owner and coordinator, and
+    // they are about to be told it no longer stands — "why" is the useful half
+    // of that message. Cancelling the prompt cancels the revert.
+    async revertWorkday() {
+        const reason = window.prompt(
+            'Reopen this workday?\n\n' +
+            "The day's summary has already been sent — everyone who received it " +
+            'will be told it was reopened. The paused task stays paused; press ' +
+            'Resume to pick it back up.\n\nReason:');
+        if (reason === null) { return; }
+        try {
+            const res = await rpc('/kpi_workday/revert', { reason });
+            if (res && res.status) {
+                await this._loadWorkdayStatus();
+                await this.refresh();
+            } else {
+                alert((res && res.message) || 'Could not reopen the workday.');
+            }
+        } catch (err) {
+            alert('Reopen Workday failed: ' + ((err && err.message) || err));
         }
     }
 
@@ -2991,12 +3088,17 @@ export class KpiAction extends Component {
             try {
                 const res = await rpc("/kpi_workday/end", { note });
                 if (res && res.status) {
-                    // Workday ended → close the modal and refresh in place. There
-                    // is no PIN gate to fall back to any more; the header simply
-                    // flips back to Start Workday, which the server refuses for
-                    // the rest of the day (one start + one end per day).
+                    // Workday ended → close the modal and refresh in place. The
+                    // header must read "Workday ended for today", which needs
+                    // dayDone as well as workdayOpen — setting only the latter
+                    // put the green Start button straight back on screen. Both
+                    // are set here for an instant flip, and refresh() re-reads
+                    // all four from the server so this can't drift again.
                     this.closeModal();
                     this.state.workdayOpen = false;
+                    this.state.workdayPaused = false;
+                    this.state.workdayClosed = false;
+                    this.state.dayDone = true;
                     await this.refresh();
                 } else {
                     alert("End-workday failed: " + (res && res.message || 'unknown error'));
@@ -3482,50 +3584,92 @@ export class KpiAction extends Component {
         }
     }
 
+    // Same limits the server enforces, checked here so an obviously-wrong file is
+    // refused before anyone waits for an upload. The server is still the rule.
+    static MANUAL_MAX_BYTES = 25 * 1024 * 1024;
+    static MANUAL_EXTENSIONS = ['.pdf', '.doc', '.docx'];
+
     handleManualUpload(event) {
         const file = event.target.files[0];
-        if (file) {
-            this.state.manualForm.file_name = file.name;
-            const reader = new FileReader();
-            reader.onload = () => {
-                this.state.manualForm.file_data = reader.result.split(',')[1];
-            };
-            reader.readAsDataURL(file);
+        this.state.manualForm.error = '';
+        this.state.manualForm.file = null;
+        this.state.manualForm.file_name = '';
+        this.state.manualForm.size_display = '';
+        if (!file) { return; }
+
+        const name = (file.name || '').toLowerCase();
+        if (!KpiAction.MANUAL_EXTENSIONS.some((ext) => name.endsWith(ext))) {
+            this.state.manualForm.error = 'Only PDF, DOC and DOCX files can be uploaded as a manual.';
+            event.target.value = '';
+            return;
         }
+        if (file.size > KpiAction.MANUAL_MAX_BYTES) {
+            this.state.manualForm.error =
+                `That file is ${this._fmtBytes(file.size)}. The limit is ` +
+                `${KpiAction.MANUAL_MAX_BYTES / (1024 * 1024)} MB.`;
+            event.target.value = '';
+            return;
+        }
+        // Keep the File itself — the multipart upload posts it directly, so
+        // there is no FileReader to wait on and the button enables immediately.
+        this.state.manualForm.file = file;
+        this.state.manualForm.file_name = file.name;
+        this.state.manualForm.size_display = this._fmtBytes(file.size);
+    }
+
+    _fmtBytes(n) {
+        if (n >= 1024 * 1024) { return (n / (1024 * 1024)).toFixed(1) + ' MB'; }
+        if (n >= 1024) { return Math.round(n / 1024) + ' KB'; }
+        return n + ' B';
     }
 
     async submitUserManual() {
-        if (!this.state.manualForm.file_data) {
-            alert('Please select a file');
+        const form = this.state.manualForm;
+        if (!form.file) {
+            form.error = 'Please select a file.';
             return;
         }
-
+        form.error = '';
+        form.uploading = true;
+        form.percent = 0;
         try {
-            const result = await rpc('/kpi/manual/upload', {
-                kpi_id: this.state.detailKpiId,
-                file_data: this.state.manualForm.file_data,
-                file_name: this.state.manualForm.file_name,
-                description: this.state.manualForm.description,
-                related_links: JSON.stringify(this.state.manualForm.related_links),
-            });
+            const fd = new FormData();
+            fd.append('kpi_id', this.state.detailKpiId);
+            fd.append('file', form.file, form.file.name);
+            fd.append('description', form.description || '');
+            fd.append('related_links', JSON.stringify(form.related_links || []));
 
-            if (result.status) {
-                alert('User manual uploaded successfully!');
+            const { promise } = uploadWithProgress('/kpi/manual/upload_file', fd, (p) => {
+                form.percent = p.percent;
+            });
+            const result = await promise;
+
+            if (result && result.status) {
                 this.state.manualForm = {
+                    file: null,
                     file_data: null,
                     file_name: '',
+                    size_display: '',
                     description: '',
                     related_links: [],
                     link_input: '',
+                    uploading: false,
+                    percent: 0,
+                    error: '',
                 };
                 this.state.showManualUpload = false;
                 await this.loadUserManualInfo(this.state.detailKpiId);
             } else {
-                alert('Error: ' + result.message);
+                // The server's own reason — "Only PDF, DOC and DOCX…",
+                // "Not authorized" — instead of one catch-all string that sent
+                // people looking at their network connection.
+                form.error = (result && result.message) || 'The server rejected the upload.';
             }
         } catch (error) {
             console.error('Error uploading user manual:', error);
-            alert('Failed to upload user manual');
+            form.error = (error && error.message) || 'Failed to upload user manual.';
+        } finally {
+            form.uploading = false;
         }
     }
     async deleteManual(manual_id) {
@@ -3803,7 +3947,13 @@ export class KpiAction extends Component {
 
     getButtonsForState(task) {
         const state = task.task_state;
-        if (state === "completed" || state === "partially_completed") {
+        // States with no developer action left. 'awaiting_client' belongs here:
+        // the work is done and sitting on the client's desk, so there is nothing
+        // to start. It used to fall through to the catch-all Start branch below
+        // and render a permanently-disabled Start button, which reads as a task
+        // you could pick up if only something were fixed. The admin's Revert is
+        // the one action available here and it lives in the template.
+        if (state === "completed" || state === "partially_completed" || state === "awaiting_client") {
             return { start: false, pause: false, resume: false, complete: false };
         }
         if (state === "in_progress") {
@@ -3919,6 +4069,35 @@ export class KpiAction extends Component {
         }
         const options = kras.map(k =>
             `<option value="${k.id}">${(k.label || '').replace(/</g, '&lt;')}</option>`).join('');
+
+        // Assignee picker — admins only. A developer filing their own task has
+        // nobody else to choose, and the route enforces that too. Uses
+        // /kra_kpi/get_users, which already excludes clients, portal users and
+        // OdooBot; the unfiltered searchRead in kpi_create.js leaks all three.
+        let userOptions = '';
+        if (this.state.isAdmin) {
+            let users = [];
+            try {
+                // Returns a bare [{id, name}] list, not a {status, users} envelope.
+                const ures = await rpc("/kra_kpi/get_users", {});
+                users = Array.isArray(ures) ? ures : [];
+            } catch (e) {
+                users = [];
+            }
+            // Default to the admin's own name, matching every other "who is this
+            // for?" field in the product — you are the most likely answer.
+            const me = this.state.currentUserId;
+            userOptions = users.map(u =>
+                `<option value="${u.id}"${u.id === me ? ' selected' : ''}>${(u.name || '').replace(/</g, '&lt;')}</option>`
+            ).join('');
+        }
+        const assigneeBlock = this.state.isAdmin ? `
+                    <div class="mb-2">
+                      <label class="form-label fw-bold">Developer *</label>
+                      <select id="ntUser" class="form-select">${userOptions}</select>
+                      <small class="text-muted">Who this task is for. Defaults to you.</small>
+                    </div>` : '';
+
         const html = `
             <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
               <div class="modal-dialog modal-dialog-centered">
@@ -3936,6 +4115,7 @@ export class KpiAction extends Component {
                       <label class="form-label fw-bold">Project (KRA) *</label>
                       <select id="ntKra" class="form-select"><option value="">— choose a project —</option>${options}</select>
                     </div>
+                    ${assigneeBlock}
                     <div class="row">
                       <div class="col mb-2">
                         <label class="form-label fw-bold">Estimate Hours</label>
@@ -3995,14 +4175,19 @@ export class KpiAction extends Component {
         const priority = (g('ntPriority') && g('ntPriority').value) || 'regular';
         const doc_type = (g('ntDocType') && g('ntDocType').value) || 'requirement';
         const description = (g('ntDesc') && g('ntDesc').value) || '';
+        // Only present for admins; the route falls back to the caller when it is
+        // absent, and refuses it outright from a non-admin.
+        const user_id = parseInt((g('ntUser') && g('ntUser').value) || '0', 10) || 0;
         if (!name) { alert('Please enter a task name.'); return; }
         if (!kra_id) { alert('Please choose a project (KRA).'); return; }
+        if (this.state.isAdmin && !user_id) { alert('Please choose a developer.'); return; }
         // Estimate deliberately NOT required — same as the requirements upload.
         // The admin fills it in when accepting.
         try {
             const res = await rpc('/kra_kpi/task/self_create', {
                 name, kra_id: parseInt(kra_id, 10),
                 estimate_hours, estimate_minutes, priority, doc_type, description,
+                user_id,
             });
             if (res && res.status) {
                 this.closeModal();
@@ -5021,6 +5206,13 @@ export class KpiAction extends Component {
     }
 
     async refresh() {
+        // Re-read the workday flags on every refresh. They used to be fetched
+        // once in onMounted, so any handler that failed to update one by hand
+        // left the header lying until a full page reload — which is exactly how
+        // Start Workday reappeared after End Workday. Fired alongside the task
+        // fetch rather than awaited before it: the tasks are what the user is
+        // waiting for, and the header correcting itself a beat later is fine.
+        this._loadWorkdayStatus();
         // 🆕 UPDATED: Pass filter parameter to backend
         const payload = await rpc("/kra_kpi/tasks/get", {
             my_tasks_only: this.state.showMyTasksOnly

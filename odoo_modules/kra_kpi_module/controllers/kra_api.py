@@ -1871,6 +1871,34 @@ class KraKpiAPI(http.Controller):
                 or user.has_group('base.group_system')):
             return {'status': False, 'message': 'Only developers can create their own tasks.'}
 
+        is_admin = (user.has_group('kra_kpi_module.group_kra_admin')
+                    or user.has_group('base.group_system'))
+
+        # Creating a task is work, so it needs an open workday — the same gate
+        # every Start already passes through. The board hides the button, but a
+        # hidden button is a courtesy; this is the actual rule. _actor_workday_open
+        # exempts admins itself (they file work for other people rather than
+        # keeping a developer's day), so the rule stays in one place.
+        if not request.env['kra.kpi']._actor_workday_open():
+            return {'status': False,
+                    'message': 'Start your workday before creating a task.'}
+
+        # Who the task is for. Admins may pick anyone assignable; a developer is
+        # always the assignee of their own task, whatever the client sent.
+        assignee = user
+        if is_admin and params.get('user_id'):
+            try:
+                candidate = request.env['res.users'].sudo().browse(int(params['user_id']))
+            except (TypeError, ValueError):
+                candidate = request.env['res.users']
+            # Mirrors /kra_kpi/get_users, which populates the picker — a client or
+            # portal account cannot open the board, so it cannot own a task.
+            if (not candidate.exists() or not candidate.active
+                    or candidate.share or candidate.id == 1
+                    or candidate.kpi_role == 'client'):
+                return {'status': False, 'message': 'Please choose a valid developer.'}
+            assignee = candidate
+
         name = (params.get('name') or '').strip()
         kra_id = params.get('kra_id')
         try:
@@ -1921,9 +1949,12 @@ class KraKpiAPI(http.Controller):
             'description': description,
             'task_state': 'assigned',
             'published': True,
-            'user_id': user.id,
+            # Who will do the work — the caller, unless an admin picked someone.
+            'user_id': assignee.id,
             'is_self_created': True,
             'admin_accepted': False,
+            # Who ASKED for it stays the actual caller either way, so an
+            # admin-filed task still shows who raised it.
             'requested_by_id': user.id,
             'external_ref': 'TASK-%03d' % task_ref_n,
         })
@@ -2914,25 +2945,76 @@ class KraKpiAPI(http.Controller):
     # 📚 UPDATED: Multiple User Manuals API
     # ============================================
 
+    # Documents only, matching the "Supported: PDF, DOC, DOCX" the form promises.
+    # The <input accept="..."> attribute is a filter, not a rule — a file dragged
+    # in or posted directly bypasses it entirely.
+    _MANUAL_EXTENSIONS = ('.pdf', '.doc', '.docx')
+    # Manuals are documents. The 50 MB progress cap exists for screen recordings;
+    # nothing here needs it, and the JSON route below carries the file as base64,
+    # which inflates it by a third on the wire.
+    _MANUAL_MAX_BYTES = 25 * 1024 * 1024
+
+    def _check_manual_upload(self, kpi_id, file_name, size_bytes):
+        """Shared gate for both manual-upload routes.
+
+        Returns (kpi, None) when the upload may proceed, else (None, message).
+        Both routes call this so the multipart and JSON paths cannot drift into
+        accepting different files.
+        """
+        if not kpi_id:
+            return None, 'KPI ID is required'
+        try:
+            kpi = request.env['kra.kpi'].sudo().browse(int(kpi_id))
+        except (TypeError, ValueError):
+            return None, 'KPI ID is invalid'
+        if not kpi.exists():
+            return None, 'KPI not found'
+        # This route wrote to any task id it was handed, with no check that the
+        # caller had anything to do with it. Same rule the detail view uses.
+        denied = self._may_view_kpi_details(kpi)
+        if denied:
+            return None, denied
+        name = (file_name or '').strip()
+        if not name:
+            return None, 'A file name is required'
+        if not name.lower().endswith(self._MANUAL_EXTENSIONS):
+            return None, 'Only PDF, DOC and DOCX files can be uploaded as a manual.'
+        if size_bytes > self._MANUAL_MAX_BYTES:
+            return None, 'File exceeds the %d MB limit.' % (self._MANUAL_MAX_BYTES // (1024 * 1024))
+        if not size_bytes:
+            return None, 'The file is empty.'
+        return kpi, None
+
     @http.route('/kpi/manual/upload', type='json', auth='user', methods=['POST'], csrf=False)
     def upload_user_manual(self, **params):
-        """Upload a new user manual for a KPI task"""
+        """Upload a new user manual for a KPI task (base64-in-JSON).
+
+        Kept for the mobile app, which posts base64. The web uses the multipart
+        route below so it can report real progress and get a clean 413.
+        """
         try:
             kpi_id = params.get('kpi_id')
             file_data = params.get('file_data')
             file_name = params.get('file_name')
             description = params.get('description', '')
             related_links = params.get('related_links', '[]')
-            
-            if not kpi_id or not file_data:
-                return {'status': False, 'message': 'KPI ID and file are required'}
-            
-            kpi = request.env['kra.kpi'].browse(int(kpi_id))
-            if not kpi.exists():
-                return {'status': False, 'message': 'KPI not found'}
-            
+
+            if not file_data:
+                return {'status': False, 'message': 'A file is required'}
+
+            # Decode to measure the real size and to prove it is valid base64 —
+            # a truncated read used to be stored happily and then 404 on view.
+            try:
+                raw = base64.b64decode(file_data, validate=True)
+            except Exception:
+                return {'status': False, 'message': 'The file could not be read. Please pick it again.'}
+
+            kpi, err = self._check_manual_upload(kpi_id, file_name, len(raw))
+            if err:
+                return {'status': False, 'message': err}
+
             manual = request.env['kpi.user.manual'].create({
-                'kpi_id': int(kpi_id),
+                'kpi_id': kpi.id,
                 'manual_file': file_data,
                 'file_name': file_name,
                 'description': description,
@@ -2940,7 +3022,7 @@ class KraKpiAPI(http.Controller):
                 'uploaded_by': request.env.user.id,
                 'upload_date': fields.Datetime.now(),
             })
-            
+
             return {
                 'status': True,
                 'message': 'User manual uploaded successfully',
@@ -2949,6 +3031,46 @@ class KraKpiAPI(http.Controller):
         except Exception as e:
             _logger.error(f"Error uploading user manual: {str(e)}")
             return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi/manual/upload_file', type='http', auth='user', methods=['POST'], csrf=False)
+    def upload_user_manual_file(self, **params):
+        """Multipart twin of /kpi/manual/upload.
+
+        The manual form used to post base64 inside a JSON-RPC call: no progress
+        events, a third more bytes on the wire, and a proxy 413 that surfaced as
+        a bare "Failed to upload user manual". This mirrors
+        /kpi/progress/upload_file, which has always done it properly.
+        """
+        try:
+            kpi_id = params.get('kpi_id')
+            description = params.get('description') or ''
+            related_links = params.get('related_links') or '[]'
+            f = request.httprequest.files.get('file')
+            if not f:
+                return request.make_json_response({'status': False, 'message': 'No file received'})
+            data = f.read()
+
+            kpi, err = self._check_manual_upload(kpi_id, f.filename, len(data))
+            if err:
+                return request.make_json_response({'status': False, 'message': err})
+
+            manual = request.env['kpi.user.manual'].create({
+                'kpi_id': kpi.id,
+                'manual_file': base64.b64encode(data),
+                'file_name': f.filename,
+                'description': description,
+                'related_links': related_links,
+                'uploaded_by': request.env.user.id,
+                'upload_date': fields.Datetime.now(),
+            })
+            return request.make_json_response({
+                'status': True,
+                'message': 'User manual uploaded successfully',
+                'manual_id': manual.id,
+            })
+        except Exception as e:
+            _logger.error("upload_user_manual_file failed: %s", str(e))
+            return request.make_json_response({'status': False, 'message': str(e)})
 
     @http.route('/kpi/manual/list', type='json', auth='user', methods=['POST'], csrf=False)
     def list_user_manuals(self, **params):
