@@ -25,7 +25,8 @@ const MOCK_LIST = {
   assignees: [{ id: 1, name: 'Ravi' }],
   tasks: [
     {
-      id: 1, name: 'Fix login bug', assignee: 'Ravi', assignee_id: 1,
+      id: 1, name: 'Fix login bug', external_ref: 'BUG-001',
+      assignee: 'Ravi', assignee_id: 1,
       priority: 'urgent', doc_count: 2, link_count: 1, github_count: 1,
       manual_count: 0, drive_count: 1, task_doc_count: 0, has_attachments: true,
     },

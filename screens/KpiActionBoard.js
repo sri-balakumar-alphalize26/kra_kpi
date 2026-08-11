@@ -15,7 +15,7 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import KpiTaskDetail from './KpiTaskDetail';
 import {
-  LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers,
+  LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, completeTask, reassignTask, adminDeleteTask, createProgress,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists,
@@ -450,15 +450,12 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
 // priority dot + chevron; tapping expands to reveal the shared TaskDetailBody.
 // Mirrors the chevron-forward/down conditional-render pattern used by KraNode /
 // OwnerDashboard's ClientCard.
-function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin, reminder, pulse, onRowRef, onOpenDetail, readOnly = false }) {
+// A read-only row that opens the task. The action props the accordion needed
+// (onAction / busyId / nowMs / isAdmin / reminder / readOnly) are gone with it —
+// the buttons live in the task detail and on the board view now.
+function TaskListRow({ task, pulse, onRowRef, onOpenDetail }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
-  // Rotate the chevron 0°→90° as the row expands/collapses.
-  const rot = useRef(new Animated.Value(expanded ? 1 : 0)).current;
-  useEffect(() => {
-    Animated.timing(rot, { toValue: expanded ? 1 : 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
-  }, [expanded, rot]);
-  const spin = rot.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] });
 
   // Arrival highlight (from a notification tap): a brief highlight wash that
   // beats TWICE, so the task the notification pointed to visibly flashes.
@@ -477,24 +474,30 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
   return (
     <Animated.View
       ref={(r) => { onRowRef && onRowRef(task.id, r); }}
-      style={[s.listRow, expanded && s.listRowOpen, pulse && s.listRowPulse]}
+      style={[s.listRow, pulse && s.listRowPulse]}
     >
       {/* Highlight wash — fades in/out with the double heartbeat. */}
       <Animated.View pointerEvents="none" style={[s.listPulseWash, { opacity: washOpacity }]} />
-      {/* The WHOLE row toggles the dropdown; the NAME is a nested touchable that
-          opens KPI Details instead. Nesting (rather than two siblings sized by
-          flex) is what makes "name → details, anywhere else → dropdown" reliable:
-          the inner touchable swallows taps on the text, everything else — the
-          spacer, the Live pill, the chevron — falls through to the outer one. */}
-      <TouchableOpacity style={s.listHead} onPress={onToggle} activeOpacity={0.7}>
+      {/* The WHOLE row opens the task. It used to expand an accordion revealing
+          every action button, with only the name opening the details — so the
+          list was both a place to act and a place to look, and which one you got
+          depended on hitting a word. The web has no expand-in-place at all: a row
+          opens a detail view that replaces the list. This matches that, and the
+          row is read-only, so acting on a task happens in one place instead of
+          three. The board view keeps its inline buttons. */}
+      <TouchableOpacity style={s.listHead} onPress={() => onOpenDetail && onOpenDetail(task)}
+        activeOpacity={0.6} disabled={!onOpenDetail}>
         <View style={[s.listDot, { backgroundColor: p.fg }]} />
-        <TouchableOpacity style={s.listNameHit} activeOpacity={0.6} disabled={!onOpenDetail}
-          onPress={() => onOpenDetail && onOpenDetail(task)}>
+        <View style={s.listNameHit}>
           <Text style={[s.listName, !!onOpenDetail && s.listNameLink]} numberOfLines={1}>{task.name}</Text>
-        </TouchableOpacity>
-        {/* Belongs to the OUTER touchable, so the empty middle of the row opens
-            the dropdown rather than the details. */}
+        </View>
         <View style={s.listSpacer} />
+        {/* The status the card used to reveal on expand. Read-only, and the one
+            thing you actually scan a list for. */}
+        <View style={[s.pill, s.listStatePill, { backgroundColor: p.bg }]}>
+          <View style={[s.pillDot, { backgroundColor: p.fg }]} />
+          <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
+        </View>
         {running && (
           <View style={s.livePill}>
             {/* Beats while the timer runs — a static dot on a card that says
@@ -503,19 +506,10 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
             <Text style={s.liveTxt}>Live</Text>
           </View>
         )}
-        <Animated.View style={{ transform: [{ rotate: spin }] }}>
-          <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
-        </Animated.View>
+        {/* Points INTO the task rather than rotating open, because that is now
+            what the tap does. */}
+        <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
       </TouchableOpacity>
-      {expanded && (
-        <View style={s.listBody}>
-          <View style={[s.pill, s.listPill, { backgroundColor: p.bg }]}>
-            <View style={[s.pillDot, { backgroundColor: p.fg }]} />
-            <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
-          </View>
-          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} reminder={reminder} readOnly={readOnly} />
-        </View>
-      )}
     </Animated.View>
   );
 }
@@ -669,6 +663,7 @@ function WorkdayMapChip({ node: n }) {
     // about the same day.
     const bparts = [];
     if (n.running) bparts.push('▶ In progress');
+    if (n.with) bparts.push(`with ${n.with}`);
     if (n.reason) bparts.push(n.reason);
     note = bparts.join(' — ');
   } else if (n.kind === 'task') {
@@ -761,12 +756,27 @@ export default function KpiActionBoard({
   const [pauseCode, setPauseCode] = useState('break');
   const [pauseNote, setPauseNote] = useState('');
   const [pauseDropdown, setPauseDropdown] = useState(false);
+  // Meeting only: who it was with. Loaded once, lazily, the first time a Meeting
+  // pause is opened — most pauses are not meetings and this list includes every
+  // client, so fetching it up front would be a request nobody asked for.
+  const [people, setPeople] = useState([]);
+  const [peopleBusy, setPeopleBusy] = useState(false);
+  const [meetingWith, setMeetingWith] = useState([]);   // array of user ids
+  const [peopleQuery, setPeopleQuery] = useState('');
   // Always change the code through this. Picking a reason that needs no note
   // clears whatever was typed, so a note written for Other cannot end up filed
   // against Lunch after the user changes their mind.
   const pickPauseCode = (code) => {
     setPauseCode(code);
     if (!noteRequiredFor(code)) setPauseNote('');
+    if (code !== 'meeting') { setMeetingWith([]); setPeopleQuery(''); }
+    else if (!people.length && !peopleBusy) {
+      setPeopleBusy(true);
+      fetchPeople()
+        .then((list) => setPeople(list || []))
+        .catch((e) => log.warn('people load failed', e?.message))
+        .finally(() => setPeopleBusy(false));
+    }
   };
 
   // Switch modal. `switchFrom` is the task being HANDED OVER — the card the
@@ -854,16 +864,16 @@ export default function KpiActionBoard({
   }, [enter]);
   const enterStyle = { opacity: enter, transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }] };
 
-  // View mode: 'list' = vertical accordion (default), 'board' = horizontal kanban.
-  // Available to every role. Two-level accordion in list mode:
+  // View mode: 'list' = read-only rows grouped by status (default), 'board' =
+  // horizontal kanban with the action buttons. Available to every role.
   //   expandedLanes = which status headings are open (default: all collapsed —
   //                   only the Regular/Paused/… headings show until tapped).
-  //   expandedId    = the single open task row inside an open heading (null = none).
+  // There is no longer a per-task accordion: a list row opens the task, which is
+  // how the web behaves and means actions live in one place rather than three.
   const [viewMode, setViewMode] = useState('list');
   // When opened focused on a status (from a Home stat card), that lane's heading
   // starts expanded so its tasks show immediately.
   const [expandedLanes, setExpandedLanes] = useState(() => (focusStatus ? new Set([focusStatus]) : new Set()));
-  const [expandedId, setExpandedId] = useState(null);
 
   // KPI Details — a full screen that REPLACES the board, exactly as the web pane
   // replaces its list. Its own component owns the loading/writes; the board just
@@ -1596,6 +1606,9 @@ export default function KpiActionBoard({
       setPauseCode('break');
       setPauseNote('');
       setPauseDropdown(false);
+      // Never carry a previous meeting's attendees into a new pause.
+      setMeetingWith([]);
+      setPeopleQuery('');
       return;
     }
     if (kind === 'complete' || kind === 'partial') {
@@ -1769,10 +1782,11 @@ export default function KpiActionBoard({
     // Clamped here as well as by maxLength: the cap is what keeps this readable
     // inside a Workday Map chip, and a paste can outrun the input's own limit.
     const reason = pauseNote.trim().slice(0, IDLE_NOTE_MAX) || label;
+    const withIds = pauseCode === 'meeting' ? meetingWith : [];
     setPauseFor(null);
     setBusyId(task.id);
     try {
-      const res = await pauseTask(task.id, reason, pauseCode);
+      const res = await pauseTask(task.id, reason, pauseCode, withIds);
       if (res && res.status === false) Alert.alert('Cannot pause', res.message || 'Failed');
       await load({ silent: true });
     } catch (e) { Alert.alert('Error', e.message || 'Pause failed'); }
@@ -2350,22 +2364,14 @@ export default function KpiActionBoard({
                     <Text style={s.listSectionTxt} numberOfLines={1}>{l.label}</Text>
                     <View style={s.laneCount}><Text style={s.laneCountTxt}>{items.length}</Text></View>
                   </TouchableOpacity>
-                  {/* Level 2: task rows — each expands to its details + actions. */}
+                  {/* Level 2: task rows — read-only; tapping one opens the task. */}
                   {laneOpen && items.map((t) => (
                     <TaskListRow
                       key={t.id}
                       task={t}
-                      expanded={expandedId === t.id}
-                      onToggle={() => { animateNext(); setExpandedId(expandedId === t.id ? null : t.id); }}
-                      onAction={runAction}
-                      busyId={busyId}
-                      nowMs={nowMs}
-                      isAdmin={isAdmin}
-                      reminder={reminders[String(t.id)]}
                       pulse={pulseId === t.id}
                       onRowRef={(id, r) => { listRowRefs.current[id] = r; }}
                       onOpenDetail={openDetail}
-                      readOnly={readOnly}
                     />
                   ))}
                 </View>
@@ -2498,6 +2504,79 @@ export default function KpiActionBoard({
                   </ScrollView>
                 </View>
               )}
+
+              {/* Meeting: who it is with. Multi-select, because a meeting rarely
+                  has exactly one other person, and it includes CLIENTS — which is
+                  why it uses its own endpoint rather than the assignee list.
+                  Checkbox rows with an array toggle, matching AssignClientsModal
+                  in KraKpiDashboard rather than inventing a third control. */}
+              {pauseCode === 'meeting' ? (
+                <>
+                  <Text style={s.fieldLabel}>Who is it with?</Text>
+                  {peopleBusy && !people.length ? (
+                    <View style={{ paddingVertical: 14 }}><ActivityIndicator color={COLORS.primary} /></View>
+                  ) : (
+                    <>
+                      <View style={s.peopleSearch}>
+                        <Ionicons name="search" size={15} color={COLORS.muted} />
+                        <TextInput
+                          style={s.peopleSearchInput}
+                          placeholder="Search people…"
+                          placeholderTextColor={COLORS.faint}
+                          value={peopleQuery}
+                          onChangeText={setPeopleQuery}
+                          autoCorrect={false}
+                        />
+                      </View>
+                      <ScrollView style={s.peopleList} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                        {people
+                          .filter((u) => !peopleQuery.trim()
+                            || String(u.name || '').toLowerCase().includes(peopleQuery.trim().toLowerCase()))
+                          .map((u) => {
+                            const on = meetingWith.includes(u.id);
+                            return (
+                              <TouchableOpacity
+                                key={u.id} style={s.personRow} activeOpacity={0.7}
+                                onPress={() => {
+                                  H.select();
+                                  setMeetingWith((prev) => (prev.includes(u.id)
+                                    ? prev.filter((x) => x !== u.id)
+                                    : [...prev, u.id]));
+                                }}
+                              >
+                                <Ionicons name={on ? 'checkbox' : 'square-outline'} size={20}
+                                  color={on ? COLORS.primary : COLORS.faint} />
+                                <Text style={s.personName} numberOfLines={1}>{u.name}</Text>
+                                <Text style={s.personRole}>{String(u.role || '').toUpperCase()}</Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        {!people.length ? (
+                          <Text style={s.idleNoteHint}>No one else to pick from.</Text>
+                        ) : null}
+                      </ScrollView>
+                      <Text style={s.idleNoteHint}>
+                        {meetingWith.length
+                          ? `${meetingWith.length} selected`
+                          : 'Optional — pick anyone who is in it.'}
+                      </Text>
+                    </>
+                  )}
+                  <Text style={s.fieldLabel}>What is it about?</Text>
+                  <TextInput
+                    style={s.pauseNote}
+                    placeholder="Short — e.g. sprint planning"
+                    placeholderTextColor={COLORS.faint}
+                    value={pauseNote}
+                    onChangeText={setPauseNote}
+                    maxLength={IDLE_NOTE_MAX}
+                    multiline
+                  />
+                  <Text style={s.idleNoteHint}>
+                    Keep it short — this shows on your Workday Map. {pauseNote.length}/{IDLE_NOTE_MAX}
+                  </Text>
+                </>
+              ) : null}
 
               {/* Only Other and Urgent ask for words. The rest ARE the explanation
                   — a box next to a button already labelled Break just taught people
@@ -3691,15 +3770,31 @@ export default function KpiActionBoard({
                   </View>
                   {(endSummary?.away_events || []).map((e, i) => {
                     // Urgent breaks are highlighted yellow, matching the web module.
-                    const urgent = /urgent/i.test(e.label || '') || /urgent/i.test(e.reason || '') || e.is_urgent === true;
+                    // NOTE the payload key is `note`, not `reason` — this test read
+                    // e.reason, which away_events has never carried, so an urgent
+                    // pause was only ever caught by its label.
+                    const urgent = /urgent/i.test(e.label || '') || /urgent/i.test(e.note || '') || e.is_urgent === true;
                     return (
                       <View key={i} style={s.awayEvent}>
                         <View style={[s.awayTag, urgent && s.awayTagUrgent]}>
                           <Text style={[s.awayTagTxt, urgent && s.awayTagTxtUrgent]}>{e.label}</Text>
                         </View>
-                        <Text style={s.awayEventTxt} numberOfLines={1}>
-                          {e.start}–{e.end} ({e.duration_display}){e.from ? ` from "${e.from}"` : ''}
-                        </Text>
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.awayEventTxt} numberOfLines={1}>
+                            {e.start}–{e.end} ({e.duration_display}){e.from ? ` from "${e.from}"` : ''}
+                          </Text>
+                          {/* The typed note and, for a meeting, who it was with.
+                              Neither was rendered here at all: the web away list
+                              and the frozen PNG both printed the note, so the app
+                              was the one surface that silently dropped it. */}
+                          {(e.with || e.note) ? (
+                            <Text style={s.awayEventNote} numberOfLines={2}>
+                              {e.with ? `with ${e.with}` : ''}
+                              {e.with && e.note ? ' — ' : ''}
+                              {e.note || ''}
+                            </Text>
+                          ) : null}
+                        </View>
                       </View>
                     );
                   })}
@@ -3849,7 +3944,6 @@ const s = StyleSheet.create({
   listSection: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 12, marginBottom: 8 },
   listSectionTxt: { flex: 1, color: '#fff', fontSize: 14, fontWeight: '900', letterSpacing: 0.2 },
   listRow: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, marginBottom: 8, overflow: 'hidden' },
-  listRowOpen: { borderColor: COLORS.primary },
   // Notification-arrival highlight: brighter border + a colored wash overlay.
   listRowPulse: { borderColor: COLORS.primary, borderWidth: 2 },
   listPulseWash: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#DCE7FB', borderRadius: 14 },
@@ -3866,6 +3960,9 @@ const s = StyleSheet.create({
   listSpacer: { flex: 1, alignSelf: 'stretch', minWidth: 8 },
   listBody: { paddingHorizontal: 14, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#F0F3F8', paddingTop: 10 },
   listPill: { alignSelf: 'flex-start', marginBottom: 4 },
+  // Status on the row itself, now that there is no expand to reveal it. Shrinks
+  // before the name does on a narrow phone.
+  listStatePill: { flexShrink: 0, marginRight: 2 },
 
   // Live activity strip (stacked rows so the break line + totals fit on a phone)
   liveStrip: { marginHorizontal: 14, marginTop: 10, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
@@ -4083,6 +4180,21 @@ const s = StyleSheet.create({
   switchName: { fontSize: 14, fontWeight: '700', color: COLORS.navy, lineHeight: 19, marginBottom: 4 },
   switchMeta: { fontSize: 11.5, color: COLORS.muted },
   switchPaused: { fontSize: 11.5, color: COLORS.amber, fontWeight: '700', marginTop: 4 },
+
+  // Meeting participants picker.
+  peopleSearch: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    borderWidth: 1, borderColor: COLORS.line, borderRadius: 10,
+    paddingHorizontal: 10, paddingVertical: 7, marginBottom: 6, backgroundColor: '#fff',
+  },
+  peopleSearchInput: { flex: 1, fontSize: 13.5, color: COLORS.ink, padding: 0 },
+  peopleList: {
+    maxHeight: 190, borderWidth: 1, borderColor: COLORS.line,
+    borderRadius: 10, paddingHorizontal: 8, backgroundColor: '#FBFCFE',
+  },
+  personRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 8 },
+  personName: { flex: 1, fontSize: 13.5, color: COLORS.ink, fontWeight: '600' },
+  personRole: { fontSize: 9.5, fontWeight: '900', color: COLORS.muted, letterSpacing: 0.4 },
   switchGroup: {
     fontSize: 11.5, fontWeight: '900', color: COLORS.muted,
     textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4, marginBottom: 6,
@@ -4294,7 +4406,10 @@ const s = StyleSheet.create({
   awayTagTxt: { fontSize: 11, fontWeight: '800', color: COLORS.ink },
   awayTagUrgent: { backgroundColor: '#F6C244' },   // yellow, like the web module
   awayTagTxtUrgent: { color: '#5c4400' },
-  awayEventTxt: { flex: 1, fontSize: 11.5, color: COLORS.muted },
+  // No longer flex:1 — it sits inside a flexed column now, and keeping flex here
+  // fought the note underneath it for the same space.
+  awayEventTxt: { fontSize: 11.5, color: COLORS.muted },
+  awayEventNote: { fontSize: 11, color: COLORS.faint, fontStyle: 'italic', marginTop: 1 },
   endHint: { fontSize: 12.5, color: COLORS.red, fontWeight: '700', marginTop: 12 },
   tasksTitle: { fontSize: 14.5, fontWeight: '900', color: COLORS.navy, marginTop: 16, marginBottom: 6 },
   taskTableHead: { flexDirection: 'row', borderBottomWidth: 2, borderBottomColor: COLORS.line, paddingBottom: 6 },

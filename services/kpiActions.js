@@ -265,8 +265,31 @@ async function action(path, params) {
 
 export const startTask   = (kpiId) => action('/kra_kpi/task/start', { kpi_id: kpiId });
 export const resumeTask  = (kpiId) => action('/kra_kpi/task/resume', { kpi_id: kpiId });
-export const pauseTask   = (kpiId, reason, reasonCode) =>
-  action('/kra_kpi/task/pause', { kpi_id: kpiId, reason: reason || '', reason_code: reasonCode || false });
+// meetingWithIds is only meaningful for reason_code 'meeting' — the route
+// ignores it otherwise, and validates the ids against real active users.
+export const pauseTask   = (kpiId, reason, reasonCode, meetingWithIds) =>
+  action('/kra_kpi/task/pause', {
+    kpi_id: kpiId,
+    reason: reason || '',
+    reason_code: reasonCode || false,
+    meeting_with_ids: meetingWithIds || [],
+  });
+
+// Everyone a meeting can be with — developers, admins AND clients. Deliberately
+// not getUsers(), which answers "who can a task be assigned to" and therefore
+// excludes clients.
+export const fetchPeople = async () => {
+  const res = await action('/kra_kpi/get_people', {});
+  // action() returns a {status, message} stub with no server configured, and the
+  // real route returns a bare array — so anything non-array means mock mode.
+  if (Array.isArray(res)) return res;
+  return [
+    { id: 101, name: 'Ravi Kumar', role: 'developer' },
+    { id: 102, name: 'Priya N', role: 'developer' },
+    { id: 103, name: 'Mitchell', role: 'admin' },
+    { id: 104, name: 'Acme Corp (client)', role: 'client' },
+  ];
+};
 export const reassignTask = (kpiId, userId, reason) =>
   action('/kra_kpi/task/reassign', { kpi_id: kpiId, user_id: userId, reason: reason || '' });
 

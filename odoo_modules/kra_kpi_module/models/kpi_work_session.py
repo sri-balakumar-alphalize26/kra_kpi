@@ -1498,6 +1498,7 @@ class KpiWorkSession(models.Model):
                 'duration_display': n.get('duration_display') or '',
                 'from': n.get('from') or '',  # the task a pause came from (blocks: none)
                 'note': n.get('reason') or '',
+                'with': n.get('with') or '',  # meeting participants, if any
             })
 
         u = self.user_id
@@ -1709,6 +1710,10 @@ class KpiWorkSession(models.Model):
                         else _range(b.start_time, b.end_time),
                 'duration_display': _fmt_hms(b_secs),
                 'reason': (b.reason_note or '').strip(),
+                # Who a meeting was with. Its own key rather than glued into
+                # `reason`, so every renderer can lay the two out as it likes —
+                # and so the 60-char note budget stays the note's alone.
+                'with': (b.meeting_with_display or '').strip(),
                 'running': b_running,
                 'from': b.source_task_id.name if b.source_task_id else '',
                 '_sort': b.start_time or first_login or _far,

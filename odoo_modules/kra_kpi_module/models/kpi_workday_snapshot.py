@@ -274,7 +274,13 @@ class KpiWorkdaySnapshot(models.Model):
                 col = OUTCOME_COLORS.get(n.get('outcome'), '#64748B')
             else:
                 col = '#94A3B8'
+            # "with X, Y — the reason". One line, because the row only has one:
+            # the participants and the note are separate keys precisely so this
+            # can decide how to join them, rather than receiving them pre-glued.
             note = n.get('reason') or ''
+            who = n.get('with') or ''
+            if who:
+                note = ('with %s — %s' % (who, note)).rstrip(' —') if note else 'with %s' % who
             row_h = 40 if not note else 56
             d.rounded_rectangle([PAD, y, IMG_W - PAD, y + row_h], radius=8,
                                 fill=C_PANEL, outline=C_LINE)

@@ -25,6 +25,18 @@ const LIVE_WORKDAY_PAUSED = {
   task_state: 'paused',
 };
 
+// Something else of theirs is already running and multi-task is off. Also about
+// the VIEWER, and the developer can clear it themselves — so it must not fall
+// through to the client message.
+const LIVE_MULTITASK = {
+  can_start: false,
+  start_block_reason: 'multitask',
+  start_block_message:
+    'You already have BUG-014 in progress. Pause it first, or use Switch to hand '
+    + 'over to another task.',
+  task_state: 'paused',
+};
+
 const LIVE_ALLOWED = {
   can_start: true,
   start_block_reason: '',
@@ -50,6 +62,13 @@ describe('gateLabel — the viewer gates come first', () => {
 
   test('paused workday says Resume — the button they actually need', () => {
     expect(gateLabel(LIVE_WORKDAY_PAUSED)).toBe('Resume your workday to work on tasks');
+  });
+
+  test('multitask blames the running task, never the client', () => {
+    expect(gateLabel(LIVE_MULTITASK)).toBe('Pause your running task first');
+    // The specific regression: an unrecognised reason key falls through to the
+    // client branch, which is untrue and unactionable for this one.
+    expect(gateLabel(LIVE_MULTITASK)).not.toMatch(/client/i);
   });
 
   test('the two workday states never share wording', () => {

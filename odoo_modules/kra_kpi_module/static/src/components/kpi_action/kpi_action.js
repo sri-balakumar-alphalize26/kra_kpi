@@ -2604,7 +2604,23 @@ export class KpiAction extends Component {
                                      already labelled Break. Urgent keeps it because that text is
                                      the body of the alert the owner receives. Hidden by default
                                      since the modal opens on a quick-pick, not on Other. -->
+                                <!-- Meeting only: who it is with. Includes CLIENTS, which is
+                                     why it uses /kra_kpi/get_people rather than the assignee
+                                     list. Checkbox rows in a scrolling box, matching the
+                                     Assign Clients picker in kra_node.js. Sits ABOVE the note
+                                     box, which Meeting also shows — "who" then "what about". -->
+                                <div id="pauseMeetWrap" style="display:none;">
+                                    <label class="form-label fw-bold mt-2 mb-1">Who is it with?</label>
+                                    <input type="text" id="pauseMeetSearch" class="form-control form-control-sm mb-1"
+                                           placeholder="Search people…" autocomplete="off"/>
+                                    <div id="pauseMeetList" class="border rounded p-2"
+                                         style="max-height:170px; overflow-y:auto; background:#fbfcfe;">
+                                        <div class="text-muted small">Loading…</div>
+                                    </div>
+                                    <div id="pauseMeetCount" class="small text-muted mt-1">Optional — pick anyone who is in it.</div>
+                                </div>
                                 <div id="pauseNoteWrap" style="display:none;">
+                                    <label id="pauseNoteLabel" class="form-label fw-bold mt-2 mb-1" style="display:none;">What is it about?</label>
                                     <textarea id="pauseReason" class="form-control" rows="2" maxlength="60"
                                               placeholder="Why? (required)"></textarea>
                                     <div class="small text-danger mt-1">
@@ -2630,16 +2646,29 @@ export class KpiAction extends Component {
         // buttons and the dropdown. They used to disagree: the dropdown had no
         // listener at all, so picking Urgent from it never showed the "this is
         // sent immediately" warning.
+        // Meeting participants, held here rather than in component state because
+        // this whole dialog is imperative DOM.
+        this._pauseMeetWith = new Set();
         const applyPauseCode = (code, focus) => {
             const wrap = document.getElementById('pauseNoteWrap');
             const noteEl = document.getElementById('pauseReason');
+            const noteLabel = document.getElementById('pauseNoteLabel');
             const urgentHint = document.getElementById('pauseUrgentHint');
-            const needsNote = (code === 'other' || code === 'urgent');
+            const meetWrap = document.getElementById('pauseMeetWrap');
+            const isMeeting = (code === 'meeting');
+            // Meeting asks for words too — a short "what about" — on top of who.
+            const needsNote = (code === 'other' || code === 'urgent' || isMeeting);
             if (wrap) wrap.style.display = needsNote ? 'block' : 'none';
+            if (noteLabel) noteLabel.style.display = isMeeting ? 'block' : 'none';
+            if (noteEl) noteEl.placeholder = isMeeting
+                ? 'Short — e.g. sprint planning' : 'Why? (required)';
             if (urgentHint) urgentHint.style.display = (code === 'urgent') ? 'block' : 'none';
+            if (meetWrap) meetWrap.style.display = isMeeting ? 'block' : 'none';
             // Drop anything typed under a reason that no longer asks for it, so a
             // note written for Other cannot be filed against Lunch.
             if (!needsNote && noteEl) noteEl.value = '';
+            if (!isMeeting) this._pauseMeetWith = new Set();
+            if (isMeeting) this._loadPauseMeetPeople();
             if (needsNote && focus && noteEl) noteEl.focus();
         };
         const selEl = document.getElementById('pauseReasonCode');
@@ -3003,6 +3032,7 @@ export class KpiAction extends Component {
                 // this popup disagreeing about the same day.
                 const bparts = [];
                 if (n.running) bparts.push('▶ In progress');
+                if (n['with']) bparts.push('with ' + tlEsc(n['with']));
                 if (n.reason) bparts.push(tlEsc(n.reason));
                 if (bparts.length) note = `<div style="font-size:11px;color:#374151;font-style:italic;line-height:1.3;">(${bparts.join(' — ')})</div>`;
             } else { // task
@@ -3092,8 +3122,10 @@ export class KpiAction extends Component {
                                     // so the list and the Map can never disagree again.
                                     const bg = awayColor(e.type);
                                     const from = e.from ? ` <span class="text-muted">from "${(e.from||'').replace(/</g,'&lt;')}"</span>` : '';
+                                    // Who a meeting was with, before the note — "with Priya, Arun — sprint planning".
+                                    const who = e['with'] ? ` <span class="text-muted">with ${(e['with']||'').replace(/</g,'&lt;')}</span>` : '';
                                     const note = e.note ? ` <span class="text-muted fst-italic">— ${(e.note||'').replace(/</g,'&lt;')}</span>` : '';
-                                    return `<li class="mb-1"><span class="badge me-1" style="background:${bg};color:#fff;">${e.label}</span> ${e.start} – ${e.end} <span class="text-muted">(${e.duration_display})</span>${from}${note}</li>`;
+                                    return `<li class="mb-1"><span class="badge me-1" style="background:${bg};color:#fff;">${e.label}</span> ${e.start} – ${e.end} <span class="text-muted">(${e.duration_display})</span>${from}${who}${note}</li>`;
                                 }).join('')}</ul>` : ''}
                             </div>` : ''}
                             ${timelineSection}
@@ -3207,12 +3239,76 @@ export class KpiAction extends Component {
 
     // CONFIRMATION METHODS
 
+    /** Fetch (once per session) and render the meeting participant checkboxes. */
+    async _loadPauseMeetPeople() {
+        const list = document.getElementById('pauseMeetList');
+        if (!list) return;
+        if (!this._peopleCache) {
+            try {
+                const res = await rpc('/kra_kpi/get_people', {});
+                this._peopleCache = Array.isArray(res) ? res : [];
+            } catch (e) {
+                list.innerHTML = '<div class="text-danger small">Could not load people.</div>';
+                return;
+            }
+        }
+        const esc = (x) => (x == null ? '' : String(x))
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const search = document.getElementById('pauseMeetSearch');
+        const countEl = document.getElementById('pauseMeetCount');
+
+        const draw = () => {
+            const q = (search && search.value || '').trim().toLowerCase();
+            const shown = this._peopleCache.filter(
+                (u) => !q || String(u.name || '').toLowerCase().includes(q));
+            if (!shown.length) {
+                list.innerHTML = '<div class="text-muted small">No one matches.</div>';
+                return;
+            }
+            list.innerHTML = shown.map((u) => `
+                <div class="form-check d-flex align-items-center gap-2">
+                  <input class="form-check-input" type="checkbox" id="mw_${u.id}" value="${u.id}"
+                         ${this._pauseMeetWith.has(u.id) ? 'checked' : ''}/>
+                  <label class="form-check-label flex-grow-1" for="mw_${u.id}">${esc(u.name)}</label>
+                  <span class="badge bg-light text-muted border">${esc((u.role || '').toUpperCase())}</span>
+                </div>`).join('');
+            // Re-bound after every redraw: the rows are replaced wholesale on each
+            // keystroke, so listeners on the old nodes die with them.
+            list.querySelectorAll('input[type=checkbox]').forEach((box) => {
+                box.addEventListener('change', () => {
+                    const id = parseInt(box.value, 10);
+                    if (box.checked) this._pauseMeetWith.add(id);
+                    else this._pauseMeetWith.delete(id);
+                    if (countEl) {
+                        countEl.textContent = this._pauseMeetWith.size
+                            ? `${this._pauseMeetWith.size} selected`
+                            : 'Optional — pick anyone who is in it.';
+                    }
+                });
+            });
+        };
+        draw();
+        if (search && !search._wired) { search._wired = true; search.addEventListener('input', draw); }
+    }
+
     async confirmStart() {
         const kpi_id = this.state.selectedKpi.id;
         this.closeModal();
-        
+
         try {
-            await rpc("/kra_kpi/task/start", { kpi_id: kpi_id });
+            const res = await rpc("/kra_kpi/task/start", { kpi_id: kpi_id });
+            // The route CATCHES the gate's ValidationError and returns
+            // {status: False, message} over a successful JSON-RPC call, so rpc()
+            // resolves and the catch below never runs. Without this check the
+            // single-task limit (and every other gate) refused silently: the
+            // modal closed, the board redrew, the task had not started, and
+            // nothing on screen said why.
+            if (res && res.status === false) {
+                this._showAlert(res.message || "This task can't start yet.",
+                                "Can't start this task", "warning");
+                await this.refresh();
+                return;
+            }
             await this.refresh();
         } catch (error) {
             console.error("Error starting task:", error);
@@ -3229,12 +3325,15 @@ export class KpiAction extends Component {
         // and stores its own label. This used to demand a note for Day End,
         // Leave, Technical Issue and the rest, which is why people typed the
         // reason they had just picked from the list.
-        const needsNote = (reason_code === 'other' || reason_code === 'urgent');
+        const needsNote = (reason_code === 'other' || reason_code === 'urgent'
+                           || reason_code === 'meeting');
         const reason = reasonRaw || (needsNote ? '' : (codeEl?.selectedOptions?.[0]?.text || reason_code));
         if (needsNote && !reason) {
             const msg = reason_code === 'urgent'
                 ? "Please describe the issue — this note is sent to the owner / configured recipients."
-                : "Please say what you're pausing for.";
+                : reason_code === 'meeting'
+                    ? "Please say what the meeting is about."
+                    : "Please say what you're pausing for.";
             const errEl = document.getElementById("pauseUrgentHint");
             if (reason_code === 'urgent' && errEl) { errEl.style.display = 'block'; errEl.textContent = "⚠ " + msg; }
             else { alert(msg); }
@@ -3247,7 +3346,11 @@ export class KpiAction extends Component {
         this.closeModal();
         
         try {
-            await rpc("/kra_kpi/task/pause", { kpi_id: kpi_id, reason: reason, reason_code: reason_code });
+            await rpc("/kra_kpi/task/pause", {
+                kpi_id: kpi_id, reason: reason, reason_code: reason_code,
+                meeting_with_ids: reason_code === 'meeting'
+                    ? Array.from(this._pauseMeetWith || []) : [],
+            });
             await this.refresh();
         } catch (error) {
             console.error("Error pausing task:", error);
@@ -3260,7 +3363,16 @@ export class KpiAction extends Component {
         this.closeModal();
 
         try {
-            await rpc("/kra_kpi/task/resume", { kpi_id: kpi_id });
+            // Same contract as confirmStart — the route converts the gate's
+            // exception into a successful response, so a refusal has to be read
+            // off the payload rather than caught.
+            const res = await rpc("/kra_kpi/task/resume", { kpi_id: kpi_id });
+            if (res && res.status === false) {
+                this._showAlert(res.message || "This task can't resume yet.",
+                                "Can't resume this task", "warning");
+                await this.refresh();
+                return;
+            }
             await this.refresh();
         } catch (error) {
             console.error("Error resuming task:", error);
@@ -4173,6 +4285,12 @@ export class KpiAction extends Component {
         // says Resume, so telling them to "start" sends them hunting.
         if (task.start_block_reason === "workday_paused") {
             return "Resume your workday to work on tasks";
+        }
+        // Also about the viewer: something of theirs is already running and
+        // multi-task is off. It fell through to the client message, which blames
+        // the wrong party for a limit they can clear themselves.
+        if (task.start_block_reason === "multitask") {
+            return "Pause your running task first";
         }
         if (task.start_block_reason === "admin") {
             return task.admin_accept_deadline_at

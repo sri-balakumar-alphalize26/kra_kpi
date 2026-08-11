@@ -2,6 +2,11 @@ import pytz
 
 from odoo import api, models, fields
 
+# One line on a Workday Map chip. Shared with the pause note and the non-task
+# note so all three agree — reason_note had NO cap at all, so a direct ORM write
+# or a future caller could store a paragraph the renderers then had to truncate.
+from .kpi_nontask_block import NOTE_MAX
+
 
 class KpiBreakLog(models.Model):
     """Break / Lunch log — mirrors kpi.time.log's start/stop/duration but records
@@ -29,7 +34,27 @@ class KpiBreakLog(models.Model):
     # The task the developer paused FROM (shown in brackets on the live panel /
     # End-Workday list). reason_note carries the free-typed text for 'Other'.
     source_task_id = fields.Many2one('kra.kpi', string='Paused From Task', index=True, ondelete='set null')
-    reason_note = fields.Char(string='Reason Note')
+    reason_note = fields.Char(string='Reason Note', size=NOTE_MAX)
+
+    # Who a MEETING was with. Kept as a real relation rather than folded into
+    # reason_note because that field is capped at NOTE_MAX and a couple of names
+    # would eat the whole budget the reason itself needs — "Meeting with Priya
+    # and Arun" would leave nothing to say what the meeting was about.
+    # Applies to break_type == 'meeting'; empty everywhere else.
+    meeting_with_user_ids = fields.Many2many(
+        'res.users', 'kpi_break_log_meeting_user_rel', 'break_id', 'user_id',
+        string='Meeting With')
+    # Denormalised for display. The timeline, the away list and the PIL-drawn
+    # snapshot all read one string; recomputing a name list in each of them is
+    # how they would drift apart.
+    meeting_with_display = fields.Char(
+        string='Meeting With (names)', compute='_compute_meeting_with_display', store=True)
+
+    @api.depends('meeting_with_user_ids')
+    def _compute_meeting_with_display(self):
+        for rec in self:
+            names = rec.meeting_with_user_ids.mapped('name')
+            rec.meeting_with_display = ', '.join(n for n in names if n) or False
 
     # Codes we recognise; anything else is filed under 'other' so no reason is lost.
     _KNOWN_TYPES = ('break', 'lunch', 'meeting', 'other', 'away', 'leave', 'urgent')
@@ -71,7 +96,7 @@ class KpiBreakLog(models.Model):
 
     @api.model
     def start_break(self, break_type, user_id=None, source_task_id=None, reason_note=None,
-                    at=None):
+                    at=None, meeting_with_ids=None):
         """Start a non-productive interval (break/lunch/meeting/other/away/leave)
         for the user. Reuse an active one if present (one active per user). Unknown
         codes are filed under 'other' so no reason is ever lost.
@@ -92,7 +117,12 @@ class KpiBreakLog(models.Model):
             if source_task_id and not active.source_task_id:
                 vals['source_task_id'] = source_task_id
             if reason_note and not active.reason_note:
-                vals['reason_note'] = reason_note
+                vals['reason_note'] = (reason_note or '')[:NOTE_MAX]
+            # Only ever ADDS names, never clears them — same rule the two fields
+            # above follow, so re-entering an already-open break cannot quietly
+            # empty who it was with.
+            if meeting_with_ids and not active.meeting_with_user_ids:
+                vals['meeting_with_user_ids'] = [(6, 0, list(meeting_with_ids))]
             if vals:
                 active.write(vals)
             return active.id
@@ -102,7 +132,8 @@ class KpiBreakLog(models.Model):
             'start_time': at or fields.Datetime.now(),
             'is_active': True,
             'source_task_id': source_task_id or False,
-            'reason_note': reason_note or False,
+            'reason_note': (reason_note or '')[:NOTE_MAX] or False,
+            'meeting_with_user_ids': [(6, 0, list(meeting_with_ids or []))],
         })
         return rec.id
 

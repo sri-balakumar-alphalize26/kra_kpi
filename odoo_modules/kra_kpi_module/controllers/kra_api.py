@@ -147,6 +147,28 @@ class KraKpiAPI(http.Controller):
         ])
         assignable = users.filtered(lambda u: u.kpi_role != 'client')
         return [{"id": u.id, "name": u.name} for u in assignable.sorted('name')]
+
+    @http.route('/kra_kpi/get_people', type='json', auth='user')
+    def get_people(self):
+        """EVERYONE a meeting can be with — developers, admins AND clients.
+
+        Deliberately not /kra_kpi/get_users: that one answers "who can a task be
+        ASSIGNED to", which excludes clients because a client cannot work a task.
+        You can absolutely be in a meeting with one, so this is a different
+        question and gets its own route rather than a flag that would make the
+        assignment picker one careless argument away from offering clients.
+
+        kpi_role is a non-stored compute, so it is resolved in Python — the same
+        reason get_users filters after searching rather than in the domain.
+        """
+        users = request.env['res.users'].sudo().search([
+            ('active', '=', True),
+            ('share', '=', False),
+            ('id', '!=', 1),                       # OdooBot is not in meetings
+        ])
+        me = request.env.user.id
+        return [{'id': u.id, 'name': u.name, 'role': u.kpi_role or 'developer'}
+                for u in users.sorted('name') if u.id != me]
     
     @http.route('/kra_kpi/task/reassign', type='json', auth='user', methods=['POST'], csrf=False)
     def task_reassign(self, **params):
@@ -474,10 +496,24 @@ class KraKpiAPI(http.Controller):
                 request.env['kra.kpi']._fields['pause_reason_code'].selection):
             return {'status': False, 'message': 'Unknown pause reason.'}
 
+        # Who a MEETING is with. Ignored for every other code, and validated to
+        # real active internal users so a hand-rolled payload cannot attach
+        # arbitrary ids to a break row.
+        meeting_with_ids = None
+        if reason_code == 'meeting':
+            try:
+                wanted = [int(i) for i in (params.get('meeting_with_ids') or [])]
+            except (TypeError, ValueError):
+                return {'status': False, 'message': 'Invalid meeting participants.'}
+            if wanted:
+                meeting_with_ids = request.env['res.users'].sudo().search([
+                    ('id', 'in', wanted), ('active', '=', True), ('id', '!=', 1),
+                ]).ids
+
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
         if not rec.exists():
             return {'status': False, 'message': 'Task not found'}
-        rec.pause_task(reason, reason_code=reason_code)
+        rec.pause_task(reason, reason_code=reason_code, meeting_with_ids=meeting_with_ids)
         return {'status': True, 'message': 'Task paused', 'id': rec.id}
 
     @http.route('/kra_kpi/task/resume', type='json', auth='user', methods=['POST'], csrf=False)
@@ -639,8 +675,18 @@ class KraKpiAPI(http.Controller):
             # picks which message the card shows ("Start" vs "Resume" your day).
             _wd_paused = bool(_sess and _sess.is_paused)
             _wd_open = bool(_sess) and not _wd_paused
+        # Same trick for the single-task limit: resolve the caller's running
+        # tasks once instead of one search per row in _multitask_blocker. Only
+        # meaningful for the caller's own rows, which is what that helper checks
+        # before trusting this.
+        _running_ids = request.env['kra.kpi'].sudo().search([
+            ('user_id', '=', current_user.id),
+            ('task_state', '=', 'in_progress'),
+            ('active', '=', True),
+        ]).ids
         kpis = kpis.with_context(kpi_workday_open=_wd_open,
-                                 kpi_workday_paused=_wd_paused)
+                                 kpi_workday_paused=_wd_paused,
+                                 kpi_running_task_ids=_running_ids)
 
         # Per-developer time on each task (survives reassignment — kpi.time.log
         # rows are kept per user). One batched read_group for all listed tasks,
@@ -3941,6 +3987,10 @@ class KraKpiAPI(http.Controller):
                 tasks.append({
                     'id': kpi.id,
                     'name': kpi.name,
+                    # The clients render this as the row's ref chip and search on
+                    # it; it was never in this payload, so the chip was blank on
+                    # every row and that arm of the search could never match.
+                    'external_ref': kpi.external_ref or '',
                     'assignee': kpi.user_id.name if kpi.user_id else 'Unassigned',
                     'assignee_id': kpi.user_id.id if kpi.user_id else False,
                     'priority': kpi.priority or 'regular',

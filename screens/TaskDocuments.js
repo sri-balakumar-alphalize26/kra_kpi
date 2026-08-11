@@ -24,6 +24,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { fetchTaskDocuments, fetchTaskDocumentDetails } from '../services/taskDocuments';
+import KpiTaskDetail from './KpiTaskDetail';
 import { createLogger } from '../api/logger';
 import * as H from '../utils/haptics';
 
@@ -75,7 +76,7 @@ function DocLine({ icon, color, title, subtitle, onPress }) {
   );
 }
 
-function TaskRow({ task, expanded, onToggle, details, detailsBusy }) {
+function TaskRow({ task, expanded, onToggle, onOpenTask, details, detailsBusy }) {
   const docs = details?.documents || {};
   const openLink = (url) => { if (url) Linking.openURL(url).catch(() => {}); };
 
@@ -92,6 +93,19 @@ function TaskRow({ task, expanded, onToggle, details, detailsBusy }) {
             <Ionicons name="person-outline" size={11} color={COLORS.muted} /> {task.assignee || 'Unassigned'}
           </Text>
           <CountChips task={task} />
+          {/* Opens the full task. A NESTED touchable inside the row's own
+              touchable, so it needs its own hit area — otherwise the press falls
+              through to the accordion. Same nesting the board's list row uses
+              for its name link. */}
+          <TouchableOpacity
+            style={s.viewBtn}
+            activeOpacity={0.7}
+            onPress={onOpenTask}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <Ionicons name="open-outline" size={13} color={COLORS.primary} />
+            <Text style={s.viewBtnTxt}>View task</Text>
+          </TouchableOpacity>
         </View>
         <Ionicons
           name={expanded ? 'chevron-up' : 'chevron-down'}
@@ -167,6 +181,10 @@ export default function TaskDocuments({ onBack }) {
   const [openId, setOpenId] = useState(null);
   const [details, setDetails] = useState({});     // taskId -> payload
   const [detailsBusy, setDetailsBusy] = useState(null);
+  // The full task screen, rendered in place rather than routed through App.js —
+  // the same thing KpiActionBoard does. Keeping it local means Back returns to
+  // this list with its scroll position and open row intact.
+  const [detailTask, setDetailTask] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -216,6 +234,17 @@ export default function TaskDocuments({ onBack }) {
       || String(t.external_ref || '').toLowerCase().includes(q)
       || String(t.assignee || '').toLowerCase().includes(q));
   }, [tasks, query]);
+
+  // After every hook, so the hook order never changes between renders.
+  if (detailTask) {
+    return (
+      <KpiTaskDetail
+        task={detailTask}
+        onBack={() => setDetailTask(null)}
+        onChanged={load}
+      />
+    );
+  }
 
   return (
     <View style={s.root}>
@@ -279,6 +308,7 @@ export default function TaskDocuments({ onBack }) {
               task={item}
               expanded={openId === item.id}
               onToggle={() => toggle(item)}
+              onOpenTask={() => { H.tap(); setDetailTask(item); }}
               details={details[item.id]}
               detailsBusy={detailsBusy === item.id}
             />
@@ -329,6 +359,12 @@ const s = StyleSheet.create({
     backgroundColor: '#F1F5F9', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3,
   },
   chipTxt: { fontSize: 11, fontWeight: '800' },
+  viewBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+    marginTop: 8, paddingVertical: 4, paddingHorizontal: 9,
+    borderRadius: 8, borderWidth: 1, borderColor: COLORS.primary,
+  },
+  viewBtnTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
   noneTxt: { fontSize: 12, color: COLORS.faint, marginTop: 6, fontStyle: 'italic' },
 
   cardBody: { borderTopWidth: 1, borderTopColor: COLORS.line, paddingHorizontal: 13, paddingVertical: 6 },

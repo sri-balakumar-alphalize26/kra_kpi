@@ -45,6 +45,11 @@ function gateLabel(task) {
   // Paused is a different fix from never-started — the button they need says
   // Resume, so "start your workday" sends them hunting for one that isn't there.
   if (task.start_block_reason === 'workday_paused') return 'Resume your workday to work on tasks';
+  // Also about the viewer rather than the task: they already have something
+  // running and multi-task is off for them. Without this branch it fell through
+  // to "Waiting for the client to approve", which blames the wrong party
+  // entirely for a limit the developer can clear themselves.
+  if (task.start_block_reason === 'multitask') return 'Pause your running task first';
   if (task.start_block_reason === 'admin') {
     return task.admin_accept_deadline_at
       ? `Waiting on admin — accepts automatically ${fmtWhen(task.admin_accept_deadline_at)}`

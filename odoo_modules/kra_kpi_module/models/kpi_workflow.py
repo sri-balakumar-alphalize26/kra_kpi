@@ -903,6 +903,41 @@ class KpiWorkflow(models.Model):
         except Exception:
             return False
 
+    def _multitask_blocker(self):
+        """The OTHER task already running for this task's assignee, or empty.
+
+        Empty when the assignee may multitask, when nothing else is running, or
+        when this task is the one running.
+
+        `kpi_running_task_ids` in the context short-circuits the lookup, the same
+        arrangement _actor_workday_open uses and for the same reason: the board
+        calls _start_block once per listed task, and without it that is one query
+        per row. The controller resolves the set once and passes it down. The
+        fallback query stays, because _serialize_task and the direct
+        _start_block() calls in the start/resume routes do not set that context.
+        """
+        self.ensure_one()
+        if not self.user_id or self.user_id.kpi_allow_multitask:
+            return self.env['kra.kpi']
+        cached = self.env.context.get('kpi_running_task_ids')
+        # Only usable for the caller's OWN tasks: the cached set is what THEY
+        # have running. An admin's board lists other people's rows, and reusing
+        # their set there would gate a developer's task on the admin's timer.
+        if cached is not None and self.user_id.id == self.env.user.id:
+            other_ids = [i for i in cached if i != self.id]
+            return self.sudo().browse(other_ids[:1])
+        try:
+            return self.sudo().search([
+                ('user_id', '=', self.user_id.id),
+                ('id', '!=', self.id),
+                ('task_state', '=', 'in_progress'),
+                ('active', '=', True),
+            ], limit=1)
+        except Exception:
+            # Never let a lookup failure be the thing that stops someone working
+            # — the same stance _actor_workday_open takes.
+            return self.env['kra.kpi']
+
     def _start_block(self):
         """Why this task cannot start, or None if it can.
 
@@ -911,8 +946,9 @@ class KpiWorkflow(models.Model):
         turn it into a readable message — so the UI cannot drift from the server
         the way a hand-maintained list of startable states always does.
 
-        Returns (reason_key, message) with reason_key in {'workday', 'admin',
-        'client'}, or None when the task is free to start.
+        Returns (reason_key, message) with reason_key in {'workday',
+        'workday_paused', 'multitask', 'admin', 'client'}, or None when the task
+        is free to start.
 
         The workflow is: admin accepts -> client approves -> developer works.
         Neither gate blocks forever: an unactioned task auto-accepts after
@@ -965,6 +1001,16 @@ class KpiWorkflow(models.Model):
             return ('client',
                     "'%s': the client rejected this before any work started. It "
                     "needs to be re-assigned or re-approved first." % ref)
+        # The single-task limit, answered BEFORE the resumable-states return
+        # below. It has to sit here: a paused task IS resumable, and resuming one
+        # while another runs is exactly what the limit forbids — checking after
+        # the early return would leave Resume enabled and let the server refuse
+        # it on the round-trip, which is the behaviour this whole gate exists to
+        # avoid. Skipped for the task that is itself running, or a developer's
+        # own in-progress card would gate itself.
+        blocking = self._multitask_blocker()
+        if blocking:
+            return ('multitask', self._multitask_message(self.user_id, blocking))
         if self.task_state in self._RESUMABLE_STATES:
             return None         # already underway — resuming is fine
         if not self.admin_accepted:
@@ -1008,11 +1054,24 @@ class KpiWorkflow(models.Model):
                 ('active', '=', True),
             ], limit=1)
             if other:
-                raise ValidationError(
-                    f"{rec.user_id.name} already has task "
-                    f"{other.external_ref or other.name} in progress. "
-                    "Pause that task first before starting a new one."
-                )
+                raise ValidationError(self._multitask_message(rec.user_id, other))
+
+    @api.model
+    def _multitask_message(self, assignee, other):
+        """The single-task refusal, phrased for whoever is reading it.
+
+        This was always third person — "Ravi already has task BUG-014 in
+        progress" — which is the right sentence for an admin acting on Ravi's
+        task and an odd one for Ravi, who is the person who sees it almost every
+        time. Shared with _start_block so the pre-emptive gate label and the
+        exception cannot drift into saying different things.
+        """
+        ref = other.external_ref or other.name
+        if assignee.id == self.env.user.id:
+            return (f"You already have {ref} in progress. "
+                    "Pause it first, or use Switch to hand over to another task.")
+        return (f"{assignee.name} already has task {ref} in progress. "
+                "That task must be paused before another can start.")
 
     @api.model
     def pause_all_running(self, reason='', reason_code='break'):
@@ -1233,7 +1292,7 @@ class KpiWorkflow(models.Model):
             rec._wrap_lifecycle('start', prev_state=prev.get(rec.id))
         return result
 
-    def pause_task(self, reason='', reason_code=False, at=None):
+    def pause_task(self, reason='', reason_code=False, at=None, meeting_with_ids=None):
         # `at` MUST be forwarded to super(), which is where the timer and the
         # kpi.time.log actually close. This override is the one MRO resolves, so
         # without the parameter here `_pause_running_task(at=eod)` raised
@@ -1278,10 +1337,17 @@ class KpiWorkflow(models.Model):
                 source_task_id=self.id if len(self) == 1 else False,
                 reason_note=reason or False,
                 at=at,
+                # Only meaningful for 'meeting'; ignored for every other code.
+                meeting_with_ids=meeting_with_ids if reason_code == 'meeting' else None,
             )
         elif reason_code:
             # The reason is still recorded on the task (pause_reason_code above);
             # only the away-time interval is skipped, because there is none.
+            # NOTE: meeting participants live on the break row, so a Meeting pause
+            # taken while another task keeps running records the reason but not
+            # who it was with — there is no away-interval to hang them on. That is
+            # the correct reading (the developer is not away), but it is worth
+            # knowing before wondering where the names went.
             _logger.info(
                 "pause: not opening a '%s' break for %s — another task is still "
                 "running, so this is not away-time", reason_code, self.env.user.login)
