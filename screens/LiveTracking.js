@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
-  RefreshControl, StatusBar as RNStatusBar,
+  RefreshControl, StatusBar as RNStatusBar, Modal, TextInput,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -16,7 +16,8 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import PulseDot from '../components/PulseDot';
-import { fetchLiveTracking } from '../services/liveTracking';
+import { fetchLiveTracking, revertWorkday } from '../services/liveTracking';
+import * as H from '../utils/haptics';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('LiveTracking');
@@ -92,7 +93,7 @@ function Attendance({ row }) {
 }
 
 // One employee card.
-function Row({ row, nowMs, fetchedAt }) {
+function Row({ row, nowMs, fetchedAt, onReopen }) {
   const kind = row.activity_kind || 'offline';
   const meta = ACT[kind] || ACT.offline;
   // Live elapsed: server value + seconds since we fetched (for ongoing kinds).
@@ -148,6 +149,15 @@ function Row({ row, nowMs, fetchedAt }) {
           </View>
         )}
       </View>
+      {/* End Workday is one-way for the developer. This is the only way back, and
+          it lives here because this is the screen where an admin can see WHOSE
+          day ended. Mirrors the web's Live Tracking button. */}
+      {row.day_done ? (
+        <TouchableOpacity style={s.reopenBtn} activeOpacity={0.8} onPress={() => onReopen(row)}>
+          <Ionicons name="arrow-undo" size={14} color={COLORS.amber} />
+          <Text style={s.reopenTxt}>Reopen day</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -160,6 +170,13 @@ export default function LiveTracking({ onBack }) {
   const [isMock, setIsMock] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
   const fetchedAtRef = useRef(Date.now());
+  // Reopen-day dialog. A real modal rather than a prompt: the reason is
+  // mandatory (the developer is told in these words), and React Native has no
+  // window.prompt to lean on the way the web does.
+  const [reopenFor, setReopenFor] = useState(null);
+  const [reopenReason, setReopenReason] = useState('');
+  const [reopenErr, setReopenErr] = useState('');
+  const [reopenBusy, setReopenBusy] = useState(false);
 
   const load = useCallback(async (silent) => {
     if (!silent) setError(null);
@@ -196,6 +213,40 @@ export default function LiveTracking({ onBack }) {
   }, []);
 
   const onRefresh = useCallback(async () => { setRefreshing(true); await load(false); setRefreshing(false); }, [load]);
+
+  const openReopen = useCallback((row) => {
+    H.tap();
+    setReopenFor(row);
+    setReopenReason('');
+    setReopenErr('');
+  }, []);
+
+  const submitReopen = useCallback(async () => {
+    const reason = reopenReason.trim();
+    // Required. The server refuses an empty one too — this is the courtesy copy.
+    if (!reason) {
+      H.err();
+      setReopenErr('A reason is required — it is sent to them in your words.');
+      return;
+    }
+    setReopenBusy(true);
+    try {
+      const res = await revertWorkday(reopenFor.user_id, reason);
+      if (res && res.status === false) {
+        H.err();
+        setReopenErr(res.message || 'Could not reopen that workday.');
+        return;
+      }
+      H.ok();
+      setReopenFor(null);
+      await load(true);
+    } catch (e) {
+      log.warn('reopen failed', e?.message);
+      setReopenErr(e?.message || 'Could not reopen that workday.');
+    } finally {
+      setReopenBusy(false);
+    }
+  }, [reopenFor, reopenReason, load]);
 
   const rows = data?.rows || [];
 
@@ -251,11 +302,65 @@ export default function LiveTracking({ onBack }) {
         <FlatList
           data={rows}
           keyExtractor={(r) => String(r.user_id)}
-          renderItem={({ item }) => <Row row={item} nowMs={nowMs} fetchedAt={fetchedAtRef.current} />}
+          renderItem={({ item }) => (
+            <Row row={item} nowMs={nowMs} fetchedAt={fetchedAtRef.current} onReopen={openReopen} />
+          )}
           contentContainerStyle={{ padding: 14, paddingBottom: 40 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         />
       )}
+
+      {/* Reopen an ended workday. Everything it can honestly undo it undoes; the
+          rest it declares — which is why the reason is required and why the copy
+          spells out what stays paused and who gets told. */}
+      <Modal visible={!!reopenFor} transparent animationType="fade"
+        onRequestClose={() => setReopenFor(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle}>↩  Reopen workday</Text>
+              <TouchableOpacity onPress={() => setReopenFor(null)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#7a5200" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalBody}>
+              <Text style={s.modalLead}>
+                Reopen <Text style={{ fontWeight: '900' }}>{reopenFor?.name}</Text>'s day?
+              </Text>
+              <Text style={s.modalNote}>
+                Their day&apos;s summary has already been sent — everyone who received it
+                is told it was reopened, and {reopenFor?.name} is told in your words.
+                Any task they had running stays paused until they resume it.
+              </Text>
+              {reopenErr ? (
+                <View style={s.errBox}>
+                  <Ionicons name="alert-circle" size={15} color={COLORS.red} />
+                  <Text style={s.errTxt2}>{reopenErr}</Text>
+                </View>
+              ) : null}
+              <Text style={s.fieldLabel}>Reason *</Text>
+              <TextInput
+                style={[s.reasonInput, reopenErr && !reopenReason.trim() && { borderColor: COLORS.red }]}
+                placeholder="Why is this day being reopened?"
+                placeholderTextColor={COLORS.faint}
+                value={reopenReason}
+                onChangeText={(t) => { setReopenReason(t); if (reopenErr) setReopenErr(''); }}
+                multiline
+              />
+            </View>
+            <View style={s.modalFoot}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setReopenFor(null)} disabled={reopenBusy}>
+                <Text style={s.footCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.footConfirm} onPress={submitReopen} disabled={reopenBusy}>
+                {reopenBusy ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={s.footConfirmTxt}>Reopen day</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -293,6 +398,45 @@ const s = StyleSheet.create({
   // task name wraps inside the card instead of pushing the row off a phone.
   pillWrap: { flexShrink: 1, gap: 5 },
   multiTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.muted },
+
+  reopenBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+    marginTop: 10, paddingVertical: 5, paddingHorizontal: 10,
+    borderRadius: 9, borderWidth: 1, borderColor: COLORS.amber, backgroundColor: COLORS.amberBg,
+  },
+  reopenTxt: { fontSize: 12, fontWeight: '800', color: COLORS.amber },
+
+  // Reopen dialog
+  modalWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  modalCard: { width: '100%', maxWidth: 460, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', ...SHADOW },
+  modalHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: COLORS.amberBg, paddingHorizontal: 14, paddingVertical: 12,
+  },
+  modalTitle: { fontSize: 15.5, fontWeight: '900', color: '#7a5200' },
+  modalBody: { paddingHorizontal: 14, paddingVertical: 12 },
+  modalLead: { fontSize: 14, color: COLORS.ink, marginBottom: 6 },
+  modalNote: { fontSize: 12.5, color: COLORS.muted, lineHeight: 18 },
+  fieldLabel: { fontSize: 13, fontWeight: '800', color: COLORS.navy, marginTop: 14, marginBottom: 6 },
+  reasonInput: {
+    borderWidth: 1, borderColor: COLORS.line, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: COLORS.ink, minHeight: 74,
+    textAlignVertical: 'top',
+  },
+  errBox: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 7, marginTop: 12,
+    backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA',
+    borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8,
+  },
+  errTxt2: { flex: 1, fontSize: 12.5, color: COLORS.red, fontWeight: '600', lineHeight: 17 },
+  modalFoot: {
+    flexDirection: 'row', gap: 10, paddingHorizontal: 14, paddingVertical: 12,
+    borderTopWidth: 1, borderTopColor: COLORS.line,
+  },
+  footCancel: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 11, borderRadius: 11, borderWidth: 1, borderColor: COLORS.line },
+  footCancelTxt: { fontSize: 14, fontWeight: '800', color: COLORS.muted },
+  footConfirm: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 11, borderRadius: 11, backgroundColor: COLORS.amber },
+  footConfirmTxt: { fontSize: 14, fontWeight: '800', color: '#fff' },
   pill: { flexDirection: 'row', alignItems: 'center', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, flexShrink: 1 },
   pillTxt: { fontSize: 13, fontWeight: '700' },
 });

@@ -310,9 +310,13 @@ export const switchTask = (kpiId, fromKpiId, note) =>
 // payload — the model scopes it to the caller's own running tasks, so it cannot
 // be aimed at anyone else. Presence is not double-counted: kpi.break.log keeps
 // one active break per user, so a 20-min lunch with two tasks open is 20 minutes.
-export const pauseAllTasks = (reason, reasonCode) =>
+// meetingWithIds only matters for reason_code 'meeting'; the route ignores it
+// otherwise. One break row is opened however many timers stop, so the names are
+// recorded once.
+export const pauseAllTasks = (reason, reasonCode, meetingWithIds) =>
   action('/kra_kpi/task/pause_all', {
     reason: reason || '', reason_code: reasonCode || 'break',
+    meeting_with_ids: meetingWithIds || [],
   });
 
 // Admin pulls a task back out of Awaiting Client Sign-off. Clearing
@@ -552,7 +556,9 @@ export async function getTodaySummary() {
 }
 
 // ── Self-create a task ("New Task") ──────────────────────────────────────────
-export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, priority, description }) =>
+// userId is ADMIN-ONLY — the route validates it and forces a non-admin caller to
+// themselves, so sending it from a developer changes nothing.
+export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, priority, description, userId }) =>
   action('/kra_kpi/task/self_create', {
     name: name || '',
     kra_id: kraId,
@@ -560,4 +566,5 @@ export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, pr
     estimate_minutes: estimateMinutes || 0,
     priority: priority || 'regular',
     description: description || '',
+    user_id: userId || 0,
   });

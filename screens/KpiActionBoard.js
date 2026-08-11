@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import Svg, { Defs, Rect, Stop, LinearGradient as SvgLinearGradient } from 'react-native-svg';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import KpiTaskDetail from './KpiTaskDetail';
@@ -190,11 +191,19 @@ function liveFromAnchor(startIso, base, nowMs) {
 // explanation, and asking for one taught people to type "break" into a box next
 // to a button already labelled Break. Urgent keeps it because that text becomes
 // the body of the 🚨 alert the owner receives. Mirrors the web's needsNote.
-const noteRequiredFor = (code) => code === 'other' || code === 'urgent';
+// Reasons that need words typed. 'meeting' is here because "Meeting" alone says
+// nothing about what it cost the day — the web already required it, and the app
+// showed the box without enforcing it, so the two disagreed about what a valid
+// Meeting pause was.
+const noteRequiredFor = (code) => code === 'other' || code === 'urgent' || code === 'meeting';
 
 // Work that has already been started and stopped — the same triple `canResume`
 // uses, so "shows a Resume button" and "counts as paused" cannot drift apart.
 const PAUSED_STATES = ['paused', 'hold', 'rework'];
+
+// Width of the soft cut at the end of a clipped task name, in px. Wide enough to
+// read as a fade over two or three characters rather than a hard edge.
+const FADE_W = 28;
 
 // Productive = finished-log base + every RUNNING task's live seconds.
 //
@@ -341,6 +350,44 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
           valueColor={running ? COLORS.green : undefined} />
         <MetaRow icon="flag-outline" label="Estimate" value={task.estimate_display || '00:00'} />
       </View>
+
+      {/* Who finished it, when, and whether an admin has picked it up for review.
+          The payload has carried all four of these all along and the app rendered
+          none of them — so "is anyone looking at this yet?" could only be answered
+          on the web. Shown for work awaiting verification, matching the web card.
+          Both the board card and the list dropdown render this component, so they
+          get it together. */}
+      {st === 'partially_completed' ? (
+        <View style={s.doneBlock}>
+          {task.completed_by_name ? (
+            <View style={s.doneRow}>
+              <Ionicons name="checkmark-circle" size={13} color={COLORS.green} />
+              <Text style={s.doneTxt}>Completed by: <Text style={s.doneStrong}>{task.completed_by_name}</Text></Text>
+            </View>
+          ) : null}
+          {task.completion_date ? (
+            <View style={s.doneRow}>
+              <Ionicons name="calendar-outline" size={13} color={COLORS.muted} />
+              <Text style={s.doneMuted}>{task.completion_date}</Text>
+            </View>
+          ) : null}
+          {task.coordinator_review_started_at ? (
+            <View style={s.doneRow}>
+              <Ionicons name="eye-outline" size={13} color={COLORS.primary} />
+              <Text style={s.doneInfo}>
+                Review started: {task.coordinator_review_started_at}
+                {task.coordinator_review_started_by_name ? ` by ${task.coordinator_review_started_by_name}` : ''}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+      {task.progress_count > 0 ? (
+        <View style={s.doneRow}>
+          <Ionicons name="checkmark-circle" size={13} color={COLORS.green} />
+          <Text style={s.doneTxt}>{task.progress_count} update{task.progress_count === 1 ? '' : 's'}</Text>
+        </View>
+      ) : null}
       {task.paused_reason && ['paused', 'hold', 'rework'].includes(st) ? (
         <View style={s.pausedPill}>
           <Ionicons name="pause-circle" size={14} color={COLORS.amber} />
@@ -447,15 +494,84 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
 }
 
 // One row of the list view: an "Odoo attendance"-style accordion — task name +
-// priority dot + chevron; tapping expands to reveal the shared TaskDetailBody.
-// Mirrors the chevron-forward/down conditional-render pattern used by KraNode /
-// OwnerDashboard's ClientCard.
-// A read-only row that opens the task. The action props the accordion needed
-// (onAction / busyId / nowMs / isAdmin / reminder / readOnly) are gone with it —
-// the buttons live in the task detail and on the board view now.
-function TaskListRow({ task, pulse, onRowRef, onOpenDetail }) {
+// Who a meeting is with. Multi-select, because a meeting rarely has exactly one
+// other person, and the list includes CLIENTS — which is why it is fed by its own
+// endpoint rather than the assignee list. Checkbox rows with an array toggle,
+// matching AssignClientsModal in KraKpiDashboard rather than inventing a third
+// control. Shared by the single Pause and Pause-all dialogs so the two cannot
+// drift into behaving differently.
+function MeetingPicker({ people, busy, query, setQuery, picked, setPicked }) {
+  const q = query.trim().toLowerCase();
+  const shown = q ? people.filter((u) => String(u.name || '').toLowerCase().includes(q)) : people;
+  return (
+    <>
+      <Text style={s.fieldLabel}>Who is it with?</Text>
+      {busy && !people.length ? (
+        <View style={{ paddingVertical: 14 }}><ActivityIndicator color={COLORS.primary} /></View>
+      ) : (
+        <>
+          <View style={s.peopleSearch}>
+            <Ionicons name="search" size={15} color={COLORS.muted} />
+            <TextInput
+              style={s.peopleSearchInput}
+              placeholder="Search people…"
+              placeholderTextColor={COLORS.faint}
+              value={query}
+              onChangeText={setQuery}
+              autoCorrect={false}
+            />
+          </View>
+          <ScrollView style={s.peopleList} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+            {shown.map((u) => {
+              const on = picked.includes(u.id);
+              return (
+                <TouchableOpacity
+                  key={u.id} style={s.personRow} activeOpacity={0.7}
+                  onPress={() => {
+                    H.select();
+                    setPicked((prev) => (prev.includes(u.id)
+                      ? prev.filter((x) => x !== u.id)
+                      : [...prev, u.id]));
+                  }}
+                >
+                  <Ionicons name={on ? 'checkbox' : 'square-outline'} size={20}
+                    color={on ? COLORS.primary : COLORS.faint} />
+                  <Text style={s.personName} numberOfLines={1}>{u.name}</Text>
+                  <Text style={s.personRole}>{String(u.role || '').toUpperCase()}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            {!shown.length ? (
+              <Text style={s.idleNoteHint}>
+                {people.length ? 'No one matches.' : 'No one else to pick from.'}
+              </Text>
+            ) : null}
+          </ScrollView>
+          <Text style={s.idleNoteHint}>
+            {picked.length ? `${picked.length} selected` : 'Optional — pick anyone who is in it.'}
+          </Text>
+        </>
+      )}
+    </>
+  );
+}
+
+// Two ways in, and they are deliberately different targets: tapping the ROW
+// opens the task; tapping the ARROW expands the actions in place. Splitting them
+// by area is what makes both reachable — the old version put the accordion on
+// the whole row and the details on the name alone, so which one you got depended
+// on hitting a word.
+function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin,
+                       reminder, pulse, onRowRef, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
+  // Chevron rotates 0°→90° as the actions open, so the arrow says which way it
+  // goes rather than just sitting there.
+  const rot = useRef(new Animated.Value(expanded ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(rot, { toValue: expanded ? 1 : 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [expanded, rot]);
+  const spin = rot.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] });
 
   // Arrival highlight (from a notification tap): a brief highlight wash that
   // beats TWICE, so the task the notification pointed to visibly flashes.
@@ -474,30 +590,42 @@ function TaskListRow({ task, pulse, onRowRef, onOpenDetail }) {
   return (
     <Animated.View
       ref={(r) => { onRowRef && onRowRef(task.id, r); }}
-      style={[s.listRow, pulse && s.listRowPulse]}
+      style={[s.listRow, expanded && s.listRowOpen, pulse && s.listRowPulse]}
     >
       {/* Highlight wash — fades in/out with the double heartbeat. */}
       <Animated.View pointerEvents="none" style={[s.listPulseWash, { opacity: washOpacity }]} />
-      {/* The WHOLE row opens the task. It used to expand an accordion revealing
-          every action button, with only the name opening the details — so the
-          list was both a place to act and a place to look, and which one you got
-          depended on hitting a word. The web has no expand-in-place at all: a row
-          opens a detail view that replaces the list. This matches that, and the
-          row is read-only, so acting on a task happens in one place instead of
-          three. The board view keeps its inline buttons. */}
-      <TouchableOpacity style={s.listHead} onPress={() => onOpenDetail && onOpenDetail(task)}
-        activeOpacity={0.6} disabled={!onOpenDetail}>
+      {/* The WHOLE row opens the dropdown; the NAME is a nested touchable that
+          opens KPI Details instead. Nesting (rather than two siblings sized by
+          flex) is what makes "name → details, anywhere else → dropdown" reliable:
+          the inner touchable swallows taps on the text, everything else — the
+          spacer, the Live pill, the arrow — falls through to the outer one. */}
+      <TouchableOpacity style={s.listHead} onPress={onToggle} activeOpacity={0.7}>
         <View style={[s.listDot, { backgroundColor: p.fg }]} />
-        <View style={s.listNameHit}>
-          <Text style={[s.listName, !!onOpenDetail && s.listNameLink]} numberOfLines={1}>{task.name}</Text>
-        </View>
+        <TouchableOpacity style={s.listNameHit} activeOpacity={0.6} disabled={!onOpenDetail}
+          onPress={() => onOpenDetail && onOpenDetail(task)}>
+          {/* Capped at half the row and CLIPPED, not ellipsised, with a fade over
+              the last few characters. An ellipsis reads as "the name ends here";
+              a fade reads as "there is more", which is true — the full name is in
+              the dropdown. Clip rather than tail is what leaves letters under the
+              gradient to fade, instead of a "…" sitting in clear space. */}
+          <Text style={[s.listName, !!onOpenDetail && s.listNameLink]}
+            numberOfLines={1} ellipsizeMode="clip">{task.name}</Text>
+          <Svg style={s.listNameFade} width={FADE_W} height="100%" pointerEvents="none">
+            <Defs>
+              <SvgLinearGradient id="nameFade" x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor="#ffffff" stopOpacity="0" />
+                <Stop offset="1" stopColor="#ffffff" stopOpacity="1" />
+              </SvgLinearGradient>
+            </Defs>
+            <Rect x="0" y="0" width={FADE_W} height="100%" fill="url(#nameFade)" />
+          </Svg>
+        </TouchableOpacity>
         <View style={s.listSpacer} />
-        {/* The status the card used to reveal on expand. Read-only, and the one
-            thing you actually scan a list for. */}
-        <View style={[s.pill, s.listStatePill, { backgroundColor: p.bg }]}>
-          <View style={[s.pillDot, { backgroundColor: p.fg }]} />
-          <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
-        </View>
+        {/* The priority badge deliberately does NOT live up here. It was tried on
+            the row and, on a phone, it ran straight over the Live pill and the
+            arrow — the header has room for the name, one live marker and the
+            control, and nothing else. The coloured dot on the left already
+            carries the priority; the full badge is in the body below. */}
         {running && (
           <View style={s.livePill}>
             {/* Beats while the timer runs — a static dot on a card that says
@@ -506,10 +634,23 @@ function TaskListRow({ task, pulse, onRowRef, onOpenDetail }) {
             <Text style={s.liveTxt}>Live</Text>
           </View>
         )}
-        {/* Points INTO the task rather than rotating open, because that is now
-            what the tap does. */}
-        <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
+        <Animated.View style={{ transform: [{ rotate: spin }] }}>
+          <Ionicons name="chevron-forward" size={18} color={expanded ? COLORS.primary : COLORS.muted} />
+        </Animated.View>
       </TouchableOpacity>
+      {expanded && (
+        <View style={s.listBody}>
+          {/* The full name, since the header had to cut it. First thing in the
+              dropdown, because "what IS this task" is the reason the cut name
+              sent you here. */}
+          <Text style={s.listFullName}>{task.name}</Text>
+          <View style={[s.pill, s.listPill, { backgroundColor: p.bg }]}>
+            <View style={[s.pillDot, { backgroundColor: p.fg }]} />
+            <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
+          </View>
+          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} reminder={reminder} readOnly={readOnly} />
+        </View>
+      )}
     </Animated.View>
   );
 }
@@ -763,12 +904,24 @@ export default function KpiActionBoard({
   const [peopleBusy, setPeopleBusy] = useState(false);
   const [meetingWith, setMeetingWith] = useState([]);   // array of user ids
   const [peopleQuery, setPeopleQuery] = useState('');
+  // Validation shown inside the pause dialogs rather than as an OS alert.
+  const [pauseErr, setPauseErr] = useState('');
+  const [pauseAllErr, setPauseAllErr] = useState('');
   // Always change the code through this. Picking a reason that needs no note
   // clears whatever was typed, so a note written for Other cannot end up filed
   // against Lunch after the user changes their mind.
-  const pickPauseCode = (code) => {
-    setPauseCode(code);
-    if (!noteRequiredFor(code)) setPauseNote('');
+  // `forAll` targets the Pause-all dialog instead of the single one. Both share
+  // the people list and the attendee selection — only one pause dialog is ever
+  // open at a time, so a second copy of that state would only be a second thing
+  // to keep in step.
+  const pickPauseCode = (code, { forAll = false } = {}) => {
+    if (forAll) {
+      setPauseAllCode(code);
+      if (!noteRequiredFor(code)) setPauseAllNote('');
+    } else {
+      setPauseCode(code);
+      if (!noteRequiredFor(code)) setPauseNote('');
+    }
     if (code !== 'meeting') { setMeetingWith([]); setPeopleQuery(''); }
     else if (!people.length && !peopleBusy) {
       setPeopleBusy(true);
@@ -804,6 +957,9 @@ export default function KpiActionBoard({
   const [finishFor, setFinishFor] = useState(null);
   const [finishPartial, setFinishPartial] = useState(false);
   const [finishSummary, setFinishSummary] = useState('');
+  // Validation message shown inside the Finish dialog, so the complaint and the
+  // field it is about are on the same screen.
+  const [finishErr, setFinishErr] = useState('');
   const [checklist, setChecklist] = useState({});
 
   // "You haven't started your workday" — asked on every board entry while locked,
@@ -864,16 +1020,18 @@ export default function KpiActionBoard({
   }, [enter]);
   const enterStyle = { opacity: enter, transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }] };
 
-  // View mode: 'list' = read-only rows grouped by status (default), 'board' =
-  // horizontal kanban with the action buttons. Available to every role.
+  // View mode: 'list' = vertical accordion (default), 'board' = horizontal kanban.
+  // Available to every role. In list mode:
   //   expandedLanes = which status headings are open (default: all collapsed —
   //                   only the Regular/Paused/… headings show until tapped).
-  // There is no longer a per-task accordion: a list row opens the task, which is
-  // how the web behaves and means actions live in one place rather than three.
+  //   expandedId    = the single task row whose ACTIONS are open (null = none).
+  //                   Opened by the row's arrow; tapping the row itself opens the
+  //                   task details instead, so both are reachable.
   const [viewMode, setViewMode] = useState('list');
   // When opened focused on a status (from a Home stat card), that lane's heading
   // starts expanded so its tasks show immediately.
   const [expandedLanes, setExpandedLanes] = useState(() => (focusStatus ? new Set([focusStatus]) : new Set()));
+  const [expandedId, setExpandedId] = useState(null);
 
   // KPI Details — a full screen that REPLACES the board, exactly as the web pane
   // replaces its list. Its own component owns the loading/writes; the board just
@@ -1114,6 +1272,12 @@ export default function KpiActionBoard({
   const [ntClient, setNtClient] = useState(null);
   const [ntClientOpen, setNtClientOpen] = useState(false);
   const [ntBusy, setNtBusy] = useState(false);
+  // Admin-only assignee picker on New Task. `assignees` is the list from
+  // /kra_kpi/get_users (developers + admins, never clients); ntUser is the
+  // chosen one, null meaning "me".
+  const [assignees, setAssignees] = useState([]);
+  const [ntUser, setNtUser] = useState(null);
+  const [ntUserOpen, setNtUserOpen] = useState(false);
 
   const load = useCallback(async (opts = {}) => {
     if (!opts.silent) setLoading(true);
@@ -1523,6 +1687,15 @@ export default function KpiActionBoard({
     setNtName(''); setNtProject(null); setNtHours('1'); setNtMinutes('0'); setNtPriority('regular'); setNtDesc('');
     setNtProjectOpen(false); setNtClient(null); setNtClientOpen(false);
     if (clientTree.length === 0) fetchClientTree().then(setClientTree).catch(() => {});
+    // Admins file work for other people, so they pick who it is for; a developer
+    // is always the assignee of their own task and gets no picker. Defaults to
+    // the admin themselves, matching the web. Loaded lazily — a developer never
+    // needs this list.
+    setNtUser(null);
+    setNtUserOpen(false);
+    if (isAdmin && !assignees.length) {
+      fetchUsers().then((list) => setAssignees(list || [])).catch((e) => log.warn('users load failed', e?.message));
+    }
   }
 
   async function submitNewTask() {
@@ -1538,7 +1711,11 @@ export default function KpiActionBoard({
     setNtBusy(true);
     try {
       const res = await selfCreateTask({
-        name: ntName.trim(), kraId: ntProject.id, estimateHours: h, estimateMinutes: m, priority: ntPriority, description: ntDesc.trim(),
+        name: ntName.trim(), kraId: ntProject.id, estimateHours: h, estimateMinutes: m,
+        priority: ntPriority, description: ntDesc.trim(),
+        // Admin-only; the route ignores it from anyone else and falls back to
+        // the caller, so a developer's task can never be filed against someone.
+        userId: isAdmin ? (ntUser?.id || 0) : 0,
       });
       if (res && res.status === false) { Alert.alert('Cannot create', res.message || 'Failed'); return; }
       setNewTaskOpen(false);
@@ -1606,15 +1783,18 @@ export default function KpiActionBoard({
       setPauseCode('break');
       setPauseNote('');
       setPauseDropdown(false);
-      // Never carry a previous meeting's attendees into a new pause.
+      // Never carry a previous meeting's attendees — or a stale error — into a
+      // new pause.
       setMeetingWith([]);
       setPeopleQuery('');
+      setPauseErr('');
       return;
     }
     if (kind === 'complete' || kind === 'partial') {
       setFinishFor(task);
       setFinishPartial(kind === 'partial');
       setFinishSummary('');
+      setFinishErr('');
       setChecklist({});
       return;
     }
@@ -1720,13 +1900,18 @@ export default function KpiActionBoard({
   // Pause, so the two can't disagree about when a reason needs explaining.
   async function submitPauseAll() {
     if (noteRequiredFor(pauseAllCode) && !pauseAllNote.trim()) {
-      return Alert.alert('Note required', "Please say what you're pausing for.");
+      H.err();
+      return setPauseAllErr(pauseAllCode === 'meeting'
+        ? '"Meeting" on its own does not explain the time — say what it is about.'
+        : "Please say what you're pausing for.");
     }
+    setPauseAllErr('');
     const label = (PAUSE_REASONS.find((r) => r.code === pauseAllCode) || {}).label || 'Paused';
     const reason = pauseAllNote.trim().slice(0, IDLE_NOTE_MAX) || label;
+    const withIds = pauseAllCode === 'meeting' ? meetingWith : [];
     setPauseAllBusy(true);
     try {
-      const res = await pauseAllTasks(reason, pauseAllCode);
+      const res = await pauseAllTasks(reason, pauseAllCode, withIds);
       if (res && res.status === false) {
         showError("Can't pause your tasks", res.message || 'Failed');
         return;
@@ -1772,12 +1957,18 @@ export default function KpiActionBoard({
   // disagreed about what a valid pause even was.
   async function submitPause() {
     const task = pauseFor;
+    // Inline, inside the dialog — the box it complains about is right there, so
+    // an OS alert thrown over the top put the complaint further away than the fix.
     if (noteRequiredFor(pauseCode) && !pauseNote.trim()) {
-      return Alert.alert('Note required',
+      H.err();
+      return setPauseErr(
         pauseCode === 'urgent'
           ? 'Describe what is urgent — this is sent to the owner straight away.'
-          : "Please say what you're pausing for.");
+          : pauseCode === 'meeting'
+            ? '"Meeting" on its own does not explain the time — say what it is about.'
+            : "Please say what you're pausing for.");
     }
+    setPauseErr('');
     const label = (PAUSE_REASONS.find((r) => r.code === pauseCode) || {}).label || 'Paused';
     // Clamped here as well as by maxLength: the cap is what keeps this readable
     // inside a Workday Map chip, and a paste can outrun the input's own limit.
@@ -1801,16 +1992,24 @@ export default function KpiActionBoard({
   // manager approves against this list, so it has to be what the developer said.
   async function submitFinish() {
     const task = finishFor;
+    // Errors show INSIDE the dialog rather than as an OS alert. Both of these
+    // are "you missed a field" — the answer is three inches away on the same
+    // screen, so throwing a system dialog over it made the fix harder to reach
+    // than the mistake was. Stacking the board's own popup would be worse still:
+    // two RN Modals at once are unreliable on Android. Same treatment the web's
+    // Partial Finish dialog already uses.
     if (!finishSummary.trim()) {
-      return Alert.alert('Progress summary required', 'Please describe what you did before finishing.');
+      H.err();
+      return setFinishErr('Describe what you did before finishing — this is what your manager reads.');
     }
     if (!finishPartial) {
       const ticked = CHECKLIST_ITEMS.filter((c) => checklist[c.key]);
       if (!ticked.length) {
-        return Alert.alert('Nothing ticked',
-          'Tick everything that applies — at least one — or use "Partial Finish" to submit a summary only.');
+        H.err();
+        return setFinishErr('Tick everything that applies — at least one — or use "Partial Finish" to submit a summary only.');
       }
     }
+    setFinishErr('');
     setFinishFor(null);
     setBusyId(task.id);
     try {
@@ -2080,7 +2279,11 @@ export default function KpiActionBoard({
                   {!readOnly && (live.active_tasks?.length || 0) > 1 ? (
                     <TouchableOpacity
                       style={s.pauseAllBtn}
-                      onPress={() => { setPauseAllCode('break'); setPauseAllNote(''); setPauseAllOpen(true); }}
+                      onPress={() => {
+                        setPauseAllCode('break'); setPauseAllNote(''); setPauseAllErr('');
+                        setMeetingWith([]); setPeopleQuery('');
+                        setPauseAllOpen(true);
+                      }}
                       activeOpacity={0.85}
                     >
                       <Ionicons name="pause" size={12} color="#92400E" />
@@ -2364,14 +2567,23 @@ export default function KpiActionBoard({
                     <Text style={s.listSectionTxt} numberOfLines={1}>{l.label}</Text>
                     <View style={s.laneCount}><Text style={s.laneCountTxt}>{items.length}</Text></View>
                   </TouchableOpacity>
-                  {/* Level 2: task rows — read-only; tapping one opens the task. */}
+                  {/* Level 2: task rows — tap the row for details, the arrow for
+                      the action buttons. */}
                   {laneOpen && items.map((t) => (
                     <TaskListRow
                       key={t.id}
                       task={t}
+                      expanded={expandedId === t.id}
+                      onToggle={() => { animateNext(); setExpandedId(expandedId === t.id ? null : t.id); }}
+                      onAction={runAction}
+                      busyId={busyId}
+                      nowMs={nowMs}
+                      isAdmin={isAdmin}
+                      reminder={reminders[String(t.id)]}
                       pulse={pulseId === t.id}
                       onRowRef={(id, r) => { listRowRefs.current[id] = r; }}
                       onOpenDetail={openDetail}
+                      readOnly={readOnly}
                     />
                   ))}
                 </View>
@@ -2505,70 +2717,30 @@ export default function KpiActionBoard({
                 </View>
               )}
 
-              {/* Meeting: who it is with. Multi-select, because a meeting rarely
-                  has exactly one other person, and it includes CLIENTS — which is
-                  why it uses its own endpoint rather than the assignee list.
-                  Checkbox rows with an array toggle, matching AssignClientsModal
-                  in KraKpiDashboard rather than inventing a third control. */}
+              {/* Inline, above the box it is about. This was an OS alert thrown
+                  over the dialog — the field it complains about is an inch away,
+                  so the complaint sat further from the fix than the mistake did. */}
+              {pauseErr ? (
+                <View style={s.inlineErr}>
+                  <Ionicons name="alert-circle" size={15} color={COLORS.red} />
+                  <Text style={s.inlineErrTxt}>{pauseErr}</Text>
+                </View>
+              ) : null}
+
               {pauseCode === 'meeting' ? (
                 <>
-                  <Text style={s.fieldLabel}>Who is it with?</Text>
-                  {peopleBusy && !people.length ? (
-                    <View style={{ paddingVertical: 14 }}><ActivityIndicator color={COLORS.primary} /></View>
-                  ) : (
-                    <>
-                      <View style={s.peopleSearch}>
-                        <Ionicons name="search" size={15} color={COLORS.muted} />
-                        <TextInput
-                          style={s.peopleSearchInput}
-                          placeholder="Search people…"
-                          placeholderTextColor={COLORS.faint}
-                          value={peopleQuery}
-                          onChangeText={setPeopleQuery}
-                          autoCorrect={false}
-                        />
-                      </View>
-                      <ScrollView style={s.peopleList} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                        {people
-                          .filter((u) => !peopleQuery.trim()
-                            || String(u.name || '').toLowerCase().includes(peopleQuery.trim().toLowerCase()))
-                          .map((u) => {
-                            const on = meetingWith.includes(u.id);
-                            return (
-                              <TouchableOpacity
-                                key={u.id} style={s.personRow} activeOpacity={0.7}
-                                onPress={() => {
-                                  H.select();
-                                  setMeetingWith((prev) => (prev.includes(u.id)
-                                    ? prev.filter((x) => x !== u.id)
-                                    : [...prev, u.id]));
-                                }}
-                              >
-                                <Ionicons name={on ? 'checkbox' : 'square-outline'} size={20}
-                                  color={on ? COLORS.primary : COLORS.faint} />
-                                <Text style={s.personName} numberOfLines={1}>{u.name}</Text>
-                                <Text style={s.personRole}>{String(u.role || '').toUpperCase()}</Text>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        {!people.length ? (
-                          <Text style={s.idleNoteHint}>No one else to pick from.</Text>
-                        ) : null}
-                      </ScrollView>
-                      <Text style={s.idleNoteHint}>
-                        {meetingWith.length
-                          ? `${meetingWith.length} selected`
-                          : 'Optional — pick anyone who is in it.'}
-                      </Text>
-                    </>
-                  )}
+                  <MeetingPicker
+                    people={people} busy={peopleBusy}
+                    query={peopleQuery} setQuery={setPeopleQuery}
+                    picked={meetingWith} setPicked={setMeetingWith}
+                  />
                   <Text style={s.fieldLabel}>What is it about?</Text>
                   <TextInput
                     style={s.pauseNote}
                     placeholder="Short — e.g. sprint planning"
                     placeholderTextColor={COLORS.faint}
                     value={pauseNote}
-                    onChangeText={setPauseNote}
+                    onChangeText={(t) => { setPauseNote(t); if (pauseErr) setPauseErr(''); }}
                     maxLength={IDLE_NOTE_MAX}
                     multiline
                   />
@@ -2584,7 +2756,9 @@ export default function KpiActionBoard({
                   body of the alert the owner receives.
                   Capped: this is drawn inside a Workday Map chip, and the Map is
                   what gets frozen into the saved End Workday image. */}
-              {noteRequiredFor(pauseCode) ? (
+              {/* Meeting is excluded: it has its own note box above, under the
+                  people list, so "who" then "what about" read in that order. */}
+              {noteRequiredFor(pauseCode) && pauseCode !== 'meeting' ? (
                 <>
                   <TextInput
                     style={s.pauseNote}
@@ -2593,7 +2767,7 @@ export default function KpiActionBoard({
                       : 'Why? (required)'}
                     placeholderTextColor={COLORS.faint}
                     value={pauseNote}
-                    onChangeText={setPauseNote}
+                    onChangeText={(t) => { setPauseNote(t); if (pauseErr) setPauseErr(''); }}
                     maxLength={IDLE_NOTE_MAX}
                     multiline
                   />
@@ -2756,8 +2930,11 @@ export default function KpiActionBoard({
                       key={r.code} style={[s.typeChip, on && s.typeChipOn]}
                       onPress={() => {
                         H.select();
-                        setPauseAllCode(r.code);
-                        if (!noteRequiredFor(r.code)) setPauseAllNote('');
+                        // Same helper the single Pause uses, so picking Meeting
+                        // loads the people list here too and switching away
+                        // clears both the note and the attendees.
+                        pickPauseCode(r.code, { forAll: true });
+                        setPauseAllErr('');
                       }}
                       activeOpacity={0.85}
                     >
@@ -2766,17 +2943,37 @@ export default function KpiActionBoard({
                   );
                 })}
               </View>
-              {/* Same rule as the single Pause — only Other and Urgent ask. */}
+              {pauseAllErr ? (
+                <View style={s.inlineErr}>
+                  <Ionicons name="alert-circle" size={15} color={COLORS.red} />
+                  <Text style={s.inlineErrTxt}>{pauseAllErr}</Text>
+                </View>
+              ) : null}
+              {/* Meeting asks who, exactly as the single Pause does. One break row
+                  is opened however many timers stop, so the names land once. */}
+              {pauseAllCode === 'meeting' ? (
+                <MeetingPicker
+                  people={people} busy={peopleBusy}
+                  query={peopleQuery} setQuery={setPeopleQuery}
+                  picked={meetingWith} setPicked={setMeetingWith}
+                />
+              ) : null}
+              {/* Same rule as the single Pause — Other, Urgent and Meeting ask. */}
               {noteRequiredFor(pauseAllCode) ? (
                 <>
+                  {pauseAllCode === 'meeting' ? (
+                    <Text style={s.fieldLabel}>What is it about?</Text>
+                  ) : null}
                   <TextInput
                     style={s.pauseNote}
                     placeholder={pauseAllCode === 'urgent'
                       ? 'What is urgent? This is sent to the owner now…'
-                      : 'Why? (required)'}
+                      : pauseAllCode === 'meeting'
+                        ? 'Short — e.g. sprint planning'
+                        : 'Why? (required)'}
                     placeholderTextColor={COLORS.faint}
                     value={pauseAllNote}
-                    onChangeText={setPauseAllNote}
+                    onChangeText={(t) => { setPauseAllNote(t); if (pauseAllErr) setPauseAllErr(''); }}
                     maxLength={IDLE_NOTE_MAX}
                     multiline
                   />
@@ -2874,13 +3071,23 @@ export default function KpiActionBoard({
                   </View>
                 ) : null}
 
+                {/* Inline, above the fields it is about — this used to be an OS
+                    alert thrown over the dialog, which put the complaint further
+                    from the fix than the mistake was. */}
+                {finishErr ? (
+                  <View style={s.inlineErr}>
+                    <Ionicons name="alert-circle" size={15} color={COLORS.red} />
+                    <Text style={s.inlineErrTxt}>{finishErr}</Text>
+                  </View>
+                ) : null}
+
                 <Text style={s.fieldLabel}>Progress Summary *</Text>
                 <TextInput
-                  style={[s.reasonInput, { minHeight: 100 }]}
+                  style={[s.reasonInput, { minHeight: 100 }, finishErr && !finishSummary.trim() && s.inputErr]}
                   placeholder={finishPartial ? "What was done, what's left, why you're finishing now…" : 'What did you do on this task?'}
                   placeholderTextColor={COLORS.faint}
                   value={finishSummary}
-                  onChangeText={setFinishSummary}
+                  onChangeText={(t) => { setFinishSummary(t); if (finishErr) setFinishErr(''); }}
                   multiline
                 />
 
@@ -2893,7 +3100,7 @@ export default function KpiActionBoard({
                     {CHECKLIST_ITEMS.map((c) => {
                       const on = !!checklist[c.key];
                       return (
-                        <TouchableOpacity key={c.key} style={s.checkRow} onPress={() => { H.select(); setChecklist((p) => ({ ...p, [c.key]: !p[c.key] })); }}>
+                        <TouchableOpacity key={c.key} style={s.checkRow} onPress={() => { H.select(); if (finishErr) setFinishErr(''); setChecklist((p) => ({ ...p, [c.key]: !p[c.key] })); }}>
                           <Ionicons name={on ? 'checkbox' : 'square-outline'} size={22} color={on ? COLORS.primary : COLORS.faint} />
                           <Text style={s.checkTxt}>{c.label}</Text>
                         </TouchableOpacity>
@@ -2970,6 +3177,43 @@ export default function KpiActionBoard({
                     </ScrollView>
                   </View>
                 )}
+
+                {/* Admins file work for other people, so they choose who it is
+                    for; a developer is always the assignee of their own task and
+                    gets no picker at all. Same list the web uses
+                    (/kra_kpi/get_users) — developers and admins, never clients,
+                    because a client cannot open the board to work it. */}
+                {isAdmin ? (
+                  <>
+                    <Text style={s.fieldLabel}>Developer *</Text>
+                    <TouchableOpacity style={s.dropdown} onPress={() => { setNtUserOpen((o) => !o); setNtClientOpen(false); setNtProjectOpen(false); }} activeOpacity={0.8}>
+                      <Text style={s.dropdownTxt} numberOfLines={1}>
+                        {ntUser ? ntUser.name : 'Me'}
+                      </Text>
+                      <Ionicons name={ntUserOpen ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.muted} />
+                    </TouchableOpacity>
+                    <Text style={s.fieldHint}>Who this task is for. Defaults to you.</Text>
+                    {ntUserOpen && (
+                      <View style={s.dropdownList}>
+                        <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                          <TouchableOpacity style={[s.dropdownItem, !ntUser && s.dropdownItemOn]}
+                            onPress={() => { H.select(); setNtUser(null); setNtUserOpen(false); }}>
+                            <Text style={[s.dropdownItemTxt, !ntUser && { color: COLORS.primary, fontWeight: '800' }]}>Me</Text>
+                          </TouchableOpacity>
+                          {assignees.length === 0 ? (
+                            <Text style={[s.centerTxt, { padding: 12 }]}>Loading people…</Text>
+                          ) : null}
+                          {assignees.map((u) => (
+                            <TouchableOpacity key={u.id} style={[s.dropdownItem, ntUser?.id === u.id && s.dropdownItemOn]}
+                              onPress={() => { H.select(); setNtUser(u); setNtUserOpen(false); }}>
+                              <Text style={[s.dropdownItemTxt, ntUser?.id === u.id && { color: COLORS.primary, fontWeight: '800' }]}>{u.name}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                      </View>
+                    )}
+                  </>
+                ) : null}
 
                 <View style={s.twoCol}>
                   <View style={{ flex: 1 }}>
@@ -3955,14 +4199,20 @@ const s = StyleSheet.create({
   // Same "opens details" cue as the kanban card and the web board.
   listNameLink: { color: COLORS.primary, textDecorationLine: 'underline' },
   // Shrinks (so long names still truncate to one line) but never grows.
-  listNameHit: { flexShrink: 1, paddingVertical: 15 },
+  // Capped at half the row: past that a long name pushes the Live pill and the
+  // arrow off a phone. flexShrink (not flex) so a SHORT name takes only what it
+  // needs and the empty middle still falls through to the dropdown.
+  listNameHit: { flexShrink: 1, maxWidth: '50%', paddingVertical: 15 },
+  // Sits over the last few characters, fading them into the card. Only visible
+  // when the text actually reaches the edge; over a short name it lies on white
+  // and shows nothing.
+  listNameFade: { position: 'absolute', right: 0, top: 0, bottom: 0 },
+  listFullName: { fontSize: 14.5, fontWeight: '800', color: COLORS.navy, lineHeight: 20, marginBottom: 8 },
   // Eats the leftover width for the OUTER (dropdown) touchable.
   listSpacer: { flex: 1, alignSelf: 'stretch', minWidth: 8 },
   listBody: { paddingHorizontal: 14, paddingBottom: 12, borderTopWidth: 1, borderTopColor: '#F0F3F8', paddingTop: 10 },
   listPill: { alignSelf: 'flex-start', marginBottom: 4 },
-  // Status on the row itself, now that there is no expand to reveal it. Shrinks
-  // before the name does on a narrow phone.
-  listStatePill: { flexShrink: 0, marginRight: 2 },
+  listRowOpen: { borderColor: COLORS.primary },
 
   // Live activity strip (stacked rows so the break line + totals fit on a phone)
   liveStrip: { marginHorizontal: 14, marginTop: 10, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
@@ -4438,6 +4688,23 @@ const s = StyleSheet.create({
   // Form fields
   fieldLabel: { fontSize: 13.5, fontWeight: '800', color: COLORS.navy, marginTop: 14, marginBottom: 7 },
   fieldHint: { fontSize: 12, color: COLORS.muted, marginTop: 5 },
+  // Inline validation inside a dialog. Clears itself as soon as the user starts
+  // fixing the thing it complains about.
+  inlineErr: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 7,
+    backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA',
+    borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginTop: 12,
+  },
+  inlineErrTxt: { flex: 1, fontSize: 12.5, color: COLORS.red, fontWeight: '600', lineHeight: 17 },
+  inputErr: { borderColor: COLORS.red },
+
+  // "Completed by / date / review started" — mirrors the web card's block.
+  doneBlock: { marginTop: 8, gap: 3 },
+  doneRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  doneTxt: { flex: 1, fontSize: 12, color: COLORS.green, fontWeight: '600' },
+  doneStrong: { fontWeight: '900' },
+  doneMuted: { flex: 1, fontSize: 12, color: COLORS.muted },
+  doneInfo: { flex: 1, fontSize: 12, color: COLORS.primary, lineHeight: 16 },
   mandatory: { fontSize: 12, color: COLORS.red, marginTop: 5, fontWeight: '700' },
   textInput: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11, fontSize: 14.5, color: COLORS.ink },
   inputErr: { borderColor: '#F3C4C0' },

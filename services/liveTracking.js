@@ -33,3 +33,19 @@ export async function fetchLiveTracking() {
   log.info('live tracking ←', { rows: res?.rows?.length ?? 0, status: res?.status });
   return res || { status: false, rows: [] };
 }
+
+// Reopen a developer's workday after they explicitly ended it. Admin-only, and
+// the server enforces that plus "today only" plus a non-empty reason — the
+// developer is told in the admin's own words, so there is nothing useful to send
+// without one. Mirrors the web's Live Tracking button.
+export async function revertWorkday(userId, reason) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) {
+    log.info('revertWorkday — no server, mock');
+    return { status: false, message: 'No server is configured — nothing was reopened.' };
+  }
+  const res = await jsonRpc(serverUrl, '/kpi_workday/revert',
+    { user_id: userId, reason: reason || '' });
+  log.info('revertWorkday ←', { user_id: userId, status: res?.status, message: res?.message });
+  return res || { status: false, message: 'Could not reopen that workday.' };
+}
