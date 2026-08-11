@@ -280,11 +280,18 @@ _APP_TEMPLATES = {
     # An ended day was reopened. Says who did it and why, because the summary
     # for that day has already been delivered and this is the correction to it.
     # PASSTHROUGH event → ctx keys only ({dev}, {admin}, {session_date}, {reason}).
+    # The admin's reason is the POINT of this message, not a footnote — the
+    # developer's day just came back to life underneath them and this is the only
+    # thing that explains it. action_revert_day refuses an empty one, so {reason}
+    # is always real words. Worded to read sensibly for both audiences: the
+    # developer gets it (extra_users) and so do the admins holding a summary that
+    # has stopped being final.
     'workday_reverted': (
-        "↩️ {dev}'s workday was reopened by {admin}\n"
-        "📅 {session_date}\n"
-        "📝 {reason}\n\n"
-        "The day's summary you already received is no longer final."
+        "↩️ {admin} reopened {dev}'s workday\n"
+        "📝 “{reason}”\n"
+        "📅 {session_date}\n\n"
+        "Any task that was running is still paused — press Resume to carry on. "
+        "The day's summary already sent is no longer final."
     ),
     # Developer ended their workday — admins. TAPPING this opens that day's frozen
     # summary image (kpi.notification.snapshot_id), which is the whole reason it is

@@ -1074,7 +1074,7 @@ class KpiWorkflow(models.Model):
                 "That task must be paused before another can start.")
 
     @api.model
-    def pause_all_running(self, reason='', reason_code='break'):
+    def pause_all_running(self, reason='', reason_code='break', meeting_with_ids=None):
         """Pause EVERY task the current user has running, with one shared reason.
 
         For "I'm stopping now" — lunch, a meeting, end of the day — when
@@ -1112,7 +1112,12 @@ class KpiWorkflow(models.Model):
         paused = []
         for rec in running:
             try:
-                rec.with_user(user).pause_task(reason=reason, reason_code=code)
+                # Participants ride along on every task's pause, but only the
+                # FIRST one opens a break (kpi.break.log keeps one active per
+                # user), so the names land once — the same reason a 20-minute
+                # lunch across two tasks is 20 minutes, not 40.
+                rec.with_user(user).pause_task(reason=reason, reason_code=code,
+                                               meeting_with_ids=meeting_with_ids)
                 paused.append(rec.external_ref or rec.name or str(rec.id))
                 try:
                     rec._log_action('paused_bulk', source='web',

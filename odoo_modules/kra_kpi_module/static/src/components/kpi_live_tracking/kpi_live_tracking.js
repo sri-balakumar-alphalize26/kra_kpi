@@ -182,10 +182,15 @@ export class KpiLiveTracking extends Component {
     async revertDay(row) {
         const reason = window.prompt(
             `Reopen ${row.name}'s workday?\n\n` +
-            "Their day's summary has already been sent — everyone who received it " +
-            'will be told it was reopened. Any task they had running stays paused ' +
-            'until they resume it.\n\nReason:');
-        if (reason === null) { return; }
+            "A reason is REQUIRED — it is sent to them word for word, and it is the " +
+            'only thing that explains why their day suddenly reopened. Everyone who ' +
+            "received the day's summary is told too. Any task they had running stays " +
+            'paused until they resume it.\n\nReason:');
+        if (reason === null) { return; }        // cancelled
+        if (!reason.trim()) {
+            this.state.error = 'A reason is required to reopen a workday — the developer is told, in your words.';
+            return;
+        }
         this.state.reverting = row.user_id;
         try {
             const res = await rpc('/kpi_workday/revert', { user_id: row.user_id, reason });

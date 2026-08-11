@@ -418,6 +418,28 @@ class KraKpiAPI(http.Controller):
         return {'status': True, 'message': 'Task started', 'id': rec.id,
                 'new_state': rec.task_state}
 
+    def _clean_meeting_ids(self, reason_code, raw):
+        """Validate meeting participants for a pause. Shared by /task/pause and
+        /task/pause_all so the two cannot disagree about what is acceptable.
+
+        Returns a list of user ids, None when the code is not 'meeting' (or no
+        one was picked), or False when the payload is malformed — a bare list is
+        falsy when empty, so callers must test `is False`, not truthiness.
+        """
+        if reason_code != 'meeting':
+            return None
+        try:
+            wanted = [int(i) for i in (raw or [])]
+        except (TypeError, ValueError):
+            return False
+        if not wanted:
+            return None
+        # Real, active, internal users only — a hand-rolled payload must not be
+        # able to attach arbitrary ids to a break row.
+        return request.env['res.users'].sudo().search([
+            ('id', 'in', wanted), ('active', '=', True), ('id', '!=', 1),
+        ]).ids
+
     @http.route('/kra_kpi/task/pause_all', type='json', auth='user', methods=['POST'], csrf=False)
     def task_pause_all(self, **params):
         """Pause every task the caller has running, with one shared reason.
@@ -425,9 +447,14 @@ class KraKpiAPI(http.Controller):
         Scoped to the CALLER's own running tasks by the model method — there is no
         task id in the payload, so this cannot be aimed at anyone else's timers.
         """
+        reason_code = params.get('reason_code') or 'break'
+        meeting_with_ids = self._clean_meeting_ids(reason_code, params.get('meeting_with_ids'))
+        if meeting_with_ids is False:
+            return {'status': False, 'message': 'Invalid meeting participants.'}
         return request.env['kra.kpi'].sudo().with_user(request.env.user).pause_all_running(
             reason=(params.get('reason') or '').strip()[:NOTE_MAX],
-            reason_code=params.get('reason_code') or 'break')
+            reason_code=reason_code,
+            meeting_with_ids=meeting_with_ids)
 
     @http.route('/kra_kpi/task/revert_signoff', type='json', auth='user', methods=['POST'], csrf=False)
     def task_revert_signoff(self, **params):
@@ -496,19 +523,9 @@ class KraKpiAPI(http.Controller):
                 request.env['kra.kpi']._fields['pause_reason_code'].selection):
             return {'status': False, 'message': 'Unknown pause reason.'}
 
-        # Who a MEETING is with. Ignored for every other code, and validated to
-        # real active internal users so a hand-rolled payload cannot attach
-        # arbitrary ids to a break row.
-        meeting_with_ids = None
-        if reason_code == 'meeting':
-            try:
-                wanted = [int(i) for i in (params.get('meeting_with_ids') or [])]
-            except (TypeError, ValueError):
-                return {'status': False, 'message': 'Invalid meeting participants.'}
-            if wanted:
-                meeting_with_ids = request.env['res.users'].sudo().search([
-                    ('id', 'in', wanted), ('active', '=', True), ('id', '!=', 1),
-                ]).ids
+        meeting_with_ids = self._clean_meeting_ids(reason_code, params.get('meeting_with_ids'))
+        if meeting_with_ids is False:
+            return {'status': False, 'message': 'Invalid meeting participants.'}
 
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
         if not rec.exists():

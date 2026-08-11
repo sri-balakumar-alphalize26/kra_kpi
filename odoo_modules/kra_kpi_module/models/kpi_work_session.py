@@ -1043,6 +1043,14 @@ class KpiWorkSession(models.Model):
         if self.session_date != fields.Date.context_today(self):
             return {'status': False,
                     'message': "Only today's workday can be reopened."}
+        # REQUIRED. The developer's day just came back to life underneath them and
+        # everyone who received the daily summary is about to be told it no longer
+        # stands — "an admin reopened it, no reason given" answers nobody. Enforced
+        # here and not only in the two dialogs, because this is the rule.
+        if not (reason or '').strip():
+            return {'status': False,
+                    'message': 'Please say why you are reopening this workday — '
+                               'the developer is told, in your words.'}
         # An open session for the same developer+date would break the "at most
         # one open session per user per day" invariant _get_or_open_today keeps.
         clash = self.sudo().search_count([
@@ -1109,7 +1117,9 @@ class KpiWorkSession(models.Model):
             'dev':          u.name or u.login or '—',
             'session_date': str(self.session_date),
             'admin':        self.env.user.name or self.env.user.login or '—',
-            'reason':       reason or 'no reason given',
+            # action_revert_day refuses an empty one, so this is always the
+            # admin's actual words — no "no reason given" fallback to fall into.
+            'reason':       (reason or '').strip(),
         }
         Kpi = self.env['kra.kpi'].sudo()
         any_kpi = Kpi.search([('user_id', '=', u.id)], order='id desc', limit=1) \

@@ -12,6 +12,14 @@ import { uploadWithProgress } from "@kra_kpi_module/utils/upload_with_progress";
 // paragraph. The route clamps it too — this is the courtesy, that is the rule.
 const PAUSE_NOTE_MAX = 60;
 
+// The only pause reasons that need words typed. Every other code IS its own
+// explanation — asking for one taught people to type "break" into a box beside a
+// button already labelled Break. Urgent keeps it because that text becomes the
+// body of the 🚨 alert; Meeting because "Meeting" alone says nothing about what
+// it cost the day. Mirrors noteRequiredFor in the app's KpiActionBoard, and is
+// shared by BOTH pause dialogs here so single-pause and pause-all cannot drift.
+const PAUSE_NOTE_CODES = ['other', 'urgent', 'meeting'];
+
 // Work already started and stopped. Mirrors the app's PAUSED_STATES and the
 // canResume triple, so "shows Resume" and "counts as paused" stay one idea.
 const PAUSED_STATES = ['paused', 'hold', 'rework'];
@@ -463,7 +471,7 @@ export class KpiAction extends Component {
                             
                             <div class="mb-3">
                                 <label class="form-label fw-bold">Progress Summary *</label>
-                                <textarea class="form-control" rows="4" 
+                                <textarea id="progressSummary" class="form-control" rows="4"
                                           t-model="state.progressForm.summary"
                                           placeholder="Describe the work done, issues faced, next steps..."></textarea>
                             </div>
@@ -2657,7 +2665,7 @@ export class KpiAction extends Component {
             const meetWrap = document.getElementById('pauseMeetWrap');
             const isMeeting = (code === 'meeting');
             // Meeting asks for words too — a short "what about" — on top of who.
-            const needsNote = (code === 'other' || code === 'urgent' || isMeeting);
+            const needsNote = PAUSE_NOTE_CODES.includes(code);
             if (wrap) wrap.style.display = needsNote ? 'block' : 'none';
             if (noteLabel) noteLabel.style.display = isMeeting ? 'block' : 'none';
             if (noteEl) noteEl.placeholder = isMeeting
@@ -2936,10 +2944,17 @@ export class KpiAction extends Component {
     async revertWorkday() {
         const reason = window.prompt(
             'Reopen this workday?\n\n' +
-            "The day's summary has already been sent — everyone who received it " +
-            'will be told it was reopened. The paused task stays paused; press ' +
-            'Resume to pick it back up.\n\nReason:');
-        if (reason === null) { return; }
+            'A reason is REQUIRED — it is sent to the developer word for word, and ' +
+            'it is the only thing that explains why their day suddenly reopened. ' +
+            "Everyone who received the day's summary is told too. The paused task " +
+            'stays paused; press Resume to pick it back up.\n\nReason:');
+        if (reason === null) { return; }        // cancelled
+        if (!reason.trim()) {
+            this._showAlert(
+                'A reason is required to reopen a workday — the developer is told, in your words.',
+                'Reason required', 'warning');
+            return;
+        }
         try {
             const res = await rpc('/kpi_workday/revert', { reason });
             if (res && res.status) {
@@ -3239,9 +3254,11 @@ export class KpiAction extends Component {
 
     // CONFIRMATION METHODS
 
-    /** Fetch (once per session) and render the meeting participant checkboxes. */
-    async _loadPauseMeetPeople() {
-        const list = document.getElementById('pauseMeetList');
+    /** Fetch (once per session) and render meeting-participant checkboxes into
+     *  the given container. Shared by the single Pause and Pause-all dialogs —
+     *  the ids and the selection Set differ, nothing else does. */
+    async _loadMeetPeople(listId, searchId, countId, picked) {
+        const list = document.getElementById(listId);
         if (!list) return;
         if (!this._peopleCache) {
             try {
@@ -3254,8 +3271,8 @@ export class KpiAction extends Component {
         }
         const esc = (x) => (x == null ? '' : String(x))
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const search = document.getElementById('pauseMeetSearch');
-        const countEl = document.getElementById('pauseMeetCount');
+        const search = document.getElementById(searchId);
+        const countEl = document.getElementById(countId);
 
         const draw = () => {
             const q = (search && search.value || '').trim().toLowerCase();
@@ -3267,9 +3284,9 @@ export class KpiAction extends Component {
             }
             list.innerHTML = shown.map((u) => `
                 <div class="form-check d-flex align-items-center gap-2">
-                  <input class="form-check-input" type="checkbox" id="mw_${u.id}" value="${u.id}"
-                         ${this._pauseMeetWith.has(u.id) ? 'checked' : ''}/>
-                  <label class="form-check-label flex-grow-1" for="mw_${u.id}">${esc(u.name)}</label>
+                  <input class="form-check-input" type="checkbox" id="${listId}_${u.id}" value="${u.id}"
+                         ${picked.has(u.id) ? 'checked' : ''}/>
+                  <label class="form-check-label flex-grow-1" for="${listId}_${u.id}">${esc(u.name)}</label>
                   <span class="badge bg-light text-muted border">${esc((u.role || '').toUpperCase())}</span>
                 </div>`).join('');
             // Re-bound after every redraw: the rows are replaced wholesale on each
@@ -3277,11 +3294,10 @@ export class KpiAction extends Component {
             list.querySelectorAll('input[type=checkbox]').forEach((box) => {
                 box.addEventListener('change', () => {
                     const id = parseInt(box.value, 10);
-                    if (box.checked) this._pauseMeetWith.add(id);
-                    else this._pauseMeetWith.delete(id);
+                    if (box.checked) picked.add(id); else picked.delete(id);
                     if (countEl) {
-                        countEl.textContent = this._pauseMeetWith.size
-                            ? `${this._pauseMeetWith.size} selected`
+                        countEl.textContent = picked.size
+                            ? `${picked.size} selected`
                             : 'Optional — pick anyone who is in it.';
                     }
                 });
@@ -3290,6 +3306,13 @@ export class KpiAction extends Component {
         draw();
         if (search && !search._wired) { search._wired = true; search.addEventListener('input', draw); }
     }
+
+    /** Single-Pause dialog wrapper — kept so its call site reads plainly. */
+    async _loadPauseMeetPeople() {
+        return this._loadMeetPeople('pauseMeetList', 'pauseMeetSearch', 'pauseMeetCount',
+                                    this._pauseMeetWith);
+    }
+
 
     async confirmStart() {
         const kpi_id = this.state.selectedKpi.id;
@@ -3325,8 +3348,7 @@ export class KpiAction extends Component {
         // and stores its own label. This used to demand a note for Day End,
         // Leave, Technical Issue and the rest, which is why people typed the
         // reason they had just picked from the list.
-        const needsNote = (reason_code === 'other' || reason_code === 'urgent'
-                           || reason_code === 'meeting');
+        const needsNote = PAUSE_NOTE_CODES.includes(reason_code);
         const reason = reasonRaw || (needsNote ? '' : (codeEl?.selectedOptions?.[0]?.text || reason_code));
         if (needsNote && !reason) {
             const msg = reason_code === 'urgent'
@@ -3521,7 +3543,14 @@ export class KpiAction extends Component {
 
     async submitProgressUpdate() {
         if (!this.state.progressForm.summary.trim()) {
-            alert('Please enter a progress summary');
+            // The styled modal, not a bare browser alert(): this was the one
+            // validation message in the file that still used the OS dialog, so
+            // the most common mistake on the screen got the ugliest response.
+            this._showAlert(
+                'Describe what you did before submitting — this is what your manager reads.',
+                'Progress summary required', 'warning');
+            const el = document.getElementById('progressSummary');
+            if (el) el.focus();
             return;
         }
         // WITH a file → live multipart upload (circular %-ring).
@@ -4837,15 +4866,36 @@ export class KpiAction extends Component {
                       <option value="technical_issue">Technical Issue</option>
                       <option value="leave">Leave</option>
                       <option value="other">✍ Other</option>
+                      <option value="urgent">🚨 Urgent — notify now</option>
                     </select>
-                    <!-- Shown only for Other, like the single-task dialog. This box
-                         also had no maxlength at all, so it was the one way to put a
+                    <!-- Meeting: who it is with, exactly as the single-task dialog
+                         asks. The break log keeps ONE active break per user, so the
+                         names are recorded once however many timers are stopping. -->
+                    <div id="paMeetWrap" style="display:none;">
+                        <label class="form-label fw-bold mt-1 mb-1">Who is it with?</label>
+                        <input type="text" id="paMeetSearch" class="form-control form-control-sm mb-1"
+                               placeholder="Search people…" autocomplete="off"/>
+                        <div id="paMeetList" class="border rounded p-2"
+                             style="max-height:150px; overflow-y:auto; background:#fbfcfe;">
+                            <div class="text-muted small">Loading…</div>
+                        </div>
+                        <div id="paMeetCount" class="small text-muted mt-1">Optional — pick anyone who is in it.</div>
+                    </div>
+                    <!-- Other / Urgent / Meeting, same rule as the single-task dialog.
+                         This asked only for Other, so the same Meeting pause was
+                         mandatory in one dialog and optional in the other. It also
+                         had no maxlength at all — the one way left to put a
                          paragraph into paused_reason. -->
                     <div id="paNoteWrap" style="display:none;">
+                      <label id="paNoteLabel" class="form-label fw-bold mt-1 mb-1" style="display:none;">What is it about?</label>
                       <textarea id="paNote" class="form-control" rows="2" maxlength="${PAUSE_NOTE_MAX}"
                                 placeholder="Why? (required)"></textarea>
                       <div class="small text-muted mt-1">Max ${PAUSE_NOTE_MAX} characters.</div>
                     </div>
+                    <div id="paUrgentHint" class="small text-danger mt-1" style="display:none;">
+                        <i class="fa fa-bullhorn me-1"></i> This note is sent immediately to the owner and any configured recipients.
+                    </div>
+                    <div id="paErr" class="alert alert-danger py-2 px-2 mt-2 mb-0 small" style="display:none;"></div>
                   </div>
                   <div class="modal-footer">
                     <button type="button" class="btn btn-light" id="paCancel">Cancel</button>
@@ -4864,25 +4914,47 @@ export class KpiAction extends Component {
         document.getElementById('paCancel').addEventListener('click', close);
         const paCodeEl = document.getElementById('paCode');
         const paWrap = document.getElementById('paNoteWrap');
+        // Participants for a Pause-all meeting. Same shape as the single dialog.
+        this._paMeetWith = new Set();
+        const paErr = document.getElementById('paErr');
+        const showPaErr = (msg) => {
+            if (!paErr) { return; }
+            paErr.textContent = msg;
+            paErr.style.display = msg ? 'block' : 'none';
+        };
         const paSync = () => {
-            const needs = paCodeEl.value === 'other';
+            const code = paCodeEl.value;
+            const isMeeting = code === 'meeting';
+            const needs = PAUSE_NOTE_CODES.includes(code);
             paWrap.style.display = needs ? 'block' : 'none';
+            document.getElementById('paMeetWrap').style.display = isMeeting ? 'block' : 'none';
+            document.getElementById('paNoteLabel').style.display = isMeeting ? 'block' : 'none';
+            document.getElementById('paUrgentHint').style.display = code === 'urgent' ? 'block' : 'none';
+            document.getElementById('paNote').placeholder = isMeeting
+                ? 'Short — e.g. sprint planning' : 'Why? (required)';
             if (!needs) document.getElementById('paNote').value = '';
+            if (!isMeeting) this._paMeetWith = new Set();
+            if (isMeeting) this._loadMeetPeople('paMeetList', 'paMeetSearch', 'paMeetCount', this._paMeetWith);
+            showPaErr('');
         };
         paCodeEl.addEventListener('change', paSync);
         paSync();
         document.getElementById('paConfirm').addEventListener('click', async () => {
             const code = paCodeEl.value;
             const note = (document.getElementById('paNote').value || '').trim().slice(0, PAUSE_NOTE_MAX);
-            // Other is the only code that carries no meaning of its own.
-            if (code === 'other' && !note) {
-                alert("Please say what you're pausing for.");
+            if (PAUSE_NOTE_CODES.includes(code) && !note) {
+                showPaErr(code === 'meeting'
+                    ? '"Meeting" on its own does not explain the time — say what it is about.'
+                    : "Please say what you're pausing for.");
                 document.getElementById('paNote').focus();
                 return;
             }
             close();
             try {
-                const res = await rpc('/kra_kpi/task/pause_all', { reason_code: code, reason: note });
+                const res = await rpc('/kra_kpi/task/pause_all', {
+                    reason_code: code, reason: note,
+                    meeting_with_ids: code === 'meeting' ? Array.from(this._paMeetWith) : [],
+                });
                 if (res && res.status) {
                     await this.refresh();
                     await this.loadLiveStatus();
