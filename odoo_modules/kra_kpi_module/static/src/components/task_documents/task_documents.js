@@ -570,8 +570,11 @@ export class TaskDocuments extends Component {
                         </div>
                     </t>
                     
-                    <!-- No Documents Message -->
-                    <t t-if="state.documents.files.length === 0 and state.documents.links.length === 0 and state.documents.github.length === 0 and state.documents.manuals.length === 0">
+                    <!-- No Documents Message. task_docs must be counted here too:
+                         without it a task holding only a requirement document
+                         rendered its Task Documents card AND "no documents found"
+                         directly underneath. -->
+                    <t t-if="state.documents.files.length === 0 and state.documents.links.length === 0 and state.documents.github.length === 0 and state.documents.manuals.length === 0 and (state.documents.task_docs or []).length === 0">
                         <div class="alert" style="background-color: #f9fafb; border: 1px solid #e5e7eb; color: #4b5563; border-radius: 0.5rem;">
                             <i class="fa fa-info-circle"></i> No documents found for this task yet.
                         </div>

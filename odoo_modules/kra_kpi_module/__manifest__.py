@@ -71,6 +71,7 @@
             # Landing page for the KRA / KPI root menu (see kra_welcome_action.xml).
             "kra_kpi_module/static/src/components/kpi_welcome/kpi_welcome.js",
             "kra_kpi_module/static/src/components/kpi_workday_snapshot/kpi_workday_snapshot.js",
+            "kra_kpi_module/static/src/components/kpi_my_workday/kpi_my_workday.js",
             "kra_kpi_module/static/src/components/dashboard/dashboard.js",
             "kra_kpi_module/static/src/components/kra_tree/kra_tree.js",
             "kra_kpi_module/static/src/components/kra_tree/kra_node.js",

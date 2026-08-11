@@ -18,4 +18,33 @@
               sequence="72"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
 
+    <!-- The developer's OWN snapshots. Same screen, but backed by
+         /kpi_workday_snapshot/my_list + my_image_b64, which are hard-scoped to
+         request.env.user. Sits beside My Workday under the main root rather than
+         in Settings: this is a developer's own record, not an admin tool. -->
+    <record id="action_kpi_my_workday_snapshot" model="ir.actions.client">
+        <field name="name">My Workday Snapshots</field>
+        <field name="tag">kpi_my_workday_snapshot</field>
+    </record>
+
+    <menuitem id="menu_kpi_my_workday_snapshot"
+              name="My Workday Snapshots"
+              parent="kra_kpi_module.menu_kra_root"
+              action="kra_kpi_module.action_kpi_my_workday_snapshot"
+              sequence="12"
+              groups="kra_kpi_module.group_kra_developer"/>
+
+    <!-- My Workday — the developer's own last N days, from /kpi_reports/my_workday. -->
+    <record id="action_kpi_my_workday" model="ir.actions.client">
+        <field name="name">My Workday</field>
+        <field name="tag">kpi_my_workday</field>
+    </record>
+
+    <menuitem id="menu_kpi_my_workday"
+              name="My Workday"
+              parent="kra_kpi_module.menu_kra_root"
+              action="kra_kpi_module.action_kpi_my_workday"
+              sequence="11"
+              groups="kra_kpi_module.group_kra_developer"/>
+
 </odoo>

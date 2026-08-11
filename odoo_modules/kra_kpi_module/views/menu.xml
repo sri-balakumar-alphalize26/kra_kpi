@@ -33,11 +33,16 @@
          developer generate a code on their phone before they could see the
          board; the workday now starts from the board's own Start Workday
          button, which already enforces one start + one end per day. -->
+    <!-- Sequence 7 puts this immediately above Live Tracking (8), the screen an
+         admin flips to and from most often. Note the two carry different groups
+         - Live Tracking is admin/owner/system - so they only read as adjacent
+         for someone holding both; a pure developer simply gets KPI Actions at
+         the top of their menu, which is where they want it anyway. -->
     <menuitem id="menu_kpi_action_screen"
               parent="menu_kra_root"
               name="KPI Actions"
               action="kra_kpi_module.action_kpi_action_screen"
-              sequence="30"
+              sequence="7"
               groups="kra_kpi_module.group_kra_developer"/>
 
     <!-- Task Related Documents: Developers + admins. -->

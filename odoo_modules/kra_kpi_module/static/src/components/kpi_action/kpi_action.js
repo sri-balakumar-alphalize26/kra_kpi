@@ -7,6 +7,15 @@ import { useService } from "@web/core/utils/hooks";
 import { session } from "@web/session";
 import { uploadWithProgress } from "@kra_kpi_module/utils/upload_with_progress";
 
+// Mirrors NOTE_MAX in models/kpi_nontask_block.py and IDLE_NOTE_MAX in the app's
+// services/kpiActions.js. A pause note is one line on the Workday Map, not a
+// paragraph. The route clamps it too — this is the courtesy, that is the rule.
+const PAUSE_NOTE_MAX = 60;
+
+// Work already started and stopped. Mirrors the app's PAUSED_STATES and the
+// canResume triple, so "shows Resume" and "counts as paused" stay one idea.
+const PAUSED_STATES = ['paused', 'hold', 'rework'];
+
 // ONE colour per away/non-task type, used by BOTH the Workday Map chips and the
 // Away-time list. They used to be defined twice and disagreed — the Map drew
 // "away" slate while the list drew it Bootstrap bg-dark (black).
@@ -355,14 +364,28 @@ export class KpiAction extends Component {
                                                 </span>
                                             </div>
                                         </t>
-                                        <!-- Real transfer progress. Without it a big file looked like
-                                             a dead button: nothing moved until the whole thing landed. -->
+                                        <!-- Real transfer progress: percent, bytes moved, live speed and
+                                             a time remaining. A bar alone cannot distinguish "slow" from
+                                             "stalled", which is the actual question on a 20 MB upload. -->
                                         <t t-if="state.manualForm.uploading">
-                                            <div class="progress mb-3" style="height:20px;">
+                                            <div class="progress mb-1" style="height:20px;">
                                                 <div class="progress-bar progress-bar-striped progress-bar-animated"
                                                      t-att-style="'width:' + state.manualForm.percent + '%'">
                                                     <t t-esc="state.manualForm.percent"/>%
                                                 </div>
+                                            </div>
+                                            <div class="d-flex justify-content-between align-items-center small text-muted mb-3">
+                                                <span>
+                                                    <t t-esc="state.manualForm.sent_display"/>
+                                                    <t t-if="state.manualForm.speed_display">
+                                                        · <t t-esc="state.manualForm.speed_display"/>
+                                                    </t>
+                                                    <t t-if="state.manualForm.eta_display">
+                                                        · <t t-esc="state.manualForm.eta_display"/> left
+                                                    </t>
+                                                </span>
+                                                <button class="btn btn-sm btn-link text-danger p-0"
+                                                        t-on-click="cancelManualUpload">Cancel</button>
                                             </div>
                                         </t>
 
@@ -1507,6 +1530,23 @@ export class KpiAction extends Component {
                                                     <div class="text-muted small">
                                                         Estimate: <t t-esc="task.estimate_display"/>
                                                     </div>
+                                                    <!-- Why this task is stopped, on the card itself. The payload
+                                                         has always carried paused_reason, but the web only ever
+                                                         showed it inside the Resume dialog — so the board could
+                                                         not answer "why is this paused?" without opening each one.
+                                                         The app has shown it on the card all along; this is the
+                                                         web catching up.
+                                                         Limited to the paused-ish states because the same field
+                                                         also stores rejection and revert text, which have their
+                                                         own badges and would otherwise appear twice. -->
+                                                    <t t-if="task.paused_reason and ['paused', 'hold', 'rework'].includes(task.task_state)">
+                                                        <div class="mt-1">
+                                                            <span class="badge bg-warning-subtle text-dark border border-warning d-inline-block text-truncate mw-100"
+                                                                  t-att-title="task.paused_reason">
+                                                                <i class="fa fa-pause-circle me-1"></i><t t-esc="task.paused_reason"/>
+                                                            </span>
+                                                        </div>
+                                                    </t>
                                                     <!-- Show completion info for partially completed tasks -->
                                                     <t t-if="col.key === 'partially_completed'">
                                                         <div class="text-success small mt-2">
@@ -1705,7 +1745,11 @@ export class KpiAction extends Component {
                 link_input: '',
                 uploading: false,
                 percent: 0,
+                sent_display: '',     // "3.2 MB / 12.0 MB"
+                speed_display: '',    // "1.4 MB/s"
+                eta_display: '',      // "12s"
                 error: '',
+                xhr: null,            // kept so Cancel can abort
             },
             showManualUpload: false,
             selectedKpi: null,
@@ -2554,10 +2598,18 @@ export class KpiAction extends Component {
                                     <option value="other">Other</option>
                                     <option value="urgent">🚨 Urgent — notify now</option>
                                 </select>
-                                <textarea id="pauseReason" class="form-control" rows="2" maxlength="60"
-                                          placeholder="Optional note (required for 'Other' and 'Urgent')..."></textarea>
-                                <div class="small text-danger mt-1">
-                                    Keep it short (max 60) — this shows on your Workday Map.
+                                <!-- Only Other and Urgent ask for words. Every other reason IS its
+                                     own explanation - "Break" needs no elaboration - and demanding
+                                     one taught people to type "break" into a box next to a button
+                                     already labelled Break. Urgent keeps it because that text is
+                                     the body of the alert the owner receives. Hidden by default
+                                     since the modal opens on a quick-pick, not on Other. -->
+                                <div id="pauseNoteWrap" style="display:none;">
+                                    <textarea id="pauseReason" class="form-control" rows="2" maxlength="60"
+                                              placeholder="Why? (required)"></textarea>
+                                    <div class="small text-danger mt-1">
+                                        Keep it short (max 60) — this shows on your Workday Map.
+                                    </div>
                                 </div>
                                 <div id="pauseUrgentHint" class="small text-danger mt-1" style="display:none;">
                                     <i class="fa fa-bullhorn me-1"></i> This note will be sent immediately to the owner and any configured recipients.
@@ -2574,6 +2626,24 @@ export class KpiAction extends Component {
             </div>
         `;
         this._renderModal(modalHTML, this.confirmPause);
+        // ONE place that reacts to the chosen code, called by both the quick
+        // buttons and the dropdown. They used to disagree: the dropdown had no
+        // listener at all, so picking Urgent from it never showed the "this is
+        // sent immediately" warning.
+        const applyPauseCode = (code, focus) => {
+            const wrap = document.getElementById('pauseNoteWrap');
+            const noteEl = document.getElementById('pauseReason');
+            const urgentHint = document.getElementById('pauseUrgentHint');
+            const needsNote = (code === 'other' || code === 'urgent');
+            if (wrap) wrap.style.display = needsNote ? 'block' : 'none';
+            if (urgentHint) urgentHint.style.display = (code === 'urgent') ? 'block' : 'none';
+            // Drop anything typed under a reason that no longer asks for it, so a
+            // note written for Other cannot be filed against Lunch.
+            if (!needsNote && noteEl) noteEl.value = '';
+            if (needsNote && focus && noteEl) noteEl.focus();
+        };
+        const selEl = document.getElementById('pauseReasonCode');
+        if (selEl) selEl.addEventListener('change', () => applyPauseCode(selEl.value, true));
         document.querySelectorAll('.pause-quick').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const code = btn.dataset.code;
@@ -2590,12 +2660,12 @@ export class KpiAction extends Component {
                         b.classList.toggle('btn-outline-secondary', !on);
                     }
                 });
-                const noteEl = document.getElementById('pauseReason');
-                const urgentHint = document.getElementById('pauseUrgentHint');
-                if (urgentHint) urgentHint.style.display = (code === 'urgent') ? 'block' : 'none';
-                if ((code === 'other' || code === 'urgent') && noteEl) noteEl.focus();
+                applyPauseCode(code, true);
             });
         });
+        // Reflect whatever the select opens on (priority_task), so the box is not
+        // visible for a reason that does not want one.
+        applyPauseCode(selEl ? selEl.value : 'priority_task', false);
     }
 
     openResumeModal(task) {
@@ -3154,13 +3224,17 @@ export class KpiAction extends Component {
     async confirmPause() {
         const codeEl = document.getElementById("pauseReasonCode");
         const reason_code = (codeEl && codeEl.value) || 'other';
-        const reasonRaw = (document.getElementById("pauseReason")?.value || '').trim();
-        const noNoteNeeded = ['break', 'lunch', 'meeting', 'away'].includes(reason_code);
-        const reason = reasonRaw || (noNoteNeeded ? (codeEl?.selectedOptions?.[0]?.text || reason_code) : '');
-        if (!noNoteNeeded && !reason) {
+        const reasonRaw = (document.getElementById("pauseReason")?.value || '').trim().slice(0, PAUSE_NOTE_MAX);
+        // Only Other and Urgent need words; everything else is self-explanatory
+        // and stores its own label. This used to demand a note for Day End,
+        // Leave, Technical Issue and the rest, which is why people typed the
+        // reason they had just picked from the list.
+        const needsNote = (reason_code === 'other' || reason_code === 'urgent');
+        const reason = reasonRaw || (needsNote ? '' : (codeEl?.selectedOptions?.[0]?.text || reason_code));
+        if (needsNote && !reason) {
             const msg = reason_code === 'urgent'
                 ? "Please describe the issue — this note is sent to the owner / configured recipients."
-                : "Please enter a note for pausing (or pick Break / Lunch / Meeting).";
+                : "Please say what you're pausing for.";
             const errEl = document.getElementById("pauseUrgentHint");
             if (reason_code === 'urgent' && errEl) { errEl.style.display = 'block'; errEl.textContent = "⚠ " + msg; }
             else { alert(msg); }
@@ -3623,6 +3697,49 @@ export class KpiAction extends Component {
         return n + ' B';
     }
 
+    /** Seconds → "45s" / "2m 05s". Rounded, because an ETA that claims
+     *  precision it does not have reads as broken when it jumps. */
+    _fmtEta(secs) {
+        if (!isFinite(secs) || secs < 0) { return ''; }
+        secs = Math.round(secs);
+        if (secs < 60) { return secs + 's'; }
+        const m = Math.floor(secs / 60);
+        return m + 'm ' + String(secs % 60).padStart(2, '0') + 's';
+    }
+
+    /** Fresh rate tracker for one upload.
+     *
+     *  Smoothed over a short window rather than reported instantaneously: raw
+     *  Δloaded/Δt between two progress events swings wildly enough to be
+     *  unreadable, and a number that flickers between 200 KB/s and 8 MB/s is
+     *  worse than none. Returns a function you feed {loaded,total} on every
+     *  progress event; it hands back {percent, speed, eta, loaded, total}.
+     */
+    _makeRateTracker() {
+        const samples = [];          // [{t, loaded}] over the last ~3s
+        const WINDOW_MS = 3000;
+        const start = Date.now();
+        return ({ loaded, total }) => {
+            const now = Date.now();
+            samples.push({ t: now, loaded });
+            while (samples.length > 2 && now - samples[0].t > WINDOW_MS) { samples.shift(); }
+            const first = samples[0];
+            const dt = (now - first.t) / 1000;
+            const db = loaded - first.loaded;
+            // Fall back to the whole-upload average until the window has filled,
+            // so the very first events still show something sensible.
+            const speed = dt > 0.25 ? db / dt : (loaded / Math.max(0.25, (now - start) / 1000));
+            const remaining = Math.max(0, (total || 0) - loaded);
+            return {
+                loaded,
+                total,
+                percent: total ? Math.min(100, Math.round((loaded / total) * 100)) : 0,
+                speed,
+                eta: speed > 0 ? remaining / speed : Infinity,
+            };
+        };
+    }
+
     async submitUserManual() {
         const form = this.state.manualForm;
         if (!form.file) {
@@ -3632,6 +3749,9 @@ export class KpiAction extends Component {
         form.error = '';
         form.uploading = true;
         form.percent = 0;
+        form.speed_display = '';
+        form.eta_display = '';
+        form.sent_display = '';
         try {
             const fd = new FormData();
             fd.append('kpi_id', this.state.detailKpiId);
@@ -3639,24 +3759,24 @@ export class KpiAction extends Component {
             fd.append('description', form.description || '');
             fd.append('related_links', JSON.stringify(form.related_links || []));
 
-            const { promise } = uploadWithProgress('/kpi/manual/upload_file', fd, (p) => {
-                form.percent = p.percent;
+            // uploadWithProgress has always handed over loaded+total; this only
+            // ever kept `percent`, so a big upload showed a bar creeping along
+            // with no way to tell whether it was moving at 5 MB/s or had stalled.
+            const rate = this._makeRateTracker();
+            const { promise, xhr } = uploadWithProgress('/kpi/manual/upload_file', fd, (p) => {
+                const r = rate(p);
+                form.percent = r.percent;
+                form.sent_display = `${this._fmtBytes(r.loaded)} / ${this._fmtBytes(r.total)}`;
+                form.speed_display = `${this._fmtBytes(r.speed)}/s`;
+                form.eta_display = this._fmtEta(r.eta);
             });
+            // Captured so Cancel can abort — the manual path never kept the xhr,
+            // so a wrong 25 MB file could only be waited out.
+            form.xhr = xhr;
             const result = await promise;
 
             if (result && result.status) {
-                this.state.manualForm = {
-                    file: null,
-                    file_data: null,
-                    file_name: '',
-                    size_display: '',
-                    description: '',
-                    related_links: [],
-                    link_input: '',
-                    uploading: false,
-                    percent: 0,
-                    error: '',
-                };
+                this.state.manualForm = this._blankManualForm();
                 this.state.showManualUpload = false;
                 await this.loadUserManualInfo(this.state.detailKpiId);
             } else {
@@ -3667,10 +3787,43 @@ export class KpiAction extends Component {
             }
         } catch (error) {
             console.error('Error uploading user manual:', error);
-            form.error = (error && error.message) || 'Failed to upload user manual.';
+            // An abort is the user's own doing, not a failure to report at them.
+            form.error = (error && error.message === 'aborted')
+                ? '' : ((error && error.message) || 'Failed to upload user manual.');
         } finally {
             form.uploading = false;
+            form.xhr = null;
         }
+    }
+
+    /** Cancel an in-flight manual upload. */
+    cancelManualUpload() {
+        const form = this.state.manualForm;
+        if (form.xhr) { try { form.xhr.abort(); } catch (e) { /* already gone */ } }
+        form.uploading = false;
+        form.percent = 0;
+        form.xhr = null;
+    }
+
+    /** The manual form's empty state, in one place — it is reset from three
+     *  different points and they had started to disagree about which keys exist. */
+    _blankManualForm() {
+        return {
+            file: null,
+            file_data: null,
+            file_name: '',
+            size_display: '',
+            description: '',
+            related_links: [],
+            link_input: '',
+            uploading: false,
+            percent: 0,
+            sent_display: '',
+            speed_display: '',
+            eta_display: '',
+            error: '',
+            xhr: null,
+        };
     }
     async deleteManual(manual_id) {
         if (!confirm('Are you sure you want to delete this manual?')) {
@@ -4406,8 +4559,7 @@ export class KpiAction extends Component {
         // next, and a bare title is not enough to choose on. Every card is
         // read-only detail plus ONE action, so there is no way to accidentally
         // start/pause something from inside the picker.
-        const rows = options.length
-            ? `<div class="row g-2">${options.map((t) => `
+        const card = (t) => `
                 <div class="col-12 col-md-6">
                   <div class="card h-100 shadow-sm" style="border:1px solid #e5e7eb;">
                     <div class="card-body p-3">
@@ -4422,17 +4574,33 @@ export class KpiAction extends Component {
                              · Est: ${esc(t.estimate_display || '—')}</div>
                         ${t.deadline ? `<div><i class="fa fa-calendar me-1"></i>Due ${esc(t.deadline)}</div>` : ''}
                         ${t.task_state ? `<div><i class="fa fa-tag me-1"></i>${esc(this.filterStatusLabel(t.task_state))}</div>` : ''}
+                        ${(t.paused_reason && PAUSED_STATES.includes(t.task_state))
+                            ? `<div class="text-warning-emphasis"><i class="fa fa-pause-circle me-1"></i>${esc(t.paused_reason)}</div>` : ''}
                       </div>
                       <button class="btn btn-sm btn-primary w-100 mt-3" data-switch-id="${t.id}">
                         <i class="fa fa-check me-1"></i> Select this task
                       </button>
                     </div>
                   </div>
-                </div>`).join('')}</div>`
-            : `<div class="text-muted text-center py-4">
-                   Nothing else is ready to start. A task has to be accepted and approved
-                   before you can switch to it.
-               </div>`;
+                </div>`;
+
+        // Paused work first. Switching is nearly always "back to the thing I
+        // paused", and that used to sit mixed in with every never-started task.
+        const renderRows = (list, query) => {
+            if (!list.length) {
+                return `<div class="text-muted text-center py-4">${query
+                    ? `Nothing matches &quot;${esc(query)}&quot;.`
+                    : `Nothing else is ready to start. A task has to be accepted and approved
+                       before you can switch to it.`}</div>`;
+            }
+            const paused = list.filter((t) => PAUSED_STATES.includes(t.task_state));
+            const fresh = list.filter((t) => !PAUSED_STATES.includes(t.task_state));
+            const group = (title, arr) => arr.length
+                ? `<h6 class="text-uppercase text-muted small fw-bold mt-2 mb-2">${title} (${arr.length})</h6>
+                   <div class="row g-2">${arr.map(card).join('')}</div>` : '';
+            return group('Paused — pick back up', paused) + group('Not started yet', fresh);
+        };
+        const rows = renderRows(options, '');
 
         const html = `
             <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
@@ -4452,7 +4620,12 @@ export class KpiAction extends Component {
                            pick starts straight away.`}
                       Time already logged is kept.
                     </p>
-                    <div class="list-group">${rows}</div>
+                    <div class="input-group input-group-sm mb-3">
+                      <span class="input-group-text"><i class="fa fa-search"></i></span>
+                      <input type="text" id="swSearch" class="form-control"
+                             placeholder="Search by ref, name or developer…" autocomplete="off"/>
+                    </div>
+                    <div class="list-group" id="swRows">${rows}</div>
                   </div>
                   <div class="modal-footer">
                     <button type="button" class="btn btn-light" id="swCancel">Cancel</button>
@@ -4467,26 +4640,51 @@ export class KpiAction extends Component {
         const close = () => { container.innerHTML = ''; };
         document.getElementById('swClose').addEventListener('click', close);
         document.getElementById('swCancel').addEventListener('click', close);
-        container.querySelectorAll('button[data-switch-id]').forEach((btn) => {
-            btn.addEventListener('click', async () => {
-                const id = parseInt(btn.getAttribute('data-switch-id'), 10);
-                close();
-                try {
-                    const res = await rpc('/kra_kpi/task/switch', {
-                        kpi_id: id,
-                        from_kpi_id: fromTask ? fromTask.id : null,
-                    });
-                    if (res && res.status) {
-                        await this.refresh();
-                        await this.loadLiveStatus();
-                    } else {
-                        alert((res && res.message) || 'Could not switch task.');
-                    }
-                } catch (e) {
-                    alert('Switch failed: ' + ((e && e.message) || e));
+
+        const doSwitch = async (id) => {
+            close();
+            try {
+                const res = await rpc('/kra_kpi/task/switch', {
+                    kpi_id: id,
+                    from_kpi_id: fromTask ? fromTask.id : null,
+                });
+                if (res && res.status) {
+                    await this.refresh();
+                    await this.loadLiveStatus();
+                } else {
+                    alert((res && res.message) || 'Could not switch task.');
                 }
+            } catch (e) {
+                alert('Switch failed: ' + ((e && e.message) || e));
+            }
+        };
+        // Re-bound after every re-render: this modal is raw HTML replaced
+        // wholesale on each keystroke, so listeners attached to the old nodes die
+        // with them. Delegating from #swRows instead would survive, but the
+        // per-button binding is what the rest of this file does.
+        const bindCards = () => {
+            container.querySelectorAll('button[data-switch-id]').forEach((btn) => {
+                btn.addEventListener('click', () =>
+                    doSwitch(parseInt(btn.getAttribute('data-switch-id'), 10)));
             });
-        });
+        };
+        bindCards();
+
+        const searchEl = document.getElementById('swSearch');
+        const rowsEl = document.getElementById('swRows');
+        if (searchEl && rowsEl) {
+            searchEl.addEventListener('input', () => {
+                const q = searchEl.value.trim().toLowerCase();
+                // Same fields the board's own search matches on.
+                const shown = !q ? options : options.filter((t) =>
+                    String(t.external_ref || '').toLowerCase().includes(q)
+                    || String(t.name || '').toLowerCase().includes(q)
+                    || String(t.user_name || '').toLowerCase().includes(q));
+                rowsEl.innerHTML = renderRows(shown, searchEl.value.trim());
+                bindCards();
+            });
+            searchEl.focus();
+        }
     }
 
     // Stop every running timer at once, with ONE reason. Only offered while more
@@ -4522,8 +4720,14 @@ export class KpiAction extends Component {
                       <option value="leave">Leave</option>
                       <option value="other">✍ Other</option>
                     </select>
-                    <textarea id="paNote" class="form-control" rows="2"
-                              placeholder="Optional note"></textarea>
+                    <!-- Shown only for Other, like the single-task dialog. This box
+                         also had no maxlength at all, so it was the one way to put a
+                         paragraph into paused_reason. -->
+                    <div id="paNoteWrap" style="display:none;">
+                      <textarea id="paNote" class="form-control" rows="2" maxlength="${PAUSE_NOTE_MAX}"
+                                placeholder="Why? (required)"></textarea>
+                      <div class="small text-muted mt-1">Max ${PAUSE_NOTE_MAX} characters.</div>
+                    </div>
                   </div>
                   <div class="modal-footer">
                     <button type="button" class="btn btn-light" id="paCancel">Cancel</button>
@@ -4540,9 +4744,24 @@ export class KpiAction extends Component {
         const close = () => { container.innerHTML = ''; };
         document.getElementById('paClose').addEventListener('click', close);
         document.getElementById('paCancel').addEventListener('click', close);
+        const paCodeEl = document.getElementById('paCode');
+        const paWrap = document.getElementById('paNoteWrap');
+        const paSync = () => {
+            const needs = paCodeEl.value === 'other';
+            paWrap.style.display = needs ? 'block' : 'none';
+            if (!needs) document.getElementById('paNote').value = '';
+        };
+        paCodeEl.addEventListener('change', paSync);
+        paSync();
         document.getElementById('paConfirm').addEventListener('click', async () => {
-            const code = document.getElementById('paCode').value;
-            const note = (document.getElementById('paNote').value || '').trim();
+            const code = paCodeEl.value;
+            const note = (document.getElementById('paNote').value || '').trim().slice(0, PAUSE_NOTE_MAX);
+            // Other is the only code that carries no meaning of its own.
+            if (code === 'other' && !note) {
+                alert("Please say what you're pausing for.");
+                document.getElementById('paNote').focus();
+                return;
+            }
             close();
             try {
                 const res = await rpc('/kra_kpi/task/pause_all', { reason_code: code, reason: note });

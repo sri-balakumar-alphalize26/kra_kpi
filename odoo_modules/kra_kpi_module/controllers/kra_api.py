@@ -5,6 +5,10 @@ from odoo.addons.kra_kpi_module.models.kpi_workflow import (
     NAME_PREFIX_FOR_DOC_TYPE,
     REF_PREFIX_FOR_DOC_TYPE,
 )
+# One line on a Workday Map chip, not a paragraph. Imported rather than redefined
+# so the pause note, the non-task note and the idle note all share one number —
+# the same way kpi_reports_api.py imports it.
+from odoo.addons.kra_kpi_module.models.kpi_nontask_block import NOTE_MAX
 import json
 import logging
 import base64
@@ -400,7 +404,7 @@ class KraKpiAPI(http.Controller):
         task id in the payload, so this cannot be aimed at anyone else's timers.
         """
         return request.env['kra.kpi'].sudo().with_user(request.env.user).pause_all_running(
-            reason=(params.get('reason') or '').strip(),
+            reason=(params.get('reason') or '').strip()[:NOTE_MAX],
             reason_code=params.get('reason_code') or 'break')
 
     @http.route('/kra_kpi/task/revert_signoff', type='json', auth='user', methods=['POST'], csrf=False)
@@ -455,12 +459,24 @@ class KraKpiAPI(http.Controller):
     @http.route('/kra_kpi/task/pause', type='json', auth='user', methods=['POST'], csrf=False)
     def task_pause(self, **params):
         kpi_id = params.get('kpi_id')
-        reason = params.get('reason') or ''
+        # Clamped here, not just in the two UIs. Both clients cap the box at 60,
+        # but a cap in a client is a courtesy — this text is rendered on the task
+        # card and inside a Workday Map chip, and a pasted paragraph reaching the
+        # column would break both. The sibling pause_all route already stripped;
+        # this one did not even do that.
+        reason = (params.get('reason') or '').strip()[:NOTE_MAX]
         reason_code = params.get('reason_code') or False
         if not kpi_id:
             return {'status': False, 'message': 'kpi_id missing'}
+        # An unknown code would raise on write to the Selection field, surfacing
+        # as an opaque 500 rather than a refusal.
+        if reason_code and reason_code not in dict(
+                request.env['kra.kpi']._fields['pause_reason_code'].selection):
+            return {'status': False, 'message': 'Unknown pause reason.'}
 
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
+        if not rec.exists():
+            return {'status': False, 'message': 'Task not found'}
         rec.pause_task(reason, reason_code=reason_code)
         return {'status': True, 'message': 'Task paused', 'id': rec.id}
 
@@ -3834,28 +3850,55 @@ class KraKpiAPI(http.Controller):
                 # same stance _may_view_kpi_details takes.
                 if user.has_group('kra_kpi_module.group_kra_client'):
                     return {'status': True, 'tasks': [], 'assignees': []}
-                domain.append(('effective_contributor_ids', 'in', [user.id]))
+                # This read `('effective_contributor_ids', 'in', [user.id])`, and
+                # that field is a NON-STORED compute (kpi.py:135) with no search=
+                # method. Odoo raised "Cannot convert ... to SQL because it is not
+                # stored", the bare except below turned it into
+                # {'status': False, 'tasks': []}, and the component only assigns
+                # state when status is true — so every developer got the ordinary
+                # "no tasks match your filters" empty screen with no error, while
+                # admins (who skip this branch entirely) saw everything and had no
+                # reason to suspect it.
+                #
+                # Expanded to the STORED fields _compute_effective_contributors
+                # unions, which is the same set expressed in a searchable way.
+                domain += ['|', '|', '|', '|', '|',
+                           ('user_id', '=', user.id),
+                           ('contributor_ids', 'in', [user.id]),
+                           ('developer_ids', 'in', [user.id]),
+                           ('tester_ids', 'in', [user.id]),
+                           ('coordinator_ids', 'in', [user.id]),
+                           ('lead_ids', 'in', [user.id])]
 
             kpis = request.env['kra.kpi'].sudo().search(domain)
-            
+
+            # sudo() on the counts below is deliberate and load-bearing:
+            # progress_employee_own_rule restricts kpi.progress to your OWN rows,
+            # so without it a task whose files a COLLEAGUE attached reported "No
+            # Attachments" — while /task_documents/details, which is sudo'd,
+            # then listed them. The list and the detail actively disagreed.
+            Progress = request.env['kpi.progress'].sudo()
+            Github = request.env['kpi.github.link'].sudo()
+            Manual = request.env['kpi.user.manual'].sudo()
+
             tasks = []
             for kpi in kpis:
                 # Count documents
-                progress_files = request.env['kpi.progress'].search([
+                progress_files = Progress.search([
                     ('kpi_id', '=', kpi.id),
                     ('uploaded_file', '!=', False)
                 ])
-                
-                github_links = request.env['kpi.github.link'].search([
+
+                github_links = Github.search([
                     ('kpi_id', '=', kpi.id)
                 ])
-                
-                user_manuals = request.env['kpi.user.manual'].search([
+
+                user_manuals = Manual.search([
                     ('kpi_id', '=', kpi.id)
                 ])
-                
+
                 # Count links from progress updates
-                progress_with_links = request.env['kpi.progress'].search([
+                progress_with_links = Progress.search([
                     ('kpi_id', '=', kpi.id),
                     ('related_links', '!=', False)
                 ])
@@ -3911,19 +3954,28 @@ class KraKpiAPI(http.Controller):
                                         + manual_count + task_doc_count) > 0,
                 })
             
-            # ✅ Get unique assignees for filter dropdown
-            all_assignees = request.env['kra.kpi'].sudo().search([]).mapped('user_id')
-            assignees = [{'id': user.id, 'name': user.name} for user in all_assignees if user]
-            # Sort by name
-            assignees = sorted(assignees, key=lambda x: x['name'])
-            
+            # Assignee filter options. Built from the tasks ACTUALLY RETURNED, not
+            # from sudo().search([]) — that listed every assignee in the company to
+            # every developer, which is the same leak the scoping above exists to
+            # close, just via the dropdown instead of the list.
+            seen = {}
+            for kpi in kpis:
+                if kpi.user_id:
+                    seen[kpi.user_id.id] = kpi.user_id.name
+            assignees = sorted(({'id': k, 'name': v} for k, v in seen.items()),
+                               key=lambda x: (x['name'] or '').lower())
+
             return {
                 'status': True,
                 'tasks': tasks,
                 'assignees': assignees,
             }
         except Exception as e:
-            _logger.error(f"Error in get_task_documents_list: {str(e)}")
+            # Log the traceback, not just str(e). A bare message here is what let
+            # the non-stored-field ValueError above hide for so long: the screen
+            # rendered its ordinary empty state and the log line said nothing
+            # about where it came from.
+            _logger.exception("Error in get_task_documents_list: %s", e)
             return {
                 'status': False,
                 'message': str(e),

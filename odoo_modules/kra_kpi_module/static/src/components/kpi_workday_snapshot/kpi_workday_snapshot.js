@@ -25,9 +25,14 @@ export class KpiWorkdaySnapshot extends Component {
             <div class="alphalize-watermark"/>
 
             <div class="d-flex align-items-center mb-3">
-                <h4 class="mb-0"><i class="fa fa-camera me-2"/> Workday Snapshots</h4>
+                <h4 class="mb-0">
+                    <i class="fa fa-camera me-2"/>
+                    <t t-if="mine">My Workday Snapshots</t>
+                    <t t-else="">Workday Snapshots</t>
+                </h4>
                 <span class="text-muted small ms-3">
-                    A frozen picture of each developer's day, saved when they end their workday.
+                    <t t-if="mine">A frozen picture of each day, saved when you end your workday.</t>
+                    <t t-else="">A frozen picture of each developer's day, saved when they end their workday.</t>
                 </span>
                 <div class="ms-auto d-flex align-items-center gap-2">
                     <label class="text-muted small mb-0">Show last</label>
@@ -57,7 +62,10 @@ export class KpiWorkdaySnapshot extends Component {
                 <div class="text-center text-muted py-5">
                     <i class="fa fa-camera fa-2x mb-2"/>
                     <div>No workday snapshots yet.</div>
-                    <div class="small">One is saved automatically each time a developer ends their workday.</div>
+                    <div class="small">
+                        <t t-if="mine">One is saved automatically each time you end your workday.</t>
+                        <t t-else="">One is saved automatically each time a developer ends their workday.</t>
+                    </div>
                 </div>
             </t>
             <t t-else="">
@@ -100,6 +108,15 @@ export class KpiWorkdaySnapshot extends Component {
                                         <!-- Level 3: the image -->
                                         <t t-if="state.openDevs[dev.snapshot_id]">
                                             <div class="px-2 pb-2">
+                                                <!-- Empty src on the mine path means the base64 is
+                                                     still in flight; show a spinner rather than a
+                                                     broken-image icon. -->
+                                                <t t-if="!imgSrc(dev)">
+                                                    <div class="text-muted small py-3">
+                                                        <i class="fa fa-spinner fa-spin me-1"/> Loading image…
+                                                    </div>
+                                                </t>
+                                                <t t-else="">
                                                 <img t-att-src="imgSrc(dev)"
                                                      class="border rounded"
                                                      style="max-width:100%; cursor:zoom-in; display:block;"
@@ -111,7 +128,7 @@ export class KpiWorkdaySnapshot extends Component {
                                                         <i class="fa fa-search-plus me-1"/> View full size
                                                     </button>
                                                     <a class="btn btn-sm btn-outline-secondary"
-                                                       t-att-href="dlSrc(dev)">
+                                                       t-att-href="dlSrc(dev)" t-att-download="dlName(dev)">
                                                         <i class="fa fa-download me-1"/> Download
                                                     </a>
                                                     <span class="text-muted small align-self-center ms-2"
@@ -119,6 +136,7 @@ export class KpiWorkdaySnapshot extends Component {
                                                         Saved <t t-esc="dev.generated_at"/>
                                                     </span>
                                                 </div>
+                                                </t>
                                             </div>
                                         </t>
                                     </div>
@@ -147,7 +165,8 @@ export class KpiWorkdaySnapshot extends Component {
                                      t-att-alt="state.viewing.name"/>
                             </div>
                             <div class="modal-footer">
-                                <a class="btn btn-primary" t-att-href="dlSrc(state.viewing)">
+                                <a class="btn btn-primary" t-att-href="dlSrc(state.viewing)"
+                                   t-att-download="dlName(state.viewing)">
                                     <i class="fa fa-download me-1"/> Download
                                 </a>
                                 <button class="btn btn-secondary" t-on-click="closeViewer">Close</button>
@@ -158,6 +177,15 @@ export class KpiWorkdaySnapshot extends Component {
             </t>
         </div>`;
 
+    // false = the admin screen (everyone's days, images via /web/image).
+    // true  = "My Workday Snapshots" for a developer, which must go through the
+    // self-scoped RPC routes instead: kpi.workday.snapshot has NO developer ACL,
+    // so /web/image and /web/content refuse them outright. Subclassed rather than
+    // forked so the tree, the popup and the day filter stay one implementation —
+    // the same trick screens/WorkdaySnapshots.js uses in the app with its `mine`
+    // prop.
+    static mine = false;
+
     setup() {
         this.state = useState({
             loading: true,
@@ -167,15 +195,24 @@ export class KpiWorkdaySnapshot extends Component {
             openDevs: {},
             viewing: null,
             limitDays: 30,
+            // mine-only: snapshot_id -> "data:image/png;base64,…", fetched on
+            // expand. Never preloaded — the list can hold weeks of days and a PNG
+            // per row would be megabytes of JSON for pictures nobody opened.
+            images: {},
         });
         onWillStart(() => this.load());
     }
+
+    get mine() { return this.constructor.mine; }
 
     async load() {
         this.state.loading = true;
         this.state.error = '';
         try {
-            const res = await rpc('/kpi_workday_snapshot/list', { limit_days: this.state.limitDays });
+            const route = this.mine
+                ? '/kpi_workday_snapshot/my_list'
+                : '/kpi_workday_snapshot/list';
+            const res = await rpc(route, { limit_days: this.state.limitDays });
             if (res && res.status) {
                 this.state.days = res.days || [];
                 // Open the most recent day by default — it is what an admin came for.
@@ -198,18 +235,42 @@ export class KpiWorkdaySnapshot extends Component {
     }
 
     toggleDate(date) { this.state.openDates[date] = !this.state.openDates[date]; }
-    toggleDev(id) { this.state.openDevs[id] = !this.state.openDevs[id]; }
 
-    // Odoo's own image/content routes — already access-checked, so there is no
-    // bespoke file route here to get wrong. (kpi.workday.snapshot has NO developer
-    // ACL, so a developer hitting these URLs directly is refused.)
+    toggleDev(id) {
+        const opening = !this.state.openDevs[id];
+        this.state.openDevs[id] = opening;
+        // Fetch the bytes only on the way open, and only once.
+        if (opening && this.mine && !this.state.images[id]) { this.fetchImage(id); }
+    }
+
+    async fetchImage(snapshotId) {
+        try {
+            const res = await rpc('/kpi_workday_snapshot/my_image_b64', { snapshot_id: snapshotId });
+            if (res && res.status && res.data_b64) {
+                this.state.images[snapshotId] =
+                    'data:' + (res.mimetype || 'image/png') + ';base64,' + res.data_b64;
+            } else {
+                this.state.error = (res && res.message) || 'Could not load that snapshot.';
+            }
+        } catch (e) {
+            this.state.error = (e && e.message) || String(e);
+        }
+    }
+
+    // Admin: Odoo's own image/content routes, already access-checked, so there is
+    // no bespoke file route to get wrong. Developer: those same routes refuse
+    // them (no ACL on kpi.workday.snapshot), so the bytes arrive as base64 from
+    // the self-scoped RPC and are rendered as a data URI.
     imgSrc(dev) {
+        if (this.mine) { return this.state.images[dev.snapshot_id] || ''; }
         return '/web/image/kpi.workday.snapshot/' + dev.snapshot_id + '/image';
     }
     dlSrc(dev) {
+        if (this.mine) { return this.state.images[dev.snapshot_id] || ''; }
         return '/web/content/kpi.workday.snapshot/' + dev.snapshot_id
              + '/image?download=true&filename=' + encodeURIComponent(dev.image_name || 'workday.png');
     }
+    dlName(dev) { return dev.image_name || 'workday.png'; }
 
     open(dev) {
         const day = this.state.days.find(d => (d.devs || []).some(x => x.snapshot_id === dev.snapshot_id));
@@ -219,3 +280,10 @@ export class KpiWorkdaySnapshot extends Component {
 }
 
 registry.category("actions").add("kpi_workday_snapshot", KpiWorkdaySnapshot);
+
+// The developer's own snapshots. Same screen, self-scoped routes — see the
+// `mine` comment above for why this is a subclass rather than a second copy.
+export class KpiMyWorkdaySnapshot extends KpiWorkdaySnapshot {
+    static mine = true;
+}
+registry.category("actions").add("kpi_my_workday_snapshot", KpiMyWorkdaySnapshot);
