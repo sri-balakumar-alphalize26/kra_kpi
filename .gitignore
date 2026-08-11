@@ -17,6 +17,10 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+# Holds the Android keystore path AND its passwords (see BUILD_AND_SIGNING.md).
+# *.jks was already ignored but this file was not, so the key was covered and the
+# passwords to it were not.
+credentials.json
 
 # Metro
 .metro-health-check*

@@ -48,6 +48,7 @@ try {
 } catch (_) { /* notifee native module absent (pre-rebuild) — alarm inert */ }
 import * as session from './api/session';
 import { getConnection, getRoleState, saveRoleState } from './api/session';
+import { loadHaptics } from './utils/haptics';
 import { jsonRpc } from './api/odooApi';
 import { createLogger } from './api/logger';
 import { registerForPushAsync, unregisterPush } from './services/push';
@@ -248,6 +249,10 @@ function AppInner() {
       setProvisioned(!!(conn && conn.serverUrl));   // device already set up?
       const saved = await session.getSession();
       if (saved) setUser(saved);
+      // Read the haptics preference once into the in-memory cache, so the first
+      // button press doesn't have to await AsyncStorage to know whether to buzz.
+      // Defaults to on, so a failure here is silent and harmless.
+      loadHaptics();
       setRestoring(false);
     })();
   }, []);

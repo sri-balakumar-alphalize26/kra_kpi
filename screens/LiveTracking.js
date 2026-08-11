@@ -15,6 +15,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
+import PulseDot from '../components/PulseDot';
 import { fetchLiveTracking } from '../services/liveTracking';
 import { createLogger } from '../api/logger';
 
@@ -99,6 +100,12 @@ function Row({ row, nowMs, fetchedAt }) {
     ? (row.elapsed_seconds || 0) + Math.max(0, Math.floor((nowMs - fetchedAt) / 1000))
     : 0;
 
+  // A developer with multitask enabled can have several timers running. The
+  // server sends them all in active_tasks (scalars stay the first one for older
+  // builds), so the pill becomes one-per-task instead of one arbitrary task.
+  const running = kind === 'task' && row.active_tasks?.length ? row.active_tasks : null;
+  const tick = (secs) => fmtElapsed((secs || 0) + Math.max(0, Math.floor((nowMs - fetchedAt) / 1000)));
+
   let text;
   if (kind === 'task') text = `${row.activity_label || 'Task'} · ${fmtElapsed(live)}`;
   else if (kind === 'break') text = `Break · ${fmtElapsed(live)}`;
@@ -115,14 +122,31 @@ function Row({ row, nowMs, fetchedAt }) {
         <Attendance row={row} />
       </View>
       <View style={s.actRow}>
-        {/* live dot — green when the heartbeat is fresh (at the desk) */}
-        <View style={[s.dot, { backgroundColor: row.active ? '#16A34A' : '#CBD5E1' }]} />
-        <View style={[s.pill, { backgroundColor: meta.bg }]}>
-          {kind !== 'idle' && kind !== 'offline' ? (
-            <MaterialCommunityIcons name={meta.icon} size={14} color={meta.fg} style={{ marginRight: 5 }} />
-          ) : null}
-          <Text style={[s.pillTxt, { color: meta.fg }]} numberOfLines={1}>{text}</Text>
-        </View>
+        {/* live dot — beats while the heartbeat is fresh (at the desk), sits
+            still and grey when it isn't, so a stalled row is visible at a glance */}
+        <PulseDot active={!!row.active} />
+        {running ? (
+          <View style={s.pillWrap}>
+            {running.length > 1 ? (
+              <Text style={s.multiTxt}>Multi-tasking {running.length} tasks</Text>
+            ) : null}
+            {running.map((at) => (
+              <View key={at.id} style={[s.pill, { backgroundColor: meta.bg }]}>
+                <MaterialCommunityIcons name={meta.icon} size={14} color={meta.fg} style={{ marginRight: 5 }} />
+                <Text style={[s.pillTxt, { color: meta.fg }]} numberOfLines={1}>
+                  {at.name} · {tick(at.elapsed_seconds)}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={[s.pill, { backgroundColor: meta.bg }]}>
+            {kind !== 'idle' && kind !== 'offline' ? (
+              <MaterialCommunityIcons name={meta.icon} size={14} color={meta.fg} style={{ marginRight: 5 }} />
+            ) : null}
+            <Text style={[s.pillTxt, { color: meta.fg }]} numberOfLines={1}>{text}</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -265,6 +289,10 @@ const s = StyleSheet.create({
 
   actRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
   dot: { width: 9, height: 9, borderRadius: 5 },
+  // Stacks the per-task pills when someone is multitasking. flexShrink so a long
+  // task name wraps inside the card instead of pushing the row off a phone.
+  pillWrap: { flexShrink: 1, gap: 5 },
+  multiTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.muted },
   pill: { flexDirection: 'row', alignItems: 'center', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, flexShrink: 1 },
   pillTxt: { fontSize: 13, fontWeight: '700' },
 });

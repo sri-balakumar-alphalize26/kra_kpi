@@ -36,6 +36,7 @@
     "plugins": [
       "./plugins/withAlarmLockScreen",
       "./plugins/android-cleartext-traffic",
+      "./plugins/withTaskWidget",
       "expo-web-browser",
       [
         "expo-notifications",

@@ -16,6 +16,7 @@ import { COLORS } from '../theme';
 import { saveSession } from '../api/session';
 import { loginCheck, appLogin, setAppPassword, requestOtp, verifyOtp, getMobileConfig } from '../services/appAuth';
 import { createLogger } from '../api/logger';
+import * as H from '../utils/haptics';
 
 const log = createLogger('AppLogin');
 const { width: SW } = Dimensions.get('window');
@@ -99,21 +100,36 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
 
   const fail = (msg) => { log.warn('login step failed', msg); setError(msg); setBusy(false); };
 
-  // Hidden admin gesture: tap the 369 logo 7 times (within ~1.5s between taps)
-  // to open the Odoo device-setup page. Lives only on this sign-in screen.
+  // Hidden admin gesture: 7 taps (within ~1.5s between taps) to open the Odoo
+  // device-setup page. Lives only on this sign-in screen.
+  //
+  // TWO targets share ONE counter: the 369 logo (undiscoverable, but it is what
+  // the existing docs and the Maestro flow use) and the small gear below, which
+  // is there so somebody who has been told "tap it seven times" has something to
+  // aim at. Deliberately still SEVEN taps on the gear rather than a single press
+  // — this repoints the app at a different Odoo server, so it should be hard to
+  // reach by accident on a device handed to a developer.
   const tapCount = useRef(0);
   const tapTimer = useRef(null);
+  const [tapsLeft, setTapsLeft] = useState(0);   // 0 = show nothing
   const onLogoTap = () => {
     tapCount.current += 1;
-    log.info('logo tap', tapCount.current);
+    log.info('setup tap', tapCount.current);
     if (tapTimer.current) clearTimeout(tapTimer.current);
-    tapTimer.current = setTimeout(() => { tapCount.current = 0; }, 1500);
+    tapTimer.current = setTimeout(() => { tapCount.current = 0; setTapsLeft(0); }, 1500);
+    // Only start counting out loud once they're clearly not tapping by accident,
+    // so the gesture stays hidden but stops feeling broken half way through.
+    setTapsLeft(tapCount.current >= 3 ? Math.max(0, 7 - tapCount.current) : 0);
     if (tapCount.current >= 7) {
       tapCount.current = 0;
+      setTapsLeft(0);
       if (tapTimer.current) clearTimeout(tapTimer.current);
-      log.info('logo 7-tap → open device setup');
+      log.info('7-tap → open device setup');
+      H.ok();
       onNeedSetup();
+      return;
     }
+    H.select();
   };
 
   async function continueMobile() {
@@ -268,6 +284,22 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
                 <TouchableOpacity activeOpacity={1} onPress={onLogoTap} style={s.logoWrap}>
                   <Image source={require('../assets/logo369.png')} style={s.logo} resizeMode="contain" />
                 </TouchableOpacity>
+                {/* Same 7-tap counter as the logo, but findable. Muted and small
+                    on purpose: it is a way in for someone who already knows, not
+                    an invitation. The countdown only appears from the 3rd tap. */}
+                <View style={s.gearRow}>
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={onLogoTap}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                    style={s.gearBtn}
+                  >
+                    <Ionicons name="settings-outline" size={16} color={COLORS.faint} />
+                  </TouchableOpacity>
+                  {tapsLeft > 0 ? (
+                    <Text style={s.gearHint}>{tapsLeft} more…</Text>
+                  ) : null}
+                </View>
                 <View style={s.decorRow}>
                   <View style={s.decorLine} />
                   <Text style={s.decorTxt}>
@@ -434,6 +466,9 @@ const s = StyleSheet.create({
   formScroll: { flexGrow: 1, paddingHorizontal: 28, paddingTop: 20, paddingBottom: 28 },
   form: { width: '100%' },
   logoWrap: { alignSelf: 'center', marginBottom: 2 },
+  gearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 2 },
+  gearBtn: { padding: 4, opacity: 0.55 },
+  gearHint: { fontSize: 11, fontWeight: '700', color: COLORS.faint },
   logo: { width: 168, height: 90 },
   decorRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 16 },
   decorLine: { width: 22, height: 1.5, backgroundColor: '#CBD6E6', borderRadius: 1 },

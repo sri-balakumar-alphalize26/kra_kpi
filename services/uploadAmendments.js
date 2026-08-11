@@ -230,11 +230,21 @@ export function humanSize(bytes) {
   return `${b} B`;
 }
 
+// What the server will accept for a manual (kra_api._check_manual_upload). Kept
+// here so the picker, the error text and the route cannot drift apart.
+export const MAX_MANUAL_BYTES = 25 * 1024 * 1024;
+export const MANUAL_EXTENSIONS = ['.pdf', '.doc', '.docx'];
+
 // Attach ONE file to a task. `onProgress(sent, total)` drives the live %.
 // `links` — optional related links, stored as the JSON array the web writes.
 export async function uploadManual(kpiId, { fileData, fileName, reason, links }, onProgress) {
   const base = await server();
-  if (!base) return { status: true };
+  // No server configured = mock mode. Reporting plain success here told the user
+  // their manual was uploaded when nothing left the device; say what happened.
+  if (!base) {
+    log.warn('uploadManual skipped — no server configured (mock mode)');
+    return { status: false, message: 'No server is configured — nothing was uploaded.' };
+  }
   log.info('uploadManual → /kpi/manual/upload', { kpi_id: kpiId, fileName, bytesB64: (fileData || '').length, links: (links || []).length });
   const res = await jsonRpc(
     base, '/kpi/manual/upload',

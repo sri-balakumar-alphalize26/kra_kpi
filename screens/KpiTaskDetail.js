@@ -36,7 +36,7 @@ import {
   deleteManual, completeTask, fetchProgressFile, fetchManualFile,
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
 } from '../services/kpiActions';
-import { uploadManual, humanSize } from '../services/uploadAmendments';
+import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('KpiDetail');
@@ -213,6 +213,9 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const [manLinks, setManLinks] = useState([]);
   const [manPct, setManPct] = useState(0);
   const [manBusy, setManBusy] = useState(false);
+  // True while the file is being base64-encoded, before any bytes move. Its own
+  // flag because manPct is meaningless during that phase.
+  const [manEncoding, setManEncoding] = useState(false);
 
   // Returns the file HANDLE only — no base64. The progress route takes the file
   // as multipart straight from this uri, so a 40 MB video never becomes a 53 MB
@@ -230,7 +233,23 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     log.info('pick manual file');
     try {
       const f = await pickFile();
-      if (f) setManFile(f);
+      if (!f) return;
+      // Refuse at pick time, exactly like the progress path — this one had no
+      // check at all, and it base64s the WHOLE file into a JS string before any
+      // request starts, so an oversized pick froze (or killed) the app before it
+      // could show an error. The server enforces the same two rules.
+      const ext = (f.name || '').toLowerCase();
+      if (!MANUAL_EXTENSIONS.some((x) => ext.endsWith(x))) {
+        log.warn('manual file wrong type', { name: f.name });
+        flash('err', 'Only PDF, DOC and DOCX files can be uploaded as a manual.');
+        return;
+      }
+      if (f.size && f.size > MAX_MANUAL_BYTES) {
+        log.warn('manual file too big', { name: f.name, size: f.size });
+        flash('err', `${f.name} is ${humanSize(f.size)} — over the ${MAX_MANUAL_BYTES / (1024 * 1024)} MB limit. Add a Drive link instead.`);
+        return;
+      }
+      setManFile(f);
     } catch (e) {
       log.error('manual file read failed', e?.message);
       flash('err', e?.message || 'Could not read that file');
@@ -269,11 +288,15 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     }
 
     log.info('upload manual →', { kpi_id: task.id, name: manFile.name, size: manFile.size, links: links.length });
-    setManBusy(true); setManPct(0);
+    setManBusy(true); setManPct(0); setManEncoding(true);
     try {
-      // /kpi/manual/upload is a JSON route, so this one does need base64.
+      // /kpi/manual/upload is a JSON route, so this one does need base64. That
+      // read happens BEFORE a single byte is sent and can take seconds on a big
+      // file, which is why manEncoding exists — the % bar only measures transmit,
+      // so without it the first half of the wait looked like a hung button.
       const data64 = await FileSystem.readAsStringAsync(manFile.uri, { encoding: FileSystem.EncodingType.Base64 });
       log.info('manual read as base64', { name: manFile.name, bytesB64: data64.length });
+      setManEncoding(false);
       const res = await uploadManual(
         task.id,
         { fileData: data64, fileName: manFile.name, reason: manDesc.trim(), links },
@@ -289,9 +312,14 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
         load(true);
       }
     } catch (e) {
+      // uploadManual THROWS on a server refusal (services/uploadAmendments.js),
+      // so this catch — not the res.status===false branch above — is where
+      // "Only PDF, DOC and DOCX…" or "Not authorized" actually lands. It used to
+      // replace every one of them with a fixed connection message, which sent
+      // people to check their wifi over a rejected file type.
       log.error('manual upload failed', e?.message);
-      flash('err', 'Upload failed — check your connection and try again');
-    } finally { setManBusy(false); setManPct(0); }
+      flash('err', e?.message || 'Upload failed — check your connection and try again');
+    } finally { setManBusy(false); setManPct(0); setManEncoding(false); }
   }
 
   // ---- Progress update ----------------------------------------------------
@@ -518,7 +546,11 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // ---- Complete -----------------------------------------------------------
   const [checks, setChecks] = useState({});
   const [cmpBusy, setCmpBusy] = useState(false);
-  const allChecked = CHECKLIST_ITEMS.every((c) => checks[c.key]);
+  // At least one, not all five — matching the web and the server, which has
+  // accepted >= 1 since the checklist became "tick what applies" rather than a
+  // gate. Demanding all five here just taught people to tick boxes that weren't
+  // true, which is worse than an honest partial list.
+  const anyChecked = CHECKLIST_ITEMS.some((c) => checks[c.key]);
   const hasProgress = (data?.progress?.length || 0) > 0;
 
   async function onComplete() {
@@ -717,8 +749,20 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 
                   {manBusy && (
                     <View style={{ marginTop: 10 }}>
-                      <View style={s.barTrack}><View style={[s.barFill, { width: `${manPct}%` }]} /></View>
-                      <Text style={s.pctTxt}>{humanSize(manFile?.size || 0)} · {manPct}%</Text>
+                      {manEncoding ? (
+                        // Indeterminate on purpose: nothing is on the wire yet, so
+                        // any number here would be a lie. A big file spends real
+                        // seconds in this phase.
+                        <>
+                          <View style={s.barTrack}><View style={[s.barFill, { width: '100%', opacity: 0.35 }]} /></View>
+                          <Text style={s.pctTxt}>Preparing {humanSize(manFile?.size || 0)}…</Text>
+                        </>
+                      ) : (
+                        <>
+                          <View style={s.barTrack}><View style={[s.barFill, { width: `${manPct}%` }]} /></View>
+                          <Text style={s.pctTxt}>{humanSize(manFile?.size || 0)} · {manPct}%</Text>
+                        </>
+                      )}
                     </View>
                   )}
                   <View style={s.formBtns}>
@@ -835,7 +879,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                   </View>
                 )}
 
-                <Text style={s.cardSub}>Confirm each item — all are required to send this task for approval.</Text>
+                <Text style={s.cardSub}>Tick everything that applies — at least one is needed to send this for approval. Your manager sees exactly which.</Text>
                 {CHECKLIST_ITEMS.map((c, i) => (
                   <TouchableOpacity key={c.key} style={s.checkRow} activeOpacity={0.7}
                     onPress={() => setChecks({ ...checks, [c.key]: !checks[c.key] })}>
@@ -846,8 +890,8 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 ))}
 
                 <TouchableOpacity
-                  style={[s.wideBtn, { backgroundColor: COLORS.red }, (!allChecked || !hasProgress || cmpBusy) && s.btnOff]}
-                  onPress={onComplete} disabled={!allChecked || !hasProgress || cmpBusy}>
+                  style={[s.wideBtn, { backgroundColor: COLORS.red }, (!anyChecked || !hasProgress || cmpBusy) && s.btnOff]}
+                  onPress={onComplete} disabled={!anyChecked || !hasProgress || cmpBusy}>
                   {cmpBusy ? <ActivityIndicator color="#fff" size="small" /> : (
                     <><Ionicons name="flag" size={16} color="#fff" /><Text style={s.wideBtnTxt}>Complete &amp; Send for Approval</Text></>
                   )}

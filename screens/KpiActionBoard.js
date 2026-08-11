@@ -30,6 +30,9 @@ import { scheduleTaskReminder, cancelTaskReminder } from '../services/reminders'
 import { scheduleTaskAlarm, stopAlarm, alarmAvailable, pickAlarmSound, titleFromUri } from '../services/alarm';
 import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets, getAlarmSound, setAlarmSound, getAlarmSettings, setAlarmSettings } from '../api/session';
 import DurationTimePicker from '../components/DurationTimePicker';
+import PulseDot from '../components/PulseDot';
+import * as H from '../utils/haptics';
+import { publishWidgetState, clearWidgetState } from '../utils/taskWidget';
 import { workdayButtonState } from '../utils/workdayState';
 // Why a blocked task is blocked, in the server's words. Pure + unit-tested
 // against real payloads (utils/__tests__/taskGate.test.js).
@@ -183,12 +186,22 @@ function secsSince(isoZ, nowMs) {
 function liveFromAnchor(startIso, base, nowMs) {
   return (base || 0) + secsSince(startIso, nowMs);
 }
-// Productive = finished-log base + the currently-running task's live seconds.
+// Productive = finished-log base + every RUNNING task's live seconds.
+//
+// This used to add only `active_task`, which is just the first of them, so a
+// developer multitasking two timers watched Productive tick at half the rate the
+// two task clocks above it were ticking — the same numbers on the same screen
+// disagreeing. The server counts every active log, so summing them all is what
+// makes the live figure converge on the one it will be replaced by.
 function productiveLive(live, nowMs) {
   const base = live?.productive_base || 0;
-  const at = live?.active_task;
-  if (at && at.timer_start) return base + secsSince(at.timer_start, nowMs);
-  return base;
+  const running = live?.active_tasks?.length
+    ? live.active_tasks
+    : (live?.active_task ? [live.active_task] : []);
+  return running.reduce(
+    (sum, at) => sum + (at?.timer_start ? secsSince(at.timer_start, nowMs) : 0),
+    base,
+  );
 }
 
 // Live Presence — the raw clock since login, matching the server's
@@ -474,7 +487,9 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
         <View style={s.listSpacer} />
         {running && (
           <View style={s.livePill}>
-            <View style={s.liveDot} />
+            {/* Beats while the timer runs — a static dot on a card that says
+                "Live" was the one thing on screen not moving. */}
+            <PulseDot size={7} color={COLORS.green} />
             <Text style={s.liveTxt}>Live</Text>
           </View>
         )}
@@ -562,7 +577,7 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onM
           </View>
           {running && (
             <View style={s.livePill}>
-              <View style={s.liveDot} />
+              <PulseDot size={7} color={COLORS.green} />
               <Text style={s.liveTxt}>Live</Text>
             </View>
           )}
@@ -608,7 +623,12 @@ function Btn({ label, icon, kind, onPress, blocked = false }) {
   return (
     <TouchableOpacity
       style={[s.btn, s[`btn_${kind}`], blocked && s.btnBlocked]}
-      onPress={onPress}
+      // Haptics live HERE rather than in the eight call sites, so every action
+      // button feels the same and a new one can't be added without it. A blocked
+      // button buzzes as an error: the press is real (it answers with a reason),
+      // it just isn't the action asked for, and that difference should be felt
+      // before the alert is read.
+      onPress={(e) => { blocked ? H.err() : H.tap(); onPress && onPress(e); }}
       activeOpacity={0.85}
     >
       <Ionicons name={blocked ? 'lock-closed' : icon} size={14} color={s[`btnTxt_${kind}`].color} />
@@ -876,7 +896,9 @@ export default function KpiActionBoard({
 
   // Styled error popup ("Can't start this task", etc.)
   const [errorPopup, setErrorPopup] = useState(null); // { title, message } | null
-  const showError = (title, message) => setErrorPopup({ title, message });
+  // Every refusal on this screen funnels through here, so the error buzz is
+  // attached once rather than at each of the ~15 call sites.
+  const showError = (title, message) => { H.err(); setErrorPopup({ title, message }); };
 
   // Per-task reminder alarms (developer-only). Map { [taskId]: {notifId, whenIso} }
   // loaded from AsyncStorage; reminderFor = the task whose picker is open.
@@ -1138,6 +1160,10 @@ export default function KpiActionBoard({
   // after-an-action refresh can never drift apart on when to ask.
   const applyLive = useCallback((r) => {
     setLive(r);
+    // Feed the home-screen widget from the same payload the strip renders, so
+    // the two can never disagree about what is running. Fire-and-forget: the
+    // widget is an extra and a failed write must not touch this screen.
+    publishWidgetState(r);
     // Keep the paused banner and the Resume button honest between mounts. The
     // mount read of /kpi_workday/status is a one-shot, so without this a pause
     // or resume made on the WEB never reached a board that was already open, and
@@ -1403,6 +1429,7 @@ export default function KpiActionBoard({
           if (res.day_done) { setDayDone(true); setWorkdayOpen(false); showError('Workday ended', res.message || 'You already ended your workday today.'); }
           else showError("Can't start workday", res.message || 'Failed');
         } else {
+          H.ok();
           setWorkdayOpen(true);
           setDayDone(false);
           // Lift read-only immediately rather than waiting up to 5s for App's poll.
@@ -1425,6 +1452,8 @@ export default function KpiActionBoard({
         showError(workdayPaused ? "Can't resume" : "Can't pause", res.message || 'Failed');
         return;
       }
+      // Resuming is a return to work (success); pausing is a deliberate stop.
+      if (workdayPaused) H.ok(); else H.warn();
       setWorkdayPaused(!workdayPaused);
       await load({ silent: true });
     } catch (e) {
@@ -1440,6 +1469,11 @@ export default function KpiActionBoard({
     try {
       const res = await endWorkday(endNote.trim());
       if (res && res.status === false) { showError("Can't end workday", res.message || 'Failed'); return; }
+      // Heavier than a normal confirm: this is the one action of the day that
+      // cannot be undone by the person taking it.
+      H.heavy();
+      // The day is over — the widget must not keep showing a task as running.
+      clearWidgetState();
       setWorkdayOpen(false);
       // Ended by the developer → one start + one end per day: mark today done so
       // the button flips straight to "Workday ended for today" (disabled), with
@@ -1613,6 +1647,10 @@ export default function KpiActionBoard({
       const res = await fn(task.id);
       if (res && res.status === false) {
         showError(kind === 'start' ? "Can't start this task" : "Can't resume this task", res.message || 'Action failed');
+      } else {
+        // The timer is now running — confirm it in the hand, since the visible
+        // change (a card moving lane) happens after the refresh below.
+        H.ok();
       }
       await load({ silent: true });
     } catch (e) {
@@ -1716,17 +1754,22 @@ export default function KpiActionBoard({
     finally { setBusyId(null); }
   }
 
-  // Finish: Partial needs only a summary; full Complete needs summary + all 5 boxes.
+  // Finish: Partial needs only a summary; full Complete needs summary + at least
+  // one box ticked — the same rule as the web and the server (/kra_kpi/task/complete
+  // accepts >= 1). The app used to demand all five AND then discard what was
+  // ticked in favour of an all-true map, so a task finished with three of five
+  // done was both refused and, once forced through, recorded as fully done. The
+  // manager approves against this list, so it has to be what the developer said.
   async function submitFinish() {
     const task = finishFor;
     if (!finishSummary.trim()) {
       return Alert.alert('Progress summary required', 'Please describe what you did before finishing.');
     }
     if (!finishPartial) {
-      const missing = CHECKLIST_ITEMS.filter((c) => !checklist[c.key]);
-      if (missing.length) {
-        return Alert.alert('Checklist incomplete',
-          'Tick all checklist items, or use "Partial Finish" to submit a summary only.');
+      const ticked = CHECKLIST_ITEMS.filter((c) => checklist[c.key]);
+      if (!ticked.length) {
+        return Alert.alert('Nothing ticked',
+          'Tick everything that applies — at least one — or use "Partial Finish" to submit a summary only.');
       }
     }
     setFinishFor(null);
@@ -1735,10 +1778,10 @@ export default function KpiActionBoard({
       // 1) submit the required progress summary
       const pr = await createProgress(task.id, finishSummary.trim());
       if (pr && pr.status === false) { Alert.alert('Cannot save summary', pr.message || 'Failed'); return; }
-      // 2) complete (full) or partial-finish
+      // 2) complete (full) or partial-finish. Send exactly what was ticked.
       const checklistObj = finishPartial
         ? {}
-        : CHECKLIST_ITEMS.reduce((o, c) => ({ ...o, [c.key]: true }), {});
+        : CHECKLIST_ITEMS.reduce((o, c) => ({ ...o, [c.key]: !!checklist[c.key] }), {});
       const res = await completeTask(task.id, checklistObj, finishPartial);
       if (res && res.status === false) Alert.alert('Cannot finish', res.message || 'Failed');
       await load({ silent: true });
@@ -1968,7 +2011,7 @@ export default function KpiActionBoard({
             {/* Row 1: LIVE badge + working/idle */}
             <View style={s.liveRow}>
               <View style={s.liveBadge}>
-                <View style={s.liveBadgeDot} />
+                <PulseDot size={6} color="#fff" />
                 <Text style={s.liveBadgeTxt}>LIVE</Text>
               </View>
               {live.active_task ? (
@@ -2248,6 +2291,13 @@ export default function KpiActionBoard({
           style={s.listScroll}
           contentContainerStyle={{ padding: 14, paddingBottom: 28 }}
           showsVerticalScrollIndicator={false}
+          // A tick per "notch" of travel. scrollEventThrottle is the frame rate
+          // of the events; the real rate-limiting is inside scrollTick, which
+          // needs both a minimum distance and a minimum gap — without the
+          // distance test a slow drag buzzes continuously, which is the version
+          // people turn off.
+          scrollEventThrottle={32}
+          onScroll={(e) => H.scrollTick(e.nativeEvent.contentOffset.y)}
         >
           {filtered.length === 0 ? (
             <View style={s.center}>
@@ -2660,11 +2710,14 @@ export default function KpiActionBoard({
 
                 {!finishPartial && (
                   <>
-                    <Text style={s.fieldLabel}>Checklist (all required)</Text>
+                    <Text style={s.fieldLabel}>Checklist — tick everything that applies</Text>
+                    <Text style={s.fieldHint}>
+                      At least one. Your manager sees exactly which you ticked.
+                    </Text>
                     {CHECKLIST_ITEMS.map((c) => {
                       const on = !!checklist[c.key];
                       return (
-                        <TouchableOpacity key={c.key} style={s.checkRow} onPress={() => setChecklist((p) => ({ ...p, [c.key]: !p[c.key] }))}>
+                        <TouchableOpacity key={c.key} style={s.checkRow} onPress={() => { H.select(); setChecklist((p) => ({ ...p, [c.key]: !p[c.key] })); }}>
                           <Ionicons name={on ? 'checkbox' : 'square-outline'} size={22} color={on ? COLORS.primary : COLORS.faint} />
                           <Text style={s.checkTxt}>{c.label}</Text>
                         </TouchableOpacity>
