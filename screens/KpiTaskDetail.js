@@ -37,6 +37,7 @@ import {
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
 } from '../services/kpiActions';
 import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
+import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('KpiDetail');
@@ -216,6 +217,8 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // True while the file is being base64-encoded, before any bytes move. Its own
   // flag because manPct is meaningless during that phase.
   const [manEncoding, setManEncoding] = useState(false);
+  // Live transfer figures — bytes moved, speed, seconds remaining.
+  const [manRate, setManRate] = useState(null);
 
   // Returns the file HANDLE only — no base64. The progress route takes the file
   // as multipart straight from this uri, so a 40 MB video never becomes a 53 MB
@@ -288,7 +291,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     }
 
     log.info('upload manual →', { kpi_id: task.id, name: manFile.name, size: manFile.size, links: links.length });
-    setManBusy(true); setManPct(0); setManEncoding(true);
+    setManBusy(true); setManPct(0); setManEncoding(true); setManRate(null);
     try {
       // /kpi/manual/upload is a JSON route, so this one does need base64. That
       // read happens BEFORE a single byte is sent and can take seconds on a big
@@ -297,10 +300,18 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       const data64 = await FileSystem.readAsStringAsync(manFile.uri, { encoding: FileSystem.EncodingType.Base64 });
       log.info('manual read as base64', { name: manFile.name, bytesB64: data64.length });
       setManEncoding(false);
+      // Rate + ETA from the callback's OWN numbers. This route is base64-in-JSON,
+      // so `total` is the encoded body (~33% larger than the file on disk) —
+      // computing speed from manFile.size instead would read a third low.
+      const rate = makeRateTracker();
       const res = await uploadManual(
         task.id,
         { fileData: data64, fileName: manFile.name, reason: manDesc.trim(), links },
-        (sent, total) => { if (total) setManPct(Math.min(100, Math.round((sent / total) * 100))); },
+        (sent, total) => {
+          const r = rate(sent, total);
+          setManPct(r.percent);
+          setManRate({ sent: r.loaded, total: r.total, speed: r.speed, eta: r.eta });
+        },
       );
       if (res?.status === false) {
         log.warn('upload manual refused', { kpi_id: task.id, message: res.message });
@@ -319,7 +330,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       // people to check their wifi over a rejected file type.
       log.error('manual upload failed', e?.message);
       flash('err', e?.message || 'Upload failed — check your connection and try again');
-    } finally { setManBusy(false); setManPct(0); setManEncoding(false); }
+    } finally { setManBusy(false); setManPct(0); setManEncoding(false); setManRate(null); }
   }
 
   // ---- Progress update ----------------------------------------------------
@@ -328,6 +339,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const [pgLinks, setPgLinks] = useState([]);
   const [pgFile, setPgFile] = useState(null);
   const [pgPct, setPgPct] = useState(0);
+  const [pgRate, setPgRate] = useState(null);
   const [pgBusy, setPgBusy] = useState(false);
 
   async function onSubmitProgress() {
@@ -353,12 +365,18 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       kpi_id: task.id, links: links.length,
       file: pgFile?.name || null, size: pgFile?.size || 0,
     });
-    setPgBusy(true); setPgPct(0);
+    setPgBusy(true); setPgPct(0); setPgRate(null);
     try {
+      // Multipart, so `total` here IS the file — unlike the manual route.
+      const rate = makeRateTracker();
       const res = await submitProgressUpdate(
         task.id,
         { summary: pgSummary.trim(), links, file: pgFile },
-        (sent, total) => { if (total) setPgPct(Math.min(100, Math.round((sent / total) * 100))); },
+        (sent, total) => {
+          const r = rate(sent, total);
+          setPgPct(r.percent);
+          setPgRate({ sent: r.loaded, total: r.total, speed: r.speed, eta: r.eta });
+        },
       );
       if (res?.status === false) {
         log.warn('submit progress refused', { kpi_id: task.id, message: res.message });
@@ -373,7 +391,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     } catch (e) {
       log.error('progress submit failed', e?.message);
       flash('err', 'Could not submit — check your connection');
-    } finally { setPgBusy(false); setPgPct(0); }
+    } finally { setPgBusy(false); setPgPct(0); setPgRate(null); }
   }
 
   // ---- GitHub -------------------------------------------------------------
@@ -760,7 +778,16 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                       ) : (
                         <>
                           <View style={s.barTrack}><View style={[s.barFill, { width: `${manPct}%` }]} /></View>
-                          <Text style={s.pctTxt}>{humanSize(manFile?.size || 0)} · {manPct}%</Text>
+                          {/* Bytes moved, live speed and time left. A percentage on
+                              its own cannot tell "slow" from "stalled", which is the
+                              only thing anyone wants to know while waiting. */}
+                          <Text style={s.pctTxt}>
+                            {manRate
+                              ? `${humanSize(manRate.sent)} / ${humanSize(manRate.total)} · ${manPct}%`
+                              : `${humanSize(manFile?.size || 0)} · ${manPct}%`}
+                            {manRate && fmtSpeed(manRate.speed) ? `  ·  ${fmtSpeed(manRate.speed)}` : ''}
+                            {manRate && fmtEta(manRate.eta) ? `  ·  ${fmtEta(manRate.eta)} left` : ''}
+                          </Text>
                         </>
                       )}
                     </View>
@@ -835,7 +862,13 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
               {pgBusy && !!pgFile && (
                 <View style={{ marginTop: 10 }}>
                   <View style={s.barTrack}><View style={[s.barFill, { width: `${pgPct}%` }]} /></View>
-                  <Text style={s.pctTxt}>{humanSize(pgFile.size)} · {pgPct}%</Text>
+                  <Text style={s.pctTxt}>
+                    {pgRate
+                      ? `${humanSize(pgRate.sent)} / ${humanSize(pgRate.total)} · ${pgPct}%`
+                      : `${humanSize(pgFile.size)} · ${pgPct}%`}
+                    {pgRate && fmtSpeed(pgRate.speed) ? `  ·  ${fmtSpeed(pgRate.speed)}` : ''}
+                    {pgRate && fmtEta(pgRate.eta) ? `  ·  ${fmtEta(pgRate.eta)} left` : ''}
+                  </Text>
                 </View>
               )}
 

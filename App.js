@@ -25,6 +25,7 @@ import CompanyBranding from './screens/CompanyBranding';
 import WorkReport from './screens/WorkReport';
 import ClientInvoices from './screens/ClientInvoices';
 import MyWorkday from './screens/MyWorkday';
+import TaskDocuments from './screens/TaskDocuments';
 import ClientTasks from './screens/ClientTasks';
 import GenerateClientFiles from './screens/GenerateClientFiles';
 import ReassignmentHistory from './screens/ReassignmentHistory';
@@ -647,6 +648,10 @@ function AppInner() {
     if (appScreen === 'myworkday')
       // Every user's OWN daily workday report (self-scoped server-side).
       return <MyWorkday onBack={home} />;
+    if (appScreen === 'taskdocuments')
+      // Documents across every task you are on. /task_documents/list scopes to
+      // your own tasks server-side, so this needs no role gate here.
+      return <TaskDocuments onBack={home} />;
     if (appScreen === 'mytasks')
       // focusTaskId: set when a client taps a notification → the row scrolls into
       // view and flashes, mirroring the board's behaviour for developers.

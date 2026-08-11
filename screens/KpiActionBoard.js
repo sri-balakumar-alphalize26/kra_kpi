@@ -186,6 +186,16 @@ function secsSince(isoZ, nowMs) {
 function liveFromAnchor(startIso, base, nowMs) {
   return (base || 0) + secsSince(startIso, nowMs);
 }
+// The only two pause reasons that need words. Every other code IS its own
+// explanation, and asking for one taught people to type "break" into a box next
+// to a button already labelled Break. Urgent keeps it because that text becomes
+// the body of the 🚨 alert the owner receives. Mirrors the web's needsNote.
+const noteRequiredFor = (code) => code === 'other' || code === 'urgent';
+
+// Work that has already been started and stopped — the same triple `canResume`
+// uses, so "shows a Resume button" and "counts as paused" cannot drift apart.
+const PAUSED_STATES = ['paused', 'hold', 'rework'];
+
 // Productive = finished-log base + every RUNNING task's live seconds.
 //
 // This used to add only `active_task`, which is just the first of them, so a
@@ -751,6 +761,13 @@ export default function KpiActionBoard({
   const [pauseCode, setPauseCode] = useState('break');
   const [pauseNote, setPauseNote] = useState('');
   const [pauseDropdown, setPauseDropdown] = useState(false);
+  // Always change the code through this. Picking a reason that needs no note
+  // clears whatever was typed, so a note written for Other cannot end up filed
+  // against Lunch after the user changes their mind.
+  const pickPauseCode = (code) => {
+    setPauseCode(code);
+    if (!noteRequiredFor(code)) setPauseNote('');
+  };
 
   // Switch modal. `switchFrom` is the task being HANDED OVER — the card the
   // button was pressed on. It is sent as from_kpi_id so that under multitask only
@@ -758,6 +775,7 @@ export default function KpiActionBoard({
   // whatever I'm on" (the strip button, only offered with one task running).
   const [switchFrom, setSwitchFrom] = useState(false);
   const [switchBusy, setSwitchBusy] = useState(false);
+  const [switchQuery, setSwitchQuery] = useState('');
 
   // Pause all — one shared reason for every running timer.
   const [pauseAllOpen, setPauseAllOpen] = useState(false);
@@ -1603,6 +1621,7 @@ export default function KpiActionBoard({
     if (kind === 'switch') {
       // The card this was pressed on is the one handing over; everything else
       // the developer has running is deliberately left alone.
+      setSwitchQuery('');   // a search left from last time would hide the list
       setSwitchFrom(task);
       return;
     }
@@ -1687,12 +1706,11 @@ export default function KpiActionBoard({
   // Pause all: one reason for every running timer. Same note rule as the single
   // Pause, so the two can't disagree about when a reason needs explaining.
   async function submitPauseAll() {
-    const noteRequired = pauseAllCode === 'other' || pauseAllCode === 'urgent';
-    if (noteRequired && !pauseAllNote.trim()) {
-      return Alert.alert('Note required', 'Please add a note for this pause reason.');
+    if (noteRequiredFor(pauseAllCode) && !pauseAllNote.trim()) {
+      return Alert.alert('Note required', "Please say what you're pausing for.");
     }
     const label = (PAUSE_REASONS.find((r) => r.code === pauseAllCode) || {}).label || 'Paused';
-    const reason = pauseAllNote.trim() || label;
+    const reason = pauseAllNote.trim().slice(0, IDLE_NOTE_MAX) || label;
     setPauseAllBusy(true);
     try {
       const res = await pauseAllTasks(reason, pauseAllCode);
@@ -1735,15 +1753,22 @@ export default function KpiActionBoard({
     }
   }
 
-  // Pause: a note is required for 'other' and 'urgent' (matches web).
+  // Pause: a note is required for 'other' and 'urgent', and the box is only shown
+  // for those two. The web now uses the identical rule — it previously demanded a
+  // note for Day End, Leave, Technical Issue and the rest, so the two clients
+  // disagreed about what a valid pause even was.
   async function submitPause() {
     const task = pauseFor;
-    const noteRequired = pauseCode === 'other' || pauseCode === 'urgent';
-    if (noteRequired && !pauseNote.trim()) {
-      return Alert.alert('Note required', 'Please add a note for this pause reason.');
+    if (noteRequiredFor(pauseCode) && !pauseNote.trim()) {
+      return Alert.alert('Note required',
+        pauseCode === 'urgent'
+          ? 'Describe what is urgent — this is sent to the owner straight away.'
+          : "Please say what you're pausing for.");
     }
     const label = (PAUSE_REASONS.find((r) => r.code === pauseCode) || {}).label || 'Paused';
-    const reason = pauseNote.trim() || label;
+    // Clamped here as well as by maxLength: the cap is what keeps this readable
+    // inside a Workday Map chip, and a paste can outrun the input's own limit.
+    const reason = pauseNote.trim().slice(0, IDLE_NOTE_MAX) || label;
     setPauseFor(null);
     setBusyId(task.id);
     try {
@@ -2440,14 +2465,14 @@ export default function KpiActionBoard({
                   {PAUSE_REASONS.filter((r) => r.quick && r.code !== 'urgent').map((r) => {
                     const on = pauseCode === r.code;
                     return (
-                      <TouchableOpacity key={r.code} style={[s.quick, on && s.quickOn]} onPress={() => setPauseCode(r.code)}>
+                      <TouchableOpacity key={r.code} style={[s.quick, on && s.quickOn]} onPress={() => { H.select(); pickPauseCode(r.code); }}>
                         <Text style={s.quickEmoji}>{r.emoji}</Text>
                         <Text style={[s.quickTxt, on && { color: COLORS.primary }]}>{r.label}</Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
-                <TouchableOpacity style={[s.quickUrgent, pauseCode === 'urgent' && s.quickUrgentOn]} onPress={() => setPauseCode('urgent')}>
+                <TouchableOpacity style={[s.quickUrgent, pauseCode === 'urgent' && s.quickUrgentOn]} onPress={() => { H.warn(); pickPauseCode('urgent'); }}>
                   <Text style={s.quickEmoji}>🚨</Text>
                   <Text style={[s.quickTxt, { color: pauseCode === 'urgent' ? '#fff' : COLORS.red }]}>Urgent</Text>
                 </TouchableOpacity>
@@ -2464,7 +2489,7 @@ export default function KpiActionBoard({
                     {PAUSE_REASONS.map((r) => {
                       const on = pauseCode === r.code;
                       return (
-                        <TouchableOpacity key={r.code} style={[s.dropdownItem, on && s.dropdownItemOn]} onPress={() => { setPauseCode(r.code); setPauseDropdown(false); }}>
+                        <TouchableOpacity key={r.code} style={[s.dropdownItem, on && s.dropdownItemOn]} onPress={() => { H.select(); pickPauseCode(r.code); setPauseDropdown(false); }}>
                           <Text style={[s.dropdownItemTxt, on && { color: COLORS.primary, fontWeight: '800' }]}>{r.label}</Text>
                           {on && <Ionicons name="checkmark" size={17} color={COLORS.primary} />}
                         </TouchableOpacity>
@@ -2474,20 +2499,30 @@ export default function KpiActionBoard({
                 </View>
               )}
 
-              {/* Note — capped: this text is drawn inside a Workday Map chip, and
-                  the Map is what gets frozen into the saved End Workday image. */}
-              <TextInput
-                style={s.pauseNote}
-                placeholder="Optional note (required for 'Other' and 'Urgent')…"
-                placeholderTextColor={COLORS.faint}
-                value={pauseNote}
-                onChangeText={setPauseNote}
-                maxLength={IDLE_NOTE_MAX}
-                multiline
-              />
-              <Text style={s.idleNoteHint}>
-                Keep it short — this shows on your Workday Map. {pauseNote.length}/{IDLE_NOTE_MAX}
-              </Text>
+              {/* Only Other and Urgent ask for words. The rest ARE the explanation
+                  — a box next to a button already labelled Break just taught people
+                  to type "break" into it. Urgent keeps it because that text is the
+                  body of the alert the owner receives.
+                  Capped: this is drawn inside a Workday Map chip, and the Map is
+                  what gets frozen into the saved End Workday image. */}
+              {noteRequiredFor(pauseCode) ? (
+                <>
+                  <TextInput
+                    style={s.pauseNote}
+                    placeholder={pauseCode === 'urgent'
+                      ? 'What is urgent? This is sent to the owner now…'
+                      : 'Why? (required)'}
+                    placeholderTextColor={COLORS.faint}
+                    value={pauseNote}
+                    onChangeText={setPauseNote}
+                    maxLength={IDLE_NOTE_MAX}
+                    multiline
+                  />
+                  <Text style={s.idleNoteHint}>
+                    Keep it short — this shows on your Workday Map. {pauseNote.length}/{IDLE_NOTE_MAX}
+                  </Text>
+                </>
+              ) : null}
 
               <Text style={s.pauseHelp}>Every pause reason is tracked as away-time in your day summary — never counted as productive.</Text>
             </View>
@@ -2520,41 +2555,91 @@ export default function KpiActionBoard({
                   ? <><Text style={{ fontWeight: '800' }}>{switchFrom.external_ref || switchFrom.name}</Text> pauses as <Text style={{ fontWeight: '800' }}>Another Priority Task</Text> and the one you pick starts straight away. Anything else you have running is left alone. Time already logged is kept.</>
                   : 'Your current task pauses as Another Priority Task and the one you pick starts straight away. Time already logged is kept.'}
               </Text>
+              {/* Search. The list is built from `raw`, not the board's filtered
+                  set, so the board's own search box does not narrow it — this is
+                  the only filter here. */}
+              <View style={s.switchSearch}>
+                <Ionicons name="search" size={16} color={COLORS.muted} />
+                <TextInput
+                  style={s.switchSearchInput}
+                  placeholder="Search by ref, name or developer…"
+                  placeholderTextColor={COLORS.faint}
+                  value={switchQuery}
+                  onChangeText={setSwitchQuery}
+                  autoCorrect={false}
+                />
+                {switchQuery ? (
+                  <TouchableOpacity onPress={() => setSwitchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close-circle" size={16} color={COLORS.faint} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
               {(() => {
                 const runningIds = new Set(
                   (live?.active_tasks?.length ? live.active_tasks : (live?.active_task ? [live.active_task] : []))
                     .map((t) => t.id));
-                const options = (raw || [])
-                  .filter((t) => !runningIds.has(t.id) && t.can_start !== false)
+                const q = switchQuery.trim().toLowerCase();
+                // Same predicate as the board's own search, so the two behave
+                // identically rather than a third rule appearing here.
+                const matches = (t) => !q
+                  || String(t.external_ref || '').toLowerCase().includes(q)
+                  || String(t.name || '').toLowerCase().includes(q)
+                  || String(t.user_name || '').toLowerCase().includes(q);
+                // can_start stays in the filter: it is the server's _start_block
+                // answer, and a PAUSED task can still be blocked by a paused
+                // workday or an unapproved client.
+                const avail = (raw || [])
+                  .filter((t) => !runningIds.has(t.id) && t.can_start !== false && matches(t))
                   .sort((a, b) => String(a.external_ref || '').localeCompare(String(b.external_ref || '')));
-                if (!options.length) {
+                // Work already begun comes first — switching is nearly always
+                // "back to the thing I paused", and that used to be buried among
+                // every never-started task in the list.
+                const paused = avail.filter((t) => PAUSED_STATES.includes(t.task_state));
+                const fresh = avail.filter((t) => !PAUSED_STATES.includes(t.task_state));
+                if (!avail.length) {
                   return (
                     <Text style={[s.centerTxt, { paddingVertical: 20 }]}>
-                      Nothing else is ready to start. A task has to be accepted and
-                      approved before you can switch to it.
+                      {q
+                        ? `Nothing matches "${switchQuery.trim()}".`
+                        : 'Nothing else is ready to start. A task has to be accepted and approved before you can switch to it.'}
                     </Text>
                   );
                 }
+                const card = (t) => (
+                  <TouchableOpacity
+                    key={t.id} style={s.switchCard} activeOpacity={0.85}
+                    disabled={switchBusy}
+                    onPress={() => submitSwitch(t)}
+                  >
+                    <View style={s.switchCardTop}>
+                      <Text style={s.switchRef}>{t.external_ref || ''}</Text>
+                      <Text style={s.switchPrio}>
+                        {PRIORITIES.find((p) => p.code === t.priority)?.label || t.priority || 'Regular'}
+                      </Text>
+                    </View>
+                    <Text style={s.switchName} numberOfLines={2}>{t.name}</Text>
+                    <Text style={s.switchMeta} numberOfLines={1}>
+                      {t.user_name || 'Unassigned'} · Time {fmtHMS(t.timer_total_seconds || 0)} · Est {t.estimate_display || '—'}
+                    </Text>
+                    {t.paused_reason && PAUSED_STATES.includes(t.task_state) ? (
+                      <Text style={s.switchPaused} numberOfLines={1}>⏸ {t.paused_reason}</Text>
+                    ) : null}
+                  </TouchableOpacity>
+                );
                 return (
                   <ScrollView style={{ maxHeight: 380 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                    {options.map((t) => (
-                      <TouchableOpacity
-                        key={t.id} style={s.switchCard} activeOpacity={0.85}
-                        disabled={switchBusy}
-                        onPress={() => submitSwitch(t)}
-                      >
-                        <View style={s.switchCardTop}>
-                          <Text style={s.switchRef}>{t.external_ref || ''}</Text>
-                          <Text style={s.switchPrio}>
-                            {PRIORITIES.find((p) => p.code === t.priority)?.label || t.priority || 'Regular'}
-                          </Text>
-                        </View>
-                        <Text style={s.switchName} numberOfLines={2}>{t.name}</Text>
-                        <Text style={s.switchMeta} numberOfLines={1}>
-                          {t.user_name || 'Unassigned'} · Time {fmtHMS(t.timer_total_seconds || 0)} · Est {t.estimate_display || '—'}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
+                    {paused.length ? (
+                      <>
+                        <Text style={s.switchGroup}>Paused — pick back up ({paused.length})</Text>
+                        {paused.map(card)}
+                      </>
+                    ) : null}
+                    {fresh.length ? (
+                      <>
+                        <Text style={s.switchGroup}>Not started yet ({fresh.length})</Text>
+                        {fresh.map(card)}
+                      </>
+                    ) : null}
                   </ScrollView>
                 );
               })()}
@@ -2590,25 +2675,37 @@ export default function KpiActionBoard({
                   return (
                     <TouchableOpacity
                       key={r.code} style={[s.typeChip, on && s.typeChipOn]}
-                      onPress={() => setPauseAllCode(r.code)} activeOpacity={0.85}
+                      onPress={() => {
+                        H.select();
+                        setPauseAllCode(r.code);
+                        if (!noteRequiredFor(r.code)) setPauseAllNote('');
+                      }}
+                      activeOpacity={0.85}
                     >
                       <Text style={[s.typeChipTxt, on && s.typeChipTxtOn]}>{r.emoji} {r.label}</Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
-              <TextInput
-                style={s.pauseNote}
-                placeholder="Optional note (required for 'Other' and 'Urgent')…"
-                placeholderTextColor={COLORS.faint}
-                value={pauseAllNote}
-                onChangeText={setPauseAllNote}
-                maxLength={IDLE_NOTE_MAX}
-                multiline
-              />
-              <Text style={s.idleNoteHint}>
-                Keep it short — this shows on your Workday Map. {pauseAllNote.length}/{IDLE_NOTE_MAX}
-              </Text>
+              {/* Same rule as the single Pause — only Other and Urgent ask. */}
+              {noteRequiredFor(pauseAllCode) ? (
+                <>
+                  <TextInput
+                    style={s.pauseNote}
+                    placeholder={pauseAllCode === 'urgent'
+                      ? 'What is urgent? This is sent to the owner now…'
+                      : 'Why? (required)'}
+                    placeholderTextColor={COLORS.faint}
+                    value={pauseAllNote}
+                    onChangeText={setPauseAllNote}
+                    maxLength={IDLE_NOTE_MAX}
+                    multiline
+                  />
+                  <Text style={s.idleNoteHint}>
+                    Keep it short — this shows on your Workday Map. {pauseAllNote.length}/{IDLE_NOTE_MAX}
+                  </Text>
+                </>
+              ) : null}
             </View>
             <View style={s.modalFoot}>
               <TouchableOpacity style={s.footCancel} onPress={() => setPauseAllOpen(false)}>
@@ -3985,6 +4082,18 @@ const s = StyleSheet.create({
   switchPrio: { fontSize: 10.5, fontWeight: '800', color: COLORS.muted, textTransform: 'uppercase' },
   switchName: { fontSize: 14, fontWeight: '700', color: COLORS.navy, lineHeight: 19, marginBottom: 4 },
   switchMeta: { fontSize: 11.5, color: COLORS.muted },
+  switchPaused: { fontSize: 11.5, color: COLORS.amber, fontWeight: '700', marginTop: 4 },
+  switchGroup: {
+    fontSize: 11.5, fontWeight: '900', color: COLORS.muted,
+    textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4, marginBottom: 6,
+  },
+  switchSearch: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1, borderColor: COLORS.line, borderRadius: 10,
+    paddingHorizontal: 10, paddingVertical: 8, marginBottom: 10,
+    backgroundColor: '#fff',
+  },
+  switchSearchInput: { flex: 1, fontSize: 13.5, color: COLORS.ink, padding: 0 },
 
   // Revert confirmation.
   revertBox: {

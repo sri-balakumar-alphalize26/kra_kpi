@@ -67,6 +67,9 @@ const QUICK = [
   { label: 'KPI Action Board',   lib: 'mc',  name: 'clipboard-check',  dest: 'actionboard',        adminOnly: false, section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
   { label: 'My Workday',         lib: 'mc',  name: 'calendar-clock',   dest: 'myworkday',          adminOnly: false, section: 'reports',  bg: '#CFFAFE', fg: '#0E7490' },
   { label: 'My Snapshots',       lib: 'mc',  name: 'camera-account',   dest: 'mysnapshots',        adminOnly: false, section: 'reports',  bg: '#E0F2FE', fg: '#0369A1' },
+  // Everyone's own tasks and their attachments — the server scopes the list to
+  // the tasks you are actually on, so this is not admin-only.
+  { label: 'Task Documents',     lib: 'mc',  name: 'file-search-outline', dest: 'taskdocuments',   adminOnly: false, section: 'main',     bg: '#FFE4E6', fg: '#BE123C' },
   { label: 'Upload Requirements', lib: 'mc', name: 'file-document',    dest: 'upload:requirement', adminOnly: true,  section: 'main',     bg: '#FEF3C7', fg: '#D97706' },
   { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true,  section: 'main',     bg: '#FFEDD5', fg: '#EA580C' },
   { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true,  section: 'main',     bg: '#FEE2E2', fg: '#DC2626' },
