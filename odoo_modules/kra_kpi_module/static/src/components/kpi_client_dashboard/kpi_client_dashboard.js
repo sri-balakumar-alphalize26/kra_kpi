@@ -315,7 +315,12 @@ export class KpiClientDashboard extends Component {
                                     <span t-else="" class="text-muted small">—</span>
                                 </td>
                                 <td>
-                                    <button t-if="k.task_state === 'partially_completed'"
+                                    <!-- Must mirror the server gate in
+                                         /kpi_client_approval/approve. This used to offer
+                                         Sign for any 'partially_completed' row, including
+                                         work no admin had QA-approved — the one affordance
+                                         that let a client sign off unchecked work. -->
+                                    <button t-if="k.task_state === 'awaiting_client'"
                                             class="btn btn-sm btn-warning"
                                             t-on-click="() => this.openApproval(k.id)">
                                         <i class="fa fa-check"/> Sign
@@ -440,6 +445,9 @@ export class KpiClientDashboard extends Component {
             'in_progress': 'bg-info',
             'paused': 'bg-warning text-dark',
             'partially_completed': 'bg-warning text-dark',
+            // The state the client is actually being asked to act on — it had no entry
+            // here, so it rendered as a washed-out badge showing the raw code.
+            'awaiting_client': 'bg-danger',
             'completed': 'bg-success',
         };
         return map[state] || 'bg-light text-dark';

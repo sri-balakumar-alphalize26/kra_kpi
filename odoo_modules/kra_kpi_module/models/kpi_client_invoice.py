@@ -218,6 +218,21 @@ class KpiClientInvoice(models.Model):
             for sub in self.filter_sub_kra_ids:
                 sub_ids.update(sub._get_descendant_ids())
             kra_ids = list(sub_ids & set(kra_ids))
+
+        # Tasks already carried by ANY other invoice — draft included. Excluding these is
+        # what stops a billed task being offered again, and it has to be membership of an
+        # invoice line rather than the `is_invoiced` flag: that flag only turns on once an
+        # invoice reaches finalized/sent, so two concurrent DRAFTS would each bill the same
+        # task at full value with nothing to stop them.
+        #
+        # Deliberately not date-based. /kpi_client_invoice/create is also called from the
+        # Owner Dashboard, which hardcodes 2000-01-01 → 2099-12-31 (services/ownerDashboard.js),
+        # so a date filter alone would never exclude anything on that path.
+        already_billed_ids = self.env['kpi.client.invoice.line'].search([
+            ('kpi_id', '!=', False),
+            ('invoice_id', '!=', self.id),
+        ]).mapped('kpi_id').ids
+
         domain = [
             ('is_active', '=', False),
             ('work_date', '>=', self.from_date),
@@ -226,6 +241,7 @@ class KpiClientInvoice(models.Model):
             # Only bill work on tasks the CLIENT has signed off as complete.
             ('kpi_id.task_state', '=', 'completed'),
             ('kpi_id.client_final_approved', '=', True),
+            ('kpi_id', 'not in', already_billed_ids),
         ]
         if self.filter_user_ids:
             domain.append(('user_id', 'in', self.filter_user_ids.ids))
@@ -300,14 +316,33 @@ class KpiClientInvoice(models.Model):
         # tasks the client has signed off.  Without these two clauses every
         # active task under the client was offered for billing, including
         # in-progress and never-approved ones.
+        #
+        # `id not in already_billed_ids` is the de-duplication: without it this pass
+        # re-offered every task the client had ever signed off, on every invoice, forever.
         task_domain = [('kra_id', 'in', kra_ids), ('active', '=', True),
                        ('task_state', '=', 'completed'),
-                       ('client_final_approved', '=', True)]
+                       ('client_final_approved', '=', True),
+                       ('id', 'not in', already_billed_ids)]
         if self.filter_kpi_ids:
             task_domain.append(('id', 'in', self.filter_kpi_ids.ids))
         if type_allowed_ids is not None:
             task_domain.append(('id', 'in', type_allowed_ids))
         candidate_tasks = self.env['kra.kpi'].search(task_domain)
+
+        # This pass had NO date filter at all, so an invoice dated 2020 happily pulled in
+        # tasks completed in 2026. Sign-off is the right anchor — a task with no time logs
+        # in range has no work_date to filter on, and sign-off is the moment it became
+        # billable. Filtered in Python rather than the domain so the fallback below stays
+        # readable: if a task somehow reached client_final_approved without a signing
+        # timestamp, fall back to its completion date instead of silently dropping it.
+        # Dropping a billable task is a worse failure than including a borderline one.
+        def _in_period(t):
+            stamp = t.client_signed_datetime or t.completion_date
+            if not stamp:
+                return True
+            return self.from_date <= stamp.date() <= self.to_date
+        candidate_tasks = candidate_tasks.filtered(_in_period)
+
         if self.filter_user_ids:
             wanted = set(self.filter_user_ids.ids)
             candidate_tasks = candidate_tasks.filtered(

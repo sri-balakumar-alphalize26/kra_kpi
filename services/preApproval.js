@@ -86,3 +86,22 @@ export async function submitClientSignoff(kpiId, { signatureText, notes } = {}) 
   log.info('signoff ←', { kpiId });
   return res;
 }
+
+// The other half of stage 2: the client does NOT accept the finished work and sends it
+// back. Server-side this walks the task to 'rework' with the reason attached, clears the
+// admin's QA approval, and notifies the coordinator — the same path the WhatsApp link uses.
+//
+// Distinct from decidePreApproval('reject') above, which is stage 1 (rejecting WHO was
+// assigned, before any work). This one rejects the DELIVERED work. Sending a stage-2
+// rejection to the stage-1 route would be recorded against the wrong decision entirely.
+export async function submitClientRejection(kpiId, reason) {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl) return { status: true, state: 'rework' };
+  const res = await jsonRpc(
+    serverUrl, '/kpi_client_approval/reject',
+    { kpi_id: kpiId, reason: (reason || '').trim() }, undefined, db,
+  );
+  if (!res || res.status === false) throw new Error(res?.message || 'Could not send this back');
+  log.info('reject ←', { kpiId, state: res.state });
+  return res;
+}

@@ -17,7 +17,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { getClientDashboard } from '../services/clientPortal';
-import { fetchPreApprovals, decidePreApproval, holdPreApproval, submitClientSignoff } from '../services/preApproval';
+import { fetchPreApprovals, decidePreApproval, holdPreApproval, submitClientSignoff, submitClientRejection } from '../services/preApproval';
 import { REJECT_REASONS } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
 
@@ -85,7 +85,15 @@ function TaskCard({ t, highlight, onPress, pulse, onLayout }) {
           <View style={s.certTag}><Ionicons name="ribbon" size={12} color="#16A34A" /><Text style={s.certTxt}>Certificate</Text></View>
         ) : null}
       </View>
-      {t.project_name ? <Text style={s.sub} numberOfLines={1}>📁 {t.project_name}</Text> : null}
+      {/* Client above project. Both go on their own truncating line rather than into
+          cardTop/metaRow, neither of which wraps — that is how the tablet-era rows
+          overflowed at 360dp. client_name has always been in the dashboard payload.
+          The project line is suppressed when it just repeats the client: a task sitting
+          directly on the client KRA resolves both to the same record, which is every
+          task in the current data, and two identical lines is worse than one. */}
+      {t.client_name ? <Text style={s.sub} numberOfLines={1}>🏢 {t.client_name}</Text> : null}
+      {t.project_name && t.project_name !== t.client_name
+        ? <Text style={s.sub} numberOfLines={1}>📁 {t.project_name}</Text> : null}
       <Text style={s.sub} numberOfLines={1}>
         👤 {t.primary_assignee || 'Unassigned'}
       </Text>
@@ -241,6 +249,11 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   const [approvals, setApprovals] = useState([]);      // tasks awaiting my sign-off
   const [busyId, setBusyId] = useState(null);          // decision in flight
   const [rejectFor, setRejectFor] = useState(null);    // task being rejected (+ reason)
+  // Which rejection this is. 'pre' = stage 1, refusing WHO was assigned before any work.
+  // 'final' = stage 2, refusing the DELIVERED work at sign-off. Same modal and the same
+  // reason presets, but two different endpoints — sending one to the other's route files
+  // the decision against the wrong stage.
+  const [rejectStage, setRejectStage] = useState('pre');
   const [rejectCode, setRejectCode] = useState('');    // chosen REJECT_REASONS code
   const [rejectNote, setRejectNote] = useState('');    // free text (required for 'other')
   const [toast, setToast] = useState('');
@@ -251,6 +264,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   const [signName, setSignName] = useState('');        // typed signature
   const [signTicks, setSignTicks] = useState({ delivered: false, works: false, authorized: false });
   const [signBusy, setSignBusy] = useState(false);
+  const [signErr, setSignErr] = useState('');          // shown inside the sheet, not as a toast
   // The two action sections collapse by default — their counts stay visible in
   // the headers, so the client reaches their task list without a long scroll.
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -375,7 +389,13 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   }, [flashToast]);
 
   const onApprove = useCallback((t) => decide(t, 'approve'), [decide]);
-  const onReject = useCallback((t) => { setRejectNote(''); setRejectCode(''); setRejectFor(t); }, []);
+  const onReject = useCallback((t) => {
+    setRejectNote(''); setRejectCode(''); setRejectStage('pre'); setRejectFor(t);
+  }, []);
+  // Stage 2: the finished work is not acceptable — send it back to the team.
+  const onRejectFinal = useCallback((t) => {
+    setRejectNote(''); setRejectCode(''); setRejectStage('final'); setRejectFor(t);
+  }, []);
   // The reason sent to the server is the preset's label, or the typed text for
   // 'other'. It lands in pre_approval_feedback and is what the admin acts on.
   const rejectReasonText = useCallback(() => {
@@ -386,18 +406,31 @@ export default function ClientTasks({ onBack, focusTaskId }) {
 
   const canReject = !!rejectReasonText();
 
-  const confirmReject = useCallback(() => {
+  const confirmReject = useCallback(async () => {
     const t = rejectFor;
     const reason = rejectReasonText();
     if (!t || !reason) return;      // mirrored server-side; never send a blank reason
-    setRejectFor(null);
-    decide(t, 'reject', reason);
-  }, [rejectFor, rejectReasonText, decide]);
+    const stage = rejectStage;
+    setRejectFor(null);             // close first: the toast renders outside this Modal
+    if (stage === 'pre') { decide(t, 'reject', reason); return; }
+    setBusyId(t.id);
+    try {
+      await submitClientRejection(t.id, reason);
+      flashToast('Sent back to the team with your reason.');
+      load();
+    } catch (e) {
+      log.error('final reject failed', e?.message);
+      flashToast(e.message || 'Could not send this back');
+    } finally {
+      setBusyId(null);
+    }
+  }, [rejectFor, rejectStage, rejectReasonText, decide, flashToast, load]);
 
   // ── Stage-2 final sign-off ───────────────────────────────────────────────
   const openSignoff = useCallback((t) => {
     setSignName('');
     setSignTicks({ delivered: false, works: false, authorized: false });
+    setSignErr('');
     setSignFor(t);
   }, []);
   const toggleTick = (k) => setSignTicks((p) => ({ ...p, [k]: !p[k] }));
@@ -410,6 +443,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     const t = signFor;
     if (!t || !signReady || signBusy) return;
     setSignBusy(true);
+    setSignErr('');
     try {
       await submitClientSignoff(t.id, { signatureText: signName });
       setSignFor(null);
@@ -417,7 +451,11 @@ export default function ClientTasks({ onBack, focusTaskId }) {
       load();
     } catch (e) {
       log.error('signoff failed', e?.message);
-      flashToast(e.message || 'Could not submit your sign-off');
+      // Show it INSIDE the sheet. flashToast renders outside this <Modal>, and an RN
+      // Modal is its own native window — the toast was painting behind it, so a failed
+      // sign-off looked like the button simply stopped spinning. Keeping the sheet open
+      // also preserves the name they typed.
+      setSignErr(e.message || 'Could not submit your sign-off');
     } finally {
       setSignBusy(false);
     }
@@ -528,11 +566,29 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 // and scroll to the top of the page instead of to this row.
                 <View key={'pa' + t.id} onLayout={onRowLayout(t.id)}>
                   <TaskCard t={t} highlight onPress={() => setDetail(t)} />
-                  {/* The work is finished and checked — this is where the client
-                      accepts it and the completion certificate is generated. */}
+                  {/* The work is finished and checked — accept it (certificate is
+                      generated) or send it back. Without the second button the only
+                      in-app action was Accept, so anyone unhappy with the work had no
+                      move at all and the task sat here indefinitely. */}
+                  {/* Stacked, not side by side: "Request changes" does not fit a
+                      half-width button at 360dp, and every fixed row in this app was
+                      originally sized for the tablet. */}
                   <TouchableOpacity style={s.signBtn} onPress={() => openSignoff(t)} activeOpacity={0.85}>
                     <Ionicons name="create-outline" size={16} color="#fff" />
                     <Text style={s.signBtnTxt}>Sign off</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[s.changesBtn, busyId === t.id && s.actDisabled]}
+                    onPress={() => onRejectFinal(t)} disabled={busyId === t.id} activeOpacity={0.85}
+                  >
+                    {busyId === t.id
+                      ? <ActivityIndicator size="small" color={COLORS.red} />
+                      : (
+                        <>
+                          <Ionicons name="arrow-undo-outline" size={16} color={COLORS.red} />
+                          <Text style={s.changesBtnTxt} numberOfLines={1}>Request changes</Text>
+                        </>
+                      )}
                   </TouchableOpacity>
                 </View>
               ))}
@@ -561,12 +617,16 @@ export default function ClientTasks({ onBack, focusTaskId }) {
       <Modal visible={!!rejectFor} transparent animationType="fade" onRequestClose={() => setRejectFor(null)}>
         <View style={s.mWrap}>
           <View style={s.mCard}>
-            <View style={s.mIcon}><Ionicons name="close-circle" size={30} color={COLORS.red} /></View>
-            <Text style={s.mTitle}>Reject this assignment?</Text>
+            <View style={s.mIcon}>
+              <Ionicons name={rejectStage === 'final' ? 'arrow-undo-circle' : 'close-circle'} size={30} color={COLORS.red} />
+            </View>
+            <Text style={s.mTitle}>
+              {rejectStage === 'final' ? 'Send this back to the team?' : 'Reject this assignment?'}
+            </Text>
             <Text style={s.mMsg} numberOfLines={2}>{rejectFor?.name}</Text>
 
             {/* One tap = the reason. Only 'Other' needs typing. */}
-            <Text style={s.mLabel}>Why?</Text>
+            <Text style={s.mLabel}>{rejectStage === 'final' ? 'What needs changing?' : 'Why?'}</Text>
             <View style={s.reasonWrap}>
               {REJECT_REASONS.map((r) => {
                 const on = rejectCode === r.code;
@@ -597,7 +657,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 style={[s.mBtn, s.mDo, !canReject && s.actDisabled]}
                 onPress={confirmReject} disabled={!canReject} activeOpacity={0.85}
               >
-                <Text style={s.mDoTxt}>Reject</Text>
+                <Text style={s.mDoTxt}>{rejectStage === 'final' ? 'Send back' : 'Reject'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -699,6 +759,12 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 <Text style={s.signNote}>
                   This records your digital approval and generates the completion certificate.
                 </Text>
+                {signErr ? (
+                  <View style={s.signErr}>
+                    <Ionicons name="alert-circle" size={16} color={COLORS.red} />
+                    <Text style={s.signErrTxt}>{signErr}</Text>
+                  </View>
+                ) : null}
               </View>
             </ScrollView>
             <View style={s.mBtns}>
@@ -868,9 +934,22 @@ const s = StyleSheet.create({
   signBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
     backgroundColor: COLORS.green, borderRadius: 11, height: 44,
-    marginTop: -4, marginBottom: 12,
+    marginTop: -4, marginBottom: 8,
   },
   signBtnTxt: { color: '#fff', fontWeight: '800', fontSize: 14.5 },
+  // Secondary to Sign off: outlined, so accepting stays the obvious primary action.
+  changesBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    backgroundColor: '#fff', borderRadius: 11, height: 42,
+    borderWidth: 1.5, borderColor: COLORS.red, marginBottom: 12,
+  },
+  changesBtnTxt: { color: COLORS.red, fontWeight: '800', fontSize: 13.5 },
+  signErr: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 7, marginTop: 12,
+    backgroundColor: '#FEF2F2', borderRadius: 10, padding: 10,
+    borderWidth: 1, borderColor: '#FECACA',
+  },
+  signErrTxt: { flex: 1, color: COLORS.red, fontSize: 12.5, fontWeight: '600', lineHeight: 17 },
   signCard: { width: '100%', maxWidth: 420, backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden' },
   signHead: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: COLORS.green, paddingHorizontal: 16, paddingVertical: 13 },
   signHeadTxt: { flex: 1, fontSize: 16.5, fontWeight: '900', color: '#fff' },

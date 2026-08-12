@@ -4417,6 +4417,20 @@ class KpiReportsAPI(http.Controller):
                 return {'status': False, 'message': 'Task not found.'}
             if not self._is_client_authorized_for_kpi(kpi):
                 return {'status': False, 'message': 'You are not authorized to approve this task.'}
+            # Stage-2 sign-off is only meaningful once the admin has QA-approved the work.
+            # Without this the route wrote the terminal fields from ANY state, so a client
+            # could create a task and immediately mark it completed + billable — skipping
+            # admin accept, client pre-approval and every minute of developer work.
+            # 'partially_completed' + admin_approved is the legacy shape that predates
+            # 'awaiting_client'; it is still offered by the pending list, so it is accepted
+            # here too. Keep the two in step — the app renders a Sign-off button for
+            # whatever /kpi_client_portal/dashboard returns in pending_approvals.
+            if not (kpi.task_state == 'awaiting_client'
+                    or (kpi.task_state == 'partially_completed' and kpi.admin_approved)):
+                return {'status': False,
+                        'message': "This task is not awaiting your sign-off yet. "
+                                   "It has to be completed by the team and approved by an "
+                                   "admin first."}
             user = request.env.user
             # Signature: prefer the user's saved signature image; allow optional typed name on top.
             signature = (params.get('signature_text') or '').strip()
@@ -4501,7 +4515,7 @@ class KpiReportsAPI(http.Controller):
 
     @http.route('/kpi_client_approval/reject', type='json', auth='user', methods=['POST'], csrf=False)
     def submit_client_rejection(self, **params):
-        """Client rejects with a reason — task returns to paused state for the dev."""
+        """Client rejects with a reason — task walks back to 'rework' for the dev."""
         try:
             kpi = request.env['kra.kpi'].sudo().browse(int(params['kpi_id']))
             if not kpi.exists():
@@ -4509,8 +4523,27 @@ class KpiReportsAPI(http.Controller):
             if not self._is_client_authorized_for_kpi(kpi):
                 return {'status': False, 'message': 'You are not authorized.'}
             reason = (params.get('reason') or '').strip() or 'Client requested changes.'
-            kpi.reject_task(reason)
-            return {'status': True}
+            # This used to call kpi.reject_task(reason), which raises unless the task is
+            # 'partially_completed'. By sign-off time the coordinator has already run
+            # approve_task, so the task is 'awaiting_client' and the call ALWAYS raised —
+            # swallowed by the except below, so the client got a silent no-op and the task
+            # sat in the queue forever. record_client_final_decision is the stage-2 path
+            # (the same one WhatsApp uses); it walks the state back to 'rework' itself.
+            res = kpi.record_client_final_decision(
+                'reject',
+                partner_name=request.env.user.name or '',
+                feedback=reason,
+                source='web',
+                partner_id=request.env.user.partner_id.id or None,
+            ) or {}
+            # That method returns a STRING status ('ok' | 'invalid' | 'expired' |
+            # 'already_decided'). Both OWL callers test `if (!r.status)`, and every one of
+            # those strings is truthy in JS — returning it raw would show the success
+            # alert on a failed rejection. Collapse it to a boolean here.
+            ok = res.get('status') == 'ok'
+            return {'status': ok,
+                    'message': res.get('message') or ('' if ok else 'Could not record your rejection.'),
+                    'state': res.get('state') or kpi.task_state}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"submit_client_rejection: {str(e)}")

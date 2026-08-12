@@ -2,11 +2,23 @@
 <odoo>
     <data noupdate="1">
 
+        <!-- NOTE on the `parent_id` branch in all three domains below.
+             client_kra_id is the task's NEAREST is_client ancestor. _compute_is_client
+             (models/kra.py) flags BOTH level-1 (root) and level-2, so for a two-level
+             client tree the task resolves to the level-2 node while the human almost
+             always attaches the portal user to the level-1 root. Matching only
+             client_kra_id.client_user_ids then finds nobody, and the client can never see
+             their own invoices — 89 of 93 tasks in the live data looked exactly like this.
+             The controllers already resolve clients by walking descendants, so this brings
+             the rules in step with them. One level up is COMPLETE, not a heuristic:
+             is_client is only ever true at level 1 or 2, so client_kra_id's parent is the
+             root whenever client_kra_id is not itself the root. -->
+
         <!-- Client invoice: clients see only their own KRA's finalized/sent invoices -->
         <record id="rule_client_invoice_client_own" model="ir.rule">
             <field name="name">Client sees own invoices (finalized+sent)</field>
             <field name="model_id" ref="model_kpi_client_invoice"/>
-            <field name="domain_force">[('client_kra_id.client_user_ids', 'in', user.id), ('state', 'in', ['finalized','sent'])]</field>
+            <field name="domain_force">['&amp;', '|', ('client_kra_id.client_user_ids', 'in', user.id), ('client_kra_id.parent_id.client_user_ids', 'in', user.id), ('state', 'in', ['finalized','sent'])]</field>
             <field name="groups" eval="[(4, ref('kra_kpi_module.group_kra_client'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>
@@ -18,7 +30,7 @@
         <record id="rule_client_invoice_line_client_own" model="ir.rule">
             <field name="name">Client sees own invoice lines</field>
             <field name="model_id" ref="model_kpi_client_invoice_line"/>
-            <field name="domain_force">[('invoice_id.client_kra_id.client_user_ids', 'in', user.id), ('invoice_id.state', 'in', ['finalized','sent'])]</field>
+            <field name="domain_force">['&amp;', '|', ('invoice_id.client_kra_id.client_user_ids', 'in', user.id), ('invoice_id.client_kra_id.parent_id.client_user_ids', 'in', user.id), ('invoice_id.state', 'in', ['finalized','sent'])]</field>
             <field name="groups" eval="[(4, ref('kra_kpi_module.group_kra_client'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>
@@ -33,7 +45,7 @@
         <record id="rule_kpi_client_own" model="ir.rule">
             <field name="name">Client sees own-KRA KPIs (read-only)</field>
             <field name="model_id" ref="model_kra_kpi"/>
-            <field name="domain_force">[('client_kra_id.client_user_ids', 'in', user.id)]</field>
+            <field name="domain_force">['|', ('client_kra_id.client_user_ids', 'in', user.id), ('client_kra_id.parent_id.client_user_ids', 'in', user.id)]</field>
             <field name="groups" eval="[(4, ref('kra_kpi_module.group_kra_client'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>
