@@ -277,6 +277,23 @@ function initials(name) {
   return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || name[0].toUpperCase();
 }
 
+// Descriptions are typed into plain <textarea>s, but some rows carry HTML from older
+// editors — an empty one is stored as '<p><br></p>', which would otherwise render as
+// visible markup and count as "has a description". Strip tags and decide on what's left.
+function plainText(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // Small icon + label + value row (the card's meta lines).
 function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
   const IconCmp = lib === 'mc' ? MaterialCommunityIcons : Ionicons;
@@ -346,10 +363,29 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
             <Text style={s.metaValue} numberOfLines={1}>{task.user_name || 'Unassigned'}</Text>
           </View>
         )}
+        {/* Who the work is for. A MetaRow and not a chip in cardTop/chipRow: the lane
+            is a fixed 278px, so those rows overflow — MetaRow's value truncates. */}
+        {task.client_name ? (
+          <MetaRow icon="business-outline" label="Client" value={task.client_name} />
+        ) : null}
         <MetaRow icon="time-outline" label="Time" value={fmtHMS(liveSeconds(task, nowMs))}
           valueColor={running ? COLORS.green : undefined} />
         <MetaRow icon="flag-outline" label="Estimate" value={task.estimate_display || '00:00'} />
       </View>
+
+      {/* What the requester actually asked for. /kra_kpi/tasks/get has always sent
+          `description` (kra_api.py map_rec) and the app rendered it nowhere, so the
+          only way to read it was to open Task Details — or the web. Clamped: a long
+          paste must not push the action buttons off the card. */}
+      {plainText(task.description) ? (
+        <View style={s.descBlock}>
+          <View style={s.descHead}>
+            <Ionicons name="document-text-outline" size={13} color={COLORS.muted} />
+            <Text style={s.descLabel}>Description</Text>
+          </View>
+          <Text style={s.descTxt} numberOfLines={4}>{plainText(task.description)}</Text>
+        </View>
+      ) : null}
 
       {/* Who finished it, when, and whether an admin has picked it up for review.
           The payload has carried all four of these all along and the app rendered
@@ -3348,6 +3384,17 @@ export default function KpiActionBoard({
             </View>
             <View style={s.modalPad}>
               <Text style={s.createdName} numberOfLines={2}>{acceptFor?.name}</Text>
+              {/* What the requester wrote. This is where the admin decides whether to
+                  accept at all, and it showed only the title and the requested type. */}
+              {plainText(acceptFor?.description) ? (
+                <View style={s.descBlock}>
+                  <View style={s.descHead}>
+                    <Ionicons name="document-text-outline" size={13} color={COLORS.muted} />
+                    <Text style={s.descLabel}>Description</Text>
+                  </View>
+                  <Text style={s.descTxt} numberOfLines={6}>{plainText(acceptFor.description)}</Text>
+                </View>
+              ) : null}
               <Text style={s.modalLabel}>Task type</Text>
               {/* What the developer filed it as. The chips below are pre-selected
                   to it, so accepting untouched keeps a bug report a bug report. */}
@@ -4369,6 +4416,13 @@ const s = StyleSheet.create({
 
   pausedPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: COLORS.amberBg, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 6, marginBottom: 12 },
   pausedPillTxt: { flex: 1, fontSize: 12, fontWeight: '700', color: '#8a5a00' },
+  descBlock: {
+    backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.line, borderRadius: 9,
+    paddingHorizontal: 10, paddingVertical: 8, marginBottom: 12, gap: 4,
+  },
+  descHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  descLabel: { fontSize: 11, fontWeight: '800', color: COLORS.muted, letterSpacing: 0.3 },
+  descTxt: { fontSize: 12.5, color: COLORS.ink, lineHeight: 18 },
   metaBlock: { gap: 8, marginBottom: 12 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   metaLabel: { fontSize: 12.5, color: COLORS.muted, width: 66 },

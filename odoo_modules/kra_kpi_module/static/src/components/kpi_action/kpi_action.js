@@ -1092,8 +1092,16 @@ export class KpiAction extends Component {
                                     <i class="fa fa-undo me-1"></i> Reopen Workday
                                 </button>
                                 <!-- GREEN Start Workday — a fresh day, or a restart after an
-                                     AUTO-close (idle/midnight). An explicit End is final for the day. -->
-                                <button t-else=""
+                                     AUTO-close (idle/midnight). An explicit End is final for the day.
+                                     CONDITION IS EXPLICIT ON PURPOSE. This was `t-else=""`, which OWL
+                                     binds to the previous sibling carrying a t-if — and that sibling is
+                                     the admin-only Reopen button (`dayDone and isAdmin`), not the
+                                     "Workday ended" button above it. So for a DEVELOPER (isAdmin false)
+                                     the else evaluated true and the green button came back right after
+                                     End Workday, on top of the disabled "ended" one. It was dead too:
+                                     /kpi_workday/ping refuses with day_done. Positional chaining breaks
+                                     the moment anything is inserted between; `!state.dayDone` cannot. -->
+                                <button t-if="!state.dayDone"
                                         class="btn btn-sm btn-success fw-bold"
                                         title="Start your workday + notify owner + coordinator"
                                         t-on-click="() => this.startWorkday()">
@@ -1429,6 +1437,16 @@ export class KpiAction extends Component {
                                                             <t t-esc="priorityLabel(task.priority)"/>
                                                         </span>
                                                     </div>
+                                                    <!-- Who the work is for. With several clients in flight the
+                                                         lanes were a wall of titles with no way to tell them
+                                                         apart without opening each task. Own line, truncated:
+                                                         the lane is narrow and client names are long. -->
+                                                    <t t-if="task.client_name">
+                                                        <div class="text-muted small mb-1 text-truncate"
+                                                             t-att-title="task.client_name">
+                                                            <i class="fa fa-building-o me-1"/><t t-esc="task.client_name"/>
+                                                        </div>
+                                                    </t>
                                                     <!-- What the task is actually for. The payload has carried
                                                          the description all along; the card just never read it,
                                                          so whatever the developer typed on New Task was invisible
@@ -4504,6 +4522,11 @@ export class KpiAction extends Component {
         // Ask the admin to categorize the task; the chosen type re-numbers its
         // provisional TASK-### ref into REQ / UPT / BUG.
         const safe = (task.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // What the requester actually wrote. This modal is where an admin decides whether
+        // to accept the task at all, and it showed only the title and the requested type —
+        // the one screen where the detail matters most was the one screen without it.
+        // Escaped the same way as the title: this is innerHTML, not a QWeb t-esc.
+        const safeDesc = (task.description || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const container = document.getElementById("modalContainer");
         if (!container) return;
         container.innerHTML = `
@@ -4518,6 +4541,11 @@ export class KpiAction extends Component {
                   <div class="modal-body">
                     <p class="mb-1">Accept <b>"${safe}"</b> into the main flow — what type is it?</p>
                     <p class="text-muted small mb-2">This sets its reference id — the current <b>${(task.external_ref || 'TASK-###')}</b> becomes REQ / UPT / BUG.</p>
+                    ${safeDesc ? `
+                      <div class="border rounded p-2 mb-3 bg-light">
+                        <div class="text-muted small fw-bold mb-1"><i class="fa fa-file-text-o me-1"></i>Description</div>
+                        <div class="small" style="white-space:pre-wrap;max-height:140px;overflow:auto;">${safeDesc}</div>
+                      </div>` : ''}
                     ${task.requested_doc_type ? `
                       <div class="alert alert-light border small py-2 mb-3">
                         <i class="fa fa-user me-1"></i>

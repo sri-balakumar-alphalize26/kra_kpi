@@ -460,16 +460,17 @@ function TaskForm({ r, users, busy, patch, setPicker, onSave, onPublish, onDisca
         onChangeText={(v) => patch(r.id, { name: v })}
       />
 
-      {/* Only shown when the client actually sent one (matches the web). */}
-      {!!r.description && (
-        <>
-          <Text style={s.lbl}>Description</Text>
-          <TextInput
-            style={s.textarea} value={r.description} multiline textAlignVertical="top"
-            onChangeText={(v) => patch(r.id, { description: v })}
-          />
-        </>
-      )}
+      {/* Always rendered. It used to be hidden unless the client had sent one, which
+          meant an admin could neither read what was written nor add a description
+          themselves — and the field is editable, so hiding it removed the only way to
+          fill it in. The web dropped the same guard; this had drifted behind it. */}
+      <Text style={s.lbl}>Description</Text>
+      <TextInput
+        style={s.textarea} value={r.description || ''} multiline textAlignVertical="top"
+        placeholder="No description was sent — you can add one"
+        placeholderTextColor={COLORS.faint}
+        onChangeText={(v) => patch(r.id, { description: v })}
+      />
 
       <View style={s.split}>
         <View style={s.half}>

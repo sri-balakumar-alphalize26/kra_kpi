@@ -765,9 +765,20 @@ class KraKpiAPI(http.Controller):
                 # Convert to ISO format string for JavaScript Date parsing
                 timer_start_iso = k.timer_start_datetime.isoformat() + 'Z'  # Add Z for UTC
             
+            # Who the work is FOR. client_kra_id is the stored nearest is_client
+            # ancestor, so this is a plain m2o read — no extra query per row. Falls
+            # back to the task's own KRA the same way the notification serializer
+            # does (see _client_kra usage below), so a task outside a client tree
+            # still names something rather than showing blank.
+            client_kra = k.client_kra_id or k.kra_id
             return {
                 'id': k.id,
                 'name': k.name or "",
+                # The board cards had no way to tell WHICH client a task belonged to —
+                # with several clients in flight the lanes were just a wall of titles.
+                # One field here feeds the web lane cards and the whole mobile board.
+                'client_name': client_kra.name if client_kra else "",
+                'project_name': k.kra_id.name if k.kra_id else "",
                 # REQ-014 / BUG-001 / UPT-007 — how people actually refer to a
                 # task out loud. The app renders it in five places (the Switch
                 # picker and its sort order, the Revert dialog title, the admin
@@ -896,12 +907,15 @@ class KraKpiAPI(http.Controller):
         timer_start_iso = None
         if k.task_state == 'in_progress' and k.timer_start_datetime:
             timer_start_iso = k.timer_start_datetime.isoformat() + 'Z'
+        client_kra = k.client_kra_id or k.kra_id
         return {
             'id': k.id,
             'name': k.name or "",
             # Same as get_tasks' map_rec — the two serializers must agree, or a
             # task opened on its own (from a notification, or the detail pane)
             # renders differently from the same task on the board.
+            'client_name': client_kra.name if client_kra else "",
+            'project_name': k.kra_id.name if k.kra_id else "",
             'external_ref': k.external_ref or "",
             'priority': k.priority or "regular",
             'requested_priority': k.requested_priority or '',
