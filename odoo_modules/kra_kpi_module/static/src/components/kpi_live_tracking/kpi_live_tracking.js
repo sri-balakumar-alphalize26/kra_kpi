@@ -115,6 +115,13 @@ export class KpiLiveTracking extends Component {
                                              needs to do anything about it. -->
                                         <div t-if="row.activity_note" class="small text-muted mt-1"
                                              style="white-space:pre-wrap;" t-esc="row.activity_note"/>
+                                        <!-- This day was reopened by an admin. Shown here
+                                             because this is the screen the Reopen button is on,
+                                             so it is where someone looks for what happened. -->
+                                        <div t-if="row.reopened_reason" class="small mt-1 text-warning">
+                                            <i class="fa fa-unlock me-1"/>Reopened<t t-if="row.reopened_by"> by <t t-esc="row.reopened_by"/></t>:
+                                            <span class="text-muted" t-esc="row.reopened_reason"/>
+                                        </div>
                                     </td>
                                     <td class="text-end">
                                         <!-- End Workday is one-way for the developer. This is the

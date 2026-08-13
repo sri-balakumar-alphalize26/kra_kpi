@@ -39,9 +39,22 @@ export const resetInvoiceDraft = (invoice_id) => call('/kpi_client_invoice/reset
 // Draft only — the server refuses anything finalized, sent or paid. Deleting a draft
 // frees any tasks it was holding back from future invoices.
 export const deleteInvoice = (invoice_id) => call('/kpi_client_invoice/delete', { invoice_id });
-export const markInvoicePaid = (invoice_id, paid, note) =>
-  call('/kpi_client_invoice/mark_paid', { invoice_id, paid, note });
+// How money moved. Must match PAYMENT_METHODS in models/kpi_client_invoice.py, which
+// is what validates it — an unknown value is rejected outright.
+export const PAYMENT_METHODS = [
+  { code: 'bank_transfer', label: 'Bank Transfer' },
+  { code: 'cash', label: 'Cash' },
+  { code: 'cheque', label: 'Cheque' },
+  { code: 'card', label: 'Card' },
+  { code: 'other', label: 'Other' },
+];
+
+// `method` is how the payment actually arrived. Omitting it no longer fails — the
+// server records 'other' so older builds keep working — but always send it: an
+// invoice that is paid without saying how leaves nothing to reconcile later.
+export const markInvoicePaid = (invoice_id, paid, note, method) =>
+  call('/kpi_client_invoice/mark_paid', { invoice_id, paid, note, method: method || '' });
 // Client-only: flag "I've paid" → notifies admins to confirm (no state change).
-export const clientMarkPaid = (invoice_id) =>
-  call('/kpi_client_invoice/client_mark_paid', { invoice_id });
+export const clientMarkPaid = (invoice_id, method, note) =>
+  call('/kpi_client_invoice/client_mark_paid', { invoice_id, method: method || '', note: note || '' });
 export const fetchInvoicePdf = (invoice_id) => call('/kpi_client_invoice/pdf', { invoice_id }, 60000);

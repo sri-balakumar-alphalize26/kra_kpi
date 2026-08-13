@@ -1769,9 +1769,12 @@ class KpiReportsAPI(http.Controller):
                 return {'status': False, 'message': 'This invoice is not ready yet.'}
             if inv.payment_status == 'paid':
                 return {'status': False, 'message': 'This invoice is already marked paid.'}
-            # How they paid is required — a claim of "paid" with no method is nothing to
-            # reconcile against a bank statement. The note stays optional.
-            method = (params.get('method') or '').strip()
+            # How they paid. The UIs make it a required choice, but app builds already
+            # in the field predate the field and send nothing — refusing here would kill
+            # the Paid button on every phone until the fleet updates. An unknown method
+            # is recorded as Other; a claim we can't record at all is worse than one
+            # that says "Other". An explicitly WRONG value is still rejected.
+            method = (params.get('method') or '').strip() or 'other'
             if method not in dict(PAYMENT_METHODS):
                 return {'status': False, 'message': 'Choose how you paid this invoice.'}
             inv.write({
@@ -3736,6 +3739,15 @@ class KpiReportsAPI(http.Controller):
                     # than re-querying per developer on a 15s poll.
                     'day_done': bool(not open_sess and sessions.filtered(
                         lambda s: s.state == 'closed' and not s.auto_closed)),
+                    # If someone reopened this day, say so and why — on the same screen
+                    # the Reopen button lives on. Otherwise the only record is the
+                    # snapshot, which does not get rewritten until the day is ended
+                    # again, so the reason was invisible during exactly the window
+                    # between reopening and re-closing.
+                    'reopened_reason': next((s.revert_reason or '' for s in sessions
+                                             if s.reverted and s.revert_reason), ''),
+                    'reopened_by': next((s.reverted_by_id.name or '' for s in sessions
+                                         if s.reverted and s.reverted_by_id), ''),
                     'active': active_flag,             # heartbeat fresh (at desk)
                     'activity_kind': activity_kind,    # task|break|lunch|meeting|no_tasks|idle|offline
                     'activity_label': activity_label,  # e.g. "abc" — first task when multitasking

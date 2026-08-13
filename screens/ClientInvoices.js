@@ -210,14 +210,23 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     if (!r?.status) flash('err', r?.message || 'Could not save notes.');
   };
   // Client (portal) "I've paid" — flags the claim server-side and notifies admins.
-  const clientPaid = async (id) => {
-    setBusy('claim');
-    try {
-      const r = await svc.clientMarkPaid(id);
-      if (r?.status) { if (r.data) setDetail(r.data); flash('ok', "Thanks — we've told the team you've paid."); }
-      else flash('err', r?.message || 'Could not send.');
-    } catch (e) { flash('err', 'Could not send.'); }
-    finally { setBusy(null); }
+  // Asks how they paid before sending, so the admin has something to reconcile
+  // against. The claim does NOT settle the invoice — an admin still confirms.
+  const clientPaid = (id) => {
+    setPrompt({
+      title: "Report payment",
+      fields: [{ key: 'method', label: 'How did you pay?', val: 'bank_transfer', choices: svc.PAYMENT_METHODS },
+               { key: 'note', label: 'Reference or note (optional)', val: '' }],
+      onOk: async (vals) => {
+        setBusy('claim');
+        try {
+          const r = await svc.clientMarkPaid(id, vals.method, vals.note || '');
+          if (r?.status) { if (r.data) setDetail(r.data); flash('ok', "Thanks — we've told the team you've paid."); }
+          else flash('err', r?.message || 'Could not send.');
+        } catch (e) { flash('err', 'Could not send.'); }
+        finally { setBusy(null); }
+      },
+    });
   };
 
   // Edit the invoice title / hourly rate (draft only). The route returns the
@@ -746,18 +755,25 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
       },
     });
   }
+  // Marking PAID asks how the money arrived; marking unpaid doesn't (there is no
+  // payment to describe). The note is internal — the client never sees it.
+  const paidFields = (paid) => (paid
+    ? [{ key: 'method', label: 'How was it paid?', val: 'bank_transfer', choices: svc.PAYMENT_METHODS },
+       { key: 'note', label: 'Note (optional, internal)', val: '' }]
+    : [{ key: 'note', label: 'Note (optional)', val: '' }]);
+
   function openMarkPaid(d, paid) {
     setPrompt({
-      title: paid ? 'Mark paid' : 'Mark unpaid', fields: [{ key: 'note', label: 'Note (optional)', val: '' }],
-      onOk: async (vals) => { doAction(paid ? 'paid' : 'unpaid', () => svc.markInvoicePaid(d.id, paid, vals.note || '')); },
+      title: paid ? 'Mark paid' : 'Mark unpaid', fields: paidFields(paid),
+      onOk: async (vals) => { doAction(paid ? 'paid' : 'unpaid', () => svc.markInvoicePaid(d.id, paid, vals.note || '', vals.method)); },
     });
   }
   // Mark paid/unpaid straight from a list row (refreshes the list, not a detail).
   function openMarkPaidList(inv, paid) {
     setPrompt({
-      title: paid ? 'Mark paid' : 'Mark unpaid', fields: [{ key: 'note', label: 'Note (optional)', val: '' }],
+      title: paid ? 'Mark paid' : 'Mark unpaid', fields: paidFields(paid),
       onOk: async (vals) => {
-        const r = await svc.markInvoicePaid(inv.id, paid, vals.note || '');
+        const r = await svc.markInvoicePaid(inv.id, paid, vals.note || '', vals.method);
         if (r?.status) { flash('ok', paid ? 'Marked paid' : 'Marked unpaid'); loadList(statusFilter); }
         else flash('err', r?.message || 'Action failed.');
       },
@@ -842,10 +858,30 @@ function PromptModal({ prompt, onClose }) {
           {(prompt.fields || []).map((fld) => (
             <View key={fld.key} style={{ marginBottom: 10 }}>
               <Text style={s.miniLbl}>{fld.label}</Text>
-              <TextInput
-                style={s.input} value={vals[fld.key]} keyboardType={fld.numeric ? 'decimal-pad' : 'default'}
-                onChangeText={(t) => setVals((p) => ({ ...p, [fld.key]: t }))}
-              />
+              {/* A field with `choices` renders as tappable chips instead of a text
+                  box — payment method has to be one of a fixed set, and free text
+                  would let "gpay"/"g-pay"/"GPay" all mean the same thing. Chips wrap,
+                  so five of them fit a 360dp screen. */}
+              {fld.choices ? (
+                <View style={s.chipWrap}>
+                  {fld.choices.map((c) => {
+                    const on = vals[fld.key] === c.code;
+                    return (
+                      <TouchableOpacity
+                        key={c.code} style={[s.chip, on && s.chipOn]} activeOpacity={0.85}
+                        onPress={() => setVals((p) => ({ ...p, [fld.key]: c.code }))}
+                      >
+                        <Text style={[s.chipTxt, on && s.chipTxtOn]}>{c.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ) : (
+                <TextInput
+                  style={s.input} value={vals[fld.key]} keyboardType={fld.numeric ? 'decimal-pad' : 'default'}
+                  onChangeText={(t) => setVals((p) => ({ ...p, [fld.key]: t }))}
+                />
+              )}
             </View>
           ))}
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 6 }}>
@@ -910,6 +946,9 @@ const s = StyleSheet.create({
   chipOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
   chipTxt: { fontSize: 12, fontWeight: '700', color: COLORS.muted },
   chipTxtOn: { color: '#fff' },
+  // flexWrap matters: five method chips do not fit one 360dp row, and every
+  // unwrapped row in this app was originally sized for the tablet.
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 
   emptyWrap: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 30 },
   emptyBox: { alignItems: 'center', gap: 8 },

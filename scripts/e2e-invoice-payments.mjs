@@ -98,8 +98,17 @@ const check = (s, ok, d = '') => { out.push({ s, ok }); console.log(`  ${ok ? 'â
     !(await call(admin, '/kpi_client_invoice/revise', { invoice_id: ID, reason: 'too late' })).ok);
 
   console.log('\n=== C â€” client claims, admin confirms ===');
-  check('claim refused with no method',
-    !(await call(client, '/kpi_client_invoice/client_mark_paid', { invoice_id: ID })).ok);
+  // A missing method is ACCEPTED and recorded as Other, on purpose: app builds
+  // already on people's phones predate the field, and refusing would kill the Paid
+  // button on every one of them until the fleet updates. A payment that cannot be
+  // recorded is worse than one recorded as "Other". A WRONG method is still refused.
+  const noMethod = await call(client, '/kpi_client_invoice/client_mark_paid', { invoice_id: ID });
+  const nmRead = (await kw(admin, 'kpi.client.invoice', 'read', [[ID], ['client_paid_method']])).result[0];
+  check('claim with no method â†’ recorded as Other (old app builds)',
+    noMethod.ok && nmRead.client_paid_method === 'other', `method=${nmRead.client_paid_method}`);
+  check('claim with an INVALID method is refused',
+    !(await call(client, '/kpi_client_invoice/client_mark_paid', { invoice_id: ID, method: 'crypto' })).ok);
+
   const claim = await call(client, '/kpi_client_invoice/client_mark_paid', {
     invoice_id: ID, method: 'bank_transfer', note: 'ref 4417' });
   check('client claims paid', claim.ok, claim.ok ? '' : claim.err);
@@ -109,11 +118,12 @@ const check = (s, ok, d = '') => { out.push({ s, ok }); console.log(`  ${ok ? 'â
     afterClaim.payment_status === 'unpaid' && afterClaim.client_paid_claim === true,
     `status=${afterClaim.payment_status} claim=${afterClaim.client_paid_claim}`);
 
-  check('admin mark-paid refused with no method',
-    !(await call(admin, '/kpi_client_invoice/mark_paid', { invoice_id: ID, paid: true, note: 'x' })).ok);
   const paid = await call(admin, '/kpi_client_invoice/mark_paid', {
     invoice_id: ID, paid: true, method: 'bank_transfer', note: 'INTERNAL short by 5, wrote off' });
   check('admin confirms with a method', paid.ok, paid.ok ? '' : paid.err);
+  const paidRead = (await kw(admin, 'kpi.client.invoice', 'read', [[ID], ['payment_method']])).result[0];
+  check('the admin\'s stated method is what got stored',
+    paidRead.payment_method === 'bank_transfer', `method=${paidRead.payment_method}`);
 
   console.log('\n=== D â€” the client must not read internal notes ===');
   const cv = (await call(client, '/kpi_client_invoice/get', { invoice_id: ID })).result?.data || {};

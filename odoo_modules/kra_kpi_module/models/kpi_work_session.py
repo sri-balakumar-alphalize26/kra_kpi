@@ -1085,7 +1085,17 @@ class KpiWorkSession(models.Model):
             self.env['kpi.workday.snapshot'].sudo().search([
                 ('user_id', '=', self.user_id.id),
                 ('session_date', '=', self.session_date),
-            ]).write({'superseded': True})
+            ]).write({
+                'superseded': True,
+                # Stamp the reason NOW, not only when the day is next ended.
+                # _capture also copies it, but that runs on the next close — so
+                # between the reopen and the re-end there was a superseded snapshot
+                # with nothing anywhere saying who reopened it or why, which is
+                # exactly the window someone goes looking.
+                'reopen_reason': (reason or '').strip() or False,
+                'reopened_by_id': self.env.user.id,
+                'reopened_at': now,
+            })
         except Exception as exc:
             _logger.warning("revert: snapshot supersede failed for session %s: %s",
                             self.id, exc)

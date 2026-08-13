@@ -154,6 +154,12 @@ function Row({ row, nowMs, fetchedAt, onReopen }) {
       {row.activity_note ? (
         <Text style={s.actNote} numberOfLines={2}>{row.activity_note}</Text>
       ) : null}
+      {/* Reopened by an admin — shown on the same screen as the Reopen button. */}
+      {row.reopened_reason ? (
+        <Text style={s.reopenNote} numberOfLines={2}>
+          Reopened{row.reopened_by ? ` by ${row.reopened_by}` : ''}: {row.reopened_reason}
+        </Text>
+      ) : null}
       {/* End Workday is one-way for the developer. This is the only way back, and
           it lives here because this is the screen where an admin can see WHOSE
           day ended. Mirrors the web's Live Tracking button. */}
@@ -401,6 +407,7 @@ const s = StyleSheet.create({
   // Own line, not inside actRow — that row has no flexWrap and a note of any length
   // would push the elapsed time off a 360dp screen.
   actNote: { fontSize: 12, color: COLORS.muted, marginTop: 6, marginLeft: 2, lineHeight: 17 },
+  reopenNote: { fontSize: 12, color: COLORS.amber, fontWeight: '700', marginTop: 4, marginLeft: 2, lineHeight: 17 },
   dot: { width: 9, height: 9, borderRadius: 5 },
   // Stacks the per-task pills when someone is multitasking. flexShrink so a long
   // task name wraps inside the card instead of pushing the row off a phone.

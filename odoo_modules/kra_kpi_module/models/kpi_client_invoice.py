@@ -519,14 +519,22 @@ class KpiClientInvoice(models.Model):
         valid = dict(PAYMENT_METHODS)
         if method and method not in valid:
             raise ValidationError("Unknown payment method '%s'." % method)
+        if not method:
+            # No method supplied → record it as Other rather than refusing.
+            #
+            # The UIs make it a required choice, but app builds already on people's
+            # phones predate the field and send nothing. Refusing here would mean an
+            # admin simply cannot mark an invoice paid from the phone until every
+            # device is updated — and a payment that can't be recorded is a worse
+            # outcome than one recorded as "Other". Drop this default once the fleet
+            # is on a build that sends the method.
+            method = 'other'
         for inv in self:
             if inv.state == 'draft':
                 raise ValidationError("Finalize the invoice before recording a payment.")
             if inv.payment_status == 'paid':
                 # Idempotent: already paid, nothing to do.
                 continue
-            if not method:
-                raise ValidationError("Choose how the payment was received before marking it paid.")
             inv.write({
                 'payment_status': 'paid',
                 'payment_date':   fields.Datetime.now(),

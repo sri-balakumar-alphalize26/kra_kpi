@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Dimensions,
   ActivityIndicator, Alert, Modal, StatusBar as RNStatusBar, Animated, Easing,
-  Platform, UIManager, LayoutAnimation, findNodeHandle,
+  Platform, UIManager, LayoutAnimation, findNodeHandle, Keyboard,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -3661,6 +3661,11 @@ export default function KpiActionBoard({
 
               {/* Optional note. Capped because it is drawn inside a Workday Map
                   chip — and the Map is what gets frozen into the saved image. */}
+              {/* returnKeyType 'done' + onSubmitEditing: pressing Enter used to do
+                  nothing visible, because the note alone cannot submit — a reason has
+                  to be chosen and only the buttons above say which. What it actually
+                  did was leave the keyboard up, covering those buttons, so the popup
+                  looked stuck. Enter now closes the keyboard and hands the screen back. */}
               <TextInput
                 style={s.idleNote}
                 placeholder="Optional note (e.g. sprint planning)…"
@@ -3669,10 +3674,20 @@ export default function KpiActionBoard({
                 onChangeText={setIdleNote}
                 maxLength={IDLE_NOTE_MAX}
                 editable={!idleBusy}
+                returnKeyType="done"
+                blurOnSubmit
+                onSubmitEditing={Keyboard.dismiss}
               />
               <Text style={s.idleNoteHint}>
                 Keep it short — this shows on your Workday Map. {idleNote.length}/{IDLE_NOTE_MAX}
               </Text>
+              {/* Says what to do next. Without it, someone who has typed a note is
+                  looking at a text box with no obvious way forward. */}
+              {idleNote.trim() ? (
+                <Text style={s.idleNoteNext}>
+                  Now pick a reason above to save it. ↑
+                </Text>
+              ) : null}
 
               {/* Closable on purpose: this popup covers the board, so a modal you
                   couldn't close would make reaching a task's Start button — the
@@ -4367,6 +4382,7 @@ const s = StyleSheet.create({
   // Red on purpose: the length limit is a real constraint (it has to fit the Map
   // chip), not a suggestion, so it should read as one.
   idleNoteHint: { fontSize: 11.5, color: COLORS.red, marginTop: 6, marginBottom: 4 },
+  idleNoteNext: { fontSize: 12, fontWeight: '800', color: COLORS.primary, marginBottom: 6 },
   idleLater: { fontSize: 13, fontWeight: '700', color: COLORS.faint, textAlign: 'center', paddingVertical: 8 },
   livePresence: { fontSize: 12, color: COLORS.muted, fontWeight: '600' },
   liveProductive: { color: COLORS.green, fontWeight: '800' },
