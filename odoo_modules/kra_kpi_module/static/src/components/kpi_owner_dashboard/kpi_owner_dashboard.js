@@ -300,9 +300,14 @@ export class KpiOwnerDashboard extends Component {
     goToInvoice(client_id, client_name) {
         // Navigate the user to the Client Invoices screen with the picked client preselected.
         try {
+            // range 'all' matters: this button says "certified tasks ready to invoice",
+            // but the prefill used to carry no dates, so you landed on a form defaulted
+            // to This Month and the certified work fell outside it — the invoice came
+            // back empty. Matches the 2000→2099 range this dashboard already uses.
             sessionStorage.setItem('kpi_invoice_prefill', JSON.stringify({
                 client_kra_id: client_id,
                 sub_kra_ids: [],
+                range_preset: 'all',
             }));
         } catch (e) { /* sessionStorage blocked — invoice screen will just open empty */ }
         window.location.hash = '#action=kpi_client_invoice_admin';
@@ -315,6 +320,7 @@ export class KpiOwnerDashboard extends Component {
             sessionStorage.setItem('kpi_invoice_prefill', JSON.stringify({
                 client_kra_id: client_id,
                 sub_kra_ids: [project_id],
+                range_preset: 'all',
             }));
         } catch (e) { /* ignore */ }
         window.location.hash = '#action=kpi_client_invoice_admin';

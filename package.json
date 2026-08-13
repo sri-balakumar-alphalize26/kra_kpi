@@ -38,7 +38,8 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:e2e": "node scripts/e2e-workday.mjs",
-    "test:ui": "node scripts/e2e-ui.mjs"
+    "test:ui": "node scripts/e2e-ui.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs"
   },
   "devDependencies": {
     "@testing-library/react-native": "^13.3.3",

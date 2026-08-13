@@ -165,7 +165,10 @@ class KpiWorkflow(models.Model):
         if rec.client_submitted and rec.submitted_by_uid:
             return rec.submitted_by_uid
         client_kra = getattr(rec, 'client_kra_id', False) or rec.kra_id
-        return client_kra.client_user_ids if client_kra else self.env['res.users'].sudo()
+        # _effective_client_users, not client_user_ids: the task resolves to the
+        # level-2 KRA while the portal user hangs off the level-1 root, so reading
+        # the field directly found nobody and closed finished work as unbillable.
+        return client_kra._effective_client_users() if client_kra else self.env['res.users'].sudo()
 
     def _release_without_client(self):
         """No client is linked to this KRA → nothing to wait for, so don't wait.

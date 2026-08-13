@@ -1108,7 +1108,7 @@ class KpiNotify(models.Model):
             # escalation cron that has since been retired). First to answer decides.
             client_kra = getattr(self, 'client_kra_id', False) or self.kra_id
             if client_kra:
-                for u in client_kra.client_user_ids:
+                for u in client_kra._effective_client_users():
                     p = u.partner_id
                     if p:
                         _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=u.id, role='client')
@@ -1175,7 +1175,7 @@ class KpiNotify(models.Model):
                 _add(self.submitted_by_uid, 'client')
             else:
                 client_kra = getattr(self, 'client_kra_id', False) or self.kra_id
-                for u in (client_kra.client_user_ids or []):
+                for u in (client_kra._effective_client_users() if client_kra else []):
                     _add(u, 'client')
 
         return out

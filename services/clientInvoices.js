@@ -36,6 +36,9 @@ export const saveInvoiceNotes = (invoice_id, notes) => call('/kpi_client_invoice
 export const finalizeInvoice = (invoice_id) => call('/kpi_client_invoice/finalize', { invoice_id });
 export const sendInvoice = (invoice_id) => call('/kpi_client_invoice/send', { invoice_id });
 export const resetInvoiceDraft = (invoice_id) => call('/kpi_client_invoice/reset_draft', { invoice_id });
+// Draft only — the server refuses anything finalized, sent or paid. Deleting a draft
+// frees any tasks it was holding back from future invoices.
+export const deleteInvoice = (invoice_id) => call('/kpi_client_invoice/delete', { invoice_id });
 export const markInvoicePaid = (invoice_id, paid, note) =>
   call('/kpi_client_invoice/mark_paid', { invoice_id, paid, note });
 // Client-only: flag "I've paid" → notifies admins to confirm (no state change).

@@ -103,7 +103,7 @@ def _build_client_pending_list(env, partner, phone_clean):
         client_kra = getattr(k, 'client_kra_id', False) or k.kra_id
         if not client_kra:
             continue
-        if partner and partner.id in client_kra.client_user_ids.mapped('partner_id').ids:
+        if partner and partner.id in client_kra._effective_client_users().mapped('partner_id').ids:
             mine.append(k)
 
     if not mine:
@@ -271,7 +271,7 @@ def _find_kpi_for_reply(env, token_prefix, partner):
         client_kra = k.client_kra_id or k.kra_id
         if not client_kra:
             continue
-        if partner.id in client_kra.client_user_ids.mapped('partner_id').ids:
+        if partner.id in client_kra._effective_client_users().mapped('partner_id').ids:
             return k
     return Kpi
 
@@ -709,7 +709,7 @@ def _show_pending_pre_approvals(env, partner, phone_clean):
         client_kra = k.client_kra_id or k.kra_id
         if not client_kra:
             continue
-        if partner and partner.id in client_kra.client_user_ids.mapped('partner_id').ids:
+        if partner and partner.id in client_kra._effective_client_users().mapped('partner_id').ids:
             mine.append(k)
     if not mine:
         return "✅ You have no pending pre-approvals right now."

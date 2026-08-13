@@ -108,6 +108,24 @@ class KraMaster(models.Model):
             ids.extend(c._get_descendant_ids())
         return ids
 
+    def _effective_client_users(self):
+        """This KRA's client users, falling back to the parent's.
+
+        A task's client_kra_id is its NEAREST is_client ancestor, and _compute_is_client
+        flags BOTH level-1 and level-2 — so a task in a two-level tree resolves to the
+        level-2 node, while whoever set the system up almost always attached the portal
+        user to the level-1 root. Reading client_user_ids alone then finds nobody, and
+        every caller silently behaves as if the client did not exist: sign-off closed
+        tasks as unbillable, and the client was never notified about their invoices.
+
+        One level up is COMPLETE, not a heuristic: is_client is only ever true at level
+        1 or 2, so if this KRA is not itself the root then its parent is. Same rule the
+        client record rules already use — see migrations/19.0.2.8/post-migrate.py, which
+        applied it to the XML side and left the Python side behind.
+        """
+        self.ensure_one()
+        return self.client_user_ids or self.parent_id.client_user_ids
+
     def get_nearest_client_kra(self):
         """Walk up parent chain until finding a KRA with is_client=True. Returns recordset (may be empty)."""
         self.ensure_one()
