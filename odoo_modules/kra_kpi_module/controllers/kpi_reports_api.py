@@ -1054,6 +1054,16 @@ class KpiReportsAPI(http.Controller):
                  ('parent_id', '=', False)],
                 order='sequence, name'
             )
+            # A client-only user gets THEIR clients, not everyone's. This route was
+            # returning every billable client in the database to anyone logged in —
+            # a list of who else you work for, readable straight from the browser
+            # console. The portal no longer calls it, but hiding the caller is not
+            # the same as scoping the data.
+            if self._is_current_user_client_only():
+                mine = set()
+                for k in self._resolve_client_kras_for_user():
+                    mine.update(k._get_descendant_ids())
+                clients = clients.filtered(lambda c: c.id in mine)
             return {
                 'status': True,
                 'clients': [
@@ -2901,6 +2911,18 @@ class KpiReportsAPI(http.Controller):
                 'is_paused':    bool(open_row and open_row.is_paused),
                 'session_id':   row.id if row else False,
                 'login_at':     fields.Datetime.to_string(row.login_at) if row and row.login_at else '',
+                # If this day was reopened, who did it and why. The board is where the
+                # Reopen button lives, so it is where someone looks for what happened —
+                # but this payload never carried the reason, so there was nothing for
+                # the header to render. Read across today's sessions, not just the
+                # latest: the reverted one is the closed row, and after reopening the
+                # open row is a different record.
+                'reopened_reason': next((s.revert_reason or '' for s in Session.search([
+                    ('user_id', '=', user.id), ('session_date', '=', today),
+                ]) if s.reverted and s.revert_reason), ''),
+                'reopened_by': next((s.reverted_by_id.name or '' for s in Session.search([
+                    ('user_id', '=', user.id), ('session_date', '=', today),
+                ]) if s.reverted and s.reverted_by_id), ''),
             }
         except Exception as e:
             import logging
@@ -6025,6 +6047,18 @@ class KpiReportsAPI(http.Controller):
             kpi = request.env['kra.kpi'].browse(int(kpi_id))
             if not kpi.exists():
                 return request.not_found()
+            # This route had NO access check beyond auth='user': any logged-in user
+            # could pull any task's requirement doc or signed certificate by guessing
+            # an id. A client is scoped to their own KRA tree, exactly as
+            # /kpi_client_portal/download_cert already does; staff keep the broad
+            # access they need to do the work. not_found rather than a message —
+            # confirming a document exists is itself a leak.
+            if self._is_current_user_client_only():
+                allowed = set()
+                for k in self._resolve_client_kras_for_user():
+                    allowed.update(k._get_descendant_ids())
+                if kpi.kra_id.id not in allowed:
+                    return request.not_found()
             if doc_type == 'updates':
                 blob = kpi.updates_document
                 fname = kpi.updates_document_name or f'updates_{kpi.id}.bin'

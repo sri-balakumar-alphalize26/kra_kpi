@@ -1095,6 +1095,8 @@ export default function KpiActionBoard({
   const [workdayOpen, setWorkdayOpenState] = useState(WORKDAY_CACHE);
   // Open but frozen: Presence has stopped and no task may start until resumed.
   const [workdayPaused, setWorkdayPaused] = useState(false);
+  // { reason, by } when an admin reopened today's workday. Empty otherwise.
+  const [reopenInfo, setReopenInfo] = useState({ reason: '', by: '' });
   const [workdayPauseBusy, setWorkdayPauseBusy] = useState(false);
   const setWorkdayOpen = (v) => { WORKDAY_CACHE = v; setWorkdayOpenState(v); };
   const [workdayBusy, setWorkdayBusy] = useState(false);
@@ -1380,6 +1382,9 @@ export default function KpiActionBoard({
       setWorkdayOpen(!!r?.is_open);
       setDayDone(!!r?.day_done);
       setWorkdayPaused(!!r?.is_paused);
+      // An admin reopened this day — say so, and say why. Shown under the workday
+      // button, which is where someone looks when their day reopens unexpectedly.
+      setReopenInfo({ reason: r?.reopened_reason || '', by: r?.reopened_by || '' });
     }).catch((e) => {
       // Say so. This used to be `.catch(() => {})`, and it was the only thing that
       // corrected a stale cached "day done" — so when it failed (offline, or the
@@ -2264,6 +2269,17 @@ export default function KpiActionBoard({
           );
         })()}
       </View>
+
+      {/* An admin reopened this day. Directly under the workday button, because that
+          is where someone stands when they wonder why their day is open again. */}
+      {reopenInfo.reason ? (
+        <View style={s.reopenBanner}>
+          <Ionicons name="lock-open-outline" size={13} color={COLORS.amber} />
+          <Text style={s.reopenBannerTxt}>
+            Workday reopened{reopenInfo.by ? ` by ${reopenInfo.by}` : ''}: {reopenInfo.reason}
+          </Text>
+        </View>
+      ) : null}
 
       {/* Why the action buttons are missing — stated, not left to be discovered. */}
       {readOnly && (
@@ -3666,18 +3682,33 @@ export default function KpiActionBoard({
                   to be chosen and only the buttons above say which. What it actually
                   did was leave the keyboard up, covering those buttons, so the popup
                   looked stuck. Enter now closes the keyboard and hands the screen back. */}
-              <TextInput
-                style={s.idleNote}
-                placeholder="Optional note (e.g. sprint planning)…"
-                placeholderTextColor={COLORS.faint}
-                value={idleNote}
-                onChangeText={setIdleNote}
-                maxLength={IDLE_NOTE_MAX}
-                editable={!idleBusy}
-                returnKeyType="done"
-                blurOnSubmit
-                onSubmitEditing={Keyboard.dismiss}
-              />
+              <View style={s.idleNoteRow}>
+                <TextInput
+                  style={[s.idleNote, { flex: 1 }]}
+                  placeholder="Optional note (e.g. sprint planning)…"
+                  placeholderTextColor={COLORS.faint}
+                  value={idleNote}
+                  onChangeText={setIdleNote}
+                  maxLength={IDLE_NOTE_MAX}
+                  editable={!idleBusy}
+                  returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={Keyboard.dismiss}
+                />
+                {/* The on-screen twin of the keyboard's Enter. Both just close the
+                    keyboard: the note alone cannot submit, because only the reason
+                    buttons say WHICH reason it belongs to. Without this the keyboard
+                    covers those buttons and the popup looks stuck. */}
+                <TouchableOpacity
+                  style={[s.idleNoteDone, !idleNote.trim() && s.idleNoteDoneOff]}
+                  onPress={Keyboard.dismiss}
+                  disabled={!idleNote.trim() || !!idleBusy}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="return-down-back" size={18}
+                    color={idleNote.trim() ? '#fff' : COLORS.faint} />
+                </TouchableOpacity>
+              </View>
               <Text style={s.idleNoteHint}>
                 Keep it short — this shows on your Workday Map. {idleNote.length}/{IDLE_NOTE_MAX}
               </Text>
@@ -4379,6 +4410,12 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12,
     paddingVertical: 10, fontSize: 14, color: COLORS.ink, marginTop: 4,
   },
+  idleNoteRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  idleNoteDone: {
+    marginTop: 4, width: 46, height: 44, borderRadius: 10,
+    backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center',
+  },
+  idleNoteDoneOff: { backgroundColor: COLORS.line },
   // Red on purpose: the length limit is a real constraint (it has to fit the Map
   // chip), not a suggestion, so it should read as one.
   idleNoteHint: { fontSize: 11.5, color: COLORS.red, marginTop: 6, marginBottom: 4 },
@@ -4607,6 +4644,13 @@ const s = StyleSheet.create({
     borderLeftWidth: 3, borderLeftColor: COLORS.red,
   },
   roBannerTxt: { flex: 1, fontSize: 12, color: COLORS.red, fontWeight: '700' },
+  reopenBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    marginHorizontal: 14, marginBottom: 4, paddingVertical: 8, paddingHorizontal: 11,
+    backgroundColor: COLORS.amberBg, borderRadius: 10,
+    borderLeftWidth: 3, borderLeftColor: COLORS.amber,
+  },
+  reopenBannerTxt: { flex: 1, fontSize: 12, color: '#8a5a00', fontWeight: '700' },
   // Pending Review → Accept: pick the type the task is filed as (drives its
   // REQ/UPT/BUG reference).
   typeRow: { flexDirection: 'row', gap: 8 },

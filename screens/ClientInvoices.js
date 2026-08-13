@@ -452,7 +452,21 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
               {!portal && d.client_paid_claim && d.payment_status !== 'paid' ? (
                 <View style={s.claimHint}>
                   <Ionicons name="cash-outline" size={13} color="#B45309" />
-                  <Text style={s.claimHintTxt}>Client marked this as paid{d.client_paid_claim_date ? ` on ${d.client_paid_claim_date}` : ''} — confirm with Mark Paid.</Text>
+                  <Text style={s.claimHintTxt}>
+                    Client marked this as paid{d.client_paid_claim_date ? ` on ${d.client_paid_claim_date}` : ''}
+                    {d.client_paid_method_label ? ` by ${d.client_paid_method_label}` : ''} — confirm with Mark Paid.
+                  </Text>
+                </View>
+              ) : null}
+              {/* The client may be holding a PDF showing the old figure. A total that
+                  changes with nothing explaining it is how billing disputes start —
+                  so this shows on BOTH sides, not just the admin's. */}
+              {d.revised_on ? (
+                <View style={s.revisedHint}>
+                  <Ionicons name="create-outline" size={13} color={COLORS.primary} />
+                  <Text style={s.revisedHintTxt}>
+                    Revised on {d.revised_on}{d.revision_reason ? ` — ${d.revision_reason}` : ''}
+                  </Text>
                 </View>
               ) : null}
               <View style={s.showAmtRow}>
@@ -574,6 +588,11 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
               ) : null}
               {!portal && d.state === 'finalized' ? (
                 <ActBtn label="Mark Sent" icon="send-outline" busy={busy === 'send'} onPress={() => doAction('send', () => svc.sendInvoice(d.id))} primary />
+              ) : null}
+              {/* Reduce a finalized invoice, then re-finalize. Finalized only — the
+                  server also refuses anything sent or paid. */}
+              {!portal && d.state === 'finalized' && d.payment_status !== 'paid' ? (
+                <ActBtn label="Revise" icon="create-outline" busy={busy === 'revise'} onPress={() => openRevise(d)} />
               ) : null}
               {!portal && d.state === 'finalized' && d.payment_status !== 'paid' ? (
                 <ActBtn label="Reset to Draft" icon="arrow-undo-outline" busy={busy === 'reset'} onPress={() => doAction('reset', () => svc.resetInvoiceDraft(d.id))} />
@@ -761,6 +780,18 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     ? [{ key: 'method', label: 'How was it paid?', val: 'bank_transfer', choices: svc.PAYMENT_METHODS },
        { key: 'note', label: 'Note (optional, internal)', val: '' }]
     : [{ key: 'note', label: 'Note (optional)', val: '' }]);
+
+  // Revise: reason required, because the client is told the figure changed.
+  function openRevise(d) {
+    setPrompt({
+      title: `Revise ${d.name}?`,
+      fields: [{ key: 'reason', label: 'Why is it being revised? (required)', val: '' }],
+      onOk: async (vals) => {
+        if (!(vals.reason || '').trim()) { flash('err', 'A reason is required.'); return; }
+        doAction('revise', () => svc.reviseInvoice(d.id, vals.reason));
+      },
+    });
+  }
 
   function openMarkPaid(d, paid) {
     setPrompt({
@@ -1015,6 +1046,8 @@ const s = StyleSheet.create({
   paidBy: { fontSize: 11, fontWeight: '700', color: COLORS.green },
   claimHint: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8, padding: 9, borderRadius: 9, backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FCD34D' },
   claimHintTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: '#92400E', lineHeight: 16 },
+  revisedHint: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8, padding: 9, borderRadius: 9, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE' },
+  revisedHintTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: COLORS.primary, lineHeight: 16 },
   miniInline: { fontSize: 11, fontWeight: '600', color: COLORS.faint },
   roText: { fontSize: 13, color: COLORS.muted, marginBottom: 3 },
   roVal: { color: COLORS.ink, fontWeight: '800' },

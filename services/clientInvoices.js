@@ -36,6 +36,11 @@ export const saveInvoiceNotes = (invoice_id, notes) => call('/kpi_client_invoice
 export const finalizeInvoice = (invoice_id) => call('/kpi_client_invoice/finalize', { invoice_id });
 export const sendInvoice = (invoice_id) => call('/kpi_client_invoice/send', { invoice_id });
 export const resetInvoiceDraft = (invoice_id) => call('/kpi_client_invoice/reset_draft', { invoice_id });
+// Reopen a FINALIZED invoice to reduce it. The reason is required — the client is told
+// the figure changed, and "it just changed" is not an answer. The server refuses
+// anything sent or paid.
+export const reviseInvoice = (invoice_id, reason) =>
+  call('/kpi_client_invoice/revise', { invoice_id, reason });
 // Draft only — the server refuses anything finalized, sent or paid. Deleting a draft
 // frees any tasks it was holding back from future invoices.
 export const deleteInvoice = (invoice_id) => call('/kpi_client_invoice/delete', { invoice_id });

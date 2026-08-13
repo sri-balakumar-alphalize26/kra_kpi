@@ -1113,6 +1113,15 @@ export class KpiAction extends Component {
                                     <t t-else="">Start Workday</t>
                                 </button>
                             </t>
+                            <!-- Directly under the workday button, because that is where
+                                 someone stands when they wonder why the day reopened.
+                                 It was only on Live Tracking and the snapshot before —
+                                 neither of which is this screen. -->
+                            <div t-if="state.reopenReason" class="small text-warning mt-1"
+                                 style="max-width:420px;white-space:pre-wrap;">
+                                <i class="fa fa-unlock me-1"/>Workday reopened<t t-if="state.reopenedBy"> by <t t-esc="state.reopenedBy"/></t>:
+                                <span class="text-muted" t-esc="state.reopenReason"/>
+                            </div>
                             <!-- Pause / Resume the whole day. Sits with End Workday
                                  because it is the same decision made softer: End
                                  buries the date (one start + one end), Pause freezes
@@ -1749,6 +1758,8 @@ export class KpiAction extends Component {
             workdayPaused:  false,   // open but frozen — Presence stopped, tasks blocked
             workdayClosed:  false,   // a closed session today with no open one (e.g. cron auto-closed)
             dayDone:        false,   // developer ENDED today themselves → one start + one end per day (no restart)
+            reopenReason:   '',      // an admin reopened this day — shown under the workday button
+            reopenedBy:     '',
             // 🆕 NEW: Filter state variables
             searchQuery: '',
             filters: {
@@ -2926,6 +2937,11 @@ export class KpiAction extends Component {
                 this.state.workdayClosed = !!res.today_closed;
                 this.state.dayDone       = !!res.day_done;
                 this.state.workdayPaused = !!res.is_paused;
+                // Why this day was reopened, shown under the workday button. Set from
+                // here so it survives a refresh — the reason lives on the session, not
+                // in whatever happened to be on screen when Reopen was pressed.
+                this.state.reopenReason  = res.reopened_reason || '';
+                this.state.reopenedBy    = res.reopened_by || '';
             }
         } catch (e) {
             // Leave the last known state alone — a dropped poll must not make
