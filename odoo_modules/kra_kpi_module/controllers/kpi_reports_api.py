@@ -8,6 +8,13 @@ import re
 # cron and these routes can never drift apart on the numbers.
 from ..models.kpi_work_session import IDLE_CHECK_MIN, NO_TASK_NUDGE_MIN, _fmt_hms
 from ..models.kpi_nontask_block import NOTE_MAX, NONTASK_REASON_CODES
+from ..models.kpi_client_invoice import PAYMENT_METHODS
+
+# End-of-day summary note. Distinct from NOTE_MAX above, which caps the short one-line
+# reason on a pause/break — this one holds a whole day's write-up (a real one runs ~400
+# characters over a dozen lines). Mirrors NOTE_MAX in utils/workdayNote.js; keep the two
+# in step. A sanity bound only: the column is TEXT and this route never rejects.
+WORKDAY_NOTE_MAX = 2000
 
 
 def _parse_task_array(text):
@@ -1035,12 +1042,17 @@ class KpiReportsAPI(http.Controller):
         of a root KRA shows up here automatically with no manual fix-up.
         """
         try:
-            # Use the is_client flag (which is_client=True for root-level
-            # clients under the new convention AND for legacy level-2 clients).
+            # Root-level only. _compute_is_client flags BOTH the root and the level-2
+            # child, so listing every is_client KRA showed each client twice — the
+            # picker read "Nexgennpos" and "Nexgennpos > Nexgennpos", with no way to
+            # tell them apart. Invoicing a root already covers its whole subtree via
+            # _get_descendant_ids(), so nothing is lost; level-2 nodes are projects and
+            # belong in the Sub-KRA filter, which is where they now appear.
             clients = request.env['kra.master'].search(
                 [('is_client', '=', True),
-                 ('active', '=', True)],
-                order='parent_id, sequence, name'
+                 ('active', '=', True),
+                 ('parent_id', '=', False)],
+                order='sequence, name'
             )
             return {
                 'status': True,
@@ -1050,6 +1062,10 @@ class KpiReportsAPI(http.Controller):
                         'name': c.name,
                         'parent_name': c.parent_id.name or '',
                         'project_quoted_hours': round(c.client_quoted or 0.0, 2),
+                        # False → nobody can sign this client's work off, so an invoice
+                        # for them can only ever be empty. Flagged in the dropdown so
+                        # it is visible BEFORE picking, not after creating.
+                        'has_client_user': bool(c._effective_client_users()),
                     }
                     for c in clients
                 ],
@@ -1104,9 +1120,47 @@ class KpiReportsAPI(http.Controller):
                         vals[pk] = float(params[pk])
                     except (TypeError, ValueError):
                         pass
+            # An invoice for a client nobody can sign work off for can only ever be
+            # empty. Guarded on BOTH conditions on purpose: approve_task() records an
+            # offline client signature without needing a portal user, so a client with
+            # no linked user can still have genuinely billable work.
+            client = request.env['kra.master'].browse(vals['client_kra_id'])
+            if not client._effective_client_users():
+                signed = request.env['kra.kpi'].sudo().search_count([
+                    ('kra_id', 'in', client._get_descendant_ids()),
+                    ('active', '=', True),
+                    ('client_final_approved', '=', True),
+                ])
+                if not signed:
+                    return {'status': False, 'message':
+                            "%s has no client user assigned, so nobody can sign work off and "
+                            "this invoice could only ever be empty. Assign a client user to "
+                            "this KRA (or its parent) first." % (client.name or 'This client')}
+
+            # Duplicate guard. A double-click used to create two or three identical
+            # drafts, and because populate skips tasks already on another invoice
+            # line, the extras then held those tasks back from every later invoice.
+            # Server-side as well as in the UI, because a disabled button cannot stop
+            # a repeated RPC from the app or a retry.
+            dup = request.env['kpi.client.invoice'].search([
+                ('client_kra_id', '=', vals['client_kra_id']),
+                ('from_date', '=', vals['from_date']),
+                ('to_date', '=', vals['to_date']),
+                ('invoice_title', '=', vals.get('invoice_title') or False),
+                ('state', '=', 'draft'),
+            ], limit=1)
+            if dup:
+                return {'status': False, 'message':
+                        "Draft %s already covers this client and period. Open or delete it "
+                        "instead of creating another — duplicate drafts hold the same tasks "
+                        "and make later invoices come back empty." % (dup.name or '')}
+
             inv = request.env['kpi.client.invoice'].create(vals)
-            inv.action_populate_from_logs()
-            return {'status': True, 'invoice_id': inv.id, 'data': inv._serialize_for_ui()}
+            populate = inv.action_populate_from_logs()
+            data = inv._serialize_for_ui()
+            # Why nothing was billable, so the UI can say so instead of "No lines yet."
+            data['empty_reasons'] = populate.get('empty_reasons') or []
+            return {'status': True, 'invoice_id': inv.id, 'data': data}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"create_client_invoice: {str(e)}")
@@ -1168,7 +1222,24 @@ class KpiReportsAPI(http.Controller):
                 if l.user_id:
                     user_set.add((l.user_id.id, l.user_id.name or l.user_id.login or ''))
             users = sorted([{'id': uid, 'name': name} for uid, name in user_set], key=lambda u: u['name'])
-            kpi_list = [{'id': k.id, 'name': k.name, 'kra_name': k.kra_id.name or ''} for k in kpis]
+            # Mark what can actually be billed. This list showed every task regardless
+            # of state, so an admin saw their work sitting right there and then got an
+            # empty invoice — which is what made the result feel arbitrary.
+            billed_ids = set(request.env['kpi.client.invoice.line'].sudo().search([
+                ('kpi_id', 'in', kpis.ids),
+            ]).mapped('kpi_id').ids)
+            kpi_list = []
+            for k in kpis:
+                if k.task_state != 'completed' or not k.client_final_approved:
+                    billable, why = False, 'awaiting sign-off'
+                elif k.id in billed_ids:
+                    billable, why = False, 'already invoiced'
+                else:
+                    billable, why = True, ''
+                kpi_list.append({
+                    'id': k.id, 'name': k.name, 'kra_name': k.kra_id.name or '',
+                    'billable': billable, 'not_billable_reason': why,
+                })
             return {'status': True, 'users': users, 'kpis': kpi_list}
         except Exception as e:
             import logging
@@ -1177,12 +1248,18 @@ class KpiReportsAPI(http.Controller):
 
     @http.route('/kpi_client_invoice/get', type='json', auth='user', methods=['POST'], csrf=False)
     def get_client_invoice(self, **params):
-        """Return a single invoice's full serialized form for the detail screen."""
+        """Return a single invoice's full serialized form for the detail screen.
+
+        A client gets the redacted form. The admin's payment note carries internal
+        remarks and must be withheld HERE — hiding it in the OWL template would leave it
+        sitting in the JSON response, which a client can read straight from the browser.
+        """
         try:
             inv = request.env['kpi.client.invoice'].browse(int(params['invoice_id']))
             if not inv.exists():
                 return {'status': False, 'message': 'Invoice not found.'}
-            return {'status': True, 'data': inv._serialize_for_ui()}
+            return {'status': True,
+                    'data': inv._serialize_for_ui(for_client=self._is_current_user_client_only())}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"get_client_invoice: {str(e)}")
@@ -1199,7 +1276,11 @@ class KpiReportsAPI(http.Controller):
         try:
             domain = []
             if params.get('client_kra_id'):
-                domain.append(('client_kra_id', '=', int(params['client_kra_id'])))
+                # Match the whole subtree, not just the exact node. The picker now
+                # offers root clients only, but existing invoices were raised against
+                # level-2 KRAs — an exact match would hide every one of them.
+                picked = request.env['kra.master'].browse(int(params['client_kra_id']))
+                domain.append(('client_kra_id', 'in', picked._get_descendant_ids()))
 
             status = (params.get('status_filter') or 'all').lower()
             if status == 'draft':
@@ -1262,13 +1343,55 @@ class KpiReportsAPI(http.Controller):
             note = (params.get('note') or '').strip()
             paid = params.get('paid', True)
             if paid:
-                inv.action_mark_paid(note=note)
+                inv.action_mark_paid(note=note, method=(params.get('method') or '').strip())
             else:
                 inv.action_mark_unpaid(note=note)
             return {'status': True, 'data': inv._serialize_for_ui()}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"mark_invoice_paid: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_client_invoice/delete', type='json', auth='user', methods=['POST'], csrf=False)
+    def delete_client_invoice(self, **params):
+        """Delete a DRAFT invoice. Same authorization as mark_paid.
+
+        There was previously no way to delete an invoice at all, only remove_line.
+        A mis-clicked draft therefore lived forever — and because populate excludes
+        tasks already sitting on any other invoice line (drafts included), a
+        forgotten draft silently held its tasks back from every future invoice.
+
+        Draft only, deliberately: a finalized or sent invoice is a record the client
+        has already seen, so it stays auditable. Lines cascade on delete
+        (invoice_id ondelete='cascade'), which frees the held tasks.
+        """
+        try:
+            user = request.env.user
+            allowed = (
+                user.has_group('base.group_system')
+                or user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('kra_kpi_module.group_kra_admin')
+            )
+            if not allowed:
+                return {'status': False, 'message': 'Not authorized.'}
+
+            inv = request.env['kpi.client.invoice'].browse(int(params['invoice_id']))
+            if not inv.exists():
+                return {'status': False, 'message': 'Invoice not found.'}
+            if inv.state != 'draft':
+                return {'status': False, 'message':
+                        "%s is %s — only draft invoices can be deleted. Reset it to draft "
+                        "first if it genuinely needs removing." % (inv.name or 'This invoice', inv.state)}
+            if inv.payment_status == 'paid':
+                return {'status': False, 'message':
+                        "%s is marked paid and cannot be deleted." % (inv.name or 'This invoice')}
+            name = inv.name or ''
+            freed = len(inv.line_ids.filtered(lambda l: l.kpi_id))
+            inv.unlink()
+            return {'status': True, 'name': name, 'freed_tasks': freed}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"delete_client_invoice: {str(e)}")
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_client_invoice/save_line', type='json', auth='user', methods=['POST'], csrf=False)
@@ -1637,19 +1760,29 @@ class KpiReportsAPI(http.Controller):
             if not inv.exists():
                 return {'status': False, 'message': 'Invoice not found.'}
             # Ownership: the caller must be one of this client's linked users.
-            if request.env.user not in inv.client_kra_id.client_user_ids:
+            # Parent fallback matters here: on a level-2 invoice the client user sits
+            # on the root, so a legitimate client was told "Not authorized" for their
+            # own invoice.
+            if request.env.user not in inv.client_kra_id._effective_client_users():
                 return {'status': False, 'message': 'Not authorized for this invoice.'}
             if inv.state not in ('finalized', 'sent'):
                 return {'status': False, 'message': 'This invoice is not ready yet.'}
             if inv.payment_status == 'paid':
                 return {'status': False, 'message': 'This invoice is already marked paid.'}
+            # How they paid is required — a claim of "paid" with no method is nothing to
+            # reconcile against a bank statement. The note stays optional.
+            method = (params.get('method') or '').strip()
+            if method not in dict(PAYMENT_METHODS):
+                return {'status': False, 'message': 'Choose how you paid this invoice.'}
             inv.write({
                 'client_paid_claim': True,
                 'client_paid_claim_date': fields.Datetime.now(),
+                'client_paid_method': method,
+                'client_paid_notes': (params.get('note') or '').strip()[:1000] or False,
             })
             # Ask the admins to confirm (recipients resolve from the role matrix).
             inv._fire_invoice_notification('invoice_client_paid')
-            return {'status': True, 'data': inv._serialize_for_ui()}
+            return {'status': True, 'data': inv._serialize_for_ui(for_client=True)}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"client_mark_invoice_paid: {str(e)}")
@@ -1969,7 +2102,7 @@ class KpiReportsAPI(http.Controller):
 
             def _serialize(kpi):
                 client_kra = getattr(kpi, 'client_kra_id', False) or kpi.kra_id
-                clients = client_kra.client_user_ids if client_kra else False
+                clients = client_kra._effective_client_users() if client_kra else False
                 notified = kpi.pre_approval_notified_user_ids
                 pending = clients.filtered(lambda u: u.id not in notified.ids) if clients else False
                 current_client = notified[-1:] if notified else (clients[:1] if clients else False)
@@ -2085,7 +2218,7 @@ class KpiReportsAPI(http.Controller):
             if kpi.approval_token_used:
                 return {'status': False, 'message': 'Token already used (client has decided).'}
             client_kra = getattr(kpi, 'client_kra_id', False) or kpi.kra_id
-            clients = client_kra.client_user_ids if client_kra else False
+            clients = client_kra._effective_client_users() if client_kra else False
             if not clients:
                 return {'status': False,
                         'message': 'No client users on this KRA — cannot send.'}
@@ -2549,12 +2682,16 @@ class KpiReportsAPI(http.Controller):
             Kpi = request.env['kra.kpi'].sudo()
             Inv = request.env['kpi.client.invoice'].sudo()
 
-            # Use the is_client flag (root-level clients under the new
-            # convention + legacy level-2 clients both set is_client=True).
+            # Root-level only. is_client is true at BOTH level 1 and level 2, so this
+            # used to render every client twice — 45 rows for ~22 clients, the same
+            # client showing two different certified counts because each row counted a
+            # different subtree. Counting from the root covers all of it (_descendants
+            # below walks down), so one row per client is both simpler and correct.
             client_kras = Kra.search(
                 [('is_client', '=', True),
-                 ('active', '=', True)],
-                order='parent_id, name')
+                 ('active', '=', True),
+                 ('parent_id', '=', False)],
+                order='name')
 
             in_progress_states = ['assigned', 'in_progress', 'paused',
                                   'partially_completed', 'urgent', 'important', 'regular']
@@ -2945,7 +3082,14 @@ class KpiReportsAPI(http.Controller):
             user = request.env.user
             Session = request.env['kpi.work.session'].sudo()
             sess = Session._get_or_open_today(user=user)
-            note = (params.get('note') or '').strip()
+            # Clamp only. This route must NEVER refuse to end a workday over the note:
+            # ending the day is one-way, and a stale app plus a strict server would leave
+            # someone unable to close their own day. The "say something real" rule lives
+            # in the clients (utils/workdayNote.js and the End Workday dialog), where a
+            # failed check can be corrected. Here we only stop an unbounded write —
+            # kpi_work_session.note is TEXT, so this is a sanity bound, not a limit
+            # anyone types up against.
+            note = (params.get('note') or '').strip()[:WORKDAY_NOTE_MAX]
             payload = sess.action_end_day(note=note)
             payload['status'] = True
             return payload
@@ -3032,6 +3176,14 @@ class KpiReportsAPI(http.Controller):
                     # later, and this day was judged against the rule of its time.
                     'met_standard': bool(r.met_standard),
                     'task_count': r.task_count or 0,
+                    # What they wrote when they ended the day. The numbers say how long
+                    # the day was; only this says what it was spent on.
+                    'note': r.note or '',
+                    # Why an admin reopened this day, if they did.
+                    'reopen_reason': r.reopen_reason or '',
+                    'reopened_by': r.reopened_by_id.name or '',
+                    'reopened_at': (fields.Datetime.to_string(r.reopened_at)
+                                    if r.reopened_at else ''),
                     'image_name': r.image_name or 'workday.png',
                     'generated_at': (fields.Datetime.to_string(r.generated_at)
                                      if r.generated_at else ''),
@@ -3107,6 +3259,14 @@ class KpiReportsAPI(http.Controller):
                     'standard_hours': r.standard_hours or 0.0,
                     'met_standard': bool(r.met_standard),
                     'task_count': r.task_count or 0,
+                    # What they wrote when they ended the day. The numbers say how long
+                    # the day was; only this says what it was spent on.
+                    'note': r.note or '',
+                    # Why an admin reopened this day, if they did.
+                    'reopen_reason': r.reopen_reason or '',
+                    'reopened_by': r.reopened_by_id.name or '',
+                    'reopened_at': (fields.Datetime.to_string(r.reopened_at)
+                                    if r.reopened_at else ''),
                     'image_name': r.image_name or 'workday.png',
                     'generated_at': (fields.Datetime.to_string(r.generated_at)
                                      if r.generated_at else ''),
@@ -3512,6 +3672,12 @@ class KpiReportsAPI(http.Controller):
 
                 # ---- current activity (only meaningful with an open session) ----
                 activity_kind, activity_label, elapsed, active_flag = 'offline', '', 0, False
+                # What the developer typed when they said why they were away. Both the
+                # break log and the non-task block have carried a note all along and
+                # neither was ever shown — so Live Tracking could say "Lunch" but not
+                # "Lunch — back by 2, dentist", which is the half an admin actually
+                # wants before deciding whether to chase someone.
+                activity_note = ''
                 active_tasks = []
                 if open_sess:
                     s = open_sess
@@ -3545,12 +3711,14 @@ class KpiReportsAPI(http.Controller):
                         bt = brk.break_type
                         activity_kind = bt if bt in ('break', 'lunch', 'meeting') else 'break'
                         activity_label = break_sel.get(bt, bt)
+                        activity_note = (brk.reason_note or '').strip()
                         if brk.start_time:
                             elapsed = max(0, int((now - brk.start_time).total_seconds()))
                     elif s.nontask_started_at:
                         r = s.nontask_reason or 'no_tasks'
                         activity_kind = r if r in ('break', 'lunch', 'meeting', 'no_tasks') else 'no_tasks'
                         activity_label = nontask_sel.get(r, r)
+                        activity_note = (s.nontask_note or '').strip()
                         elapsed = max(0, int((now - s.nontask_started_at).total_seconds()))
                     else:
                         activity_kind, activity_label = 'idle', 'Idle'
@@ -3571,6 +3739,9 @@ class KpiReportsAPI(http.Controller):
                     'active': active_flag,             # heartbeat fresh (at desk)
                     'activity_kind': activity_kind,    # task|break|lunch|meeting|no_tasks|idle|offline
                     'activity_label': activity_label,  # e.g. "abc" — first task when multitasking
+                    # Free text the developer gave with a break / lunch / meeting /
+                    # "no tasks". Empty when they are on a task or gave no reason.
+                    'activity_note': activity_note,
                     'elapsed_seconds': elapsed,
                     'elapsed_display': _fmt_hms(elapsed) if elapsed else '',
                     # Every running timer, oldest first. Empty unless activity_kind
@@ -4408,110 +4579,176 @@ class KpiReportsAPI(http.Controller):
             logging.getLogger(__name__).error(f"get_client_approval_detail: {str(e)}")
             return {'status': False, 'message': str(e)}
 
+    def _resolve_client_signature(self, params):
+        """(signature, error) for the current client user.
+
+        Shared by the single and bulk sign-off routes so the "no signature, no
+        sign-off" rule cannot drift between them.
+        """
+        user = request.env.user
+        signature = (params.get('signature_text') or '').strip()
+        if not signature and not bool(user.kpi_signature_image):
+            return None, ('Please upload a signature image (Completions menu) '
+                          'or type your name.')
+        if not signature:
+            # Fall back to the user's display name when only the saved image is used.
+            signature = user.name or user.login or 'Client'
+        return signature, None
+
+    def _apply_client_signoff(self, kpi, signature, notes, chk_delivered, chk_works, chk_authorized):
+        """Sign ONE task off as the client. Returns (ok, message).
+
+        Every guard lives in here rather than in the callers, so the bulk route
+        cannot bypass one by looping. This body writes `client_final_approved`,
+        the flag the invoice domain filters on — if the single and bulk paths ever
+        diverged, the result would be a billing-correctness bug, not a cosmetic one.
+        """
+        if not kpi.exists():
+            return False, 'Task not found.'
+        if not self._is_client_authorized_for_kpi(kpi):
+            return False, 'You are not authorized to approve this task.'
+        # Stage-2 sign-off is only meaningful once the admin has QA-approved the work.
+        # Without this the route wrote the terminal fields from ANY state, so a client
+        # could create a task and immediately mark it completed + billable — skipping
+        # admin accept, client pre-approval and every minute of developer work.
+        # 'partially_completed' + admin_approved is the legacy shape that predates
+        # 'awaiting_client'; it is still offered by the pending list, so it is accepted
+        # here too. Keep the two in step — the app renders a Sign-off button for
+        # whatever /kpi_client_portal/dashboard returns in pending_approvals.
+        if not (kpi.task_state == 'awaiting_client'
+                or (kpi.task_state == 'partially_completed' and kpi.admin_approved)):
+            return False, ("This task is not awaiting your sign-off yet. "
+                           "It has to be completed by the team and approved by an "
+                           "admin first.")
+
+        user = request.env.user
+        now = fields.Datetime.now()
+        today = fields.Date.today()
+
+        # Minimal plaintext digital-approval receipt — stored as the signed_certificate
+        # so the approve_task() gate is satisfied. Admin can still view/download this.
+        import base64 as _b64
+        receipt = (
+            f"DIGITAL APPROVAL RECEIPT\n"
+            f"========================\n"
+            f"Task:      {kpi.name}\n"
+            f"Ref:       {kpi.external_ref or ''}\n"
+            f"Signed by: {signature}  (user login: {user.login}, id={user.id})\n"
+            f"Signed at: {now}\n"
+            f"Checklist: delivered={chk_delivered}, works={chk_works}, authorized={chk_authorized}\n"
+            f"Notes:     {notes}\n"
+        ).encode('utf-8')
+        # Stage 2: client digital sign-off. Records signature, generates a receipt,
+        # and moves the task to 'completed'.
+        kpi.write({
+            'client_signature_text': signature,
+            'client_signed_datetime': now,
+            'client_approval_notes': notes,
+            'client_chk_delivered': chk_delivered,
+            'client_chk_works': chk_works,
+            'client_chk_authorized': chk_authorized,
+            'signed_certificate': _b64.b64encode(receipt).decode(),
+            'signed_certificate_name': f'digital_approval_{kpi.id}.txt',
+            'signed_certificate_date': today,
+            # Final state transition — client sign-off closes the task
+            'task_state': 'completed',
+            'approved_by': user.id,
+            'approval_date': now,
+            # If admin hadn't run QA-approve yet, mark it now (client signed = effective approval)
+            'admin_approved': True,
+            # The client's signature IS the billable event — without this the task
+            # looks fully approved but can never be invoiced, because the invoice
+            # domain filters on client_final_approved (kpi_client_invoice.py:228).
+            # Matches the app path (kpi_workflow.py) and approve_task() (kpi.py).
+            'client_final_approved': True,
+        })
+        # Audit + notify owner / coordinator / developer that the client signed off.
+        try:
+            kpi._log_action(
+                'final_approved',
+                source='web',
+                actor_user_id=user.id,
+                actor_label=signature,
+                payload={'kpi_id': kpi.id, 'notes': notes},
+            )
+            kpi._notify('final_approved', decided_by=signature, feedback=notes, source='web')
+        except Exception as nx:
+            try:
+                kpi._log_action(
+                    'notification_failed',
+                    payload={'event': 'final_approved', 'error': str(nx)},
+                    success=False,
+                )
+            except Exception:
+                pass
+        return True, 'Approved successfully.'
+
+    @http.route('/kpi_client_approval/approve_bulk', type='json', auth='user', methods=['POST'], csrf=False)
+    def submit_client_approval_bulk(self, **params):
+        """Sign several tasks off in one action.
+
+        Clients had to open a dialog and tick three boxes per task; with 40 pending
+        that is 40 dialogs, which is why 92 tasks sat unsigned for over 60 days.
+
+        Each task is authorized and state-checked individually inside
+        _apply_client_signoff — a task cannot ride in on a valid neighbour. Partial
+        success is normal, not an error: the rest sign and the caller is told which
+        ones did not and why.
+        """
+        try:
+            ids = [int(i) for i in (params.get('kpi_ids') or [])]
+            if not ids:
+                return {'status': False, 'message': 'No tasks selected.'}
+            chk_delivered = bool(params.get('chk_delivered'))
+            chk_works = bool(params.get('chk_works'))
+            chk_authorized = bool(params.get('chk_authorized'))
+            if not (chk_delivered and chk_works and chk_authorized):
+                return {'status': False,
+                        'message': 'Please tick all three confirmation checkboxes before signing.'}
+            signature, err = self._resolve_client_signature(params)
+            if err:
+                return {'status': False, 'message': err}
+            notes = params.get('notes') or ''
+
+            approved, skipped = [], []
+            for kpi in request.env['kra.kpi'].sudo().browse(ids):
+                ok, msg = self._apply_client_signoff(
+                    kpi, signature, notes, chk_delivered, chk_works, chk_authorized)
+                if ok:
+                    approved.append(kpi.id)
+                else:
+                    skipped.append({'id': kpi.id, 'name': kpi.name or '', 'reason': msg})
+            return {'status': True, 'approved': approved, 'skipped': skipped,
+                    'message': 'Signed off %s task(s).' % len(approved)}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"submit_client_approval_bulk: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
     @http.route('/kpi_client_approval/approve', type='json', auth='user', methods=['POST'], csrf=False)
     def submit_client_approval(self, **params):
         """Client submits digital approval. Auto-generates a signed cert record and approves the task."""
         try:
             kpi = request.env['kra.kpi'].sudo().browse(int(params['kpi_id']))
-            if not kpi.exists():
-                return {'status': False, 'message': 'Task not found.'}
-            if not self._is_client_authorized_for_kpi(kpi):
-                return {'status': False, 'message': 'You are not authorized to approve this task.'}
-            # Stage-2 sign-off is only meaningful once the admin has QA-approved the work.
-            # Without this the route wrote the terminal fields from ANY state, so a client
-            # could create a task and immediately mark it completed + billable — skipping
-            # admin accept, client pre-approval and every minute of developer work.
-            # 'partially_completed' + admin_approved is the legacy shape that predates
-            # 'awaiting_client'; it is still offered by the pending list, so it is accepted
-            # here too. Keep the two in step — the app renders a Sign-off button for
-            # whatever /kpi_client_portal/dashboard returns in pending_approvals.
-            if not (kpi.task_state == 'awaiting_client'
-                    or (kpi.task_state == 'partially_completed' and kpi.admin_approved)):
-                return {'status': False,
-                        'message': "This task is not awaiting your sign-off yet. "
-                                   "It has to be completed by the team and approved by an "
-                                   "admin first."}
-            user = request.env.user
-            # Signature: prefer the user's saved signature image; allow optional typed name on top.
-            signature = (params.get('signature_text') or '').strip()
-            has_saved_image = bool(user.kpi_signature_image)
-            if not signature and not has_saved_image:
-                return {'status': False,
-                        'message': 'Please upload a signature image (Completions menu) or type your name.'}
-            if not signature:
-                # Fall back to user's display name as the typed signature when only the image is used
-                signature = user.name or user.login or 'Client'
             chk_delivered = bool(params.get('chk_delivered'))
             chk_works = bool(params.get('chk_works'))
             chk_authorized = bool(params.get('chk_authorized'))
             if not (chk_delivered and chk_works and chk_authorized):
                 return {'status': False, 'message': 'Please tick all three confirmation checkboxes before signing.'}
+            signature, err = self._resolve_client_signature(params)
+            if err:
+                return {'status': False, 'message': err}
             notes = params.get('notes') or ''
-
-            now = fields.Datetime.now()
-            today = fields.Date.today()
-
-            # Minimal plaintext digital-approval receipt — stored as the signed_certificate
-            # so the approve_task() gate is satisfied. Admin can still view/download this.
-            import base64 as _b64
-            receipt = (
-                f"DIGITAL APPROVAL RECEIPT\n"
-                f"========================\n"
-                f"Task:      {kpi.name}\n"
-                f"Ref:       {kpi.external_ref or ''}\n"
-                f"Signed by: {signature}  (user login: {user.login}, id={user.id})\n"
-                f"Signed at: {now}\n"
-                f"Checklist: delivered={chk_delivered}, works={chk_works}, authorized={chk_authorized}\n"
-                f"Notes:     {notes}\n"
-            ).encode('utf-8')
-            # Stage 2: client digital sign-off. Records signature, generates a receipt,
-            # and moves the task to 'completed'.
-            kpi.write({
-                'client_signature_text': signature,
-                'client_signed_datetime': now,
-                'client_approval_notes': notes,
-                'client_chk_delivered': chk_delivered,
-                'client_chk_works': chk_works,
-                'client_chk_authorized': chk_authorized,
-                'signed_certificate': _b64.b64encode(receipt).decode(),
-                'signed_certificate_name': f'digital_approval_{kpi.id}.txt',
-                'signed_certificate_date': today,
-                # Final state transition — client sign-off closes the task
-                'task_state': 'completed',
-                'approved_by': user.id,
-                'approval_date': now,
-                # If admin hadn't run QA-approve yet, mark it now (client signed = effective approval)
-                'admin_approved': True,
-                # The client's signature IS the billable event — without this the task
-                # looks fully approved but can never be invoiced, because the invoice
-                # domain filters on client_final_approved (kpi_client_invoice.py:228).
-                # Matches the app path (kpi_workflow.py) and approve_task() (kpi.py).
-                'client_final_approved': True,
-            })
-            # Audit + notify owner / coordinator / developer that the client signed off.
-            try:
-                kpi._log_action(
-                    'final_approved',
-                    source='web',
-                    actor_user_id=user.id,
-                    actor_label=signature,
-                    payload={'kpi_id': kpi.id, 'notes': notes},
-                )
-                kpi._notify('final_approved', decided_by=signature, feedback=notes, source='web')
-            except Exception as nx:
-                try:
-                    kpi._log_action(
-                        'notification_failed',
-                        payload={'event': 'final_approved', 'error': str(nx)},
-                        success=False,
-                    )
-                except Exception:
-                    pass
-            return {'status': True, 'message': 'Approved successfully.', 'kpi_id': kpi.id}
+            ok, msg = self._apply_client_signoff(
+                kpi, signature, notes, chk_delivered, chk_works, chk_authorized)
+            if not ok:
+                return {'status': False, 'message': msg}
+            return {'status': True, 'message': msg, 'kpi_id': kpi.id}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"submit_client_approval: {str(e)}")
             return {'status': False, 'message': str(e)}
+
 
     @http.route('/kpi_client_approval/reject', type='json', auth='user', methods=['POST'], csrf=False)
     def submit_client_rejection(self, **params):
@@ -5808,4 +6045,63 @@ class KpiReportsAPI(http.Controller):
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"reset_client_invoice_draft: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_client_invoice/revise', type='json', auth='user', methods=['POST'], csrf=False)
+    def revise_client_invoice(self, **params):
+        """Reopen a FINALIZED invoice to reduce it, recording who and why.
+
+        Admin-only, and the model refuses anything that is sent or paid. Separate from
+        reset_draft because this one is a deliberate, reasoned correction that the
+        client will be told about — not a quiet un-finalize.
+        """
+        try:
+            user = request.env.user
+            allowed = (
+                user.has_group('base.group_system')
+                or user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('kra_kpi_module.group_kra_admin')
+            )
+            if not allowed:
+                return {'status': False, 'message': 'Not authorized.'}
+            inv = request.env['kpi.client.invoice'].browse(int(params.get('invoice_id') or 0))
+            if not inv.exists():
+                return {'status': False, 'message': 'Invoice not found.'}
+            inv.action_revise(reason=params.get('reason') or '')
+            return {'status': True, 'data': inv._serialize_for_ui()}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"revise_client_invoice: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_client_invoice/clear_paid_claim', type='json', auth='user', methods=['POST'], csrf=False)
+    def clear_client_paid_claim(self, **params):
+        """Admin dismisses a client's payment claim that turned out to be wrong.
+
+        Without this a mistaken tap sticks forever: the client can't claim twice (their
+        button is gone once claimed) and only marking the invoice actually paid cleared
+        the flag — which is precisely the thing you don't want to do to correct it.
+        """
+        try:
+            user = request.env.user
+            allowed = (
+                user.has_group('base.group_system')
+                or user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('kra_kpi_module.group_kra_admin')
+            )
+            if not allowed:
+                return {'status': False, 'message': 'Not authorized.'}
+            inv = request.env['kpi.client.invoice'].browse(int(params.get('invoice_id') or 0))
+            if not inv.exists():
+                return {'status': False, 'message': 'Invoice not found.'}
+            inv.write({
+                'client_paid_claim': False,
+                'client_paid_claim_date': False,
+                'client_paid_method': False,
+                'client_paid_notes': False,
+            })
+            return {'status': True, 'data': inv._serialize_for_ui()}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"clear_client_paid_claim: {str(e)}")
             return {'status': False, 'message': str(e)}

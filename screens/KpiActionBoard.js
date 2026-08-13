@@ -35,6 +35,7 @@ import PulseDot from '../components/PulseDot';
 import * as H from '../utils/haptics';
 import { publishWidgetState, clearWidgetState } from '../utils/taskWidget';
 import { workdayButtonState } from '../utils/workdayState';
+import { validateWorkdayNote, NOTE_MAX } from '../utils/workdayNote';
 // Why a blocked task is blocked, in the server's words. Pure + unit-tested
 // against real payloads (utils/__tests__/taskGate.test.js).
 import { gateLabel } from '../utils/taskGate';
@@ -601,6 +602,9 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
                        reminder, pulse, onRowRef, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
+  // With the client, so there is nothing left for the developer to do on it — the
+  // detail sheet is all edit affordances. Admins keep it: they still review and invoice.
+  const canOpen = onOpenDetail && (isAdmin || task.task_state !== 'awaiting_client');
   // Chevron rotates 0°→90° as the actions open, so the arrow says which way it
   // goes rather than just sitting there.
   const rot = useRef(new Animated.Value(expanded ? 1 : 0)).current;
@@ -637,14 +641,14 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
           spacer, the Live pill, the arrow — falls through to the outer one. */}
       <TouchableOpacity style={s.listHead} onPress={onToggle} activeOpacity={0.7}>
         <View style={[s.listDot, { backgroundColor: p.fg }]} />
-        <TouchableOpacity style={s.listNameHit} activeOpacity={0.6} disabled={!onOpenDetail}
-          onPress={() => onOpenDetail && onOpenDetail(task)}>
+        <TouchableOpacity style={s.listNameHit} activeOpacity={0.6} disabled={!canOpen}
+          onPress={() => canOpen && onOpenDetail(task)}>
           {/* Capped at half the row and CLIPPED, not ellipsised, with a fade over
               the last few characters. An ellipsis reads as "the name ends here";
               a fade reads as "there is more", which is true — the full name is in
               the dropdown. Clip rather than tail is what leaves letters under the
               gradient to fade, instead of a "…" sitting in clear space. */}
-          <Text style={[s.listName, !!onOpenDetail && s.listNameLink]}
+          <Text style={[s.listName, !!canOpen && s.listNameLink]}
             numberOfLines={1} ellipsizeMode="clip">{task.name}</Text>
           <Svg style={s.listNameFade} width={FADE_W} height="100%" pointerEvents="none">
             <Defs>
@@ -692,6 +696,8 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
 }
 
 function TaskCard({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onMeasure, onOpenDetail, readOnly = false }) {
+  // Same rule as TaskListRow: with the client → not the developer's to open.
+  const canOpen = onOpenDetail && (isAdmin || task.task_state !== 'awaiting_client');
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
 
@@ -746,10 +752,10 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onM
         {/* Title + priority pill. The title opens KPI Details — matching the web
             board, where the task name is what you tap. In the list view the name
             is already the accordion toggle, so there it's an ⓘ button instead. */}
-        <TouchableOpacity style={s.cardTop} onPress={() => onOpenDetail && onOpenDetail(task)}
-          activeOpacity={0.6} disabled={!onOpenDetail}>
-          <Text style={[s.cardTitle, !!onOpenDetail && s.cardTitleLink]} numberOfLines={2}>{task.name}</Text>
-          {onOpenDetail && <Ionicons name="information-circle-outline" size={16} color={COLORS.primary} style={{ marginLeft: 6, marginTop: 2 }} />}
+        <TouchableOpacity style={s.cardTop} onPress={() => canOpen && onOpenDetail(task)}
+          activeOpacity={0.6} disabled={!canOpen}>
+          <Text style={[s.cardTitle, !!canOpen && s.cardTitleLink]} numberOfLines={2}>{task.name}</Text>
+          {canOpen && <Ionicons name="information-circle-outline" size={16} color={COLORS.primary} style={{ marginLeft: 6, marginTop: 2 }} />}
         </TouchableOpacity>
         <View style={s.chipRow}>
           <View style={[s.pill, { backgroundColor: p.bg }]}>
@@ -1094,6 +1100,7 @@ export default function KpiActionBoard({
   const [workdayBusy, setWorkdayBusy] = useState(false);
   const [endSummary, setEndSummary] = useState(null); // payload for the End Workday popup
   const [endNote, setEndNote] = useState('');
+  const [endNoteErr, setEndNoteErr] = useState('');   // shown under the box, never a toast
   const [endBusy, setEndBusy] = useState(false);
   const [live, setLive] = useState(null); // live_status payload for the activity strip
 
@@ -1692,10 +1699,14 @@ export default function KpiActionBoard({
   }
 
   async function confirmEndWorkday() {
-    log.info('end workday confirmed', { note: !!endNote.trim() });
+    // Optional, so an empty note sails through. This only stops a note that was typed
+    // but says nothing. Never blocks on anything else — ending the day is one-way.
+    const check = validateWorkdayNote(endNote);
+    if (!check.ok) { setEndNoteErr(check.reason); return; }
+    log.info('end workday confirmed', { note: !!check.value });
     setEndBusy(true);
     try {
-      const res = await endWorkday(endNote.trim());
+      const res = await endWorkday(check.value);
       if (res && res.status === false) { showError("Can't end workday", res.message || 'Failed'); return; }
       // Heavier than a normal confirm: this is the one action of the day that
       // cannot be undone by the person taking it.
@@ -4136,8 +4147,23 @@ export default function KpiActionBoard({
                   </View>
                 ))}
 
-                <Text style={s.fieldLabel}>Optional note for owner / coordinator:</Text>
-                <TextInput style={[s.textInput, { minHeight: 60, textAlignVertical: 'top' }]} multiline value={endNote} onChangeText={setEndNote} placeholder="Anything to add…" placeholderTextColor={COLORS.faint} />
+                {/* Still optional — just big enough to actually write in, and it now says
+                    where the note goes. "Anything to add…" in a 60pt box got 3 notes out of
+                    213 sessions. */}
+                <Text style={s.fieldLabel}>What did you work on today? (optional)</Text>
+                <TextInput
+                  style={[s.textInput, { minHeight: 120, textAlignVertical: 'top' }]}
+                  multiline
+                  maxLength={NOTE_MAX}
+                  value={endNote}
+                  onChangeText={(v) => { setEndNote(v); if (endNoteErr) setEndNoteErr(''); }}
+                  // A real note from this team, in their own shorthand (-> bullets, + to
+                  // chain items). People copy the shape of the example they are shown.
+                  placeholder={'Module documents\n->Signage scan module doc\n\nApp documents\n->Van sale doc\n->Price checker doc(Need to add screenshots)\n\nChats server connecting issue + Dark/light mode switch bug + Build taken for testing'}
+                  placeholderTextColor={COLORS.faint}
+                />
+                <Text style={s.fieldHint}>Saved with your workday snapshot and sent in the daily summary.</Text>
+                {endNoteErr ? <Text style={s.fieldErr}>{endNoteErr}</Text> : null}
               </View>
             </ScrollView>
 
@@ -4741,6 +4767,8 @@ const s = StyleSheet.create({
 
   // Form fields
   fieldLabel: { fontSize: 13.5, fontWeight: '800', color: COLORS.navy, marginTop: 14, marginBottom: 7 },
+  fieldHint: { fontSize: 11.5, color: COLORS.muted, marginTop: 6, lineHeight: 16 },
+  fieldErr: { fontSize: 12, color: COLORS.red, fontWeight: '700', marginTop: 6 },
   fieldHint: { fontSize: 12, color: COLORS.muted, marginTop: 5 },
   // Inline validation inside a dialog. Clears itself as soon as the user starts
   // fixing the thing it complains about.

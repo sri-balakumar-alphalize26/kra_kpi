@@ -109,6 +109,12 @@ export class KpiLiveTracking extends Component {
                                         <t t-else="">
                                             <span class="text-muted">Not started</span>
                                         </t>
+                                        <!-- Why they're away, in their own words. The badge
+                                             above says "Lunch"; this says "back by 2, dentist"
+                                             — which is the half that decides whether an admin
+                                             needs to do anything about it. -->
+                                        <div t-if="row.activity_note" class="small text-muted mt-1"
+                                             style="white-space:pre-wrap;" t-esc="row.activity_note"/>
                                     </td>
                                     <td class="text-end">
                                         <!-- End Workday is one-way for the developer. This is the

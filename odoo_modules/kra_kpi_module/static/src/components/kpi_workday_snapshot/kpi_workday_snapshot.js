@@ -107,6 +107,36 @@ export class KpiWorkdaySnapshot extends Component {
 
                                         <!-- Level 3: the image -->
                                         <t t-if="state.openDevs[dev.snapshot_id]">
+                                            <!-- What they wrote at End Workday. Above the
+                                                 image on purpose: the numbers say how long the
+                                                 day was, this says what it was spent on, and it
+                                                 is the part someone actually reads. Not drawn
+                                                 into the PNG — that layout is fixed. -->
+                                            <div t-if="dev.note" class="px-2 pb-2">
+                                                <div class="border rounded p-2 bg-light">
+                                                    <div class="text-muted small fw-bold mb-1">
+                                                        <i class="fa fa-pencil me-1"/>End-of-day note
+                                                    </div>
+                                                    <div class="small" style="white-space:pre-wrap;" t-esc="dev.note"/>
+                                                </div>
+                                            </div>
+                                            <!-- Sits directly under the note: if these figures
+                                                 differ from a summary someone already received,
+                                                 this is the reason why. -->
+                                            <div t-if="dev.reopen_reason" class="px-2 pb-2">
+                                                <div class="border border-warning rounded p-2 bg-white">
+                                                    <div class="text-warning small fw-bold mb-1">
+                                                        <i class="fa fa-unlock me-1"/>Reopened workday
+                                                        <span t-if="dev.reopened_by" class="text-muted fw-normal">
+                                                            — by <t t-esc="dev.reopened_by"/>
+                                                        </span>
+                                                        <span t-if="dev.reopened_at" class="text-muted fw-normal">
+                                                            on <t t-esc="dev.reopened_at"/>
+                                                        </span>
+                                                    </div>
+                                                    <div class="small" style="white-space:pre-wrap;" t-esc="dev.reopen_reason"/>
+                                                </div>
+                                            </div>
                                             <div class="px-2 pb-2">
                                                 <!-- Empty src on the mine path means the base64 is
                                                      still in flight; show a spinner rather than a

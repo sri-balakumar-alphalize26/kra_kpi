@@ -41,6 +41,7 @@ const TEMPLATE = xml/* xml */`
                         <t t-foreach="state.clients" t-as="c" t-key="c.id">
                             <option t-att-value="c.id">
                                 <t t-esc="c.parent_name ? c.parent_name + ' > ' + c.name : c.name"/>
+                                <t t-if="c.has_client_user === false"> — no client user assigned</t>
                             </option>
                         </t>
                     </select>
@@ -57,6 +58,10 @@ const TEMPLATE = xml/* xml */`
                         <i class="fa fa-calendar me-1 text-muted"/> Date Range
                     </label>
                     <div class="btn-group mb-2 w-100" role="group" aria-label="Date range preset">
+                        <button type="button"
+                                t-att-class="'btn btn-sm ' + (state.newInvoice.range_preset === 'all' ? 'btn-success' : 'btn-outline-success')"
+                                t-on-click="() => this.setRangePreset('all')"
+                                title="Bill everything the client has signed off that isn't already invoiced">All unbilled</button>
                         <button type="button"
                                 t-att-class="'btn btn-sm ' + (state.newInvoice.range_preset === 'today' ? 'btn-primary' : 'btn-outline-primary')"
                                 t-on-click="() => this.setRangePreset('today')">Today</button>
@@ -115,7 +120,7 @@ const TEMPLATE = xml/* xml */`
                            placeholder="0.00"
                            t-model.number="state.newInvoice.hourly_rate"/>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-3" t-if="state.showAdvanced">
                     <label class="form-label fw-bold">Currency</label>
                     <select class="form-select" t-model="state.newInvoice.currency_id">
                         <option value="">-- default --</option>
@@ -134,7 +139,7 @@ const TEMPLATE = xml/* xml */`
                     </div>
                 </div>
                 <!-- Task-type checkboxes — defaults to all 3 checked.  Empty = include all. -->
-                <div class="col-12">
+                <div class="col-12" t-if="state.showAdvanced">
                     <label class="form-label fw-bold">
                         <i class="fa fa-tags me-1 text-muted"/> Include Task Types
                     </label>
@@ -171,15 +176,24 @@ const TEMPLATE = xml/* xml */`
                         — final invoice total = (grand total hours) × (rate above).
                         Currency: <b t-esc="getCurrencyPreview()"/>.
                     </div>
-                    <button class="btn btn-primary w-100 mt-2" t-on-click="createInvoice">
-                        <i class="fa fa-plus me-1"/> Create Invoice
-                    </button>
                 </div>
 
             </div>
 
             <!-- Sub-KRA (project) filter — appears once a client is chosen. -->
-            <div t-if="state.scopeSubKras.length > 0" class="row g-3 mt-2">
+            <!-- Advanced toggle. Everything behind it already has a correct default —
+                 currency from the client KRA, all three task types, empty filters
+                 meaning "everything" — so the everyday path is client + period + Create. -->
+            <div class="mt-3">
+                <button type="button" class="btn btn-sm btn-link px-0 text-decoration-none"
+                        t-on-click="() => state.showAdvanced = !state.showAdvanced">
+                    <i t-att-class="'fa me-1 ' + (state.showAdvanced ? 'fa-caret-down' : 'fa-caret-right')"/>
+                    Advanced options
+                    <span class="text-muted small">(currency, task types, filters)</span>
+                </button>
+            </div>
+
+            <div t-if="state.showAdvanced and state.scopeSubKras.length > 0" class="row g-3 mt-2">
                 <div class="col-12">
                     <label class="form-label fw-bold">
                         <i class="fa fa-sitemap me-1 text-muted"/> Filter: Sub-KRA / Project
@@ -200,7 +214,7 @@ const TEMPLATE = xml/* xml */`
             </div>
 
             <!-- Optional filters: developer + task. Populated after client selection. -->
-            <div t-if="state.scopeUsers.length > 0 or state.scopeKpis.length > 0" class="row g-3 mt-2">
+            <div t-if="state.showAdvanced and (state.scopeUsers.length > 0 or state.scopeKpis.length > 0)" class="row g-3 mt-2">
                 <div class="col-md-6">
                     <label class="form-label fw-bold">
                         <i class="fa fa-user me-1 text-muted"/> Filter: Developers
@@ -230,13 +244,33 @@ const TEMPLATE = xml/* xml */`
                                        t-att-id="'kpi_' + k.id"
                                        t-att-checked="isFilterSelected('filter_kpi_ids', k.id)"
                                        t-on-change="() => this.toggleFilter('filter_kpi_ids', k.id)"/>
-                                <label class="form-check-label" t-att-for="'kpi_' + k.id">
+                                <label t-att-for="'kpi_' + k.id"
+                                       t-att-class="'form-check-label' + (k.billable === false ? ' text-muted' : '')">
                                     <t t-esc="k.name"/>
                                     <span t-if="k.kra_name" class="text-muted">  (<t t-esc="k.kra_name"/>)</span>
+                                    <span t-if="k.billable === false" class="badge bg-light text-secondary ms-1"
+                                          t-esc="k.not_billable_reason"/>
                                 </label>
                             </div>
                         </t>
                     </div>
+                </div>
+            </div>
+
+            <!-- Create sits LAST so the form reads top-to-bottom. It used to render
+                 above the three filters, which asked you to submit before you had
+                 seen the rest of the form. -->
+            <div class="row g-3 mt-2">
+                <div class="col-12">
+                    <button class="btn btn-primary w-100" t-on-click="createInvoice"
+                            t-att-disabled="state.creating">
+                        <t t-if="state.creating">
+                            <i class="fa fa-spinner fa-spin me-1"/> Creating…
+                        </t>
+                        <t t-else="">
+                            <i class="fa fa-plus me-1"/> Create Invoice
+                        </t>
+                    </button>
                 </div>
             </div>
         </div>
@@ -342,6 +376,16 @@ const TEMPLATE = xml/* xml */`
                                         <i class="fa fa-check me-1"/> Paid
                                     </span>
                                 </t>
+                                <!-- The client says they paid and nobody has checked yet.
+                                     Amber, between Due and Paid, and NOT a payment_status
+                                     value: nothing is part-settled, the full amount is
+                                     claimed and unverified. -->
+                                <t t-elif="inv.client_paid_claim">
+                                    <span class="badge bg-warning text-dark"
+                                          title="The client reported paying this. Confirm it to close the invoice.">
+                                        <i class="fa fa-hourglass-half me-1"/> Claimed
+                                    </span>
+                                </t>
                                 <t t-else="">
                                     <span class="badge bg-danger">
                                         <i class="fa fa-clock-o me-1"/> Due
@@ -377,6 +421,20 @@ const TEMPLATE = xml/* xml */`
                                         </button>
                                     </t>
                                 </t>
+                                <!-- CLIENT's own "I've paid". A claim, not a settlement:
+                                     it notifies the admins, who confirm. Once claimed the
+                                     button is replaced, so they can't submit twice. -->
+                                <t t-if="state.isPortal and inv.state !== 'draft' and inv.payment_status !== 'paid'">
+                                    <button t-if="!inv.client_paid_claim"
+                                            class="btn btn-sm btn-success"
+                                            title="Tell us you've paid this invoice"
+                                            t-on-click="() => this.clientPaidPrompt(inv)">
+                                        <i class="fa fa-check me-1"/> I've paid
+                                    </button>
+                                    <span t-else="" class="text-muted small">
+                                        <i class="fa fa-hourglass-half me-1"/> Awaiting confirmation
+                                    </span>
+                                </t>
                             </td>
                         </tr>
                     </t>
@@ -397,6 +455,7 @@ const TEMPLATE = xml/* xml */`
                         <span class="fw-bold" t-esc="state.invoice.name"/>
                         <span t-if="state.invoice.state === 'draft'" class="badge bg-secondary ms-2 align-middle">Draft</span>
                         <span t-elif="state.invoice.payment_status === 'paid'" class="badge bg-success ms-2 align-middle">Paid</span>
+                        <span t-elif="state.invoice.client_paid_claim" class="badge bg-warning text-dark ms-2 align-middle">Payment claimed</span>
                         <span t-else="" class="badge bg-danger ms-2 align-middle">Unpaid</span>
                     </h4>
                     <div class="text-muted">
@@ -442,14 +501,88 @@ const TEMPLATE = xml/* xml */`
                                 t-on-click="sendInvoice">
                             <i class="fa fa-paper-plane me-1"/> Mark Sent
                         </button>
+                        <!-- Reduce a finalized invoice: reason → draft → edit → finalize.
+                             Finalized only. Not sent (the client has that document) and
+                             not paid (the money arrived) — the server refuses both too. -->
+                        <button t-if="state.invoice.state === 'finalized' and state.invoice.payment_status !== 'paid'"
+                                class="btn btn-outline-primary me-2"
+                                title="Reopen to reduce the amount, then re-finalize"
+                                t-on-click="reviseInvoice">
+                            <i class="fa fa-pencil me-1"/> Revise
+                        </button>
                         <button t-if="state.invoice.state === 'finalized' and state.invoice.payment_status !== 'paid'"
                                 class="btn btn-outline-secondary"
                                 t-on-click="resetDraft">
                             <i class="fa fa-undo me-1"/> Reset to Draft
                         </button>
+                        <!-- Draft only. A finalized invoice is a record the client has
+                             seen, so it stays. Deleting a draft frees any task it was
+                             holding back from future invoices. -->
+                        <button t-if="state.invoice.state === 'draft'"
+                                class="btn btn-outline-danger ms-2"
+                                t-on-click="deleteInvoice">
+                            <i class="fa fa-trash me-1"/> Delete Draft
+                        </button>
                     </t>
                 </div>
             </div>
+        </div>
+
+        <!-- Revised: shown to BOTH sides. The client may be holding a PDF with the old
+             figure, and a total that changes with no explanation is how disputes start. -->
+        <div t-if="state.invoice.revised_on" class="alert alert-info py-2 mb-3">
+            <i class="fa fa-pencil me-1"/>
+            <strong>Revised</strong> on <t t-esc="state.invoice.revised_on"/>
+            <t t-if="state.invoice.revision_reason"> — <t t-esc="state.invoice.revision_reason"/></t>
+            <span t-if="state.invoice.revision_count > 1" class="text-muted small ms-2">
+                (revised <t t-esc="state.invoice.revision_count"/> times)
+            </span>
+        </div>
+
+        <!-- The client's payment claim. Admin gets Confirm / Not received; the client
+             sees the same details read-only, so they know the claim registered. -->
+        <div t-if="state.invoice.client_paid_claim" class="alert alert-warning d-flex flex-wrap align-items-center gap-2 py-2 mb-3">
+            <div class="flex-grow-1">
+                <i class="fa fa-hourglass-half me-1"/>
+                <strong t-if="state.isPortal">You reported paying this invoice.</strong>
+                <strong t-else="">The client reported paying this invoice.</strong>
+                <span class="ms-1">
+                    <t t-if="state.invoice.client_paid_method_label">
+                        Method: <strong t-esc="state.invoice.client_paid_method_label"/>.
+                    </t>
+                    <t t-if="state.invoice.client_paid_claim_date">
+                        Reported <t t-esc="state.invoice.client_paid_claim_date"/>.
+                    </t>
+                </span>
+                <div t-if="state.invoice.client_paid_notes" class="small mt-1" style="white-space:pre-wrap;"
+                     t-esc="state.invoice.client_paid_notes"/>
+                <div t-if="state.isPortal" class="small text-muted mt-1">
+                    Awaiting confirmation — we'll mark it paid once the payment is checked.
+                </div>
+            </div>
+            <div t-if="!state.isPortal" class="text-nowrap">
+                <button class="btn btn-sm btn-success me-2"
+                        t-on-click="() => this.markPaidPrompt(state.invoice)">
+                    <i class="fa fa-check me-1"/> Confirm payment
+                </button>
+                <button class="btn btn-sm btn-outline-secondary"
+                        title="The payment never arrived — clear the claim"
+                        t-on-click="clearPaidClaim">
+                    Not received
+                </button>
+            </div>
+        </div>
+
+        <!-- Admin's own payment record. Never rendered in portal mode, and the server
+             also withholds these fields from a client's payload. -->
+        <div t-if="!state.isPortal and state.invoice.payment_status === 'paid'" class="alert alert-success py-2 mb-3">
+            <i class="fa fa-check-circle me-1"/>
+            <strong>Paid</strong>
+            <t t-if="state.invoice.payment_method_label"> by <t t-esc="state.invoice.payment_method_label"/></t>
+            <t t-if="state.invoice.payment_date"> on <t t-esc="state.invoice.payment_date"/></t>
+            <t t-if="state.invoice.paid_by"> — recorded by <t t-esc="state.invoice.paid_by"/></t>
+            <div t-if="state.invoice.payment_notes" class="small mt-1" style="white-space:pre-wrap;"
+                 t-esc="state.invoice.payment_notes"/>
         </div>
 
         <!-- Editable header fields (draft only, admin only) -->
@@ -638,6 +771,25 @@ const TEMPLATE = xml/* xml */`
                     </tr>
                 </tbody>
             </table>
+
+            <!-- An empty invoice is the confusing case. The server already knows which
+                 gate rejected every task, so say it plainly rather than leaving the
+                 admin staring at "No lines yet." with nothing to act on. -->
+            <div t-if="state.invoice.lines.length === 0 and (state.invoice.empty_reasons or []).length > 0"
+                 class="alert alert-warning mb-0">
+                <div class="fw-bold mb-2">
+                    <i class="fa fa-info-circle me-1"/> Nothing to bill for this period
+                </div>
+                <ul class="mb-2 ps-3">
+                    <t t-foreach="state.invoice.empty_reasons" t-as="reason" t-key="reason_index">
+                        <li t-esc="reason"/>
+                    </t>
+                </ul>
+                <div class="small text-muted">
+                    Work becomes billable only once the client has signed it off in their
+                    portal. You can delete this draft and create it again after they do.
+                </div>
+            </div>
         </div>
 
         <!-- Notes -->
@@ -660,8 +812,11 @@ const TEMPLATE = xml/* xml */`
 
 class _BaseInvoiceComponent extends Component {
     static template = TEMPLATE;
+    // Default; each exported subclass overrides it. Never assign this.isPortal here —
+    // that is what silently wiped the portal flag and showed clients the admin screen.
+    static isPortal = false;
     setup() {
-        this.isPortal = false;  // overridden by subclasses
+        this.isPortal = this.constructor.isPortal;
         this.state = useState({
             view: 'list',                  // 'list' | 'detail'
             isPortal: this.isPortal,
@@ -671,6 +826,8 @@ class _BaseInvoiceComponent extends Component {
             statusFilter: 'all',           // 'all' | 'draft' | 'finalized' | 'sent' | 'due' | 'paid'
             counts: { all: 0, draft: 0, finalized: 0, sent: 0, due: 0, paid: 0 },
             invoice: null,                 // current detail invoice
+            creating: false,               // in-flight guard — blocks duplicate drafts
+            showAdvanced: false,           // currency / task types / filters — all defaulted
             expanded: {},                  // {line_id: bool}
             showAmounts: true,             // detail toggle — off = clean, cost-free view + PDF
             notesText: '',
@@ -688,7 +845,9 @@ class _BaseInvoiceComponent extends Component {
                 currency_id: '',
                 from_date: '',
                 to_date: '',
-                range_preset: 'this_month',
+                // "All unbilled" by default: sign-off, not the calendar, decides what
+                // is billable, so a month window mostly just hides work.
+                range_preset: 'all',
                 include_req: true,
                 include_upt: true,
                 include_bug: true,
@@ -698,11 +857,8 @@ class _BaseInvoiceComponent extends Component {
             },
         });
         onWillStart(async () => {
-            // Default new-invoice dates: first of current month → today
-            const today = new Date();
-            const first = new Date(today.getFullYear(), today.getMonth(), 1);
-            this.state.newInvoice.from_date = this._fmt(first);
-            this.state.newInvoice.to_date = this._fmt(today);
+            // Defaults to "All unbilled" — see setRangePreset('all').
+            this.setRangePreset('all');
             if (!this.isPortal) {
                 const r = await rpc('/kpi_client_invoice/get_filters', {});
                 if (r && r.status) this.state.clients = r.clients || [];
@@ -714,6 +870,7 @@ class _BaseInvoiceComponent extends Component {
                     if (raw) {
                         sessionStorage.removeItem('kpi_invoice_prefill');
                         const pre = JSON.parse(raw);
+                        if (pre.range_preset) this.setRangePreset(pre.range_preset);
                         if (pre.client_kra_id) {
                             this.state.newInvoice.client_kra_id = String(pre.client_kra_id);
                             await this.onClientChange();
@@ -746,14 +903,42 @@ class _BaseInvoiceComponent extends Component {
         this.state.statusFilter = s;
         await this.refreshList();
     }
+    // Bank Transfer / Cash / Cheque / Card / Other — must match PAYMENT_METHODS in
+    // models/kpi_client_invoice.py, which is what validates them.
+    get paymentMethods() {
+        return [
+            ['bank_transfer', 'Bank Transfer'],
+            ['cash', 'Cash'],
+            ['cheque', 'Cheque'],
+            ['card', 'Card'],
+            ['other', 'Other'],
+        ];
+    }
+
+    // Method is required both sides — an invoice that is paid but doesn't say how leaves
+    // nothing to reconcile against a bank statement later. Returns '' if cancelled.
+    _askMethod(title) {
+        const list = this.paymentMethods.map(([, label], i) => `${i + 1}. ${label}`).join('\n');
+        const pick = prompt(`${title}\n\nHow was it paid?\n${list}\n\nEnter 1-${this.paymentMethods.length}:`, '1');
+        if (pick === null) return null;
+        const idx = parseInt(pick, 10) - 1;
+        if (!(idx >= 0 && idx < this.paymentMethods.length)) {
+            alert('Please choose a number from the list.');
+            return null;
+        }
+        return this.paymentMethods[idx][0];
+    }
+
     async markPaidPrompt(inv) {
+        const method = this._askMethod(`Mark invoice ${inv.name} as PAID?`);
+        if (!method) return;  // cancelled or invalid
         const note = prompt(
-            `Mark invoice ${inv.name} as PAID?\n\nOptional note (e.g. cheque #, UPI ref):`,
+            `Mark invoice ${inv.name} as PAID?\n\nOptional note (e.g. cheque #, transfer ref).\nThis note is internal — the client does not see it:`,
             ""
         );
         if (note === null) return;  // cancelled
         const r = await rpc('/kpi_client_invoice/mark_paid', {
-            invoice_id: inv.id, paid: true, note: note || '',
+            invoice_id: inv.id, paid: true, note: note || '', method,
         });
         if (r && r.status) {
             await this.refreshList();
@@ -788,6 +973,18 @@ class _BaseInvoiceComponent extends Component {
         const ni = this.state.newInvoice;
         ni.range_preset = preset;
         if (preset === 'custom') return;        // user fills From/To manually
+        if (preset === 'all') {
+            // "Everything not yet billed". Billability is driven by client sign-off,
+            // not the calendar — work done in July but signed in August falls outside
+            // a July invoice, which is the trap that made invoices come back empty.
+            // Safe because double-billing is prevented elsewhere: populate skips any
+            // task already on another invoice line. Same range the Owner Dashboard
+            // has always used for "invoice everything certified".
+            const ni2 = this.state.newInvoice;
+            ni2.from_date = '2000-01-01';
+            ni2.to_date = '2099-12-31';
+            return;
+        }
         const today = new Date();
         let from, to;
         if (preset === 'today') {
@@ -838,6 +1035,10 @@ class _BaseInvoiceComponent extends Component {
     }
 
     async createInvoice() {
+        // In-flight guard. Without it a double-click created two or three identical
+        // drafts, and since populate skips tasks already on another invoice line, the
+        // extras then held those tasks back and every later invoice came back empty.
+        if (this.state.creating) return;
         const ni = this.state.newInvoice;
         if (!ni.client_kra_id || !ni.from_date || !ni.to_date) {
             alert('Please pick a client and both dates.');
@@ -848,9 +1049,14 @@ class _BaseInvoiceComponent extends Component {
             alert('Pick at least one task type (REQ / UPT / BUG).');
             return;
         }
-        // Per Task: create straight away, then the admin prices each task
-        // individually in the invoice detail (saved live).
-        await this._doCreate();
+        this.state.creating = true;
+        try {
+            // Per Task: create straight away, then the admin prices each task
+            // individually in the invoice detail (saved live).
+            await this._doCreate();
+        } finally {
+            this.state.creating = false;
+        }
     }
     async _doCreate() {
         const ni = this.state.newInvoice;
@@ -1231,14 +1437,85 @@ class _BaseInvoiceComponent extends Component {
         if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
         this.state.invoice = r.data;
     }
+
+    // Reduce a finalized invoice. The reason is required because the client is told the
+    // figure changed — and the server refuses without one anyway.
+    async reviseInvoice() {
+        const inv = this.state.invoice;
+        const reason = prompt(
+            `Revise ${inv.name}?\n\nIt goes back to Draft so you can change the amount, then `
+            + `Finalize again. The client is told it was revised.\n\nWhy is it being revised?`,
+            ''
+        );
+        if (reason === null) return;
+        if (!reason.trim()) { alert('A reason is required.'); return; }
+        const r = await rpc('/kpi_client_invoice/revise', { invoice_id: inv.id, reason });
+        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        this.state.invoice = r.data;
+        await this.refreshList();
+    }
+
+    // The claimed payment never arrived. Without this the flag sticks forever: the client
+    // can't claim twice, and the only other thing that cleared it was marking the invoice
+    // paid — the exact thing you don't want to do to correct a false claim.
+    async clearPaidClaim() {
+        const inv = this.state.invoice;
+        if (!confirm(`Clear the client's payment claim on ${inv.name}?\n\n`
+                     + `Use this when the payment never arrived. The invoice stays Unpaid `
+                     + `and the client can report paying again.`)) return;
+        const r = await rpc('/kpi_client_invoice/clear_paid_claim', { invoice_id: inv.id });
+        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        this.state.invoice = r.data;
+        await this.refreshList();
+    }
+
+    // CLIENT side: "I've paid". A claim only — it notifies the admins, who confirm.
+    async clientPaidPrompt(inv) {
+        const method = this._askMethod(`Report payment for ${inv.name}?`);
+        if (!method) return;
+        const note = prompt(
+            `Reporting payment for ${inv.name}.\n\nOptional reference or note (e.g. transfer ref):`,
+            ''
+        );
+        if (note === null) return;
+        const r = await rpc('/kpi_client_invoice/client_mark_paid', {
+            invoice_id: inv.id, method, note: note || '',
+        });
+        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        alert('Thank you — we have been notified and will confirm the payment.');
+        await this.refreshList();
+        if (this.state.view === 'detail' && this.state.invoice && this.state.invoice.id === inv.id) {
+            this.state.invoice = r.data;
+        }
+    }
+    async deleteInvoice() {
+        const inv = this.state.invoice;
+        if (!confirm(`Delete draft ${inv.name}? Any tasks on it are freed for a future invoice. `
+                     + `This cannot be undone.`)) return;
+        const r = await rpc('/kpi_client_invoice/delete', { invoice_id: inv.id });
+        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (r.freed_tasks) {
+            alert(`${r.name} deleted. ${r.freed_tasks} task(s) are now free to bill again.`);
+        }
+        this.backToList();
+    }
 }
 
+// Which mode each action runs in. A STATIC, not an instance assignment in setup():
+// the subclasses used to do `setup() { this.isPortal = true; super.setup(); }`, and the
+// base's own setup then reassigned this.isPortal = false before building state — so the
+// portal flag was destroyed a line after it was set, state.isPortal was ALWAYS false,
+// and all 23 `t-if="!state.isPortal"` guards fell open. A client opening My Invoices got
+// the whole admin screen: the Create Invoice form, Finalize, Send, Mark Paid, editable
+// lines. The server still refused every one of those, so nothing could actually be
+// changed, but the buttons were there and failed confusingly when pressed.
+// Read via this.constructor.isPortal, so no ordering between base and subclass can break it.
 export class KpiClientInvoiceAdmin extends _BaseInvoiceComponent {
-    setup() { this.isPortal = false; super.setup(); }
+    static isPortal = false;
 }
 
 export class KpiClientInvoicePortal extends _BaseInvoiceComponent {
-    setup() { this.isPortal = true; super.setup(); }
+    static isPortal = true;
 }
 
 registry.category("actions").add("kpi_client_invoice_admin", KpiClientInvoiceAdmin);

@@ -96,7 +96,31 @@ const check = (s, ok, d = '') => { out.push({ s, ok }); console.log(`  ${ok ? '�
     after.task_state !== 'completed',
     `${before} -> ${after.task_state} client_final_approved=${after.client_final_approved} ${sg.ok ? '' : '· ' + sg.err}`);
 
-  console.log(`\n[APITEST] kras=${L1},${L2} tasks=${ids.join(',')},${early} invoices=${cid},${did}`);
+  // ── Regression: client user linked to the ROOT only ──────────────────────
+  // This is the production shape, and the reason the parent-lookup bug survived:
+  // every fixture above links the client to BOTH levels. A task resolves to the
+  // level-2 KRA, so reading client_user_ids there found nobody and admin approval
+  // closed the task as 'completed' with client_final_approved false — finished
+  // work that could never be invoiced. 42 live tasks were stuck that way.
+  const R1 = (await call(admin, '/kra_kpi/create_kra', { name: '[APITEST] RootOnly Co', is_sub: false })).result?.id;
+  const R2 = (await call(admin, '/kra_kpi/create_kra', { name: '[APITEST] RootOnly Unit', is_sub: true, parent_id: R1 })).result?.id;
+  await call(admin, '/kra_kpi/kra/assign_clients', { kra_id: R1, user_ids: [client.uid] });  // L1 ONLY — not L2
+  const rid = (await call(client, '/kpi_client_portal/add_task', {
+    sub_kra_id: R2, name: '[APITEST] RootOnly approver', kind: 'requirement',
+    priority: 'regular', description: 'parent-lookup probe' })).result?.kpi_id;
+  await kw(admin, 'kra.kpi', 'write', [[rid], { user_id: devUid }]);
+  await call(client, '/kpi_pre_approval/decide', { kpi_id: rid, action: 'approve' });
+  await call(dev, '/kra_kpi/task/pause_all', {});
+  await call(dev, '/kra_kpi/task/start', { kpi_id: rid });
+  await call(dev, '/kpi/progress/create', { kpi_id: rid, summary: '[APITEST] done' });
+  await call(dev, '/kra_kpi/task/complete', { kpi_id: rid, employee_checklist: { tested_code: true }, partial: false });
+  await call(admin, '/kra_kpi/task/approve', { kpi_id: rid });
+  const rs = (await kw(admin, 'kra.kpi', 'read', [[rid], ['task_state', 'client_final_approved']])).result[0];
+  check('client on ROOT only is still asked to sign off',
+    rs.task_state === 'awaiting_client' && !rs.client_final_approved,
+    `state=${rs.task_state} (pre-fix: completed) signed=${rs.client_final_approved}`);
+
+  console.log(`\n[APITEST] kras=${L1},${L2},${R1},${R2} tasks=${ids.join(',')},${early},${rid} invoices=${cid},${did}`);
   const ok = out.filter((r) => r.ok).length;
   console.log(`════════ ${ok}/${out.length} ════════`);
 })().catch((e) => console.log('FATAL', e.message));

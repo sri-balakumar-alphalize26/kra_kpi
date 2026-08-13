@@ -10,13 +10,13 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
   RefreshControl, StatusBar as RNStatusBar, Modal, TextInput,
-  Animated, Easing,
+  Animated, Easing, Image,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
-import { getClientDashboard } from '../services/clientPortal';
+import { getClientDashboard, getClientSignature } from '../services/clientPortal';
 import { fetchPreApprovals, decidePreApproval, holdPreApproval, submitClientSignoff, submitClientRejection } from '../services/preApproval';
 import { REJECT_REASONS } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
@@ -265,6 +265,9 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   const [signTicks, setSignTicks] = useState({ delivered: false, works: false, authorized: false });
   const [signBusy, setSignBusy] = useState(false);
   const [signErr, setSignErr] = useState('');          // shown inside the sheet, not as a toast
+  // Saved signature image from the web portal. When present the server accepts the
+  // sign-off with no typed name, so the app must stop demanding one.
+  const [signature, setSignature] = useState({ hasSignature: false, imageB64: '' });
   // The two action sections collapse by default — their counts stay visible in
   // the headers, so the client reaches their task list without a long scroll.
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -275,15 +278,19 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     try {
       // Approvals are a separate, non-fatal concern: a client with no pending
       // approvals (or an older server) must still get their task list.
-      const [res, appr] = await Promise.all([
+      const [res, appr, sig] = await Promise.all([
         getClientDashboard('all'),
         fetchPreApprovals().catch((e) => {
           log.warn('preApprovals failed', e?.message);
           return { kpis: [] };
         }),
+        // Non-fatal by construction — getClientSignature never throws, and no
+        // signature simply means the normal typed-name flow.
+        getClientSignature(),
       ]);
       setData(res);
       setApprovals(appr.kpis || []);
+      setSignature(sig);
     } catch (e) {
       log.error('load failed', e?.message);
       setError(e.message || 'Failed to load your tasks');
@@ -436,8 +443,11 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   const toggleTick = (k) => setSignTicks((p) => ({ ...p, [k]: !p[k] }));
   // The server rejects the call unless all three are ticked AND a signature is
   // present, so gate the button on exactly the same rule (no failed round-trip).
+  // "Signature present" means a typed name OR a saved signature image — the app
+  // only knew about the first, so anyone who had uploaded one was still forced to
+  // type a name on every task.
   const signReady = signTicks.delivered && signTicks.works && signTicks.authorized
-    && signName.trim().length > 0;
+    && (signature.hasSignature || signName.trim().length > 0);
 
   const confirmSignoff = useCallback(async () => {
     const t = signFor;
@@ -747,15 +757,30 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                     <Text style={s.tickTxt}>{label}</Text>
                   </TouchableOpacity>
                 ))}
-                <Text style={[s.signLead, { marginTop: 14 }]}>Type your name to sign</Text>
-                <TextInput
-                  style={s.signInput}
-                  placeholder="Your full name"
-                  placeholderTextColor={COLORS.faint}
-                  value={signName}
-                  onChangeText={setSignName}
-                  autoCapitalize="words"
-                />
+                {signature.hasSignature ? (
+                  <>
+                    <Text style={[s.signLead, { marginTop: 14 }]}>Your saved signature</Text>
+                    <View style={s.sigBox}>
+                      <Image
+                        source={{ uri: `data:image/png;base64,${signature.imageB64}` }}
+                        style={s.sigImg}
+                        resizeMode="contain"
+                      />
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <Text style={[s.signLead, { marginTop: 14 }]}>Type your name to sign</Text>
+                    <TextInput
+                      style={s.signInput}
+                      placeholder="Your full name"
+                      placeholderTextColor={COLORS.faint}
+                      value={signName}
+                      onChangeText={setSignName}
+                      autoCapitalize="words"
+                    />
+                  </>
+                )}
                 <Text style={s.signNote}>
                   This records your digital approval and generates the completion certificate.
                 </Text>
@@ -962,6 +987,11 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, paddingHorizontal: 12,
     height: 48, fontSize: 15, color: COLORS.ink, backgroundColor: '#F8FAFF',
   },
+  sigBox: {
+    borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, backgroundColor: '#fff',
+    paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center',
+  },
+  sigImg: { width: '100%', height: 76 },
   signNote: { fontSize: 12, color: COLORS.muted, marginTop: 10, lineHeight: 17 },
   signDo: { backgroundColor: COLORS.green },
   signDoOff: { backgroundColor: '#9DBBA6' },

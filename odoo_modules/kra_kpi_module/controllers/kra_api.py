@@ -674,7 +674,21 @@ class KraKpiAPI(http.Controller):
             domain = []  # Show all tasks
         else:
             domain = [('user_id', '=', current_user.id)]  # Show only user's tasks
-        
+
+        # Once the client has signed a task off it is finished business — it is not
+        # something the developer can act on, and left in place it grows a Completed
+        # lane that never stops growing. Drop it from the BOARD for developers; admins
+        # keep seeing everything, because they still have to invoice it.
+        #
+        # Board only, deliberately. The task stays in the developer's Work Report, My
+        # Workday and hours totals — they must be able to see and prove what they
+        # finished. That is also why this is a query filter here rather than `published`
+        # or a record rule: either of those would hide the task from their own reports
+        # too, which is a different and much worse change.
+        if not is_manager_or_admin:
+            domain += ['!', '&', ('task_state', '=', 'completed'),
+                       ('client_final_approved', '=', True)]
+
         kpis = request.env['kra.kpi'].search(domain)
 
         # Resolve "is this developer's workday open?" ONCE for the whole board and

@@ -37,3 +37,26 @@ export async function getClientProjects() {
   log.info('projects ←', { count: (res.projects || []).length });
   return { projects: res.projects || [] };
 }
+
+// The client's saved signature image, if they uploaded one on the web portal.
+// When it exists, sign-off needs no typed name — the server accepts the saved
+// signature and stamps the account name (see _resolve_client_signature). The app
+// had no idea this existed, so it demanded a typed name on every task even from
+// clients who had already uploaded one.
+//
+// Never throws: a signature is an optional convenience, and failing to load it
+// must not stop someone signing off. On any error we report "no signature",
+// which falls back to the normal typed-name flow.
+export async function getClientSignature() {
+  try {
+    const { serverUrl, db } = await getConnection();
+    if (!serverUrl) return { hasSignature: false, imageB64: '' };
+    const res = await jsonRpc(serverUrl, '/kpi_client_portal/get_signature_info', {}, undefined, db);
+    if (!res || res.status === false) return { hasSignature: false, imageB64: '' };
+    log.info('signature ←', { has: !!res.has_signature });
+    return { hasSignature: !!res.has_signature, imageB64: res.image_b64 || '' };
+  } catch (e) {
+    log.info('signature lookup failed, falling back to typed name', e?.message);
+    return { hasSignature: false, imageB64: '' };
+  }
+}

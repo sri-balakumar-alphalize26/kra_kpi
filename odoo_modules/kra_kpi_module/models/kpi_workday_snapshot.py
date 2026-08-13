@@ -113,6 +113,23 @@ class KpiWorkdaySnapshot(models.Model):
     standard_hours = fields.Float(string='Standard Day (h)')
     met_standard = fields.Boolean(string='Met the Standard Day')
     task_count = fields.Integer(string='Tasks Touched')
+    # What the developer wrote when they ended the day. Copied from
+    # kpi.work.session.note at capture time so the snapshot is a complete record on its
+    # own — the session can be reopened and re-ended, and this freezes what was said at
+    # the moment the day was closed.
+    #
+    # Deliberately NOT drawn into the image: that layout is fixed and a dozen lines of
+    # prose would either overflow it or shrink to unreadable. It lives on the row, which
+    # is also the part that survives the retention cron (only the PNG is cleared).
+    note = fields.Text(string='End-of-Day Note')
+    # If an admin reopened this day, why. Copied off the session at capture time: the
+    # reopen happens between one End Workday and the next, so by the time the day is
+    # re-ended the session still carries the reason and this freezes it next to the
+    # figures it explains. Without it the day silently shows different numbers from the
+    # summary someone already received, with nothing saying a human reopened it.
+    reopen_reason = fields.Text(string='Reopened Because', readonly=True)
+    reopened_by_id = fields.Many2one('res.users', string='Reopened By', readonly=True)
+    reopened_at = fields.Datetime(string='Reopened At', readonly=True)
     generated_at = fields.Datetime(string='Generated At')
 
     # Set when an admin reopens the day this image was drawn for. The image is
@@ -369,6 +386,15 @@ class KpiWorkdaySnapshot(models.Model):
             'standard_hours': payload.get('standard_hours') or 0.0,
             'met_standard': bool(payload.get('met_standard')),
             'task_count': payload.get('task_count') or 0,
+            # Straight off the session — action_end_day() writes the note before it
+            # captures, so this is the note just submitted. `or False` keeps an empty
+            # note out of the column rather than storing ''.
+            'note': (session.note or '').strip() or False,
+            # Carried across a reopen: session.reverted stays set after the admin's
+            # revert, so a re-ended day explains itself.
+            'reopen_reason': (session.revert_reason or '').strip() or False,
+            'reopened_by_id': session.reverted_by_id.id if session.reverted_by_id else False,
+            'reopened_at': session.reverted_at or False,
             'generated_at': fields.Datetime.now(),
             # A redraw is a complete, current picture of the day, so it clears
             # any supersede left by an earlier reopen. Without this, a day that

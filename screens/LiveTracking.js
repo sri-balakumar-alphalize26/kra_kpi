@@ -149,6 +149,11 @@ function Row({ row, nowMs, fetchedAt, onReopen }) {
           </View>
         )}
       </View>
+      {/* Why they're away, in their own words. The pill says "Lunch"; this says
+          "back by 2, dentist" — the half that decides whether to chase someone. */}
+      {row.activity_note ? (
+        <Text style={s.actNote} numberOfLines={2}>{row.activity_note}</Text>
+      ) : null}
       {/* End Workday is one-way for the developer. This is the only way back, and
           it lives here because this is the screen where an admin can see WHOSE
           day ended. Mirrors the web's Live Tracking button. */}
@@ -393,6 +398,9 @@ const s = StyleSheet.create({
   badgeTxt: { fontSize: 12, fontWeight: '800' },
 
   actRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  // Own line, not inside actRow — that row has no flexWrap and a note of any length
+  // would push the elapsed time off a 360dp screen.
+  actNote: { fontSize: 12, color: COLORS.muted, marginTop: 6, marginLeft: 2, lineHeight: 17 },
   dot: { width: 9, height: 9, borderRadius: 5 },
   // Stacks the per-task pills when someone is multitasking. flexShrink so a long
   // task name wraps inside the card instead of pushing the row off a phone.

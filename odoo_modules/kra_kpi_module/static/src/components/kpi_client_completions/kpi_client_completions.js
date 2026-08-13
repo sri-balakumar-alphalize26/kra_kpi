@@ -89,17 +89,53 @@ export class KpiClientCompletions extends Component {
             </div>
         </div>
 
-        <div t-if="filteredPending.length > 0" class="card p-3 shadow-sm">
-            <h5 class="fw-bold mb-3 text-warning">
-                <i class="fa fa-bell me-2"/>
-                <t t-esc="filteredPending.length"/> task(s) need your approval
-                <span t-if="state.projectFilter" class="badge bg-info ms-2">
+        <div t-if="filteredPending.length > 0" class="card shadow-sm overflow-hidden">
+            <!-- Header doubles as the toggle. One client has 132 pending; rendering
+                 them all inline buried everything below it. -->
+            <div class="d-flex align-items-center gap-2 p-3 user-select-none"
+                 style="cursor:pointer" t-on-click="() => this.togglePending()">
+                <i t-att-class="state.pendingOpen ? 'fa fa-chevron-down text-warning' : 'fa fa-chevron-right text-warning'"/>
+                <i class="fa fa-bell text-warning"/>
+                <span class="fw-bold text-warning">
+                    <t t-esc="filteredPending.length"/> task(s) need your approval
+                </span>
+                <span t-if="state.projectFilter" class="badge bg-info">
                     Project: <t t-esc="this.projectLabel(state.projectFilter)"/>
                 </span>
-            </h5>
+                <span class="ms-auto badge bg-light text-warning border" t-esc="filteredPending.length"/>
+            </div>
+            <!-- Sign several at once. One dialog instead of one per task — with 40
+                 pending that was 40 dialogs and 120 checkbox clicks.
+                 Lives OUTSIDE the scroll box on purpose: inside it, the bar scrolled
+                 away around row 90 and you had to scroll back up to find the button
+                 you had just armed. t-stopPropagation so clicking it doesn't fold
+                 the panel shut under your cursor. -->
+            <div t-if="state.selected.length > 0"
+                 t-on-click.stop=""
+                 class="alert alert-warning d-flex align-items-center justify-content-between py-2 mx-3 mb-2">
+                <div>
+                    <strong t-esc="state.selected.length"/> task(s) selected
+                </div>
+                <div>
+                    <button class="btn btn-sm btn-outline-secondary me-2" t-on-click="clearSelection">
+                        Clear
+                    </button>
+                    <button class="btn btn-sm btn-warning" t-on-click="openBulkApproval">
+                        <i class="fa fa-certificate me-1"/>
+                        Sign selected (<t t-esc="state.selected.length"/>)
+                    </button>
+                </div>
+            </div>
+            <div t-if="state.pendingOpen" class="px-3 pb-3" style="max-height:420px; overflow-y:auto;">
             <table class="table table-hover align-middle">
                 <thead class="table-light">
                     <tr>
+                        <th style="width: 34px">
+                            <input class="form-check-input" type="checkbox"
+                                   t-att-checked="allSelected"
+                                   t-on-change="toggleSelectAll"
+                                   title="Select all"/>
+                        </th>
                         <th style="width: 70px">Kind</th>
                         <th style="width: 90px">Ref</th>
                         <th>Task</th>
@@ -112,6 +148,11 @@ export class KpiClientCompletions extends Component {
                 <tbody>
                     <t t-foreach="filteredPending" t-as="p" t-key="p.id">
                         <tr>
+                            <td>
+                                <input class="form-check-input" type="checkbox"
+                                       t-att-checked="state.selected.includes(p.id)"
+                                       t-on-change="() => this.toggleSelect(p.id)"/>
+                            </td>
                             <td>
                                 <span class="badge"
                                       t-att-class="p.kind === 'bug' ? 'bg-danger' : (p.kind === 'update' ? 'bg-warning text-dark' : 'bg-primary')"
@@ -134,6 +175,7 @@ export class KpiClientCompletions extends Component {
                     </t>
                 </tbody>
             </table>
+            </div>
         </div>
 
         <!-- Approval modal -->
@@ -234,6 +276,81 @@ export class KpiClientCompletions extends Component {
                 </div>
             </div>
         </div>
+
+        <!-- Bulk sign-off modal -->
+        <div t-if="state.bulk.open" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <i class="fa fa-certificate me-2"/>
+                            Sign off <t t-esc="state.selected.length"/> task(s)
+                        </h5>
+                        <button type="button" class="btn-close" t-on-click="closeBulk"/>
+                    </div>
+                    <div class="modal-body">
+                        <!-- Every task is listed by name. Signing "12 tasks" with no names
+                             would be asking for a signature on something unseen. -->
+                        <div class="mb-3">
+                            <div class="fw-bold mb-1">You are signing off:</div>
+                            <div class="border rounded p-2" style="max-height:210px; overflow-y:auto;">
+                                <t t-foreach="selectedTasks" t-as="t" t-key="t.id">
+                                    <div class="small border-bottom py-1">
+                                        <span class="badge bg-secondary me-1" t-esc="t.external_ref or '—'"/>
+                                        <t t-esc="t.name"/>
+                                        <span class="text-muted" t-if="t.project_name"> · <t t-esc="t.project_name"/></span>
+                                    </div>
+                                </t>
+                            </div>
+                        </div>
+                        <div class="alert alert-light border">
+                            <div class="fw-bold mb-2">By signing you confirm, for every task listed above:</div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="bchk1"
+                                       t-model="state.bulk.chk_delivered"/>
+                                <label class="form-check-label" for="bchk1">The work was delivered to me.</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="bchk2"
+                                       t-model="state.bulk.chk_works"/>
+                                <label class="form-check-label" for="bchk2">It works as agreed.</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="bchk3"
+                                       t-model="state.bulk.chk_authorized"/>
+                                <label class="form-check-label" for="bchk3">I am authorized to approve it.</label>
+                            </div>
+                        </div>
+                        <div t-if="state.signatureB64" class="mb-3">
+                            <div class="small text-muted mb-1">Your signature (auto-loaded)</div>
+                            <img t-att-src="'data:image/png;base64,' + state.signatureB64"
+                                 style="max-height:70px; border:1px solid #dee2e6; border-radius:4px;"
+                                 alt="Saved signature"/>
+                        </div>
+                        <div t-else="" class="mb-3">
+                            <label class="form-label fw-bold">Type your full name as digital signature</label>
+                            <input type="text" class="form-control form-control-lg"
+                                   style="font-family: cursive"
+                                   t-model="state.bulk.signature_text"
+                                   placeholder="Your full name"/>
+                        </div>
+                        <div class="mb-0">
+                            <label class="form-label">Notes (optional — applied to all)</label>
+                            <textarea class="form-control" rows="2" t-model="state.bulk.notes"/>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" t-on-click="closeBulk">Cancel</button>
+                        <button type="button" class="btn btn-success"
+                                t-att-disabled="state.bulk.busy"
+                                t-on-click="submitBulkApprove">
+                            <i t-att-class="'fa me-1 ' + (state.bulk.busy ? 'fa-spinner fa-spin' : 'fa-check')"/>
+                            Approve &amp; Sign all
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
     `;
 
@@ -247,6 +364,68 @@ export class KpiClientCompletions extends Component {
         const p = (this.state.projects || []).find(p => p.id === pid);
         return p ? (p.display || p.name || '') : projectFilter;
     }
+    get selectedTasks() {
+        return this.state.pending.filter(p => this.state.selected.includes(p.id));
+    }
+    get allSelected() {
+        const vis = this.filteredPending;
+        return vis.length > 0 && vis.every(p => this.state.selected.includes(p.id));
+    }
+    toggleSelect(id) {
+        const sel = this.state.selected;
+        const i = sel.indexOf(id);
+        if (i === -1) sel.push(id); else sel.splice(i, 1);
+    }
+    toggleSelectAll() {
+        // Operates on what's VISIBLE, so a project filter narrows "select all" too —
+        // otherwise it would silently pick up tasks the client can't currently see.
+        this.state.selected = this.allSelected ? [] : this.filteredPending.map(p => p.id);
+    }
+    clearSelection() { this.state.selected = []; }
+    togglePending() { this.state.pendingOpen = !this.state.pendingOpen; }
+    openBulkApproval() {
+        Object.assign(this.state.bulk, {
+            open: true, busy: false,
+            chk_delivered: false, chk_works: false, chk_authorized: false,
+            notes: '', signature_text: '',
+        });
+    }
+    closeBulk() { this.state.bulk.open = false; }
+    async submitBulkApprove() {
+        const b = this.state.bulk;
+        if (!(b.chk_delivered && b.chk_works && b.chk_authorized)) {
+            alert('Please tick all three confirmations before signing.');
+            return;
+        }
+        if (!this.state.signatureB64 && !(b.signature_text || '').trim()) {
+            alert('Please type your full name, or upload a signature image at the top of the page.');
+            return;
+        }
+        b.busy = true;
+        try {
+            const r = await rpc('/kpi_client_approval/approve_bulk', {
+                kpi_ids: this.state.selected,
+                chk_delivered: b.chk_delivered,
+                chk_works: b.chk_works,
+                chk_authorized: b.chk_authorized,
+                notes: b.notes,
+                signature_text: b.signature_text,
+            });
+            if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+            // Partial success is normal — say exactly which ones didn't go through.
+            let msg = `Signed off ${r.approved.length} task(s).`;
+            if ((r.skipped || []).length) {
+                msg += `\n\nNot signed (${r.skipped.length}):\n`
+                     + r.skipped.map(s => `• ${s.name || s.id}: ${s.reason}`).join('\n');
+            }
+            alert(msg);
+            this.state.bulk.open = false;
+            this.state.selected = [];
+            await this.refresh();
+        } finally {
+            b.busy = false;
+        }
+    }
 
     setup() {
         this.state = useState({
@@ -258,6 +437,14 @@ export class KpiClientCompletions extends Component {
             signatureB64: '',
             signatureFileName: '',
             userName: '',
+            selected: [],                  // task ids ticked for bulk sign-off
+            pendingOpen: false,            // list starts folded — see the header comment
+
+            bulk: {
+                open: false, busy: false,
+                chk_delivered: false, chk_works: false, chk_authorized: false,
+                notes: '', signature_text: '',
+            },
             approval: {
                 open: false,
                 data: null,

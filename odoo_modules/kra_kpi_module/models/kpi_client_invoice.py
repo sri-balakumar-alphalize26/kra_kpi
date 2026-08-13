@@ -6,6 +6,17 @@ from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
 
+# How money moved. Shared by the admin's confirmation and the client's claim so the two
+# are directly comparable — if a client says "cash" and the admin confirms "bank
+# transfer", that difference is visible rather than buried in free text.
+PAYMENT_METHODS = [
+    ('bank_transfer', 'Bank Transfer'),
+    ('cash', 'Cash'),
+    ('cheque', 'Cheque'),
+    ('card', 'Card'),
+    ('other', 'Other'),
+]
+
 
 def _kind_from_ref(ref):
     """Map a task's external_ref prefix to its billing kind: 'req' / 'upt' / 'bug'
@@ -54,6 +65,9 @@ class KpiClientInvoice(models.Model):
         'res.users', string='Marked Paid By', readonly=True, copy=False,
     )
     payment_notes = fields.Text(string='Payment Notes', help='Optional note recorded on payment.')
+    payment_method = fields.Selection(
+        PAYMENT_METHODS, string='Payment Method', copy=False,
+        help='How the payment actually arrived, recorded by the admin who confirmed it.')
     # Client-side "I've paid" claim: the client can flag that they've paid (which
     # notifies admins to confirm). It does NOT set payment_status — only an admin's
     # Mark Paid does that. Cleared automatically once actually marked paid.
@@ -61,6 +75,23 @@ class KpiClientInvoice(models.Model):
         string='Client Marked Paid', default=False, copy=False,
         help="The client indicated they've paid this invoice; awaiting admin confirmation.")
     client_paid_claim_date = fields.Datetime(string='Client Paid-Claim On', readonly=True, copy=False)
+    # The client's OWN account of the payment, kept separate from the admin fields above
+    # on purpose. Sharing one pair would let the admin's confirmation overwrite what the
+    # client said, and both halves are worth keeping: "client says bank transfer, ref
+    # 4417" and "confirmed, arrived short by 5" tell different parts of the story.
+    client_paid_method = fields.Selection(
+        PAYMENT_METHODS, string='Client-Stated Method', copy=False,
+        help='How the client says they paid. Their claim, not a confirmation.')
+    client_paid_notes = fields.Text(
+        string='Client Payment Note', copy=False,
+        help='Optional reference or note the client supplied with their payment claim.')
+
+    # ── Revision trail ────────────────────────────────────────────────────────
+    # action_reset_draft records nothing, so a reduced invoice used to change with no
+    # trace of who did it or why. The client may be holding a PDF with the old figure.
+    revised_on = fields.Datetime(string='Last Revised On', readonly=True, copy=False)
+    revision_reason = fields.Char(string='Revision Reason', readonly=True, copy=False)
+    revision_count = fields.Integer(string='Times Revised', default=0, readonly=True, copy=False)
     line_ids = fields.One2many('kpi.client.invoice.line', 'invoice_id', string='Lines')
     notes = fields.Html(string='Overall Notes')
 
@@ -365,7 +396,73 @@ class KpiClientInvoice(models.Model):
             })
             seq += 10
 
-        return {'lines_created': len(self.line_ids.filtered(lambda l: l.line_type == 'kpi'))}
+        created = len(self.line_ids.filtered(lambda l: l.line_type == 'kpi'))
+        result = {'lines_created': created}
+        if not created:
+            # An empty invoice is the confusing case: the UI used to show a bare
+            # "No lines yet." while the server knew exactly which gate rejected
+            # every task. Only computed when there is nothing to bill, so the
+            # normal path pays nothing for it.
+            result['empty_reasons'] = self._diagnose_empty(kra_ids, already_billed_ids,
+                                                           type_allowed_ids)
+        return result
+
+    def _diagnose_empty(self, kra_ids, already_billed_ids, type_allowed_ids):
+        """Plain-language reasons why nothing was billable, most useful first.
+
+        Each task is attributed to the FIRST gate that rejected it, walking the gates
+        in the order populate applies them, so the counts sum to the candidate pool
+        instead of double-counting a task that fails several at once.
+        """
+        self.ensure_one()
+        Kpi = self.env['kra.kpi'].sudo()
+        tasks = Kpi.search([('kra_id', 'in', kra_ids), ('active', '=', True)])
+        if not tasks:
+            return ["This client has no tasks yet."]
+
+        unsigned = billed = out_of_period = wrong_type = 0
+        holders = {}   # invoice name -> state, so the message can name what to delete
+        for t in tasks:
+            if t.task_state != 'completed' or not t.client_final_approved:
+                unsigned += 1
+            elif t.id in already_billed_ids:
+                billed += 1
+                for line in t.invoice_line_ids:
+                    if line.invoice_id and line.invoice_id != self:
+                        holders[line.invoice_id.name or '?'] = line.invoice_id.state
+            elif type_allowed_ids is not None and t.id not in type_allowed_ids:
+                wrong_type += 1
+            else:
+                stamp = t.client_signed_datetime or t.completion_date
+                if stamp and not (self.from_date <= stamp.date() <= self.to_date):
+                    out_of_period += 1
+
+        reasons = []
+        if unsigned:
+            reasons.append(
+                "%s task%s still waiting for the client to sign off — they become "
+                "billable as soon as the client approves them in their portal."
+                % (unsigned, '' if unsigned == 1 else 's'))
+        if billed:
+            # Name the holders: "already on another invoice" is true but useless if
+            # you cannot tell WHICH one to delete. Drafts are the actionable case.
+            where = ', '.join('%s (%s)' % (n, s) for n, s in sorted(holders.items())[:5])
+            tail = (" — on %s. Delete that draft to free the work." % where) if where else "."
+            reasons.append(
+                "%s task%s already on another invoice%s"
+                % (billed, ' is' if billed == 1 else 's are', tail))
+        if out_of_period:
+            reasons.append(
+                "%s signed-off task%s outside %s → %s. Widen the date range to include them."
+                % (out_of_period, ' falls' if out_of_period == 1 else 's fall',
+                   self.from_date, self.to_date))
+        if wrong_type:
+            reasons.append(
+                "%s task%s excluded by the REQ / UPT / BUG filter."
+                % (wrong_type, ' was' if wrong_type == 1 else 's were'))
+        if not reasons:
+            reasons.append("No completed, signed-off work found for this period.")
+        return reasons
 
     def _fire_invoice_notification(self, event, user_ids=None):
         """Fire an app-only notification for this invoice (push + in-app feed).
@@ -394,7 +491,11 @@ class KpiClientInvoice(models.Model):
                 locked.unlink()
             inv.state = 'finalized'
             # The invoice is now visible to the client — tell them it's ready.
-            inv._fire_invoice_notification('invoice_ready', inv.client_kra_id.client_user_ids.ids)
+            # _effective_client_users falls back to the parent KRA: an invoice raised
+            # against a level-2 project has no client users of its own, so this
+            # notified nobody at all before.
+            inv._fire_invoice_notification(
+                'invoice_ready', inv.client_kra_id._effective_client_users().ids)
 
     def action_send(self):
         for inv in self:
@@ -402,25 +503,48 @@ class KpiClientInvoice(models.Model):
                 raise ValidationError("Only Finalized invoices can be marked Sent.")
             inv.state = 'sent'
 
-    def action_mark_paid(self, note=''):
+    def _billed_tasks(self):
+        """The tasks this invoice actually bills. Used to archive them on payment."""
+        self.ensure_one()
+        return self.line_ids.mapped('kpi_id').filtered(lambda k: k)
+
+    def action_mark_paid(self, note='', method=''):
         """Mark this invoice as paid. Only valid once the invoice is at least
         Finalized — we shouldn't allow recording payment on a draft.
+
+        `method` is required: an invoice that is paid but does not say how leaves
+        nothing to reconcile against a bank statement later.
         """
+        method = (method or '').strip()
+        valid = dict(PAYMENT_METHODS)
+        if method and method not in valid:
+            raise ValidationError("Unknown payment method '%s'." % method)
         for inv in self:
             if inv.state == 'draft':
                 raise ValidationError("Finalize the invoice before recording a payment.")
             if inv.payment_status == 'paid':
                 # Idempotent: already paid, nothing to do.
                 continue
+            if not method:
+                raise ValidationError("Choose how the payment was received before marking it paid.")
             inv.write({
                 'payment_status': 'paid',
                 'payment_date':   fields.Datetime.now(),
                 'paid_by_id':     self.env.user.id,
                 'payment_notes':  (note or '').strip() or False,
+                'payment_method': method,
                 'client_paid_claim': False,   # confirmed → clear any pending client claim
             })
+            # Paid work is finished work: file its tasks away so day-to-day lists show
+            # only what is still live. Nothing is destroyed — every hour, log and invoice
+            # line survives, and action_mark_unpaid puts them straight back.
+            tasks = inv._billed_tasks()
+            if tasks:
+                tasks.sudo().write({'active': False})
+                _logger.info("invoice %s paid → archived %s task(s)", inv.name, len(tasks))
             # Receipt confirmation to the client.
-            inv._fire_invoice_notification('invoice_paid', inv.client_kra_id.client_user_ids.ids)
+            inv._fire_invoice_notification(
+                'invoice_paid', inv.client_kra_id._effective_client_users().ids)
 
     def action_mark_unpaid(self, note=''):
         """Revert a 'paid' invoice back to 'unpaid' (e.g. payment bounced
@@ -433,10 +557,18 @@ class KpiClientInvoice(models.Model):
                 'payment_status': 'unpaid',
                 'payment_date':   False,
                 'paid_by_id':     False,
+                'payment_method': False,
                 'payment_notes':  ((inv.payment_notes or '') +
                                    f"\n[Reverted on {fields.Datetime.now()} by "
                                    f"{self.env.user.name}: {note or 'no note'}]").strip()[:2000],
             })
+            # Un-archive what marking it paid filed away. Without this, reversing a
+            # mistaken payment would leave the tasks invisible with no way back.
+            # active_test=False because they are archived — a plain read finds nothing.
+            tasks = inv.with_context(active_test=False)._billed_tasks()
+            if tasks:
+                tasks.sudo().write({'active': True})
+                _logger.info("invoice %s un-paid → restored %s task(s)", inv.name, len(tasks))
 
     def action_reset_draft(self):
         for inv in self:
@@ -453,6 +585,40 @@ class KpiClientInvoice(models.Model):
                     "Invoice %s has already been sent to the client — it can't be reset to "
                     "draft. Only a finalized (un-sent) invoice can go back to draft." % (inv.name or ''))
             inv.state = 'draft'
+
+    def action_revise(self, reason=''):
+        """Reopen a FINALIZED invoice so its amount can be reduced, then re-finalized.
+
+        Deliberately stricter than action_reset_draft, and with its own state check
+        rather than leaning on that one:
+          * `finalized` only. Not `sent` — the client already has that document, and it
+            should not change under them. Not `paid` — the money has arrived.
+          * a reason is required, because the client will be told the figure changed and
+            "it just changed" is not an answer.
+
+        Reopening is safe against double-billing: the invoice keeps its lines while in
+        draft, and the billing de-dup excludes any task already sitting on an invoice
+        line regardless of that invoice's state.
+        """
+        reason = (reason or '').strip()
+        if not reason:
+            raise ValidationError("Give a reason for revising this invoice — the client is told it changed.")
+        for inv in self:
+            if inv.payment_status == 'paid':
+                raise ValidationError(
+                    "Invoice %s is marked PAID and can't be revised. Mark it Unpaid first "
+                    "if a correction is genuinely needed." % (inv.name or ''))
+            if inv.state != 'finalized':
+                raise ValidationError(
+                    "Only a finalized invoice can be revised — %s is %s." %
+                    (inv.name or '', inv.state or 'draft'))
+            inv.write({
+                'state': 'draft',
+                'revised_on': fields.Datetime.now(),
+                'revision_reason': reason[:255],
+                'revision_count': (inv.revision_count or 0) + 1,
+            })
+            _logger.info("invoice %s revised by %s: %s", inv.name, self.env.user.login, reason)
 
     def _serialize_for_list(self):
         self.ensure_one()
@@ -476,6 +642,11 @@ class KpiClientInvoice(models.Model):
             'payment_status': self.payment_status or 'unpaid',
             'payment_date':   fields.Datetime.to_string(self.payment_date) if self.payment_date else '',
             'paid_by_name':   self.paid_by_id.name or '',
+            # Drives the "Payment claimed — awaiting confirmation" row state on both
+            # sides. A boolean, not a payment_status value: nothing is part-settled, the
+            # client has claimed the full amount and nobody has verified it yet.
+            'client_paid_claim': self.client_paid_claim,
+            'revision_count': self.revision_count or 0,
             'total_quoted_hours': round(self.total_quoted_hours or 0.0, 2),
             'total_actual_hours': round(self.total_actual_hours or 0.0, 2),
             'total_adjusted_hours': round(self.total_adjusted_hours or 0.0, 2),
@@ -554,7 +725,14 @@ class KpiClientInvoice(models.Model):
             'currency': currency_info,
         }
 
-    def _serialize_for_ui(self):
+    def _serialize_for_ui(self, for_client=False):
+        """`for_client=True` strips anything the client must not read.
+
+        The admin's confirmation note routinely carries internal remarks — "chased
+        twice", "arrived short by 5, wrote off". Withholding it has to happen HERE and
+        not by hiding a field in the OWL template: a client can read the JSON response
+        straight out of the browser, so a template-only guard hides nothing at all.
+        """
         self.ensure_one()
         result = self._serialize_for_list()
         result.update({
@@ -564,10 +742,26 @@ class KpiClientInvoice(models.Model):
             'filter_user_ids': [{'id': u.id, 'name': u.name} for u in self.filter_user_ids],
             'filter_kpi_ids': [{'id': k.id, 'name': k.name} for k in self.filter_kpi_ids],
             'filter_sub_kra_ids': [{'id': k.id, 'name': k.name} for k in self.filter_sub_kra_ids],
-            'payment_notes': self.payment_notes or '',
             'client_paid_claim': self.client_paid_claim,
             'client_paid_claim_date': fields.Datetime.to_string(self.client_paid_claim_date) if self.client_paid_claim_date else '',
+            # The client's own submission — shown back to them so they can see their
+            # claim registered, rather than tapping Paid into silence and claiming again.
+            'client_paid_method': self.client_paid_method or '',
+            'client_paid_method_label': dict(PAYMENT_METHODS).get(self.client_paid_method, ''),
+            'client_paid_notes': self.client_paid_notes or '',
+            # Both sides may know an invoice was revised and why — that is the whole
+            # point of telling them.
+            'revised_on': fields.Datetime.to_string(self.revised_on) if self.revised_on else '',
+            'revision_reason': self.revision_reason or '',
+            'revision_count': self.revision_count or 0,
         })
+        if not for_client:
+            result.update({
+                'payment_notes': self.payment_notes or '',
+                'payment_method': self.payment_method or '',
+                'payment_method_label': dict(PAYMENT_METHODS).get(self.payment_method, ''),
+                'paid_by': self.paid_by_id.name or '',
+            })
         return result
 
 

@@ -1093,14 +1093,17 @@ export class KpiAction extends Component {
                                 </button>
                                 <!-- GREEN Start Workday — a fresh day, or a restart after an
                                      AUTO-close (idle/midnight). An explicit End is final for the day.
-                                     CONDITION IS EXPLICIT ON PURPOSE. This was `t-else=""`, which OWL
+                                     CONDITION IS EXPLICIT ON PURPOSE. This was t-else="", which OWL
                                      binds to the previous sibling carrying a t-if — and that sibling is
-                                     the admin-only Reopen button (`dayDone and isAdmin`), not the
+                                     the admin-only Reopen button (dayDone and isAdmin), not the
                                      "Workday ended" button above it. So for a DEVELOPER (isAdmin false)
                                      the else evaluated true and the green button came back right after
                                      End Workday, on top of the disabled "ended" one. It was dead too:
                                      /kpi_workday/ping refuses with day_done. Positional chaining breaks
-                                     the moment anything is inserted between; `!state.dayDone` cannot. -->
+                                     the moment anything is inserted between; !state.dayDone cannot.
+                                     Never put a backtick in this comment: it sits inside the
+                                     tagged template literal that holds the whole template, so a
+                                     backtick ends the literal and breaks the entire JS bundle. -->
                                 <button t-if="!state.dayDone"
                                         class="btn btn-sm btn-success fw-bold"
                                         title="Start your workday + notify owner + coordinator"
@@ -1427,10 +1430,18 @@ export class KpiAction extends Component {
                                         <t t-if="filteredTasks.length">
                                             <t t-foreach="filteredTasks" t-as="task" t-key="task.id">
                                                 <div class="kpi-task">
-                                                    <div class="fw-bold text-primary"
+                                                    <!-- Once it is with the client the developer
+                                                         has nothing left to do on it, and the
+                                                         detail pane is all edit affordances — so
+                                                         the name stops being a link and reads as
+                                                         plain text. Admins keep the link: they
+                                                         still have to review and invoice it. -->
+                                                    <div t-if="state.isAdmin or task.task_state !== 'awaiting_client'"
+                                                        class="fw-bold text-primary"
                                                         style="cursor:pointer;"
                                                         t-on-click="() => this.openKpiDetail(task.id)"
                                                         t-esc="task.name"/>
+                                                    <div t-else="" class="fw-bold" t-esc="task.name"/>
 
                                                     <div class="small mb-1">
                                                         <span t-att-class="'badge ' + priorityBadgeClass(task.priority)">
@@ -3169,8 +3180,22 @@ export class KpiAction extends Component {
                                 <tbody>${tasksHTML}</tbody>
                             </table>
                             ${(data.allow_multitask || anyConcurrent) ? `<div class="small text-warning mb-2"><b>⚡ = multi-tasked together</b> — the ⚡ tasks (amber line) ran at the same time, so Productive can exceed Presence (expected).</div>` : ''}
-                            <label class="form-label mt-2">Optional note for owner / coordinator:</label>
-                            <textarea id="endWorkdayNote" class="form-control" rows="2" maxlength="500"></textarea>
+                            <!-- Was 2 rows, capped at 500, labelled only "Optional" — and it
+                                 showed: 3 notes in 213 sessions, the longest 51 characters.
+                                 A real day's summary runs ~400 characters over a dozen lines.
+                                 Still optional; just big enough to write in, and it now says
+                                 where the note ends up. -->
+                            <label class="form-label mt-2">
+                                What did you work on today? <span class="text-muted">(optional)</span>
+                            </label>
+                            <!-- The example is a real note from this team, kept in their own
+                                 shorthand (-> bullets, + to chain items). People copy the
+                                 shape of whatever example you show them, so showing polished
+                                 prose here would just make the box feel like homework. -->
+                            <textarea id="endWorkdayNote" class="form-control" rows="6" maxlength="2000"
+                                      placeholder="Module documents&#10;->Signage scan module doc&#10;&#10;App documents&#10;->Van sale doc&#10;->Price checker doc(Need to add screenshots)&#10;&#10;Chats server connecting issue + Dark/light mode switch bug + Build taken for testing&#10;&#10;KRA KPI checked for client side invoice generate + found 4 bugs fixed"></textarea>
+                            <div class="form-text">Saved with your workday snapshot and sent in the daily summary.</div>
+                            <div id="endWorkdayNoteErr" class="small text-danger mt-1 d-none"></div>
                             ${autoNote}
                             <p class="text-muted small mt-2 mb-0">
                                 Clicking <b>Logout</b> finalises this session, sends a WhatsApp summary to
@@ -3218,6 +3243,23 @@ export class KpiAction extends Component {
         });
         document.getElementById("endWorkdayConfirmBtn").addEventListener("click", async () => {
             const note = document.getElementById("endWorkdayNote")?.value || '';
+            // Same rule as utils/workdayNote.js in the mobile app — kept in step by hand
+            // because the Odoo asset bundle and the Metro bundle share no code. If you
+            // change one, change the other.
+            //
+            // The note is OPTIONAL: empty always passes. This only catches a note that was
+            // typed but says nothing ("." / "123" / "----"). Punctuation and digits are
+            // fine — real notes are full of "->", "+" and numbers.
+            const typed = note.trim();
+            if (typed && (typed.match(/[A-Za-z]{2,}/g) || []).length < 2) {
+                const err = document.getElementById("endWorkdayNoteErr");
+                if (err) {
+                    err.textContent = 'Please write a few words about what you did today, or leave it empty.';
+                    err.classList.remove('d-none');
+                }
+                document.getElementById("endWorkdayNote")?.focus();
+                return;
+            }
             const btn = document.getElementById("endWorkdayConfirmBtn");
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin me-1"></i> Sending...'; }
             try {

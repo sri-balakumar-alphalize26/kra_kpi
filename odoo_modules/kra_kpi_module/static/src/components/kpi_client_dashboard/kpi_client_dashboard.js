@@ -210,14 +210,25 @@ export class KpiClientDashboard extends Component {
 
             <!-- Pending Approvals (call-out) -->
             <div t-if="filteredPending.length > 0"
-                 class="card p-3 mb-3 shadow-sm border-warning border-3">
-                <h5 class="fw-bold mb-3 text-warning">
-                    <i class="fa fa-bell me-2"/>
-                    <t t-esc="filteredPending.length"/> task(s) need your approval
-                    <span t-if="state.projectFilter" class="badge bg-info ms-2">
+                 class="card mb-3 shadow-sm border-warning border-3 overflow-hidden">
+                <!-- Header is the toggle, and the body only renders when open. With one
+                     client sitting on 132 pending, rendering every row inline made the
+                     card ~6000px tall and pushed the task list and invoices off screen.
+                     Same shape as kpi_pending_queue's date/client groups. -->
+                <div class="d-flex align-items-center gap-2 p-3 user-select-none"
+                     style="cursor:pointer" t-on-click="() => this.togglePending()">
+                    <i t-att-class="state.pendingOpen ? 'fa fa-chevron-down text-warning' : 'fa fa-chevron-right text-warning'"/>
+                    <i class="fa fa-bell text-warning"/>
+                    <span class="fw-bold text-warning">
+                        <t t-esc="filteredPending.length"/> task(s) need your approval
+                    </span>
+                    <span t-if="state.projectFilter" class="badge bg-info">
                         Project: <t t-esc="this.projectLabel(state.projectFilter)"/>
                     </span>
-                </h5>
+                    <span class="ms-auto badge bg-light text-warning border" t-esc="filteredPending.length"/>
+                </div>
+                <!-- Bounded and scrolled internally, so the list can never grow the page. -->
+                <div t-if="state.pendingOpen" class="px-3 pb-3" style="max-height:420px; overflow-y:auto;">
                 <table class="table table-sm align-middle mb-0">
                     <thead class="table-light">
                         <tr>
@@ -242,6 +253,7 @@ export class KpiClientDashboard extends Component {
                         </t>
                     </tbody>
                 </table>
+                </div>
             </div>
 
             <!-- All Tasks table -->
@@ -393,7 +405,20 @@ export class KpiClientDashboard extends Component {
                             <label class="form-label fw-bold">Notes (optional)</label>
                             <textarea class="form-control" rows="2" t-model="state.approval.notes"/>
                         </div>
-                        <div class="mb-3">
+                        <!-- Saved signature image → use it, nothing to type. -->
+                        <div t-if="state.hasSignature" class="mb-3">
+                            <label class="form-label fw-bold">
+                                <i class="fa fa-check-circle text-success me-1"/>
+                                Your signature (auto-loaded)
+                            </label>
+                            <div class="border rounded p-2 bg-white text-center">
+                                <img t-att-src="'data:image/png;base64,' + state.signatureB64"
+                                     style="max-height: 90px; max-width: 100%"
+                                     alt="Saved signature"/>
+                            </div>
+                        </div>
+                        <!-- No image → the normal flow: type the name. -->
+                        <div t-else="" class="mb-3">
                             <label class="form-label fw-bold">Type your full name as digital signature <span class="text-danger">*</span></label>
                             <input type="text" class="form-control form-control-lg"
                                    style="font-family: cursive"
@@ -554,12 +579,35 @@ export class KpiClientDashboard extends Component {
                 chk_delivered: false, chk_works: false, chk_authorized: false,
                 notes: '', signature_text: '',
             },
+            // The client's saved signature image. This screen never loaded it, so it
+            // demanded a typed name on every task even from clients who had uploaded
+            // one — while the Completions screen accepted the image. Same client, same
+            // task, two different answers depending on which menu they came in through.
+            hasSignature: false,
+            signatureB64: '',
+            // Closed by default — same call the pending queue makes: a long list stays
+            // scannable only if it starts folded.
+            pendingOpen: false,
         });
         onWillStart(async () => {
             await this.refresh();
+            await this.loadSignatureInfo();
             const rp = await rpc('/kpi_client_portal/get_projects', {});
             if (rp && rp.status) this.state.projects = rp.projects || [];
         });
+    }
+
+    // Same call and same shape as kpi_client_completions.loadSignatureInfo — the two
+    // screens sign off through the same route, so they have to agree on what counts
+    // as a signature.
+    togglePending() { this.state.pendingOpen = !this.state.pendingOpen; }
+
+    async loadSignatureInfo() {
+        const r = await rpc('/kpi_client_portal/get_signature_info', {});
+        if (r && r.status) {
+            this.state.hasSignature = !!r.has_signature;
+            this.state.signatureB64 = r.image_b64 || '';
+        }
     }
 
     async refresh() {
@@ -614,8 +662,11 @@ export class KpiClientDashboard extends Component {
             alert('Please tick all three confirmation checkboxes.');
             return;
         }
-        if (!(a.signature_text || '').trim()) {
-            alert('Please type your name as signature.');
+        // Only demand a typed name when there is no saved signature to fall back on —
+        // this used to be unconditional, so an uploaded signature was ignored here.
+        // Mirrors the server rule in _resolve_client_signature.
+        if (!this.state.hasSignature && !(a.signature_text || '').trim()) {
+            alert('Please type your name as signature, or upload a signature image from the Completions page.');
             return;
         }
         const r = await rpc('/kpi_client_approval/approve', {

@@ -223,8 +223,20 @@ async function driveToSignoff(fx, label, { verbose = false, stopBeforeSignoff = 
   // /kpi_workday/status is read-only — /kpi_workday/ping is the actual opener
   // (the green "Start Workday" button) and is idempotent.
   console.log(`\n=== DEV WORKDAY ===`);
-  const ping = await call(fx.dev, '/kpi_workday/ping', {});
-  const ws = await call(fx.dev, '/kpi_workday/status', {});
+  let ping = await call(fx.dev, '/kpi_workday/ping', {});
+  let ws = await call(fx.dev, '/kpi_workday/status', {});
+  // One start + one end per day is a real rule, and ping rightly refuses to reopen a
+  // day the developer explicitly ended. That makes this suite un-runnable for the rest
+  // of the day as soon as anything ends this account's workday — which the End Workday
+  // note test does. Reopen it as admin (the same affordance a coordinator has) so the
+  // suite can be run repeatedly; we are not bypassing the rule, we are using its
+  // sanctioned undo.
+  if (ws.result?.day_done) {
+    await call(admin, '/kpi_workday/revert', {
+      user_id: fx.DEV_UID, reason: '[APITEST] reopened so the flow suite can run again' });
+    ping = await call(fx.dev, '/kpi_workday/ping', {});
+    ws = await call(fx.dev, '/kpi_workday/status', {});
+  }
   check('dev workday opened (/kpi_workday/ping)', ws.result?.is_open === true,
     `session=${ping.result?.session_id ?? '?'} opened=${ping.result?.opened} is_open=${ws.result?.is_open}`);
 
