@@ -1201,6 +1201,43 @@ class KpiReportsAPI(http.Controller):
             logging.getLogger(__name__).error(f"list_sub_kras_for_invoice: {str(e)}")
             return {'status': False, 'message': str(e), 'sub_kras': []}
 
+    # Why a task cannot be invoiced, in the words an admin would use. Every
+    # non-billable state used to collapse into the single string "awaiting
+    # sign-off", so an admin who HAD signed everything off still saw a wall of
+    # "awaiting sign-off" against work that was merely unstarted, and could not
+    # tell what was genuinely waiting on the client.
+    #
+    # The code is the coarse grouping the UI colours by:
+    #   'signoff'  — really is the client's move (amber)
+    #   'progress' — the team is still working on it (blue)
+    #   'invoiced' — settled, already on an invoice (grey)
+    _BILL_BLOCK_BY_STATE = {
+        'partially_completed': ('awaiting admin check', 'progress'),
+        'in_progress': ('in progress', 'progress'),
+        'paused': ('paused', 'progress'),
+        'hold': ('on hold', 'progress'),
+        'rework': ('rework needed', 'progress'),
+        'pre_approval_pending': ('awaiting client approval', 'progress'),
+    }
+
+    def _invoice_billability(self, kpi, billed_ids):
+        """(billable, reason, code) for one task in the invoice builder's picker.
+
+        billed_ids is checked FIRST: a billed task is by definition signed off,
+        so it must never be described as awaiting anything.
+        """
+        if kpi.id in billed_ids:
+            return False, 'already invoiced', 'invoiced'
+        if kpi.task_state == 'completed' and kpi.client_final_approved:
+            return True, '', ''
+        if kpi.task_state in ('awaiting_client', 'completed'):
+            # 'completed' without the signature is a legacy row — the signature
+            # is what makes work billable, so it still waits on the client.
+            return False, 'awaiting sign-off', 'signoff'
+        reason, code = self._BILL_BLOCK_BY_STATE.get(
+            kpi.task_state, ('not started', 'progress'))
+        return False, reason, code
+
     @http.route('/kpi_client_invoice/get_client_users_and_kpis', type='json', auth='user', methods=['POST'], csrf=False)
     def get_client_users_and_kpis(self, **params):
         """For a chosen client KRA, return the developers + KPIs to populate filter dropdowns.
@@ -1240,15 +1277,12 @@ class KpiReportsAPI(http.Controller):
             ]).mapped('kpi_id').ids)
             kpi_list = []
             for k in kpis:
-                if k.task_state != 'completed' or not k.client_final_approved:
-                    billable, why = False, 'awaiting sign-off'
-                elif k.id in billed_ids:
-                    billable, why = False, 'already invoiced'
-                else:
-                    billable, why = True, ''
+                billable, why, code = self._invoice_billability(k, billed_ids)
                 kpi_list.append({
                     'id': k.id, 'name': k.name, 'kra_name': k.kra_id.name or '',
-                    'billable': billable, 'not_billable_reason': why,
+                    'billable': billable,
+                    'not_billable_reason': why,
+                    'not_billable_code': code,
                 })
             return {'status': True, 'users': users, 'kpis': kpi_list}
         except Exception as e:
@@ -3023,7 +3057,12 @@ class KpiReportsAPI(http.Controller):
 
     @http.route('/kpi_client_portal/upload_signature', type='json', auth='user', methods=['POST'], csrf=False)
     def upload_user_signature(self, **params):
-        """Upload the current user's saved signature image (used for sign-off auto-fill)."""
+        """Upload the current user's saved signature image (used for sign-off auto-fill).
+
+        Doubles as the delete: posting an empty file_data clears the image, which is
+        what the portal's Remove button does. No separate route — the write below
+        already resolves '' to False.
+        """
         try:
             user = request.env.user
             updates = {}

@@ -138,8 +138,11 @@ const TEMPLATE = xml/* xml */`
                         <b>each task individually</b> in the invoice.
                     </div>
                 </div>
-                <!-- Task-type checkboxes — defaults to all 3 checked.  Empty = include all. -->
-                <div class="col-12" t-if="state.showAdvanced">
+                <!-- Task-type checkboxes — defaults to all 3 checked.  Empty = include all.
+                     Deliberately NOT behind the Advanced toggle: it renders above the
+                     toggle and reads as an ordinary field, so collapsing Advanced looked
+                     like the task types had vanished on their own. -->
+                <div class="col-12">
                     <label class="form-label fw-bold">
                         <i class="fa fa-tags me-1 text-muted"/> Include Task Types
                     </label>
@@ -189,7 +192,7 @@ const TEMPLATE = xml/* xml */`
                         t-on-click="() => state.showAdvanced = !state.showAdvanced">
                     <i t-att-class="'fa me-1 ' + (state.showAdvanced ? 'fa-caret-down' : 'fa-caret-right')"/>
                     Advanced options
-                    <span class="text-muted small">(currency, task types, filters)</span>
+                    <span class="text-muted small">(currency, filters)</span>
                 </button>
             </div>
 
@@ -238,7 +241,7 @@ const TEMPLATE = xml/* xml */`
                         <span class="text-muted small">(optional — leave empty for all)</span>
                     </label>
                     <div class="border rounded p-2" style="max-height:160px; overflow-y:auto;">
-                        <t t-foreach="state.scopeKpis" t-as="k" t-key="k.id">
+                        <t t-foreach="visibleScopeKpis()" t-as="k" t-key="k.id">
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox"
                                        t-att-id="'kpi_' + k.id"
@@ -248,12 +251,26 @@ const TEMPLATE = xml/* xml */`
                                        t-att-class="'form-check-label' + (k.billable === false ? ' text-muted' : '')">
                                     <t t-esc="k.name"/>
                                     <span t-if="k.kra_name" class="text-muted">  (<t t-esc="k.kra_name"/>)</span>
-                                    <span t-if="k.billable === false" class="badge bg-light text-secondary ms-1"
+                                    <span t-if="k.billable === false"
+                                          t-att-class="'badge ms-1 ' + billBadgeClass(k)"
                                           t-esc="k.not_billable_reason"/>
                                 </label>
                             </div>
                         </t>
+                        <div t-if="visibleScopeKpis().length === 0" class="text-muted small p-1">
+                            <i class="fa fa-info-circle me-1"/>
+                            No signed-off work for this client yet.
+                        </div>
                     </div>
+                    <!-- An invoice can only bill signed-off work, so unsigned tasks are
+                         noise in this picker — but hiding them silently would leave an
+                         empty box with no explanation. -->
+                    <button t-if="unsignedScopeKpis().length > 0"
+                            type="button" class="btn btn-sm btn-link px-0 text-muted text-decoration-none"
+                            t-on-click="() => state.showUnsignedTasks = !state.showUnsignedTasks">
+                        <i t-att-class="'fa me-1 ' + (state.showUnsignedTasks ? 'fa-caret-down' : 'fa-caret-right')"/>
+                        <t t-esc="unsignedScopeKpis().length"/> task(s) hidden — not signed off yet
+                    </button>
                 </div>
             </div>
 
@@ -713,6 +730,17 @@ const TEMPLATE = xml/* xml */`
                                 <span t-if="line.already_invoiced" class="badge bg-danger ms-2">
                                     <i class="fa fa-lock me-1"/> Billed on <t t-esc="line.invoiced_on"/>
                                 </span>
+                                <!-- What the client wrote when they signed this task off.
+                                     It lived only on the task, so at the moment someone is
+                                     checking what they are charging for, the client's own
+                                     words about the work were nowhere on the invoice. -->
+                                <div t-if="line.client_signoff_notes" class="small text-muted mt-1"
+                                     style="white-space:pre-wrap;">
+                                    <i class="fa fa-quote-left me-1"/><t t-esc="line.client_signoff_notes"/>
+                                    <span t-if="line.client_signed_by" class="fst-italic">
+                                        — <t t-esc="line.client_signed_by"/>
+                                    </span>
+                                </div>
                             </td>
                             <td class="text-end">
                                 <input t-if="!state.isPortal and state.invoice.state === 'draft'"
@@ -807,6 +835,66 @@ const TEMPLATE = xml/* xml */`
                  t-out="state.invoice.notes or '(no notes)'"/>
         </div>
     </t>
+
+    <!-- Result / error banner — replaces alert(). -->
+    <div t-if="state.toast.show"
+         t-att-class="'alert alert-dismissible d-flex align-items-center gap-2 alert-' + state.toast.kind"
+         style="position:sticky;top:0;z-index:1080;">
+        <i t-att-class="state.toast.kind === 'danger' ? 'fa fa-exclamation-circle' : 'fa fa-check-circle'"/>
+        <div class="flex-grow-1" style="white-space:pre-wrap;" t-esc="state.toast.text"/>
+        <button type="button" class="btn-close" t-on-click="() => this.state.toast.show = false"/>
+    </div>
+
+    <!-- ─── IN-APP DIALOG ─── replaces window.prompt / confirm.
+         Same shape as the client dashboard's approval modal so the module has one
+         dialog, not a browser one on payment screens and a styled one elsewhere. -->
+    <div t-if="state.dlg.open" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" t-esc="state.dlg.title"/>
+                    <button type="button" class="btn-close btn-close-white" t-on-click="dlgCancel"/>
+                </div>
+                <div class="modal-body">
+                    <p t-if="state.dlg.message" class="mb-3" style="white-space:pre-wrap;" t-esc="state.dlg.message"/>
+                    <t t-foreach="state.dlg.fields" t-as="f" t-key="f.key">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">
+                                <t t-esc="f.label"/>
+                                <span t-if="f.required" class="text-danger">*</span>
+                            </label>
+                            <!-- Radios, not a numbered prompt: the options are a fixed,
+                                 short set and picking one should be a single click. -->
+                            <t t-if="f.type === 'radio'">
+                                <div t-foreach="f.options" t-as="o" t-key="o.value" class="form-check">
+                                    <input class="form-check-input" type="radio"
+                                           t-att-name="f.key" t-att-id="f.key + '_' + o.value"
+                                           t-att-checked="state.dlg.values[f.key] === o.value"
+                                           t-on-change="() => this.dlgSet(f.key, o.value)"/>
+                                    <label class="form-check-label" t-att-for="f.key + '_' + o.value" t-esc="o.label"/>
+                                </div>
+                            </t>
+                            <textarea t-elif="f.type === 'textarea'" class="form-control" rows="3"
+                                      t-att-value="state.dlg.values[f.key]"
+                                      t-att-placeholder="f.placeholder or ''"
+                                      t-on-input="(ev) => this.dlgSet(f.key, ev.target.value)"/>
+                            <input t-else="" type="text" class="form-control"
+                                   t-att-value="state.dlg.values[f.key]"
+                                   t-att-placeholder="f.placeholder or ''"
+                                   t-on-input="(ev) => this.dlgSet(f.key, ev.target.value)"/>
+                            <div t-if="f.hint" class="form-text" t-esc="f.hint"/>
+                        </div>
+                    </t>
+                    <div t-if="state.dlg.error" class="alert alert-danger py-2 mb-0" t-esc="state.dlg.error"/>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" t-on-click="dlgCancel">Cancel</button>
+                    <button type="button" t-att-class="'btn ' + state.dlg.okClass"
+                            t-on-click="dlgOk" t-esc="state.dlg.okLabel"/>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 `;
 
@@ -820,6 +908,19 @@ class _BaseInvoiceComponent extends Component {
         this.state = useState({
             view: 'list',                  // 'list' | 'detail'
             isPortal: this.isPortal,
+            // One in-app dialog, driven by state, replacing window.prompt/confirm.
+            // Those are the browser's chrome, not ours: they cannot show a radio
+            // group, they cannot be styled, and on a payment screen they look like
+            // something has gone wrong rather than like part of the product.
+            dlg: {
+                open: false, title: '', message: '', okLabel: 'OK',
+                okClass: 'btn-primary', fields: [], values: {}, error: '',
+                resolve: null,
+            },
+            // Replaces alert() for results and errors. A banner inside the page,
+            // dismissible, rather than a modal the user has to acknowledge before
+            // they can even see what changed behind it.
+            toast: { show: false, text: '', kind: 'success' },
             clients: [],
             currencies: [],
             invoices: [],
@@ -827,7 +928,8 @@ class _BaseInvoiceComponent extends Component {
             counts: { all: 0, draft: 0, finalized: 0, sent: 0, due: 0, paid: 0 },
             invoice: null,                 // current detail invoice
             creating: false,               // in-flight guard — blocks duplicate drafts
-            showAdvanced: false,           // currency / task types / filters — all defaulted
+            showAdvanced: false,           // currency / filters — all defaulted
+            showUnsignedTasks: false,      // reveal the not-yet-signed-off tasks in the picker
             expanded: {},                  // {line_id: bool}
             showAmounts: true,             // detail toggle — off = clean, cost-free view + PDF
             notesText: '',
@@ -907,36 +1009,80 @@ class _BaseInvoiceComponent extends Component {
     // models/kpi_client_invoice.py, which is what validates them.
     get paymentMethods() {
         return [
-            ['bank_transfer', 'Bank Transfer'],
-            ['cash', 'Cash'],
-            ['cheque', 'Cheque'],
-            ['card', 'Card'],
-            ['other', 'Other'],
+            { value: 'bank_transfer', label: 'Bank Transfer' },
+            { value: 'cash', label: 'Cash' },
+            { value: 'cheque', label: 'Cheque' },
+            { value: 'card', label: 'Card' },
+            { value: 'other', label: 'Other' },
         ];
     }
 
-    // Method is required both sides — an invoice that is paid but doesn't say how leaves
-    // nothing to reconcile against a bank statement later. Returns '' if cancelled.
-    _askMethod(title) {
-        const list = this.paymentMethods.map(([, label], i) => `${i + 1}. ${label}`).join('\n');
-        const pick = prompt(`${title}\n\nHow was it paid?\n${list}\n\nEnter 1-${this.paymentMethods.length}:`, '1');
-        if (pick === null) return null;
-        const idx = parseInt(pick, 10) - 1;
-        if (!(idx >= 0 && idx < this.paymentMethods.length)) {
-            alert('Please choose a number from the list.');
-            return null;
+    // ── the one dialog ────────────────────────────────────────────────────────
+    // Returns a Promise of the entered values, or null if cancelled — so callers
+    // read like the prompt() they replace, without the browser chrome.
+    _dialog({ title, message = '', fields = [], okLabel = 'OK', okClass = 'btn-primary' }) {
+        const d = this.state.dlg;
+        d.title = title;
+        d.message = message;
+        d.fields = fields;
+        d.okLabel = okLabel;
+        d.okClass = okClass;
+        d.error = '';
+        d.values = {};
+        for (const f of fields) d.values[f.key] = f.value !== undefined ? f.value : '';
+        d.open = true;
+        return new Promise((resolve) => { d.resolve = resolve; });
+    }
+    _confirm(title, message, okLabel = 'OK', okClass = 'btn-primary') {
+        return this._dialog({ title, message, fields: [], okLabel, okClass });
+    }
+    _toast(text, kind = 'success') {
+        this.state.toast = { show: true, text, kind };
+        // Successes clear themselves; errors stay until dismissed, because an error
+        // that vanishes before it is read is the same as no error at all.
+        if (kind !== 'danger') {
+            setTimeout(() => { this.state.toast.show = false; }, 4000);
         }
-        return this.paymentMethods[idx][0];
+    }
+    dlgSet(key, val) { this.state.dlg.values[key] = val; this.state.dlg.error = ''; }
+    dlgCancel() {
+        const d = this.state.dlg;
+        d.open = false;
+        const r = d.resolve; d.resolve = null;
+        if (r) r(null);
+    }
+    dlgOk() {
+        const d = this.state.dlg;
+        // Required fields are enforced here rather than by disabling OK, so the
+        // reason a click did nothing is stated instead of left to be guessed.
+        for (const f of d.fields) {
+            if (f.required && !String(d.values[f.key] || '').trim()) {
+                d.error = `${f.label} is required.`;
+                return;
+            }
+        }
+        const vals = { ...d.values };
+        d.open = false;
+        const r = d.resolve; d.resolve = null;
+        if (r) r(vals);
     }
 
     async markPaidPrompt(inv) {
-        const method = this._askMethod(`Mark invoice ${inv.name} as PAID?`);
-        if (!method) return;  // cancelled or invalid
-        const note = prompt(
-            `Mark invoice ${inv.name} as PAID?\n\nOptional note (e.g. cheque #, transfer ref).\nThis note is internal — the client does not see it:`,
-            ""
-        );
-        if (note === null) return;  // cancelled
+        const vals = await this._dialog({
+            title: `Mark ${inv.name} as paid`,
+            message: 'Record how the payment arrived. The note is internal — the client never sees it.',
+            okLabel: 'Mark Paid',
+            okClass: 'btn-success',
+            fields: [
+                { key: 'method', label: 'How was it paid?', type: 'radio',
+                  options: this.paymentMethods, value: 'bank_transfer', required: true },
+                { key: 'note', label: 'Note (optional)', type: 'textarea',
+                  placeholder: 'e.g. cheque #4417, transfer ref…',
+                  hint: 'Internal only — not shown to the client.' },
+            ],
+        });
+        if (!vals) return;
+        const { method, note } = vals;
         const r = await rpc('/kpi_client_invoice/mark_paid', {
             invoice_id: inv.id, paid: true, note: note || '', method,
         });
@@ -947,15 +1093,23 @@ class _BaseInvoiceComponent extends Component {
                 this.state.invoice = r.data;
             }
         } else {
-            alert("Mark paid failed: " + ((r && r.message) || 'unknown'));
+            this._toast((r && r.message) || 'Could not mark it paid.', 'danger');
         }
     }
     async markUnpaidPrompt(inv) {
-        const reason = prompt(
-            `Revert invoice ${inv.name} from PAID back to DUE?\n\nReason (will be appended to payment notes):`,
-            ""
-        );
-        if (reason === null) return;
+        const vals = await this._dialog({
+            title: `Revert ${inv.name} to Due`,
+            message: 'Use this when a payment bounced or was recorded in error. '
+                   + 'Any tasks this invoice archived come back.',
+            okLabel: 'Revert to Due',
+            okClass: 'btn-warning',
+            fields: [
+                { key: 'reason', label: 'Reason', type: 'textarea',
+                  hint: 'Appended to the payment notes.' },
+            ],
+        });
+        if (!vals) return;
+        const reason = vals.reason;
         const r = await rpc('/kpi_client_invoice/mark_paid', {
             invoice_id: inv.id, paid: false, note: reason || '',
         });
@@ -965,7 +1119,7 @@ class _BaseInvoiceComponent extends Component {
                 this.state.invoice = r.data;
             }
         } else {
-            alert("Revert failed: " + ((r && r.message) || 'unknown'));
+            this._toast((r && r.message) || 'Could not revert it.', 'danger');
         }
     }
     // ----- Date-range preset helpers ----- //
@@ -1041,12 +1195,12 @@ class _BaseInvoiceComponent extends Component {
         if (this.state.creating) return;
         const ni = this.state.newInvoice;
         if (!ni.client_kra_id || !ni.from_date || !ni.to_date) {
-            alert('Please pick a client and both dates.');
+            this._toast('Pick a client and both dates first.', 'danger');
             return;
         }
         // Block creation if user un-ticked ALL three types — would produce empty invoice silently.
         if (this._selectedTaskTypes().length === 0) {
-            alert('Pick at least one task type (REQ / UPT / BUG).');
+            this._toast('Pick at least one task type (REQ / UPT / BUG).', 'danger');
             return;
         }
         this.state.creating = true;
@@ -1080,7 +1234,7 @@ class _BaseInvoiceComponent extends Component {
             invoice_title: ni.invoice_title || '',
             currency_id: ni.currency_id || false,
         });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         this.state.invoice = r.data;
         this.state.notesText = this.state.invoice.notes || '';
         this.state.expanded = {};
@@ -1088,7 +1242,7 @@ class _BaseInvoiceComponent extends Component {
     }
     async downloadPdf(invoiceId) {
         const r = await rpc('/kpi_client_invoice/pdf_data', { invoice_id: invoiceId });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         const pdf = r.data;
         const inv = pdf.invoice;
         // Already-billed (locked) lines are excluded from the total, so drop them from the
@@ -1119,7 +1273,7 @@ class _BaseInvoiceComponent extends Component {
             return s;
         };
         if (!window.jspdf) {
-            alert('jsPDF library not loaded.'); return;
+            this._toast('The PDF library did not load — reload the page and try again.', 'danger'); return;
         }
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -1302,6 +1456,7 @@ class _BaseInvoiceComponent extends Component {
         this.state.scopeUsers = [];
         this.state.scopeKpis = [];
         this.state.scopeSubKras = [];
+        this.state.showUnsignedTasks = false;   // a new client starts collapsed again
         if (!this.state.newInvoice.client_kra_id) return;
         const [users, subs] = await Promise.all([
             rpc('/kpi_client_invoice/get_client_users_and_kpis', {
@@ -1354,6 +1509,28 @@ class _BaseInvoiceComponent extends Component {
             ? arr.filter(x => x !== id)
             : [...arr, id];
     }
+    // The picker offers signed-off work only — that is all an invoice can bill.
+    // Already-invoiced tasks stay on the list, greyed, so it is visible that they
+    // were billed rather than simply gone.
+    _isSignedOff(k) {
+        return k.billable !== false || k.not_billable_code === 'invoiced';
+    }
+    visibleScopeKpis() {
+        const all = this.state.scopeKpis || [];
+        return this.state.showUnsignedTasks ? all : all.filter(k => this._isSignedOff(k));
+    }
+    unsignedScopeKpis() {
+        return (this.state.scopeKpis || []).filter(k => !this._isSignedOff(k));
+    }
+    // Colour by what the tag means, not by "not billable": amber is the client's
+    // move, blue is the team still working, grey is settled. The old
+    // bg-light/text-secondary was near-invisible on the white card.
+    billBadgeClass(k) {
+        return {
+            signoff: 'bg-warning text-dark',
+            invoiced: 'bg-secondary text-white',
+        }[k.not_billable_code] || 'bg-info text-dark';
+    }
     async toggleSubKra(id) {
         this.toggleFilter('filter_sub_kra_ids', id);
         // Sub-KRA choice narrows which developers/tasks are in scope; refresh then
@@ -1364,7 +1541,7 @@ class _BaseInvoiceComponent extends Component {
     }
     async openInvoice(id) {
         const r = await rpc('/kpi_client_invoice/get', { invoice_id: id });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         this.state.invoice = r.data;
         this.state.notesText = r.data.notes || '';
         this.state.expanded = {};
@@ -1382,36 +1559,45 @@ class _BaseInvoiceComponent extends Component {
         const payload = { line_id: lineId };
         payload[field] = value;
         const r = await rpc('/kpi_client_invoice/save_line', payload);
-        if (!r.status) { alert('Save failed: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast('Could not save: ' + (r.message || 'unknown'), 'danger'); return; }
         // Refresh totals
         await this.openInvoice(this.state.invoice.id);
     }
     async addAdjustment() {
-        const desc = prompt('Adjustment description?');
-        if (!desc) return;
-        const hrsStr = prompt('Hours (use negative for deductions):', '0');
-        if (hrsStr === null) return;
-        const hours = parseFloat(hrsStr);
-        if (Number.isNaN(hours)) { alert('Invalid number.'); return; }
+        const vals = await this._dialog({
+            title: 'Add an adjustment',
+            message: 'A positive figure adds hours, a negative one deducts them.',
+            okLabel: 'Add',
+            fields: [
+                { key: 'desc', label: 'Description', required: true,
+                  placeholder: 'e.g. agreed discount' },
+                { key: 'hours', label: 'Hours', value: '0',
+                  placeholder: '-2', hint: 'Use a minus sign to deduct.' },
+            ],
+        });
+        if (!vals) return;
+        const desc = vals.desc;
+        const hours = parseFloat(vals.hours);
+        if (Number.isNaN(hours)) { this._toast('That is not a number.', 'danger'); return; }
         const r = await rpc('/kpi_client_invoice/add_adjustment', {
             invoice_id: this.state.invoice.id,
             description: desc,
             quoted_hours: hours,
         });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         await this.openInvoice(this.state.invoice.id);
     }
     async removeLine(lineId) {
-        if (!confirm('Remove this line?')) return;
+        if (!await this._confirm('Remove this line?', 'It comes off the invoice and the total updates.', 'Remove', 'btn-danger')) return;
         const r = await rpc('/kpi_client_invoice/remove_line', { line_id: lineId });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         await this.openInvoice(this.state.invoice.id);
     }
     async saveHeader(field, value) {
         const payload = { invoice_id: this.state.invoice.id };
         payload[field] = value;
         const r = await rpc('/kpi_client_invoice/save_header', payload);
-        if (!r.status) { alert('Save failed: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast('Could not save: ' + (r.message || 'unknown'), 'danger'); return; }
         this.state.invoice = r.data;
     }
     async saveNotes() {
@@ -1421,20 +1607,20 @@ class _BaseInvoiceComponent extends Component {
         });
     }
     async finalizeInvoice() {
-        if (!confirm('Finalize this invoice? It will be locked and visible to the client.')) return;
+        if (!await this._confirm('Finalize this invoice?', 'It is locked from further edits and becomes visible to the client.', 'Finalize', 'btn-warning')) return;
         const r = await rpc('/kpi_client_invoice/finalize', { invoice_id: this.state.invoice.id });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         this.state.invoice = r.data;
     }
     async sendInvoice() {
         const r = await rpc('/kpi_client_invoice/send', { invoice_id: this.state.invoice.id });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         this.state.invoice = r.data;
     }
     async resetDraft() {
-        if (!confirm('Reset to Draft? Client will lose visibility until you re-finalize.')) return;
+        if (!await this._confirm('Reset to Draft?', 'The client loses sight of it until you finalize again.', 'Reset to Draft', 'btn-secondary')) return;
         const r = await rpc('/kpi_client_invoice/reset_draft', { invoice_id: this.state.invoice.id });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         this.state.invoice = r.data;
     }
 
@@ -1442,15 +1628,21 @@ class _BaseInvoiceComponent extends Component {
     // figure changed — and the server refuses without one anyway.
     async reviseInvoice() {
         const inv = this.state.invoice;
-        const reason = prompt(
-            `Revise ${inv.name}?\n\nIt goes back to Draft so you can change the amount, then `
-            + `Finalize again. The client is told it was revised.\n\nWhy is it being revised?`,
-            ''
-        );
-        if (reason === null) return;
-        if (!reason.trim()) { alert('A reason is required.'); return; }
+        const vals = await this._dialog({
+            title: `Revise ${inv.name}`,
+            message: 'It goes back to Draft so you can change the amount, then Finalize again. '
+                   + 'The client is told it was revised, and sees the reason.',
+            okLabel: 'Revise',
+            okClass: 'btn-primary',
+            fields: [
+                { key: 'reason', label: 'Why is it being revised?', type: 'textarea',
+                  required: true, placeholder: 'e.g. agreed discount on the reporting work' },
+            ],
+        });
+        if (!vals) return;
+        const reason = vals.reason;
         const r = await rpc('/kpi_client_invoice/revise', { invoice_id: inv.id, reason });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         this.state.invoice = r.data;
         await this.refreshList();
     }
@@ -1460,29 +1652,37 @@ class _BaseInvoiceComponent extends Component {
     // paid — the exact thing you don't want to do to correct a false claim.
     async clearPaidClaim() {
         const inv = this.state.invoice;
-        if (!confirm(`Clear the client's payment claim on ${inv.name}?\n\n`
-                     + `Use this when the payment never arrived. The invoice stays Unpaid `
-                     + `and the client can report paying again.`)) return;
+        if (!await this._confirm(
+            `Clear the payment claim on ${inv.name}?`,
+            'Use this when the payment never arrived. The invoice stays Unpaid and the '
+            + 'client can report paying again.',
+            'Clear claim', 'btn-secondary')) return;
         const r = await rpc('/kpi_client_invoice/clear_paid_claim', { invoice_id: inv.id });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         this.state.invoice = r.data;
         await this.refreshList();
     }
 
     // CLIENT side: "I've paid". A claim only — it notifies the admins, who confirm.
     async clientPaidPrompt(inv) {
-        const method = this._askMethod(`Report payment for ${inv.name}?`);
-        if (!method) return;
-        const note = prompt(
-            `Reporting payment for ${inv.name}.\n\nOptional reference or note (e.g. transfer ref):`,
-            ''
-        );
-        if (note === null) return;
-        const r = await rpc('/kpi_client_invoice/client_mark_paid', {
-            invoice_id: inv.id, method, note: note || '',
+        const vals = await this._dialog({
+            title: `Report payment for ${inv.name}`,
+            message: "Tell us how you paid. We'll confirm it once the payment is checked.",
+            okLabel: "I've paid",
+            okClass: 'btn-success',
+            fields: [
+                { key: 'method', label: 'How did you pay?', type: 'radio',
+                  options: this.paymentMethods, value: 'bank_transfer', required: true },
+                { key: 'note', label: 'Reference or note (optional)', type: 'textarea',
+                  placeholder: 'e.g. transfer reference…' },
+            ],
         });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        alert('Thank you — we have been notified and will confirm the payment.');
+        if (!vals) return;
+        const r = await rpc('/kpi_client_invoice/client_mark_paid', {
+            invoice_id: inv.id, method: vals.method, note: vals.note || '',
+        });
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
+        this._toast('Thank you — we have been told, and will confirm the payment.');
         await this.refreshList();
         if (this.state.view === 'detail' && this.state.invoice && this.state.invoice.id === inv.id) {
             this.state.invoice = r.data;
@@ -1490,12 +1690,14 @@ class _BaseInvoiceComponent extends Component {
     }
     async deleteInvoice() {
         const inv = this.state.invoice;
-        if (!confirm(`Delete draft ${inv.name}? Any tasks on it are freed for a future invoice. `
-                     + `This cannot be undone.`)) return;
+        if (!await this._confirm(
+            `Delete draft ${inv.name}?`,
+            'Any tasks it is holding are freed for a future invoice. This cannot be undone.',
+            'Delete', 'btn-danger')) return;
         const r = await rpc('/kpi_client_invoice/delete', { invoice_id: inv.id });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
         if (r.freed_tasks) {
-            alert(`${r.name} deleted. ${r.freed_tasks} task(s) are now free to bill again.`);
+            this._toast(`${r.name} deleted. ${r.freed_tasks} task(s) are free to bill again.`);
         }
         this.backToList();
     }

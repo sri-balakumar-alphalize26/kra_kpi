@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, xml, useState, onWillStart } from "@odoo/owl";
+import { Component, xml, useState, useRef, onWillStart } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { rpc } from "@web/core/network/rpc";
 
@@ -20,6 +20,14 @@ export class KpiClientCompletions extends Component {
             </button>
         </div>
 
+        <!-- Results and errors land here, in the page, instead of a browser alert. -->
+        <div t-if="state.toast.show"
+             t-att-class="'alert alert-dismissible d-flex align-items-start alert-' + state.toast.kind">
+            <i t-att-class="'fa me-2 mt-1 ' + (state.toast.kind === 'success' ? 'fa-check-circle' : (state.toast.kind === 'danger' ? 'fa-exclamation-circle' : 'fa-info-circle'))"/>
+            <div class="flex-grow-1" t-esc="state.toast.text"/>
+            <button type="button" class="btn-close" t-on-click="dismissToast"/>
+        </div>
+
         <!-- One-time signature image upload — reused for every sign-off below -->
         <div class="card p-3 mb-3 shadow-sm border-info border-start border-4">
             <div class="row g-3 align-items-center">
@@ -34,6 +42,7 @@ export class KpiClientCompletions extends Component {
                     </p>
                     <input type="file" class="form-control form-control-sm"
                            accept=".png,.jpg,.jpeg"
+                           t-ref="sigFile"
                            t-on-change="onSignatureUpload"
                            style="max-width: 320px"/>
                 </div>
@@ -43,6 +52,23 @@ export class KpiClientCompletions extends Component {
                         <img t-att-src="'data:image/png;base64,' + state.signatureB64"
                              style="max-height: 80px; max-width: 280px; border: 1px solid #ddd; border-radius: 4px; background: #fff; padding: 4px"
                              alt="Saved signature"/>
+                        <!-- Removing it falls back to typing your name on each sign-off.
+                             Confirmed inline rather than with a browser confirm(). -->
+                        <div class="mt-2">
+                            <button t-if="!state.confirmRemoveSig" type="button"
+                                    class="btn btn-sm btn-outline-danger"
+                                    t-on-click="() => state.confirmRemoveSig = true">
+                                <i class="fa fa-trash me-1"/> Remove
+                            </button>
+                            <div t-else="" class="d-inline-flex align-items-center gap-2">
+                                <span class="small text-danger">Remove signature?</span>
+                                <button type="button" class="btn btn-sm btn-danger"
+                                        t-att-disabled="state.removingSig"
+                                        t-on-click="removeSignature">Yes, remove</button>
+                                <button type="button" class="btn btn-sm btn-secondary"
+                                        t-on-click="() => state.confirmRemoveSig = false">Cancel</button>
+                            </div>
+                        </div>
                     </div>
                     <div t-else="" class="text-muted small">
                         <i class="fa fa-info-circle me-1"/>
@@ -257,15 +283,40 @@ export class KpiClientCompletions extends Component {
                                    t-model="state.approval.signature_text"
                                    placeholder="Your full name"/>
                         </div>
+                        <!-- Rejection reason, asked here rather than in a browser prompt. -->
+                        <div t-if="state.approval.rejecting" class="alert alert-danger mt-3 mb-0">
+                            <label class="form-label fw-bold">
+                                What needs changing? <span class="text-danger">*</span>
+                            </label>
+                            <textarea class="form-control" rows="3" maxlength="2000"
+                                      t-model="state.approval.reject_reason"
+                                      placeholder="Tell the team what to fix before you can sign this off"/>
+                        </div>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-danger me-auto" t-on-click="submitReject">
-                            <i class="fa fa-times me-1"/> Reject &amp; Send Back
-                        </button>
-                        <button type="button" class="btn btn-secondary" t-on-click="closeApproval">Cancel</button>
-                        <button type="button" class="btn btn-success" t-on-click="submitApprove">
-                            <i class="fa fa-check me-1"/> Approve &amp; Sign
-                        </button>
+                    <div class="modal-footer d-block">
+                        <div t-if="state.approval.error" class="alert alert-danger py-2 small mb-2">
+                            <i class="fa fa-exclamation-circle me-1"/>
+                            <t t-esc="state.approval.error"/>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <t t-if="state.approval.rejecting">
+                                <button type="button" class="btn btn-danger me-auto" t-on-click="submitReject">
+                                    <i class="fa fa-paper-plane me-1"/> Send Back to Team
+                                </button>
+                                <button type="button" class="btn btn-secondary" t-on-click="cancelReject">
+                                    Cancel
+                                </button>
+                            </t>
+                            <t t-else="">
+                                <button type="button" class="btn btn-outline-danger me-auto" t-on-click="startReject">
+                                    <i class="fa fa-times me-1"/> Reject &amp; Send Back
+                                </button>
+                                <button type="button" class="btn btn-secondary" t-on-click="closeApproval">Cancel</button>
+                                <button type="button" class="btn btn-success" t-on-click="submitApprove">
+                                    <i class="fa fa-check me-1"/> Approve &amp; Sign
+                                </button>
+                            </t>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-content" t-if="!state.approval.data">
@@ -339,14 +390,20 @@ export class KpiClientCompletions extends Component {
                             <textarea class="form-control" rows="2" t-model="state.bulk.notes"/>
                         </div>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" t-on-click="closeBulk">Cancel</button>
-                        <button type="button" class="btn btn-success"
-                                t-att-disabled="state.bulk.busy"
-                                t-on-click="submitBulkApprove">
-                            <i t-att-class="'fa me-1 ' + (state.bulk.busy ? 'fa-spinner fa-spin' : 'fa-check')"/>
-                            Approve &amp; Sign all
-                        </button>
+                    <div class="modal-footer d-block">
+                        <div t-if="state.bulk.error" class="alert alert-danger py-2 small mb-2">
+                            <i class="fa fa-exclamation-circle me-1"/>
+                            <t t-esc="state.bulk.error"/>
+                        </div>
+                        <div class="d-flex gap-2 justify-content-end">
+                            <button type="button" class="btn btn-secondary" t-on-click="closeBulk">Cancel</button>
+                            <button type="button" class="btn btn-success"
+                                    t-att-disabled="state.bulk.busy"
+                                    t-on-click="submitBulkApprove">
+                                <i t-att-class="'fa me-1 ' + (state.bulk.busy ? 'fa-spinner fa-spin' : 'fa-check')"/>
+                                Approve &amp; Sign all
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -387,18 +444,19 @@ export class KpiClientCompletions extends Component {
         Object.assign(this.state.bulk, {
             open: true, busy: false,
             chk_delivered: false, chk_works: false, chk_authorized: false,
-            notes: '', signature_text: '',
+            notes: '', signature_text: '', error: '',
         });
     }
     closeBulk() { this.state.bulk.open = false; }
     async submitBulkApprove() {
         const b = this.state.bulk;
+        b.error = '';
         if (!(b.chk_delivered && b.chk_works && b.chk_authorized)) {
-            alert('Please tick all three confirmations before signing.');
+            b.error = 'Please tick all three confirmations before signing.';
             return;
         }
         if (!this.state.signatureB64 && !(b.signature_text || '').trim()) {
-            alert('Please type your full name, or upload a signature image at the top of the page.');
+            b.error = 'Type your full name to sign, or upload a signature image at the top of the page.';
             return;
         }
         b.busy = true;
@@ -411,14 +469,14 @@ export class KpiClientCompletions extends Component {
                 notes: b.notes,
                 signature_text: b.signature_text,
             });
-            if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+            if (!r.status) { b.error = r.message || 'Something went wrong.'; return; }
             // Partial success is normal — say exactly which ones didn't go through.
             let msg = `Signed off ${r.approved.length} task(s).`;
             if ((r.skipped || []).length) {
-                msg += `\n\nNot signed (${r.skipped.length}):\n`
-                     + r.skipped.map(s => `• ${s.name || s.id}: ${s.reason}`).join('\n');
+                msg += ` Not signed (${r.skipped.length}): `
+                     + r.skipped.map(s => `${s.name || s.id} — ${s.reason}`).join('; ');
             }
-            alert(msg);
+            this._toast(msg, (r.skipped || []).length ? 'warning' : 'success');
             this.state.bulk.open = false;
             this.state.selected = [];
             await this.refresh();
@@ -439,19 +497,28 @@ export class KpiClientCompletions extends Component {
             userName: '',
             selected: [],                  // task ids ticked for bulk sign-off
             pendingOpen: false,            // list starts folded — see the header comment
+            confirmRemoveSig: false,       // inline "Remove signature?" step
+            removingSig: false,
+            // In-page banner instead of alert(). A browser alert blocks the whole
+            // tab and hides the very screen it is talking about.
+            toast: { show: false, text: '', kind: 'success' },
 
             bulk: {
                 open: false, busy: false,
                 chk_delivered: false, chk_works: false, chk_authorized: false,
-                notes: '', signature_text: '',
+                notes: '', signature_text: '', error: '',
             },
             approval: {
                 open: false,
                 data: null,
                 chk_delivered: false, chk_works: false, chk_authorized: false,
-                notes: '', signature_text: '',
+                notes: '', signature_text: '', error: '',
+                // Rejection reason, asked for in the dialog itself — this used to be
+                // a browser prompt().
+                rejecting: false, reject_reason: '',
             },
         });
+        this.sigFileRef = useRef('sigFile');
         onWillStart(async () => {
             await this.loadSignatureInfo();
             await this.refresh();
@@ -470,6 +537,11 @@ export class KpiClientCompletions extends Component {
         }
     }
 
+    _toast(text, kind = 'success') {
+        this.state.toast = { show: true, text, kind };
+    }
+    dismissToast() { this.state.toast.show = false; }
+
     onSignatureUpload(ev) {
         const file = ev.target.files && ev.target.files[0];
         if (!file) return;
@@ -481,13 +553,37 @@ export class KpiClientCompletions extends Component {
             const r = await rpc('/kpi_client_portal/upload_signature', {
                 file_data: b64, file_name: file.name,
             });
-            if (!r.status) { alert('Upload failed: ' + (r.message || 'unknown')); return; }
+            if (!r.status) { this._toast(r.message || 'Upload failed.', 'danger'); return; }
             this.state.hasSignature = true;
             this.state.signatureB64 = b64;
             this.state.signatureFileName = file.name;
+            this.state.confirmRemoveSig = false;
             ev.target.value = '';
+            this._toast('Signature saved. It will auto-load on every sign-off.');
         };
         reader.readAsDataURL(file);
+    }
+
+    // Deleting goes through the upload route: an empty file_data clears the image
+    // server-side, so there is no second route to keep in step.
+    async removeSignature() {
+        this.state.removingSig = true;
+        try {
+            const r = await rpc('/kpi_client_portal/upload_signature', {
+                file_data: '', file_name: '',
+            });
+            if (!r.status) { this._toast(r.message || 'Could not remove.', 'danger'); return; }
+            this.state.hasSignature = false;
+            this.state.signatureB64 = '';
+            this.state.signatureFileName = '';
+            this.state.confirmRemoveSig = false;
+            // Without this, picking the SAME file again fires no change event and
+            // the re-upload silently does nothing.
+            if (this.sigFileRef.el) this.sigFileRef.el.value = '';
+            this._toast('Signature removed. You will type your name on each sign-off.');
+        } finally {
+            this.state.removingSig = false;
+        }
     }
 
     async refresh() {
@@ -507,24 +603,34 @@ export class KpiClientCompletions extends Component {
         this.state.approval.chk_authorized = false;
         this.state.approval.notes = '';
         this.state.approval.signature_text = '';
+        this.state.approval.error = '';
+        this.state.approval.rejecting = false;
+        this.state.approval.reject_reason = '';
         const r = await rpc('/kpi_client_approval/get', { kpi_id: kpiId });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); this.closeApproval(); return; }
+        if (!r.status) {
+            this.closeApproval();
+            this._toast(r.message || 'Could not open this task.', 'danger');
+            return;
+        }
         this.state.approval.data = r.data;
     }
     closeApproval() {
         this.state.approval.open = false;
         this.state.approval.data = null;
+        this.state.approval.rejecting = false;
+        this.state.approval.error = '';
     }
     async submitApprove() {
         const a = this.state.approval;
+        a.error = '';
         if (!a.chk_delivered || !a.chk_works || !a.chk_authorized) {
-            alert('Please tick all three confirmation checkboxes.');
+            a.error = 'Please tick all three confirmation checkboxes.';
             return;
         }
         // If a saved signature image exists, no need to type anything — server will
         // use the user's name as the textual signature alongside the image.
         if (!this.state.hasSignature && !(a.signature_text || '').trim()) {
-            alert('Please upload a signature image at the top of the page, or type your name.');
+            a.error = 'Type your full name to sign, or upload a signature image at the top of the page.';
             return;
         }
         const r = await rpc('/kpi_client_approval/approve', {
@@ -535,21 +641,28 @@ export class KpiClientCompletions extends Component {
             notes: a.notes,
             signature_text: a.signature_text || '',  // empty allowed when image is saved
         });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        alert('Approved and signed. Thank you!');
+        if (!r.status) { a.error = r.message || 'Something went wrong.'; return; }
         this.closeApproval();
+        this._toast('Approved and signed. Thank you!');
         await this.refresh();
     }
+    startReject() {
+        this.state.approval.rejecting = true;
+        this.state.approval.reject_reason = '';
+        this.state.approval.error = '';
+    }
+    cancelReject() { this.state.approval.rejecting = false; }
     async submitReject() {
-        const reason = prompt('Reason for rejection?');
-        if (!reason) return;
+        const a = this.state.approval;
+        const reason = (a.reject_reason || '').trim();
+        if (!reason) { a.error = 'Please say what needs changing.'; return; }
         const r = await rpc('/kpi_client_approval/reject', {
-            kpi_id: this.state.approval.data.kpi.id,
+            kpi_id: a.data.kpi.id,
             reason: reason,
         });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        alert('Sent back to the team for changes.');
+        if (!r.status) { a.error = r.message || 'Something went wrong.'; return; }
         this.closeApproval();
+        this._toast('Sent back to the team for changes.', 'warning');
         await this.refresh();
     }
 }

@@ -380,7 +380,7 @@ _APP_TEMPLATES = {
         "📌 {title} ({ref})\n"
         "🏷 Project: {project}\n"
         "👤 Developer: {dev} • ⏱ {elapsed}\n"
-        "✍️ Signed by: {decided_by}"
+        "✍️ Signed by: {decided_by}{signoff_note}"
     ),
     # No live emitter since the 'prep work' state was retired in 19.0.2.3; kept
     # only so an old queued row still renders. New silence-timeouts fire
@@ -735,7 +735,7 @@ _TEMPLATES = {
         "Project: {project} • Ref: {ref}\n"
         "Developer: {dev}\n"
         "Total time: {elapsed}\n"
-        "Signed by: {decided_by}"
+        "Signed by: {decided_by}{signoff_note}"
     ),
     'reassigned': (
         "🔄 Task REASSIGNED — {title}\n"
@@ -1486,6 +1486,11 @@ class KpiNotify(models.Model):
             'decided_by':      ctx.get('decided_by') or '—',
             'source':          ctx.get('source') or 'web',
             'feedback':        (ctx.get('feedback') or '').strip() or '—',
+            # The whole line, or nothing. Templates that want the client's sign-off
+            # note append {signoff_note} and get a clean message when there isn't
+            # one — rather than a dangling "Note: —" on every single approval.
+            'signoff_note':    (('\n📝 “%s”' % (ctx.get('feedback') or '').strip())
+                                if (ctx.get('feedback') or '').strip() else ''),
             'created_by':      (ctx.get('created_by')
                                 or (self.create_uid.name if self.create_uid else '')
                                 or 'system'),

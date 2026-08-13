@@ -849,4 +849,10 @@ class KpiClientInvoiceLine(models.Model):
             'contributors': contributors,
             'already_invoiced': locked,
             'invoiced_on': (self.kpi_id.invoiced_on_id.name or '') if locked else '',
+            # What the client wrote in the Review & Sign popup when they accepted this
+            # task. It lived only on the task, so at billing time — the moment someone
+            # is checking what they are charging for — the client's own words about the
+            # work were nowhere to be seen. Read-only here; the task owns it.
+            'client_signoff_notes': (self.kpi_id.client_approval_notes or '') if self.kpi_id else '',
+            'client_signed_by': (self.kpi_id.client_signature_text or '') if self.kpi_id else '',
         }
