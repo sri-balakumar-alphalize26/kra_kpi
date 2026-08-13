@@ -1010,11 +1010,25 @@ class KpiMaster(models.Model):
             root = root.parent_id
         project_kra = self.kra_id if self.kra_id and self.kra_id != root else self.env['kra.master']
 
-        # Company logo
+        # Company logo — same resolution order as the invoice (kpi_client_invoice
+        # get_pdf_data): company branding, then the root KRA's own logo, then the
+        # module's bundled brand logo. This used to read company.logo unguarded, so a
+        # company that never uploaded one printed Odoo's grey "Your logo" placeholder
+        # onto the certificate; uses_default_logo is how you tell that apart.
         logo_b64 = ''
-        if company.logo:
-            raw = company.logo
-            logo_b64 = raw.decode() if isinstance(raw, bytes) else raw
+        branding_logo = company.logo if not company.uses_default_logo else False
+        for candidate in (branding_logo, root.logo if root else False):
+            if candidate:
+                logo_b64 = candidate.decode() if isinstance(candidate, bytes) else candidate
+                break
+        if not logo_b64:
+            try:
+                import base64 as _b64logo
+                from odoo.tools import file_open
+                with file_open('kra_kpi_module/static/src/img/alphalize_logo.png', 'rb') as f:
+                    logo_b64 = _b64logo.b64encode(f.read()).decode()
+            except Exception:
+                logo_b64 = ''
 
         # Per-contributor breakdown of actual time on this KPI, plus per-role aggregation.
         logs = self.env['kpi.time.log'].search([
@@ -1091,6 +1105,18 @@ class KpiMaster(models.Model):
                 'has_signed_certificate': bool(self.signed_certificate),
                 'signed_certificate_name': self.signed_certificate_name or '',
                 'signed_certificate_date': _date(self.signed_certificate_date),
+                # The sign-off itself. None of this was returned here, so the only way
+                # to see who signed and what they confirmed was to open the raw .txt
+                # receipt — which is exactly what the branded certificate replaces.
+                # /kpi_client_approval/get bolted these on afterwards; they belong at
+                # the source, where every caller gets them.
+                'external_ref': self.external_ref or '',
+                'client_signature_text': self.client_signature_text or '',
+                'client_signed_datetime': _datetime(self.client_signed_datetime),
+                'client_approval_notes': self.client_approval_notes or '',
+                'client_chk_delivered': bool(self.client_chk_delivered),
+                'client_chk_works': bool(self.client_chk_works),
+                'client_chk_authorized': bool(self.client_chk_authorized),
             },
             'contributors': contributors,
             'role_totals': [

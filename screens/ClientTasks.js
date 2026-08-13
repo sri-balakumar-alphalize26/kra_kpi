@@ -10,13 +10,15 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
   RefreshControl, StatusBar as RNStatusBar, Modal, TextInput,
-  Animated, Easing, Image,
+  Animated, Easing, Image, Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
-import { getClientDashboard, getClientSignature } from '../services/clientPortal';
+import { getClientDashboard, getClientSignature, fetchCertificatePdf } from '../services/clientPortal';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { fetchPreApprovals, decidePreApproval, holdPreApproval, submitClientSignoff, submitClientRejection } from '../services/preApproval';
 import { REJECT_REASONS } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
@@ -268,6 +270,47 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   // Saved signature image from the web portal. When present the server accepts the
   // sign-off with no typed name, so the app must stop demanding one.
   const [signature, setSignature] = useState({ hasSignature: false, imageB64: '' });
+  const [certBusy, setCertBusy] = useState(false);
+
+  // Save the completion certificate. Same two-path approach as the invoice PDF:
+  // Android asks WHERE first through the Storage Access Framework so nothing is
+  // written until a folder is picked; iOS goes through the share sheet, which is
+  // where "Save to Files" lives.
+  const downloadCertificate = useCallback(async (kpiId) => {
+    setCertBusy(true);
+    try {
+      const res = await fetchCertificatePdf(kpiId);
+      if (!res?.status || !res.data_b64) {
+        flashToast(res?.message || 'Could not build the certificate.');
+        return;
+      }
+      const name = (res.file_name || 'certificate.pdf').split(/[\\/]/).pop();
+      const SAF = FileSystem.StorageAccessFramework;
+      if (Platform.OS === 'android' && SAF) {
+        const perm = await SAF.requestDirectoryPermissionsAsync();
+        if (!perm.granted) { flashToast('Download cancelled — no folder chosen.'); return; }
+        const dot = name.lastIndexOf('.');
+        const bare = dot > 0 ? name.slice(0, dot) : name;   // SAF re-appends from the mime
+        const uri = await SAF.createFileAsync(perm.directoryUri, bare, 'application/pdf');
+        await FileSystem.writeAsStringAsync(uri, res.data_b64, { encoding: FileSystem.EncodingType.Base64 });
+        flashToast(`Saved ${name}`);
+        return;
+      }
+      const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      const uri = `${dir}${name}`;
+      await FileSystem.writeAsStringAsync(uri, res.data_b64, { encoding: FileSystem.EncodingType.Base64 });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: `Save ${name}`, UTI: 'com.adobe.pdf' });
+      } else {
+        flashToast('Saving is not available on this device.');
+      }
+    } catch (e) {
+      log.error('certificate download failed', e?.message);
+      flashToast('Could not build the certificate.');
+    } finally {
+      setCertBusy(false);
+    }
+  }, [flashToast]);
   // The two action sections collapse by default — their counts stay visible in
   // the headers, so the client reaches their task list without a long scroll.
   const [approvalOpen, setApprovalOpen] = useState(false);
@@ -710,11 +753,22 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 {detail?.delivery_version ? <DRow label="Version" value={detail.delivery_version} /> : null}
                 {detail?.completion_date ? <DRow label="Completed on" value={detail.completion_date} /> : null}
 
+                {/* It used to say a certificate was "available" and give no way to
+                    open it — promising something the app could not deliver. */}
                 {detail?.has_signed_certificate ? (
-                  <View style={s.dCert}>
+                  <TouchableOpacity
+                    style={s.dCert}
+                    onPress={() => downloadCertificate(detail.id)}
+                    disabled={certBusy}
+                    activeOpacity={0.85}
+                  >
                     <Ionicons name="ribbon" size={15} color="#16A34A" />
-                    <Text style={s.dCertTxt}>Signed completion certificate available</Text>
-                  </View>
+                    <Text style={s.dCertTxt}>
+                      {certBusy ? 'Preparing certificate…' : 'Download completion certificate'}
+                    </Text>
+                    {certBusy ? <ActivityIndicator size="small" color="#16A34A" />
+                      : <Ionicons name="download-outline" size={15} color="#16A34A" />}
+                  </TouchableOpacity>
                 ) : null}
               </View>
             </ScrollView>

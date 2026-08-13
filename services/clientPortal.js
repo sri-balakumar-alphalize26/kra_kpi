@@ -38,6 +38,20 @@ export async function getClientProjects() {
   return { projects: res.projects || [] };
 }
 
+// The signed completion certificate as base64, ready to write to a file. The app
+// cannot use the http download route (it does not send the session cookie), which is
+// why this JSON sibling exists — the same reason the invoice PDF has one.
+export async function fetchCertificatePdf(kpiId) {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'No server connection' };
+  try {
+    return (await jsonRpc(serverUrl, '/kpi_completion_cert/pdf_b64', { kpi_id: kpiId }, 60000, db))
+      || { status: false };
+  } catch (e) {
+    return { status: false, message: e?.message || 'Could not fetch the certificate' };
+  }
+}
+
 // The client's saved signature image, if they uploaded one on the web portal.
 // When it exists, sign-off needs no typed name — the server accepts the saved
 // signature and stamps the account name (see _resolve_client_signature). The app

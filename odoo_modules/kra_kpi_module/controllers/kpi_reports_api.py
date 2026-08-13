@@ -1543,6 +1543,169 @@ class KpiReportsAPI(http.Controller):
             'data_b64': base64.b64encode(pdf_bytes).decode(),
         }
 
+    def _build_certificate_pdf(self, data):
+        """Render a completion certificate to PDF bytes — same house style as the
+        invoice and the work report: A4, 48pt margins, Times, #38385C header band,
+        and the faint centred logo watermark at 8% opacity.
+
+        Deliberately a SIGN-OFF RECORD, not an effort report. get_completion_certificate_data
+        also returns per-contributor hours and a role breakdown; none of it is printed.
+        This document goes to the client, and how long each developer spent is internal —
+        putting it in front of them invites an argument about time rather than settling
+        that the work was accepted.
+
+        Replaces a plain-text receipt that downloaded as digital_approval_<id>.txt.
+        """
+        import base64
+        import io
+        from xml.sax.saxutils import escape as _esc
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.lib.utils import ImageReader
+        from reportlab.platypus import (
+            SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, HRFlowable,
+        )
+
+        k = data.get('kpi', {}) or {}
+
+        brand = colors.HexColor('#38385C')
+        zebra = colors.HexColor('#F7F7FB')
+        grid = colors.HexColor('#E1E1E1')
+        rule = colors.HexColor('#BEBEBE')
+        ink = colors.black
+        muted = colors.HexColor('#64748B')
+
+        logo_bytes = None
+        if data.get('company_logo_b64'):
+            try:
+                logo_bytes = base64.b64decode(data['company_logo_b64'])
+            except Exception:
+                logo_bytes = None
+        logo_reader = None
+        logo_ratio = 1.0
+        if logo_bytes:
+            try:
+                logo_reader = ImageReader(io.BytesIO(logo_bytes))
+                iw, ih = logo_reader.getSize()
+                if iw and ih:
+                    logo_ratio = float(iw) / float(ih)
+            except Exception:
+                logo_reader = None
+
+        styles = getSampleStyleSheet()
+        s_company = ParagraphStyle('co', parent=styles['Normal'], fontName='Times-Bold', fontSize=22, alignment=2, textColor=ink, leading=24)
+        s_doctype = ParagraphStyle('dt', parent=styles['Normal'], fontName='Times-Roman', fontSize=12, alignment=2, textColor=muted, leading=16)
+        s_title = ParagraphStyle('ti', parent=styles['Normal'], fontName='Times-Bold', fontSize=18, alignment=1, textColor=brand, leading=22, spaceBefore=6, spaceAfter=10)
+        s_meta = ParagraphStyle('me', parent=styles['Normal'], fontName='Times-Roman', fontSize=10, textColor=ink, leading=15)
+        s_lbl = ParagraphStyle('lb', parent=styles['Normal'], fontName='Times-Bold', fontSize=10, textColor=muted, leading=14)
+        cell = ParagraphStyle('c', parent=styles['Normal'], fontName='Times-Roman', fontSize=9, textColor=ink, leading=12)
+        s_body = ParagraphStyle('bd', parent=styles['Normal'], fontName='Times-Roman', fontSize=10, textColor=ink, leading=15, spaceBefore=6)
+
+        PW, PH = A4
+        MARGIN = 48
+        content_w = PW - 2 * MARGIN
+
+        def _watermark(canvas, doc_):
+            if not logo_reader:
+                return
+            canvas.saveState()
+            wm_w = PW * 0.55
+            wm_h = wm_w / (logo_ratio or 1.0)
+            if wm_h > PH * 0.5:
+                wm_h = PH * 0.5
+                wm_w = wm_h * (logo_ratio or 1.0)
+            try:
+                canvas.setFillAlpha(0.08)
+                canvas.setStrokeAlpha(0.08)
+            except Exception:
+                pass
+            try:
+                canvas.drawImage(logo_reader, (PW - wm_w) / 2.0, (PH - wm_h) / 2.0,
+                                 wm_w, wm_h, mask='auto', preserveAspectRatio=True)
+            except Exception:
+                pass
+            canvas.restoreState()
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN,
+                                topMargin=MARGIN, bottomMargin=MARGIN, title='Completion Certificate')
+        story = []
+
+        right_cell = [Paragraph(_esc(data.get('company_name') or ''), s_company),
+                      Paragraph('COMPLETION CERTIFICATE', s_doctype)]
+        if logo_reader:
+            h = 56
+            w = min(h * logo_ratio, 150)
+            left_cell = Image(io.BytesIO(logo_bytes), width=w, height=h)
+            left_cell.hAlign = 'LEFT'
+        else:
+            left_cell = Paragraph('', cell)
+        header = Table([[left_cell, right_cell]], colWidths=[content_w * 0.45, content_w * 0.55])
+        header.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(header)
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width='100%', thickness=0.8, color=rule, spaceBefore=0, spaceAfter=8))
+        story.append(Paragraph('Certificate of Completion', s_title))
+
+        rows = [
+            ['Reference', k.get('external_ref') or '—'],
+            ['Task', Paragraph(_esc(k.get('name') or ''), cell)],
+            ['Client', _esc(data.get('client_name') or '—')],
+            ['Project', _esc(data.get('project_name') or '—')],
+        ]
+        if k.get('delivery_version'):
+            rows.append(['Version', k.get('delivery_version')])
+        rows += [
+            ['Completed on', k.get('completion_date') or '—'],
+            ['Signed off by', _esc(k.get('client_signature_text') or '—')],
+            ['Signed on', k.get('client_signed_datetime') or '—'],
+        ]
+        tbl = Table(rows, colWidths=[34 * mm, content_w - (34 * mm)])
+        tbl.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), 'Times-Roman'),
+            ('FONTNAME', (0, 0), (0, -1), 'Times-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('TEXTCOLOR', (0, 0), (0, -1), muted),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ROWBACKGROUNDS', (0, 0), (-1, -1), [colors.white, zebra]),
+            ('GRID', (0, 0), (-1, -1), 0.5, grid),
+            ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 12))
+
+        # The three confirmations are what the client actually agreed to — the whole
+        # point of the document, so they are printed as statements, not a tick count.
+        story.append(Paragraph('The client confirmed:', s_lbl))
+        for ok, text in ((k.get('client_chk_delivered'), 'The work was delivered to me.'),
+                         (k.get('client_chk_works'), 'I have checked it and it works.'),
+                         (k.get('client_chk_authorized'), 'I am authorised to approve this.')):
+            story.append(Paragraph(('%s %s' % ('&#10003;' if ok else '&#10007;', _esc(text))), s_body))
+
+        if k.get('client_approval_notes'):
+            story.append(Spacer(1, 8))
+            story.append(Paragraph('Client notes:', s_lbl))
+            story.append(Paragraph(_esc(k.get('client_approval_notes')), s_body))
+
+        story.append(Spacer(1, 14))
+        story.append(Paragraph(
+            'This certifies that the task above was completed by %s and accepted by %s '
+            'on %s. This is a digital record of that acceptance; no wet signature is '
+            'required.' % (
+                _esc(data.get('company_name') or 'the provider'),
+                _esc(k.get('client_signature_text') or data.get('client_name') or 'the client'),
+                k.get('client_signed_datetime') or '—'), s_body))
+
+        doc.build(story, onFirstPage=_watermark, onLaterPages=_watermark)
+        return buf.getvalue()
+
     def _build_invoice_pdf(self, data):
         """Render a client invoice to PDF bytes with reportlab (Times, #38385C
         header, zebra rows, faint logo watermark) — matching the other PDFs."""
@@ -2627,13 +2790,39 @@ class KpiReportsAPI(http.Controller):
             if kpi.kra_id.id not in kra_ids:
                 return request.not_found()
             data = base64.b64decode(kpi.signed_certificate)
-            fname = kpi.signed_certificate_name or f'signed_cert_{kpi.id}.txt'
+            fname = kpi.signed_certificate_name or f'signed_cert_{kpi.id}.pdf'
+            data, fname, mime = self._certificate_payload(kpi, data, fname)
             return request.make_response(data, headers=[
-                ('Content-Type', 'application/octet-stream'),
+                ('Content-Type', mime),
                 ('Content-Disposition', f'attachment; filename="{fname}"'),
             ])
         except Exception:
             return request.not_found()
+
+    def _certificate_payload(self, kpi, blob, fname):
+        """(bytes, filename, mimetype) for a stored certificate.
+
+        A PDF or an image is served untouched — that is either an admin-uploaded scan
+        or a certificate generated at sign-off, and it is the artifact the client
+        actually signed. Rewriting it would be rewriting evidence.
+
+        The legacy plain-text receipt is re-rendered as a branded PDF on the fly. That
+        turns every certificate issued before this change into a proper document with
+        no migration and without overwriting a single stored row. If rendering fails
+        for any reason, the original text is served rather than nothing.
+        """
+        low = (fname or '').lower()
+        if low.endswith(('.pdf', '.png', '.jpg', '.jpeg')):
+            mime = 'application/pdf' if low.endswith('.pdf') else 'image/png'
+            return blob, fname, mime
+        try:
+            pdf = self._build_certificate_pdf(kpi.get_completion_certificate_data())
+            return pdf, f'completion_certificate_{kpi.id}.pdf', 'application/pdf'
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "certificate render failed for kpi %s, serving the stored receipt: %s", kpi.id, e)
+            return blob, fname, 'text/plain'
 
     # ============================================================
     #            CURRENT USER — ROLE FLAGS
@@ -6037,6 +6226,32 @@ class KpiReportsAPI(http.Controller):
             return request.make_response(b'Error generating template: ' + str(e).encode(),
                 headers=[('Content-Type', 'text/plain')])
 
+    @http.route('/kpi_completion_cert/pdf_b64', type='json', auth='user', methods=['POST'], csrf=False)
+    def completion_cert_pdf_b64(self, **params):
+        """The certificate as base64, for the mobile app.
+
+        The app cannot use the type='http' download routes — it does not send the
+        session cookie — which is why the invoice and the daily report both have a
+        JSON sibling. Same reason here: without this the app can say "certificate
+        available" but has no way to hand it over.
+        """
+        try:
+            kpi = request.env['kra.kpi'].sudo().browse(int(params.get('kpi_id') or 0))
+            if not kpi.exists() or not kpi.signed_certificate:
+                return {'status': False, 'message': 'No certificate for this task.'}
+            if not self._is_client_authorized_for_kpi(kpi) and self._is_current_user_client_only():
+                return {'status': False, 'message': 'Not authorized for this task.'}
+            import base64 as _b
+            blob = _b.b64decode(kpi.signed_certificate)
+            fname = kpi.signed_certificate_name or f'signed_cert_{kpi.id}.pdf'
+            data, fname, mime = self._certificate_payload(kpi, blob, fname)
+            return {'status': True, 'file_name': fname, 'mimetype': mime,
+                    'data_b64': _b.b64encode(data).decode()}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"completion_cert_pdf_b64: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
     @http.route('/kpi_completion_cert/download_doc', type='http', auth='user')
     def download_kpi_doc(self, kpi_id=None, doc_type='requirement', **kw):
         """Stream the stored doc back as a file download. doc_type='requirement'|'updates'."""
@@ -6071,8 +6286,13 @@ class KpiReportsAPI(http.Controller):
             if not blob:
                 return request.not_found()
             data = base64.b64decode(blob)
+            mime = 'application/octet-stream'
+            if doc_type == 'signed':
+                # Same treatment as the client portal: a legacy text receipt is
+                # rendered into the branded PDF, an uploaded scan is served as-is.
+                data, fname, mime = self._certificate_payload(kpi, data, fname)
             return request.make_response(data, headers=[
-                ('Content-Type', 'application/octet-stream'),
+                ('Content-Type', mime),
                 ('Content-Disposition', f'attachment; filename="{fname}"'),
             ])
         except Exception as e:
