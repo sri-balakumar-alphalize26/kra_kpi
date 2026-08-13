@@ -3100,18 +3100,23 @@ class KpiReportsAPI(http.Controller):
                 'is_paused':    bool(open_row and open_row.is_paused),
                 'session_id':   row.id if row else False,
                 'login_at':     fields.Datetime.to_string(row.login_at) if row and row.login_at else '',
-                # If this day was reopened, who did it and why. The board is where the
-                # Reopen button lives, so it is where someone looks for what happened —
-                # but this payload never carried the reason, so there was nothing for
-                # the header to render. Read across today's sessions, not just the
-                # latest: the reverted one is the closed row, and after reopening the
-                # open row is a different record.
-                'reopened_reason': next((s.revert_reason or '' for s in Session.search([
-                    ('user_id', '=', user.id), ('session_date', '=', today),
-                ]) if s.reverted and s.revert_reason), ''),
-                'reopened_by': next((s.reverted_by_id.name or '' for s in Session.search([
-                    ('user_id', '=', user.id), ('session_date', '=', today),
-                ]) if s.reverted and s.reverted_by_id), ''),
+                # If this day was reopened, who did it and why — but only while it is
+                # still live. Once the developer has ended the day again (day_done),
+                # the reopen has played out and the banner would just be stale text
+                # about something already dealt with. The snapshot keeps its own frozen
+                # copy, so nothing is lost by dropping it here.
+                #
+                # Read across today's sessions rather than the latest one: the reverted
+                # session is the closed row, and after restarting the open row is a
+                # different record entirely.
+                'reopened_reason': '' if day_done else next(
+                    (s.revert_reason or '' for s in Session.search([
+                        ('user_id', '=', user.id), ('session_date', '=', today),
+                    ]) if s.reverted and s.revert_reason), ''),
+                'reopened_by': '' if day_done else next(
+                    (s.reverted_by_id.name or '' for s in Session.search([
+                        ('user_id', '=', user.id), ('session_date', '=', today),
+                    ]) if s.reverted and s.reverted_by_id), ''),
             }
         except Exception as e:
             import logging
@@ -3948,17 +3953,29 @@ class KpiReportsAPI(http.Controller):
                     # session + a closed one that the cron did NOT auto-close),
                     # restated over the sessions already fetched above rather
                     # than re-querying per developer on a 15s poll.
+                    # Must match kpi.work.session._ended_session_today exactly, including
+                    # the reverted exclusion — otherwise a reopened day still reads as
+                    # "ended" here and offers a Reopen button for something already
+                    # reopened, while the developer's own board correctly shows Start.
                     'day_done': bool(not open_sess and sessions.filtered(
-                        lambda s: s.state == 'closed' and not s.auto_closed)),
+                        lambda s: s.state == 'closed' and not s.auto_closed and not s.reverted)),
                     # If someone reopened this day, say so and why — on the same screen
                     # the Reopen button lives on. Otherwise the only record is the
                     # snapshot, which does not get rewritten until the day is ended
                     # again, so the reason was invisible during exactly the window
                     # between reopening and re-closing.
-                    'reopened_reason': next((s.revert_reason or '' for s in sessions
-                                             if s.reverted and s.revert_reason), ''),
-                    'reopened_by': next((s.reverted_by_id.name or '' for s in sessions
-                                         if s.reverted and s.reverted_by_id), ''),
+                    #
+                    # Cleared once the day is ended again: by then the reopen has
+                    # played out, and a row still announcing it reads as if something
+                    # is outstanding. The snapshot keeps the permanent copy.
+                    'reopened_reason': '' if (not open_sess and sessions.filtered(
+                        lambda s: s.state == 'closed' and not s.auto_closed and not s.reverted
+                    )) else next((s.revert_reason or '' for s in sessions
+                                  if s.reverted and s.revert_reason), ''),
+                    'reopened_by': '' if (not open_sess and sessions.filtered(
+                        lambda s: s.state == 'closed' and not s.auto_closed and not s.reverted
+                    )) else next((s.reverted_by_id.name or '' for s in sessions
+                                  if s.reverted and s.reverted_by_id), ''),
                     'active': active_flag,             # heartbeat fresh (at desk)
                     'activity_kind': activity_kind,    # task|break|lunch|meeting|no_tasks|idle|offline
                     'activity_label': activity_label,  # e.g. "abc" — first task when multitasking

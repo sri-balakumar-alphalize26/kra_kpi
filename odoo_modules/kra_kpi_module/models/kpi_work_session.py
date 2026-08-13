@@ -446,6 +446,13 @@ class KpiWorkSession(models.Model):
         sessions (idle / cross-midnight cron, auto_closed=True) are deliberately
         EXCLUDED — a developer who was auto-ended can still restart the same day.
         Returns the closed record (truthy) or an empty recordset.
+
+        A REVERTED session is excluded for the same reason. An admin reopening a
+        day is them saying "that ending does not stand", so it stops counting as
+        the developer having ended their day — which is what lets the Start button
+        come back. The session itself stays closed: reverting restores the RIGHT
+        to start, it does not start anything. Pressing Start is the developer's
+        decision and the honest record of when they actually resumed.
         """
         user = user or self.env.user
         today = fields.Date.context_today(self)
@@ -462,6 +469,7 @@ class KpiWorkSession(models.Model):
             ('session_date', '=', today),
             ('state',        '=', 'closed'),
             ('auto_closed',  '=', False),
+            ('reverted',     '=', False),
         ], limit=1)
 
     @api.model
@@ -1010,14 +1018,18 @@ class KpiWorkSession(models.Model):
     # Revert — admin reopens a day that was explicitly ended               #
     # ------------------------------------------------------------------ #
     def action_revert_day(self, reason=''):
-        """Reopen a CLOSED session so the developer can carry on working.
+        """Let a developer start again on a day they had already ended.
 
         End Workday is one-way for the developer, and stays that way: this is an
         admin action, for the case where somebody pressed it by accident or was
         asked to come back. Everything it can honestly undo, it undoes; the rest
         it declares rather than hides:
 
-        * The session reopens (state/logout_at) and the idle clock is re-armed.
+        * The ended session stays CLOSED, with its logout_at intact. What comes
+          back is the Start button, not the clock — the developer is notified with
+          the admin's reason and starts when they are ready, which is the honest
+          record of when they actually resumed. Pressing Start opens a fresh
+          session for the same date; the day's totals aggregate every session.
         * The task that End Workday paused is deliberately LEFT paused. Its timer
           was closed at logout_at, and silently restarting it would book time
           nobody worked. The developer presses Resume, which is one click and is
@@ -1065,13 +1077,23 @@ class KpiWorkSession(models.Model):
         now = fields.Datetime.now()
         reason = (reason or '').strip()
         self.sudo().write({
-            'state':          'open',
-            'logout_at':      False,
+            # The session stays CLOSED, and logout_at is kept. Reverting restores the
+            # RIGHT to work today, it does not put the developer back on the clock:
+            # they get a notification with the reason and press Start themselves.
+            #
+            # This used to set state='open', logout_at=False — the day came back to
+            # life underneath them with no decision on their part, and the board
+            # jumped straight to "End Workday". Worse, the clock was running again
+            # from a moment nobody chose, so time could accrue before they had even
+            # read the notification. _ended_session_today now ignores a reverted
+            # session, which is what brings the Start button back.
             # `note` is deliberately KEPT. It is what the developer typed when
             # they ended the day; deleting it destroys their words to tidy up a
             # field that action_end_day will overwrite on the next close anyway.
-            'last_heartbeat': now,
-            'idle_check_at':  now + timedelta(minutes=IDLE_CHECK_MIN),
+            #
+            # last_heartbeat / idle_check_at are NOT re-armed any more: the idle
+            # sweep only looks at open sessions, so setting them on a closed one
+            # was inert, and it implied a clock that is not running.
             'reverted':       True,
             'reverted_at':    now,
             'reverted_by_id': self.env.user.id,
@@ -1112,7 +1134,8 @@ class KpiWorkSession(models.Model):
 
         return {'status': True,
                 'session_id': self.id,
-                'message': 'Workday reopened. The paused task can be resumed.'}
+                'message': 'The developer can start their workday again. They have been '
+                           'told why, and the day starts when they press Start.'}
 
     def _fire_workday_reverted(self, reason=''):
         """Tell the developer and the admins that an ended day was reopened.
