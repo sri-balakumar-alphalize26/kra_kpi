@@ -94,3 +94,9 @@ access_kpi_app_otp_admin,kpi.app.otp.admin,model_kpi_app_otp,base.group_system,1
 access_kpi_daily_report_admin,kpi.daily.report.admin,model_kpi_daily_report,base.group_system,1,1,1,1
 access_kpi_daily_report_coord,kpi.daily.report.coord,model_kpi_daily_report,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_daily_report_owner,kpi.daily.report.owner,model_kpi_daily_report,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_wa_group_admin,kpi.wa.group.admin,model_kpi_wa_group,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_wa_group_owner,kpi.wa.group.owner,model_kpi_wa_group,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_wa_group_system,kpi.wa.group.system,model_kpi_wa_group,base.group_system,1,1,1,1
+access_kpi_wa_group_event_admin,kpi.wa.group.event.admin,model_kpi_wa_group_event,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_wa_group_event_owner,kpi.wa.group.event.owner,model_kpi_wa_group_event,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_wa_group_event_system,kpi.wa.group.event.system,model_kpi_wa_group_event,base.group_system,1,1,1,1

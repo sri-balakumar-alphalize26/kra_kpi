@@ -36,3 +36,8 @@ from . import kpi_pair
 from . import kpi_app_otp
 from . import kpi_workday_snapshot
 from . import kpi_daily_report
+from . import whatsapp_group_patch
+from . import kpi_wa_group_event
+from . import kpi_wa_group_report
+from . import kpi_wa_group_capture
+from . import kpi_wa_inbound_hook

@@ -1,7 +1,9 @@
 /** @odoo-module **/
-import { Component, xml, useState, onWillStart } from "@odoo/owl";
+import { Component, xml, useState, onWillStart, markup } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { rpc } from "@web/core/network/rpc";
+import { useService } from "@web/core/utils/hooks";
+import { ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 
 export class KpiConfiguration extends Component {
     static template = xml/* xml */`
@@ -207,10 +209,206 @@ export class KpiConfiguration extends Component {
                     </div>
                 </div>
 
+                <!-- WhatsApp group reporting. Sits here because this screen already
+                     owns the res.company settings, and because the developer numbers
+                     the mentions depend on are edited in the table just above. -->
+                <div class="card p-3 mb-3">
+                    <h5 class="mb-1"><i class="fa fa-whatsapp me-2 text-success"></i> WhatsApp Group Reports</h5>
+                    <p class="text-muted small mb-3">
+                        Updates are posted to one group, with the developer @-mentioned. Choose which
+                        updates get posted and word each one yourself, below. Leave the group unset
+                        to post nothing at all.
+                    </p>
+
+                    <div t-if="state.waGroupJid" class="alert alert-success py-2 d-flex align-items-center gap-2">
+                        <i class="fa fa-check-circle"></i>
+                        <div class="flex-grow-1">
+                            Reporting to <b t-esc="state.waGroupName || state.waGroupJid"/>
+                            <div class="small text-muted" t-esc="state.waGroupJid"/>
+                        </div>
+                        <button class="btn btn-sm btn-outline-success" t-on-click="waTest">Send test</button>
+                        <button class="btn btn-sm btn-outline-danger" t-on-click="waClear">Turn off</button>
+                    </div>
+                    <div t-else="" class="alert alert-secondary py-2">
+                        <i class="fa fa-info-circle me-1"></i> No group set — nothing is posted.
+                    </div>
+
+                    <div t-if="state.waMsg" t-att-class="'alert py-2 small alert-' + state.waMsgKind" t-esc="state.waMsg"/>
+
+                    <!-- The procedure that actually works on this gateway, stated as
+                         steps rather than buried in a hint. Group LOOKUP is broken here
+                         — GetJoinedGroups crashes the Go binary, GetGroupInfoFromLink
+                         and join-by-link fail the same way — but incoming group messages
+                         are captured, so the id arrives on its own. -->
+                    <div class="alert alert-info py-2 small mb-3">
+                        <div class="fw-bold mb-1">To connect a group:</div>
+                        <div>1. Make sure this WhatsApp number is a member of the group</div>
+                        <div>2. Find it in the list below and press <b>Use this</b></div>
+                        <div class="text-muted mt-1">
+                            If the phone is offline the list falls back to groups we have already
+                            seen a message from — post any message in the group, then Refresh.
+                        </div>
+                    </div>
+
+                    <div class="row g-3">
+                            <div class="col-md-8">
+                                <label class="form-label fw-bold small">Groups we have seen a message from</label>
+                                <!-- WhatsApp does not hand us a group's name on this gateway, so a
+                                     captured row is an opaque id until a human labels it. Showing
+                                     who last posted and when is what makes an unlabelled row
+                                     recognisable. This matters: a bare id presented as though it
+                                     were a name is how a client group once got picked as the
+                                     reporting destination and posted to. -->
+                                <div class="alert alert-warning py-2 small">
+                                    <i class="fa fa-exclamation-triangle me-1"></i>
+                                    Odoo cannot tell which group an id belongs to. Name a group before
+                                    selecting it — everything posted there is visible to everyone in it.
+                                </div>
+                                <div t-if="!state.waGroups.length" class="form-text mb-2">
+                                    No groups yet. If the phone is offline, post any message in the
+                                    group you want and press Refresh.
+                                </div>
+                                <!-- This number is in dozens of groups, so the list is only
+                                     usable with a filter. -->
+                                <input t-if="state.waGroups.length > 8" type="search"
+                                       class="form-control form-control-sm mb-2"
+                                       placeholder="Filter groups by name…" t-model="state.waFilter"/>
+                                <div style="max-height: 22rem; overflow-y: auto;">
+                                <div t-foreach="waVisibleGroups" t-as="g" t-key="g.jid" class="border rounded p-2 mb-2">
+                                    <div class="d-flex gap-2 align-items-center">
+                                        <input type="text" class="form-control form-control-sm"
+                                               t-att-value="g.name"
+                                               placeholder="Unnamed — name it before using it"
+                                               t-on-change="(ev) => this.waRename(g.jid, ev.target.value)"/>
+                                        <!-- Unnamed groups cannot be selected. The guard is the
+                                             point: naming forces a moment of "which group is
+                                             this?" before anything can be posted to it. -->
+                                        <button class="btn btn-sm btn-primary text-nowrap"
+                                                t-att-disabled="!g.named"
+                                                t-on-click="() => this.waSelect(g.jid)">Use this</button>
+                                    </div>
+                                    <div class="small text-muted mt-1">
+                                        <t t-if="g.members"><b t-esc="g.members"/> members · </t>
+                                        <span t-esc="g.jid"/>
+                                        <t t-if="g.last_sender"> · last posted by <b t-esc="g.last_sender"/></t>
+                                        <t t-if="g.last_seen"> · <t t-esc="g.last_seen"/> UTC</t>
+                                    </div>
+                                </div>
+                                </div>
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        t-att-disabled="state.waBusy" t-on-click="waRefresh">Refresh</button>
+                                <div class="form-text">
+                                    A group appears here as soon as anyone posts in it, once this
+                                    WhatsApp number is a member.
+                                </div>
+                            </div>
+
+                            <!-- Which updates get posted, and in what words. One block per
+                                 event: switch, live preview, editable wording, insert
+                                 buttons, reset and its own test send. Modelled on the
+                                 reset-message editor in Login Management, which reads as
+                                 plain writing rather than as a template language. -->
+                            <div class="col-12 mt-2">
+                                <label class="form-label fw-bold small">What gets posted</label>
+                                <div t-foreach="state.waEvents" t-as="ev" t-key="ev.event"
+                                     class="border rounded p-2 mb-2">
+                                    <div class="form-check form-switch d-flex align-items-center gap-2 mb-0">
+                                        <input type="checkbox" class="form-check-input" role="switch"
+                                               t-att-checked="ev.enabled"
+                                               t-on-change="() => this.waToggleEvent(ev)"/>
+                                        <label class="form-check-label fw-semibold mb-0" t-esc="ev.label"/>
+                                        <span class="text-muted small" t-esc="ev.help"/>
+                                        <span t-if="ev._saved" class="text-success small">✓ Saved</span>
+                                    </div>
+
+                                    <!-- Hidden while off: a live preview of something that will
+                                         never be sent is just noise. -->
+                                    <div t-if="ev.enabled" class="mt-2 ps-4">
+                                        <small class="text-muted d-block mb-1">
+                                            <i class="fa fa-whatsapp me-1 text-success"/>Preview — what the group sees:
+                                        </small>
+                                        <div style="background:#dcf8c6; border-radius:12px; padding:10px 12px; max-width:440px; white-space:pre-wrap; font-size:14px; line-height:1.5; box-shadow:0 1px 2px rgba(0,0,0,0.12); color:#111;"
+                                             t-out="ev._preview"/>
+
+                                        <div class="d-flex flex-wrap gap-1 mt-2">
+                                            <span class="text-muted small me-1">Insert:</span>
+                                            <t t-foreach="ev.tokens" t-as="tok" t-key="tok">
+                                                <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                                                        style="font-size:11px;"
+                                                        t-on-click="() => this.waInsertToken(ev, tok)"
+                                                        t-esc="tok"/>
+                                            </t>
+                                        </div>
+
+                                        <textarea class="form-control mt-2" rows="4" style="font-family: inherit;"
+                                                  t-att-id="'watmpl-' + ev.event"
+                                                  t-att-value="ev.template"
+                                                  t-on-input="(e) => this.waTemplateInput(ev, e)"
+                                                  t-on-change="(e) => this.waSaveTemplate(ev, e)"/>
+                                        <div class="d-flex gap-2 mt-1">
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                    t-on-click="() => this.waResetTemplate(ev)">
+                                                <i class="fa fa-undo me-1"/>Reset to default</button>
+                                            <button class="btn btn-sm btn-outline-success"
+                                                    t-att-disabled="!state.waGroupJid"
+                                                    t-on-click="() => this.waTestEvent(ev)">Send test</button>
+                                        </div>
+                                        <small class="text-muted d-block mt-1">
+                                            Write it in plain English. The name, times and task details are
+                                            filled in automatically — the preview above shows exactly what
+                                            the group gets.
+                                        </small>
+                                    </div>
+                                </div>
+                            </div>
+                    <details class="mt-3">
+                        <summary class="small text-muted" style="cursor:pointer;">
+                            Advanced — invite link or a pasted id (both unavailable on this gateway)
+                        </summary>
+                        <div class="mt-2">
+                    <!-- Two ways in, because group LOOKUP is broken in the installed
+                         neonize build: GetJoinedGroups crashes the Go binary and
+                         GetGroupInfoFromLink cannot parse its own reply. Joining by
+                         link uses neither — it returns the JID directly — and it also
+                         puts the number in the group, which is required to post there
+                         at all. SENDING was never affected. -->
+                    <label class="form-label fw-bold small">Invite link</label>
+                    <div class="d-flex gap-2 mb-1" style="max-width:520px;">
+                        <input type="text" class="form-control form-control-sm"
+                               placeholder="https://chat.whatsapp.com/…"
+                               t-model="state.waLink"/>
+                        <button class="btn btn-sm btn-success text-nowrap"
+                                t-att-disabled="!state.waLink or state.waBusy"
+                                t-on-click="waJoin">Join and use</button>
+                    </div>
+                    <div class="form-text mb-3">
+                        Joins the group with this WhatsApp number and saves the group id in
+                        one step — members will see the number join. Copy the link
+                        <b>in full</b>; a truncated code is rejected as bad-request.
+                    </div>
+
+                    <label class="form-label fw-bold small">…or paste the group id, if you have it</label>
+                    <div class="d-flex gap-2" style="max-width:520px;">
+                        <input type="text" class="form-control form-control-sm"
+                               placeholder="120363041234567890@g.us"
+                               t-model="state.waJid"/>
+                        <button class="btn btn-sm btn-primary text-nowrap"
+                                t-att-disabled="!state.waJid" t-on-click="waUseJid">Use</button>
+                    </div>
+                    <div class="form-text mb-3">
+                        Open the group in WhatsApp Web — the id is the
+                        <code>120363…@g.us</code> part of the address bar. Then use
+                        <b>Send test</b> to confirm it works.
+                    </div>                        </div>
+                    </details>
+
+                    </div>
+                </div>
             </t>
         </div>`;
 
     setup() {
+        this.dialog = useService("dialog");
         this.state = useState({
             // Workflow gate timers (same res.company fields the mobile app edits).
             // Nothing about these windows is hard-coded anywhere — the crons read
@@ -221,6 +419,11 @@ export class KpiConfiguration extends Component {
             queue_nudge_minutes: 30,
             urgent_nudge_minutes: 5,
             developers: [],
+            // WhatsApp group reporting
+            waGroupJid: "", waGroupName: "",
+            waGroups: [], waFilter: "", waEvents: [], waSamples: {},
+            waPick: "", waLink: "", waPeek: null, waJid: "",
+            waBusy: false, waMsg: "", waMsgKind: "info",
             loading: true,
             error: "",
             savedAdminAccept: false,
@@ -257,6 +460,10 @@ export class KpiConfiguration extends Component {
                     this.state.dial = String(cfg.country_dial_code || "91");
                     this.state.mobileLength = Number(cfg.mobile_length) || 10;
                     this.state.countries = cfg.countries || [];
+                    // Read from /kpi_config/get, not the group route: the current
+                    // destination must be visible with the gateway offline.
+                    this.state.waGroupJid = cfg.wa_group_jid || "";
+                    this.state.waGroupName = cfg.wa_group_name || "";
                     // Daily report + retention.
                     if (cfg.daily_report_enabled != null) this.state.daily_report_enabled = !!cfg.daily_report_enabled;
                     if (cfg.daily_report_hour != null) this.state.daily_report_time = this.hourToTime(cfg.daily_report_hour);
@@ -268,6 +475,21 @@ export class KpiConfiguration extends Component {
                 }
                 const devs = await rpc("/kpi_multitask/list", {});
                 if (devs?.status) this.state.developers = devs.developers;
+                // Fill the group list on open. Deliberately silent: a group being
+                // unreadable (gateway offline) is a normal state this screen has to
+                // survive, and the current destination above already came from
+                // /kpi_config/get. Without this the dropdown sits empty until
+                // someone thinks to press Refresh — which reads as "we know of no
+                // groups" at exactly the moment we do know of one.
+                try {
+                    const g = await rpc("/kpi_wa_group/list", {});
+                    if (g?.status) this.state.waGroups = g.groups || [];
+                } catch (e) { /* offline is fine — Refresh is still there */ }
+                // Which updates get posted, and their wording. Needs no gateway
+                // at all — it is pure configuration, so it must load even with
+                // the phone offline.
+                try { await this.waLoadEvents(); }
+                catch (e) { /* leaves the list empty rather than breaking the screen */ }
             } catch (e) { this.state.error = e?.data?.message || e?.message || "Failed to load configuration."; }
             finally { this.state.loading = false; }
         });
@@ -481,6 +703,251 @@ export class KpiConfiguration extends Component {
     saveReportRetentionUnit(ev) {
         this.state.report_retention_unit = ev.target.value || "months";
         this.saveReportRetention();
+    }
+
+    _waSay(msg, kind = "info") {
+        this.state.waMsg = msg;
+        this.state.waMsgKind = kind;
+    }
+
+    async waRefresh() {
+        this.state.waBusy = true;
+        this._waSay("");
+        try {
+            const r = await rpc("/kpi_wa_group/list", {});
+            if (!r || !r.status) {
+                // Almost always "gateway not connected", which is a real answer and
+                // not an error in this screen — say it plainly rather than as a failure.
+                this.state.waGroups = [];
+                this._waSay((r && r.message) || "Could not read groups.", "warning");
+                return;
+            }
+            this.state.waGroups = r.groups || [];
+            if (!this.state.waGroups.length) {
+                // Invite links are dead on this gateway, so pointing at them was
+                // sending people down a path that cannot work. Capture is the way.
+                this._waSay("No groups captured yet. Post any message in the group you want, then press Refresh.", "info");
+            }
+        } finally {
+            this.state.waBusy = false;
+        }
+    }
+
+    async waUseJid() {
+        const jid = (this.state.waJid || "").trim();
+        const r = await rpc("/kpi_wa_group/select", { jid, name: "" });
+        if (!r || !r.status) { this._waSay((r && r.message) || "Could not save.", "danger"); return; }
+        this.state.waGroupJid = r.jid || "";
+        this.state.waGroupName = "";
+        this.state.waJid = "";
+        this._waSay("Saved. Use Send test to confirm the group accepts it.", "success");
+    }
+
+    /** Promise<boolean> from Odoo's own confirm dialog.
+     *
+     * Not window.confirm: this dialog names the destination group, and a native
+     * prompt renders the id as an unreadable run-on. `browser` (from
+     * @web/core/browser/browser) has no confirm() — that was a real bug here.
+     * Dismissing without choosing resolves false, so an ignored dialog can never
+     * be read as consent to post.
+     */
+    _waConfirm(title, body) {
+        return new Promise((resolve) => {
+            this.dialog.add(ConfirmationDialog, {
+                title, body,
+                confirm: () => resolve(true),
+                cancel: () => resolve(false),
+            }, { onClose: () => resolve(false) });
+        });
+    }
+
+    /** Fill the sample values and render WhatsApp *bold*, so the preview is what
+     *  the group actually receives rather than the raw wording. Escape first,
+     *  then add the <b> — the other order would let typed HTML through.
+     *  Same approach as renderPreview() on the Login Management screen. */
+    waRenderPreview(tpl) {
+        const samples = this.state.waSamples || {};
+        // Line by line, mirroring the server's rule: a line whose tokens ALL
+        // resolved to empty is dropped, decoration and all. If this diverged the
+        // preview would be lying about the one thing it exists to show.
+        const lines = [];
+        for (const line of String(tpl || "").split("\n")) {
+            let filled = line;
+            const resolved = [];
+            for (const [k, v] of Object.entries(samples)) {
+                const tok = `{${k}}`;
+                if (filled.includes(tok)) {
+                    const val = v == null ? "" : String(v);
+                    resolved.push(val.trim());
+                    filled = filled.split(tok).join(val);
+                }
+            }
+            if (resolved.length && !resolved.some(Boolean)) continue;
+            lines.push(filled);
+        }
+        let s = lines.join("\n").trim();
+        s = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        s = s.replace(/\*([^*\n]+)\*/g, "<b>$1</b>");   // WhatsApp bold → <b>
+        return markup(s);
+    }
+
+    async waLoadEvents() {
+        const r = await rpc("/kpi_wa_group/events", {});
+        if (!r || !r.status) return;
+        this.state.waSamples = r.samples || {};
+        this.state.waEvents = (r.events || []).map((e) => ({
+            ...e, _preview: this.waRenderPreview(e.template), _saved: false,
+        }));
+    }
+
+    async _waSaveEvent(ev, vals) {
+        const r = await rpc("/kpi_wa_group/set_event", { event: ev.event, ...vals });
+        if (!r || !r.status) { this._waSay((r && r.message) || "Could not save.", "danger"); return false; }
+        ev.enabled = r.enabled;
+        ev.template = r.template;
+        ev._preview = this.waRenderPreview(r.template);
+        this._flash(ev, "_saved");
+        return true;
+    }
+
+    waToggleEvent(ev) {
+        return this._waSaveEvent(ev, { enabled: !ev.enabled });
+    }
+
+    waTemplateInput(ev, e) {
+        // Preview only — saving happens on blur, exactly like the OTP editor.
+        ev._preview = this.waRenderPreview(e.target.value || "");
+    }
+
+    waSaveTemplate(ev, e) {
+        return this._waSaveEvent(ev, { template: e.target.value || "" });
+    }
+
+    /** Empty string means "use the built-in default" on the server, so Reset
+     *  never has to know what the default text is. */
+    waResetTemplate(ev) {
+        return this._waSaveEvent(ev, { template: "" });
+    }
+
+    waInsertToken(ev, tok) {
+        const el = document.getElementById(`watmpl-${ev.event}`);
+        const tag = `{${tok}}`;
+        if (!el) { return this._waSaveEvent(ev, { template: (ev.template || "") + tag }); }
+        // Drop it where the cursor is, not at the end — otherwise inserting into
+        // the middle of a sentence means retyping it.
+        const start = el.selectionStart ?? el.value.length;
+        const end = el.selectionEnd ?? el.value.length;
+        el.value = el.value.slice(0, start) + tag + el.value.slice(end);
+        el.focus();
+        el.selectionStart = el.selectionEnd = start + tag.length;
+        ev._preview = this.waRenderPreview(el.value);
+        return this._waSaveEvent(ev, { template: el.value });
+    }
+
+    async waTestEvent(ev) {
+        const jid = this.state.waGroupJid;
+        if (!jid) { this._waSay("No group selected yet.", "warning"); return; }
+        const label = this.state.waGroupName || jid;
+        const ok = await this._waConfirm(
+            `Send a test "${ev.label}" message?`,
+            `"${label}"\n${jid}\n\nEveryone in that group will see it. ` +
+            `It is marked as a test, and no real activity is implied.`);
+        if (!ok) return;
+        const r = await rpc("/kpi_wa_group/test_event", { event: ev.event, confirm_jid: jid });
+        this._waSay((r && r.message) || "No response.", r && r.status ? "success" : "warning");
+    }
+
+    get waVisibleGroups() {
+        const q = (this.state.waFilter || "").trim().toLowerCase();
+        const all = this.state.waGroups || [];
+        if (!q) return all;
+        // Match the id too — pasting a jid from a log should find its group.
+        return all.filter((g) =>
+            (g.name || "").toLowerCase().includes(q) || (g.jid || "").toLowerCase().includes(q));
+    }
+
+    async waRename(jid, name) {
+        const label = (name || "").trim();
+        const r = await rpc("/kpi_wa_group/rename", { jid, name: label });
+        if (!r || !r.status) { this._waSay((r && r.message) || "Could not rename.", "danger"); return; }
+        const g = (this.state.waGroups || []).find((x) => x.jid === jid);
+        // `named` is what unlocks "Use this", so it has to move with the label.
+        if (g) { g.name = r.name || ""; g.named = !!r.name; }
+        if (this.state.waGroupJid === jid) this.state.waGroupName = r.name || "";
+        this._waSay(label ? `Named "${r.name}".` : "Name cleared.", "info");
+    }
+
+    async waSelect(jid) {
+        const g = (this.state.waGroups || []).find((x) => x.jid === jid);
+        // Named-only is enforced on the button too, but a stale list could get
+        // here — and selecting a group nobody has identified is the exact mistake
+        // that put a test message in a client group.
+        if (!g || !g.named) { this._waSay("Name the group first, so it is clear which one it is.", "warning"); return; }
+        const ok = await this._waConfirm(
+            "Send workday reports here?",
+            `"${g.name}"${g.members ? ` — ${g.members} members` : ""}\n${jid}\n\n` +
+            `Everyone in that group will see every workday start and end message.`);
+        if (!ok) return;
+        const r = await rpc("/kpi_wa_group/select", { jid, name: g.name });
+        if (!r || !r.status) { this._waSay((r && r.message) || "Could not save.", "danger"); return; }
+        this.state.waGroupJid = r.jid || "";
+        this.state.waGroupName = r.name || g.name;
+        this._waSay(`Saved — reports will go to "${this.state.waGroupName}".`, "success");
+    }
+
+    async waClear() {
+        const r = await rpc("/kpi_wa_group/select", { jid: "" });
+        if (!r || !r.status) { this._waSay((r && r.message) || "Could not clear.", "danger"); return; }
+        this.state.waGroupJid = "";
+        this.state.waGroupName = "";
+        this._waSay("Turned off — nothing will be posted.", "info");
+    }
+
+    async waPeek() {
+        this.state.waBusy = true;
+        this.state.waPeek = null;
+        this._waSay("");
+        try {
+            // Read-only on purpose: joining is visible to the whole group, so the
+            // name is shown for confirmation before anything happens.
+            const r = await rpc("/kpi_wa_group/peek", { link: this.state.waLink });
+            if (!r || !r.status) { this._waSay((r && r.message) || "Could not read that link.", "warning"); return; }
+            this.state.waPeek = { name: r.name || r.jid, size: r.size || 0, jid: r.jid };
+        } finally {
+            this.state.waBusy = false;
+        }
+    }
+
+    async waJoin() {
+        this.state.waBusy = true;
+        try {
+            const r = await rpc("/kpi_wa_group/join", {
+                link: this.state.waLink, select: true,
+                name: this.state.waPeek ? this.state.waPeek.name : "",
+            });
+            if (!r || !r.status) { this._waSay((r && r.message) || "Could not join.", "danger"); return; }
+            this.state.waGroupJid = r.jid || "";
+            this.state.waGroupName = this.state.waPeek ? this.state.waPeek.name : "";
+            this.state.waPeek = null;
+            this.state.waLink = "";
+            this._waSay("Joined — reports will go to this group.", "success");
+        } finally {
+            this.state.waBusy = false;
+        }
+    }
+
+    async waTest() {
+        const jid = this.state.waGroupJid;
+        if (!jid) { this._waSay("No group selected yet.", "warning"); return; }
+        const label = this.state.waGroupName || jid;
+        const ok = await this._waConfirm(
+            "Post a test message?",
+            `"${label}"\n${jid}\n\nEveryone in that group will see it.`);
+        if (!ok) return;
+        // confirm_jid is checked server-side as well — the destination is an opaque
+        // id, and the route refuses to post anywhere the caller cannot name.
+        const r = await rpc("/kpi_wa_group/test", { confirm_jid: jid });
+        this._waSay((r && r.message) || "No response.", r && r.status ? "success" : "warning");
     }
 
 }

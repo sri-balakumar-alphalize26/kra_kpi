@@ -858,6 +858,20 @@ class KpiNotify(models.Model):
         # WhatsApp leg below no-ops on the empty `body`.
         app_body = self._format_message(event, ctx, templates=_APP_TEMPLATES) or body
 
+        # Post to the WhatsApp report group, if this event is switched on there.
+        #
+        # Placed HERE, before the early returns below, on purpose: those govern
+        # per-person WhatsApp DMs (the master switch, the per-event mute, whether
+        # any recipient has a phone). The group is a different channel with its
+        # own switch, and it must not go silent because nobody happens to have a
+        # phone number on file.
+        #
+        # Rendered through _format_message with the admin's wording as a
+        # one-entry templates dict, so all ~30 record tokens work in a group
+        # message with no second engine to keep in step. That call already
+        # swallows KeyError and returns the raw template rather than raising.
+        self._kpi_post_group_event(event, ctx)
+
         # Persist a browsable in-app notification per recipient user for the
         # curated assignment/upload events. This runs BEFORE the WhatsApp toggle
         # / phone-recipient early-returns below on purpose: the app feed must be
@@ -945,6 +959,33 @@ class KpiNotify(models.Model):
 
         for rcp in recipients:
             self._notify_one(event, rcp, body, session)
+
+    def _kpi_post_group_event(self, event, ctx):
+        """Post `event` to the WhatsApp report group when it is switched on.
+
+        Never raises. A group report is a side effect of the task operation that
+        triggered it — completing a task must not fail because a group is
+        unreachable or because someone typed a bad token into the wording.
+        """
+        try:
+            from .kpi_wa_group_event import WORKDAY_EVENT_KEYS
+            # The workday pair is posted from kpi_work_session via
+            # kpi.wa.group.report. workday_started ALSO exists as a _TEMPLATES
+            # event, so without this guard it would post twice.
+            if event in WORKDAY_EVENT_KEYS or event == 'workday_started':
+                return
+            Event = self.env['kpi.wa.group.event'].sudo()
+            row = Event._row(event)
+            if not row or not row.enabled:
+                return
+            body = self._format_message(
+                event, ctx, templates={event: row.effective_template()})
+            if not (body or '').strip():
+                return
+            self.env['kpi.wa.group.report'].sudo()._post(body)
+        except Exception as exc:
+            _logger.warning("wa group event %s failed for task %s: %s",
+                            event, self.id, exc)
 
     # ------------------------------------------------------------------ #
     # Helpers                                                            #

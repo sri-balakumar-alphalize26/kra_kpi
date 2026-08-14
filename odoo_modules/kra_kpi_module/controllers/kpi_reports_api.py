@@ -3180,6 +3180,329 @@ class KpiReportsAPI(http.Controller):
             return {'status': False, 'message': str(e), 'tasks': []}
 
     # ============================================================
+    #         WHATSAPP GROUP REPORTING
+    # ============================================================
+
+    # Invite-link discovery is refused in Python rather than attempted. Every
+    # neonize call in that family — get_joined_groups, get_group_info_from_link,
+    # join_group_with_link — fails on this gateway build with an access violation
+    # inside the Go binary. That is a process kill, not a Python exception, so no
+    # try/except can contain it and the whole Odoo server goes down with it. The
+    # capture flow needs none of them.
+    _WA_LINK_UNAVAILABLE = (
+        "Invite links do not work on this WhatsApp gateway. Instead: add this "
+        "WhatsApp number to the group from your phone, send any message in the "
+        "group, then press Refresh — the group appears in the list above.")
+
+    def _wa_is_admin(self):
+        """These routes join groups and change where the team's workday reports
+        are published, so they are admin-only."""
+        user = request.env.user
+        return (user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('kra_kpi_module.group_kra_admin')
+                or user.has_group('base.group_system'))
+
+    def _wa_admin_or_refuse(self):
+        """(session, error) for the routes that genuinely talk to WhatsApp.
+
+        Kept separate from picking a group: choosing or clearing the destination is
+        pure configuration and must work with the gateway down, or you cannot set
+        anything up until the phone happens to be connected.
+        """
+        if not self._wa_is_admin():
+            return None, 'Not authorized.'
+        session = request.env['whatsapp.session'].sudo().search(
+            [('status', '=', 'connected')], limit=1)
+        if not session:
+            return None, 'No connected WhatsApp session. Connect the gateway first.'
+        return session, None
+
+    @http.route('/kpi_wa_group/list', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_list(self, **params):
+        """Every group this number has joined, merged with what we have captured.
+
+        Two sources, deliberately:
+
+        * `kpi.wa.group` — groups we have seen a message from. Always readable,
+          works with the phone offline, and carries the admin's own label.
+        * the gateway's own joined-groups list — real WhatsApp names and member
+          counts, which is what actually makes a group identifiable.
+
+        The gateway half is best-effort. It was removed entirely while neonize
+        0.4.1 was installed, where get_joined_groups() died inside the Go binary
+        with an access violation — a process kill no Python `except` can contain,
+        on a route that runs on every press of Refresh. neonize 0.4.3 fixed it
+        (verified out-of-process against this exact session: 61 groups returned
+        with names). It stays wrapped and optional so an offline phone, or a
+        regression, degrades to the captured list instead of an error.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.', 'groups': []}
+        try:
+            company = request.env.company
+            rows = {}
+            # A row created before labels existed has name == jid, because that was
+            # the old default. That is not a name, and treating it as one would let
+            # the very rows the naming guard exists for sail straight through it.
+            for g in request.env['kpi.wa.group'].sudo().search([], limit=200):
+                label = '' if (g.name or '') == g.jid else (g.name or '')
+                rows[g.jid] = {
+                    'jid': g.jid, 'name': label, 'named': bool(label),
+                    'messages': g.message_count,
+                    'last_sender': g.last_sender or '',
+                    'last_seen': fields.Datetime.to_string(g.last_seen) if g.last_seen else '',
+                    'seen': True, 'joined': False, 'members': 0,
+                }
+            session = request.env['whatsapp.session'].sudo().search(
+                [('status', '=', 'connected')], limit=1)
+            if session:
+                try:
+                    for g in session.wa_list_groups():
+                        row = rows.setdefault(g['jid'], {
+                            'jid': g['jid'], 'name': '', 'named': False, 'messages': 0,
+                            'last_sender': '', 'last_seen': '', 'seen': False,
+                        })
+                        # The admin's own label wins: they set it precisely because
+                        # they wanted this group called something they recognise.
+                        row['name'] = row.get('name') or g.get('name') or ''
+                        row['named'] = bool(row['name'])
+                        row['members'] = g.get('size') or 0
+                        row['joined'] = True
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "gateway group list unavailable, using captured rows: %s", exc)
+            # Named first, then biggest — an unnamed group cannot be selected, so
+            # it belongs at the bottom rather than buried among the usable ones.
+            groups = sorted(rows.values(),
+                            key=lambda r: (not r['named'], -(r.get('members') or 0),
+                                           (r['name'] or '').lower()))
+            return {'status': True,
+                    'groups': groups,
+                    'selected_jid': company.kpi_wa_group_jid or '',
+                    'selected_name': company.kpi_wa_group_name or ''}
+        except Exception as e:
+            # Imported locally, matching the rest of this file — `logging` is not
+            # imported at module scope here.
+            import logging
+            logging.getLogger(__name__).error("wa_group_list: %s", e)
+            return {'status': False,
+                    'message': 'Could not read the group list: %s' % str(e)[:120],
+                    'groups': []}
+
+    @http.route('/kpi_wa_group/peek', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_peek(self, **params):
+        """Read an invite link WITHOUT joining, so the group can be confirmed first.
+
+        Joining is visible — everyone in the group sees the number appear — so it
+        is not something to do silently on paste.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        # NOT wired to the gateway. wa_peek_invite calls get_group_info_from_link,
+        # which fails on this neonize build with an access violation inside the Go
+        # binary — that is a process kill, not an exception, so no try/except here
+        # can contain it. Refusing in Python is strictly better than a 50/50 chance
+        # of taking Odoo down, and the capture route below always works.
+        return {"status": False, "message": self._WA_LINK_UNAVAILABLE}
+
+    @http.route('/kpi_wa_group/join', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_join(self, **params):
+        """Disabled: join-by-link crashes this gateway build. See wa_group_peek."""
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        # join_group_with_link is in the same crashing family as the lookups. It is
+        # also no longer needed: a group announces its own id the moment anyone
+        # posts in it, which is the flow the card now teaches.
+        return {"status": False, "message": self._WA_LINK_UNAVAILABLE}
+
+    @http.route('/kpi_wa_group/select', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_select(self, **params):
+        """Set (or clear, with an empty jid) the group workday reports go to.
+
+        Admin rights only — deliberately NOT a connected gateway. This is
+        configuration, and requiring the phone to be online to change a setting
+        means you can never set it up while it is offline.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        jid = (params.get('jid') or '').strip()
+        if jid and not jid.endswith('@g.us'):
+            return {'status': False, 'message': 'That is not a group id.'}
+        request.env.company.sudo().write({
+            'kpi_wa_group_jid': jid or False,
+            'kpi_wa_group_name': (params.get('name') or '') if jid else False,
+        })
+        return {'status': True, 'jid': jid, 'name': params.get('name') or ''}
+
+    @http.route('/kpi_wa_group/rename', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_rename(self, **params):
+        """Label a captured group so a human can tell which one it is.
+
+        No gateway call at all — which is the point. WhatsApp will not give us the
+        real group name on this build, and an unlabelled row is just an opaque id
+        that reads the same whether it is the dev group or a client's.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        jid = (params.get('jid') or '').strip()
+        rec = request.env['kpi.wa.group'].sudo().search([('jid', '=', jid)], limit=1)
+        if not rec:
+            return {'status': False, 'message': 'Unknown group.'}
+        rec.rename(params.get('name') or '')
+        # Keep the label shown on the "Reporting to …" banner in step with the
+        # picker when the renamed group is the one currently selected.
+        company = request.env.company
+        if (company.kpi_wa_group_jid or '') == jid:
+            company.sudo().kpi_wa_group_name = rec.name or ''
+        return {'status': True, 'jid': jid, 'name': rec.name or ''}
+
+    @http.route('/kpi_wa_group/events', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_events(self, **params):
+        """Every reportable event: switch, wording, default wording and preview.
+
+        Returns the effective wording AND the default, like /kpi_user_access/get
+        does for the OTP message — that is what lets "Reset to default" and the
+        live preview work without a second round-trip, and it keeps the default
+        defined in exactly one place.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.', 'events': []}
+        from ..models.kpi_wa_group_event import WA_GROUP_EVENTS_BY_KEY, PREVIEW_SAMPLES
+        rows = request.env['kpi.wa.group.event'].sudo()._rows(request.env.company)
+        out = []
+        for row in rows:
+            spec = WA_GROUP_EVENTS_BY_KEY.get(row.event, {})
+            out.append({
+                'event': row.event,
+                'label': spec.get('label', row.event),
+                'help': spec.get('help', ''),
+                'enabled': row.enabled,
+                'template': row.effective_template(),
+                'default': spec.get('default', ''),
+                'tokens': spec.get('tokens', []),
+            })
+        return {'status': True, 'events': out, 'samples': PREVIEW_SAMPLES}
+
+    @http.route('/kpi_wa_group/set_event', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_set_event(self, **params):
+        """Save one event's switch and/or wording.
+
+        Both keys optional and the persisted values echoed back, matching
+        /kpi_config/set_daily_report. An empty template stores '' so the built-in
+        default takes over again — the same "empty means default" convention as
+        the OTP template, which is what makes Reset a one-liner.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        row = request.env['kpi.wa.group.event'].sudo()._row(params.get('event') or '')
+        if not row:
+            return {'status': False, 'message': 'Unknown event.'}
+        if 'enabled' in params:
+            row.enabled = bool(params.get('enabled'))
+        if 'template' in params:
+            row.template = (params.get('template') or '').strip() or False
+        return {'status': True, 'event': row.event, 'enabled': row.enabled,
+                'template': row.effective_template()}
+
+    @http.route('/kpi_wa_group/test_event', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_test_event(self, **params):
+        """Post one event's wording to the group, filled with sample values.
+
+        Works whether the event is switched on or off — checking the wording
+        before turning something on is the whole point of a test button; the
+        switch governs real traffic.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        jid = (request.env.company.kpi_wa_group_jid or '').strip()
+        if not jid:
+            return {'status': False, 'message': 'No group selected yet.'}
+        # Same guard as /kpi_wa_group/test: the caller must name the destination
+        # it is about to post to. This is a one-click send, once per event, into
+        # a group that is only identified by an opaque id — exactly where that
+        # check has to hold.
+        if (params.get('confirm_jid') or '').strip() != jid:
+            return {'status': False, 'needs_confirm': True, 'jid': jid,
+                    'message': 'Confirm the destination before sending a test message.'}
+        row = request.env['kpi.wa.group.event'].sudo()._row(params.get('event') or '')
+        if not row:
+            return {'status': False, 'message': 'Unknown event.'}
+        from ..models.kpi_wa_group_event import PREVIEW_SAMPLES
+        Event = request.env['kpi.wa.group.event'].sudo()
+        body = Event.render(row.effective_template(), PREVIEW_SAMPLES)
+        if not (body or '').strip():
+            return {'status': False, 'message': 'That message is empty — nothing to send.'}
+        # Marked as a test. An unannounced "✅ Task completed" for a task nobody
+        # touched is worse than no test at all.
+        body = "🧪 _Test message — no real activity._\n\n" + body
+        try:
+            ok = request.env['kpi.wa.group.report'].sudo()._post(body)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("wa_group_test_event: %s", exc)
+            return {'status': False, 'message': str(exc)[:160] or exc.__class__.__name__}
+        return {'status': bool(ok),
+                'message': ('Test message dispatched. This gateway cannot confirm '
+                            'delivery — open the group and check it arrived.') if ok
+                           else 'The gateway refused the send — check the log.'}
+
+    @http.route('/kpi_wa_group/test', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_test(self, **params):
+        """Post a test line to the configured group.
+
+        The only way to prove the whole chain — JID, membership, and the @g.us
+        send path — without waiting for someone to start their workday.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        # Config first, gateway second. "No group selected" is the actionable
+        # message and needs no phone; checking the session first made both
+        # failures report the same thing.
+        jid = (request.env.company.kpi_wa_group_jid or '').strip()
+        if not jid:
+            return {'status': False, 'message': 'No group selected yet.'}
+        # The caller must echo back the exact destination it is about to post to.
+        # Enforced HERE rather than only in a dialog, because the damage this
+        # prevents is real: a test message went into a live client group because
+        # the destination was an opaque id nobody had confirmed. A client that
+        # cannot name the group it is posting to does not get to post.
+        confirm = (params.get('confirm_jid') or '').strip()
+        if confirm != jid:
+            return {'status': False, 'needs_confirm': True, 'jid': jid,
+                    'message': 'Confirm the destination before sending a test message.'}
+        session, err = self._wa_admin_or_refuse()
+        if err:
+            return {'status': False, 'message': err}
+        # A refused group send returns False, but the send can also RAISE before it
+        # gets that far: this route picks the session on the database `status`
+        # column, while send_message looks the live client up in a per-process dict.
+        # When those disagree — the usual case being a row left reading "connected"
+        # after a restart — the user got a raw JSON-RPC error instead of the
+        # friendly answer this handler exists to give.
+        try:
+            ok = session.send_message(
+                jid, "✅ KRA/KPI is connected to this group.\n"
+                     "Workday start and end reports will appear here.")
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("wa_group_test send failed: %s", exc)
+            # The gateway's own wording is the actionable part (usually "not
+            # connected — scan the QR"). The class name is only a fallback for
+            # failures from deeper inside neonize that carry no message at all.
+            return {'status': False,
+                    'message': str(exc)[:160] or exc.__class__.__name__}
+        # Never claim delivery. This gateway cannot return a receipt (the send
+        # succeeds but the reply does not parse), so "Sent." would be asserting
+        # something we do not know — and the whole reason a test exists is that the
+        # destination is an opaque id nobody can verify from inside Odoo.
+        return {'status': bool(ok),
+                'message': ('Message dispatched to %s. This gateway cannot confirm '
+                            'delivery — open that group and check it arrived.' % jid)
+                           if ok else
+                           'The gateway refused the send — check the log.'}
+
+    # ============================================================
     #         CLIENT PORTAL — SAVED SIGNATURE IMAGE
     # ============================================================
 
