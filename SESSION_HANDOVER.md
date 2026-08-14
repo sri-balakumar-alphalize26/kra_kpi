@@ -1,215 +1,174 @@
-# KRA/KPI — session handover (30 Jul 2026)
+# KRA/KPI — session handover (14 Aug 2026)
 
-Replaces the 29 Jul handover (recoverable from git history). Everything here was
-verified against the live database or the device, not recalled.
-
----
-
-## 0. FIRST: uncommitted work is on disk
-
-Complete and verified, but **not committed**. Commit it or discard it; do not
-leave it sitting there.
-
-```
-?? components/DateGridModal.js      (new, shared date picker)
- M screens/ClientInvoices.js        (now imports it; local copy + 13 cal* styles removed)
- M screens/WorkReport.js            (typed YYYY-MM-DD fields -> the picker)
-```
-
-The shared picker was extracted from `ClientInvoices` so `WorkReport` could use it
-instead of carrying a second copy — both screens had the same typed-date problem,
-and fixing only one is how they drift. WorkReport was the last place a date could
-be hand-typed, so a malformed range is no longer reachable in the app.
-
-Verified: 48/48 jest, all 73 app files parse, Metro bundle 200 with the new
-strings present. **Not seen on a device** — no screenshot of the WorkReport picker.
-
-Suggested message:
-
-```
-Share one date picker between New Invoice and Work Report
-```
+Replaces the earlier 14 Aug handover (recoverable from git history). Everything here was verified
+against the live database, the served asset bundle or the running server — not recalled.
 
 ---
 
-## 1. Environment (verified)
+## 0. The environment changed: neonize was upgraded
 
-| | |
-|---|---|
-| Odoo | `C:\Program Files\Odoo 19.0.20260119\` — service **`odoo-server-19.0`**, port 8069 |
-| Live DB | **`369application`** — module **19.0.2.6 installed** |
-| Other DB | **`sales_test`** — also upgraded to 19.0.2.6 today |
-| Postgres | `...\PostgreSQL\bin\psql.exe`, user `openpg`, pw `openpgpwd`, **v12.4** |
-| Odoo log | `C:\Program Files\Odoo 19.0.20260119\server\odoo.log` — **grep it with `-a`**, git/grep treat it as binary |
-| adb | `C:\Users\sriba\platform-tools\adb.exe` — tablet `R52N410F5QE` (SM-T510) |
-| App | Expo SDK 54, runs in **Expo Go**; `com.alphalize.krakpi` is NOT installed |
+**`neonize 0.4.1.post0` → `0.4.3.post0`.** This is a pip install on the server, so **no git
+checkout reproduces it** — a fresh machine needs it done again.
 
-### Deploy (PowerShell as Administrator)
+It fixed three things at once, all of which the previous handover recorded as permanent:
 
-```powershell
-$mod="kra_kpi_module"
-$src="c:\Projects\KRA_KPI\odoo_modules\$mod"
-$dst="C:\Program Files\Odoo 19.0.20260119\server\odoo\addons\$mod"
-Stop-Service odoo-server-19.0 -Force
-robocopy $src $dst /MIR /XD __pycache__ /XF *.pyc | Out-Null
-if ($LASTEXITCODE -ge 8) { "COPY FAILED" } else {
-  & "C:\Program Files\Odoo 19.0.20260119\python\python.exe" `
-    "C:\Program Files\Odoo 19.0.20260119\server\odoo-bin" `
-    -c "C:\Program Files\Odoo 19.0.20260119\server\odoo.conf" `
-    -d 369application -u $mod --stop-after-init
-}
-Start-Service odoo-server-19.0
-```
+- `get_joined_groups()` — was dying inside the Go binary, now returns all **61** groups with names.
+- `get_group_info(jid)` — was unusable, now works.
+- `SendMessageReturnFunction` — group sends dispatched fine but the *reply* would not parse, so a
+  delivered message was recorded as `failed`. Now parses.
 
-`robocopy` exits **1** on a successful copy-with-changes; `>=8` is the real
-failure threshold. `-u` is needed for web assets (`kpi_action.js`) and for new
-stored fields.
+**Backup, for rollback:** the 0.4.1 package directory and the pairing database were copied to
+`neonize-backup-20260814/` (`pkg/neonize`, `pkg/neonize-0.4.1.post0.dist-info`, `sessions/`).
+**That copy is currently in a session temp folder and needs moving somewhere durable.** Without it a
+rollback means re-pairing the OTP number by QR: whatsmeow migrates the session `.db` forward on
+first use by a newer version and does not migrate back.
 
----
+Rollback = stop both services, restore `pkg/neonize` over site-packages **and** the
+`369application_session_2.db` pairing file, start.
 
-## 2. Git
+### Two hypotheses that were investigated and disproven — do not re-chase
 
-- `613f696` — phone responsiveness: toolbar wrap, idle popup scroll, modalCard cap
-- `a150dbb` — Presence = clock, close-path `at` caps, break overlap, migration fix
-- Both pushed to **`origin` AND `origin2`** (upstream is `origin2/main`)
-- **User does not want Claude/AI attribution in commit messages.**
+- **Protobuf version mismatch.** No. The generated code declares `Protobuf Python Version: 7.34.1`
+  and validates against exactly the installed 7.34.1. neonize is also the only package in the
+  environment that depends on protobuf.
+- **Schema drift between separately-sourced halves.** No. `neonize-windows-amd64.dll` and
+  `proto/Neonize_pb2.py` share one timestamp — they shipped in the same wheel.
+  `NO CHECKED-IN PROTOBUF GENCODE` is a routine protoc marker, and the odd
+  `from waVnameCert import …` imports are simply how neonize ships.
+
+It was a plain library bug with a plain upgrade path.
 
 ---
 
-## 3. Traps that cost real time today
+## 1. What the WhatsApp group feature does now
 
-**Odoo logs to `odoo.log`, not stdout.** `-u ... 2>&1 | ...` captures nothing. My
-first upgrade failed silently and I believed it worked. **Always verify the
-outcome** (`ir_module_module.latest_version`), never the exit code.
+**Proven end to end today** — a real group send finally succeeded (`whatsapp_message` 1517, `sent`,
+to a throwaway group named "Alpha"). Every earlier attempt in this project used a fabricated JID,
+so this was the one open verification from the previous handover.
 
-**Raw SQL in migrations gets no validation.** `migrations/19.0.2.6/post-migrate.py`
-selected `kind` from `kpi_break_log`; the column is `break_type`. It aborted the
-upgrade mid-run, which left a new stored field with no DB column and crashed End
-Workday. Byte-compile migrations and dry-run their SQL against the live DB first.
+- **Group picker** lists all 61 joined groups with real WhatsApp names, member counts and a filter,
+  merged with groups learned from inbound messages (`kpi.wa.group`) so it still works with the phone
+  offline.
+- **Per-event control** (`kpi.wa.group.event`, new): each update has its own switch and its own
+  editable wording, with a live preview, click-to-insert fields, Reset to default and its own
+  Send test. Registry lives in `models/kpi_wa_group_event.py` — adding an event is a dict entry.
 
-**`kra.kpi.pause_task` is defined TWICE** — `models/kpi.py` and
-`models/kpi_workflow.py` (`_inherit`). MRO resolves the **workflow** one. Changing
-a signature in only one place raises `TypeError` inside a broad
-`except Exception: log a warning`, so the failure is invisible and the work is
-silently skipped. Check both.
+  | event | default |
+  |---|---|
+  | `workday_start`, `workday_end` | **on** (existing behaviour) |
+  | `complete`, `final_approved`, `start`, `pause`, `resume` | **off** |
 
-**"Stamp the clock after the work, not before."** Hit twice: `action_pause_workday`
-and `_close_overdue`. Both computed `now`/`eod` before doing the thing it was meant
-to timestamp.
+  New events are seeded **off** deliberately: task-level reporting for nine developers is hundreds
+  of messages a day.
 
-**`Dimensions.get('window')` is read once at module scope** (`IS_NARROW`,
-`MODAL_BODY_MAX_H`, `LANE_MAX_H` in `KpiActionBoard.js`). To test a phone layout
-you must resize BEFORE the bundle loads:
-```bash
-adb shell am force-stop host.exp.exponent
-adb shell wm size 720x1600; adb shell wm density 320   # = 360dp wide
-# ... test ...
-adb shell wm size reset; adb shell wm density reset
-```
+- Task events hook `kpi_notify._notify()` **before** its four early returns, because those govern
+  per-person DMs (master switch, per-event mute, whether anyone has a phone). The group is a
+  separate channel with its own switch. `workday_started` is explicitly excluded from that hook —
+  it already posts from `_get_or_open_today`, and hooking it in both places double-posts.
 
-**Every fixed-width row in this app was sized for the 1200px tablet.** Four found
-and fixed (`statTiles`, `modalFoot`, `toolbar`, and `modalCard` height). Assume any
-`flexDirection: 'row'` without `flexWrap` is broken on a phone.
+- Wording is rendered with `str.replace`, **never `str.format`**: templates are hand-written and
+  contain emoji, quotes and sometimes a stray brace, all of which make `format()` raise. Ending a
+  workday is one-way, so a typo in a message must never be able to block it. Unknown `{tokens}`
+  survive as literal text. Covered by `scripts`-free unit checks that read the real function and the
+  real defaults out of the source.
 
-**`Write` emits a UTF-8 BOM**, which `odoo-bin shell` (`exec(sys.stdin.read())`)
-rejects with `SyntaxError: invalid non-printable character U+FEFF`. Strip it:
-```powershell
-$t=[IO.File]::ReadAllText($p).TrimStart([char]0xFEFF)
-[IO.File]::WriteAllText($p,$t,(New-Object Text.UTF8Encoding $false))
-```
-Bash `< file` redirection is blocked by the permission classifier — pipe via `cmd /c`.
+- A line whose tokens **all** resolved to empty is dropped, decoration included — otherwise an empty
+  note renders as a bare `📝 ""`. The test is on the tokens, not on how the finished line looks: an
+  emoji is enough to defeat a text-based check.
 
 ---
 
-## 4. The reconciliation model (changed today — read before touching totals)
+## 2. The client-group incident — read this before touching the picker
 
-```
-presence   = logout_at − login_at          # RAW CLOCK, paused INCLUDED
-accounted  = productive + metered + paused
-other_idle = presence − productive − metered − paused
-met_standard = (presence − paused) >= standard_workday_hours
-```
+Four test messages were posted into **"Nex Gen 369Ai.biz"**, a live client group, because:
 
-`presence` is now the true span so 09:30→21:30 always reads 12h. `met_standard`
-subtracts paused so a frozen day cannot read as a full day. **Invariant:
-`accounted + other_idle == presence`, exactly** — verified to the second.
+1. **Captured groups had no names.** `record_seen(jid, name='')` stored only the id, so the picker
+   showed `120363405315530367@g.us` and it was assumed to be the dev group.
+2. **A delivered message was reported as failed.** The `SendMessageReturnFunction` parse error made
+   every successful send look like a failure, which invited a retry — one mistake became four.
 
-`metered` = break + lunch + meeting + away + other + no_tasks. A break type not in
-that sum becomes *unexplained idle*. `pause_reason_code = 'day_end'` deliberately
-has **no** break type — `start_break` files unknown codes as `'other'`, which is
-already metered.
+Guards now in place, all of which should stay:
 
-`away` is no longer idle detection (retired). It is now **"the system stopped a
-task"** — Pause Workday and the midnight close. Labelled **"Away (system)"**.
+- A group **cannot be selected until it is named**, enforced in the route as well as the button.
+- Selecting *and* testing both require a confirmation naming the destination; `/kpi_wa_group/test`
+  and `/kpi_wa_group/test_event` refuse unless the caller echoes back `confirm_jid`.
+- Test messages are prefixed `🧪 Test message — no real activity.`
+- A send whose receipt cannot be parsed is recorded as `sent`, not `failed`, so nothing retries.
 
 ---
 
-## 5. Fixed today
+## 3. Answered: §2 of the previous handover
 
-- **End Workday crashed** — `paused_seconds` declared stored, column missing.
-- **Migration aborting** (`kind` → `break_type`).
-- **Presence/Accounted model** as above, plus reverted the live tickers
-  (`presenceLive`, `livePresenceDisplay`) that subtracted paused.
-- **Task logs outliving their session** — `at` cap threaded through
-  `stop_session` → `pause_task` → `_pause_running_task` → `start_break`; `eod`
-  computed first in `_close_overdue`; same for the idle close; `action_end_day`
-  now uses one instant for both.
-- **Breaks overlapping running work** — a break no longer opens while another task
-  runs, and `start_task` now closes an open break (`resume_task`/`complete_task`
-  already did).
-- **Day End** pause reason; **web Resume gated** like Start; **phone
-  responsiveness** (4 layout faults).
-- **`sales_test`** upgraded — its crons were failing every minute and flooding the
-  shared log. Now 0 errors over a full cycle.
+The ask was *"the dev numbers are assigned so when logged in send the msg in the grp from their
+number"*.
 
-### Data repaired (all backed up to the session scratchpad)
-- 12 time logs clamped to their session end — **9.80h** of phantom task time, with
-  `timer_total_seconds` decremented to match (e.g. `REQ-064` 85321 → **51944**).
-- 1 break zeroed that sat entirely inside a running task (192s).
-- 1 inverted break row (−354s) healed by the migration.
+**Rejected, with the user's agreement.** Sending *as* a number is not possible from a stored number:
+WhatsApp only lets software send as an account once that account authorises it as a linked device
+(a one-time QR or 8-character code from the person's own phone — `PairPhone` exists in neonize and
+would work). Group membership is not a substitute; membership lets *their* number post, linking lets
+*Odoo* post as them, and both would be needed.
 
-### Deliberately NOT repaired
-- **8 time logs that STARTED after their session closed** (~43h span, ~16h real
-  work across adithyan/angitha/sribalakumar/nishanthini). Pre-workday-gate debris;
-  `_start_block` now prevents it. Clamping would invert start/end and **delete real
-  work**. Needs a decision: attach to the right session, or leave.
-- **1 partial break overlap (90s, break 3, 25 Jul)** — a task ran *inside* a break.
-  The only accurate repair is splitting the row, i.e. inventing history.
+Decision: **one company number posts and @-mentions the developer.**
 
 ---
 
-## 6. Not done / blocked
+## 4. Traps in this environment
 
-| # | Item | Blocker |
-|---|---|---|
-| 1, 2 | read-only gate across End Workday; reopen still shows "Workday ended for today" | **End Workday is one-way for the date.** User must drive. Item 2 is the regression they most expect. |
-| 12, 13 | keyboard lift on the 4 login screens | needs a logout; PIN not available |
-| — | 5-tile End Workday case | needs `paused_seconds > 0` on the logged-in account. 4 tiles verified wrapping; 5th is one more cell. |
-| — | **Push notifications** | `InvalidCredentials` from Expo on every send. **Not a code bug** — the EAS project's FCM V1 credentials. Fix in EAS/Firebase. 9 sends worked 25 Jul, all have failed since. |
+- **Deploy is a copy.** Robocopy repo → `C:\Program Files\Odoo 19.0.20260119\server\odoo\addons\`,
+  then stop services → `-u kra_kpi_module --stop-after-init` → start. Verify with
+  `select state, latest_version from ir_module_module`, never the exit code. Live db is
+  **`369application`** (not `sales_test`, which several scripts still assume).
+- **Python changes need a full service restart.** Neither service runs with `--dev=reload`, so a
+  registry reload does not re-import edited modules.
+- **The asset URL only changes when the bundle content does — and the `/odoo` HTML that references
+  it can itself be cached.** Bump the manifest version on every JS change and hard-reload when
+  testing. Delete `ir.attachment` rows matching `web.assets%` to force regeneration, then read the
+  bundle back: verified-in-source is not verified-as-shipped.
+- **A Go-level access violation is a process kill, not an exception.** No Python `try/except` can
+  contain it — it takes the whole Odoo server down. That is why the invite-link routes
+  (`wa_group_peek`, `wa_group_join`) are still refused in Python rather than re-armed; with 61
+  groups listed by name they solve a problem that no longer exists.
+- **`odoo_modules/whatsapp_neonize/` in this repo is stale and is NOT what runs.** `addons_path`
+  covers only the Program Files directory. Read the installed copy when reasoning about gateway
+  behaviour. This cost real time today.
+- **Do not install `whatsapp_gateway`** (present in the addons directory, uninstalled). Its
+  migration drops six columns this feature reads.
+- **`--logfile=-` writes a file literally named `-`.** Use `Select-String` on the output instead.
+- **`node --check` cannot see unbalanced tags inside a template literal.** Always also parse the OWL
+  template as XML.
+- **Odoo refuses remote calls to `_`-prefixed methods.**
 
 ---
 
-## 7. Watch out
+## 5. Open — nothing here is done
 
-**Postgres went into recovery mode** mid-session (v12.4) and recovered on its own.
-Cause unknown. All committed repairs verified intact afterwards. If it recurs, look
-at that before trusting any numbers.
-
-**The app's cached display name can be stale.** The tablet greeted "Hello,
-Mitchell" while the Odoo session cookie was `sribalakumar`'s — `user.name` comes
-from AsyncStorage, the session from the cookie. Trust `fetchTasks ← isAdmin` and
-the DB, not the greeting.
-
-**`components/PairArt.js`** is orphaned (PIN pairing artwork, nothing imports it).
+1. **OTP has not been re-proven since the neonize upgrade.** The most recent personal send in
+   `whatsapp_message` is 6 Aug. The session reconnects and the client is live, but only a real
+   mobile-app login proves the channel. **This is the highest-priority check**, and the rollback
+   above exists for it.
+2. **`sales_test` is broken** — `column res_company.kpi_wa_group_jid does not exist`. The Python is
+   shared from the addons directory but that database was never upgraded. **The e2e suites run
+   against it, so the test baseline is currently meaningless.** Fix with `-u kra_kpi_module`, then
+   re-run: baseline was `e2e-client-flow 27/27`, `e2e-billing-dedup 4/4`,
+   `e2e-invoice-payments 45/45`, `jest 71/71`.
+3. **Developer numbers: 0 of 14** have `kpi_wa_number`, so every `{dev}` mention renders as a plain
+   name rather than a tap-able mention. Entered at Configuration → Developers;
+   `normalize_wa` already prefixes the dial code, so saved numbers clear the ≥11-digit bar.
+4. **The reply parser has still never seen a real inbound message.** It was dead from 24 Jul until
+   it was repaired, and now runs from a `whatsapp.message` create hook.
+5. **The React Native Configuration screen has not been updated** for per-event control — web only.
+6. **Move the neonize backup somewhere durable** (see §0).
+7. `scripts/deploy-upgrade.mjs` hardcodes `DB = 'sales_test'`; it should take the database as an
+   argument the way `check-bundle.mjs` does.
+8. **Auto-closed workdays post nothing** — `_close_overdue` and `_cron_close_idle_workdays` call
+   `_finalize_day_cleanup` directly and never `action_end_day`, where the group hook lives. A
+   developer who forgets to end their day gets a start post and no end post. Flagged, not fixed.
+9. The app still needs an EAS build for its half of the earlier work.
 
 ---
 
-## 8. Working preferences observed
+## 6. `[APITEST]` fixtures
 
-- Module first, then app — **and give the deploy command with the change.**
-- Short, direct answers. Update the todo list when asked.
-- **No AI attribution in commits.**
-- Confirm before anything with real consequences (billing, auth, destroying data).
-  Several requirements reversed mid-design — check intent before implementing.
-- Test on the **device**, not just in code. Every bug that mattered today was
-  invisible in the diff and obvious on a phone.
+Root clients are stable (the suites reuse a fixed tree). **Tasks and invoices still grow on every
+run** by design. `scripts/cleanup-apitest.mjs` removes them (dry-run by default, `--yes` to act);
+the user chose to keep them.
