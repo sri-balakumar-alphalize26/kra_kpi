@@ -97,6 +97,18 @@ class ResCompany(models.Model):
              "Nudging stops once an admin reads the notification (or the task resumes). "
              "Read by kra.kpi._cron_nudge_urgent_pause.")
 
+    # ---- WhatsApp group reporting ---------------------------------------- #
+    # Where workday start/end reports are posted. Stores the group's JID
+    # ("120363...@g.us"), never the invite link: links are revocable and rotate,
+    # the JID does not. Empty = reporting off, which is the default.
+    kpi_wa_group_jid = fields.Char(
+        string='WhatsApp Report Group',
+        help="Group JID that workday start/end reports are posted to. "
+             "Leave empty to post nothing.")
+    kpi_wa_group_name = fields.Char(
+        string='WhatsApp Report Group Name', readonly=True,
+        help="Cached for display; the JID above is what is actually used.")
+
     standard_workday_hours = fields.Float(
         string='Standard Workday (hours)',
         default=9.0,

@@ -2499,6 +2499,12 @@ class KraKpiAPI(http.Controller):
                 'country_id': c.kpi_country_id.id if c.kpi_country_id else False,
                 'country_dial_code': dial,
                 'mobile_length': length,
+                # Where workday start/end reports are posted. Read here rather than
+                # from /kpi_wa_group/list so the screen can show the current setting
+                # with the gateway offline — you must be able to see and change the
+                # destination without the phone being connected.
+                'wa_group_jid': c.kpi_wa_group_jid or '',
+                'wa_group_name': c.kpi_wa_group_name or '',
                 'countries': [
                     {'id': co.id, 'name': co.name, 'code': co.code or '',
                      'phone_code': co.phone_code}

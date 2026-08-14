@@ -1260,7 +1260,26 @@ try:
     from odoo.addons.whatsapp_neonize.models.whatsapp_session import WhatsAppSession  # noqa: I001
 
     if not getattr(WhatsAppSession, '_kpi_parser_installed', False):
-        _original = WhatsAppSession._process_credit_reply_instant
+        # The gateway was rewritten and _process_credit_reply_instant no longer
+        # exists, so this patch had been failing at every startup since 2026-07-24
+        # and client "1"/"2" pre-approval replies were going nowhere. It now
+        # attaches to whichever hook the installed gateway actually has, and falls
+        # back to a no-op original when there is nothing to chain — the KPI parser
+        # is what matters, and it must run even with no credit parser in front.
+        _original = None
+        for _name in ('_process_credit_reply_instant', '_process_credit_reply',
+                      '_process_inbound_reply'):
+            _candidate = getattr(WhatsAppSession, _name, None)
+            if _candidate is not None:
+                _original = _candidate
+                _logger.info("KRA/KPI inbound parser chaining onto %s", _name)
+                break
+        if _original is None:
+            _logger.info("KRA/KPI inbound parser: no credit parser on this gateway, "
+                         "installing standalone")
+
+            def _original(pool, uid, session_id, phone_clean, msg_text):
+                return False
 
         def _chained_credit_reply(pool, uid, session_id, phone_clean, msg_text):
             # -----------------------------------------------------------------
@@ -1332,7 +1351,21 @@ try:
 
         WhatsAppSession._process_credit_reply_instant = staticmethod(_chained_credit_reply)
         WhatsAppSession._kpi_parser_installed = True
+        # Exposed module-level as well, because attaching to the gateway attribute
+        # is no longer enough: the rewritten gateway does not call it. The live
+        # trigger is now a create() hook on whatsapp.message (see
+        # kpi_wa_inbound_hook.py), which invokes this directly with the row the
+        # gateway just recorded — so we read their parsed phone/text rather than
+        # re-deriving it from the raw event.
+        process_inbound_reply = _chained_credit_reply
         _logger.info("KRA/KPI inbound reply parser installed on WhatsAppSession.")
 except Exception as exc:
     # whatsapp_neonize might not be installed in some envs; log and skip.
     _logger.warning("Could not install KRA/KPI inbound parser: %s", exc)
+
+
+# Fallback when the gateway is not installed at all: importers can still call this
+# and get a clean "not handled" rather than an AttributeError.
+if 'process_inbound_reply' not in dir():
+    def process_inbound_reply(pool, uid, session_id, phone_clean, msg_text):
+        return False
