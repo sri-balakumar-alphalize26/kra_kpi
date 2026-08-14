@@ -6,6 +6,14 @@ import { rpc } from "@web/core/network/rpc";
 export class KpiCompletionCertificate extends Component {
     static template = xml/* xml */`
         <div class="o_kpi_completion_certificate p-4">
+        <div t-if="state.toast.show"
+             t-att-class="'alert alert-dismissible d-flex align-items-start gap-2 alert-' + state.toast.kind"
+             style="position:sticky; top:0; z-index:1080; white-space:pre-wrap;">
+            <i t-att-class="'fa mt-1 ' + (state.toast.kind === 'success' ? 'fa-check-circle' : (state.toast.kind === 'danger' ? 'fa-exclamation-circle' : 'fa-info-circle'))"/>
+            <div class="flex-grow-1" t-esc="state.toast.text"/>
+            <button type="button" class="btn-close" t-on-click="dismissToast"/>
+        </div>
+
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2 class="fw-bold">
                     <i class="fa fa-certificate me-2 text-primary"/> Completion Certificates
@@ -280,6 +288,9 @@ export class KpiCompletionCertificate extends Component {
         const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
         this.state = useState({
+            // Replaces alert(). A browser alert blocks the whole tab and hides the
+            // screen it is talking about; this sits in the page and can be ignored.
+            toast: { show: false, text: '', kind: 'warning' },
             filters: {
                 client_kra_id: '',
                 from_date: fmt(firstOfMonth),
@@ -350,7 +361,7 @@ export class KpiCompletionCertificate extends Component {
     async quickCreateTask() {
         const nt = this.state.newTask;
         if (!nt.client_kra_id || !nt.sub_kra_id || !nt.task_name) {
-            alert('Please select client, project, and enter a task name.');
+            this._toast('Please select client, project, and enter a task name.', 'warning');
             return;
         }
         const r = await rpc('/kpi_completion_cert/create_task_from_doc', {
@@ -364,8 +375,8 @@ export class KpiCompletionCertificate extends Component {
             file_data: nt.file_data,
             file_name: nt.file_name,
         });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        alert(`Task created: ${r.name} (id=${r.kpi_id})`);
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
+        this._toast(`Task created: ${r.name} (id=${r.kpi_id})`, 'warning');
         // Reset form + reload list
         this.state.newTask = {
             client_kra_id: '', sub_kra_id: '', task_name: '',
@@ -378,7 +389,7 @@ export class KpiCompletionCertificate extends Component {
 
     async loadList() {
         const r = await rpc('/kpi_completion_cert/list', this.state.filters);
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
         this.state.kpis = r.kpis || [];
         // Default cert version to V01 for any KPI we haven't seen yet
         for (const k of this.state.kpis) {
@@ -415,7 +426,7 @@ export class KpiCompletionCertificate extends Component {
                 file_name: file.name,
                 signed_date: today,
             });
-            if (!r.status) { alert('Upload failed: ' + (r.message || 'unknown')); return; }
+            if (!r.status) { this._toast('Upload failed: ' + (r.message || 'unknown'), 'danger'); return; }
             const k = this.state.kpis.find(x => x.id === kpiId);
             if (k) {
                 k.has_signed_certificate = r.has_signed_certificate;
@@ -442,7 +453,7 @@ export class KpiCompletionCertificate extends Component {
                 file_data: b64,
                 file_name: file.name,
             });
-            if (!r.status) { alert('Upload failed: ' + (r.message || 'unknown')); return; }
+            if (!r.status) { this._toast('Upload failed: ' + (r.message || 'unknown'), 'danger'); return; }
             // Refresh the row data
             const k = this.state.kpis.find(x => x.id === kpiId);
             if (k) {
@@ -458,10 +469,10 @@ export class KpiCompletionCertificate extends Component {
 
     async downloadCertificate(kpiId) {
         const r = await rpc('/kpi_completion_cert/pdf_data', { kpi_id: kpiId });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
         const d = r.data;
         const certVer = this.state.certVersions[kpiId] || 'V01';
-        if (!window.jspdf) { alert('jsPDF not loaded.'); return; }
+        if (!window.jspdf) { this._toast('jsPDF not loaded.', 'warning'); return; }
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ unit: 'pt', format: 'a4' });
         const pageW = doc.internal.pageSize.getWidth();
@@ -674,6 +685,17 @@ export class KpiCompletionCertificate extends Component {
         const safeName = (k.name || `KPI_${k.id}`).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60);
         doc.save(`Completion_Certificate_${certVer}_${safeName}.pdf`);
     }
+
+    // Errors stay until dismissed — an error that vanishes before it is read is the
+    // same as no error at all. Anything else clears itself.
+    _toast(text, kind = 'warning') {
+        this.state.toast = { show: true, text: String(text == null ? '' : text), kind };
+        if (kind !== 'danger') {
+            setTimeout(() => { this.state.toast.show = false; }, 4500);
+        }
+    }
+    dismissToast() { this.state.toast.show = false; }
+
 }
 
 registry.category("actions").add("kpi_completion_certificate", KpiCompletionCertificate);

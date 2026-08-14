@@ -30,6 +30,44 @@ async function call(s, route, params = {}) {
 const kw = (s, model, method, args = [], kwargs = {}) =>
   call(s, '/web/dataset/call_kw', { model, method, args, kwargs });
 
+
+// Reuse a fixture tree instead of creating a fresh one every run. The suites used to
+// build a new client per execution, which is how the Create Invoice dropdown ended up
+// with 71 identical "[APITEST] Client Co" rows burying the real clients. Tasks and
+// invoices are still made fresh each run — those are the things under test.
+// Drop invoices this suite left behind last time. The fixture tree is reused now, and
+// a draft covering the same client and period blocks a new one ("Draft INV/... already
+// covers this client and period") — so without this the second run of the day fails on
+// its own leftovers rather than on the code under test.
+async function clearFixtureInvoices(session, kraIds) {
+  const found = await call(session, '/web/dataset/call_kw', {
+    model: 'kpi.client.invoice', method: 'search',
+    args: [[['client_kra_id', 'in', kraIds]]],
+    kwargs: { context: { active_test: false } },
+  });
+  const ids = found.result || [];
+  if (ids.length) {
+    await call(session, '/web/dataset/call_kw', {
+      model: 'kpi.client.invoice', method: 'unlink', args: [ids],
+      kwargs: { context: { active_test: false } },
+    });
+  }
+  return ids.length;
+}
+
+async function fixtureKra(session, name, { parent_id = null } = {}) {
+  const found = await call(session, '/web/dataset/call_kw', {
+    model: 'kra.master', method: 'search_read',
+    args: [[['name', '=', name]], ['id']],
+    kwargs: { limit: 1, context: { active_test: false } },
+  });
+  const hit = (found.result || found.r || [])[0];
+  if (hit && hit.id) return hit.id;
+  const made = await call(session, '/kra_kpi/create_kra',
+    parent_id ? { name, is_sub: true, parent_id } : { name, is_sub: false });
+  return (made.result || made.r || {}).id;
+}
+
 const out = [];
 const check = (s, ok, d = '') => { out.push({ s, ok }); console.log(`  ${ok ? '✅' : '❌'} ${s.padEnd(56)} ${d}`); };
 
@@ -40,11 +78,13 @@ const check = (s, ok, d = '') => { out.push({ s, ok }); console.log(`  ${ok ? '�
   const devUid = dev.uid;
 
   // fresh tree so no prior finalized invoice locks anything
-  const L1 = (await call(admin, '/kra_kpi/create_kra', { name: '[APITEST] Dedup Co', is_sub: false })).result?.id;
-  const L2 = (await call(admin, '/kra_kpi/create_kra', { name: '[APITEST] Dedup Unit', is_sub: true, parent_id: L1 })).result?.id;
+  const L1 = await fixtureKra(admin, '[APITEST] Dedup Co');
+  const L2 = await fixtureKra(admin, '[APITEST] Dedup Unit', { parent_id: L1 });
   for (const k of [L1, L2]) await call(admin, '/kra_kpi/kra/assign_clients', { kra_id: k, user_ids: [client.uid] });
   await call(dev, '/kpi_workday/ping', {});
-  console.log(`\n=== fixture: kra ${L1}/${L2} ===`);
+  const wiped = await clearFixtureInvoices(admin, [L1, L2]);
+  console.log(`
+=== fixture: kra ${L1}/${L2} (cleared ${wiped} old invoice(s)) ===`);
 
   async function signedOffTask(label) {
     const id = (await call(client, '/kpi_client_portal/add_task', {
@@ -102,8 +142,8 @@ const check = (s, ok, d = '') => { out.push({ s, ok }); console.log(`  ${ok ? '�
   // level-2 KRA, so reading client_user_ids there found nobody and admin approval
   // closed the task as 'completed' with client_final_approved false — finished
   // work that could never be invoiced. 42 live tasks were stuck that way.
-  const R1 = (await call(admin, '/kra_kpi/create_kra', { name: '[APITEST] RootOnly Co', is_sub: false })).result?.id;
-  const R2 = (await call(admin, '/kra_kpi/create_kra', { name: '[APITEST] RootOnly Unit', is_sub: true, parent_id: R1 })).result?.id;
+  const R1 = await fixtureKra(admin, '[APITEST] RootOnly Co');
+  const R2 = await fixtureKra(admin, '[APITEST] RootOnly Unit', { parent_id: R1 });
   await call(admin, '/kra_kpi/kra/assign_clients', { kra_id: R1, user_ids: [client.uid] });  // L1 ONLY — not L2
   const rid = (await call(client, '/kpi_client_portal/add_task', {
     sub_kra_id: R2, name: '[APITEST] RootOnly approver', kind: 'requirement',

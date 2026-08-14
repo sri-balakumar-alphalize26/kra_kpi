@@ -1064,33 +1064,109 @@ class KpiReportsAPI(http.Controller):
                 for k in self._resolve_client_kras_for_user():
                     mine.update(k._get_descendant_ids())
                 clients = clients.filtered(lambda c: c.id in mine)
-            return {
-                'status': True,
-                'clients': [
-                    {
-                        'id': c.id,
-                        'name': c.name,
-                        'parent_name': c.parent_id.name or '',
-                        'project_quoted_hours': round(c.client_quoted or 0.0, 2),
-                        # False → nobody can sign this client's work off, so an invoice
-                        # for them can only ever be empty. Flagged in the dropdown so
-                        # it is visible BEFORE picking, not after creating.
-                        'has_client_user': bool(c._effective_client_users()),
-                    }
-                    for c in clients
-                ],
-            }
+
+            # Per-client tallies, so the dropdown can group into "ready to bill",
+            # "nothing left" and "no tasks yet" instead of listing 90 identical-looking
+            # names. Counted with the SAME billability helper the task picker uses, so
+            # the two can never tell you different things about the same client.
+            #
+            # Two grouped reads for the whole list rather than a query per client: this
+            # dropdown is built on every page load.
+            all_ids = []
+            subtree = {}
+            for c in clients:
+                ids = c._get_descendant_ids()
+                subtree[c.id] = ids
+                all_ids.extend(ids)
+            tasks = request.env['kra.kpi'].search([('kra_id', 'in', list(set(all_ids)))])
+            billed = set(request.env['kpi.client.invoice.line'].sudo().search([
+                ('kpi_id', 'in', tasks.ids),
+            ]).mapped('kpi_id').ids)
+            by_kra = {}
+            for t in tasks:
+                by_kra.setdefault(t.kra_id.id, []).append(t)
+
+            rows = []
+            for c in clients:
+                total = billable = invoiced = 0
+                for kra_id in subtree[c.id]:
+                    for t in by_kra.get(kra_id, ()):
+                        total += 1
+                        ok, _why, code = self._invoice_billability(t, billed)
+                        if ok:
+                            billable += 1
+                        elif code == 'invoiced':
+                            invoiced += 1
+                rows.append({
+                    'id': c.id,
+                    'name': c.name,
+                    'parent_name': c.parent_id.name or '',
+                    'project_quoted_hours': round(c.client_quoted or 0.0, 2),
+                    # False → nobody can sign this client's work off, so an invoice
+                    # for them can only ever be empty. Flagged in the dropdown so
+                    # it is visible BEFORE picking, not after creating.
+                    'has_client_user': bool(c._effective_client_users()),
+                    'task_count': total,
+                    'billable_count': billable,
+                    'invoiced_count': invoiced,
+                })
+            return {'status': True, 'clients': rows}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"get_client_invoice_filters: {str(e)}")
             return {'status': False, 'message': str(e), 'clients': []}
 
+    @staticmethod
+    def _default_invoice_title(client_kra, from_date, to_date):
+        """'supermarket — Aug 2026' for a blank title.
+
+        The all-unbilled preset sends a 2000..2099 window, which would read as
+        "Jan 2000 – Dec 2099" — nonsense on an invoice — so it gets its own wording.
+        """
+        from datetime import date as _date
+        name = (client_kra.name or 'Client').strip()
+
+        def _parse(v):
+            try:
+                return fields.Date.to_date(v)
+            except Exception:
+                return None
+
+        d1, d2 = _parse(from_date), _parse(to_date)
+        if not d1 or not d2:
+            return name
+        if d1.year <= 2000 or d2.year >= 2099:
+            return f"{name} — all unbilled"
+        if d1 == d2:
+            return f"{name} — {d1.strftime('%d %b %Y')}"
+        # A whole calendar month is the common case and reads best unqualified.
+        if (d1.year, d1.month) == (d2.year, d2.month):
+            last = (_date(d2.year + (d2.month // 12), (d2.month % 12) + 1, 1)
+                    - timedelta(days=1))
+            if d1.day == 1 and d2 >= last:
+                return f"{name} — {d1.strftime('%b %Y')}"
+            return f"{name} — {d1.strftime('%d')}–{d2.strftime('%d %b %Y')}"
+        return f"{name} — {d1.strftime('%d %b')} – {d2.strftime('%d %b %Y')}"
+
     @http.route('/kpi_client_invoice/create', type='json', auth='user', methods=['POST'], csrf=False)
     def create_client_invoice(self, **params):
         """Create a new invoice and auto-populate its KPI lines from time logs."""
         try:
+            # The client decides whose signed-off work is billed and who receives
+            # the invoice, so it is mandatory. Checked here as well as in the UI:
+            # a missing one otherwise surfaced as a raw KeyError / int('') /
+            # "Expected singleton" further down.
+            raw_client = params.get('client_kra_id')
+            client_kra_id = int(raw_client) if str(raw_client or '').strip().isdigit() else 0
+            client_kra = request.env['kra.master'].browse(client_kra_id)
+            if not client_kra_id or not client_kra.exists():
+                return {'status': False,
+                        'message': 'Choose a client before creating the invoice.'}
+            if not params.get('from_date') or not params.get('to_date'):
+                return {'status': False,
+                        'message': 'Choose the period this invoice covers.'}
             vals = {
-                'client_kra_id': int(params['client_kra_id']),
+                'client_kra_id': client_kra_id,
                 'from_date': params['from_date'],
                 'to_date': params['to_date'],
             }
@@ -1113,6 +1189,12 @@ class KpiReportsAPI(http.Controller):
             # Optional one-shot fields the UI already passes for new invoices.
             if params.get('invoice_title'):
                 vals['invoice_title'] = params['invoice_title']
+            else:
+                # Left blank, an invoice is identifiable only by its sequence number, so
+                # a list of them reads as a column of INV/2026/xxxx. Named here rather
+                # than in the OWL form so the app gets the same default.
+                vals['invoice_title'] = self._default_invoice_title(
+                    client_kra, params['from_date'], params['to_date'])
             if params.get('hourly_rate') is not None:
                 try:
                     vals['hourly_rate'] = float(params['hourly_rate'])
@@ -1283,6 +1365,11 @@ class KpiReportsAPI(http.Controller):
                     'billable': billable,
                     'not_billable_reason': why,
                     'not_billable_code': code,
+                    # Task type, as the invoice itself understands it: the prefix of
+                    # external_ref (REQ-004 → REQ). _populate filters on exactly this,
+                    # so the picker needs it to show the same set the invoice will bill.
+                    # Empty for a task with no reference.
+                    'task_type': (k.external_ref or '').split('-')[0].strip().upper(),
                 })
             return {'status': True, 'users': users, 'kpis': kpi_list}
         except Exception as e:
@@ -1313,9 +1400,17 @@ class KpiReportsAPI(http.Controller):
     def list_client_invoices(self, **params):
         """List invoices. Optional filters:
           - client_kra_id: only invoices for one client
-          - status_filter: 'all' (default) | 'draft' | 'finalized' | 'sent' | 'due' | 'paid'
-              'due'  → state in (finalized, sent) AND payment_status = 'unpaid'
-              'paid' → payment_status = 'paid'
+          - status_filter: 'all' (default) | 'draft' | 'finalized' | 'sent'
+                           | 'due' | 'claimed' | 'paid'
+
+        Money moves Due → Claimed → Paid, and an invoice sits in exactly one of
+        them. 'due' therefore excludes claims: once the client says they have paid,
+        it is no longer merely owed, it is waiting on the admin to confirm — and
+        leaving it in both buckets is how the one invoice that needs attention
+        stays buried among the ones that don't.
+              'due'     → finalized/sent, unpaid, no client claim outstanding
+              'claimed' → client says paid, admin has not confirmed yet
+              'paid'    → payment_status = 'paid'
         """
         try:
             domain = []
@@ -1335,6 +1430,10 @@ class KpiReportsAPI(http.Controller):
                 domain.append(('state', '=', 'sent'))
             elif status == 'due':
                 domain += [('state', 'in', ('finalized', 'sent')),
+                           ('payment_status', '=', 'unpaid'),
+                           ('client_paid_claim', '=', False)]
+            elif status == 'claimed':
+                domain += [('client_paid_claim', '=', True),
                            ('payment_status', '=', 'unpaid')]
             elif status == 'paid':
                 domain.append(('payment_status', '=', 'paid'))
@@ -1348,7 +1447,12 @@ class KpiReportsAPI(http.Controller):
                 'finalized': request.env['kpi.client.invoice'].search_count([('state','=','finalized')]),
                 'sent':      request.env['kpi.client.invoice'].search_count([('state','=','sent')]),
                 'due':       request.env['kpi.client.invoice'].search_count(
-                                  [('state','in',('finalized','sent')),('payment_status','=','unpaid')]),
+                                  [('state','in',('finalized','sent')),
+                                   ('payment_status','=','unpaid'),
+                                   ('client_paid_claim','=',False)]),
+                'claimed':   request.env['kpi.client.invoice'].search_count(
+                                  [('client_paid_claim','=',True),
+                                   ('payment_status','=','unpaid')]),
                 'paid':      request.env['kpi.client.invoice'].search_count([('payment_status','=','paid')]),
             }
             return {
@@ -1570,9 +1674,14 @@ class KpiReportsAPI(http.Controller):
             return {'status': False, 'message': str(e)}
         import base64
         name = (data.get('invoice', {}).get('name') or str(inv.id)).replace('/', '_')
+        # State in the filename too: these get saved to a folder and emailed on, where
+        # the only thing visible is the name.
+        state_tag = ('PAID' if inv.payment_status == 'paid'
+                     else 'CLAIMED' if inv.client_paid_claim
+                     else 'UNPAID')
         return {
             'status': True,
-            'file_name': 'Invoice_%s.pdf' % name,
+            'file_name': 'Invoice_%s_%s.pdf' % (name, state_tag),
             'mimetype': 'application/pdf',
             'data_b64': base64.b64encode(pdf_bytes).decode(),
         }
@@ -1827,8 +1936,27 @@ class KpiReportsAPI(http.Controller):
         doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN, topMargin=MARGIN, bottomMargin=MARGIN, title='Invoice')
         story = []
 
+        # Payment state on the document itself. A printed or forwarded copy carried no
+        # clue whether it had been settled, so the same PDF read identically before and
+        # after payment. Same three colours the screens use for the same three states.
+        #
+        # NOTE: this invoice has TWO renderers — this one (reportlab, used by the mobile
+        # app via /kpi_client_invoice/pdf) and the jsPDF builder in kpi_client_invoice.js
+        # behind the web PDF button. Change the wording or the states here and change
+        # them there too; they drifted apart once already.
+        _inv = data.get('invoice', {}) or {}
+        if _inv.get('payment_status') == 'paid':
+            _stamp, _stamp_col = 'PAID', colors.HexColor('#15803D')
+        elif _inv.get('client_paid_claim'):
+            _stamp, _stamp_col = 'PAYMENT CLAIMED', colors.HexColor('#B45309')
+        else:
+            _stamp, _stamp_col = 'UNPAID', colors.HexColor('#B91C1C')
+        s_stamp = ParagraphStyle('st', parent=styles['Normal'], fontName='Times-Bold',
+                                 fontSize=13, alignment=2, textColor=_stamp_col, leading=17)
+
         right_cell = [Paragraph(_esc(data.get('company_name') or ''), s_company),
-                      Paragraph('INVOICE', s_doctype)]
+                      Paragraph('INVOICE', s_doctype),
+                      Paragraph(_stamp, s_stamp)]
         if logo_reader:
             h = 56
             w = min(h * logo_ratio, 150)

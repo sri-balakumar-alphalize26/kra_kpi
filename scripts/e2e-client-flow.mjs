@@ -75,9 +75,9 @@ async function setup() {
   check('admin authenticates', !!admin.cookie, `uid=${admin.uid}`);
   if (!admin.cookie) throw new Error('cannot continue without admin');
 
-  const l1 = await call(admin, '/kra_kpi/create_kra', { name: '[APITEST] Client Co', is_sub: false });
+  const l1 = { result: { id: await fixtureKra(admin, '[APITEST] Client Co') } };
   const L1 = l1.result?.id;
-  const l2 = await call(admin, '/kra_kpi/create_kra', { name: '[APITEST] Billing Unit', is_sub: true, parent_id: L1 });
+  const l2 = { result: { id: await fixtureKra(admin, '[APITEST] Billing Unit', { parent_id: L1 }) } };
   const L2 = l2.result?.id;
   made.kras.push(L1, L2);
   check('create KRA tree (root + level-2)', !!L1 && !!L2, `root=${L1} billable=${L2}`);
@@ -214,6 +214,24 @@ async function driveToSignoff(fx, label, { verbose = false, stopBeforeSignoff = 
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
+
+// Reuse a fixture tree instead of creating a fresh one every run. The suites used to
+// build a new client per execution, which is how the Create Invoice dropdown ended up
+// with 71 identical "[APITEST] Client Co" rows burying the real clients. Tasks and
+// invoices are still made fresh each run — those are the things under test.
+async function fixtureKra(session, name, { parent_id = null } = {}) {
+  const found = await call(session, '/web/dataset/call_kw', {
+    model: 'kra.master', method: 'search_read',
+    args: [[['name', '=', name]], ['id']],
+    kwargs: { limit: 1, context: { active_test: false } },
+  });
+  const hit = (found.result || found.r || [])[0];
+  if (hit && hit.id) return hit.id;
+  const made = await call(session, '/kra_kpi/create_kra',
+    parent_id ? { name, is_sub: true, parent_id } : { name, is_sub: false });
+  return (made.result || made.r || {}).id;
+}
+
 (async () => {
   const fx = await setup();
   if (!fx.client?.cookie || !fx.dev?.cookie) { finish(); return; }

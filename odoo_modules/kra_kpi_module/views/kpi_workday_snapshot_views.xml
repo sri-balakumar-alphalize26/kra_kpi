@@ -29,9 +29,9 @@
 
     <menuitem id="menu_kpi_my_workday_snapshot"
               name="My Workday Snapshots"
-              parent="kra_kpi_module.menu_kra_root"
+              parent="menu_grp_my_work"
               action="kra_kpi_module.action_kpi_my_workday_snapshot"
-              sequence="12"
+              sequence="30"
               groups="kra_kpi_module.group_kra_developer"/>
 
     <!-- My Workday — the developer's own last N days, from /kpi_reports/my_workday. -->
@@ -42,9 +42,9 @@
 
     <menuitem id="menu_kpi_my_workday"
               name="My Workday"
-              parent="kra_kpi_module.menu_kra_root"
+              parent="menu_grp_my_work"
               action="kra_kpi_module.action_kpi_my_workday"
-              sequence="11"
+              sequence="20"
               groups="kra_kpi_module.group_kra_developer"/>
 
 </odoo>

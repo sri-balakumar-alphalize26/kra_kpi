@@ -51,6 +51,25 @@ class KpiMaster(models.Model):
     estimate_hours = fields.Integer(string="Estimate Hours", default=0)
     estimate_minutes = fields.Integer(string="Estimate Minutes", default=0)
 
+    # ---- Extending an estimate ------------------------------------------- #
+    # An estimate was set once at creation and could never be changed, so a task
+    # that ran over read as permanently over — and the estimate is what the board
+    # and the Paid lane compare worked time against.
+    #
+    # The reason lives HERE, on the task, not only in kpi.action.log: the point is
+    # that anyone looking at the board sees why the number grew. The log keeps the
+    # full history (every earlier reason and the original estimate); this field is
+    # the latest one, which is what the card shows.
+    estimate_extend_reason = fields.Char(
+        string='Last Extension Reason', copy=False,
+        help="Why the estimate was last extended. Shown on the task card.")
+    estimate_extension_count = fields.Integer(
+        string='Times Extended', default=0, copy=False)
+    estimate_extended_by_id = fields.Many2one(
+        'res.users', string='Estimate Extended By', readonly=True, copy=False)
+    estimate_extended_at = fields.Datetime(
+        string='Estimate Extended On', readonly=True, copy=False)
+
     # Computed field for total estimate in hours (for calculations)
     estimate = fields.Float(
         string="Estimated Time",

@@ -11,10 +11,29 @@
               sequence="10"
               action="kra_kpi_module.action_kra_welcome"
               groups="kra_kpi_module.group_kra_developer"/>
-    
+
+    <!-- ============================================================
+         MENU SECTIONS
+         The root carried 16 flat items. Odoo renders a menu that has
+         children as a titled section in the app dropdown, so grouping
+         them is a parenting change rather than new UI.
+
+         Deliberately NO groups= on these headings. Every child keeps
+         its own, and Odoo hides a heading whose children are all
+         invisible to you. Putting groups here is how a regroup like
+         this goes wrong: either a section disappears for someone who
+         should see part of it, or it appears for someone who should
+         see none of it.
+         ============================================================ -->
+    <menuitem id="menu_grp_my_work"  name="My Work"  parent="menu_kra_root" sequence="5"/>
+    <menuitem id="menu_grp_tracking" name="Tracking" parent="menu_kra_root" sequence="10"/>
+    <menuitem id="menu_grp_clients"  name="Clients"  parent="menu_kra_root" sequence="15"/>
+    <menuitem id="menu_grp_uploads"  name="Uploads"  parent="menu_kra_root" sequence="20"/>
+    <menuitem id="menu_grp_setup"    name="Setup"    parent="menu_kra_root" sequence="25"/>
+
     <!-- KRA/KPI Master: Only Managers and Admin -->
     <menuitem id="menu_kra_master_screen"
-              parent="menu_kra_root"
+              parent="menu_grp_setup"
               name="KRA / KPI Master"
               action="kra_kpi_module.action_kra_dashboard"
               sequence="10"
@@ -23,7 +42,7 @@
     <!-- KPI Configuration: Only Managers and Admin -->
     <menuitem id="menu_kpi_config_screens"
               name="KPI Configuration"
-              parent="menu_kra_root"
+              parent="menu_grp_setup"
               sequence="20"
               action="action_kpi_config_screen"
               groups="kra_kpi_module.group_kra_manager,base.group_system"/>
@@ -39,18 +58,18 @@
          for someone holding both; a pure developer simply gets KPI Actions at
          the top of their menu, which is where they want it anyway. -->
     <menuitem id="menu_kpi_action_screen"
-              parent="menu_kra_root"
+              parent="menu_grp_my_work"
               name="KPI Actions"
               action="kra_kpi_module.action_kpi_action_screen"
-              sequence="7"
+              sequence="10"
               groups="kra_kpi_module.group_kra_developer"/>
 
     <!-- Task Related Documents: Developers + admins. -->
     <menuitem id="menu_task_documents"
-              parent="menu_kra_root"
+              parent="menu_grp_my_work"
               name="Task Related Documents"
               action="kra_kpi_module.action_task_documents"
-              sequence="35"
+              sequence="40"
               groups="kra_kpi_module.group_kra_developer"/>
 
     <!-- WhatsApp Connect: shortcut to the WhatsApp Sessions form so
@@ -58,10 +77,10 @@
          WhatsApp and Email app menu.  Reuses the action defined by the
          whatsapp_neonize addon. -->
     <menuitem id="menu_kpi_whatsapp_connect"
-              parent="menu_kra_root"
+              parent="menu_grp_setup"
               name="WhatsApp Connect"
               action="whatsapp_neonize.action_whatsapp_session"
-              sequence="40"
+              sequence="30"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
     
     <!-- ✅ Settings Menu. Header visible to manager/admin/owner/system so the

@@ -67,6 +67,110 @@ export class KpiAction extends Component {
 
     static template = xml/* xml */`
         <div class="o_kpi_action_wrapper">
+        <!-- Activity, in its own centred popup. It was inline and capped at 50, which
+             pushed the rest of the detail pane off screen on a task with real history.
+             Grouped by day with a caret per day, the same idiom as the customer_support
+             gallery, so a long list is navigable instead of a wall. -->
+        <div t-if="state.activityOpen" class="modal d-block" tabindex="-1"
+             style="background: rgba(0,0,0,0.5); z-index:2100;">
+            <div class="modal-dialog modal-lg modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header bg-secondary text-white">
+                        <h5 class="modal-title">
+                            <i class="fa fa-history me-2"/>Activity
+                        </h5>
+                        <button type="button" class="btn-close btn-close-white"
+                                t-on-click="() => state.activityOpen = false"/>
+                    </div>
+                    <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
+                        <!-- Says plainly when this is a slice, so the list is never
+                             mistaken for the task's whole history. -->
+                        <div t-if="state.detailData.activity_total > (state.detailData.activity_log || []).length"
+                             class="small text-muted fst-italic mb-2">
+                            <t t-esc="state.detailData.activity_total"/> entries —
+                            showing the most recent <t t-esc="state.detailData.activity_log.length"/>.
+                        </div>
+                        <t t-foreach="activityGroups()" t-as="g" t-key="g.date">
+                            <div class="d-flex align-items-center border-bottom py-2"
+                                 style="cursor:pointer;"
+                                 t-on-click="() => this.toggleActivityDate(g.date)">
+                                <i t-att-class="'fa me-2 ' + (isActivityDateOpen(g.date) ? 'fa-caret-down' : 'fa-caret-right')"/>
+                                <span class="fw-bold" t-esc="g.label"/>
+                                <span class="badge bg-light text-dark ms-auto" t-esc="g.entries.length"/>
+                            </div>
+                            <div t-if="isActivityDateOpen(g.date)" class="ps-4 pb-2">
+                                <div t-foreach="g.entries" t-as="ev" t-key="ev.id"
+                                     class="d-flex gap-2 small border-bottom py-1">
+                                    <div class="text-muted" style="min-width:52px;" t-esc="ev.time"/>
+                                    <div class="fw-bold" style="min-width:150px;" t-esc="ev.label"/>
+                                    <div class="text-muted flex-grow-1" style="word-break:break-word;"
+                                         t-esc="activityDetail(ev)"/>
+                                    <div class="text-muted text-nowrap" t-esc="ev.actor"/>
+                                </div>
+                            </div>
+                        </t>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary"
+                                t-on-click="() => state.activityOpen = false">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div t-if="state.dlg.open" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5); z-index:2000;">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div t-att-class="'modal-header ' + (state.dlg.okClass === 'btn-danger' ? 'bg-danger text-white' : 'bg-primary text-white')">
+                        <h5 class="modal-title" t-esc="state.dlg.title"/>
+                        <button type="button" class="btn-close btn-close-white" t-on-click="dlgCancel"/>
+                    </div>
+                    <div class="modal-body">
+                        <p t-if="state.dlg.message" style="white-space:pre-wrap;" t-esc="state.dlg.message"/>
+                        <div t-if="state.dlg.nums.length" class="d-flex gap-2 mb-2">
+                            <div t-foreach="state.dlg.nums" t-as="n" t-key="n.key">
+                                <label class="form-label fw-bold small mb-0" t-esc="n.label"/>
+                                <input type="number" class="form-control" min="0"
+                                       t-att-value="state.dlg.numVals[n.key]"
+                                       t-on-input="(ev) => this.dlgNum(n.key, ev.target.value)"/>
+                            </div>
+                        </div>
+                        <!-- Recomputed on every keystroke, so the arithmetic that used to
+                             have to be done in your head is on screen before you commit. -->
+                        <div t-if="state.dlg.ctx" t-att-class="'small mb-2 fw-bold ' + dlgLiveNote().cls">
+                            <t t-esc="dlgLiveNote().text"/>
+                        </div>
+                        <div t-if="state.dlg.footNote" class="small text-muted mb-2"
+                             t-esc="state.dlg.footNote"/>
+                        <div t-if="state.dlg.input" class="mb-2">
+                            <label class="form-label fw-bold">
+                                <t t-esc="state.dlg.inputLabel"/>
+                                <span t-if="state.dlg.required" class="text-danger">*</span>
+                            </label>
+                            <textarea class="form-control" rows="3"
+                                      t-att-placeholder="state.dlg.placeholder"
+                                      t-att-value="state.dlg.value"
+                                      t-on-input="(ev) => this.dlgSet(ev.target.value)"/>
+                        </div>
+                        <div t-if="state.dlg.error" class="alert alert-danger py-2 mb-0 small" t-esc="state.dlg.error"/>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" t-on-click="dlgCancel">Cancel</button>
+                        <button type="button" t-att-class="'btn ' + state.dlg.okClass"
+                                t-on-click="dlgOk" t-esc="state.dlg.okLabel"/>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div t-if="state.toast.show"
+             t-att-class="'alert alert-dismissible d-flex align-items-start gap-2 alert-' + state.toast.kind"
+             style="position:sticky; top:0; z-index:1080; white-space:pre-wrap;">
+            <i t-att-class="'fa mt-1 ' + (state.toast.kind === 'success' ? 'fa-check-circle' : (state.toast.kind === 'danger' ? 'fa-exclamation-circle' : 'fa-info-circle'))"/>
+            <div class="flex-grow-1" t-esc="state.toast.text"/>
+            <button type="button" class="btn-close" t-on-click="dismissToast"/>
+        </div>
+
             
             <!-- Show Detail View if detailKpiId is set -->
             <t t-if="state.view === 'detail' and state.detailKpiId">
@@ -146,7 +250,39 @@ export class KpiAction extends Component {
                                             <tr><td><b>Priority</b></td><td>
                                                 <span t-att-class="'badge ' + priorityBadgeClass(state.detailData.priority)" t-esc="priorityLabel(state.detailData.priority)"/>
                                             </td></tr>
-                                            <tr><td><b>Estimate</b></td><td t-esc="state.detailData.estimate"/></tr>
+                                            <tr>
+                                                <td><b>Estimate</b></td>
+                                                <td>
+                                                    <t t-esc="state.detailData.estimate"/>
+                                                    <!-- The chain, not just the total. A bare "02:00"
+                                                         is indistinguishable from an estimate that was
+                                                         always 02:00, which is what caused the
+                                                         "where did my 62h go" confusion. -->
+                                                    <div t-if="(state.detailData.estimate_history || []).length"
+                                                         class="mt-1 ps-2 border-start">
+                                                        <div t-foreach="state.detailData.estimate_history" t-as="h" t-key="h.seq"
+                                                             class="small">
+                                                            <t t-if="h.kind === 'original'">
+                                                                <span class="text-muted">
+                                                                    <t t-esc="h.value"/> — original
+                                                                </span>
+                                                            </t>
+                                                            <t t-else="">
+                                                                <span class="text-info fw-bold" t-esc="h.value"/>
+                                                                <span t-if="h.running_total" class="text-muted">
+                                                                    → <t t-esc="h.running_total"/>
+                                                                </span>
+                                                                <span t-if="h.reason" class="fst-italic">
+                                                                    · "<t t-esc="h.reason"/>"
+                                                                </span>
+                                                                <span class="text-muted">
+                                                                    — <t t-esc="h.actor"/><t t-if="h.at">, <t t-esc="h.at"/></t>
+                                                                </span>
+                                                            </t>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
                                             <tr><td><b>Assignee</b></td><td t-esc="state.detailData.assignee"/></tr>
                                             <tr><td><b>Deadline</b></td><td t-esc="state.detailData.deadline or '—'"/></tr>
                                             <!-- Uploaded file only when present -->
@@ -769,6 +905,19 @@ export class KpiAction extends Component {
                                     <t t-else=""><div class="text-muted small">— No links yet —</div></t>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- Activity: the audit trail this task has been writing all along
+                             (started, paused, switched, estimate extended). Collapsed by
+                             default and capped server-side, because a task worked over
+                             months carries hundreds of entries and the pane still has to
+                             open quickly. -->
+                        <div t-if="(state.detailData.activity_log || []).length" class="mb-3">
+                            <button class="btn btn-outline-secondary" t-on-click="openActivity">
+                                <i class="fa fa-history me-2"/>
+                                Activity
+                                <span class="badge bg-secondary ms-2" t-esc="state.detailData.activity_total"/>
+                            </button>
                         </div>
 
                         <!-- Progress History -->
@@ -1426,15 +1575,74 @@ export class KpiAction extends Component {
 
                     <div class="row g-3" t-ref="kpiKanbanRow">
                         <t t-foreach="columns" t-as="col" t-key="col.key">
-                            <div class="col">
+                            <div class="col kpi-lane">
                                 <div class="kpi-column-card h-100" t-att-class="'kpi-' + col.key">
                                     
                                     <div class="kpi-header" t-att-class="'kpi-' + col.key">
                                         <span t-esc="col.label"/>
-                                        <span class="badge bg-white text-dark ms-2" style="font-size: 0.75rem;" t-esc="getFilteredTasksByState(col.key).length"/>
+                                        <span class="badge bg-white text-dark ms-2" style="font-size: 0.75rem;"
+                                              t-esc="col.key === 'paid' ? state.paidTasks.length : getFilteredTasksByState(col.key).length"/>
                                     </div>
 
-                                    <div class="kpi-task-list" t-att-class="'kpi-' + col.key">
+                                    <!-- Paid is an archive, not a workload: the tasks are settled,
+                                         there is nothing to act on, and they are filed away
+                                         (active=False) so they reach the board by their own route.
+                                         Read-only cards, and outside the search/assignee/priority
+                                         pipeline the working lanes run through. -->
+                                    <div t-if="col.key === 'paid'" class="kpi-task-list kpi-paid">
+                                        <t t-if="state.paidTasks.length">
+                                            <t t-foreach="state.paidTasks" t-as="pt" t-key="pt.id">
+                                                <div class="kpi-task">
+                                                    <div class="fw-bold">
+                                                        <span t-if="pt.external_ref"
+                                                              class="badge bg-secondary me-1" t-esc="pt.external_ref"/>
+                                                        <t t-esc="pt.name"/>
+                                                    </div>
+                                                    <div t-if="pt.user_name" class="text-muted small text-truncate"
+                                                         t-att-title="pt.user_name">
+                                                        <i class="fa fa-user me-1"/><t t-esc="pt.user_name"/>
+                                                    </div>
+                                                    <div class="small">
+                                                        <span t-att-class="paidOverEstimate(pt) ? 'text-danger fw-bold' : 'text-muted'">
+                                                            <i class="fa fa-clock-o me-1"/>
+                                                            <t t-esc="formatTime(pt.timer_total_seconds)"/>
+                                                        </span>
+                                                        <!-- No estimate is not a zero estimate — saying
+                                                             "est 00:00" would read as a target that was
+                                                             blown on every task that never had one. -->
+                                                        <span t-if="pt.estimate_hours or pt.estimate_minutes"
+                                                              class="text-muted">
+                                                            · est <t t-esc="pt.estimate_display"/>
+                                                        </span>
+                                                        <span t-else="" class="text-muted">· no estimate</span>
+                                                    </div>
+                                                    <!-- Rate 0 is a time-only invoice, so no amount
+                                                         beats a 0.00 that looks like free work. -->
+                                                    <div t-if="pt.amount" class="small fw-bold text-success">
+                                                        <t t-esc="pt.currency"/> <t t-esc="pt.amount.toFixed(2)"/>
+                                                    </div>
+                                                    <div class="small text-muted">
+                                                        <t t-if="pt.client_paid_on">
+                                                            client <t t-esc="pt.client_paid_on.slice(0, 11)"/> →
+                                                        </t>
+                                                        confirmed <t t-esc="(pt.paid_on || '').slice(0, 11) || '—'"/>
+                                                    </div>
+                                                    <div t-if="pt.client_name" class="text-muted small text-truncate"
+                                                         t-att-title="pt.client_name">
+                                                        <i class="fa fa-building-o me-1"/><t t-esc="pt.client_name"/>
+                                                    </div>
+                                                </div>
+                                            </t>
+                                            <div t-if="state.paidTruncated" class="text-muted small p-2 fst-italic">
+                                                Showing the most recent <t t-esc="state.paidTasks.length"/> only.
+                                            </div>
+                                        </t>
+                                        <div t-else="" class="text-muted small p-2">
+                                            Nothing paid yet.
+                                        </div>
+                                    </div>
+
+                                    <div t-else="" class="kpi-task-list" t-att-class="'kpi-' + col.key">
                                         <t t-set="filteredTasks" t-value="getFilteredTasksByState(col.key)"/>
                                         <t t-if="filteredTasks.length">
                                             <t t-foreach="filteredTasks" t-as="task" t-key="task.id">
@@ -1575,6 +1783,20 @@ export class KpiAction extends Component {
                                                     </div>
                                                     <div class="text-muted small">
                                                         Estimate: <t t-esc="task.estimate_display"/>
+                                                        <span t-if="task.estimate_extension_count"
+                                                              class="badge bg-info-subtle text-dark ms-1"
+                                                              t-att-title="'Extended ' + task.estimate_extension_count + ' time(s) by ' + (task.estimate_extended_by_name || 'someone')">
+                                                            <i class="fa fa-arrow-up"/> extended <t t-esc="task.estimate_extension_count"/>
+                                                        </span>
+                                                    </div>
+                                                    <!-- The reason lives on the card, not buried in the audit log:
+                                                         an estimate that grew without explanation reads exactly like
+                                                         an estimate that was wrong. -->
+                                                    <div t-if="task.estimate_extend_reason"
+                                                         class="small text-muted fst-italic text-truncate"
+                                                         t-att-title="task.estimate_extend_reason">
+                                                        <i class="fa fa-sticky-note-o me-1"/>
+                                                        <t t-esc="task.estimate_extend_reason"/>
                                                     </div>
                                                     <!-- Why this task is stopped, on the card itself. The payload
                                                          has always carried paused_reason, but the web only ever
@@ -1645,7 +1867,7 @@ export class KpiAction extends Component {
                                                                 t-on-click="() => openCompleteFromCard(task)">
                                                             <i class="fa fa-check-circle"></i> Complete
                                                         </button>
-                                                        <button class="btn btn-sm btn-outline-danger"
+                                                        <button class="btn btn-sm kpi-btn-partial"
                                                                 t-if="btns.complete"
                                                                 t-on-click="() => openPartialFinishModal(task)"
                                                                 title="Send a summary now and finish this task without the full checklist">
@@ -1669,6 +1891,17 @@ export class KpiAction extends Component {
                                                                 <i class="fa fa-times"></i> Reject
                                                             </button>
                                                         </t>
+                                                        <!-- Add time lives with the other actions, not wedged into the
+                                                             Estimate text line where it read as part of the number
+                                                             rather than as something you press. Only while the task is
+                                                             live and near its estimate; the server enforces the same
+                                                             rule, so this only keeps the button honest. -->
+                                                        <button t-if="canAddTime(task)" type="button"
+                                                                class="btn btn-sm kpi-btn-addtime"
+                                                                title="Add time to this estimate"
+                                                                t-on-click="() => this.addTimePrompt(task)">
+                                                            <i class="fa fa-hourglass-half"></i> Add time
+                                                        </button>
                                                         <!-- Admin: remove a task nobody has worked on. can_admin_delete
                                                              is the SERVER's answer (kra.kpi._may_admin_delete), never
                                                              re-derived here, so the button can't offer what the route
@@ -1729,12 +1962,166 @@ export class KpiAction extends Component {
         </div>
     `;
 
-    // Kanban columns shown on the board.  All 8 buckets are visible to every
-    // role — developers see Pending Approvals / Awaiting Client / Completed
-    // for visibility into their tasks' downstream state, but action buttons
-    // on those columns remain admin/manager-only.
+    // Kanban columns shown on the board.  The working buckets are visible to
+    // every role — developers see Pending Approvals / Awaiting Client /
+    // Completed for visibility into their tasks' downstream state, but action
+    // buttons on those columns remain admin/manager-only.
+    //
+    // Paid is the exception: it is billing history, its tasks are archived out
+    // of the developer's world entirely, and the route behind it refuses anyone
+    // who is not an admin — so the lane would only ever render empty for them.
     get columns() {
-        return this._allColumns;
+        if (this.state.isAdmin) return this._allColumns;
+        return this._allColumns.filter(c => c.key !== 'paid');
+    }
+    // Extending an estimate is for work still in flight. Once the client has signed
+    // off, that number is what they accepted — and may be what they were billed on —
+    // so those states get no button. The server enforces the same list; this only
+    // stops the button appearing where it would be refused.
+    // Offered on work that is actually being done — In Progress and Paused — and only
+    // once it is near or past its estimate. Presentation only: the server still allows
+    // any state the client does not own, because the mobile app may offer the action
+    // from somewhere else and a stricter server would break it.
+    //
+    // A task with NO estimate (00:00) is past 80% from its first second, so the button
+    // shows immediately there. That is intended — a task being worked with no estimate
+    // is exactly the one that needs a number.
+    canAddTime(task) {
+        if (!['in_progress', 'paused'].includes(task.task_state)) return false;
+        if (!(this.state.isAdmin || task.user_id === this.state.currentUserId)) return false;
+        const estSec = ((task.estimate_hours || 0) * 3600) + ((task.estimate_minutes || 0) * 60);
+        if (estSec <= 0) return true;
+        return (task.timer_total_seconds || 0) >= estSec * 0.8;
+    }
+    // "02:10", and the shortfall/remainder against an estimate, for the dialog.
+    _hhmm(totalMinutes) {
+        const m = Math.max(0, Math.round(totalMinutes));
+        return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+    }
+    _humanMins(mins) {
+        const m = Math.round(mins);
+        if (m < 60) return `${m}m`;
+        const h = Math.floor(m / 60), r = m % 60;
+        return r ? `${h}h ${r}m` : `${h}h`;
+    }
+    // What the estimate becomes, and — the number that actually matters — how much is
+    // left to work once it does. Adding an hour when you are already ten minutes over
+    // buys fifty more minutes, not sixty, because the addition applies to the estimate
+    // rather than to the clock from now. That caught you out; now it is on screen.
+    // The log stores raw JSON; the row shows the human half of it. Falls back to the
+    // raw payload rather than blanking, so an event type this does not know about is
+    // still legible instead of silently empty.
+    // Buckets the log by day, newest first. The server already sends `at` as
+    // "YYYY-MM-DD HH:MM:SS" in the user's timezone, so the split is positional and there
+    // is no second date format to keep in step with the rest of the screens.
+    activityGroups() {
+        const rows = this.state.detailData.activity_log || [];
+        const byDate = new Map();
+        for (const ev of rows) {
+            const date = String(ev.at || '').slice(0, 10) || 'unknown';
+            if (!byDate.has(date)) byDate.set(date, []);
+            byDate.get(date).push({ ...ev, time: String(ev.at || '').slice(11, 16) });
+        }
+        return [...byDate.entries()]
+            .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+            .map(([date, entries]) => ({ date, entries, label: this._dayLabel(date) }));
+    }
+    _dayLabel(date) {
+        const d = new Date(date + 'T00:00:00');
+        if (isNaN(d)) return date;
+        return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+    toggleActivityDate(d) {
+        this.state.activityExpanded[d] = !this.state.activityExpanded[d];
+    }
+    isActivityDateOpen(d) {
+        return !!this.state.activityExpanded[d];
+    }
+    openActivity() {
+        // Newest day open, the rest folded: opening fully collapsed means a click before
+        // you can read anything, and fully expanded is the wall the popup exists to avoid.
+        // Reset each time, so it never reopens in a half-open state from last visit.
+        const groups = this.activityGroups();
+        this.state.activityExpanded = groups.length ? { [groups[0].date]: true } : {};
+        this.state.activityOpen = true;
+    }
+    activityDetail(ev) {
+        let p = {};
+        try { p = JSON.parse(ev.detail || '{}'); } catch (e) { return ev.detail || ''; }
+        if (ev.event === 'estimate_extended') {
+            return `${p.from} → ${p.to}` + (p.reason ? ` · "${p.reason}"` : '');
+        }
+        if (p.reason) return String(p.reason);
+        if (p.note) return String(p.note);
+        const bits = Object.entries(p).filter(([k]) => k !== 'kpi_id')
+            .map(([k, v]) => `${k}: ${v}`).join(' · ');
+        return bits.slice(0, 160);
+    }
+    dlgLiveNote() {
+        const c = this.state.dlg.ctx;
+        if (!c) return { text: '', cls: '' };
+        const added = ((this.state.dlg.numVals.hours || 0) * 60)
+                    + (this.state.dlg.numVals.minutes || 0);
+        const newEst = c.estMin + added;
+        const left = newEst - c.workedMin;
+        if (added <= 0) return { text: 'Enter how much to add.', cls: 'text-muted' };
+        if (left <= 0) {
+            return { text: `New estimate ${this._hhmm(newEst)} · still `
+                         + `${this._humanMins(-left)} over`, cls: 'text-danger' };
+        }
+        return { text: `New estimate ${this._hhmm(newEst)} · ${this._humanMins(left)} left`,
+                 cls: 'text-success' };
+    }
+    async addTimePrompt(task) {
+        const estMin = ((task.estimate_hours || 0) * 60) + (task.estimate_minutes || 0);
+        const workedMin = Math.round((task.timer_total_seconds || 0) / 60);
+        const over = workedMin - estMin;
+        const worked = `${this._hhmm(workedMin)}`
+            + (estMin > 0 && over > 0 ? `   ⚠ ${this._humanMins(over)} over` : '');
+        const vals = await this._dialog({
+            title: `Add time — ${task.name}`,
+            message: `Current estimate   ${task.estimate_display || '00:00'}\n`
+                   + `Worked so far      ${worked}\n\n`
+                   + 'This is ADDED to the estimate, not a new total.',
+            nums: [{ key: 'hours', label: 'Hours', value: 0 },
+                   { key: 'minutes', label: 'Minutes', value: 0 }],
+            ctx: { estMin, workedMin },
+            footNote: 'The reason shows on the task card, so write it for whoever reads the board.',
+            input: true, inputLabel: 'Reason', required: true,
+            placeholder: 'e.g. client added two more screens',
+            okLabel: 'Add time', okClass: 'btn-primary',
+        });
+        if (!vals) return;
+        const r = await rpc('/kra_kpi/task/add_time', {
+            kpi_id: task.id,
+            hours: vals.hours || 0,
+            minutes: vals.minutes || 0,
+            reason: vals.text || '',
+        });
+        if (!r || !r.status) {
+            this._toast((r && r.message) || 'Could not add time.', 'danger');
+            return;
+        }
+        this._toast(r.message, 'success');
+        await this.refresh();
+    }
+    async _loadPaidTasks() {
+        try {
+            const r = await rpc('/kra_kpi/tasks/paid', {});
+            if (r && r.status) {
+                this.state.paidTasks = r.tasks || [];
+                this.state.paidTruncated = !!r.truncated;
+            }
+        } catch (e) {
+            // A failed archive lane must never take the working board down with it.
+            console.warn('paid lane unavailable', e);
+        }
+    }
+    // Worked longer than it was estimated at. No estimate means no target, so
+    // nothing is "over" — otherwise every unestimated task would flag red.
+    paidOverEstimate(pt) {
+        const est = ((pt.estimate_hours || 0) * 3600) + ((pt.estimate_minutes || 0) * 60);
+        return est > 0 && (pt.timer_total_seconds || 0) > est;
     }
 
     setup() {
@@ -1742,12 +2129,27 @@ export class KpiAction extends Component {
         // gets un-paired (auto-away) so an unpaired board is never shown.
         this.actionService = useService("action");
         this.state = useState({
+            // Promise-driven in-page dialog, replacing window.confirm/prompt.
+            // Those are the browser's chrome, not ours: unstyleable, and on a work
+            // screen they read as something having gone wrong.
+            dlg: { open: false, title: '', message: '', okLabel: 'OK', okClass: 'btn-primary',
+                   input: false, inputLabel: '', placeholder: '', required: false,
+                   value: '', error: '', resolve: null,
+                   // Optional numeric fields, e.g. the hours/minutes on Add time.
+                   nums: [], numVals: {}, footNote: '', ctx: null },
+            // Replaces alert(). A browser alert blocks the whole tab and hides the
+            // screen it is talking about; this sits in the page and can be ignored.
+            toast: { show: false, text: '', kind: 'warning' },
             view: 'list',
             detailKpiId: null,
             detailData: {},
             detailLoaded: false,
             detailError: null,
             tasksByState: {},
+            activityOpen: false,      // the Activity popup
+            activityExpanded: {},     // which day sections are open, keyed by date
+            paidTasks: [],        // settled work, admin-only Paid lane (own route — archived)
+            paidTruncated: false, // more paid tasks exist than the lane shows
             allTasks: [],  // 🆕 NEW: Store all tasks for filtering
             assignees: [], // 🆕 NEW: Store unique assignees for filter dropdown
             isAdmin: false,
@@ -1858,6 +2260,8 @@ export class KpiAction extends Component {
             { key: "partially_completed", label: "Pending Approvals" },
             { key: "awaiting_client", label: "Awaiting Client Sign-off" },  // admin approved, client to sign
             { key: "completed",   label: "Completed" },
+            // Billed and settled. Admin-only — see the `columns` getter.
+            { key: "paid",        label: "Paid" },
         ];
 
         this.refresh = this.refresh.bind(this);
@@ -2227,11 +2631,9 @@ export class KpiAction extends Component {
         
         // Require all items to be checked for approval
         if (checkedCount < 6) {
-            alert(
-                `⚠️ Cannot approve: You must complete all 6 checklist items.\n\n` +
+            this._toast(`⚠️ Cannot approve: You must complete all 6 checklist items.\n\n` +
                 `Currently completed: ${checkedCount}/6 items\n\n` +
-                `Please verify all items before approving the task.`
-            );
+                `Please verify all items before approving the task.`, 'warning');
             return; // Don't proceed with approval
         }
         
@@ -2245,14 +2647,14 @@ export class KpiAction extends Component {
             });
             
             if (result.status) {
-                alert(`✅ Task approved successfully!\n\nAll ${checkedCount} review items completed.\n\nThe task has moved to "Awaiting Client Sign-off". The client will now see it in their portal for the final signature.`);
+                this._toast(`✅ Task approved successfully!\n\nAll ${checkedCount} review items completed.\n\nThe task has moved to "Awaiting Client Sign-off". The client will now see it in their portal for the final signature.`, 'success');
                 await this.refresh();
             } else {
-                alert("❌ Error: " + result.message);
+                this._toast("❌ Error: " + result.message, 'danger');
             }
         } catch (error) {
             console.error("Error approving task:", error);
-            alert("Failed to approve task. Please try again.");
+            this._toast("Failed to approve task. Please try again.", 'danger');
         }
     }
 
@@ -2261,12 +2663,12 @@ export class KpiAction extends Component {
         const reason = document.getElementById("rejectionReason")?.value?.trim();
         
         if (!reason) {
-            alert("Please enter a reason for rejecting the task.");
+            this._toast("Please enter a reason for rejecting the task.", 'warning');
             return;
         }
         
         if (reason.length < 10) {
-            alert("Please provide a more detailed reason (at least 10 characters).");
+            this._toast("Please provide a more detailed reason (at least 10 characters).", 'warning');
             return;
         }
         
@@ -2281,14 +2683,14 @@ export class KpiAction extends Component {
             });
             
             if (result.status) {
-                alert(`✅ Task "${task_name}" has been rejected.\n\nThe task is now in "Paused" state with your feedback.\nThe employee must click "Resume" to continue working.`);
+                this._toast(`✅ Task "${task_name}" has been rejected.\n\nThe task is now in "Paused" state with your feedback.\nThe employee must click "Resume" to continue working.`, 'success');
                 await this.refresh();
             } else {
-                alert("❌ Error: " + result.message);
+                this._toast("❌ Error: " + result.message, 'danger');
             }
         } catch (error) {
             console.error("Error rejecting task:", error);
-            alert("Failed to reject task. Please try again.");
+            this._toast("Failed to reject task. Please try again.", 'danger');
         }
     }
     openCompleteModal(task) {
@@ -2394,10 +2796,14 @@ export class KpiAction extends Component {
         
         // Optional: Warn if not all items are checked
         if (checkedCount < 5) {
-            const proceed = confirm(
-                `⚠️ Warning: You have only checked ${checkedCount} out of 5 items.\n\n` +
-                `Are you sure you want to proceed without completing all checklist items?`
-            );
+            const proceed = await this._confirm(
+                'Checklist incomplete',
+                `You have checked ${checkedCount} of 5 items.
+
+`
+                + 'You can send it for approval anyway, but the reviewer sees which '
+                + 'items you skipped.',
+                'Send anyway', 'btn-warning');
             if (!proceed) {
                 return; // Don't close modal, let them check more items
             }
@@ -2413,14 +2819,14 @@ export class KpiAction extends Component {
             });
             
             if (result.status) {
-                alert(`✅ Task marked as complete and sent for approval!\n\nChecklist completed: ${checkedCount}/5 items`);
+                this._toast(`✅ Task marked as complete and sent for approval!\n\nChecklist completed: ${checkedCount}/5 items`, 'success');
                 await this.refresh();
             } else {
-                alert("❌ Error: " + result.message);
+                this._toast("❌ Error: " + result.message, 'danger');
             }
         } catch (error) {
             console.error("Error completing task:", error);
-            alert("Failed to complete task. Please try again.");
+            this._toast("Failed to complete task. Please try again.", 'danger');
         }
     }
 
@@ -2874,7 +3280,7 @@ export class KpiAction extends Component {
             this._renderModal(modalHTML, this.confirmReassign);
         } catch (error) {
             console.error("Error fetching users:", error);
-            alert("Failed to load users. Please try again.");
+            this._toast("Failed to load users. Please try again.", 'danger');
         }
     }
 
@@ -2893,12 +3299,14 @@ export class KpiAction extends Component {
         this.state.reassignReason = '';
     }
 
-    // Styled in-app alert (replaces the plain browser alert() for board messages).
+    // A styled in-page banner for board messages. Predates the toast added alongside
+    // the popup sweep and does the same job by injecting DOM; left in place because
+    // several callers position it deliberately.
     _showAlert(message, title = "Heads up", variant = "warning") {
         const safe = (message || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const icon = variant === 'danger' ? 'exclamation-triangle' : 'exclamation-circle';
         const container = document.getElementById("modalContainer");
-        if (!container) { alert(message); return; }
+        if (!container) { this._toast(message, 'warning'); return; }
         container.innerHTML = `
             <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
               <div class="modal-dialog modal-dialog-centered">
@@ -2960,10 +3368,10 @@ export class KpiAction extends Component {
                 await this.refresh();
                 await this.loadLiveStatus();
             } else {
-                alert((res && res.message) || 'Could not pause your workday.');
+                this._toast((res && res.message) || 'Could not pause your workday.', 'danger');
             }
         } catch (err) {
-            alert('Pause Workday failed: ' + ((err && err.message) || err));
+            this._toast('Pause Workday failed: ' + ((err && err.message) || err), 'danger');
         }
     }
 
@@ -2975,10 +3383,10 @@ export class KpiAction extends Component {
                 await this.refresh();
                 await this.loadLiveStatus();
             } else {
-                alert((res && res.message) || 'Could not resume your workday.');
+                this._toast((res && res.message) || 'Could not resume your workday.', 'danger');
             }
         } catch (err) {
-            alert('Resume Workday failed: ' + ((err && err.message) || err));
+            this._toast('Resume Workday failed: ' + ((err && err.message) || err), 'danger');
         }
     }
 
@@ -2987,12 +3395,18 @@ export class KpiAction extends Component {
     // they are about to be told it no longer stands — "why" is the useful half
     // of that message. Cancelling the prompt cancels the revert.
     async revertWorkday() {
-        const reason = window.prompt(
-            'Reopen this workday?\n\n' +
-            'A reason is REQUIRED — it is sent to the developer word for word, and ' +
-            'it is the only thing that explains why their day suddenly reopened. ' +
-            "Everyone who received the day's summary is told too. The paused task " +
-            'stays paused; press Resume to pick it back up.\n\nReason:');
+        const reason = await this._dialog({
+            title: 'Reopen this workday?',
+            message: 'The reason is sent to the developer word for word — it is the only '
+                   + 'thing that explains why their day suddenly reopened. Everyone who '
+                   + "received the day's summary is told too.
+
+The paused task stays "
+                   + 'paused; they press Resume to pick it back up.',
+            input: true, inputLabel: 'Reason', required: true,
+            placeholder: 'e.g. forgot to log the afternoon site visit',
+            okLabel: 'Reopen workday', okClass: 'btn-warning',
+        });
         if (reason === null) { return; }        // cancelled
         if (!reason.trim()) {
             this._showAlert(
@@ -3006,10 +3420,10 @@ export class KpiAction extends Component {
                 await this._loadWorkdayStatus();
                 await this.refresh();
             } else {
-                alert((res && res.message) || 'Could not reopen the workday.');
+                this._toast((res && res.message) || 'Could not reopen the workday.', 'danger');
             }
         } catch (err) {
-            alert('Reopen Workday failed: ' + ((err && err.message) || err));
+            this._toast('Reopen Workday failed: ' + ((err && err.message) || err), 'danger');
         }
     }
 
@@ -3030,10 +3444,10 @@ export class KpiAction extends Component {
                 this.state.dayDone = true;
                 this.state.workdayOpen = false;
             } else {
-                alert("Could not start workday: " + ((res && res.message) || 'unknown error'));
+                this._toast("Could not start workday: " + ((res && res.message) || 'unknown error'), 'danger');
             }
         } catch (err) {
-            alert("Start Workday request failed: " + ((err && err.message) || err));
+            this._toast("Start Workday request failed: " + ((err && err.message) || err), 'danger');
         }
     }
 
@@ -3045,11 +3459,11 @@ export class KpiAction extends Component {
         try {
             data = await rpc("/kpi_workday/today_summary", {});
         } catch (err) {
-            alert("Could not load today's workday summary. " + (err && err.message || ''));
+            this._toast("Could not load today's workday summary. " + (err && err.message || ''), 'danger');
             return;
         }
         if (!data || data.status === false) {
-            alert(data && data.message ? data.message : "Failed to fetch today's summary.");
+            this._toast(data && data.message ? data.message : "Failed to fetch today's summary.", 'danger');
             return;
         }
         const anyConcurrent = (data.tasks || []).some(t => t.concurrent);
@@ -3294,11 +3708,11 @@ export class KpiAction extends Component {
                     this.state.dayDone = true;
                     await this.refresh();
                 } else {
-                    alert("End-workday failed: " + (res && res.message || 'unknown error'));
+                    this._toast("End-workday failed: " + (res && res.message || 'unknown error'), 'danger');
                     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-sign-out me-1"></i> End Workday &amp; Send Summary'; }
                 }
             } catch (err) {
-                alert("End-workday request failed: " + (err && err.message || err));
+                this._toast("End-workday request failed: " + (err && err.message || err), 'danger');
                 if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-sign-out me-1"></i> End Workday &amp; Send Summary'; }
             }
         });
@@ -3434,7 +3848,7 @@ export class KpiAction extends Component {
                     : "Please say what you're pausing for.";
             const errEl = document.getElementById("pauseUrgentHint");
             if (reason_code === 'urgent' && errEl) { errEl.style.display = 'block'; errEl.textContent = "⚠ " + msg; }
-            else { alert(msg); }
+            else { this._toast(msg, 'warning'); }
             const noteEl = document.getElementById("pauseReason");
             if (noteEl) noteEl.focus();
             return;
@@ -3452,7 +3866,7 @@ export class KpiAction extends Component {
             await this.refresh();
         } catch (error) {
             console.error("Error pausing task:", error);
-            alert("Failed to pause task. Please try again.");
+            this._toast("Failed to pause task. Please try again.", 'danger');
         }
     }
 
@@ -3482,7 +3896,7 @@ export class KpiAction extends Component {
     async confirmResumeWithReason() {
         const el = document.getElementById('rsReason');
         const reason = (el && el.value || '').trim();
-        if (!reason) { alert('Please enter what you changed before resuming.'); return; }
+        if (!reason) { this._toast('Please enter what you changed before resuming.', 'warning'); return; }
         const kpi_id = this.state.selectedKpi.id;
         try {
             const res = await rpc('/kra_kpi/task/resume_with_reason', { kpi_id, reason });
@@ -3490,10 +3904,10 @@ export class KpiAction extends Component {
                 this.closeModal();
                 await this.refresh();
             } else {
-                alert((res && res.message) || 'Resume failed.');
+                this._toast((res && res.message) || 'Resume failed.', 'danger');
             }
         } catch (e) {
-            alert('Resume failed: ' + ((e && e.message) || e));
+            this._toast('Resume failed: ' + ((e && e.message) || e), 'danger');
         }
     }
 
@@ -3545,14 +3959,14 @@ export class KpiAction extends Component {
             });
             
             if (response.status) {
-                alert(`✅ Task "${task_name}" has been successfully reassigned!\n\nNew State: ${response.new_state}\nNew Assignee: ${response.new_assignee}\n\nThe task has been reset and history has been recorded.`);
+                this._toast(`✅ Task "${task_name}" has been successfully reassigned!\n\nNew State: ${response.new_state}\nNew Assignee: ${response.new_assignee}\n\nThe task has been reset and history has been recorded.`, 'success');
                 await this.refresh();
             } else {
-                alert("❌ Error: " + response.message);
+                this._toast("❌ Error: " + response.message, 'danger');
             }
         } catch (error) {
             console.error("Error reassigning task:", error);
-            alert("Failed to reassign task. Please try again.");
+            this._toast("Failed to reassign task. Please try again.", 'danger');
         }
     }
 
@@ -3619,7 +4033,7 @@ export class KpiAction extends Component {
 
     async submitProgressUpdate() {
         if (!this.state.progressForm.summary.trim()) {
-            // The styled modal, not a bare browser alert(): this was the one
+            // The styled modal, not a bare browser this._toast(, 'warning'): this was the one
             // validation message in the file that still used the OS dialog, so
             // the most common mistake on the screen got the ugliest response.
             this._showAlert(
@@ -3646,11 +4060,11 @@ export class KpiAction extends Component {
                 this._resetProgressForm();
                 await this._reloadProgressLists();
             } else {
-                alert('Error: ' + result.message);
+                this._toast('Error: ' + result.message, 'danger');
             }
         } catch (error) {
             console.error('Error submitting progress:', error);
-            alert('Failed to submit progress update');
+            this._toast('Failed to submit progress update', 'danger');
         }
     }
 
@@ -4043,28 +4457,28 @@ export class KpiAction extends Component {
         };
     }
     async deleteManual(manual_id) {
-        if (!confirm('Are you sure you want to delete this manual?')) {
+        if (!await this._confirm('Delete this manual?', 'This cannot be undone.', 'Delete', 'btn-danger')) {
             return;
         }
         
         try {
             const result = await rpc('/kpi/manual/delete', { manual_id: manual_id });
             if (result.status) {
-                alert('Manual deleted successfully');
+                this._toast('Manual deleted successfully', 'success');
                 await this.loadUserManualInfo(this.state.detailKpiId);
             } else {
-                alert('Error: ' + result.message);
+                this._toast('Error: ' + result.message, 'danger');
             }
         } catch (error) {
             console.error('Error deleting manual:', error);
-            alert('Failed to delete manual');
+            this._toast('Failed to delete manual', 'danger');
         }
     }
     addLink() {
         const link = this.state.progressForm.link_input.trim();
         
         if (!link) {
-            alert('Please enter a link');
+            this._toast('Please enter a link', 'warning');
             return;
         }
         
@@ -4072,7 +4486,7 @@ export class KpiAction extends Component {
         try {
             new URL(link);
         } catch (e) {
-            alert('Please enter a valid URL (e.g., https://example.com)');
+            this._toast('Please enter a valid URL (e.g., https://example.com)', 'warning');
             return;
         }
         
@@ -4088,7 +4502,7 @@ export class KpiAction extends Component {
         const link = this.state.manualForm.link_input.trim();
         
         if (!link) {
-            alert('Please enter a link');
+            this._toast('Please enter a link', 'warning');
             return;
         }
         
@@ -4096,7 +4510,7 @@ export class KpiAction extends Component {
         try {
             new URL(link);
         } catch (e) {
-            alert('Please enter a valid URL (e.g., https://example.com)');
+            this._toast('Please enter a valid URL (e.g., https://example.com)', 'warning');
             return;
         }
         
@@ -4137,17 +4551,17 @@ export class KpiAction extends Component {
         
         // Validation
         if (!github_url) {
-            alert('Please enter a GitHub URL');
+            this._toast('Please enter a GitHub URL', 'warning');
             return;
         }
         
         if (!this.isValidGithubUrl(github_url)) {
-            alert('Please enter a valid GitHub URL (must start with https://github.com/)');
+            this._toast('Please enter a valid GitHub URL (must start with https://github.com/)', 'warning');
             return;
         }
         
         if (!branch_name) {
-            alert('Please enter a branch name');
+            this._toast('Please enter a branch name', 'warning');
             return;
         }
         
@@ -4159,18 +4573,18 @@ export class KpiAction extends Component {
             });
             
             if (result.status) {
-                alert('✅ GitHub link added successfully!');
+                this._toast('✅ GitHub link added successfully!', 'success');
                 // Clear form
                 this.state.progressForm.github_url = '';
                 this.state.progressForm.branch_name = '';
                 // Reload GitHub links
                 await this.loadGithubLinks(this.state.detailKpiId);
             } else {
-                alert('❌ Error: ' + result.message);
+                this._toast('❌ Error: ' + result.message, 'danger');
             }
         } catch (error) {
             console.error('Error adding GitHub link:', error);
-            alert('Failed to add GitHub link');
+            this._toast('Failed to add GitHub link', 'danger');
         }
     }
 
@@ -4188,21 +4602,21 @@ export class KpiAction extends Component {
 
     // 🆕 NEW: Delete GitHub Link
     async deleteGithubLink(link_id) {
-        if (!confirm('Are you sure you want to delete this GitHub link?')) {
+        if (!await this._confirm('Delete this GitHub link?', 'This cannot be undone.', 'Delete', 'btn-danger')) {
             return;
         }
         
         try {
             const result = await rpc('/kpi/github/delete', { link_id: link_id });
             if (result.status) {
-                alert('GitHub link deleted successfully');
+                this._toast('GitHub link deleted successfully', 'success');
                 await this.loadGithubLinks(this.state.detailKpiId);
             } else {
-                alert('Error: ' + result.message);
+                this._toast('Error: ' + result.message, 'danger');
             }
         } catch (error) {
             console.error('Error deleting GitHub link:', error);
-            alert('Failed to delete GitHub link');
+            this._toast('Failed to delete GitHub link', 'danger');
         }
     }
 
@@ -4283,8 +4697,8 @@ export class KpiAction extends Component {
     async saveMetaEdit() {
         const e = this.state.metaEdit;
         const name = (e.name || '').trim();
-        if (!name) { alert('Task name cannot be empty.'); return; }
-        if (!e.kra_id) { alert('Please pick a project.'); return; }
+        if (!name) { this._toast('Task name cannot be empty.', 'warning'); return; }
+        if (!e.kra_id) { this._toast('Please pick a project.', 'warning'); return; }
         this.state.metaEdit.saving = true;
         try {
             const r = await rpc('/kpi_action/update_meta', {
@@ -4293,7 +4707,7 @@ export class KpiAction extends Component {
                 type: e.type,
                 kra_id: parseInt(e.kra_id, 10),
             });
-            if (!r.status) { alert('Save failed: ' + (r.message || 'unknown')); return; }
+            if (!r.status) { this._toast('Save failed: ' + (r.message || 'unknown'), 'danger'); return; }
             this.state.metaEdit = { editing: false, saving: false, name: '', type: '', kra_id: '' };
             await this.loadKpiDetail(this.state.detailKpiId);
         } finally {
@@ -4554,9 +4968,9 @@ export class KpiAction extends Component {
         // Only present for admins; the route falls back to the caller when it is
         // absent, and refuses it outright from a non-admin.
         const user_id = parseInt((g('ntUser') && g('ntUser').value) || '0', 10) || 0;
-        if (!name) { alert('Please enter a task name.'); return; }
-        if (!kra_id) { alert('Please choose a project (KRA).'); return; }
-        if (this.state.isAdmin && !user_id) { alert('Please choose a developer.'); return; }
+        if (!name) { this._toast('Please enter a task name.', 'warning'); return; }
+        if (!kra_id) { this._toast('Please choose a project (KRA).', 'warning'); return; }
+        if (this.state.isAdmin && !user_id) { this._toast('Please choose a developer.', 'warning'); return; }
         // Estimate deliberately NOT required — same as the requirements upload.
         // The admin fills it in when accepting.
         try {
@@ -4569,10 +4983,10 @@ export class KpiAction extends Component {
                 this.closeModal();
                 await this.refresh();
             } else {
-                alert((res && res.message) || 'Could not create the task.');
+                this._toast((res && res.message) || 'Could not create the task.', 'danger');
             }
         } catch (e) {
-            alert('Create failed: ' + ((e && e.message) || e));
+            this._toast('Create failed: ' + ((e && e.message) || e), 'danger');
         }
     }
 
@@ -4657,10 +5071,10 @@ export class KpiAction extends Component {
                     if (res && res.status) {
                         await this.refresh();
                     } else {
-                        alert((res && res.message) || 'Accept failed.');
+                        this._toast((res && res.message) || 'Accept failed.', 'danger');
                     }
                 } catch (e) {
-                    alert('Accept failed: ' + ((e && e.message) || e));
+                    this._toast('Accept failed: ' + ((e && e.message) || e), 'danger');
                 }
             });
         });
@@ -4707,10 +5121,10 @@ export class KpiAction extends Component {
                     this.closeModal();
                     await this.refresh();
                 } else {
-                    alert((res && res.message) || 'Reject failed.');
+                    this._toast((res && res.message) || 'Reject failed.', 'danger');
                 }
             } catch (e) {
-                alert('Reject failed: ' + ((e && e.message) || e));
+                this._toast('Reject failed: ' + ((e && e.message) || e), 'danger');
             }
         });
     }
@@ -4761,10 +5175,10 @@ export class KpiAction extends Component {
                     this.closeModal();
                     await this.refresh();
                 } else {
-                    alert((res && res.message) || 'Delete failed.');
+                    this._toast((res && res.message) || 'Delete failed.', 'danger');
                 }
             } catch (e) {
-                alert('Delete failed: ' + ((e && e.message) || e));
+                this._toast('Delete failed: ' + ((e && e.message) || e), 'danger');
             }
         });
     }
@@ -4868,7 +5282,7 @@ export class KpiAction extends Component {
             </div>`;
 
         const container = document.getElementById("modalContainer");
-        if (!container) { alert("Could not open the task picker."); return; }
+        if (!container) { this._toast("Could not open the task picker.", 'danger'); return; }
         container.innerHTML = html;
         const close = () => { container.innerHTML = ''; };
         document.getElementById('swClose').addEventListener('click', close);
@@ -4885,10 +5299,10 @@ export class KpiAction extends Component {
                     await this.refresh();
                     await this.loadLiveStatus();
                 } else {
-                    alert((res && res.message) || 'Could not switch task.');
+                    this._toast((res && res.message) || 'Could not switch task.', 'danger');
                 }
             } catch (e) {
-                alert('Switch failed: ' + ((e && e.message) || e));
+                this._toast('Switch failed: ' + ((e && e.message) || e), 'danger');
             }
         };
         // Re-bound after every re-render: this modal is raw HTML replaced
@@ -4993,7 +5407,7 @@ export class KpiAction extends Component {
               </div>
             </div>`;
         const container = document.getElementById("modalContainer");
-        if (!container) { alert('Could not open the pause dialog.'); return; }
+        if (!container) { this._toast('Could not open the pause dialog.', 'danger'); return; }
         container.innerHTML = html;
         const close = () => { container.innerHTML = ''; };
         document.getElementById('paClose').addEventListener('click', close);
@@ -5045,10 +5459,10 @@ export class KpiAction extends Component {
                     await this.refresh();
                     await this.loadLiveStatus();
                 } else {
-                    alert((res && res.message) || 'Could not pause your tasks.');
+                    this._toast((res && res.message) || 'Could not pause your tasks.', 'danger');
                 }
             } catch (e) {
-                alert('Pause all failed: ' + ((e && e.message) || e));
+                this._toast('Pause all failed: ' + ((e && e.message) || e), 'danger');
             }
         });
     }
@@ -5094,7 +5508,7 @@ export class KpiAction extends Component {
               </div>
             </div>`;
         const container = document.getElementById("modalContainer");
-        if (!container) { alert('Could not open the revert dialog.'); return; }
+        if (!container) { this._toast('Could not open the revert dialog.', 'danger'); return; }
         container.innerHTML = html;
         const close = () => { container.innerHTML = ''; };
         document.getElementById('rvClose').addEventListener('click', close);
@@ -5102,17 +5516,17 @@ export class KpiAction extends Component {
         document.getElementById('rvConfirm').addEventListener('click', async () => {
             const el = document.getElementById('rvReason');
             const reason = (el && el.value || '').trim();
-            if (!reason) { alert('Please say why it is going back.'); return; }
+            if (!reason) { this._toast('Please say why it is going back.', 'warning'); return; }
             close();
             try {
                 const res = await rpc('/kra_kpi/task/revert_signoff', { kpi_id: task.id, reason });
                 if (res && res.status) {
                     await this.refresh();
                 } else {
-                    alert((res && res.message) || 'Could not revert this task.');
+                    this._toast((res && res.message) || 'Could not revert this task.', 'danger');
                 }
             } catch (e) {
-                alert('Revert failed: ' + ((e && e.message) || e));
+                this._toast('Revert failed: ' + ((e && e.message) || e), 'danger');
             }
         });
     }
@@ -5265,7 +5679,7 @@ export class KpiAction extends Component {
             const note = (this.state.idleNote || '').trim().slice(0, 60);
             const res = await rpc('/kpi_workday/idle_reason', { reason: code, note });
             if (res && res.status === false) {
-                alert((res && res.message) || "Couldn't save that.");
+                this._toast((res && res.message) || "Couldn't save that.", 'danger');
                 return;
             }
             this.state.idleModalOpen = false;
@@ -5275,7 +5689,7 @@ export class KpiAction extends Component {
             // server-side and loadLiveStatus resets from that.
             await this.loadLiveStatus();
         } catch (e) {
-            alert("Couldn't save that: " + ((e && e.message) || e));
+            this._toast("Couldn't save that: " + ((e && e.message) || e), 'danger');
         } finally {
             this.state.idleBusy = '';
         }
@@ -5287,7 +5701,7 @@ export class KpiAction extends Component {
         try {
             const res = await rpc('/kpi_workday/end_nontask', {});
             if (res && res.status === false) {
-                alert((res && res.message) || "Couldn't end that.");
+                this._toast((res && res.message) || "Couldn't end that.", 'danger');
                 return;
             }
             await this.loadLiveStatus();
@@ -5300,7 +5714,7 @@ export class KpiAction extends Component {
             // would swallow the real prompt #1.
             if (res && res.ask_again) this.state.idleModalOpen = true;
         } catch (e) {
-            alert("Couldn't end that: " + ((e && e.message) || e));
+            this._toast("Couldn't end that: " + ((e && e.message) || e), 'danger');
         } finally {
             this.state.nontaskBusy = false;
         }
@@ -5396,7 +5810,7 @@ export class KpiAction extends Component {
             
             console.log(`[Reminder Check] In-progress task found for current user: ${task.name}`);
             
-            // Check deadline alert (one-time) - compare date strings (YYYY-MM-DD)
+            // Check deadline this._toast(one-time, 'warning') - compare date strings (YYYY-MM-DD)
             // Only show if deadline_alert_shown is false
             if (task.deadline && !task.deadline_alert_shown) {
                 // task.deadline is already in YYYY-MM-DD format
@@ -5722,6 +6136,17 @@ export class KpiAction extends Component {
             this.state.isAdmin = payload.is_admin || false;
             this.state.currentUserId = payload.current_user_id || null;  // 🆕 NEW: Store current user ID
             this.state.selfPendingCount = payload.self_pending_count || 0;  // 🆕 Pending Review lane count
+
+            // Paid work lives outside the board query — it is archived, so the main
+            // fetch cannot see it. Only asked for once we know the viewer is an
+            // admin; the route refuses anyone else anyway. Not awaited: the lane
+            // filling a beat after the rest of the board is fine.
+            if (this.state.isAdmin) {
+                this._loadPaidTasks();
+            } else {
+                this.state.paidTasks = [];
+                this.state.paidTruncated = false;
+            }
             
             // 🆕 NEW: Store all tasks for filtering
             this.state.allTasks = payload.tasks;
@@ -6031,6 +6456,59 @@ export class KpiAction extends Component {
     isAssigneeSelected(assigneeId) {
         return this.state.filters.assignee === String(assigneeId);
     }
+
+    // Errors stay until dismissed — an error that vanishes before it is read is the
+    // same as no error at all. Anything else clears itself.
+    _toast(text, kind = 'warning') {
+        this.state.toast = { show: true, text: String(text == null ? '' : text), kind };
+        if (kind !== 'danger') {
+            setTimeout(() => { this.state.toast.show = false; }, 4500);
+        }
+    }
+    dismissToast() { this.state.toast.show = false; }
+
+
+    _dialog({ title, message = '', okLabel = 'OK', okClass = 'btn-primary',
+              input = false, inputLabel = '', placeholder = '', required = false,
+              nums = [], footNote = '', ctx = null }) {
+        const numVals = {};
+        for (const n of nums) numVals[n.key] = n.value !== undefined ? n.value : 0;
+        Object.assign(this.state.dlg, {
+            open: true, title, message, okLabel, okClass,
+            input, inputLabel, placeholder, required, value: '', error: '',
+            nums, numVals, footNote, ctx,
+        });
+        return new Promise((resolve) => { this.state.dlg.resolve = resolve; });
+    }
+    _confirm(title, message, okLabel = 'OK', okClass = 'btn-primary') {
+        return this._dialog({ title, message, okLabel, okClass });
+    }
+    dlgSet(v) { this.state.dlg.value = v; this.state.dlg.error = ''; }
+    dlgNum(key, v) {
+        this.state.dlg.numVals[key] = Math.max(0, parseInt(v, 10) || 0);
+        this.state.dlg.error = '';
+    }
+    dlgCancel() {
+        const r = this.state.dlg.resolve;
+        this.state.dlg.open = false; this.state.dlg.resolve = null;
+        if (r) r(null);
+    }
+    dlgOk() {
+        const d = this.state.dlg;
+        // Stated rather than enforced by disabling OK, so a click that does nothing
+        // always says why.
+        if (d.input && d.required && !String(d.value || '').trim()) {
+            d.error = (d.inputLabel || 'This') + ' is required.';
+            return;
+        }
+        // With numbers present the caller wants the whole set, not just the text.
+        const val = d.nums.length ? { ...d.numVals, text: d.value }
+                                  : (d.input ? d.value : true);
+        const r = d.resolve;
+        d.open = false; d.resolve = null;
+        if (r) r(val);
+    }
+
 }
  
 registry.category("actions").add("kra_kpi_actions", KpiAction);

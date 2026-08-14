@@ -25,26 +25,47 @@ const TEMPLATE = xml/* xml */`
     <!-- ─── LIST VIEW ─── -->
     <t t-if="state.view === 'list'">
 
-        <!-- New invoice card (admin only) -->
+        <!-- New invoice card (admin only). Collapsed by default: raising an invoice is
+             occasional, but this form sat permanently above the list of existing ones,
+             which is what the screen is usually opened to read. -->
         <div t-if="!state.isPortal" class="card p-3 mb-4 shadow-sm">
-            <h5 class="fw-bold mb-3">
+            <h5 class="fw-bold mb-0" style="cursor:pointer;"
+                t-on-click="() => state.showCreate = !state.showCreate">
+                <i t-att-class="'fa me-2 ' + (state.showCreate ? 'fa-caret-down' : 'fa-caret-right')"/>
                 <i class="fa fa-plus-circle me-2 text-success"/>
                 Create New Invoice
+                <span t-if="!state.showCreate" class="text-muted small fw-normal ms-2">
+                    — click to open
+                </span>
             </h5>
-            <div class="row g-3 align-items-end">
+            <div t-if="state.showCreate" class="row g-3 align-items-end mt-0">
                 <div class="col-md-4">
-                    <label class="form-label fw-bold">Client</label>
-                    <select class="form-select"
+                    <label class="form-label fw-bold">
+                        Client <span class="text-danger">*</span>
+                    </label>
+                    <select t-att-class="'form-select' + (state.missingClient ? ' is-invalid border-danger' : '')"
                             t-model="state.newInvoice.client_kra_id"
                             t-on-change="onClientChange">
                         <option value="">-- Select Client --</option>
-                        <t t-foreach="state.clients" t-as="c" t-key="c.id">
-                            <option t-att-value="c.id">
-                                <t t-esc="c.parent_name ? c.parent_name + ' > ' + c.name : c.name"/>
-                                <t t-if="c.has_client_user === false"> — no client user assigned</t>
-                            </option>
+                        <!-- Grouped so the clients you can actually invoice today are not
+                             buried among ones with nothing outstanding. optgroup, so the
+                             headings are real and unselectable rather than styled options. -->
+                        <t t-foreach="clientGroups()" t-as="g" t-key="g.key">
+                            <optgroup t-if="g.clients.length" t-att-label="g.label + ' (' + g.clients.length + ')'">
+                                <t t-foreach="g.clients" t-as="c" t-key="c.id">
+                                    <option t-att-value="c.id">
+                                        <t t-esc="c.parent_name ? c.parent_name + ' > ' + c.name : c.name"/>
+                                        <t t-if="c.billable_count"> — <t t-esc="c.billable_count"/> to bill</t>
+                                        <t t-elif="c.invoiced_count"> — all invoiced</t>
+                                        <t t-if="c.has_client_user === false"> · no client user assigned</t>
+                                    </option>
+                                </t>
+                            </optgroup>
                         </t>
                     </select>
+                    <div t-if="state.missingClient" class="invalid-feedback d-block">
+                        Choose the client this invoice is for.
+                    </div>
                 </div>
                 <div class="col-md-4">
                     <label class="form-label fw-bold">Invoice Title <span class="text-muted small">(optional)</span></label>
@@ -187,7 +208,7 @@ const TEMPLATE = xml/* xml */`
             <!-- Advanced toggle. Everything behind it already has a correct default —
                  currency from the client KRA, all three task types, empty filters
                  meaning "everything" — so the everyday path is client + period + Create. -->
-            <div class="mt-3">
+            <div t-if="state.showCreate" class="mt-3">
                 <button type="button" class="btn btn-sm btn-link px-0 text-decoration-none"
                         t-on-click="() => state.showAdvanced = !state.showAdvanced">
                     <i t-att-class="'fa me-1 ' + (state.showAdvanced ? 'fa-caret-down' : 'fa-caret-right')"/>
@@ -196,7 +217,7 @@ const TEMPLATE = xml/* xml */`
                 </button>
             </div>
 
-            <div t-if="state.showAdvanced and state.scopeSubKras.length > 0" class="row g-3 mt-2">
+            <div t-if="state.showCreate and state.showAdvanced and state.scopeSubKras.length > 0" class="row g-3 mt-2">
                 <div class="col-12">
                     <label class="form-label fw-bold">
                         <i class="fa fa-sitemap me-1 text-muted"/> Filter: Sub-KRA / Project
@@ -216,8 +237,8 @@ const TEMPLATE = xml/* xml */`
                 </div>
             </div>
 
-            <!-- Optional filters: developer + task. Populated after client selection. -->
-            <div t-if="state.showAdvanced and (state.scopeUsers.length > 0 or state.scopeKpis.length > 0)" class="row g-3 mt-2">
+            <!-- Optional filter: developer. Populated after client selection. -->
+            <div t-if="state.showCreate and state.showAdvanced and state.scopeUsers.length > 0" class="row g-3 mt-2">
                 <div class="col-md-6">
                     <label class="form-label fw-bold">
                         <i class="fa fa-user me-1 text-muted"/> Filter: Developers
@@ -235,49 +256,93 @@ const TEMPLATE = xml/* xml */`
                         </t>
                     </div>
                 </div>
-                <div class="col-md-6">
+            </div>
+
+            <!-- Tasks get the full width and two boxes. One mixed list meant tickable and
+                 untickable rows sat together, and a tick on an already-invoiced row
+                 narrowed the invoice down to work that cannot be billed — an empty
+                 invoice raised from a form where you had just ticked three things. -->
+            <div t-if="state.showCreate and state.showAdvanced and state.scopeKpis.length > 0" class="row g-3 mt-2">
+                <div class="col-12">
                     <label class="form-label fw-bold">
                         <i class="fa fa-tasks me-1 text-muted"/> Filter: Tasks
                         <span class="text-muted small">(optional — leave empty for all)</span>
                     </label>
-                    <div class="border rounded p-2" style="max-height:160px; overflow-y:auto;">
-                        <t t-foreach="visibleScopeKpis()" t-as="k" t-key="k.id">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox"
-                                       t-att-id="'kpi_' + k.id"
-                                       t-att-checked="isFilterSelected('filter_kpi_ids', k.id)"
-                                       t-on-change="() => this.toggleFilter('filter_kpi_ids', k.id)"/>
-                                <label t-att-for="'kpi_' + k.id"
-                                       t-att-class="'form-check-label' + (k.billable === false ? ' text-muted' : '')">
-                                    <t t-esc="k.name"/>
-                                    <span t-if="k.kra_name" class="text-muted">  (<t t-esc="k.kra_name"/>)</span>
-                                    <span t-if="k.billable === false"
-                                          t-att-class="'badge ms-1 ' + billBadgeClass(k)"
-                                          t-esc="k.not_billable_reason"/>
-                                </label>
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <div class="small fw-bold text-success mb-1">
+                                <i class="fa fa-check-square-o me-1"/>
+                                Available to bill
+                                <span class="badge bg-success-subtle text-success ms-1"
+                                      t-esc="leftScopeKpis().length"/>
                             </div>
-                        </t>
-                        <div t-if="visibleScopeKpis().length === 0" class="text-muted small p-1">
-                            <i class="fa fa-info-circle me-1"/>
-                            No signed-off work for this client yet.
+                            <div class="border rounded p-2" style="max-height:190px; overflow-y:auto;">
+                                <t t-foreach="leftScopeKpis()" t-as="k" t-key="k.id">
+                                    <div class="form-check">
+                                        <!-- Only billable rows get a box. On the others it
+                                             could be ticked but never meant anything. -->
+                                        <input t-if="k.billable !== false"
+                                               class="form-check-input" type="checkbox"
+                                               t-att-id="'kpi_' + k.id"
+                                               t-att-checked="isFilterSelected('filter_kpi_ids', k.id)"
+                                               t-on-change="() => this.toggleFilter('filter_kpi_ids', k.id)"/>
+                                        <label t-att-for="'kpi_' + k.id"
+                                               t-att-class="'form-check-label' + (k.billable === false ? ' text-muted' : '')">
+                                            <t t-esc="k.name"/>
+                                            <span t-if="k.kra_name" class="text-muted">  (<t t-esc="k.kra_name"/>)</span>
+                                            <span t-if="k.billable === false"
+                                                  t-att-class="'badge ms-1 ' + billBadgeClass(k)"
+                                                  t-esc="k.not_billable_reason"/>
+                                        </label>
+                                    </div>
+                                </t>
+                                <div t-if="leftScopeKpis().length === 0" class="text-muted small p-1">
+                                    <i class="fa fa-info-circle me-1"/>
+                                    <t t-esc="emptyBillableMessage()"/>
+                                </div>
+                            </div>
+                            <!-- An invoice can only bill signed-off work, so unsigned tasks
+                                 are noise here — but hiding them silently would leave an
+                                 empty box with no explanation. -->
+                            <button t-if="unsignedScopeKpis().length > 0"
+                                    type="button" class="btn btn-sm btn-link px-0 text-muted text-decoration-none"
+                                    t-on-click="() => state.showUnsignedTasks = !state.showUnsignedTasks">
+                                <i t-att-class="'fa me-1 ' + (state.showUnsignedTasks ? 'fa-caret-down' : 'fa-caret-right')"/>
+                                <t t-esc="unsignedScopeKpis().length"/> task(s) hidden — not signed off yet
+                            </button>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="small fw-bold text-secondary mb-1">
+                                <i class="fa fa-lock me-1"/>
+                                Already invoiced
+                                <span class="badge bg-secondary-subtle text-secondary ms-1"
+                                      t-esc="invoicedScopeKpis().length"/>
+                            </div>
+                            <div class="border rounded p-2 bg-light" style="max-height:190px; overflow-y:auto;">
+                                <t t-foreach="invoicedScopeKpis()" t-as="k" t-key="k.id">
+                                    <div class="form-check">
+                                        <label class="form-check-label text-muted">
+                                            <t t-esc="k.name"/>
+                                            <span t-if="k.kra_name" class="text-muted">  (<t t-esc="k.kra_name"/>)</span>
+                                            <span t-att-class="'badge ms-1 ' + billBadgeClass(k)"
+                                                  t-esc="k.not_billable_reason"/>
+                                        </label>
+                                    </div>
+                                </t>
+                                <div t-if="invoicedScopeKpis().length === 0" class="text-muted small p-1">
+                                    <i class="fa fa-info-circle me-1"/>
+                                    No invoiced tasks yet.
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <!-- An invoice can only bill signed-off work, so unsigned tasks are
-                         noise in this picker — but hiding them silently would leave an
-                         empty box with no explanation. -->
-                    <button t-if="unsignedScopeKpis().length > 0"
-                            type="button" class="btn btn-sm btn-link px-0 text-muted text-decoration-none"
-                            t-on-click="() => state.showUnsignedTasks = !state.showUnsignedTasks">
-                        <i t-att-class="'fa me-1 ' + (state.showUnsignedTasks ? 'fa-caret-down' : 'fa-caret-right')"/>
-                        <t t-esc="unsignedScopeKpis().length"/> task(s) hidden — not signed off yet
-                    </button>
                 </div>
             </div>
 
             <!-- Create sits LAST so the form reads top-to-bottom. It used to render
                  above the three filters, which asked you to submit before you had
                  seen the rest of the form. -->
-            <div class="row g-3 mt-2">
+            <div t-if="state.showCreate" class="row g-3 mt-2">
                 <div class="col-12">
                     <button class="btn btn-primary w-100" t-on-click="createInvoice"
                             t-att-disabled="state.creating">
@@ -300,6 +365,39 @@ const TEMPLATE = xml/* xml */`
                 <t t-else="">All Invoices</t>
                 <span class="badge bg-secondary ms-2" t-esc="state.invoices.length"/>
             </h5>
+            <!-- Client's own chips. Same filters and same counts as the admin's, in the
+                 client's words: "Payment Due" is the biller's term for it, and to the
+                 person who owes the money it is simply Unpaid. Drafts never appear under
+                 any of them — the record rule keeps a client to finalized/sent, and both
+                 search and search_count run as the logged-in user. -->
+            <div t-if="state.isPortal" class="mb-3 d-flex flex-wrap gap-2">
+                <button type="button"
+                        t-att-class="'btn btn-sm ' + (state.statusFilter === 'all' ? 'btn-primary' : 'btn-outline-primary')"
+                        t-on-click="() => this.setStatusFilter('all')">
+                    All
+                    <span class="badge bg-light text-dark ms-1" t-esc="state.counts.all || 0"/>
+                </button>
+                <button type="button"
+                        t-att-class="'btn btn-sm ' + (state.statusFilter === 'due' ? 'btn-danger' : 'btn-outline-danger')"
+                        t-on-click="() => this.setStatusFilter('due')"
+                        title="Invoices you still owe">
+                    <i class="fa fa-exclamation-circle me-1"/> Unpaid
+                    <span class="badge bg-light text-dark ms-1" t-esc="state.counts.due || 0"/>
+                </button>
+                <button type="button"
+                        t-att-class="'btn btn-sm ' + (state.statusFilter === 'claimed' ? 'btn-warning' : 'btn-outline-warning')"
+                        t-on-click="() => this.setStatusFilter('claimed')"
+                        title="You reported paying these — we're confirming the money arrived">
+                    <i class="fa fa-hourglass-half me-1"/> Claimed
+                    <span class="badge bg-light text-dark ms-1" t-esc="state.counts.claimed || 0"/>
+                </button>
+                <button type="button"
+                        t-att-class="'btn btn-sm ' + (state.statusFilter === 'paid' ? 'btn-success' : 'btn-outline-success')"
+                        t-on-click="() => this.setStatusFilter('paid')">
+                    <i class="fa fa-check-circle me-1"/> Paid
+                    <span class="badge bg-light text-dark ms-1" t-esc="state.counts.paid || 0"/>
+                </button>
+            </div>
             <!-- Status filter chips (admin only) -->
             <div t-if="!state.isPortal" class="mb-3 d-flex flex-wrap gap-2">
                 <button type="button"
@@ -328,9 +426,20 @@ const TEMPLATE = xml/* xml */`
                 </button>
                 <button type="button"
                         t-att-class="'btn btn-sm ' + (state.statusFilter === 'due' ? 'btn-danger' : 'btn-outline-danger')"
-                        t-on-click="() => this.setStatusFilter('due')">
+                        t-on-click="() => this.setStatusFilter('due')"
+                        title="Billed to the client and still unpaid, with no payment claim outstanding">
                     <i class="fa fa-exclamation-circle me-1"/> Payment Due
                     <span class="badge bg-light text-dark ms-1" t-esc="state.counts.due || 0"/>
+                </button>
+                <!-- Sits between Due and Paid because that is where the money is: the
+                     client says it has left their account, you have not confirmed it
+                     arrived. Amber matches the row and detail badges for the same state. -->
+                <button type="button"
+                        t-att-class="'btn btn-sm ' + (state.statusFilter === 'claimed' ? 'btn-warning' : 'btn-outline-warning')"
+                        t-on-click="() => this.setStatusFilter('claimed')"
+                        title="The client reported paying these — confirm the money arrived, or clear the claim">
+                    <i class="fa fa-hourglass-half me-1"/> Payment Claimed
+                    <span class="badge bg-light text-dark ms-1" t-esc="state.counts.claimed || 0"/>
                 </button>
                 <button type="button"
                         t-att-class="'btn btn-sm ' + (state.statusFilter === 'paid' ? 'btn-success' : 'btn-outline-success')"
@@ -408,6 +517,13 @@ const TEMPLATE = xml/* xml */`
                                         <i class="fa fa-clock-o me-1"/> Due
                                     </span>
                                 </t>
+                                <!-- A settled invoice that went back to Due. Called out on
+                                     the row itself because the whole point is that the
+                                     client should not have to open it to find out why. -->
+                                <div t-if="inv.unpaid_reason" class="small text-danger fw-bold mt-1"
+                                     t-att-title="inv.unpaid_reason">
+                                    <i class="fa fa-undo me-1"/>Payment reversed
+                                </div>
                             </td>
                             <td class="text-end" t-esc="inv.total_quoted_hours + 'h'"/>
                             <td class="text-end" t-esc="inv.total_adjusted_hours + 'h'"/>
@@ -519,19 +635,31 @@ const TEMPLATE = xml/* xml */`
                             <i class="fa fa-paper-plane me-1"/> Mark Sent
                         </button>
                         <!-- Reduce a finalized invoice: reason → draft → edit → finalize.
-                             Finalized only. Not sent (the client has that document) and
-                             not paid (the money arrived) — the server refuses both too. -->
-                        <button t-if="state.invoice.state === 'finalized' and state.invoice.payment_status !== 'paid'"
+                             Finalized only. Not sent (the client has that document), not
+                             paid (the money arrived), and not while a payment claim is
+                             open — the client has already sent money against this figure,
+                             so it must not move under them. The server refuses all three.
+                             Reset to Draft is locked on the same terms: it is the same
+                             escape hatch by another name. -->
+                        <button t-if="canEditFinalized()"
                                 class="btn btn-outline-primary me-2"
                                 title="Reopen to reduce the amount, then re-finalize"
                                 t-on-click="reviseInvoice">
                             <i class="fa fa-pencil me-1"/> Revise
                         </button>
-                        <button t-if="state.invoice.state === 'finalized' and state.invoice.payment_status !== 'paid'"
+                        <button t-if="canEditFinalized()"
                                 class="btn btn-outline-secondary"
                                 t-on-click="resetDraft">
                             <i class="fa fa-undo me-1"/> Reset to Draft
                         </button>
+                        <!-- Say why the buttons are gone; an unexplained absence reads as
+                             a broken screen. The claim banner below carries the way out. -->
+                        <span t-if="state.invoice.state === 'finalized' and state.invoice.payment_status !== 'paid' and state.invoice.client_paid_claim"
+                              class="text-muted small fst-italic">
+                            <i class="fa fa-lock me-1"/>
+                            Revise is locked while the client's payment claim is open —
+                            confirm it, or clear it if the money never arrived.
+                        </span>
                         <!-- Draft only. A finalized invoice is a record the client has
                              seen, so it stays. Deleting a draft frees any task it was
                              holding back from future invoices. -->
@@ -542,6 +670,21 @@ const TEMPLATE = xml/* xml */`
                         </button>
                     </t>
                 </div>
+            </div>
+        </div>
+
+        <!-- Payment reversed. Shown to BOTH sides and in the loudest style on the page:
+             the client had this invoice settled and now owes it again, which they must
+             not have to discover by noticing a badge changed colour. -->
+        <div t-if="state.invoice.unpaid_reason" class="alert alert-danger py-2 mb-3">
+            <i class="fa fa-undo me-1"/>
+            <strong t-if="state.isPortal">This payment was reversed — the invoice is due again.</strong>
+            <strong t-else="">Payment reverted to Due.</strong>
+            <div class="mt-1" style="white-space:pre-wrap;">
+                <t t-esc="state.invoice.unpaid_reason"/>
+            </div>
+            <div t-if="state.invoice.unpaid_on" class="small text-muted mt-1">
+                Reverted <t t-esc="state.invoice.unpaid_on"/>
             </div>
         </div>
 
@@ -825,14 +968,22 @@ const TEMPLATE = xml/* xml */`
             <h5 class="fw-bold mb-2">
                 <i class="fa fa-sticky-note-o me-2 text-warning"/> Overall Notes
             </h5>
+            <div t-if="!state.isPortal and state.invoice.state === 'draft'" class="small text-muted mb-1">
+                The client reads this on their copy of the invoice. Saved as you type.
+            </div>
             <textarea t-if="!state.isPortal and state.invoice.state === 'draft'"
                       class="form-control"
-                      rows="4"
+                      rows="8"
+                      placeholder="Anything the client should know about this invoice — scope, adjustments, payment terms…"
                       t-att-value="state.notesText"
                       t-on-input="(ev) => state.notesText = ev.target.value"
                       t-on-blur="saveNotes"/>
+            <!-- t-esc, not t-out: the server now sends plain text, and t-out would only
+                 render markup if it were flagged as such — which is why the client was
+                 reading the <p> tags. pre-wrap keeps the typed paragraphs. -->
             <div t-else="" class="border rounded p-2 bg-light"
-                 t-out="state.invoice.notes or '(no notes)'"/>
+                 style="white-space:pre-wrap;"
+                 t-esc="state.invoice.notes or '(no notes)'"/>
         </div>
     </t>
 
@@ -851,12 +1002,31 @@ const TEMPLATE = xml/* xml */`
     <div t-if="state.dlg.open" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title" t-esc="state.dlg.title"/>
-                    <button type="button" class="btn-close btn-close-white" t-on-click="dlgCancel"/>
+                <div t-att-class="'modal-header ' + state.dlg.headerClass">
+                    <h5 class="modal-title">
+                        <i t-if="state.dlg.icon" t-att-class="'fa me-2 ' + state.dlg.icon"/>
+                        <t t-esc="state.dlg.title"/>
+                    </h5>
+                    <button type="button"
+                            t-att-class="'btn-close' + (state.dlg.headerClass.includes('text-white') ? ' btn-close-white' : '')"
+                            t-on-click="dlgCancel"/>
                 </div>
                 <div class="modal-body">
                     <p t-if="state.dlg.message" class="mb-3" style="white-space:pre-wrap;" t-esc="state.dlg.message"/>
+                    <!-- Naming the records a warning is about, without making the dialog
+                         a wall of text when there are thirty of them. -->
+                    <div t-if="state.dlg.items.length" class="mb-3">
+                        <button type="button" class="btn btn-sm btn-link px-0 text-decoration-none"
+                                t-on-click="() => state.dlg.itemsOpen = !state.dlg.itemsOpen">
+                            <i t-att-class="'fa me-1 ' + (state.dlg.itemsOpen ? 'fa-caret-down' : 'fa-caret-right')"/>
+                            <t t-esc="state.dlg.itemsLabel"/>
+                        </button>
+                        <div t-if="state.dlg.itemsOpen" class="border rounded p-2 bg-light"
+                             style="max-height:180px; overflow-y:auto;">
+                            <div t-foreach="state.dlg.items" t-as="it" t-key="it_index"
+                                 class="small border-bottom py-1" t-esc="it"/>
+                        </div>
+                    </div>
                     <t t-foreach="state.dlg.fields" t-as="f" t-key="f.key">
                         <div class="mb-3">
                             <label class="form-label fw-bold">
@@ -888,7 +1058,8 @@ const TEMPLATE = xml/* xml */`
                     <div t-if="state.dlg.error" class="alert alert-danger py-2 mb-0" t-esc="state.dlg.error"/>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" t-on-click="dlgCancel">Cancel</button>
+                    <button t-if="!state.dlg.okOnly" type="button" class="btn btn-secondary"
+                            t-on-click="dlgCancel">Cancel</button>
                     <button type="button" t-att-class="'btn ' + state.dlg.okClass"
                             t-on-click="dlgOk" t-esc="state.dlg.okLabel"/>
                 </div>
@@ -915,8 +1086,11 @@ class _BaseInvoiceComponent extends Component {
             dlg: {
                 open: false, title: '', message: '', okLabel: 'OK',
                 okClass: 'btn-primary', fields: [], values: {}, error: '',
+                headerClass: 'bg-primary text-white', icon: '', okOnly: false,
+                items: [], itemsLabel: '', itemsOpen: false,
                 resolve: null,
             },
+            missingClient: false,          // red highlight on the Client picker
             // Replaces alert() for results and errors. A banner inside the page,
             // dismissible, rather than a modal the user has to acknowledge before
             // they can even see what changed behind it.
@@ -924,10 +1098,11 @@ class _BaseInvoiceComponent extends Component {
             clients: [],
             currencies: [],
             invoices: [],
-            statusFilter: 'all',           // 'all' | 'draft' | 'finalized' | 'sent' | 'due' | 'paid'
-            counts: { all: 0, draft: 0, finalized: 0, sent: 0, due: 0, paid: 0 },
+            statusFilter: 'all',           // 'all' | 'draft' | 'finalized' | 'sent' | 'due' | 'claimed' | 'paid'
+            counts: { all: 0, draft: 0, finalized: 0, sent: 0, due: 0, claimed: 0, paid: 0 },
             invoice: null,                 // current detail invoice
             creating: false,               // in-flight guard — blocks duplicate drafts
+            showCreate: false,             // the builder folds away; the list is what you came for
             showAdvanced: false,           // currency / filters — all defaulted
             showUnsignedTasks: false,      // reveal the not-yet-signed-off tasks in the picker
             expanded: {},                  // {line_id: bool}
@@ -975,6 +1150,9 @@ class _BaseInvoiceComponent extends Component {
                         if (pre.range_preset) this.setRangePreset(pre.range_preset);
                         if (pre.client_kra_id) {
                             this.state.newInvoice.client_kra_id = String(pre.client_kra_id);
+                            // Arrived here from "Invoice this project" — they came to
+                            // raise one, so the folded form would just be in the way.
+                            this.state.showCreate = true;
                             await this.onClientChange();
                             if (Array.isArray(pre.sub_kra_ids) && pre.sub_kra_ids.length) {
                                 this.state.newInvoice.filter_sub_kra_ids = pre.sub_kra_ids.map(Number);
@@ -1020,13 +1198,21 @@ class _BaseInvoiceComponent extends Component {
     // ── the one dialog ────────────────────────────────────────────────────────
     // Returns a Promise of the entered values, or null if cancelled — so callers
     // read like the prompt() they replace, without the browser chrome.
-    _dialog({ title, message = '', fields = [], okLabel = 'OK', okClass = 'btn-primary' }) {
+    _dialog({ title, message = '', fields = [], okLabel = 'OK', okClass = 'btn-primary',
+              headerClass = 'bg-primary text-white', icon = '', okOnly = false,
+              items = [], itemsLabel = '' }) {
         const d = this.state.dlg;
         d.title = title;
         d.message = message;
         d.fields = fields;
         d.okLabel = okLabel;
         d.okClass = okClass;
+        d.headerClass = headerClass;
+        d.icon = icon;
+        d.okOnly = okOnly;
+        d.items = items;
+        d.itemsLabel = itemsLabel;
+        d.itemsOpen = false;
         d.error = '';
         d.values = {};
         for (const f of fields) d.values[f.key] = f.value !== undefined ? f.value : '';
@@ -1035,6 +1221,17 @@ class _BaseInvoiceComponent extends Component {
     }
     _confirm(title, message, okLabel = 'OK', okClass = 'btn-primary') {
         return this._dialog({ title, message, fields: [], okLabel, okClass });
+    }
+    // A blocking warning with one button. Used where the toast banner was too easy
+    // to miss: the Create button sits at the bottom of a long form, and a message
+    // that appears at the top reads as nothing happening at all.
+    _warn(title, message) {
+        return this._dialog({
+            title, message,
+            okLabel: 'Got it', okClass: 'btn-warning',
+            headerClass: 'bg-warning text-dark', icon: 'fa-exclamation-triangle',
+            okOnly: true,
+        });
     }
     _toast(text, kind = 'success') {
         this.state.toast = { show: true, text, kind };
@@ -1104,8 +1301,11 @@ class _BaseInvoiceComponent extends Component {
             okLabel: 'Revert to Due',
             okClass: 'btn-warning',
             fields: [
-                { key: 'reason', label: 'Reason', type: 'textarea',
-                  hint: 'Appended to the payment notes.' },
+                // Required, and the client reads it — so it is written for them, not
+                // as an internal shorthand.
+                { key: 'reason', label: 'Reason', type: 'textarea', required: true,
+                  placeholder: 'e.g. cheque returned unpaid by the bank',
+                  hint: 'The client is shown this on their invoice.' },
             ],
         });
         if (!vals) return;
@@ -1194,14 +1394,46 @@ class _BaseInvoiceComponent extends Component {
         // extras then held those tasks back and every later invoice came back empty.
         if (this.state.creating) return;
         const ni = this.state.newInvoice;
-        if (!ni.client_kra_id || !ni.from_date || !ni.to_date) {
-            this._toast('Pick a client and both dates first.', 'danger');
+        // Each miss is named on its own. "Pick a client and both dates" left you
+        // hunting for which of the three was actually empty.
+        this.state.missingClient = !ni.client_kra_id;
+        if (!ni.client_kra_id) {
+            await this._warn(
+                'Choose a client first',
+                'Every invoice is raised against one client — it decides whose signed-off '
+                + 'work gets billed and who receives the invoice.\n\n'
+                + 'Pick one from the Client dropdown at the top of the form, then press '
+                + 'Create Invoice again.');
+            // Put the cursor where the fix is; the button is far below the field.
+            const sel = document.querySelector('.o_kpi_client_invoice select.is-invalid');
+            if (sel) { sel.scrollIntoView({ block: 'center' }); sel.focus(); }
+            return;
+        }
+        if (!ni.from_date || !ni.to_date) {
+            await this._warn('Set the date range',
+                'Choose the period this invoice covers — either a preset button '
+                + '(All unbilled, This Month, …) or both From and To dates.');
             return;
         }
         // Block creation if user un-ticked ALL three types — would produce empty invoice silently.
         if (this._selectedTaskTypes().length === 0) {
-            this._toast('Pick at least one task type (REQ / UPT / BUG).', 'danger');
+            await this._warn('Pick at least one task type',
+                'REQ, UPT and BUG are all unticked, so there is nothing left to bill. '
+                + 'Tick at least one under Include Task Types.');
             return;
+        }
+        // An hourly invoice at rate 0 totals zero however many hours it carries. A
+        // deliberate 0 is legitimate — the field's own hint calls it "time-only" — so
+        // this asks rather than blocks. Per-task is NOT checked here: its prices are
+        // set after creation, so there is nothing to check yet.
+        if (ni.billing_method === 'hourly' && !(Number(ni.hourly_rate) > 0)) {
+            const go = await this._confirm(
+                'Per-hour rate is 0',
+                'This invoice will total 0 no matter how many hours it bills.\n\n'
+                + 'That is right for a time-only record you are sending for information. '
+                + 'If you meant to charge for this work, set a rate first.',
+                'Create it anyway', 'btn-warning');
+            if (!go) return;
         }
         this.state.creating = true;
         try {
@@ -1222,7 +1454,11 @@ class _BaseInvoiceComponent extends Component {
             from_date: ni.from_date,
             to_date: ni.to_date,
             filter_user_ids: ni.filter_user_ids,
-            filter_kpi_ids: ni.filter_kpi_ids,
+            // Only ids still on screen and still tickable. Untick BUG after picking a
+            // BUG task and it would otherwise stay silently selected, narrowing the
+            // invoice to work the type filter has already thrown out — an empty invoice
+            // caused by a tick you can no longer see.
+            filter_kpi_ids: this._tickedBillableIds(),
             filter_sub_kra_ids: ni.filter_sub_kra_ids,
             // If all 3 are ticked we send no filter (treat as "all").
             task_types: (types.length < 3) ? types : [],
@@ -1293,8 +1529,21 @@ class _BaseInvoiceComponent extends Component {
             } catch (e) { /* keep 1:1 */ }
         }
         // Payment status shown next to the invoice number (and in the filename).
+        //
+        // NOTE: this invoice has TWO renderers — this one (jsPDF, in the browser, behind
+        // the PDF button) and _build_invoice_pdf in kpi_reports_api.py (reportlab, used
+        // by the mobile app). They must agree. This branch knew only paid/unpaid, so a
+        // claimed invoice printed as UNPAID while every screen called it Claimed.
+        // Same order and same wording as the server version.
         const payLabel = inv.state === 'draft'
-            ? '' : (inv.payment_status === 'paid' ? 'PAID' : 'UNPAID');
+            ? ''
+            : (inv.payment_status === 'paid'
+                ? 'PAID'
+                : (inv.client_paid_claim ? 'CLAIMED' : 'UNPAID'));
+        // Red owed, amber claimed, green settled — the colours the screens already use,
+        // so a printed copy carries the same signal as the list it came from.
+        const payColor = payLabel === 'PAID' ? [21, 128, 61]
+            : (payLabel === 'CLAIMED' ? [180, 83, 9] : [185, 28, 28]);
 
         // ── Header: logo left, company + INVOICE right ──
         if (logoData) {
@@ -1315,7 +1564,14 @@ class _BaseInvoiceComponent extends Component {
         // ── Meta: Invoice # (+ Paid/Unpaid) left, date right ──
         doc.setFontSize(11);
         doc.setFont('times', 'bold');
-        doc.text(`Invoice #: ${inv.name}${payLabel ? '   —   ' + payLabel : ''}`, M, y);
+        doc.text(`Invoice #: ${inv.name}`, M, y);
+        if (payLabel) {
+            // Drawn separately so it can carry its own colour without tinting the number.
+            const numW = doc.getTextWidth(`Invoice #: ${inv.name}`);
+            doc.setTextColor(payColor[0], payColor[1], payColor[2]);
+            doc.text(`   —   ${payLabel}`, M + numW, y);
+            doc.setTextColor(0, 0, 0);
+        }
         doc.setFont('times', 'normal');
         doc.text(`Date: ${inv.invoice_date}`, pageW - M, y, { align: 'right' });
         y += 17;
@@ -1449,6 +1705,7 @@ class _BaseInvoiceComponent extends Component {
         doc.save(`${inv.name.replace(/\//g, '_')}${payLabel ? '_' + payLabel : ''}.pdf`);
     }
     async onClientChange() {
+        this.state.missingClient = false;
         // Reset filter selections when client changes
         this.state.newInvoice.filter_user_ids = [];
         this.state.newInvoice.filter_kpi_ids = [];
@@ -1509,18 +1766,70 @@ class _BaseInvoiceComponent extends Component {
             ? arr.filter(x => x !== id)
             : [...arr, id];
     }
-    // The picker offers signed-off work only — that is all an invoice can bill.
-    // Already-invoiced tasks stay on the list, greyed, so it is visible that they
-    // were billed rather than simply gone.
+    // Three buckets, in the order you would work through them: what can be billed now,
+    // what is settled, and what has not produced any work yet. A client with tasks that
+    // are all still in progress lands in "nothing to bill yet" — true, and it keeps the
+    // top group honest about what is actionable.
+    clientGroups() {
+        const all = this.state.clients || [];
+        return [
+            { key: 'ready', label: 'Ready to bill',
+              clients: all.filter(c => (c.billable_count || 0) > 0) },
+            { key: 'done', label: 'Nothing left to bill',
+              clients: all.filter(c => !(c.billable_count || 0) && (c.task_count || 0) > 0) },
+            { key: 'empty', label: 'No tasks yet',
+              clients: all.filter(c => !(c.task_count || 0)) },
+        ];
+    }
+    // Mirrors the server's own task-type rule (_populate matches the external_ref
+    // prefix). All three ticked sends no filter at all, so everything passes —
+    // including BRAND-, TST- and tasks with no reference. Narrow the tick and only
+    // those prefixes pass. If the picker used a stricter rule it would offer work the
+    // invoice then refused to bill, or hide work the invoice would have included.
+    _typeAllowed(k) {
+        const types = this._selectedTaskTypes();
+        if (types.length >= 3) return true;
+        return types.includes((k.task_type || '').toUpperCase());
+    }
+    _scopeKpisInType() {
+        return (this.state.scopeKpis || []).filter(k => this._typeAllowed(k));
+    }
+    // Signed off = billable now, or billable once and already on an invoice.
     _isSignedOff(k) {
         return k.billable !== false || k.not_billable_code === 'invoiced';
     }
-    visibleScopeKpis() {
-        const all = this.state.scopeKpis || [];
-        return this.state.showUnsignedTasks ? all : all.filter(k => this._isSignedOff(k));
+    // Left box: what you can actually tick, plus the not-signed-off ones once the
+    // hidden count is expanded (greyed, and boxless — they cannot be billed either).
+    leftScopeKpis() {
+        const inType = this._scopeKpisInType();
+        return inType.filter(k => k.billable !== false
+            || (this.state.showUnsignedTasks && !this._isSignedOff(k)));
+    }
+    // Right box: billed already. Kept on screen so it is clear a task was invoiced
+    // rather than mysteriously missing.
+    invoicedScopeKpis() {
+        return this._scopeKpisInType().filter(k => k.not_billable_code === 'invoiced');
     }
     unsignedScopeKpis() {
-        return (this.state.scopeKpis || []).filter(k => !this._isSignedOff(k));
+        return this._scopeKpisInType().filter(k => !this._isSignedOff(k));
+    }
+    // The selection as it stands on screen: ticked, billable, and still in the ticked
+    // task types. Anything else was either never tickable or has since been filtered out.
+    _tickedBillableIds() {
+        const picked = new Set(this.state.newInvoice.filter_kpi_ids || []);
+        return this._scopeKpisInType()
+            .filter(k => k.billable !== false && picked.has(k.id))
+            .map(k => k.id);
+    }
+    // An empty left box has two very different causes, and saying "no signed-off work"
+    // when the truth is "you unticked BUG" sends someone hunting for a missing task.
+    emptyBillableMessage() {
+        const types = this._selectedTaskTypes();
+        if (types.length < 3 && (this.state.scopeKpis || []).some(k => k.billable !== false)) {
+            return `No ${types.join(' / ') || 'matching'} work available to bill — `
+                 + 'check Include Task Types above.';
+        }
+        return 'No signed-off work waiting to be billed.';
     }
     // Colour by what the tag means, not by "not billable": amber is the client's
     // move, blue is the team still working, grey is settled. The old
@@ -1606,7 +1915,29 @@ class _BaseInvoiceComponent extends Component {
             notes: this.state.notesText || '',
         });
     }
+    // Tasks on a per-task invoice that were never given a price. Finalize is the point
+    // of no return — after it the figure is the client's — so this is where an unpriced
+    // line has to be caught, not at creation when no price could exist yet.
+    unpricedLines() {
+        const inv = this.state.invoice;
+        if (!inv || inv.billing_method !== 'per_task') return [];
+        return (inv.lines || []).filter(l => l.line_type === 'kpi' && !(Number(l.unit_price) > 0));
+    }
     async finalizeInvoice() {
+        const unpriced = this.unpricedLines();
+        if (unpriced.length) {
+            const total = (this.state.invoice.lines || []).filter(l => l.line_type === 'kpi').length;
+            const go = await this._dialog({
+                title: 'Some tasks have no price',
+                message: `${unpriced.length} of ${total} tasks on this invoice are still `
+                       + 'priced at 0, so they will be billed as free. Finalizing locks that in.',
+                items: unpriced.map(l => l.description || `Line ${l.id}`),
+                itemsLabel: `Show the ${unpriced.length} unpriced task(s)`,
+                okLabel: 'Finalize anyway', okClass: 'btn-warning',
+                headerClass: 'bg-warning text-dark', icon: 'fa-exclamation-triangle',
+            });
+            if (!go) return;
+        }
         if (!await this._confirm('Finalize this invoice?', 'It is locked from further edits and becomes visible to the client.', 'Finalize', 'btn-warning')) return;
         const r = await rpc('/kpi_client_invoice/finalize', { invoice_id: this.state.invoice.id });
         if (!r.status) { this._toast(r.message || 'Something went wrong.', 'danger'); return; }
@@ -1624,6 +1955,14 @@ class _BaseInvoiceComponent extends Component {
         this.state.invoice = r.data;
     }
 
+    // Can this finalized invoice still have its figure changed? Not once it is paid,
+    // and not while the client has a payment claim outstanding against it.
+    canEditFinalized() {
+        const inv = this.state.invoice;
+        return !!inv && inv.state === 'finalized'
+            && inv.payment_status !== 'paid'
+            && !inv.client_paid_claim;
+    }
     // Reduce a finalized invoice. The reason is required because the client is told the
     // figure changed — and the server refuses without one anyway.
     async reviseInvoice() {

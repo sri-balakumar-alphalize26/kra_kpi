@@ -5,6 +5,14 @@ import { useService } from "@web/core/utils/hooks";
 export class KpiCreate extends Component {
     static template = xml/* xml */`
         <div class="o_kpi_form p-2 p-md-4" style="max-width: 100%; height: 100vh; overflow-y: auto; overflow-x: hidden;">
+        <div t-if="state.toast.show"
+             t-att-class="'alert alert-dismissible d-flex align-items-start gap-2 alert-' + state.toast.kind"
+             style="position:sticky; top:0; z-index:1080; white-space:pre-wrap;">
+            <i t-att-class="'fa mt-1 ' + (state.toast.kind === 'success' ? 'fa-check-circle' : (state.toast.kind === 'danger' ? 'fa-exclamation-circle' : 'fa-info-circle'))"/>
+            <div class="flex-grow-1" t-esc="state.toast.text"/>
+            <button type="button" class="btn-close" t-on-click="dismissToast"/>
+        </div>
+
             
             <!-- ============================================ -->
             <!-- 🆕 NEW: KRA QUICK CREATE MODAL -->
@@ -675,6 +683,9 @@ export class KpiCreate extends Component {
         // 🔄 UPDATED: Added warehouse fields with company and transaction
         // ============================================
         this.state = useState({
+            // Replaces alert(). A browser alert blocks the whole tab and hides the
+            // screen it is talking about; this sits in the page and can be ignored.
+            toast: { show: false, text: '', kind: 'warning' },
             name: "",
             kra_id: "",
             estimate_hours: 0,
@@ -919,7 +930,7 @@ export class KpiCreate extends Component {
     // ============================================
     async saveQuickKra() {
         if (!this.state.newKraName) {
-            alert('KRA Name is required');
+            this._toast('KRA Name is required', 'warning');
             return;
         }
 
@@ -933,16 +944,16 @@ export class KpiCreate extends Component {
             await this.loadParentKras();
             this.state.kra_id = newId;
             this.state.showKraModal = false;
-            alert('KRA created successfully!');
+            this._toast('KRA created successfully!', 'success');
         } catch (e) {
             console.error('Error creating KRA:', e);
-            alert('Error creating KRA');
+            this._toast('Error creating KRA', 'danger');
         }
     }
 
     async saveQuickAction() {
         if (!this.state.newActionName || !this.state.newActionUrl) {
-            alert('Screen Name and URL are required');
+            this._toast('Screen Name and URL are required', 'warning');
             return;
         }
 
@@ -956,17 +967,17 @@ export class KpiCreate extends Component {
             await this.loadActionConfig();
             this.state.action_config_id = newAction[0];
             this.state.showActionModal = false;
-            alert('Action Configuration created successfully!');
+            this._toast('Action Configuration created successfully!', 'success');
         } catch (e) {
             console.error('Error creating action config:', e);
-            alert('Error creating action configuration');
+            this._toast('Error creating action configuration', 'danger');
         }
     }
 
     // 🔄 UPDATED: Save warehouse with company and transaction
     async saveQuickWarehouse() {
         if (!this.state.newWarehouseName) {
-            alert('Warehouse Name is required');
+            this._toast('Warehouse Name is required', 'warning');
             return;
         }
 
@@ -986,16 +997,16 @@ export class KpiCreate extends Component {
             await this.loadWarehouses();
             this.state.warehouse_id = newWarehouse[0];
             this.state.showWarehouseModal = false;
-            alert('Warehouse created successfully!');
+            this._toast('Warehouse created successfully!', 'success');
         } catch (e) {
             console.error('Error creating warehouse:', e);
-            alert('Error creating warehouse');
+            this._toast('Error creating warehouse', 'danger');
         }
     }
 
     async saveQuickUserGroup() {
         if (!this.state.newUserGroupName) {
-            alert('Group Name is required');
+            this._toast('Group Name is required', 'warning');
             return;
         }
 
@@ -1007,22 +1018,22 @@ export class KpiCreate extends Component {
             await this.loadUsersAndGroups();
             this.state.user_group_id = newGroup[0];
             this.state.showUserGroupModal = false;
-            alert('User Group created successfully!');
+            this._toast('User Group created successfully!', 'success');
         } catch (e) {
             console.error('Error creating user group:', e);
-            alert('Error creating user group');
+            this._toast('Error creating user group', 'danger');
         }
     }
     async saveQuickEmployee() {
         if (!this.state.newEmployeeName || !this.state.newEmployeeEmail || !this.state.newEmployeeLogin) {
-            alert('Employee Name, Email, and Login are required');
+            this._toast('Employee Name, Email, and Login are required', 'warning');
             return;
         }
 
         // Basic email validation
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(this.state.newEmployeeEmail)) {
-            alert('Please enter a valid email address');
+            this._toast('Please enter a valid email address', 'warning');
             return;
         }
 
@@ -1036,10 +1047,10 @@ export class KpiCreate extends Component {
             await this.loadUsersAndGroups();
             this.state.user_id = newUser[0];
             this.state.showEmployeeModal = false;
-            alert('Employee created successfully! Please set a password from Settings → Users.');
+            this._toast('Employee created successfully! Please set a password from Settings → Users.', 'success');
         } catch (e) {
             console.error('Error creating employee:', e);
-            alert('Error creating employee: ' + (e.message || 'Please try again'));
+            this._toast('Error creating employee: ' + (e.message || 'Please try again'), 'danger');
         }
     }
     // ============================================
@@ -1314,4 +1325,15 @@ export class KpiCreate extends Component {
     cancel() {
         window.location.hash = "/";
     }
+
+    // Errors stay until dismissed — an error that vanishes before it is read is the
+    // same as no error at all. Anything else clears itself.
+    _toast(text, kind = 'warning') {
+        this.state.toast = { show: true, text: String(text == null ? '' : text), kind };
+        if (kind !== 'danger') {
+            setTimeout(() => { this.state.toast.show = false; }, 4500);
+        }
+    }
+    dismissToast() { this.state.toast.show = false; }
+
 }

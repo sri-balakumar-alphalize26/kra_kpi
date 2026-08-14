@@ -1,5 +1,7 @@
 import json
 import logging
+import re
+from html import unescape as html_unescape
 
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
@@ -65,6 +67,15 @@ class KpiClientInvoice(models.Model):
         'res.users', string='Marked Paid By', readonly=True, copy=False,
     )
     payment_notes = fields.Text(string='Payment Notes', help='Optional note recorded on payment.')
+    # Why a confirmed payment was reversed. Deliberately NOT payment_notes: that field
+    # carries internal remarks and is withheld from the client — and the client is
+    # precisely the person who needs to know their payment was put back to Due. Kept
+    # separate for the same reason the client's payment details are kept separate from
+    # the admin's: one of the two is publishable and the other is not.
+    unpaid_reason = fields.Char(
+        string='Reversal Reason', copy=False,
+        help="Why a paid invoice was put back to Due. Shown to the client.")
+    unpaid_on = fields.Datetime(string='Reverted On', readonly=True, copy=False)
     payment_method = fields.Selection(
         PAYMENT_METHODS, string='Payment Method', copy=False,
         help='How the payment actually arrived, recorded by the admin who confirmed it.')
@@ -542,6 +553,10 @@ class KpiClientInvoice(models.Model):
                 'payment_notes':  (note or '').strip() or False,
                 'payment_method': method,
                 'client_paid_claim': False,   # confirmed → clear any pending client claim
+                # A fresh payment settles the previous reversal; leaving the banner up
+                # would tell the client it is still in dispute.
+                'unpaid_reason': False,
+                'unpaid_on': False,
             })
             # Paid work is finished work: file its tasks away so day-to-day lists show
             # only what is still live. Nothing is destroyed — every hour, log and invoice
@@ -557,7 +572,17 @@ class KpiClientInvoice(models.Model):
     def action_mark_unpaid(self, note=''):
         """Revert a 'paid' invoice back to 'unpaid' (e.g. payment bounced
         or was mis-recorded).  Audit fields are cleared.
+
+        The reason is REQUIRED and is published to the client. Telling someone their
+        settled invoice is due again without saying why is how a payment dispute
+        starts; enforced here rather than only in the dialog, because the dialog is
+        one caller of several (the app and call_kw reach this too).
         """
+        reason = (note or '').strip()
+        if not reason:
+            raise ValidationError(
+                "Give a reason for reverting this payment — the client is told the "
+                "invoice is due again and sees the reason.")
         for inv in self:
             if inv.payment_status != 'paid':
                 continue
@@ -566,9 +591,11 @@ class KpiClientInvoice(models.Model):
                 'payment_date':   False,
                 'paid_by_id':     False,
                 'payment_method': False,
+                'unpaid_reason':  reason[:255],
+                'unpaid_on':      fields.Datetime.now(),
                 'payment_notes':  ((inv.payment_notes or '') +
                                    f"\n[Reverted on {fields.Datetime.now()} by "
-                                   f"{self.env.user.name}: {note or 'no note'}]").strip()[:2000],
+                                   f"{self.env.user.name}: {reason}]").strip()[:2000],
             })
             # Un-archive what marking it paid filed away. Without this, reversing a
             # mistaken payment would leave the tasks invisible with no way back.
@@ -592,7 +619,21 @@ class KpiClientInvoice(models.Model):
                 raise ValidationError(
                     "Invoice %s has already been sent to the client — it can't be reset to "
                     "draft. Only a finalized (un-sent) invoice can go back to draft." % (inv.name or ''))
+            if inv.client_paid_claim:
+                raise ValidationError(self._claim_lock_message(inv, 'reset to draft'))
             inv.state = 'draft'
+
+    @staticmethod
+    def _claim_lock_message(inv, what):
+        """Why an amount is frozen while the client says they have paid.
+
+        Once a client reports payment they have sent money against a specific
+        figure. Changing it underneath them turns a settled bill into a dispute,
+        so the amount stays put until the claim is resolved either way.
+        """
+        return ("Invoice %s has a payment claim from the client awaiting confirmation, "
+                "so it can't be %s. Confirm the payment, or clear the claim if the money "
+                "never arrived." % (inv.name or '', what))
 
     def action_revise(self, reason=''):
         """Reopen a FINALIZED invoice so its amount can be reduced, then re-finalized.
@@ -600,7 +641,9 @@ class KpiClientInvoice(models.Model):
         Deliberately stricter than action_reset_draft, and with its own state check
         rather than leaning on that one:
           * `finalized` only. Not `sent` — the client already has that document, and it
-            should not change under them. Not `paid` — the money has arrived.
+            should not change under them. Not `paid` — the money has arrived. Not while
+            a client payment claim is open — they have sent money against this exact
+            figure, and it must not move until the claim is confirmed or cleared.
           * a reason is required, because the client will be told the figure changed and
             "it just changed" is not an answer.
 
@@ -616,6 +659,8 @@ class KpiClientInvoice(models.Model):
                 raise ValidationError(
                     "Invoice %s is marked PAID and can't be revised. Mark it Unpaid first "
                     "if a correction is genuinely needed." % (inv.name or ''))
+            if inv.client_paid_claim:
+                raise ValidationError(self._claim_lock_message(inv, 'revised'))
             if inv.state != 'finalized':
                 raise ValidationError(
                     "Only a finalized invoice can be revised — %s is %s." %
@@ -654,6 +699,10 @@ class KpiClientInvoice(models.Model):
             # sides. A boolean, not a payment_status value: nothing is part-settled, the
             # client has claimed the full amount and nobody has verified it yet.
             'client_paid_claim': self.client_paid_claim,
+            # On the LIST too, not just the detail: a client scanning their invoices
+            # should see which one went back to Due without opening each.
+            'unpaid_reason': self.unpaid_reason or '',
+            'unpaid_on': fields.Datetime.to_string(self.unpaid_on) if self.unpaid_on else '',
             'revision_count': self.revision_count or 0,
             'total_quoted_hours': round(self.total_quoted_hours or 0.0, 2),
             'total_actual_hours': round(self.total_actual_hours or 0.0, 2),
@@ -733,6 +782,31 @@ class KpiClientInvoice(models.Model):
             'currency': currency_info,
         }
 
+    def _notes_as_text(self):
+        """Overall Notes as the plain text somebody actually typed.
+
+        The field is Html, so Odoo wraps a typed paragraph in <p>…</p> on write. OWL's
+        t-out only renders raw markup for a value flagged as such — a plain string is
+        escaped — so the client was reading "<p>How about this one</p>", tags and all.
+        Converting here rather than in the template keeps the app and any other caller
+        on the same text.
+        """
+        self.ensure_one()
+        raw = self.notes or ''
+        if not raw:
+            return ''
+        # Block ends become line breaks BEFORE tags are stripped, or every paragraph
+        # would run into the next one — which is the "big para" complaint.
+        text = re.sub(r'(?i)<br\s*/?>', '\n', raw)
+        text = re.sub(r'(?i)</p\s*>|</div\s*>|</li\s*>', '\n', text)
+        text = re.sub(r'(?i)<li[^>]*>', '• ', text)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = html_unescape(text)
+        # Odoo's wrapper leaves a trailing newline of its own; collapse runs of three
+        # or more so deliberate blank lines survive but artefacts do not.
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
     def _serialize_for_ui(self, for_client=False):
         """`for_client=True` strips anything the client must not read.
 
@@ -744,7 +818,7 @@ class KpiClientInvoice(models.Model):
         self.ensure_one()
         result = self._serialize_for_list()
         result.update({
-            'notes': self.notes or '',
+            'notes': self._notes_as_text(),
             'project_quoted_hours': round(self.client_kra_id.client_quoted or 0.0, 2),
             'lines': [l._serialize() for l in self.line_ids.sorted(key=lambda l: (l.line_type != 'kpi', l.sequence, l.id))],
             'filter_user_ids': [{'id': u.id, 'name': u.name} for u in self.filter_user_ids],

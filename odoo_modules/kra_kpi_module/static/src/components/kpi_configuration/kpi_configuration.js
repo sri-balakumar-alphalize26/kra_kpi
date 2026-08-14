@@ -206,6 +206,7 @@ export class KpiConfiguration extends Component {
                         </table>
                     </div>
                 </div>
+
             </t>
         </div>`;
 
@@ -481,6 +482,7 @@ export class KpiConfiguration extends Component {
         this.state.report_retention_unit = ev.target.value || "months";
         this.saveReportRetention();
     }
+
 }
 
 registry.category("actions").add("kpi_configuration", KpiConfiguration);

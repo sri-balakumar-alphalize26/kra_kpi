@@ -6,6 +6,53 @@ import { rpc } from "@web/core/network/rpc";
 export class KraNode extends Component {
     static template = xml/* xml */`
         <div class="mb-2">
+        <div t-if="state.dlg.open" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5); z-index:2000;">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div t-att-class="'modal-header ' + (state.dlg.okClass === 'btn-danger' ? 'bg-danger text-white' : 'bg-primary text-white')">
+                        <h5 class="modal-title" t-esc="state.dlg.title"/>
+                        <button type="button" class="btn-close btn-close-white" t-on-click="dlgCancel"/>
+                    </div>
+                    <div class="modal-body">
+                        <p t-if="state.dlg.message" style="white-space:pre-wrap;" t-esc="state.dlg.message"/>
+                        <div t-if="state.dlg.input" class="mb-2">
+                            <label class="form-label fw-bold">
+                                <t t-esc="state.dlg.inputLabel"/>
+                                <span t-if="state.dlg.required" class="text-danger">*</span>
+                            </label>
+                            <textarea class="form-control" rows="3"
+                                      t-att-placeholder="state.dlg.placeholder"
+                                      t-att-value="state.dlg.value"
+                                      t-on-input="(ev) => this.dlgSet(ev.target.value)"/>
+                        </div>
+                        <div t-if="state.dlg.choices.length" class="list-group">
+                            <button t-foreach="state.dlg.choices" t-as="ch" t-key="ch_index"
+                                    type="button" class="list-group-item list-group-item-action"
+                                    t-on-click="() => this.dlgPick(ch.value)">
+                                <div class="fw-bold" t-esc="ch.label"/>
+                                <div t-if="ch.hint" class="small text-muted" t-esc="ch.hint"/>
+                            </button>
+                        </div>
+                        <div t-if="state.dlg.error" class="alert alert-danger py-2 mb-0 small mt-2" t-esc="state.dlg.error"/>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" t-on-click="dlgCancel">Cancel</button>
+                        <button t-if="!state.dlg.choices.length" type="button"
+                                t-att-class="'btn ' + state.dlg.okClass"
+                                t-on-click="dlgOk" t-esc="state.dlg.okLabel"/>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div t-if="state.toast.show"
+             t-att-class="'alert alert-dismissible d-flex align-items-start gap-2 alert-' + state.toast.kind"
+             style="position:sticky; top:0; z-index:1080; white-space:pre-wrap;">
+            <i t-att-class="'fa mt-1 ' + (state.toast.kind === 'success' ? 'fa-check-circle' : (state.toast.kind === 'danger' ? 'fa-exclamation-circle' : 'fa-info-circle'))"/>
+            <div class="flex-grow-1" t-esc="state.toast.text"/>
+            <button type="button" class="btn-close" t-on-click="dismissToast"/>
+        </div>
+
 
             <!-- MAIN ROW -->
             <div class="d-flex align-items-center">
@@ -128,6 +175,13 @@ export class KraNode extends Component {
 
     setup() {
         this.state = useState({ 
+            // Promise-driven in-page dialog, replacing window.confirm/prompt.
+            // Those are the browser's chrome, not ours: unstyleable, and on a work
+            // screen they read as something having gone wrong.
+            dlg: { open: false, title: '', message: '', okLabel: 'OK', okClass: 'btn-primary',
+                   input: false, inputLabel: '', placeholder: '', required: false,
+                   value: '', error: '', choices: [], resolve: null },
+            toast: { show: false, text: '', kind: 'warning' },
             open: false,
             editing: false,
             editName: ''
@@ -163,7 +217,7 @@ export class KraNode extends Component {
         const newName = this.state.editName.trim();
         
         if (!newName) {
-            alert("KRA name cannot be empty!");
+            this._toast("KRA name cannot be empty!", 'warning');
             return;
         }
 
@@ -179,14 +233,14 @@ export class KraNode extends Component {
             });
 
             if (res && res.status) {
-                alert("KRA name updated successfully!");
+                this._toast("KRA name updated successfully!", 'success');
                 window.location.reload();
             } else {
-                alert("Error updating KRA: " + (res && res.message ? res.message : "Unknown error"));
+                this._toast("Error updating KRA: " + (res && res.message ? res.message : "Unknown error"), 'danger');
             }
         } catch (error) {
             console.error("Error updating KRA:", error);
-            alert("Failed to update KRA name. Please try again.");
+            this._toast("Failed to update KRA name. Please try again.", 'danger');
         }
     }
 
@@ -200,13 +254,13 @@ export class KraNode extends Component {
         try {
             res = await rpc("/kra_kpi/kra/get_client_users", {});
         } catch (err) {
-            alert("Could not load client list. " + (err && err.message || ''));
+            this._toast("Could not load client list. " + (err && err.message || ''), 'danger');
             return;
         }
         const users = (res && res.users) || [];
         const assigned = new Set((this.props.kra.client_user_ids || []).map(u => u.id));
         if (users.length === 0) {
-            alert("No client portal users exist yet. Create a user in the 'KRA / KPI Client' group first.");
+            this._toast("No client portal users exist yet. Create a user in the 'KRA / KPI Client' group first.", 'warning');
             return;
         }
         const rows = users.map(u => `
@@ -371,13 +425,13 @@ export class KraNode extends Component {
                 });
                 if (r && r.status) {
                     cleanup();
-                    alert(r.message || 'Saved.');
+                    this._toast(r.message || 'Saved.', 'warning');
                     window.location.reload();
                 } else {
-                    alert("Save failed: " + ((r && r.message) || 'unknown'));
+                    this._toast("Save failed: " + ((r && r.message) || 'unknown'), 'danger');
                 }
             } catch (err) {
-                alert("Save request failed: " + (err && err.message || err));
+                this._toast("Save request failed: " + (err && err.message || err), 'danger');
             }
         });
     }
@@ -387,7 +441,7 @@ export class KraNode extends Component {
             ev.stopPropagation();
         }
 
-        const ok = confirm("Are you sure you want to delete the KRA?");
+        const ok = await this._confirm('Delete this KRA?', 'Everything under it goes with it. This cannot be undone.', 'Delete', 'btn-danger');
         if (!ok) {
             return;
         }
@@ -395,10 +449,10 @@ export class KraNode extends Component {
         const res = await rpc("/kra_kpi/delete_kra", { kra_id: this.props.kra.id });
 
         if (res && res.status) {
-            alert("KRA deleted successfully.");
+            this._toast("KRA deleted successfully.", 'success');
             window.location.reload();
         } else {
-            alert("Error deleting KRA: " + (res && res.message ? res.message : "Unknown error"));
+            this._toast("Error deleting KRA: " + (res && res.message ? res.message : "Unknown error"), 'danger');
         }
     }
 
@@ -407,7 +461,7 @@ export class KraNode extends Component {
             ev.stopPropagation();
         }
 
-        const ok = confirm("Are you sure you want to delete the KPI?");
+        const ok = await this._confirm('Delete this KPI?', 'This cannot be undone.', 'Delete', 'btn-danger');
         if (!ok) {
             return;
         }
@@ -415,10 +469,10 @@ export class KraNode extends Component {
         const res = await rpc("/kra_kpi/delete_kpi", { kpi_id: id });
 
         if (res && res.status) {
-            alert("KPI deleted successfully.");
+            this._toast("KPI deleted successfully.", 'success');
             window.location.reload();
         } else {
-            alert("Error deleting KPI: " + (res && res.message ? res.message : "Unknown error"));
+            this._toast("Error deleting KPI: " + (res && res.message ? res.message : "Unknown error"), 'danger');
         }
     }
 
@@ -432,7 +486,7 @@ export class KraNode extends Component {
             const result = await rpc('/kpi/manual/list', { kpi_id: kpiId });
             
             if (!result.status || !result.manuals || result.manuals.length === 0) {
-                alert('No user manuals found for this KPI.');
+                this._toast('No user manuals found for this KPI.', 'warning');
                 return;
             }
 
@@ -443,35 +497,72 @@ export class KraNode extends Component {
                 return;
             }
 
-            let message = 'Multiple user manuals available. Select one to view:\n\n';
-            result.manuals.forEach((manual, index) => {
-                message += `${index + 1}. ${manual.file_name}\n`;
-                if (manual.description) {
-                    message += `   Description: ${manual.description}\n`;
-                }
-                message += '\n';
+            const picked = await this._dialog({
+                title: 'Which manual?',
+                message: `${result.manuals.length} manuals are available for this KRA.`,
+                choices: result.manuals.map((m) => ({
+                    value: m.id, label: m.file_name, hint: m.description || '',
+                })),
             });
-            message += '\nEnter the number (1-' + result.manuals.length + ') of the manual you want to view:';
-
-            const choice = prompt(message);
-            
-            if (choice === null) {
-                return;
-            }
-
-            const choiceNum = parseInt(choice);
-            if (isNaN(choiceNum) || choiceNum < 1 || choiceNum > result.manuals.length) {
-                alert('Invalid selection. Please enter a number between 1 and ' + result.manuals.length);
-                return;
-            }
-
-            const selectedManual = result.manuals[choiceNum - 1];
+            if (picked === null) { return; }
+            const selectedManual = result.manuals.find((m) => m.id === picked);
+            if (!selectedManual) { return; }
             const viewUrl = `/kpi/manual/view/${selectedManual.id}`;
             window.open(viewUrl, '_blank');
 
         } catch (error) {
             console.error("Error viewing user manuals:", error);
-            alert("Failed to load user manuals. Please try again.");
+            this._toast("Failed to load user manuals. Please try again.", 'danger');
         }
     }
+
+    // Errors stay until dismissed — an error that vanishes before it is read is the
+    // same as no error at all. Anything else clears itself.
+    _toast(text, kind = 'warning') {
+        this.state.toast = { show: true, text: String(text == null ? '' : text), kind };
+        if (kind !== 'danger') {
+            setTimeout(() => { this.state.toast.show = false; }, 4500);
+        }
+    }
+    dismissToast() { this.state.toast.show = false; }
+
+
+    _dialog({ title, message = '', okLabel = 'OK', okClass = 'btn-primary',
+              input = false, inputLabel = '', placeholder = '', required = false,
+              choices = [] }) {
+        Object.assign(this.state.dlg, {
+            open: true, title, message, okLabel, okClass,
+            input, inputLabel, placeholder, required, value: '', error: '', choices,
+        });
+        return new Promise((resolve) => { this.state.dlg.resolve = resolve; });
+    }
+    _confirm(title, message, okLabel = 'OK', okClass = 'btn-primary') {
+        return this._dialog({ title, message, okLabel, okClass });
+    }
+    dlgSet(v) { this.state.dlg.value = v; this.state.dlg.error = ''; }
+    // Choosing from a list is a click, not a number typed into a text box.
+    dlgPick(val) {
+        const r = this.state.dlg.resolve;
+        this.state.dlg.open = false; this.state.dlg.resolve = null;
+        if (r) r(val);
+    }
+    dlgCancel() {
+        const r = this.state.dlg.resolve;
+        this.state.dlg.open = false; this.state.dlg.resolve = null;
+        if (r) r(null);
+    }
+    dlgOk() {
+        const d = this.state.dlg;
+        // Stated rather than enforced by disabling OK, so a click that does nothing
+        // always says why.
+        if (d.input && d.required && !String(d.value || '').trim()) {
+            d.error = (d.inputLabel || 'This') + ' is required.';
+            return;
+        }
+        const val = d.input ? d.value : true;
+        const r = d.resolve;
+        d.open = false; d.resolve = null;
+        if (r) r(val);
+    }
+
 }

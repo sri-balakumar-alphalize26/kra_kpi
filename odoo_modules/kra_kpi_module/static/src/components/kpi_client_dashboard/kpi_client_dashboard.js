@@ -6,6 +6,44 @@ import { rpc } from "@web/core/network/rpc";
 export class KpiClientDashboard extends Component {
     static template = xml/* xml */`
     <div class="o_kpi_client_dashboard p-4">
+        <div t-if="state.dlg.open" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5); z-index:2000;">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div t-att-class="'modal-header ' + (state.dlg.okClass === 'btn-danger' ? 'bg-danger text-white' : 'bg-primary text-white')">
+                        <h5 class="modal-title" t-esc="state.dlg.title"/>
+                        <button type="button" class="btn-close btn-close-white" t-on-click="dlgCancel"/>
+                    </div>
+                    <div class="modal-body">
+                        <p t-if="state.dlg.message" style="white-space:pre-wrap;" t-esc="state.dlg.message"/>
+                        <div t-if="state.dlg.input" class="mb-2">
+                            <label class="form-label fw-bold">
+                                <t t-esc="state.dlg.inputLabel"/>
+                                <span t-if="state.dlg.required" class="text-danger">*</span>
+                            </label>
+                            <textarea class="form-control" rows="3"
+                                      t-att-placeholder="state.dlg.placeholder"
+                                      t-att-value="state.dlg.value"
+                                      t-on-input="(ev) => this.dlgSet(ev.target.value)"/>
+                        </div>
+                        <div t-if="state.dlg.error" class="alert alert-danger py-2 mb-0 small" t-esc="state.dlg.error"/>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" t-on-click="dlgCancel">Cancel</button>
+                        <button type="button" t-att-class="'btn ' + state.dlg.okClass"
+                                t-on-click="dlgOk" t-esc="state.dlg.okLabel"/>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div t-if="state.toast.show"
+             t-att-class="'alert alert-dismissible d-flex align-items-start gap-2 alert-' + state.toast.kind"
+             style="position:sticky; top:0; z-index:1080; white-space:pre-wrap;">
+            <i t-att-class="'fa mt-1 ' + (state.toast.kind === 'success' ? 'fa-check-circle' : (state.toast.kind === 'danger' ? 'fa-exclamation-circle' : 'fa-info-circle'))"/>
+            <div class="flex-grow-1" t-esc="state.toast.text"/>
+            <button type="button" class="btn-close" t-on-click="dismissToast"/>
+        </div>
+
 
         <!-- Header -->
         <div class="d-flex justify-content-between align-items-center mb-4">
@@ -562,6 +600,15 @@ export class KpiClientDashboard extends Component {
 
     setup() {
         this.state = useState({
+            // Promise-driven in-page dialog, replacing window.confirm/prompt.
+            // Those are the browser's chrome, not ours: unstyleable, and on a work
+            // screen they read as something having gone wrong.
+            dlg: { open: false, title: '', message: '', okLabel: 'OK', okClass: 'btn-primary',
+                   input: false, inputLabel: '', placeholder: '', required: false,
+                   value: '', error: '', resolve: null },
+            // Replaces alert(). A browser alert blocks the whole tab and hides the
+            // screen it is talking about; this sits in the page and can be ignored.
+            toast: { show: false, text: '', kind: 'warning' },
             dashboard: null,
             projects: [],
             tab: 'pending',     // active tab: pending | in_progress | completed
@@ -613,24 +660,24 @@ export class KpiClientDashboard extends Component {
     async refresh() {
         // Always load the full list; the 3 tabs bucket it client-side.
         const r = await rpc('/kpi_client_portal/dashboard', { state: 'all' });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
         this.state.dashboard = r;
     }
     async setFilter(key) {
         const r = await rpc('/kpi_client_portal/dashboard', { state: key });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
         this.state.dashboard = r;
     }
 
     async submitNewTask() {
         const t = this.state.newTask;
         if (!t.name || !t.sub_kra_id) {
-            alert('Project and Task Name are required.');
+            this._toast('Project and Task Name are required.', 'warning');
             return;
         }
         const r = await rpc('/kpi_client_portal/add_task', t);
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        alert(`Task submitted: ${r.name}. Your admin will review and assign it.`);
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
+        this._toast(`Task submitted: ${r.name}. Your admin will review and assign it.`, 'warning');
         this.state.newTask = {
             kind: 'requirement', sub_kra_id: '', name: '',
             external_ref: '', related_req_ref: '',
@@ -649,7 +696,7 @@ export class KpiClientDashboard extends Component {
         this.state.approval.notes = '';
         this.state.approval.signature_text = '';
         const r = await rpc('/kpi_client_approval/get', { kpi_id: kpiId });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); this.closeApproval(); return; }
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); this.closeApproval(); return; }
         this.state.approval.data = r.data;
     }
     closeApproval() {
@@ -659,14 +706,14 @@ export class KpiClientDashboard extends Component {
     async submitApprove() {
         const a = this.state.approval;
         if (!a.chk_delivered || !a.chk_works || !a.chk_authorized) {
-            alert('Please tick all three confirmation checkboxes.');
+            this._toast('Please tick all three confirmation checkboxes.', 'warning');
             return;
         }
         // Only demand a typed name when there is no saved signature to fall back on —
         // this used to be unconditional, so an uploaded signature was ignored here.
         // Mirrors the server rule in _resolve_client_signature.
         if (!this.state.hasSignature && !(a.signature_text || '').trim()) {
-            alert('Please type your name as signature, or upload a signature image from the Completions page.');
+            this._toast('Please type your name as signature, or upload a signature image from the Completions page.', 'warning');
             return;
         }
         const r = await rpc('/kpi_client_approval/approve', {
@@ -677,23 +724,71 @@ export class KpiClientDashboard extends Component {
             notes: a.notes,
             signature_text: a.signature_text,
         });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        alert('Approved and signed. Thank you!');
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
+        this._toast('Approved and signed. Thank you!', 'warning');
         this.closeApproval();
         await this.refresh();
     }
     async submitReject() {
-        const reason = prompt('Reason for rejection?');
+        const reason = await this._dialog({
+            title: 'Send this back to the team',
+            message: 'Tell them what needs changing before you can sign it off.',
+            input: true, inputLabel: 'What needs changing', required: true,
+            okLabel: 'Send back', okClass: 'btn-danger',
+        });
         if (!reason) return;
         const r = await rpc('/kpi_client_approval/reject', {
             kpi_id: this.state.approval.data.kpi.id,
             reason: reason,
         });
-        if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        alert('Sent back to the team for changes.');
+        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
+        this._toast('Sent back to the team for changes.', 'warning');
         this.closeApproval();
         await this.refresh();
     }
+
+    // Errors stay until dismissed — an error that vanishes before it is read is the
+    // same as no error at all. Anything else clears itself.
+    _toast(text, kind = 'warning') {
+        this.state.toast = { show: true, text: String(text == null ? '' : text), kind };
+        if (kind !== 'danger') {
+            setTimeout(() => { this.state.toast.show = false; }, 4500);
+        }
+    }
+    dismissToast() { this.state.toast.show = false; }
+
+
+    _dialog({ title, message = '', okLabel = 'OK', okClass = 'btn-primary',
+              input = false, inputLabel = '', placeholder = '', required = false }) {
+        Object.assign(this.state.dlg, {
+            open: true, title, message, okLabel, okClass,
+            input, inputLabel, placeholder, required, value: '', error: '',
+        });
+        return new Promise((resolve) => { this.state.dlg.resolve = resolve; });
+    }
+    _confirm(title, message, okLabel = 'OK', okClass = 'btn-primary') {
+        return this._dialog({ title, message, okLabel, okClass });
+    }
+    dlgSet(v) { this.state.dlg.value = v; this.state.dlg.error = ''; }
+    dlgCancel() {
+        const r = this.state.dlg.resolve;
+        this.state.dlg.open = false; this.state.dlg.resolve = null;
+        if (r) r(null);
+    }
+    dlgOk() {
+        const d = this.state.dlg;
+        // Stated rather than enforced by disabling OK, so a click that does nothing
+        // always says why.
+        if (d.input && d.required && !String(d.value || '').trim()) {
+            d.error = (d.inputLabel || 'This') + ' is required.';
+            return;
+        }
+        const val = d.input ? d.value : true;
+        const r = d.resolve;
+        d.open = false; d.resolve = null;
+        if (r) r(val);
+    }
+
 }
 
 registry.category("actions").add("kpi_client_dashboard", KpiClientDashboard);

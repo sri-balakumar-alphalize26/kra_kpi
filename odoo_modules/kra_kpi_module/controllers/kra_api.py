@@ -533,6 +533,96 @@ class KraKpiAPI(http.Controller):
         rec.pause_task(reason, reason_code=reason_code, meeting_with_ids=meeting_with_ids)
         return {'status': True, 'message': 'Task paused', 'id': rec.id}
 
+    # Deliberately a BLOCK-list of the two finished states rather than an allow-list of
+    # the live ones. An allow-list has to be kept in step with the state vocabulary, and
+    # the first version of this already missed pre_approval_pending — refusing to extend
+    # a task that had not even started, with a message saying it was finished. Anything
+    # still in flight is extendable; only work the client has taken delivery of is not.
+    ESTIMATE_LOCKED_STATES = ('awaiting_client', 'completed')
+
+    @http.route('/kra_kpi/task/add_time', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_add_time(self, **params):
+        """Extend a task's estimate, with a required reason.
+
+        The estimate was write-once at creation, so a task that overran read as
+        permanently over and nobody could correct it without going into the Odoo
+        backend. This ADDS to the estimate rather than replacing it, and records why.
+
+        The reason is stored on the task, not only in the audit log — the whole point
+        is that it shows on the card, where the overrun is visible.
+        """
+        try:
+            kpi_id = int(params.get('kpi_id') or 0)
+            add_h = int(params.get('hours') or 0)
+            add_m = int(params.get('minutes') or 0)
+            reason = (params.get('reason') or '').strip()
+
+            rec = request.env['kra.kpi'].sudo().browse(kpi_id)
+            if not kpi_id or not rec.exists():
+                return {'status': False, 'message': 'Task not found.'}
+
+            user = request.env.user
+            is_admin = (user.has_group('kra_kpi_module.group_kra_owner')
+                        or user.has_group('kra_kpi_module.group_kra_admin')
+                        or user.has_group('kra_kpi_module.group_kra_manager')
+                        or user.has_group('base.group_system'))
+            # The person doing the work can extend their own estimate; everyone else
+            # needs a management role. Checked here, not only by hiding the button.
+            is_owner = (rec.user_id.id == user.id) or (user.id in rec.contributor_ids.ids)
+            if not (is_admin or is_owner):
+                return {'status': False,
+                        'message': "You can only add time to your own tasks."}
+
+            if rec.task_state in self.ESTIMATE_LOCKED_STATES:
+                return {'status': False,
+                        'message': "This task is with the client — its estimate is what "
+                                   "they signed off against and can't be changed now."}
+            if add_h < 0 or add_m < 0 or (add_h == 0 and add_m == 0):
+                return {'status': False, 'message': 'Add more than 0 minutes.'}
+            if not reason:
+                return {'status': False,
+                        'message': 'Give a reason — it is shown on the task card.'}
+
+            before = f"{rec.estimate_hours:02d}:{rec.estimate_minutes:02d}"
+            total_m = (rec.estimate_hours * 60 + rec.estimate_minutes) + (add_h * 60 + add_m)
+            rec.write({
+                'estimate_hours': total_m // 60,
+                'estimate_minutes': total_m % 60,
+                'estimate_extend_reason': reason[:255],
+                'estimate_extension_count': (rec.estimate_extension_count or 0) + 1,
+                'estimate_extended_by_id': user.id,
+                'estimate_extended_at': fields.Datetime.now(),
+            })
+            after = f"{rec.estimate_hours:02d}:{rec.estimate_minutes:02d}"
+
+            # The log keeps the history the card cannot: every earlier reason, and the
+            # original estimate, stay recoverable after a second extension overwrites
+            # the field above.
+            request.env['kpi.action.log'].sudo().create({
+                'kpi_id': rec.id,
+                'event': 'estimate_extended',
+                'source': 'web',
+                'actor_user_id': user.id,
+                'actor_label': user.name or user.login or '',
+                'payload_json': json.dumps({
+                    'from': before, 'to': after,
+                    'added_hours': add_h, 'added_minutes': add_m,
+                    'reason': reason,
+                }),
+            })
+            _logger.info("kpi %s estimate %s → %s by %s: %s",
+                         rec.id, before, after, user.login, reason)
+            return {'status': True, 'id': rec.id,
+                    'estimate_display': after,
+                    'estimate_hours': rec.estimate_hours,
+                    'estimate_minutes': rec.estimate_minutes,
+                    'estimate_extend_reason': rec.estimate_extend_reason or '',
+                    'estimate_extension_count': rec.estimate_extension_count or 0,
+                    'message': f'Estimate extended from {before} to {after}.'}
+        except Exception as e:
+            _logger.error("task_add_time: %s", e)
+            return {'status': False, 'message': str(e)}
+
     @http.route('/kra_kpi/task/resume', type='json', auth='user', methods=['POST'], csrf=False)
     def task_resume(self, **params):
         """Resume the timer. Same error contract as /task/start — resume_task
@@ -651,6 +741,92 @@ class KraKpiAPI(http.Controller):
     def kpi_action_live_status(self, **params):
         """Live activity strip data: running task, active break, day anchors."""
         return request.env['kpi.work.session'].sudo().live_status(user=request.env.user)
+
+    # How many settled tasks the Paid lane will carry. An archive lane only ever
+    # grows, and the board re-fetches it on every refresh.
+    PAID_LANE_LIMIT = 200
+
+    @http.route('/kra_kpi/tasks/paid', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_paid_tasks(self, **params):
+        """Settled work, for the admin-only Paid lane on the KPI Action board.
+
+        Marking an invoice paid archives its tasks, so they leave every board and
+        search — correct for the developer, but it left the admin with no record of
+        what had been billed and closed. This is that record: read-only, name plus
+        who did it, what it took and what was estimated.
+
+        Keyed on the invoice being paid rather than on `active = False`. Those two
+        coincide today, but archiving is a general flag and anything archived for
+        another reason later would otherwise appear here as though it had been paid.
+        """
+        user = request.env.user
+        if not (user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('kra_kpi_module.group_kra_admin')
+                or user.has_group('kra_kpi_module.group_kra_manager')
+                or user.has_group('base.group_system')):
+            return {'status': False, 'message': 'Not authorized.', 'tasks': []}
+        try:
+            lines = request.env['kpi.client.invoice.line'].sudo().search([
+                ('kpi_id', '!=', False),
+                ('invoice_id.payment_status', '=', 'paid'),
+            ])
+            # Newest payment first, and one entry per task — a task billed on a
+            # revised-and-reissued invoice can appear on more than one line.
+            seen, ordered = set(), []
+            for line in lines.sorted(
+                    key=lambda l: (l.invoice_id.payment_date or l.invoice_id.write_date),
+                    reverse=True):
+                if line.kpi_id.id in seen:
+                    continue
+                seen.add(line.kpi_id.id)
+                ordered.append(line)
+            truncated = len(ordered) > self.PAID_LANE_LIMIT
+            ordered = ordered[:self.PAID_LANE_LIMIT]
+
+            tasks = []
+            for line in ordered:
+                # Archived by action_mark_paid — a plain browse would read blanks.
+                k = line.kpi_id.with_context(active_test=False)
+                inv = line.invoice_id
+                client_kra = k.client_kra_id or k.kra_id
+                # What this task actually settled for, the same way the invoice detail
+                # works it out: a per-task invoice prices each line, an hourly one
+                # multiplies its hours by the rate. Rate 0 is a time-only invoice, so
+                # there is no amount to show rather than a misleading 0.00.
+                if inv.billing_method == 'per_task':
+                    amount = round(line.unit_price or 0.0, 2)
+                elif inv.hourly_rate:
+                    hours = line.actual_hours or line.quoted_hours or 0.0
+                    amount = round(hours * inv.hourly_rate, 2)
+                else:
+                    amount = 0.0
+                cur = inv.currency_id
+                tasks.append({
+                    'amount': amount,
+                    'currency': (cur.symbol or cur.name or '') if cur else '',
+                    # When the client said they paid. action_mark_paid clears the claim
+                    # FLAG but not this date, so it survives confirmation.
+                    'client_paid_on': (convert_to_user_tz(inv.client_paid_claim_date)
+                                       if inv.client_paid_claim_date else ''),
+                    'id': k.id,
+                    'name': k.name or '',
+                    'external_ref': k.external_ref or '',
+                    'user_name': k.user_id.name if k.user_id else '',
+                    'client_name': client_kra.name if client_kra else '',
+                    # Same field names the board's own serializer uses, so the card
+                    # markup and formatTime work without a second time format.
+                    'timer_total_seconds': k.timer_total_seconds or 0,
+                    'estimate_display': f"{k.estimate_hours:02d}:{k.estimate_minutes:02d}",
+                    'estimate_hours': k.estimate_hours or 0,
+                    'estimate_minutes': k.estimate_minutes or 0,
+                    'invoice_name': inv.name or '',
+                    'paid_on': convert_to_user_tz(inv.payment_date) if inv.payment_date else '',
+                })
+            return {'status': True, 'tasks': tasks, 'truncated': truncated,
+                    'limit': self.PAID_LANE_LIMIT}
+        except Exception as e:
+            _logger.error("get_paid_tasks: %s", e)
+            return {'status': False, 'message': str(e), 'tasks': []}
 
     @http.route('/kra_kpi/tasks/get', type='json', auth='user', methods=['POST'], csrf=False)
     def get_tasks(self, **params):
@@ -815,6 +991,12 @@ class KraKpiAPI(http.Controller):
                 'estimate_display': f"{k.estimate_hours:02d}:{k.estimate_minutes:02d}",
                 'estimate_hours': k.estimate_hours or 0,
                 'estimate_minutes': k.estimate_minutes or 0,
+                # Why the estimate grew, carried to the card so the overrun explains
+                # itself instead of sending someone to the audit log.
+                'estimate_extend_reason': k.estimate_extend_reason or '',
+                'estimate_extension_count': k.estimate_extension_count or 0,
+                'estimate_extended_by_name': (k.estimate_extended_by_id.name
+                                              if k.estimate_extended_by_id else ''),
                 'timer_total_seconds': k.timer_total_seconds or 0,
                 'timer_start_datetime': timer_start_iso,  # For real-time timer calculation
                 'paused_reason': k.paused_reason or "",
@@ -2498,8 +2680,11 @@ class KraKpiAPI(http.Controller):
         if not k.exists():
             return {"status": False, "message": "KPI not found"}
 
+
         return {
             "status": True,
+            "estimate_history": self._estimate_history(k),
+            **self._activity_log(k),
             "kpi": {
                 "id": k.id,
                 "name": k.name,
@@ -2676,6 +2861,65 @@ class KraKpiAPI(http.Controller):
             return None
         return 'Not authorized'
 
+    # How many audit entries the detail pane carries. A task worked over months
+    # accumulates hundreds. The list lives in a scrollable popup rather than inline
+    # now, so it can hold far more without pushing the pane around — each row is a
+    # short dict, so 200 is still a small payload.
+    ACTIVITY_LIMIT = 200
+
+    def _estimate_history(self, kpi):
+        """The estimate's chain: what it started at, then each extension.
+
+        The card can only carry the latest reason, so the whole story lives here. The
+        ORIGINAL estimate is the first entry's "from" — which is exactly why the
+        extension route records from/to rather than only the delta.
+        """
+        out = []
+        entries = request.env['kpi.action.log'].sudo().search(
+            [('kpi_id', '=', kpi.id), ('event', '=', 'estimate_extended')], order='id asc')
+        for n, e in enumerate(entries, start=1):
+            try:
+                p = json.loads(e.payload_json or '{}')
+            except (ValueError, TypeError):
+                p = {}
+            if n == 1:
+                out.append({'seq': 0, 'kind': 'original',
+                            'value': p.get('from') or '00:00',
+                            'reason': '', 'actor': '', 'at': ''})
+            out.append({
+                'seq': n, 'kind': 'extension',
+                'value': '+%02d:%02d' % (p.get('added_hours') or 0, p.get('added_minutes') or 0),
+                'running_total': p.get('to') or '',
+                'reason': p.get('reason') or '',
+                'actor': e.actor_label or (e.actor_user_id.name if e.actor_user_id else ''),
+                'at': convert_to_user_tz(e.create_date) if e.create_date else '',
+            })
+        return out
+
+    def _activity_log(self, kpi):
+        """Everything that happened to this task, newest first.
+
+        A reader for the audit trail already being written on every start, pause,
+        switch and extension — not new tracking. Capped, and the true total is returned
+        alongside so the UI can say it is showing a slice rather than implying the task
+        only ever had 50 events.
+        """
+        Log = request.env['kpi.action.log'].sudo()
+        rows = Log.search([('kpi_id', '=', kpi.id)], order='id desc', limit=self.ACTIVITY_LIMIT)
+        return {
+            'activity_total': Log.search_count([('kpi_id', '=', kpi.id)]),
+            'activity_limit': self.ACTIVITY_LIMIT,
+            'activity_log': [{
+                'id': e.id,
+                'event': e.event or '',
+                'label': (e.event or '').replace('_', ' ').strip().capitalize(),
+                'actor': e.actor_label or (e.actor_user_id.name if e.actor_user_id else ''),
+                'at': convert_to_user_tz(e.create_date) if e.create_date else '',
+                'detail': (e.payload_json or '')[:400],
+                'success': e.success,
+            } for e in rows],
+        }
+
     @http.route('/kpi_action/details', type='json', auth='user')
     def get_kpi_action_details(self, id):
         kpi = request.env['kra.kpi'].sudo().browse(int(id))
@@ -2742,6 +2986,11 @@ class KraKpiAPI(http.Controller):
             "available_kras": available_kras,
             "priority": kpi.priority or "",
             "estimate": f"{kpi.estimate_hours:02d}:{kpi.estimate_minutes:02d}",
+            # How the estimate got here, and everything that has happened to the task.
+            # Built by the shared helpers so the two detail routes cannot drift apart —
+            # get_kpi_detail serves the same data and this is the one the web opens.
+            "estimate_history": self._estimate_history(kpi),
+            **self._activity_log(kpi),
             "points": kpi.points or 0,
             "assignee": kpi.user_id.name if kpi.user_id else "",
             "user_group": kpi.user_group_id.name if kpi.user_group_id else "",

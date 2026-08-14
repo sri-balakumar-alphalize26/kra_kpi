@@ -209,23 +209,23 @@
     <!-- Admin upload menus (under KRA / KPI root) -->
     <menuitem id="menu_kpi_upload_requirements"
               name="Upload Requirements"
-              parent="menu_kra_root"
+              parent="menu_grp_uploads"
               action="action_kpi_upload_requirements"
-              sequence="15"
+              sequence="10"
               groups="kra_kpi_module.group_kra_admin,base.group_system"/>
 
     <menuitem id="menu_kpi_upload_updates"
               name="Upload Updates"
-              parent="menu_kra_root"
+              parent="menu_grp_uploads"
               action="action_kpi_upload_updates"
-              sequence="16"
+              sequence="20"
               groups="kra_kpi_module.group_kra_admin,base.group_system"/>
 
     <menuitem id="menu_kpi_upload_bug_reports"
               name="Upload Bug Reports"
-              parent="menu_kra_root"
+              parent="menu_grp_uploads"
               action="action_kpi_upload_bug_reports"
-              sequence="17"
+              sequence="30"
               groups="kra_kpi_module.group_kra_admin,base.group_system"/>
 
     <!-- Client Portal root — declared early because the child menus below
@@ -267,9 +267,9 @@
 
     <menuitem id="menu_kpi_pending_queue"
               name="Client Task Queue"
-              parent="menu_kra_root"
+              parent="menu_grp_clients"
               action="action_kpi_pending_queue"
-              sequence="13"
+              sequence="10"
               groups="kra_kpi_module.group_kra_admin,base.group_system"/>
 
     <!-- Generate Client Files (in our format) -->
@@ -280,9 +280,9 @@
 
     <menuitem id="menu_kpi_client_workspace"
               name="Generate Client Files"
-              parent="menu_kra_root"
+              parent="menu_grp_clients"
               action="action_kpi_client_workspace"
-              sequence="14"
+              sequence="20"
               groups="kra_kpi_module.group_kra_admin,base.group_system"/>
 
     <!-- Owner Dashboard — per-client certified tasks + invoice gateway (Owner role) -->
@@ -293,9 +293,9 @@
 
     <menuitem id="menu_kpi_owner_dashboard"
               name="Owner Dashboard"
-              parent="menu_kra_root"
+              parent="menu_grp_tracking"
               action="action_kpi_owner_dashboard"
-              sequence="9"
+              sequence="20"
               groups="kra_kpi_module.group_kra_owner,base.group_system"/>
 
     <!-- Live Tracking — admin real-time "who is doing what now" + attendance
@@ -307,9 +307,9 @@
 
     <menuitem id="menu_kpi_live_tracking"
               name="Live Tracking"
-              parent="menu_kra_root"
+              parent="menu_grp_tracking"
               action="action_kpi_live_tracking"
-              sequence="8"
+              sequence="10"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
 
     <!-- Project Completion Check -->

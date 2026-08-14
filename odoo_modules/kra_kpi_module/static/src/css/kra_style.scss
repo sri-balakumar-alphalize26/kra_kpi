@@ -395,7 +395,53 @@
     flex-direction: column;
     height: auto;
     min-height: 400px;
-    min-width: 215px;
+    /* Every lane the same width, so every card in them is too. Previously only a
+       min-width was set and the lanes were Bootstrap .col (flex: 1 0 0%) — equal until
+       one lane's content needed more, at which point it grew and its neighbours shrank.
+       A long task title or a four-button action row was enough to do it. */
+    width: 100%;
+    min-width: 0;
+}
+
+/* The lane wrapper is the flex item, so the fixed basis has to live here. min-width:0
+   is the part that actually bites: without it a long unbroken word sets a min-content
+   floor that overrides the basis and the lane widens anyway. The board already scrolls
+   sideways (.o_kpi_action_wrapper), so ten fixed lanes scroll rather than squeeze.
+   A real class rather than :has() — that selector has to survive Odoo's SCSS pipeline
+   and every browser in use, and there is no reason to gamble on it here. */
+.kpi-lane {
+    flex: 0 0 265px;
+    max-width: 265px;
+    min-width: 0;
+}
+
+/* Soft-focus the rest of the lane so the hovered card reads as the one in focus.
+   CSS cannot blur "the background" behind an element — only real elements — so this
+   softens the sibling cards instead.
+
+   Scoped to the hovered lane on purpose. filter:blur promotes every affected element
+   to its own compositing layer and repaints it; this board carries hundreds of cards
+   (Paused alone runs to 86), and applying it across all ten lanes on every pointer
+   move would cost frames on exactly the lanes that are busiest.
+
+   NO BLUR, deliberately. It was tried and it lagged. The cause was not the transition
+   — measured off the compiled bundle, this rule already won on specificity and ran at
+   0.15s — it was paint cost: filter:blur promotes every affected card to its own
+   compositing layer and re-rasterises it, and hovering one card does that to all the
+   others in the lane (84 in Regular, 86 in Paused). That is expensive by construction
+   and no timing change makes it cheap.
+
+   Opacity does the same job for nothing: the browser reuses the already-painted card
+   and redraws it with less alpha, on the compositor, without repainting.
+
+   transition:none so the soften lands on the same frame as the hover expansion, which
+   cannot animate at all (height to auto). !important because .kpi-task declares
+   `transition: all 0.4s ... !important`. */
+.kpi-task-list .kpi-task {
+    transition: none !important;
+}
+.kpi-task-list:hover .kpi-task:not(:hover) {
+    opacity: 0.45;
 }
 
 /* ----- Column Headers (same color for all) ----- */
@@ -516,6 +562,58 @@
     margin-bottom: 14px !important;
     position: relative;
     overflow: hidden;
+
+    /* Uniform height. Card height used to be whatever the content made it — a title
+       that wrapped to two lines, a client name, a description, three buttons or none —
+       so a lane read as a staircase. The frame is fixed and the content adapts inside
+       it: title clamped, meta zone absorbs the slack, actions pinned to the bottom so
+       they line up across every lane.
+
+       Sized from the tallest common card (Pending Approvals, which adds "Completed by",
+       a date and an update count). Short cards therefore carry some whitespace — that
+       is the cost of the alignment, and the alternative (a height per lane) brings back
+       exactly the raggedness this removes.
+
+       The cost of the fixed height is that anything past it is cut off, and on the
+       fullest cards that was the buttons — Delete, Partial Finish, Approve/Reject.
+       Hovering restores them (see &:hover below); an even grid that hides Approve
+       would be a worse trade than the raggedness it replaced. */
+    height: 248px;
+    display: flex;
+    flex-direction: column;
+
+    /* Hover shows the whole card. Deliberately no transition on height: it cannot be
+       animated from a fixed value to auto, and a hover that eases open reads as slower
+       than one that just opens. overflow stays hidden — with the height grown nothing
+       is clipped, and the ::before shimmer below relies on it to stay inside the
+       rounded corner.
+
+       It grows in flow and pushes the cards below it down, rather than floating over
+       them: the lane (.kpi-task-list) is its own overflow-y:auto scrollbox, so an
+       absolutely-positioned card would simply be clipped at the lane's edge. */
+    &:hover {
+        height: auto;
+        min-height: 248px;
+        z-index: 5;
+        box-shadow:
+            0 10px 30px rgba(0, 0, 0, 0.18),
+            0 3px 8px rgba(0, 0, 0, 0.10) !important;
+    }
+
+    /* Nothing is lost to the clamp — the full title stays in the title attribute and
+       in the detail pane. */
+    > .fw-bold:first-of-type {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        flex: 0 0 auto;
+    }
+
+    /* Deliberately no rule pinning the buttons to the bottom: which element holds them
+       differs per lane, and a selector guessing at that would move the wrong row on the
+       cards that have none. Uniform card size is the ask; the buttons land where the
+       content puts them. */
     border: 1.5px solid rgba(255, 255, 255, 0.3) !important;
     box-shadow: 
         0 4px 15px rgba(0, 0, 0, 0.08),
@@ -625,38 +723,131 @@
         }
         
         &.btn-primary {
-            background: linear-gradient(135deg, #0370ec 0%, #c9d9eb 100%) !important;
-            color: #000000 !important;
+            background: linear-gradient(135deg, #00b3ff 0%, #0066ff 100%) !important;
+            border: none !important;
+            color: #fff !important;
+            font-weight: 600 !important;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 10px rgba(0,150,255,0.45), 0 1px 3px rgba(0,0,0,0.15) !important;
             
             &:hover {
-                background: linear-gradient(135deg, #0056b3 0%, #bfd3ea 100%) !important;
+                background: linear-gradient(135deg, #0066ff 0%, #00b3ff 100%) !important;
+                box-shadow: 0 4px 18px rgba(0,150,255,0.75), 0 2px 6px rgba(0,0,0,0.2) !important;
+                transform: translateY(-1px);
             }
         }
 
         &.btn-warning {
-            background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%) !important;
-            color: #000 !important;
+            background: linear-gradient(135deg, #ffd000 0%, #ff8a00 100%) !important;
+            border: none !important;
+            color: #3d2c00 !important;
+            font-weight: 600 !important;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 10px rgba(255,170,0,0.45), 0 1px 3px rgba(0,0,0,0.15) !important;
             
             &:hover {
-                background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%) !important;
+                background: linear-gradient(135deg, #ff8a00 0%, #ffd000 100%) !important;
+                box-shadow: 0 4px 18px rgba(255,170,0,0.75), 0 2px 6px rgba(0,0,0,0.2) !important;
+                transform: translateY(-1px);
             }
         }
 
         &.btn-success {
-            background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%) !important;
-            color: #fff !important;
+            background: linear-gradient(135deg, #39ff6a 0%, #00c853 100%) !important;
+            border: none !important;
+            color: #04310f !important;
+            font-weight: 600 !important;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 10px rgba(57,255,106,0.45), 0 1px 3px rgba(0,0,0,0.15) !important;
             
             &:hover {
-                background: linear-gradient(135deg, #1e7e34 0%, #155724 100%) !important;
+                background: linear-gradient(135deg, #00c853 0%, #39ff6a 100%) !important;
+                box-shadow: 0 4px 18px rgba(57,255,106,0.75), 0 2px 6px rgba(0,0,0,0.2) !important;
+                transform: translateY(-1px);
             }
         }
 
         &.btn-danger {
-            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
+            background: linear-gradient(135deg, #ff4d6d 0%, #e00030 100%) !important;
+            border: none !important;
             color: #fff !important;
-            
+            font-weight: 600 !important;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 10px rgba(255,60,100,0.45), 0 1px 3px rgba(0,0,0,0.15) !important;
+
             &:hover {
-                background: linear-gradient(135deg, #c82333 0%, #bd2130 100%) !important;
+                background: linear-gradient(135deg, #e00030 0%, #ff4d6d 100%) !important;
+                box-shadow: 0 4px 18px rgba(255,60,100,0.75), 0 2px 6px rgba(0,0,0,0.2) !important;
+                transform: translateY(-1px);
+            }
+        }
+
+        /* The buttons that never matched a variant rule above and so rendered flat.
+           Colour carries meaning here rather than decoration: teal for the halfway
+           state of Partial Finish, indigo for Add time because it changes a number
+           rather than a state, slate for Reassign which is neither progress nor
+           destruction, and a muted red for Delete so it stays clearly destructive
+           without shouting louder than Complete. */
+        &.kpi-btn-partial {
+            background: linear-gradient(135deg, #2ee6d6 0%, #00a99d 100%) !important;
+            border: none !important;
+            color: #04302c !important;
+            font-weight: 600 !important;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 10px rgba(46,230,214,0.45), 0 1px 3px rgba(0,0,0,0.15) !important;
+
+            &:hover {
+                background: linear-gradient(135deg, #00a99d 0%, #2ee6d6 100%) !important;
+                box-shadow: 0 4px 18px rgba(46,230,214,0.75), 0 2px 6px rgba(0,0,0,0.2) !important;
+                transform: translateY(-1px);
+            }
+        }
+
+        &.kpi-btn-addtime {
+            background: linear-gradient(135deg, #8b7bff 0%, #4b32e0 100%) !important;
+            border: none !important;
+            color: #fff !important;
+            font-weight: 600 !important;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 10px rgba(139,123,255,0.45), 0 1px 3px rgba(0,0,0,0.15) !important;
+
+            &:hover {
+                background: linear-gradient(135deg, #4b32e0 0%, #8b7bff 100%) !important;
+                box-shadow: 0 4px 18px rgba(139,123,255,0.75), 0 2px 6px rgba(0,0,0,0.2) !important;
+                transform: translateY(-1px);
+            }
+        }
+
+        &.btn-secondary {
+            background: linear-gradient(135deg, #9aa8bd 0%, #5b6b82 100%) !important;
+            border: none !important;
+            color: #0d1520 !important;
+            font-weight: 600 !important;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 10px rgba(154,168,189,0.45), 0 1px 3px rgba(0,0,0,0.15) !important;
+
+            &:hover {
+                background: linear-gradient(135deg, #5b6b82 0%, #9aa8bd 100%) !important;
+                box-shadow: 0 4px 18px rgba(154,168,189,0.75), 0 2px 6px rgba(0,0,0,0.2) !important;
+                transform: translateY(-1px);
+            }
+        }
+
+        /* Delete keeps the outline shape but stops being flat. Deliberately softer
+           than btn-danger: Complete is the action you want to be loudest. */
+        &.btn-outline-danger {
+            background: linear-gradient(135deg, #ff8fa3 0%, #ff2d55 100%) !important;
+            border: none !important;
+            color: #3d0713 !important;
+            font-weight: 600 !important;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 10px rgba(255,45,85,0.45), 0 1px 3px rgba(0,0,0,0.15) !important;
+
+            &:hover {
+                background: linear-gradient(135deg, #ff2d55 0%, #ff8fa3 100%) !important;
+                box-shadow: 0 4px 18px rgba(255,45,85,0.75), 0 2px 6px rgba(0,0,0,0.2) !important;
+                transform: translateY(-1px);
+                color: #fff !important;
             }
         }
 
