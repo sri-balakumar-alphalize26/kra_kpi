@@ -548,9 +548,9 @@ class KpiWorkSession(models.Model):
             # it; if not, the DEVELOPER gets asked why (never the admin first).
             'idle_check_at': fields.Datetime.now() + timedelta(minutes=IDLE_CHECK_MIN),
         })
-        # Tell owner + coordinator the workday started (attendance only) — but
-        # ONLY on the first start of the day. Multiple sessions per day are
-        # allowed (restart after an accidental End Workday), and re-announcing
+        # Announce the start — to the owner/coordinator feed AND to the WhatsApp
+        # group — but ONLY on the first start of the day. Multiple sessions per day
+        # are allowed (restart after an accidental End Workday), and re-announcing
         # attendance each time is noise: it says nothing new, and a feed that
         # repeats itself is a feed that stops being read. Counts closed sessions
         # too, so an end-then-restart stays silent.
@@ -562,8 +562,19 @@ class KpiWorkSession(models.Model):
         if prior_today:
             _logger.info(
                 "workday_started: session %s is start #%s today for %s — not "
-                "re-notifying admins", new_sess.id, prior_today + 1, user.login)
+                "re-notifying admins or the WhatsApp group",
+                new_sess.id, prior_today + 1, user.login)
         else:
+            # Report the start to the WhatsApp group, if one is configured. Wrapped
+            # because this is a side effect: a group being unreachable must never
+            # stop someone starting their day. One shared number posts for everyone,
+            # so a duplicate here lands in the same list the whole team reads.
+            try:
+                self.env['kpi.wa.group.report'].post_workday_start(
+                    user, fields.Datetime.context_timestamp(
+                        self, fields.Datetime.now()).strftime('%I:%M %p · %a %d %b'))
+            except Exception as exc:
+                _logger.warning("wa group start report failed for %s: %s", user.id, exc)
             try:
                 new_sess._fire_workday_started()
             except Exception as exc:
@@ -1012,6 +1023,18 @@ class KpiWorkSession(models.Model):
         # notification can point at a row that already exists.
         snap = self._capture_snapshot(payload)
         self._fire_daily_summary(payload, snapshot=snap)
+        # Same contract as the start hook: never let a group report affect the
+        # workday. Ending a day is one-way, so a raise here would be unrecoverable.
+        try:
+            self.env['kpi.wa.group.report'].post_workday_end(
+                self.user_id,
+                fields.Datetime.context_timestamp(
+                    self, fields.Datetime.now()).strftime('%I:%M %p · %a %d %b'),
+                payload.get('productive_seconds') or 0,
+                tasks_touched=payload.get('task_count') or 0,
+                note=payload.get('note') or '')
+        except Exception as exc:
+            _logger.warning("wa group end report failed for session %s: %s", self.id, exc)
         return payload
 
     # ------------------------------------------------------------------ #
