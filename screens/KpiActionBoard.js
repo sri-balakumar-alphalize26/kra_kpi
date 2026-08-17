@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import {
   View, Text, ScrollView, FlatList, TouchableOpacity, TextInput, StyleSheet, Dimensions,
-  ActivityIndicator, Alert, Modal, StatusBar as RNStatusBar, Animated, Easing,
+  ActivityIndicator, Modal, StatusBar as RNStatusBar, Animated, Easing,
   Platform, UIManager, LayoutAnimation, findNodeHandle, Keyboard,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -16,6 +16,7 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import KpiTaskDetail from './KpiTaskDetail';
 import AddTimeModal from '../components/AddTimeModal';
+import AppDialog from '../components/AppDialog';
 import {
   LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, completeTask, reassignTask, adminDeleteTask, createProgress,
@@ -1234,7 +1235,13 @@ export default function KpiActionBoard({
   // rounded cards and gradients. `dlg` holds one at a time; a confirm is any that
   // carries onConfirm.
   const [dlg, setDlg] = useState(null);
-  const say = useCallback((title, message, tone = 'info') => setDlg({ title, message, tone }), []);
+  const say = useCallback((title, message, tone = 'info') => {
+    // The haptic belongs to the tone, not the call site — a refusal should feel
+    // different from a confirmation before either is read.
+    if (tone === 'warn' || tone === 'danger') H.err();
+    else if (tone === 'ok') H.ok();
+    setDlg({ title, message, tone });
+  }, []);
   const confirm = useCallback((opts) => setDlg({ ...opts, tone: opts.tone || 'warn' }), []);
 
   // Cross-fade the body when switching board ⇄ list (also fades in on first mount).
@@ -1304,10 +1311,13 @@ export default function KpiActionBoard({
   const idleSnoozeRef = useRef(0);
 
   // Styled error popup ("Can't start this task", etc.)
-  const [errorPopup, setErrorPopup] = useState(null); // { title, message } | null
   // Every refusal on this screen funnels through here, so the error buzz is
   // attached once rather than at each of the ~15 call sites.
-  const showError = (title, message) => { H.err(); setErrorPopup({ title, message }); };
+  // Kept as a name because a dozen call sites read better saying "show an error"
+  // than "say this, warmly". One popup system underneath, though — the screen used
+  // to have its own amber ⛔ modal alongside the OS Alert, which is two answers to
+  // the same question.
+  const showError = (title, message) => say(title, message, 'warn');
 
   // Per-task reminder alarms (developer-only). Map { [taskId]: {notifId, whenIso} }
   // loaded from AsyncStorage; reminderFor = the task whose picker is open.
@@ -1964,8 +1974,8 @@ export default function KpiActionBoard({
   }
 
   async function submitNewTask() {
-    if (!ntName.trim()) return Alert.alert('Task name required', 'Enter a task name.');
-    if (!ntProject) return Alert.alert('Project required', 'Choose a project (KRA).');
+    if (!ntName.trim()) return say('Task name required', 'Enter a task name.', 'warn');
+    if (!ntProject) return say('Project required', 'Choose a project (KRA).', 'warn');
     const h = parseInt(ntHours, 10) || 0;
     const m = parseInt(ntMinutes, 10) || 0;
     // Estimate is OPTIONAL, matching the server and the web board. A developer
@@ -1982,11 +1992,11 @@ export default function KpiActionBoard({
         // the caller, so a developer's task can never be filed against someone.
         userId: isAdmin ? (ntUser?.id || 0) : 0,
       });
-      if (res && res.status === false) { Alert.alert('Cannot create', res.message || 'Failed'); return; }
+      if (res && res.status === false) { say('Cannot create', res.message || 'Failed', 'warn'); return; }
       setNewTaskOpen(false);
       await load({ silent: true });
       setCreatedPopup({ ref: (res && res.external_ref) || '', name: ntName.trim() });
-    } catch (e) { Alert.alert('Error', e.message || 'Failed'); }
+    } catch (e) { say('Error', e.message || 'Failed', 'warn'); }
     finally { setNtBusy(false); }
   }
 
@@ -2019,36 +2029,36 @@ export default function KpiActionBoard({
     if (kind === 'adminDelete') {
       // Permanent and irreversible, so it asks — and it names what it is about to
       // remove rather than saying "this task".
-      Alert.alert(
-        'Delete this task?',
-        `${task.external_ref || ''} ${task.name || ''}\n\n` +
-        'This cannot be undone. It is only possible because no time has been ' +
-        'logged against it. The assigned developer and the client who raised it ' +
-        'are notified.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Delete',
-            style: 'destructive',
-            onPress: async () => {
-              setBusyId(task.id);
-              try {
-                const res = await adminDeleteTask(task.id);
-                if (res && res.status === false) {
-                  // The server re-checks: a board rendered before someone started
-                  // the task is refused here, not honoured.
-                  showError("Can't delete", res.message || 'Failed');
-                  return;
-                }
-                setDetailTask(null);
-                await load({ silent: true });
-              } catch (e) {
-                showError('Something went wrong', e.message || 'Failed');
-              } finally { setBusyId(null); }
-            },
-          },
-        ],
-      );
+      confirm({
+        tone: 'danger',
+        destructive: true,
+        title: 'Delete this task?',
+        message: `${task.external_ref || ''} ${task.name || ''}\n\n`
+          + 'This cannot be undone. It is only possible because no time has been '
+          + 'logged against it. The assigned developer and the client who raised it '
+          + 'are notified.',
+        confirmLabel: 'Delete',
+        onConfirm: async () => {
+          setDlg((d) => (d ? { ...d, busy: true } : d));
+          setBusyId(task.id);
+          try {
+            const res = await adminDeleteTask(task.id);
+            if (res && res.status === false) {
+              // The server re-checks: a board rendered before someone started
+              // the task is refused here, not honoured.
+              setDlg(null);
+              say("Can't delete", res.message || 'Failed', 'warn');
+              return;
+            }
+            setDlg(null);
+            setDetailTask(null);
+            await load({ silent: true });
+          } catch (e) {
+            setDlg(null);
+            say('Something went wrong', e.message || 'Failed', 'warn');
+          } finally { setBusyId(null); }
+        },
+      });
       return;
     }
     if (kind === 'pause') {
@@ -2205,7 +2215,7 @@ export default function KpiActionBoard({
     const task = revertFor;
     const reason = revertReason.trim();
     if (!reason) {
-      return Alert.alert('Reason required', 'Please say why it is going back to the developer.');
+      return say('Reason required', 'Please say why it is going back to the developer.', 'warn');
     }
     setRevertBusy(true);
     try {
@@ -2251,9 +2261,9 @@ export default function KpiActionBoard({
     setBusyId(task.id);
     try {
       const res = await pauseTask(task.id, reason, pauseCode, withIds);
-      if (res && res.status === false) Alert.alert('Cannot pause', res.message || 'Failed');
+      if (res && res.status === false) say('Cannot pause', res.message || 'Failed', 'warn');
       await load({ silent: true });
-    } catch (e) { Alert.alert('Error', e.message || 'Pause failed'); }
+    } catch (e) { say('Error', e.message || 'Pause failed', 'warn'); }
     finally { setBusyId(null); }
   }
 
@@ -2288,15 +2298,15 @@ export default function KpiActionBoard({
     try {
       // 1) submit the required progress summary
       const pr = await createProgress(task.id, finishSummary.trim());
-      if (pr && pr.status === false) { Alert.alert('Cannot save summary', pr.message || 'Failed'); return; }
+      if (pr && pr.status === false) { say('Cannot save summary', pr.message || 'Failed', 'warn'); return; }
       // 2) complete (full) or partial-finish. Send exactly what was ticked.
       const checklistObj = finishPartial
         ? {}
         : CHECKLIST_ITEMS.reduce((o, c) => ({ ...o, [c.key]: !!checklist[c.key] }), {});
       const res = await completeTask(task.id, checklistObj, finishPartial);
-      if (res && res.status === false) Alert.alert('Cannot finish', res.message || 'Failed');
+      if (res && res.status === false) say('Cannot finish', res.message || 'Failed', 'warn');
       await load({ silent: true });
-    } catch (e) { Alert.alert('Error', e.message || 'Failed'); }
+    } catch (e) { say('Error', e.message || 'Failed', 'warn'); }
     finally { setBusyId(null); }
   }
 
@@ -2311,7 +2321,7 @@ export default function KpiActionBoard({
     try {
       await acceptSelfCreated(task.id, docType, priority);
       await load({ silent: true });
-    } catch (e) { Alert.alert('Cannot accept', e.message || 'Failed'); }
+    } catch (e) { say('Cannot accept', e.message || 'Failed', 'warn'); }
     finally { setBusyId(null); }
   }
 
@@ -2328,7 +2338,7 @@ export default function KpiActionBoard({
     try {
       await rejectSelfCreated(task.id, note, false);
       await load({ silent: true });
-    } catch (e) { Alert.alert('Cannot send back', e.message || 'Failed'); }
+    } catch (e) { say('Cannot send back', e.message || 'Failed', 'warn'); }
     finally { setBusyId(null); }
   }
 
@@ -2338,7 +2348,7 @@ export default function KpiActionBoard({
     const task = approveFor;
     const missing = MGR_CHECKLIST_ITEMS.filter((c) => !mgrChecklist[c.key]);
     if (missing.length) {
-      return Alert.alert('Checklist incomplete', 'Please tick every QA item before approving.');
+      return say('Checklist incomplete', 'Please tick every QA item before approving.', 'warn');
     }
     setApproveFor(null);
     if (!task) return;
@@ -2346,9 +2356,9 @@ export default function KpiActionBoard({
     try {
       const checklistObj = MGR_CHECKLIST_ITEMS.reduce((o, c) => ({ ...o, [c.key]: true }), {});
       const res = await approveTask(task.id, checklistObj);
-      if (res && res.status === false) Alert.alert('Cannot approve', res.message || 'Failed');
+      if (res && res.status === false) say('Cannot approve', res.message || 'Failed', 'warn');
       await load({ silent: true });
-    } catch (e) { Alert.alert('Error', e.message || 'Approve failed'); }
+    } catch (e) { say('Error', e.message || 'Approve failed', 'warn'); }
     finally { setBusyId(null); }
   }
 
@@ -2363,9 +2373,9 @@ export default function KpiActionBoard({
     setBusyId(task.id);
     try {
       const res = await rejectTask(task.id, note);
-      if (res && res.status === false) Alert.alert('Cannot reject', res.message || 'Failed');
+      if (res && res.status === false) say('Cannot reject', res.message || 'Failed', 'warn');
       await load({ silent: true });
-    } catch (e) { Alert.alert('Error', e.message || 'Reject failed'); }
+    } catch (e) { say('Error', e.message || 'Reject failed', 'warn'); }
     finally { setBusyId(null); }
   }
 
@@ -2376,9 +2386,9 @@ export default function KpiActionBoard({
     setBusyId(task.id);
     try {
       const res = await reassignTask(task.id, reassignUser.id, reassignReason.trim());
-      if (res && res.status === false) Alert.alert('Cannot reassign', res.message || 'Failed');
+      if (res && res.status === false) say('Cannot reassign', res.message || 'Failed', 'warn');
       await load({ silent: true });
-    } catch (e) { Alert.alert('Error', e.message || 'Failed'); }
+    } catch (e) { say('Error', e.message || 'Failed', 'warn'); }
     finally { setBusyId(null); }
   }
 
@@ -2892,7 +2902,21 @@ export default function KpiActionBoard({
         visible={!!addTimeFor}
         task={addTimeFor}
         onClose={() => setAddTimeFor(null)}
-        onDone={(msg) => { Alert.alert('Estimate extended', msg); load({ silent: true }); }}
+        onDone={(msg) => { say('Estimate extended', msg, 'ok'); load({ silent: true }); }}
+      />
+
+      {/* The app's own alert/confirm. One at a time, which is all a screen should
+          ever be asking. */}
+      <AppDialog
+        visible={!!dlg}
+        tone={dlg?.tone}
+        title={dlg?.title}
+        message={dlg?.message}
+        confirmLabel={dlg?.confirmLabel}
+        destructive={dlg?.destructive}
+        busy={dlg?.busy}
+        onConfirm={dlg?.onConfirm}
+        onClose={() => setDlg(null)}
       />
 
       {/* Reassign modal — mirrors web "Reassign KPI Task" */}
@@ -4220,25 +4244,6 @@ export default function KpiActionBoard({
       ) : null}
 
       {/* Styled error popup — "Can't start this task", etc. */}
-      <Modal visible={!!errorPopup} transparent animationType="fade" onRequestClose={() => setErrorPopup(null)}>
-        <View style={s.modalWrap}>
-          <View style={s.modalCard}>
-            <View style={[s.modalHead, s.headAmber]}>
-              <Text style={s.headAmberTitle}>⛔  {errorPopup?.title}</Text>
-              <TouchableOpacity onPress={() => setErrorPopup(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Ionicons name="close" size={22} color="#7a5200" />
-              </TouchableOpacity>
-            </View>
-            <View style={s.modalPad}>
-              <Text style={s.errorMsg}>{errorPopup?.message}</Text>
-            </View>
-            <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
-              <TouchableOpacity style={s.footConfirm} onPress={() => setErrorPopup(null)}><Text style={s.footConfirmTxt}>OK</Text></TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       {/* End Workday summary — mirrors the web logout summary */}
       <Modal visible={!!endSummary} transparent animationType="fade" onRequestClose={() => setEndSummary(null)}>
         <View style={s.modalWrap}>
