@@ -1,0 +1,57 @@
+# 43 — Paid Work (new screen, 2bd3fa4) and the Notifications feed (c995c12).
+#
+# ZERO WRITES. Paid Work is read-only. "Mark all read" IS a write, so it is asserted
+# visible and deliberately never tapped.
+appId: host.exp.exponent
+---
+- runFlow: _enter-app.yaml
+
+# ── Paid Work ────────────────────────────────────────────────────────────────
+- tapOn:
+    point: "4%,6%"
+- extendedWaitUntil:
+    visible: "MENU"
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      text: "Paid Work"
+    direction: DOWN
+- tapOn: "Paid Work"
+# Anchor on the lead paragraph, NOT the title: "Paid Work" is both the tile just
+# tapped and the screen title, so the title would assert true even if navigation had
+# failed completely.
+- extendedWaitUntil:
+    visible: ".*Work on invoices that have been paid.*"
+    timeout: 30000
+# A role refusal replaces the whole body, so the lead paragraph being present is also
+# proof the admin gate let us through.
+- assertNotVisible: "Not authorized."
+
+- back
+- extendedWaitUntil:
+    visible: "Your Tasks"
+    timeout: 20000
+
+# ── Notifications ────────────────────────────────────────────────────────────
+# The bell is icon-only; 96%,6% is the coordinate 30-touch-nav.yaml already proves.
+- tapOn:
+    point: "96%,6%"
+- extendedWaitUntil:
+    visible: "Notifications"
+    timeout: 30000
+- assertVisible: "All"
+- assertVisible: "Unread"
+- assertVisible: "Action needed"
+
+- tapOn: "Action needed"
+- waitForAnimationToEnd:
+    timeout: 5000
+- tapOn: "All"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# The app's only accessibilityLabel. Asserted, never tapped — marking all read is a
+# server write.
+- assertVisible: "Mark all read"
+
+- back

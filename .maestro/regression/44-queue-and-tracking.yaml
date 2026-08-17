@@ -1,0 +1,53 @@
+# 44 — Client Task Queue description field (b39d8ae) and Live Tracking (87d6b22).
+#
+# ZERO WRITES. The queue's description box edits local state only; it reaches the
+# server on that screen's Save/Publish, which is never tapped. Live Tracking is
+# entirely read-only.
+appId: host.exp.exponent
+---
+- runFlow: _enter-app.yaml
+
+# ── Client Task Queue ────────────────────────────────────────────────────────
+# b39d8ae: the Description textarea used to be hidden when the client sent none,
+# which removed the only way to add one. It must now always render.
+- tapOn:
+    point: "4%,6%"
+- extendedWaitUntil:
+    visible: "MENU"
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      text: "Client Task Queue"
+    direction: DOWN
+- tapOn: "Client Task Queue"
+- waitForAnimationToEnd:
+    timeout: 15000
+# The queue can legitimately be empty, so the description assertion is guarded on a
+# request actually being present.
+- runFlow:
+    when:
+      visible: "Description"
+    commands:
+      - assertVisible: ".*No description was sent — you can add one.*"
+
+- back
+- extendedWaitUntil:
+    visible: "Your Tasks"
+    timeout: 20000
+
+# ── Live Tracking ────────────────────────────────────────────────────────────
+- tapOn:
+    point: "4%,6%"
+- extendedWaitUntil:
+    visible: "MENU"
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      text: "Live Tracking"
+    direction: DOWN
+- tapOn: "Live Tracking"
+- waitForAnimationToEnd:
+    timeout: 15000
+- assertNotVisible: ".*Offline demo data.*"
+
+- back

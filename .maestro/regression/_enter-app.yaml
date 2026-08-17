@@ -1,0 +1,67 @@
+# Shared preamble for the regression suite: get from wherever the tablet is into the
+# app, on Home, on live data.
+#
+# The project runs through Metro inside Expo Go, so the target is host.exp.exponent.
+# Two Expo Go behaviours make this more than a `launchApp`:
+#
+#  1. Launching Expo Go lands on ITS launcher ("Recently opened"), not on the running
+#     experience, even with stopApp:false. The project has to be re-entered by tapping
+#     its "KRA KPI" entry.
+#  2. That list is populated asynchronously, so tapping it immediately after the
+#     launcher appears intermittently misses. Hence the wait for the entry itself
+#     rather than for the launcher, and the retry around the whole re-entry.
+appId: host.exp.exponent
+---
+# Deliberately NO `launchApp`. Launching Expo Go throws the running experience back to
+# the Expo Go launcher every single time, so each flow would kick the app out and pay
+# a full Metro reload. Working with whatever is already on screen keeps the app up
+# across the whole suite; the block below only fires if we genuinely are on the
+# launcher.
+- waitForAnimationToEnd:
+    timeout: 10000
+
+# Expo Go launcher → re-enter the project.
+- runFlow:
+    when:
+      visible: "Recently opened"
+    commands:
+      - retry:
+          maxRetries: 3
+          commands:
+            # Wait for the entry, not just the list — the list header renders before
+            # its rows do.
+            - extendedWaitUntil:
+                visible: "KRA KPI"
+                timeout: 30000
+            - tapOn: "KRA KPI"
+            # The experience resumes on whatever screen it was last left on — NOT
+            # necessarily Home — so the only safe thing to wait for is the launcher
+            # going away. Reaching Home is the next block's job.
+            - extendedWaitUntil:
+                notVisible: "Recently opened"
+                timeout: 180000
+      - waitForAnimationToEnd:
+          timeout: 20000
+
+# Recover to Home from wherever a previous flow left the app. Hardware back is
+# unconditional for a logged-in user on any non-home screen (App.js:270).
+- retry:
+    maxRetries: 6
+    commands:
+      - runFlow:
+          when:
+            notVisible: "Your Tasks"
+          commands:
+            - back
+            - waitForAnimationToEnd:
+                timeout: 5000
+      - assertVisible: "Your Tasks"
+
+# Prove we are on live data. If the offline mock were showing, every assertion in the
+# suite would be checking hard-coded fixtures instead of the real app.
+#
+# NOTE the .* wrapping. Maestro FULL-matches its selector regex against an element's
+# text, so a bare substring silently never matches — which on an assertNotVisible
+# means the check passes without testing anything. Any non-exact anchor in this suite
+# is wrapped the same way.
+- assertNotVisible: ".*Offline demo data.*"

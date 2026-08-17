@@ -1,0 +1,80 @@
+# 40 — Add time to the estimate (commit 5d7d9a8) + the KPI Details rows.
+#
+# ZERO WRITES. Both validations run in KpiTaskDetail.js:190-191 BEFORE any network
+# call, and the modal is always cancelled, so nothing reaches the server.
+#
+# appId is Expo Go, NOT com.alphalize.krakpi: this tablet runs the project through
+# Metro rather than the standalone build. The legacy flat flows still target the
+# standalone id — they are the developer-role workday suite, not this suite.
+appId: host.exp.exponent
+---
+- runFlow: _enter-app.yaml
+
+# ── Home → KPI Action Board ──────────────────────────────────────────────────
+- tapOn: "KPI Action Board"
+# ".*Showing.*" not "Showing": the subtitle is "Showing 639 of 639 tasks" and Maestro
+# full-matches its regex against the element text.
+- extendedWaitUntil:
+    visible: ".*Showing.*of.*tasks.*"
+    timeout: 30000
+
+# Expand the Regular lane and open its first task.
+#
+# Two things make this fiddly, and both are handled by the retry rather than by
+# assuming a starting state:
+#  - Lane expansion PERSISTS between runs, so a bare `tapOn: "Regular"` collapses the
+#    lane whenever the previous run left it open. The retry simply taps again.
+#  - Task titles are live data, so the row is selected RELATIVE to the lane header.
+#    A name anchor would not survive the week and a fixed coordinate breaks the moment
+#    a lane above it expands.
+- retry:
+    maxRetries: 4
+    commands:
+      - runFlow:
+          when:
+            notVisible: "KPI Details"
+          commands:
+            - tapOn: "Regular"
+            - waitForAnimationToEnd:
+                timeout: 15000
+            - tapOn:
+                below:
+                  text: "Regular"
+            - waitForAnimationToEnd:
+                timeout: 15000
+      - assertVisible: "KPI Details"
+
+# ── The detail rows ──────────────────────────────────────────────────────────
+- assertVisible: "KRA / Project"
+- assertVisible: "Estimate"
+- assertVisible: "Assignee"
+- assertVisible: "Description"
+
+# ── 5d7d9a8 — add time to the estimate ───────────────────────────────────────
+- tapOn: "+ Add time to the estimate"
+# Anchored on the placeholder: the modal title "Add time to the estimate" is a
+# substring of the link that opened it, so the title cannot prove the modal is up.
+- extendedWaitUntil:
+    visible: "Why does it need more time?"
+    timeout: 10000
+- assertVisible: "hours"
+- assertVisible: "minutes"
+
+# 1) nothing entered → the zero-duration error
+- tapOn: "Add time"
+- assertVisible: "Add more than 0 minutes."
+
+# 2) hours entered, reason still blank → the reason error replaces it
+- tapOn:
+    leftOf:
+      text: "hours"
+- inputText: "1"
+- hideKeyboard
+- tapOn: "Add time"
+- assertVisible: "Give a reason — it is shown on the task."
+- assertNotVisible: "Add more than 0 minutes."
+
+# Never commit: Cancel, and prove the modal is gone.
+- tapOn: "Cancel"
+- assertNotVisible: "Why does it need more time?"
+- back

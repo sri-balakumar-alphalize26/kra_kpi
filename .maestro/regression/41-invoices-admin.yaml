@@ -1,0 +1,117 @@
+# 41 — Client Invoices: revise reason (7cba518), payment-method chips (87d6b22),
+# the clear-payment-claim prompt body (5d7d9a8) and the non-billable rows (2bd3fa4).
+#
+# ZERO WRITES. Every prompt is opened, its wording asserted, then Cancelled. The two
+# validation messages exercised here both short-circuit client-side before any
+# network call. "Create Invoice", "Mark paid" confirm and "OK"-with-a-reason are
+# never tapped — Mark paid archives the tasks behind the invoice.
+#
+# Each block is guarded by `runFlow: when:` because it depends on invoice state that
+# varies: an invoice must be finalized-and-unpaid to offer Revise, and must carry a
+# client paid-claim to offer the clear-claim link. A missing precondition skips the
+# block rather than failing the flow.
+appId: host.exp.exponent
+---
+- runFlow: _enter-app.yaml
+
+- tapOn:
+    point: "4%,6%"
+- extendedWaitUntil:
+    visible: "MENU"
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      text: "Client Invoices"
+    direction: DOWN
+- tapOn: "Client Invoices"
+# Anchor on a filter chip, not the screen title: "Client Invoices" is also the drawer
+# item that was just tapped, so the title alone cannot prove navigation happened.
+- extendedWaitUntil:
+    visible: ".*Payment Due.*"
+    timeout: 30000
+
+# ── Open the first invoice ───────────────────────────────────────────────────
+- tapOn: "Open"
+- extendedWaitUntil:
+    visible: "Status"
+    timeout: 30000
+
+# ── 7cba518 — Revise requires a reason ───────────────────────────────────────
+- runFlow:
+    when:
+      visible: "Revise"
+    commands:
+      - tapOn: "Revise"
+      - extendedWaitUntil:
+          visible: "Why is it being revised? (required)"
+          timeout: 10000
+      # OK with an empty reason short-circuits in ClientInvoices.js:852 — it never
+      # reaches the server, so this is a safe way to prove the guard.
+      - tapOn: "OK"
+      - assertVisible: "A reason is required."
+      - tapOn: "Cancel"
+      - assertNotVisible: "Why is it being revised? (required)"
+
+# ── 87d6b22 — payment-method chips render and wrap ───────────────────────────
+- runFlow:
+    when:
+      visible: "Mark Paid"
+    commands:
+      - tapOn: "Mark Paid"
+      - extendedWaitUntil:
+          visible: "How was it paid?"
+          timeout: 10000
+      - assertVisible: "Bank Transfer"
+      - assertVisible: "Cash"
+      - assertVisible: "Cheque"
+      - assertVisible: "Card"
+      - assertVisible: "Other"
+      - assertVisible: "Note (optional, internal)"
+      # Chip selection is local state (vals), so tapping one writes nothing.
+      - tapOn: "Cash"
+      - tapOn: "Cancel"
+      - assertNotVisible: "How was it paid?"
+
+# ── 5d7d9a8 — the clear-claim prompt must render its BODY ────────────────────
+# Before this commit PromptModal silently discarded prompt.body, so the dialog asked
+# a question with no explanation. The body text is the whole point of the assertion.
+- runFlow:
+    when:
+      visible: "Not paid — clear this claim"
+    commands:
+      - tapOn: "Not paid — clear this claim"
+      - extendedWaitUntil:
+          visible: "Clear the payment claim?"
+          timeout: 10000
+      - assertVisible: ".*the client said they paid.*"
+      - assertVisible: ".*It does not change whether the invoice is paid.*"
+      - tapOn: "Cancel"
+      - assertNotVisible: "Clear the payment claim?"
+
+# ── 2bd3fa4 — non-billable tasks are listed with a reason, not hidden ────────
+# Use the on-screen chevron, NOT hardware back. The invoice detail is internal `mode`
+# state rather than its own appScreen, so App.js:270 sends hardware back all the way
+# to Home and the list is skipped entirely.
+- tapOn:
+    point: "4%,6%"
+- extendedWaitUntil:
+    visible: ".*Payment Due.*"
+    timeout: 20000
+- tapOn:
+    point: "92%,5%"
+- extendedWaitUntil:
+    visible: "New Invoice"
+    timeout: 20000
+- assertVisible: "Client"
+# The collapsed row only appears once a client with unbillable work is chosen, so it
+# is guarded too. Expanding it must reveal each task's reason.
+- runFlow:
+    when:
+      visible: ".*task\\(s\\) hidden — not signed off yet.*"
+    commands:
+      - tapOn: ".*task\\(s\\) hidden — not signed off yet.*"
+      - waitForAnimationToEnd:
+          timeout: 5000
+
+# Never submit.
+- back

@@ -1,0 +1,80 @@
+# 42 — WhatsApp group per-event control (commits 514f818, 4102a6c) + the Timers card.
+#
+# ZERO WRITES. No switch is toggled and no template is edited: every per-event switch
+# saves to the server the instant it flips, so toggling one would change live config.
+# Everything here is assertion-only, plus one tap on a button that is inert.
+#
+# Safe by construction on this database: res_company.kpi_wa_group_jid is false, so no
+# destination exists and nothing can be posted even if a send were attempted.
+appId: host.exp.exponent
+---
+- runFlow: _enter-app.yaml
+
+# Drawer, not the Home grid: the grid is filtered by a per-user AsyncStorage choice
+# and may not contain the tile at all, while the drawer always lists every tile the
+# role allows (HomeScreen.js:499, :537).
+- tapOn:
+    point: "4%,6%"
+- extendedWaitUntil:
+    visible: "MENU"
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      text: "Configuration"
+    direction: DOWN
+- tapOn: "Configuration"
+- extendedWaitUntil:
+    visible: "Timers"
+    timeout: 30000
+
+# ── Timers: the admin-accept field whose 0 must survive as a kill switch ──────
+- assertVisible: "Admin accept window (minutes)"
+
+# ── WhatsApp Group Reports — the last card, so it has to be scrolled to ───────
+# The Developers card in between lists every developer with a country picker and a
+# number field, so it is thousands of pixels tall — a default 20 s scroll times out
+# inside it.
+#
+# Anchor on the LAST event row rather than the card title: scrolling to the bottom
+# puts all seven rows plus the enabled event's editor on screen together, whereas the
+# card title scrolls off the top before the rows arrive.
+- scrollUntilVisible:
+    element:
+      text: "Task resumed"
+    direction: DOWN
+    timeout: 120000
+    speed: 80
+    visibilityPercentage: 20
+
+# ── 4102a6c — all SEVEN events must be listed ────────────────────────────────
+# The bug this covers: the offline demo used to expose only two events, making the
+# feature look smaller than it is. The list must match the server registry in
+# odoo_modules/kra_kpi_module/models/kpi_wa_group_event.py.
+- assertVisible: "Workday started"
+- assertVisible: "Workday ended"
+- assertVisible: "Task completed"
+- assertVisible: "Task signed off"
+- assertVisible: "Task started"
+- assertVisible: "Task paused"
+- assertVisible: "Task resumed"
+
+# ── 514f818 — the editor belongs to the ENABLED event only ───────────────────
+# Only workday_start is enabled on this database, so exactly one editor should be
+# rendered: preview, token chips and reset all live behind the switch
+# (ConfigurationScreen.js:638). The six disabled rows show their label and help text
+# and nothing else — asserting a single "Insert:" proves that.
+- assertVisible: "Preview — what the group sees"
+- assertVisible: "Insert:"
+- assertVisible: "↺ Reset to default"
+- assertVisible: "When a developer presses Start Workday."
+- assertVisible: "When a developer resumes a paused task."
+
+# ── Send test must be inert while no group is set ────────────────────────────
+# Tapping it and proving the confirm card does NOT appear is a positive assertion
+# that still cannot send anything.
+- tapOn: "Send test"
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertNotVisible: "Send a test message?"
+
+- back
