@@ -265,6 +265,18 @@ async function action(path, params) {
 
 export const startTask   = (kpiId) => action('/kra_kpi/task/start', { kpi_id: kpiId });
 export const resumeTask  = (kpiId) => action('/kra_kpi/task/resume', { kpi_id: kpiId });
+// Extend a task's estimate. ADDS to it rather than replacing it, and the reason
+// is required because it is shown on the card next to the overrun — an estimate
+// that grew for no stated reason is worse than one that was simply wrong.
+// The server refuses once the client owns the number, and lets a developer
+// extend their own task without a management role.
+export const addTaskTime = (kpiId, hours, minutes, reason) =>
+  action('/kra_kpi/task/add_time', {
+    kpi_id: kpiId,
+    hours: hours || 0,
+    minutes: minutes || 0,
+    reason: reason || '',
+  });
 // meetingWithIds is only meaningful for reason_code 'meeting' — the route
 // ignores it otherwise, and validates the ids against real active users.
 export const pauseTask   = (kpiId, reason, reasonCode, meetingWithIds) =>

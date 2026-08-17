@@ -452,10 +452,19 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
               {!portal && d.client_paid_claim && d.payment_status !== 'paid' ? (
                 <View style={s.claimHint}>
                   <Ionicons name="cash-outline" size={13} color="#B45309" />
-                  <Text style={s.claimHintTxt}>
-                    Client marked this as paid{d.client_paid_claim_date ? ` on ${d.client_paid_claim_date}` : ''}
-                    {d.client_paid_method_label ? ` by ${d.client_paid_method_label}` : ''} — confirm with Mark Paid.
-                  </Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.claimHintTxt}>
+                      Client marked this as paid{d.client_paid_claim_date ? ` on ${d.client_paid_claim_date}` : ''}
+                      {d.client_paid_method_label ? ` by ${d.client_paid_method_label}` : ''} — confirm with Mark Paid.
+                    </Text>
+                    {/* A claim made by mistake used to be unclearable from here: the
+                        client cannot claim twice, and the only other way to drop the
+                        flag was marking the invoice paid — the one thing you must not
+                        do to correct it. */}
+                    <TouchableOpacity onPress={() => openClearClaim(d)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Text style={s.claimClear}>Not paid — clear this claim</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ) : null}
               {/* The client may be holding a PDF showing the old figure. A total that
@@ -793,6 +802,19 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     });
   }
 
+  // Dismiss a claim the client made by mistake. Confirmed because it removes
+  // something the client did, and they are not told it happened — the honest
+  // follow-up is a conversation, not a silent tap.
+  function openClearClaim(d) {
+    setPrompt({
+      title: 'Clear the payment claim?',
+      body: `${d.name}: the client said they paid. Clearing this removes their claim so it `
+        + 'no longer shows as awaiting confirmation. It does not change whether the invoice is paid.',
+      fields: [],
+      onOk: async () => { doAction('clear_claim', () => svc.clearPaidClaim(d.id)); },
+    });
+  }
+
   function openMarkPaid(d, paid) {
     setPrompt({
       title: paid ? 'Mark paid' : 'Mark unpaid', fields: paidFields(paid),
@@ -885,7 +907,11 @@ function PromptModal({ prompt, onClose }) {
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={s.modalBackdrop}>
         <View style={[s.modalSheet, { padding: 18 }]}>
-          <Text style={[s.modalTitle, { marginBottom: 12 }]}>{prompt.title}</Text>
+          <Text style={[s.modalTitle, { marginBottom: prompt.body ? 6 : 12 }]}>{prompt.title}</Text>
+          {/* Optional explanation. Some confirmations need to say what they will
+              and will not do — a bare title is not enough when the action removes
+              something a client did. */}
+          {prompt.body ? <Text style={s.promptBody}>{prompt.body}</Text> : null}
           {(prompt.fields || []).map((fld) => (
             <View key={fld.key} style={{ marginBottom: 10 }}>
               <Text style={s.miniLbl}>{fld.label}</Text>
@@ -1046,6 +1072,8 @@ const s = StyleSheet.create({
   paidBy: { fontSize: 11, fontWeight: '700', color: COLORS.green },
   claimHint: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8, padding: 9, borderRadius: 9, backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FCD34D' },
   claimHintTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: '#92400E', lineHeight: 16 },
+  claimClear: { fontSize: 11.5, fontWeight: '800', color: '#B45309', textDecorationLine: 'underline', marginTop: 6 },
+  promptBody: { fontSize: 12.5, color: COLORS.muted, lineHeight: 18, marginBottom: 12 },
   revisedHint: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8, padding: 9, borderRadius: 9, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE' },
   revisedHintTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: COLORS.primary, lineHeight: 16 },
   miniInline: { fontSize: 11, fontWeight: '600', color: COLORS.faint },

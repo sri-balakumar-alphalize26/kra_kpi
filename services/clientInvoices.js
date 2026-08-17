@@ -62,4 +62,10 @@ export const markInvoicePaid = (invoice_id, paid, note, method) =>
 // Client-only: flag "I've paid" → notifies admins to confirm (no state change).
 export const clientMarkPaid = (invoice_id, method, note) =>
   call('/kpi_client_invoice/client_mark_paid', { invoice_id, method: method || '', note: note || '' });
+// Admin-only: dismiss a payment claim that turned out to be wrong. Without this a
+// mistaken tap sticks forever — the client's claim button is gone once used, and
+// the only other way to clear the flag is marking the invoice paid, which is
+// exactly what you must not do to correct it.
+export const clearPaidClaim = (invoice_id) =>
+  call('/kpi_client_invoice/clear_paid_claim', { invoice_id });
 export const fetchInvoicePdf = (invoice_id) => call('/kpi_client_invoice/pdf', { invoice_id }, 60000);

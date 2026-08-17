@@ -31,9 +31,10 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { COLORS } from '../theme';
 import GradientBackground from '../components/GradientBackground';
+import GradientButton from '../components/GradientButton';
 import {
   fetchTaskDetails, submitProgressUpdate, addGithubLink, deleteGithubLink,
-  deleteManual, completeTask, fetchProgressFile, fetchManualFile,
+  deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime,
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
 } from '../services/kpiActions';
 import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
@@ -171,6 +172,40 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const enterStyle = { opacity: enter, transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] };
 
   const flash = (kind, msg) => { setBanner({ kind, msg }); setTimeout(() => setBanner(null), 3500); };
+
+  // Add time to the estimate. Reason required — the server refuses without one,
+  // and it is what shows on the task next to the new number.
+  const [addOpen, setAddOpen] = useState(false);
+  const [addH, setAddH] = useState('');
+  const [addM, setAddM] = useState('');
+  const [addReason, setAddReason] = useState('');
+  const [addErr, setAddErr] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+
+  const submitAddTime = async () => {
+    const h = parseInt(addH, 10) || 0;
+    const m = parseInt(addM, 10) || 0;
+    // Checked here as well as server-side so the answer is immediate, and worded
+    // the same way the server words it.
+    if (h === 0 && m === 0) { setAddErr('Add more than 0 minutes.'); return; }
+    if (!addReason.trim()) { setAddErr('Give a reason — it is shown on the task.'); return; }
+    setAddBusy(true);
+    try {
+      const res = await addTaskTime(task.id, h, m, addReason.trim());
+      if (res?.status) {
+        setAddOpen(false);
+        flash('ok', res.message || 'Estimate extended.');
+        await load(true);
+        if (onChanged) onChanged();
+      } else {
+        // The server refuses for reasons worth reading — the client owns the
+        // estimate, or it is not your task — so show its words, not a generic one.
+        setAddErr(res?.message || 'Could not add time.');
+      }
+    } catch (e) {
+      setAddErr('Could not add time.');
+    } finally { setAddBusy(false); }
+  };
 
   const load = useCallback(async (quiet) => {
     log.info('load details', { kpi_id: task.id, quiet: !!quiet });
@@ -637,6 +672,19 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
               </View>
               <Row label="KRA / Project" value={meta.kra} />
               <Row label="Estimate" value={t.estimate_display} mono />
+              {/* Why the estimate grew, next to the number it grew to. The web
+                  puts this on the card for the same reason: an estimate that
+                  changed with nothing explaining it is how overruns get argued
+                  about later. */}
+              {!!t.estimate_extend_reason && (
+                <Text style={s.estExtend}>
+                  Extended{t.estimate_extension_count > 1 ? ` ${t.estimate_extension_count}×` : ''} — {t.estimate_extend_reason}
+                </Text>
+              )}
+              <TouchableOpacity onPress={() => { setAddH(''); setAddM(''); setAddReason(''); setAddErr(''); setAddOpen(true); }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={s.addTimeLink}>+ Add time to the estimate</Text>
+              </TouchableOpacity>
               <Row label="Assignee" value={t.user_name || 'Unassigned'} />
               <Row label="Deadline" value={t.deadline} />
               {!!meta.points && <Row label="Points" value={String(meta.points)} />}
@@ -1201,6 +1249,42 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
             </View>
           )}
         </Modal>
+
+        {/* Add time to the estimate. Reason is required and shown on the task —
+            the point of extending is that the overrun stops being unexplained. */}
+        <Modal visible={addOpen} transparent animationType="fade" onRequestClose={() => setAddOpen(false)}>
+          <View style={s.addBackdrop}>
+            <View style={s.addCard}>
+              <Text style={s.addTitle}>Add time to the estimate</Text>
+              <Text style={s.addHint}>
+                This adds to the current estimate of {data?.task?.estimate_display || '00:00'} — it does
+                not replace it. The reason is shown on the task.
+              </Text>
+              <View style={s.addRow}>
+                <TextInput style={s.addNum} keyboardType="number-pad" placeholder="0"
+                  placeholderTextColor={COLORS.faint} value={addH}
+                  onChangeText={(t) => { setAddH(t.replace(/[^\d]/g, '')); if (addErr) setAddErr(''); }} />
+                <Text style={s.addUnit}>hours</Text>
+                <TextInput style={s.addNum} keyboardType="number-pad" placeholder="0"
+                  placeholderTextColor={COLORS.faint} value={addM}
+                  onChangeText={(t) => { setAddM(t.replace(/[^\d]/g, '')); if (addErr) setAddErr(''); }} />
+                <Text style={s.addUnit}>minutes</Text>
+              </View>
+              <TextInput style={s.addReason} multiline maxLength={255}
+                placeholder="Why does it need more time?" placeholderTextColor={COLORS.faint}
+                value={addReason}
+                onChangeText={(t) => { setAddReason(t); if (addErr) setAddErr(''); }} />
+              {!!addErr && <Text style={s.addErr}>{addErr}</Text>}
+              <View style={s.addBtns}>
+                <TouchableOpacity style={s.addCancel} onPress={() => setAddOpen(false)}>
+                  <Text style={s.addCancelTxt}>Cancel</Text>
+                </TouchableOpacity>
+                <GradientButton label={addBusy ? 'Adding…' : 'Add time'} disabled={addBusy}
+                  onPress={submitAddTime} style={{ flex: 1 }} />
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </View>
   );
@@ -1236,6 +1320,22 @@ const s = StyleSheet.create({
   sortItemTxt: { fontSize: 12, color: COLORS.ink },
   sortItemTxtOn: { fontWeight: '800', color: COLORS.primary },
   cardSub: { fontSize: 12, color: COLORS.muted, marginBottom: 10, lineHeight: 17 },
+
+  // Estimate extension
+  estExtend: { fontSize: 11.5, color: '#B45309', fontWeight: '700', marginTop: -4, marginBottom: 4, lineHeight: 16 },
+  addTimeLink: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary, marginTop: 2, marginBottom: 6 },
+  addBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  addCard: { width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 16, padding: 18 },
+  addTitle: { fontSize: 16, fontWeight: '900', color: COLORS.ink, marginBottom: 4 },
+  addHint: { fontSize: 12, color: COLORS.muted, lineHeight: 17, marginBottom: 12 },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  addNum: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 15, color: COLORS.ink, width: 74, textAlign: 'center', backgroundColor: '#fff' },
+  addUnit: { fontSize: 13, color: COLORS.muted, fontWeight: '700' },
+  addReason: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, padding: 11, minHeight: 74, fontSize: 14, color: COLORS.ink, textAlignVertical: 'top', backgroundColor: '#fff' },
+  addErr: { fontSize: 12, color: COLORS.red, fontWeight: '700', marginTop: 8 },
+  addBtns: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  addCancel: { flex: 1, height: 44, borderRadius: 11, borderWidth: 1.5, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center' },
+  addCancelTxt: { fontSize: 14, fontWeight: '800', color: COLORS.muted },
 
   taskName: { fontSize: 16, fontWeight: '900', color: COLORS.ink, marginTop: 6 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 7, marginTop: 8, marginBottom: 4 },
