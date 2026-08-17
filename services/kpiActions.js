@@ -263,6 +263,14 @@ async function action(path, params) {
   return res;
 }
 
+// Settled work — the admin-only record of what was billed and closed.
+//
+// Marking an invoice paid ARCHIVES its tasks, so they leave every board and
+// search. Correct for the developer, but it left the admin with no way to see
+// what had been paid for. Read-only, newest payment first, capped server-side at
+// 200 with a `truncated` flag the caller must surface rather than silently cut.
+export const fetchPaidTasks = () => action('/kra_kpi/tasks/paid', {});
+
 export const startTask   = (kpiId) => action('/kra_kpi/task/start', { kpi_id: kpiId });
 export const resumeTask  = (kpiId) => action('/kra_kpi/task/resume', { kpi_id: kpiId });
 // Extend a task's estimate. ADDS to it rather than replacing it, and the reason

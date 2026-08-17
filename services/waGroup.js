@@ -37,6 +37,44 @@ const MOCK_EVENTS = [
     default: '🔴 *Workday ended*\n{dev}\n{time} · {date} · {hours} logged\n{tasks}\n📝 "{note}"',
     tokens: ['dev', 'time', 'date', 'hours', 'tasks', 'note'],
   },
+  // The five task events, all off by default — same as the server registry.
+  // Offline used to list only the two workday events, so the demo showed a
+  // smaller feature than the real one.
+  {
+    event: 'complete', label: 'Task completed',
+    help: 'When a developer marks a task complete.', enabled: false,
+    template: '✅ *Task completed*\n{title} ({ref})\n{dev} · {elapsed}',
+    default: '✅ *Task completed*\n{title} ({ref})\n{dev} · {elapsed}',
+    tokens: ['dev', 'title', 'ref', 'client', 'project', 'elapsed'],
+  },
+  {
+    event: 'final_approved', label: 'Task signed off',
+    help: 'When a completed task is finally approved.', enabled: false,
+    template: '🏁 *Signed off*\n{title} ({ref})\n{client}',
+    default: '🏁 *Signed off*\n{title} ({ref})\n{client}',
+    tokens: ['dev', 'title', 'ref', 'client', 'project'],
+  },
+  {
+    event: 'start', label: 'Task started',
+    help: 'When a developer starts working on a task.', enabled: false,
+    template: '▶️ *Task started*\n{title} ({ref})\n{dev}',
+    default: '▶️ *Task started*\n{title} ({ref})\n{dev}',
+    tokens: ['dev', 'title', 'ref', 'client', 'project', 'priority', 'deadline'],
+  },
+  {
+    event: 'pause', label: 'Task paused',
+    help: 'When a developer pauses a task.', enabled: false,
+    template: '⏸ *Task paused*\n{title} ({ref})\n{dev} · {pause_reason}',
+    default: '⏸ *Task paused*\n{title} ({ref})\n{dev} · {pause_reason}',
+    tokens: ['dev', 'title', 'ref', 'elapsed', 'pause_reason'],
+  },
+  {
+    event: 'resume', label: 'Task resumed',
+    help: 'When a developer resumes a paused task.', enabled: false,
+    template: '⏵ *Task resumed*\n{title} ({ref})\n{dev}',
+    default: '⏵ *Task resumed*\n{title} ({ref})\n{dev}',
+    tokens: ['dev', 'title', 'ref', 'elapsed'],
+  },
 ];
 
 /** Every reportable event with its switch, wording, built-in default and tokens.
