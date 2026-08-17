@@ -1281,6 +1281,14 @@ class KraKpiAPI(http.Controller):
         return {
             'status': True,
             'task': self._serialize_task(kpi),
+            # The estimate's whole chain and the task's audit trail, the same two
+            # the web detail pane gets from /kpi_action/details. The card can only
+            # ever carry the LATEST reason — the field is overwritten on each
+            # extension — so without these the app could show that an estimate had
+            # grown three times but not what the first two reasons were, or who.
+            # Both are already computed here; only this route was not asking.
+            'estimate_history': self._estimate_history(kpi),
+            **self._activity_log(kpi),
             # Fields the board's task payload (map_rec) doesn't carry but the
             # detail view shows — kept in `meta` so map_rec stays untouched and
             # the board's list call doesn't get heavier for every task.

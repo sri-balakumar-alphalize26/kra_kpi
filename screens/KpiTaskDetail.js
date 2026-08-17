@@ -18,7 +18,7 @@
 // /kpi/manual/view/<id> silently renders the login page instead of the file (the
 // same bug that broke the ZIP download). Files are listed by name + reason; the
 // media itself opens on the web viewer.
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, TextInput, StyleSheet, StatusBar as RNStatusBar,
   ActivityIndicator, Animated, Easing, Linking, KeyboardAvoidingView, Platform,
@@ -32,6 +32,7 @@ import * as Sharing from 'expo-sharing';
 import { COLORS } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import GradientButton from '../components/GradientButton';
+import AddTimeModal from '../components/AddTimeModal';
 import {
   fetchTaskDetails, submitProgressUpdate, addGithubLink, deleteGithubLink,
   deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime,
@@ -153,10 +154,7 @@ function Empty({ text }) {
   return <Text style={s.empty}>{text}</Text>;
 }
 
-// autoAddTime: arrived from the board's "Add time" button, so open that modal
-// straight away rather than making the user find the link again on a screen they
-// were sent to for exactly one reason.
-export default function KpiTaskDetail({ task, onBack, onChanged, autoAddTime = false }) {
+export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const [data, setData] = useState(null);       // { task, meta, manuals, progress, github, reassignments, files, links }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -176,39 +174,13 @@ export default function KpiTaskDetail({ task, onBack, onChanged, autoAddTime = f
 
   const flash = (kind, msg) => { setBanner({ kind, msg }); setTimeout(() => setBanner(null), 3500); };
 
-  // Add time to the estimate. Reason required — the server refuses without one,
-  // and it is what shows on the task next to the new number.
-  const [addOpen, setAddOpen] = useState(!!autoAddTime);
-  const [addH, setAddH] = useState('');
-  const [addM, setAddM] = useState('');
-  const [addReason, setAddReason] = useState('');
-  const [addErr, setAddErr] = useState('');
-  const [addBusy, setAddBusy] = useState(false);
-
-  const submitAddTime = async () => {
-    const h = parseInt(addH, 10) || 0;
-    const m = parseInt(addM, 10) || 0;
-    // Checked here as well as server-side so the answer is immediate, and worded
-    // the same way the server words it.
-    if (h === 0 && m === 0) { setAddErr('Add more than 0 minutes.'); return; }
-    if (!addReason.trim()) { setAddErr('Give a reason — it is shown on the task.'); return; }
-    setAddBusy(true);
-    try {
-      const res = await addTaskTime(task.id, h, m, addReason.trim());
-      if (res?.status) {
-        setAddOpen(false);
-        flash('ok', res.message || 'Estimate extended.');
-        await load(true);
-        if (onChanged) onChanged();
-      } else {
-        // The server refuses for reasons worth reading — the client owns the
-        // estimate, or it is not your task — so show its words, not a generic one.
-        setAddErr(res?.message || 'Could not add time.');
-      }
-    } catch (e) {
-      setAddErr('Could not add time.');
-    } finally { setAddBusy(false); }
-  };
+  // Add time to the estimate. The fields, their validation and the write all live
+  // in AddTimeModal, shared with the board — this screen only decides when to open
+  // it and what to do once it succeeds.
+  const [addOpen, setAddOpen] = useState(false);
+  // Activity popup, and which day groups are open inside it.
+  const [actOpen, setActOpen] = useState(false);
+  const [actDays, setActDays] = useState(() => new Set());
 
   const load = useCallback(async (quiet) => {
     log.info('load details', { kpi_id: task.id, quiet: !!quiet });
@@ -621,6 +593,19 @@ export default function KpiTaskDetail({ task, onBack, onChanged, autoAddTime = f
 
   const meta = data?.meta || {};
   const t = data?.task || task;
+  const estHistory = data?.estimate_history || [];
+  const activityTotal = data?.activity_total || 0;
+  // Newest day first, grouped on the date half of the server's timestamp — the
+  // same grouping the web's popup uses, so the two read identically.
+  const actGroups = useMemo(() => {
+    const by = new Map();
+    for (const e of (data?.activity_log || [])) {
+      const day = String(e.at || '').slice(0, 10) || '—';
+      if (!by.has(day)) by.set(day, []);
+      by.get(day).push(e);
+    }
+    return Array.from(by, ([day, rows]) => ({ day, rows }));
+  }, [data]);
   const kind = KIND[meta.kind] || KIND.requirement;
   const pr = PRIORITY[t.priority] || PRIORITY.regular;
 
@@ -679,15 +664,52 @@ export default function KpiTaskDetail({ task, onBack, onChanged, autoAddTime = f
                   puts this on the card for the same reason: an estimate that
                   changed with nothing explaining it is how overruns get argued
                   about later. */}
-              {!!t.estimate_extend_reason && (
+              {/* The whole chain, not just the latest reason. estimate_extend_reason
+                  is overwritten on every extension, so on its own it can say an
+                  estimate grew three times without saying what the first two
+                  reasons were — which is exactly the argument it exists to settle.
+                  Falls back to the single latest line on an older server that does
+                  not send estimate_history. */}
+              {estHistory.length ? (
+                <View style={s.estChain}>
+                  {estHistory.map((h) => (
+                    <Text key={`${h.seq}`} style={s.estChainRow}>
+                      {h.kind === 'original' ? (
+                        <Text style={s.estChainOrig}>{h.value} — original</Text>
+                      ) : (
+                        <>
+                          <Text style={s.estChainAdd}>{h.value}</Text>
+                          <Text style={s.estChainTo}> → {h.running_total}</Text>
+                          {!!h.reason && <Text style={s.estChainWhy}> · "{h.reason}"</Text>}
+                          {!!(h.actor || h.at) && (
+                            <Text style={s.estChainWho}> — {[h.actor, h.at].filter(Boolean).join(', ')}</Text>
+                          )}
+                        </>
+                      )}
+                    </Text>
+                  ))}
+                </View>
+              ) : !!t.estimate_extend_reason && (
                 <Text style={s.estExtend}>
                   Extended{t.estimate_extension_count > 1 ? ` ${t.estimate_extension_count}×` : ''} — {t.estimate_extend_reason}
                 </Text>
               )}
-              <TouchableOpacity onPress={() => { setAddH(''); setAddM(''); setAddReason(''); setAddErr(''); setAddOpen(true); }}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={s.addTimeLink}>+ Add time to the estimate</Text>
-              </TouchableOpacity>
+              <View style={s.estActions}>
+                <TouchableOpacity onPress={() => setAddOpen(true)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={s.addTimeLink}>+ Add time to the estimate</Text>
+                </TouchableOpacity>
+                {/* Everything that has happened to this task — starts, pauses,
+                    switches, extensions — grouped by day, as the web's Activity
+                    popup does. The trail was already being written; the app just
+                    had no reader for it. */}
+                {activityTotal > 0 && (
+                  <TouchableOpacity onPress={() => setActOpen(true)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Text style={s.actLink}>Activity ({activityTotal})</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
               <Row label="Assignee" value={t.user_name || 'Unassigned'} />
               <Row label="Deadline" value={t.deadline} />
               {!!meta.points && <Row label="Points" value={String(meta.points)} />}
@@ -1253,38 +1275,69 @@ export default function KpiTaskDetail({ task, onBack, onChanged, autoAddTime = f
           )}
         </Modal>
 
-        {/* Add time to the estimate. Reason is required and shown on the task —
-            the point of extending is that the overrun stops being unexplained. */}
-        <Modal visible={addOpen} transparent animationType="fade" onRequestClose={() => setAddOpen(false)}>
-          <View style={s.addBackdrop}>
-            <View style={s.addCard}>
-              <Text style={s.addTitle}>Add time to the estimate</Text>
-              <Text style={s.addHint}>
-                This adds to the current estimate of {data?.task?.estimate_display || '00:00'} — it does
-                not replace it. The reason is shown on the task.
-              </Text>
-              <View style={s.addRow}>
-                <TextInput style={s.addNum} keyboardType="number-pad" placeholder="0"
-                  placeholderTextColor={COLORS.faint} value={addH}
-                  onChangeText={(t) => { setAddH(t.replace(/[^\d]/g, '')); if (addErr) setAddErr(''); }} />
-                <Text style={s.addUnit}>hours</Text>
-                <TextInput style={s.addNum} keyboardType="number-pad" placeholder="0"
-                  placeholderTextColor={COLORS.faint} value={addM}
-                  onChangeText={(t) => { setAddM(t.replace(/[^\d]/g, '')); if (addErr) setAddErr(''); }} />
-                <Text style={s.addUnit}>minutes</Text>
-              </View>
-              <TextInput style={s.addReason} multiline maxLength={255}
-                placeholder="Why does it need more time?" placeholderTextColor={COLORS.faint}
-                value={addReason}
-                onChangeText={(t) => { setAddReason(t); if (addErr) setAddErr(''); }} />
-              {!!addErr && <Text style={s.addErr}>{addErr}</Text>}
-              <View style={s.addBtns}>
-                <TouchableOpacity style={s.addCancel} onPress={() => setAddOpen(false)}>
-                  <Text style={s.addCancelTxt}>Cancel</Text>
+        {/* Add time to the estimate — the same component the board uses, so the
+            required reason cannot be enforced one way here and another there.
+            Staying on this screen afterwards is the right answer HERE, exactly as
+            staying on the board is the right answer there. */}
+        <AddTimeModal
+          visible={addOpen}
+          task={data?.task || task}
+          onClose={() => setAddOpen(false)}
+          onDone={async (msg) => {
+            flash('ok', msg);
+            await load(true);
+            if (onChanged) onChanged();
+          }}
+        />
+
+        {/* Activity — everything that happened to this task, newest day first.
+            Days collapse so a long-running task does not open as a wall; the
+            newest is expanded because it is the one being asked about. */}
+        <Modal visible={actOpen} transparent animationType="fade" onRequestClose={() => setActOpen(false)}>
+          <View style={s.actBackdrop}>
+            <View style={s.actCard}>
+              <View style={s.actHead}>
+                <Text style={s.actTitle}>Activity</Text>
+                <TouchableOpacity onPress={() => setActOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="close" size={22} color={COLORS.muted} />
                 </TouchableOpacity>
-                <GradientButton label={addBusy ? 'Adding…' : 'Add time'} disabled={addBusy}
-                  onPress={submitAddTime} style={{ flex: 1 }} />
               </View>
+              {/* Say when it is a slice. A capped list that looks complete is how
+                  somebody concludes an event never happened. */}
+              {activityTotal > (data?.activity_log || []).length ? (
+                <Text style={s.actSlice}>
+                  {activityTotal} entries — showing the most recent {(data?.activity_log || []).length}.
+                </Text>
+              ) : null}
+              <ScrollView style={{ maxHeight: 420 }}>
+                {actGroups.map((g, gi) => {
+                  const open = actDays.has(g.day) || (gi === 0 && !actDays.size);
+                  return (
+                    <View key={g.day}>
+                      <TouchableOpacity style={s.actDay} activeOpacity={0.8}
+                        onPress={() => setActDays((prev) => {
+                          const next = new Set(prev.size ? prev : [actGroups[0].day]);
+                          next.has(g.day) ? next.delete(g.day) : next.add(g.day);
+                          return next;
+                        })}>
+                        <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={15} color={COLORS.muted} />
+                        <Text style={s.actDayTxt}>{g.day}</Text>
+                        <View style={s.actDayCount}><Text style={s.actDayCountTxt}>{g.rows.length}</Text></View>
+                      </TouchableOpacity>
+                      {open ? g.rows.map((e) => (
+                        <View key={String(e.id)} style={s.actRow}>
+                          <Text style={s.actTime}>{String(e.at || '').slice(11, 16)}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={s.actLabel}>{e.label || e.event}</Text>
+                            {!!e.actor && <Text style={s.actActor}>{e.actor}</Text>}
+                          </View>
+                        </View>
+                      )) : null}
+                    </View>
+                  );
+                })}
+                {!actGroups.length ? <Text style={s.actEmpty}>Nothing recorded yet.</Text> : null}
+              </ScrollView>
             </View>
           </View>
         </Modal>
@@ -1327,18 +1380,31 @@ const s = StyleSheet.create({
   // Estimate extension
   estExtend: { fontSize: 11.5, color: '#B45309', fontWeight: '700', marginTop: -4, marginBottom: 4, lineHeight: 16 },
   addTimeLink: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary, marginTop: 2, marginBottom: 6 },
-  addBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  addCard: { width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 16, padding: 18 },
-  addTitle: { fontSize: 16, fontWeight: '900', color: COLORS.ink, marginBottom: 4 },
-  addHint: { fontSize: 12, color: COLORS.muted, lineHeight: 17, marginBottom: 12 },
-  addRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  addNum: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 15, color: COLORS.ink, width: 74, textAlign: 'center', backgroundColor: '#fff' },
-  addUnit: { fontSize: 13, color: COLORS.muted, fontWeight: '700' },
-  addReason: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, padding: 11, minHeight: 74, fontSize: 14, color: COLORS.ink, textAlignVertical: 'top', backgroundColor: '#fff' },
-  addErr: { fontSize: 12, color: COLORS.red, fontWeight: '700', marginTop: 8 },
-  addBtns: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  addCancel: { flex: 1, height: 44, borderRadius: 11, borderWidth: 1.5, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center' },
-  addCancelTxt: { fontSize: 14, fontWeight: '800', color: COLORS.muted },
+  estActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  actLink: { fontSize: 12.5, fontWeight: '800', color: COLORS.muted, marginTop: 2, marginBottom: 6 },
+  // The estimate chain: original, then every extension with its running total.
+  estChain: { marginTop: 2, marginBottom: 6, gap: 3 },
+  estChainRow: { fontSize: 11.5, lineHeight: 17 },
+  estChainOrig: { color: COLORS.muted, fontWeight: '700' },
+  estChainAdd: { color: '#0891B2', fontWeight: '900' },
+  estChainTo: { color: COLORS.ink, fontWeight: '800' },
+  estChainWhy: { color: '#B45309', fontStyle: 'italic' },
+  estChainWho: { color: COLORS.faint },
+  // Activity popup
+  actBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  actCard: { width: '100%', maxWidth: 460, backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  actHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  actTitle: { fontSize: 16, fontWeight: '900', color: COLORS.ink },
+  actSlice: { fontSize: 11.5, color: COLORS.muted, marginBottom: 8 },
+  actDay: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingVertical: 9, borderTopWidth: 1, borderTopColor: '#F1F4F9' },
+  actDayTxt: { flex: 1, fontSize: 12.5, fontWeight: '900', color: COLORS.ink },
+  actDayCount: { backgroundColor: '#F1F5F9', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 1 },
+  actDayCountTxt: { fontSize: 10.5, fontWeight: '800', color: COLORS.muted },
+  actRow: { flexDirection: 'row', gap: 10, paddingVertical: 5, paddingLeft: 22 },
+  actTime: { width: 44, fontSize: 11, color: COLORS.faint, fontWeight: '700' },
+  actLabel: { fontSize: 12, color: COLORS.ink, fontWeight: '700' },
+  actActor: { fontSize: 11, color: COLORS.muted, marginTop: 1 },
+  actEmpty: { fontSize: 12, color: COLORS.muted, paddingVertical: 12 },
 
   taskName: { fontSize: 16, fontWeight: '900', color: COLORS.ink, marginTop: 6 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 7, marginTop: 8, marginBottom: 4 },

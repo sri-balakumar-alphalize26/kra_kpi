@@ -15,6 +15,7 @@ import Svg, { Defs, Rect, Stop, LinearGradient as SvgLinearGradient } from 'reac
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import KpiTaskDetail from './KpiTaskDetail';
+import AddTimeModal from '../components/AddTimeModal';
 import {
   LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, completeTask, reassignTask, adminDeleteTask, createProgress,
@@ -894,6 +895,11 @@ function AnimatedLane({ index, stagger, style, onLayout, children }) {
 //   purple    kpi-btn-addtime    Add time
 //   ghost     btn-secondary      Switch / Reassign
 //   ghostRed  btn-outline-danger Reject / Delete
+// The button's fixed height (mirrors s.btn) and a width past any label we render.
+// Both are constants so the gradient rect never has to be measured — see Btn.
+const BTN_H = 36;
+const BTN_GRAD_W = 400;
+
 const BTN_GRAD = {
   primary:  ['#00b3ff', '#0066ff'],
   green:    ['#39ff6a', '#00c853'],
@@ -914,19 +920,8 @@ function Btn({ label, icon, kind, onPress, blocked = false }) {
   // are document-global, so a shared one leaves every button painted with whichever
   // definition mounted last. A board can hold hundreds of these at once.
   const gid = `bg${String(useId()).replace(/[^a-zA-Z0-9]/g, '')}`;
-  // Measured, not `width="100%"`. These buttons size themselves to their label, and
-  // a percentage in react-native-svg resolves against the SVG viewport as it was
-  // when the rect was laid out — which for an auto-width button is before the text
-  // has measured. The result was a gradient that stopped short of the right edge:
-  // the button looked half-painted. Numbers cannot drift like that.
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  const onBtnLayout = (e) => {
-    const { width, height } = e.nativeEvent.layout;
-    setSize((p) => (p.w === width && p.h === height ? p : { w: width, h: height }));
-  };
   return (
     <TouchableOpacity
-      onLayout={onBtnLayout}
       style={[s.btn, s[`btn_${kind}`], blocked && s.btnBlocked]}
       // Haptics live HERE rather than in the eight call sites, so every action
       // button feels the same and a new one can't be added without it. A blocked
@@ -936,20 +931,36 @@ function Btn({ label, icon, kind, onPress, blocked = false }) {
       onPress={(e) => { blocked ? H.err() : H.tap(); onPress && onPress(e); }}
       activeOpacity={0.85}
     >
-      {/* The gradient sits behind the label as an absolutely-filled SVG, the same
-          way GradientButton does it — react-native-svg is already a dependency,
-          and expo-linear-gradient would be a native module added for something
-          the installed library draws. A blocked button keeps its flat fill, so
-          "dimmed and unavailable" still reads differently from "ready". */}
-      {grad && !blocked && size.w > 0 ? (
-        <Svg style={StyleSheet.absoluteFill} width={size.w} height={size.h} pointerEvents="none">
+      {/* The gradient sits behind the label, drawn with react-native-svg — already a
+          dependency, where expo-linear-gradient would be a native module added for
+          something the installed library draws.
+
+          Deliberately NOT sized from the button. Two earlier attempts both failed
+          on an auto-width button: `width="100%"` resolves against the SVG viewport
+          as it was when the rect laid out, which is before the label has measured,
+          so the fill stopped short and the button looked half-painted; measuring
+          with onLayout fixed the width but only after a state round-trip that, on a
+          busy JS thread, landed seconds later — the button visibly changed colour
+          after the fact.
+
+          So the ramp runs TOP TO BOTTOM over the one dimension that is already
+          known: height is a fixed 36 in s.btn. Width is oversized past any label
+          and clipped by the parent's overflow:hidden + borderRadius. Nothing needs
+          measuring, so the gradient is correct in the first frame at any width.
+          The web's is 135°; vertical is the honest approximation available without
+          knowing the width, and at 36px tall the difference is not visible.
+
+          A blocked button keeps its flat fill, so "dimmed and unavailable" still
+          reads differently from "ready". */}
+      {grad && !blocked ? (
+        <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
           <Defs>
-            <SvgLinearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
+            <SvgLinearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor={grad[0]} />
               <Stop offset="1" stopColor={grad[1]} />
             </SvgLinearGradient>
           </Defs>
-          <Rect x="0" y="0" width={size.w} height={size.h} rx={10} ry={10} fill={`url(#${gid})`} />
+          <Rect x="0" y="0" width={BTN_GRAD_W} height={BTN_H} fill={`url(#${gid})`} />
         </Svg>
       ) : null}
       <Ionicons name={blocked ? 'lock-closed' : icon} size={14} color={grad && !blocked ? '#fff' : s[`btnTxt_${kind}`].color} />
@@ -1213,11 +1224,10 @@ export default function KpiActionBoard({
   // replaces its list. Its own component owns the loading/writes; the board just
   // says which task and takes it back on Back.
   const [detailTask, setDetailTask] = useState(null);
-  // Set only by the card's Add time button, so Details knows to open its add-time
-  // modal on arrival. Cleared on the way out, or the next plain tap on a card
-  // would reopen it.
-  const [detailAutoAddTime, setDetailAutoAddTime] = useState(false);
-  const openDetail = useCallback((task) => { setDetailAutoAddTime(false); setDetailTask(task); }, []);
+  const openDetail = useCallback((task) => setDetailTask(task), []);
+  // The task whose estimate is being extended, from the card's Add time button.
+  // Null closes the dialog; the board stays exactly where it was.
+  const [addTimeFor, setAddTimeFor] = useState(null);
 
   // Cross-fade the body when switching board ⇄ list (also fades in on first mount).
   //
@@ -1982,13 +1992,12 @@ export default function KpiActionBoard({
       setPresetMgrOpen(false);
       setReminderFor(task); setReminderCustom(''); return;
     }
-    // Add time opens KPI Details with its add-time modal already up, rather than
-    // the board growing a second copy. That modal validates hours/minutes and the
-    // required reason, and surfaces the server's own refusals; a duplicate here
-    // would be one more place for the two to disagree about the same rule.
+    // Add time happens HERE, on the board. Sending the reader to KPI Details meant
+    // leaving the list to answer a question about a row in it, and coming back to
+    // find their place again. The dialog is the shared AddTimeModal, so the board
+    // and the detail screen still cannot disagree about the required reason.
     if (kind === 'addTime') {
-      setDetailAutoAddTime(true);
-      setDetailTask(task);
+      setAddTimeFor(task);
       return;
     }
     if (kind === 'reassign') {
@@ -2373,8 +2382,7 @@ export default function KpiActionBoard({
     return (
       <KpiTaskDetail
         task={detailTask}
-        autoAddTime={detailAutoAddTime}
-        onBack={() => { setDetailAutoAddTime(false); setDetailTask(null); }}
+        onBack={() => setDetailTask(null)}
         onChanged={() => load({ silent: true })}
       />
     );
@@ -2867,6 +2875,17 @@ export default function KpiActionBoard({
         </Animated.View>
       )}
       </Animated.View>
+
+      {/* Add time to the estimate, in place. Shared with KPI Details so the
+          required reason is enforced identically in both. A silent reload keeps
+          the reader's scroll position and open lanes — the point of doing this
+          here rather than on another screen. */}
+      <AddTimeModal
+        visible={!!addTimeFor}
+        task={addTimeFor}
+        onClose={() => setAddTimeFor(null)}
+        onDone={(msg) => { Alert.alert('Estimate extended', msg); load({ silent: true }); }}
+      />
 
       {/* Reassign modal — mirrors web "Reassign KPI Task" */}
       <Modal visible={!!reassignFor} transparent animationType="fade" onRequestClose={() => setReassignFor(null)}>
