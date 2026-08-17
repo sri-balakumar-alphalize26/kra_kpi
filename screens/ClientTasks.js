@@ -16,7 +16,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
-import { getClientDashboard, getClientSignature, fetchCertificatePdf } from '../services/clientPortal';
+import { getClientDashboard, getClientSignature, removeClientSignature, fetchCertificatePdf } from '../services/clientPortal';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { fetchPreApprovals, decidePreApproval, holdPreApproval, submitClientSignoff, submitClientRejection } from '../services/preApproval';
@@ -270,6 +270,8 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   // Saved signature image from the web portal. When present the server accepts the
   // sign-off with no typed name, so the app must stop demanding one.
   const [signature, setSignature] = useState({ hasSignature: false, imageB64: '' });
+  const [sigConfirm, setSigConfirm] = useState(false);   // "Remove it?" step
+  const [sigRemoving, setSigRemoving] = useState(false);
   const [certBusy, setCertBusy] = useState(false);
 
   // Save the completion certificate. Same two-path approach as the invoice PDF:
@@ -393,6 +395,26 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     setToast(msg);
     setTimeout(() => setToast((m) => (m === msg ? '' : m)), 2600);
   }, []);
+
+  // Clear the saved signature. The server's own answer decides what we show —
+  // assuming the write worked would leave someone believing it was removed when
+  // it is still stored, which they would only discover at the next sign-off.
+  const doRemoveSignature = useCallback(async () => {
+    setSigRemoving(true);
+    try {
+      const res = await removeClientSignature();
+      if (res?.status && !res.hasSignature) {
+        setSignature({ hasSignature: false, imageB64: '' });
+        setSigConfirm(false);
+        flashToast('Signature removed — type your name to sign.');
+      } else {
+        flashToast(res?.message || 'Could not remove the signature.');
+      }
+    } catch (e) {
+      log.warn('removeSignature', e?.message);
+      flashToast('Could not remove the signature.');
+    } finally { setSigRemoving(false); }
+  }, [flashToast]);
 
   // Shared by Approve and Reject. Drops the row optimistically, then reloads so
   // the task reappears in the main list with its new state.
@@ -821,6 +843,27 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                         resizeMode="contain"
                       />
                     </View>
+                    {/* Saving the wrong image used to be permanent from the app —
+                        it was reused on every future sign-off with no way to
+                        change it. Removing is safe: sign-off falls back to the
+                        typed name. */}
+                    {sigRemoving ? (
+                      <Text style={s.sigRemoveHint}>Removing…</Text>
+                    ) : sigConfirm ? (
+                      <View style={s.sigConfirmRow}>
+                        <Text style={s.sigRemoveHint}>Remove it? You can type your name instead.</Text>
+                        <TouchableOpacity onPress={() => setSigConfirm(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                          <Text style={s.sigKeep}>Keep</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={doRemoveSignature} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                          <Text style={s.sigRemoveYes}>Remove</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <TouchableOpacity onPress={() => setSigConfirm(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Text style={s.sigRemove}>Remove saved signature</Text>
+                      </TouchableOpacity>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1035,6 +1078,11 @@ const s = StyleSheet.create({
   signPad: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 6 },
   signTask: { fontSize: 15, fontWeight: '900', color: COLORS.navy, marginBottom: 12 },
   signLead: { fontSize: 13, fontWeight: '700', color: COLORS.muted, marginBottom: 6 },
+  sigRemove: { fontSize: 12, fontWeight: '800', color: COLORS.primary, marginTop: 8 },
+  sigConfirmRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 8 },
+  sigRemoveHint: { fontSize: 12, color: COLORS.muted, marginTop: 8, flexShrink: 1 },
+  sigKeep: { fontSize: 12, fontWeight: '800', color: COLORS.muted, marginTop: 8 },
+  sigRemoveYes: { fontSize: 12, fontWeight: '800', color: COLORS.red, marginTop: 8 },
   tickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9 },
   tickTxt: { flex: 1, fontSize: 14, color: COLORS.ink, fontWeight: '600' },
   signInput: {

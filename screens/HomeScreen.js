@@ -80,6 +80,9 @@ const QUICK = [
   { label: 'Login Management',   lib: 'mc',  name: 'account-key',      dest: 'loginmgmt',          adminOnly: true,  section: 'settings', bg: '#EDE9FE', fg: '#7C3AED' },
   { label: 'Workday Snapshots',  lib: 'mc',  name: 'camera-timer',     dest: 'snapshots',          adminOnly: true,  section: 'reports',  bg: '#CFFAFE', fg: '#0891B2' },
   { label: 'Daily Reports',      lib: 'mc',  name: 'file-chart',       dest: 'dailyreports',       adminOnly: true,  section: 'reports',  bg: '#DBEAFE', fg: '#4338CA' },
+  // Paying an invoice archives its tasks, so they leave every board — this is
+  // the only place the work still exists to look at.
+  { label: 'Paid Work',          lib: 'mc',  name: 'cash-check',       dest: 'paidwork',           adminOnly: true,  section: 'reports',  bg: '#DCFCE7', fg: '#16A34A' },
   { label: 'Work Report',        lib: 'mc',  name: 'chart-box-outline', dest: 'workreport',        adminOnly: true,  section: 'reports',  bg: '#E0F2FE', fg: '#0369A1' },
   { label: 'Client Invoices',    lib: 'mc',  name: 'receipt',          dest: 'clientinvoices',     adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },
   // Client-facing read-only invoices (whitelisted for clients below; adminOnly hides it from developers).

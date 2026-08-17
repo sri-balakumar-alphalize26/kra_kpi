@@ -74,3 +74,22 @@ export async function getClientSignature() {
     return { hasSignature: false, imageB64: '' };
   }
 }
+
+// Remove the saved signature. There is no delete route: the upload route treats
+// an empty file_data as the delete, and the server resolves '' to False.
+//
+// Unlike the lookup this DOES report failure, because the caller is a person who
+// just asked for something to be removed. Quietly answering "no signature" when
+// it is still stored would be a lie they only discover at the next sign-off.
+// Removing it is safe: sign-off falls back to the typed name.
+export async function removeClientSignature() {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'Not connected to a server.' };
+  const res = await jsonRpc(
+    serverUrl, '/kpi_client_portal/upload_signature',
+    { file_data: '', file_name: '' }, undefined, db);
+  log.info('signature removed', { has: !!res?.has_signature });
+  // Trust the server's own answer about what is stored now, rather than assuming
+  // the write did what was asked.
+  return { status: !!res?.status, hasSignature: !!res?.has_signature, message: res?.message || '' };
+}

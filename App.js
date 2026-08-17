@@ -20,6 +20,7 @@ import ConfigurationScreen from './screens/ConfigurationScreen';
 import LoginManagementScreen from './screens/LoginManagementScreen';
 import UsersScreen from './screens/UsersScreen';
 import WorkdaySnapshots from './screens/WorkdaySnapshots';
+import PaidWork from './screens/PaidWork';
 import DailyReports from './screens/DailyReports';
 import CompanyBranding from './screens/CompanyBranding';
 import WorkReport from './screens/WorkReport';
@@ -632,6 +633,11 @@ function AppInner() {
       // Self-scoped: every user sees ONLY their own workday snapshot images
       // (server route is hard-scoped to request.env.user).
       return <WorkdaySnapshots onBack={home} mine />;
+    if (appScreen === 'paidwork')
+      // Admin: what has been billed and settled. Paying an invoice archives its
+      // tasks, so this is the only place they still exist. Route is role-gated
+      // server-side; the tile is admin-only as well.
+      return <PaidWork onBack={home} />;
     if (appScreen === 'dailyreports')
       // focusReportId: set when an admin taps a "Daily report ready" notification
       // → the Daily Reports screen opens that report's PDF.

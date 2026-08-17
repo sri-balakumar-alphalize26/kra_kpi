@@ -34,6 +34,16 @@ const PORTAL_CHIPS = [
   { key: 'all', label: 'All' }, { key: 'due', label: 'Payment Due' }, { key: 'paid', label: 'Paid' },
 ];
 const STATE_COLOR = { draft: '#64748B', finalized: '#2563EB', sent: '#16A34A' };
+
+// Why a task cannot be billed yet, coloured by the server's coarse grouping so
+// "the client still has to sign this off" reads differently from "we are still
+// working on it". Collapsing the two is what made merely-unstarted work look
+// like it was sitting on the client's desk.
+//   signoff  — really is the client's move
+//   progress — the team is still working on it
+//   invoiced — settled, already on an invoice
+const BLOCK_BG = { signoff: '#FEF3C7', progress: '#DBEAFE', invoiced: '#F1F5F9' };
+const BLOCK_FG = { signoff: '#92400E', progress: '#1D4ED8', invoiced: '#64748B' };
 const PRESETS = [
   { key: 'today', label: 'Today' }, { key: 'yesterday', label: 'Yesterday' },
   { key: 'this_week', label: 'This Week' }, { key: 'this_month', label: 'This Month' },
@@ -87,6 +97,7 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
   const [clients, setClients] = useState([]);
   const [currencies, setCurrencies] = useState([]);
   const [cForm, setCForm] = useState(null);     // create form state
+  const [showBlocked, setShowBlocked] = useState(false); // reveal the not-yet-billable tasks
   const [pick, setPick] = useState(null);       // { title, options, current, onPick }
   const [datePick, setDatePick] = useState(null); // { field:'from'|'to', title }
   const [prompt, setPrompt] = useState(null);   // { title, fields:[{key,label,val}], onOk }
@@ -258,6 +269,9 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
 
   // On client selection, load the optional after-client filters (sub-KRAs / devs / tasks).
   const onClientChange = async (id, label) => {
+    // Collapse the hidden-tasks list too. Left open it would expand straight into
+    // the NEW client's blocked tasks, which nobody asked to see.
+    setShowBlocked(false);
     setCForm((p) => ({ ...p, clientId: id, clientName: label, subKras: [], users: [], kpis: [], filterSub: [], filterUser: [], filterKpi: [] }));
     try {
       const [sk, uk] = await Promise.all([svc.fetchSubKras(id), svc.fetchClientUsersKpis(id, [])]);
@@ -624,6 +638,14 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
 
   // ---- CREATE ----
   const f = cForm || {};
+  // Only signed-off work can actually be billed. The server says so per task and
+  // the app used to throw that away, offering everything as tickable — so an
+  // admin could select nine tasks and get an empty invoice with nothing
+  // explaining why. `billable === false` explicitly, so a server that stops
+  // sending the field degrades to "offer it" rather than hiding every task.
+  const allKpis = f.kpis || [];
+  const billableKpis = allKpis.filter((k) => k.billable !== false);
+  const blockedKpis = allKpis.filter((k) => k.billable === false);
   return (
     <View style={s.root}>
       <GradientBackground />
@@ -733,10 +755,41 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
                 <CheckList label="Filter: Developers" help="(optional — leave empty for all)"
                   items={f.users} sel={f.filterUser} onToggle={(ids) => setCForm((p) => ({ ...p, filterUser: ids }))} />
               ) : null}
-              {f.kpis?.length ? (
+              {billableKpis.length ? (
                 <CheckList label="Filter: Tasks" help="(optional — leave empty for all)"
-                  items={f.kpis.map((k) => ({ id: k.id, name: k.kra_name ? `${k.name} (${k.kra_name})` : k.name }))}
+                  items={billableKpis.map((k) => ({ id: k.id, name: k.kra_name ? `${k.name} (${k.kra_name})` : k.name }))}
                   sel={f.filterKpi} onToggle={(ids) => setCForm((p) => ({ ...p, filterKpi: ids }))} />
+              ) : null}
+              {!billableKpis.length && blockedKpis.length ? (
+                <Text style={s.noBillable}>
+                  Nothing is ready to bill for this client yet — all {blockedKpis.length} task(s)
+                  are listed below with the reason.
+                </Text>
+              ) : null}
+              {/* Not hidden outright: an empty box that does not say why is the
+                  complaint this whole change came from. Each reason comes from the
+                  server so the app and the web cannot describe a state differently. */}
+              {blockedKpis.length ? (
+                <View style={{ marginTop: 10 }}>
+                  <TouchableOpacity style={s.hiddenRow} activeOpacity={0.8}
+                    onPress={() => setShowBlocked((v) => !v)}>
+                    <Ionicons name={showBlocked ? 'chevron-down' : 'chevron-forward'}
+                      size={15} color={COLORS.muted} />
+                    <Text style={s.hiddenTxt}>{blockedKpis.length} task(s) hidden — not signed off yet</Text>
+                  </TouchableOpacity>
+                  {showBlocked ? blockedKpis.map((k) => (
+                    <View key={k.id} style={s.blockedRow}>
+                      <Text style={s.blockedName} numberOfLines={2}>
+                        {k.kra_name ? `${k.name} (${k.kra_name})` : k.name}
+                      </Text>
+                      <View style={[s.blockedTag, { backgroundColor: BLOCK_BG[k.not_billable_code] || '#F1F5F9' }]}>
+                        <Text style={[s.blockedTagTxt, { color: BLOCK_FG[k.not_billable_code] || COLORS.muted }]}>
+                          {k.not_billable_reason || 'not ready'}
+                        </Text>
+                      </View>
+                    </View>
+                  )) : null}
+                </View>
               ) : null}
             </View>
           ) : null}
@@ -1073,6 +1126,13 @@ const s = StyleSheet.create({
   claimHint: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8, padding: 9, borderRadius: 9, backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#FCD34D' },
   claimHintTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: '#92400E', lineHeight: 16 },
   claimClear: { fontSize: 11.5, fontWeight: '800', color: '#B45309', textDecorationLine: 'underline', marginTop: 6 },
+  noBillable: { fontSize: 12, color: COLORS.muted, lineHeight: 17, marginTop: 12 },
+  hiddenRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 7 },
+  hiddenTxt: { fontSize: 12, fontWeight: '800', color: COLORS.muted },
+  blockedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, paddingLeft: 20 },
+  blockedName: { flex: 1, fontSize: 12, color: COLORS.ink, lineHeight: 16 },
+  blockedTag: { borderRadius: 7, paddingHorizontal: 7, paddingVertical: 3 },
+  blockedTagTxt: { fontSize: 10.5, fontWeight: '800' },
   promptBody: { fontSize: 12.5, color: COLORS.muted, lineHeight: 18, marginBottom: 12 },
   revisedHint: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8, padding: 9, borderRadius: 9, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE' },
   revisedHintTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: COLORS.primary, lineHeight: 16 },
