@@ -64,7 +64,6 @@ const EVENT_ICON = {
   task_reassigned:     { lib: 'mc', name: 'account-arrow-left',  color: '#64748B' },
   self_task_submitted: { lib: 'mc', name: 'clipboard-account',   color: '#0891B2' },
   self_task_rejected:  { lib: 'mc', name: 'clipboard-remove',    color: '#EA580C' },
-  task_auto_away:      { lib: 'mc', name: 'sleep',               color: '#64748B' },
   workday_auto_closed: { lib: 'mc', name: 'weather-night',       color: '#64748B' },
   daily_report:        { lib: 'mc', name: 'file-chart',          color: '#4338CA' },
 };
@@ -304,7 +303,14 @@ export default function NotificationsScreen({ onBack, onOpen, isClient = false }
     // single value Login Management shows.
     if (item.kpi_id) {
       onOpen(isClient ? 'mytasks' : 'actionboard', item.kpi_id);
+      return;
     }
+    // Nothing to open. Events about a developer or a day ("workday started", the
+    // idle check, the no-task nudge) are anchored on an arbitrary task server-side
+    // and now arrive with kpi_id blanked, precisely so this does NOT open one.
+    // Read the row and stop — silently doing nothing is fine here; opening
+    // somebody else's task was not.
+    log.info('notification has no destination', { event: item.event });
   }, [onOpen, isClient]);
 
   const onMarkAll = useCallback(async () => {

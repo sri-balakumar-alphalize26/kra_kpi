@@ -859,7 +859,15 @@ class KpiWorkSession(models.Model):
         Left in place, not deleted, so a company that WANTS strict idle pausing
         can set away_after_minutes and re-activate the cron. 0 now genuinely means
         off — it used to be swallowed by `max(1, x or 5)`, so the setting could
-        never actually disable the thing it claimed to control."""
+        never actually disable the thing it claimed to control.
+
+        IF YOU RE-ACTIVATE THIS: it pauses the task SILENTLY. The developer is not
+        told. There was a full `task_auto_away` notification — recipients, wording,
+        title, in-app row, its own config toggle — but nothing ever dispatched it,
+        so the toggle promised something that could not happen. It was removed
+        rather than left as decoration. Bringing idle pausing back means adding
+        `self._notify('task_auto_away', ...)` here and restoring those entries in
+        kpi_notify.py; otherwise a developer's timer stops with no explanation."""
         try:
             minutes = int(self.env.company.away_after_minutes or 0)
         except Exception:

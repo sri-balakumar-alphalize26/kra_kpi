@@ -35,8 +35,11 @@ class WhatsAppConfigKpi(models.Model):
         help="Send each developer's end-of-day summary (productive + presence hours + per-task breakdown) to owner + coordinator. Fires when developer clicks End Workday OR when the 23:55 cron auto-closes a forgotten session.")
     notify_workday_started       = fields.Boolean(default=True, string='Notify: Developer Workday Started',
         help='Fires the first time a developer opens the KPI Action Board each day. Sends "Workday Started — name @ login_time" to owner + coordinator.')
-    notify_task_auto_away        = fields.Boolean(default=True, string='Notify: Task Auto-Paused (Away)',
-        help='WhatsApp the developer when the idle/auto-away cron pauses their running task (tab closed or board idle). Default ON.')
+    # notify_task_auto_away was removed. Idle auto-pause is retired — the cron is
+    # inactive, away_after_minutes is 0, and its setter route is a documented
+    # no-op — and nothing ever dispatched the notification anyway. A toggle that
+    # cannot change anything reads as a working feature, which is worse than no
+    # toggle. See _cron_auto_away if idle pausing is ever brought back.
 
     # MASTER SWITCH for every task-related WhatsApp message. OFF (the default)
     # means notifications go to the app only — the in-app feed + Expo push. The

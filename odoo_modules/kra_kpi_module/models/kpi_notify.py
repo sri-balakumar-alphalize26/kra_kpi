@@ -50,12 +50,40 @@ _logger = logging.getLogger(__name__)
 # events — start/pause/complete/approval lifecycle noise is left out of the feed.
 # `task_created` covers both single new tasks and the bulk requirement/update/bug
 # uploads (each uploaded row is a kra.kpi.create → task_created).
+#
+# `start`, `pause` and `resume` therefore reach NOBODY by default, and that is a
+# decision, not an oversight: they are absent here, the WhatsApp task master
+# switch ships off, and their WhatsApp-group switches default off too. Three
+# events per task per developer per day would bury everything that matters in the
+# feed. They are still dispatched, so anyone who does want them can switch on
+# their group event (Configuration → WhatsApp Group Reports) without code
+# changes. Please do not "fix" this by adding them here.
+# Events that are NOT about the task they are anchored on.
+#
+# _notify lives on kra.kpi, so an event about a DEVELOPER or a DAY still needs a
+# record to hang off. The callers pick an arbitrary one — several use
+# `Kpi.search([], order='id desc', limit=1)`, literally the newest task in the
+# database. That anchor is an implementation detail and must never be shown or
+# tapped through: doing so opened a random unrelated task from the app's
+# notification feed, and printed that task's name and client on the row as though
+# they belonged to the message.
+#
+# The ones that carry their own destination (daily_summary → snapshot,
+# daily_report → report, the invoice trio → invoice) are listed too: their tap
+# already routes correctly, but the anchor's NAME and CLIENT were still being
+# exposed on the row.
+_NON_TASK_EVENTS = {
+    'workday_started', 'workday_reverted', 'workday_auto_closed',
+    'dev_idle_check', 'dev_no_task',
+    'daily_summary', 'daily_report',
+    'invoice_ready', 'invoice_paid', 'invoice_client_paid',
+}
+
 _PERSIST_EVENTS = {
     'task_created',
     'task_assigned',
     'reassigned',
     'self_task_submitted',
-    'task_auto_away',   # web went idle/asleep → task auto-paused → tell the dev's phone
     'workday_auto_closed',  # midnight cron closed a workday the dev left open
     # "X ended their workday" → admins. Tapping it opens that day's frozen summary
     # image. This is the ONLY channel it has: its WhatsApp template was removed,
@@ -143,7 +171,6 @@ _NOTIF_TITLES = {
     'task_assigned':       'New task assigned',
     'reassigned':          'Task reassigned',
     'self_task_submitted': 'Task submitted for review',
-    'task_auto_away':      'Task paused — you went away',
     'workday_auto_closed': 'Workday auto-closed',
     'task_reassigned':     'Task reassigned',
     'pre_approval_request': 'Approval needed',
@@ -477,8 +504,6 @@ _EVENT_TO_TOGGLE = {
     'workday_reverted':          'notify_daily_summary',
     # Workday auto-closed at midnight — reuse the daily-summary toggle.
     'workday_auto_closed':       'notify_daily_summary',
-    # Auto-away — mutable dev notice when the idle cron pauses their task.
-    'task_auto_away':            'notify_task_auto_away',
     # Reminder to client when developer starts on a pre_approval_partial task.
     'pre_approval_reminder':     'notify_pre_approval_request',  # reuse pre-approval toggle
     # First-time developer assignment (after client already approved).
@@ -577,8 +602,6 @@ _EVENT_RECIPIENTS = {
     'self_task_submitted':       ('owner', 'coordinator'),
     'self_task_accepted':        ('developer',),
     'self_task_rejected':        ('developer',),
-    # Auto-away — tell the DEVELOPER their running task was paused while away.
-    'task_auto_away':            ('developer',),
     # Urgent pause — owner + coordinator, IN-APP. Was ('owner', 'urgent_extra'):
     # `urgent_extra` is a list of bare phone numbers with no user account, so it
     # can only ever be reached over WhatsApp. With task WhatsApp off it could
@@ -603,10 +626,6 @@ _TEMPLATES = {
         "Client: {client} • Project: {project}\n"
         "Priority: {priority} • Deadline: {deadline}\n"
         "👤 Created by: {created_by}"
-    ),
-    'task_auto_away': (
-        "⚠ {dev}, your task {ref} \"{name}\" was auto-paused (Away) at {time} — "
-        "the KPI board was closed or idle. Open it to resume; your task time is NOT running."
     ),
     'urgent_pause': (
         "🚨 URGENT — {dev} flagged a blocker\n"
@@ -794,7 +813,7 @@ _TEMPLATES = {
 _PASSTHROUGH_EVENTS = ('daily_summary', 'daily_report',
                        'invoice_ready', 'invoice_paid', 'invoice_client_paid',
                        'workday_started', 'workday_reverted', 'workday_auto_closed',
-                       'task_auto_away', 'self_task_submitted', 'self_task_accepted',
+                       'self_task_submitted', 'self_task_accepted',
                        'self_task_rejected', 'task_reassigned',
                        # Both are about a DEVELOPER, not about the task they're
                        # anchored on. _notify lives on kra.kpi, and an idle dev may
@@ -978,8 +997,13 @@ class KpiNotify(models.Model):
             row = Event._row(event)
             if not row or not row.enabled:
                 return
+            # safe=True: this template is written by hand on the settings screen.
+            # Rendering it with str.format would post a literal "{hours}" into the
+            # group on an unknown token, and silently drop the whole message on a
+            # stray brace — the exact failures KpiWaGroupEvent.render exists to
+            # avoid, and which the workday path already avoids.
             body = self._format_message(
-                event, ctx, templates={event: row.effective_template()})
+                event, ctx, templates={event: row.effective_template()}, safe=True)
             if not (body or '').strip():
                 return
             self.env['kpi.wa.group.report'].sudo()._post(body)
@@ -1430,12 +1454,19 @@ class KpiNotify(models.Model):
                 'devices': len(batch)})
         return ok
 
-    def _format_message(self, event, ctx, templates=None):
+    def _format_message(self, event, ctx, templates=None, safe=False):
         """Build the text body for an event from a template dict.
 
         `templates` defaults to the WhatsApp `_TEMPLATES`; pass `_APP_TEMPLATES`
         to render the in-app variant (same placeholders, no wa.me links/tokens).
         Returns '' when the dict has no entry for the event.
+
+        `safe=True` substitutes with str.replace instead of str.format, and drops
+        lines whose tokens all resolved to empty. Use it for any template a human
+        edits — the built-in ones here are ours and well-formed, but an
+        admin-written one contains emoji, quotes and the occasional stray brace.
+        format() raises ValueError on those, and the KeyError path below would
+        ship the RAW template — literal {hours} and all — straight to the reader.
         """
         self.ensure_one()
         tmpl = (templates or _TEMPLATES).get(event)
@@ -1444,6 +1475,8 @@ class KpiNotify(models.Model):
         # Passthrough events (daily_summary etc.) — ctx is the source of truth.
         # We don't need per-record placeholders; render directly.
         if event in _PASSTHROUGH_EVENTS:
+            if safe:
+                return self.env['kpi.wa.group.event'].render(tmpl, ctx)
             try:
                 return tmpl.format(**ctx)
             except KeyError as exc:
@@ -1550,6 +1583,8 @@ class KpiNotify(models.Model):
                              or (self.user_id.partner_id.phone if self.user_id.partner_id else '')
                              or '—') if self.user_id else '—'),
         }
+        if safe:
+            return self.env['kpi.wa.group.event'].render(tmpl, params)
         try:
             return tmpl.format(**params)
         except KeyError as exc:

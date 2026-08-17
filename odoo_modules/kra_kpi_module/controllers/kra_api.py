@@ -1389,13 +1389,21 @@ class KraKpiAPI(http.Controller):
             # may even belong to another client). The row taps through on invoice_id, so
             # never expose the anchor task's details for these rows — that would leak one
             # client's task name into another client's feed.
+            # Same reasoning for every event that is about a DEVELOPER or a DAY
+            # rather than a task: "workday started", the idle check and the
+            # no-task nudge all anchor on an arbitrary task (some on the newest
+            # task in the whole database), and the app routes purely on kpi_id —
+            # so tapping one opened a random unrelated task, with that task's name
+            # and client shown on the row as though they belonged to the message.
+            from ..models.kpi_notify import _NON_TASK_EVENTS
             is_invoice = bool(n.invoice_id)
+            anchor_only = is_invoice or (n.event in _NON_TASK_EVENTS)
             return {
                 'id': n.id,
-                'kpi_id': False if is_invoice else (kpi.id if kpi else False),
-                'kpi_name': "" if is_invoice else (kpi.name if kpi else ""),
-                'developer': "" if is_invoice else (kpi.user_id.name if kpi and kpi.user_id else ""),
-                'client_name': "" if is_invoice else (client_kra.name if client_kra else ""),
+                'kpi_id': False if anchor_only else (kpi.id if kpi else False),
+                'kpi_name': "" if anchor_only else (kpi.name if kpi else ""),
+                'developer': "" if anchor_only else (kpi.user_id.name if kpi and kpi.user_id else ""),
+                'client_name': "" if anchor_only else (client_kra.name if client_kra else ""),
                 # Where a tap should go when the answer ISN'T a task. "X ended their
                 # workday" opens that day's frozen summary image; without this the
                 # row is untappable, because the app routes purely on kpi_id.
