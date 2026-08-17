@@ -919,6 +919,46 @@ class KraKpiAPI(http.Controller):
                     a.user_id.id, {'name': a.user_id.name, 'seconds': 0.0})
                 d['seconds'] += max(0.0, (now - a.start_time).total_seconds())
 
+        # Seconds each listed task got TODAY, for the caller. Drives the board's
+        # "Today" lane: start task 1, pause, task 2, pause, task 3 — then going
+        # back to task 1 meant finding it among a hundred-odd paused tasks, where
+        # one paused ten minutes ago looks exactly like one paused three weeks
+        # ago. Nothing in this payload could tell them apart: timer_start_datetime
+        # is cleared on pause, and timer_total_seconds is a lifetime figure.
+        #
+        # work_date, not create_date or a UTC day: kpi.time.log computes it in the
+        # DEVELOPER's timezone precisely so 01:00 IST files under today rather
+        # than yesterday (see kpi_time_log._compute_work_date). That also makes
+        # the midnight reset free — the date simply stops matching and the lane
+        # empties itself, with no cron and nothing to clean up.
+        #
+        # Scoped to the caller because "did I work on this today" is a personal
+        # question: an admin looking at the board should not see a lane filled by
+        # somebody else's day.
+        today_map = {}   # kpi_id -> seconds logged today by this user
+        if kpis.ids:
+            TimeLog = request.env['kpi.time.log'].sudo()
+            today = fields.Date.context_today(request.env.user)
+            for g in TimeLog.read_group(
+                    [('kpi_id', 'in', kpis.ids),
+                     ('user_id', '=', request.env.user.id),
+                     ('work_date', '=', today)],
+                    ['duration_seconds:sum'], ['kpi_id'], lazy=False):
+                kid = g['kpi_id'][0] if g.get('kpi_id') else False
+                if kid:
+                    today_map[kid] = g.get('duration_seconds') or 0.0
+            # The running segment has duration_seconds 0 until it is closed, so a
+            # task started today and still going would otherwise report 0 and be
+            # missing from its own lane.
+            now = fields.Datetime.now()
+            for a in TimeLog.search([('kpi_id', 'in', kpis.ids),
+                                     ('user_id', '=', request.env.user.id),
+                                     ('is_active', '=', True)]):
+                if not (a.kpi_id and a.start_time):
+                    continue
+                today_map[a.kpi_id.id] = (today_map.get(a.kpi_id.id) or 0.0) \
+                    + max(0.0, (now - a.start_time).total_seconds())
+
         # Which listed tasks have ANY time log — one query for the whole board,
         # fed to _may_admin_delete so the delete rule doesn't cost a COUNT per
         # row. Only needed for admins; nobody else is offered the button.
@@ -998,6 +1038,12 @@ class KraKpiAPI(http.Controller):
                 'estimate_extended_by_name': (k.estimate_extended_by_id.name
                                               if k.estimate_extended_by_id else ''),
                 'timer_total_seconds': k.timer_total_seconds or 0,
+                # Seconds THIS user logged against this task today, in their own
+                # timezone. 0 means "not touched today" — which is the whole
+                # question the board could not previously answer, because
+                # timer_total_seconds is a lifetime figure and
+                # timer_start_datetime is cleared the moment a task is paused.
+                'today_seconds': round(today_map.get(k.id) or 0.0, 2),
                 'timer_start_datetime': timer_start_iso,  # For real-time timer calculation
                 'paused_reason': k.paused_reason or "",
                 'description': k.description or "",
@@ -1103,6 +1149,25 @@ class KraKpiAPI(http.Controller):
         timer_start_iso = None
         if k.task_state == 'in_progress' and k.timer_start_datetime:
             timer_start_iso = k.timer_start_datetime.isoformat() + 'Z'
+        # Same today_seconds map_rec emits, for one task. A card refreshed through
+        # this path (a notification tap, a post-action refetch) is dropped straight
+        # into the board's list, so if this omitted the field that card would fall
+        # out of the Today lane the moment it was touched — the one moment it most
+        # belongs there. Per-task query, but this route serializes a single record.
+        _today_secs = 0.0
+        _tl = request.env['kpi.time.log'].sudo()
+        for _g in _tl.read_group(
+                [('kpi_id', '=', k.id),
+                 ('user_id', '=', request.env.user.id),
+                 ('work_date', '=', fields.Date.context_today(request.env.user))],
+                ['duration_seconds:sum'], ['kpi_id'], lazy=False):
+            _today_secs += _g.get('duration_seconds') or 0.0
+        _now = fields.Datetime.now()
+        for _a in _tl.search([('kpi_id', '=', k.id),
+                              ('user_id', '=', request.env.user.id),
+                              ('is_active', '=', True)]):
+            if _a.start_time:
+                _today_secs += max(0.0, (_now - _a.start_time).total_seconds())
         client_kra = k.client_kra_id or k.kra_id
         return {
             'id': k.id,
@@ -1132,6 +1197,7 @@ class KraKpiAPI(http.Controller):
             'estimate_extend_reason': k.estimate_extend_reason or '',
             'estimate_extension_count': k.estimate_extension_count or 0,
             'timer_total_seconds': k.timer_total_seconds or 0,
+            'today_seconds': round(_today_secs, 2),
             'timer_start_datetime': timer_start_iso,
             'paused_reason': k.paused_reason or "",
             'description': k.description or "",

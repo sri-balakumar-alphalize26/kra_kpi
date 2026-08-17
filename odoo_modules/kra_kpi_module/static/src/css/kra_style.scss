@@ -504,6 +504,10 @@
 
 /* Per-lane header accents so the eye maps header → lane instantly
    (cards already carry per-lane colors; headers used to all be beige). */
+/* Today is not a workflow state, so it deliberately sits outside the warm
+   ramp every state uses — indigo reads as "a view onto the others" rather than
+   as another bucket work moves through. */
+.kpi-today               .kpi-header { background: #4f46e5 !important; color: #fff !important; }
 .kpi-self_pending        .kpi-header { background: #8b5cf6 !important; color: #fff !important; }
 .kpi-regular             .kpi-header { background: #3b82f6 !important; color: #fff !important; }
 .kpi-important           .kpi-header { background: #7c3aed !important; color: #fff !important; }
@@ -875,6 +879,21 @@
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.7; }
+}
+
+/* Today Column - Indigo. Same card treatment as every other lane so a task
+   reads identically wherever you meet it: these are the SAME tasks as the
+   status lanes below, not copies, and they should not look like a different
+   kind of thing. */
+.kpi-today .kpi-task {
+    background: linear-gradient(135deg,
+        rgba(129, 140, 248, 0.30) 0%,
+        rgba(224, 231, 255, 0.55) 100%) !important;
+    border-color: rgba(129, 140, 248, 0.50) !important;
+    box-shadow:
+        0 4px 15px rgba(79, 70, 229, 0.20),
+        0 1px 3px rgba(0, 0, 0, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
 }
 
 /* Regular Column - Crystal Sky Blue */

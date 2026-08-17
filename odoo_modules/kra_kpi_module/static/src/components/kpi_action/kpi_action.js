@@ -2251,6 +2251,14 @@ export class KpiAction extends Component {
         // can iterate every bucket key (including hidden ones) and route tasks
         // into the correct group even when the developer view filters columns.
         this._allColumns = [
+            // First on purpose. The problem it solves is finding something again:
+            // start task 1, pause, task 2, pause, task 3 — then going back to task 1
+            // meant hunting through every paused task, where one paused ten minutes
+            // ago looks identical to one paused three weeks ago. A lane you have to
+            // scroll to would not have fixed that.
+            //
+            // Tasks here are ALSO in their status column; see the grouping loop.
+            { key: "today",        label: "🕒 Today" },
             { key: "self_pending", label: "🆕 Pending Review" },
             { key: "regular",     label: "Regular" },
             { key: "important",   label: "Important" },
@@ -6183,7 +6191,24 @@ The paused task stays "
                 if (groups[key]) {
                     groups[key].push(t);
                 }
+
+                // Today is an ADDITIONAL membership, not an alternative one — the
+                // push above has already happened and is left alone. A task worked
+                // today appears here AND in its real column, because this lane is a
+                // shortcut for picking work back up, not a new home for it: nothing
+                // moves, and the Paused count stays true.
+                //
+                // Driven by today_seconds from the server, which counts kpi.time.log
+                // rows whose work_date is today in the DEVELOPER's timezone. That is
+                // also why the lane empties itself at midnight — the date stops
+                // matching, so there is no cron and nothing to reset.
+                if ((t.today_seconds || 0) > 0) {
+                    groups.today.push(t);
+                }
             }
+            // Most time today first: someone coming back to the board is looking for
+            // what they were last deep in, not whatever happens to sort first.
+            groups.today.sort((a, b) => (b.today_seconds || 0) - (a.today_seconds || 0));
         }
         this.state.tasksByState = groups;
         // ✅ NEW: Check for rejected tasks after loading
@@ -6342,18 +6367,25 @@ The paused task stays "
     }
     
     // Get total count of filtered tasks
+    //
+    // Skips `today`, because that lane holds the SAME tasks as the status lanes
+    // rather than tasks of its own. Counting it would report a board of 40 tasks
+    // as 43 the moment somebody had worked on three of them.
     getTotalFilteredCount() {
         let count = 0;
         for (const col of this.columns) {
+            if (col.key === 'today') continue;
             count += this.getFilteredTasksByState(col.key).length;
         }
         return count;
     }
     
-    // Get total count of all tasks
+    // Get total count of all tasks — `today` excluded for the same reason as
+    // getTotalFilteredCount above: it is a second view of tasks already counted.
     getTotalTaskCount() {
         let count = 0;
         for (const col of this.columns) {
+            if (col.key === 'today') continue;
             count += (this.state.tasksByState[col.key] || []).length;
         }
         return count;

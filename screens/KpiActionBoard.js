@@ -18,7 +18,7 @@ import KpiTaskDetail from './KpiTaskDetail';
 import AddTimeModal from '../components/AddTimeModal';
 import AppDialog from '../components/AppDialog';
 import {
-  LANES, groupIntoLanes, laneForTask, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
+  LANES, groupIntoLanes, laneForTask, isTodayTask, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, completeTask, reassignTask, adminDeleteTask, createProgress,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists,
@@ -204,6 +204,12 @@ const noteRequiredFor = (code) => code === 'other' || code === 'urgent' || code 
 // uses, so "shows a Resume button" and "counts as paused" cannot drift apart.
 const PAUSED_STATES = ['paused', 'hold', 'rework'];
 
+// Identity of one list-view task row. Lane-scoped, because a task worked today
+// appears in BOTH the Today lane and its status lane: keyed by id alone, the two
+// copies would collide as FlatList keys and share one open/closed state, so
+// opening the actions on one would silently open the other.
+const rowKey = (laneKey, taskId) => `t:${laneKey}:${taskId}`;
+
 // Width of the soft cut at the end of a clipped task name, in px. Wide enough to
 // read as a fade over two or three characters rather than a hard edge.
 const FADE_W = 28;
@@ -241,6 +247,11 @@ function presenceLive(live, nowMs) {
   if (!live?.login_raw) return 0;
   return Math.max(0, secsSince(live.login_raw, nowMs));
 }
+
+// The Today lane's indigo, shared by its header (via LANES) and the "Today" meta
+// row on the card, so the figure and the lane it explains read as one thing.
+// Matches `.kpi-today` in the module's kra_style.scss.
+const TODAY_FG = '#4F46E5';
 
 const PRIORITY = {
   urgent:    { label: 'Urgent',    bg: COLORS.redBg,   fg: COLORS.red },
@@ -385,6 +396,19 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
         ) : null}
         <MetaRow icon="time-outline" label="Time" value={fmtHMS(liveSeconds(task, nowMs))}
           valueColor={running ? COLORS.green : undefined} />
+        {/* What this task cost TODAY, which is the number the Today lane sorts by —
+            without it the ordering there has no visible reason. Absent when zero,
+            so a task not touched today doesn't gain a line reading "0h 0m 0s".
+
+            Static, and deliberately NOT given nowMs like the Time row above: the
+            server's today_seconds ALREADY includes the open segment's now − start
+            (kra_api.py), so ticking it here would count a running task's elapsed
+            time twice. The 20s poll refreshes it, and a still number that is right
+            beats a moving one that is wrong. */}
+        {(task.today_seconds || 0) > 0 ? (
+          <MetaRow icon="today-outline" label="Today" value={fmtHMS(task.today_seconds)}
+            valueColor={TODAY_FG} />
+        ) : null}
         {/* Why the estimate grew, on the card rather than only in the audit log —
             an estimate that changed with nothing explaining it reads exactly like
             one that was simply wrong. /kra_kpi/tasks/get has always sent these
@@ -647,7 +671,7 @@ function MeetingPicker({ people, busy, query, setQuery, picked, setPicked }) {
 // by area is what makes both reachable — the old version put the accordion on
 // the whole row and the details on the name alone, so which one you got depended
 // on hitting a word.
-function TaskListRowBase({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin,
+function TaskListRowBase({ task, expanded, rowKey: myRowKey, onToggle, onAction, busyId, nowMs, isAdmin,
                        reminder, pulse, onRowRef, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
@@ -688,10 +712,12 @@ function TaskListRowBase({ task, expanded, onToggle, onAction, busyId, nowMs, is
           flex) is what makes "name → details, anywhere else → dropdown" reliable:
           the inner touchable swallows taps on the text, everything else — the
           spacer, the Live pill, the arrow — falls through to the outer one. */}
-      {/* Reports its own id, so the parent hands every row one stable callback
+      {/* Reports its own row key, so the parent hands every row one stable callback
           rather than a fresh closure each render. The arrow is created inside the
-          memoised component, so it is only rebuilt when this row actually is. */}
-      <TouchableOpacity style={s.listHead} onPress={() => onToggle(task.id)} activeOpacity={0.7}>
+          memoised component, so it is only rebuilt when this row actually is.
+          The KEY and not the task id: this task may also be on screen in the Today
+          lane, and only the copy that was tapped should open. */}
+      <TouchableOpacity style={s.listHead} onPress={() => onToggle(myRowKey)} activeOpacity={0.7}>
         <View style={[s.listDot, { backgroundColor: p.fg }]} />
         <TouchableOpacity style={s.listNameHit} activeOpacity={0.6} disabled={!canOpen}
           onPress={() => canOpen && onOpenDetail(task)}>
@@ -1212,14 +1238,17 @@ export default function KpiActionBoard({
   // Available to every role. In list mode:
   //   expandedLanes = which status headings are open (default: all collapsed —
   //                   only the Regular/Paused/… headings show until tapped).
-  //   expandedId    = the single task row whose ACTIONS are open (null = none).
+  //   expandedRow   = the single task row whose ACTIONS are open (null = none),
+  //                   held as a lane-scoped rowKey rather than a task id: the
+  //                   same task can be on screen twice (Today + its status lane)
+  //                   and only the copy that was tapped should open.
   //                   Opened by the row's arrow; tapping the row itself opens the
   //                   task details instead, so both are reachable.
   const [viewMode, setViewMode] = useState('list');
   // When opened focused on a status (from a Home stat card), that lane's heading
   // starts expanded so its tasks show immediately.
   const [expandedLanes, setExpandedLanes] = useState(() => (focusStatus ? new Set([focusStatus]) : new Set()));
-  const [expandedId, setExpandedId] = useState(null);
+  const [expandedRow, setExpandedRow] = useState(null);
 
   // KPI Details — a full screen that REPLACES the board, exactly as the web pane
   // replaces its list. Its own component owns the loading/writes; the board just
@@ -1269,9 +1298,10 @@ export default function KpiActionBoard({
   const laneKeyExtractor = useCallback((t) => String(t.id), []);
   const onCardMeasure = useCallback((id, y) => { cardY.current[id] = y; }, []);
   const onRowRef = useCallback((id, r) => { listRowRefs.current[id] = r; }, []);
-  const onRowToggle = useCallback((id) => {
+  // Takes the row's own key, not the task id — see expandedRow above.
+  const onRowToggle = useCallback((key) => {
     animateNext();
-    setExpandedId((prev) => (prev === id ? null : id));
+    setExpandedRow((prev) => (prev === key ? null : key));
   }, []);
 
   // Workday
@@ -1701,7 +1731,11 @@ export default function KpiActionBoard({
       if (q && !((t.name || '').toLowerCase().includes(q) || (t.user_name || '').toLowerCase().includes(q))) return false;
       if (filterAssignee != null && t.user_id !== filterAssignee) return false;
       if (filterPriority && t.priority !== filterPriority) return false;
-      if (filterStatus && laneForTask(t) !== filterStatus) return false;
+      // Today is not a status, so laneForTask never returns it — asking it would
+      // filter the board to zero for the one lane people reach for most. It gets
+      // the same predicate the grouping uses instead.
+      if (filterStatus === 'today') { if (!isTodayTask(t)) return false; }
+      else if (filterStatus && laneForTask(t) !== filterStatus) return false;
       return true;
     });
   }, [raw, search, filterAssignee, filterPriority, filterStatus]);
@@ -1723,7 +1757,10 @@ export default function KpiActionBoard({
       if (!items.length) continue;
       const open = expandedLanes.has(l.key);
       out.push({ kind: 'head', key: `h:${l.key}`, lane: l, count: items.length, open });
-      if (open) for (const t of items) out.push({ kind: 'row', key: `t:${t.id}`, task: t });
+      // Keyed by LANE + id, not id alone. A task worked today is in Today and in
+      // its status lane, so with both open a bare `t:${id}` is emitted twice and
+      // FlatList drops one of the rows.
+      if (open) for (const t of items) out.push({ kind: 'row', key: rowKey(l.key, t.id), task: t });
     }
     return out;
   }, [lanes, expandedLanes]);
@@ -1800,7 +1837,10 @@ export default function KpiActionBoard({
     // user toggles back to list.
     setViewMode('board');
     setExpandedLanes((prev) => new Set(prev).add(laneKey));
-    setExpandedId(focusTaskId);
+    // The copy in the task's own STATUS lane, which is the one expandedLanes just
+    // opened — not the Today copy, which may not be open and is not where focus
+    // scrolled to.
+    setExpandedRow(rowKey(laneKey, focusTaskId));
     log.info('noti focus: view=board, lane', { laneKey });
 
     // 2. Scroll to the card — but the view is switching list→board, so the lane/
@@ -2794,7 +2834,13 @@ export default function KpiActionBoard({
                     nestedScrollEnabled lets it scroll inside the horizontal board
                     ScrollView (required on Android). No getItemLayout: card height
                     varies with description, buttons and the paused/gate pills, and
-                    a wrong one breaks scrolling worse than not having it. */}
+                    a wrong one breaks scrolling worse than not having it.
+
+                    onMeasure below is passed by the task's OWN status lane only. A
+                    task worked today renders in TWO lanes and cardY is keyed by task
+                    id, so letting both report would leave the Today copy's y in the
+                    map — and notification focus, which scrolls laneForTask's lane,
+                    would then scroll it to the wrong offset. */}
                 <FlatList
                   ref={(r) => { laneRefs.current[l.key] = r; }}
                   style={s.laneBody}
@@ -2822,7 +2868,7 @@ export default function KpiActionBoard({
                       isAdmin={isAdmin}
                       reminder={reminders[String(t.id)]}
                       pulse={pulseId === t.id}
-                      onMeasure={onCardMeasure}
+                      onMeasure={l.key === 'today' ? undefined : onCardMeasure}
                       onOpenDetail={openDetail}
                       readOnly={readOnly}
                     />
@@ -2880,7 +2926,8 @@ export default function KpiActionBoard({
                action buttons. */
             <TaskListRow
               task={item.task}
-              expanded={expandedId === item.task.id}
+              expanded={expandedRow === item.key}
+              rowKey={item.key}
               onToggle={onRowToggle}
               onAction={runAction}
               busyId={busyId}

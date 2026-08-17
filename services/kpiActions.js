@@ -5,7 +5,8 @@
 // Task shape (from get_tasks map_rec):
 //   { id, name, priority, task_state, user_id, user_name, estimate_display,
 //     estimate_hours, estimate_minutes, timer_total_seconds, timer_start_datetime,
-//     paused_reason, description, progress_count, is_self_created, admin_accepted, ... }
+//     today_seconds, paused_reason, description, progress_count, is_self_created,
+//     admin_accepted, ... }
 
 import { getConnection } from '../api/session';
 import { jsonRpc, httpUpload } from '../api/odooApi';
@@ -56,9 +57,20 @@ export async function fetchClientTree() {
 }
 
 // ── Lane model — mirrors the Odoo board columns in the screenshot ────────────
-// A task lands in exactly one lane. Priority lanes (Regular/Important/Urgent)
-// only hold tasks that are still in a "to-do" state (assigned/queued/etc.).
+// A task lands in exactly one STATUS lane. Priority lanes (Regular/Important/
+// Urgent) only hold tasks that are still in a "to-do" state (assigned/queued/
+// etc.). `today` is the one exception and is not a status — see below.
 export const LANES = [
+  // First on purpose, and not a workflow state. The problem it solves is finding
+  // something again: start task 1, pause, task 2, pause, task 3 — then going back
+  // to task 1 meant hunting through every paused task, where one paused ten
+  // minutes ago looks identical to one paused three weeks ago. A lane you have to
+  // scroll to would not have fixed that.
+  //
+  // Indigo matches `.kpi-today .kpi-header` in the module's kra_style.scss, and
+  // sits deliberately outside the warm ramp the status lanes use: Today is a view
+  // onto the others, not another bucket work moves through.
+  { key: 'today',          label: '🕒 Today',      color: '#4F46E5' },
   { key: 'pending_review', label: 'Pending Review', color: '#7C3AED' },
   { key: 'regular',        label: 'Regular',        color: '#2563EB' },
   { key: 'important',      label: 'Important',      color: '#7C3AED' },
@@ -70,7 +82,22 @@ export const LANES = [
   { key: 'completed',      label: 'Completed',      color: '#16A34A' },
 ];
 
-// Decide which lane a task belongs to. Matches the OWL board's grouping.
+// Did THIS user log time against this task today? `today_seconds` comes from the
+// server (kra_api.py map_rec), counting kpi.time.log rows whose `work_date` is
+// today in the DEVELOPER's timezone — which is why 01:00 IST files under today,
+// and why the lane empties itself at midnight with no cron and nothing to reset:
+// the date simply stops matching. An older server sends no field at all, which
+// reads as "not today" and leaves the board exactly as it was.
+export const isTodayTask = (t) => (t.today_seconds || 0) > 0;
+
+// Decide which STATUS lane a task belongs to. Matches the OWL board's grouping.
+//
+// Deliberately never returns 'today'. Today is an additional membership, not an
+// alternative one, and this function answers "which lane OWNS this task" — the
+// question the status filter, the notification scroll-to and the Home stat cards
+// all ask. Adding a `today` branch here would empty the status lane the task
+// really lives in and send notification focus to the wrong column; use
+// isTodayTask for Today instead.
 export function laneForTask(t) {
   if (t.is_self_created && !t.admin_accepted) return 'pending_review';
   switch (t.task_state) {
@@ -95,7 +122,16 @@ export function groupIntoLanes(tasks) {
   for (const t of tasks) {
     const key = laneForTask(t);
     (buckets[key] || buckets.regular).push(t);
+
+    // ADDITIONAL membership, not an alternative one — the push above has already
+    // happened and is left alone. A task worked today appears here AND in its
+    // real status lane, because this lane is a shortcut for picking work back up,
+    // not a new home for it: nothing moves, and the Paused count stays true.
+    if (isTodayTask(t)) buckets.today.push(t);
   }
+  // Most time today first: someone coming back to the board is looking for what
+  // they were last deep in, not whatever happens to sort first.
+  buckets.today.sort((a, b) => (b.today_seconds || 0) - (a.today_seconds || 0));
   return buckets;
 }
 
@@ -109,14 +145,18 @@ const MOCK_TASKS = [
     user_id: 0, user_name: '', estimate_display: '01:00', timer_total_seconds: 0,
     timer_start_datetime: null, paused_reason: '', progress_count: 0,
     is_self_created: false, admin_accepted: true },
+  // These two carry today_seconds so the sample board shows a populated Today
+  // lane rather than an empty first column — and they are deliberately out of
+  // source order (att 2 logged less overall but more today), so the demo also
+  // shows that the lane sorts by today's time and not by the list it came from.
   { id: 3, name: 'Attendance', priority: 'regular', task_state: 'paused',
     user_id: 3, user_name: 'user', estimate_display: '01:00', timer_total_seconds: 11360,
     timer_start_datetime: null, paused_reason: 'Break', progress_count: 1,
-    is_self_created: false, admin_accepted: true },
+    today_seconds: 1500, is_self_created: false, admin_accepted: true },
   { id: 4, name: 'att 2', priority: 'regular', task_state: 'paused',
     user_id: 3, user_name: 'user', estimate_display: '01:00', timer_total_seconds: 6192,
     timer_start_datetime: null, paused_reason: 'Lunch', progress_count: 0,
-    is_self_created: false, admin_accepted: true },
+    today_seconds: 4200, is_self_created: false, admin_accepted: true },
 ];
 
 function mockEnvelope() {
