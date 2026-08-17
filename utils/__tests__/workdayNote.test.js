@@ -48,24 +48,40 @@ describe('the real note survives untouched', () => {
   });
 });
 
-describe('rejects a note that says nothing', () => {
+// The note is OPTIONAL, and optional has to mean it. A thin note used to be
+// refused, which made a box labelled "(optional)" compulsory the moment anything
+// was typed into it — empty ended the day, "Finished" did not — and the refusal
+// rendered far above the button, so the button simply looked broken. Ending a day
+// is one-way and the server has never refused one over its note; this is the
+// client agreeing. What survives is a hint, and a hint must never block.
+describe('never blocks the day over its note', () => {
   test.each([['a full stop', '.'], ['digits', '123'], ['dashes', '----'],
              ['ellipsis', '...'], ['punctuation', '+ + +'], ['one letter', 'a'],
              ['a single word', 'done']])(
-    'rejects %s', (_label, input) => {
+    'accepts %s, with a hint', (_label, input) => {
       const r = validateWorkdayNote(input);
-      expect(r.ok).toBe(false);
-      expect(r.reason).toBeTruthy();
+      expect(r.ok).toBe(true);
+      expect(r.reason).toBe('');
+      expect(r.hint).toBeTruthy();
     });
+
+  test('an empty note is accepted with no hint at all', () => {
+    const r = validateWorkdayNote('');
+    expect(r.ok).toBe(true);
+    expect(r.hint).toBe('');
+    expect(r.value).toBe('');
+  });
 });
 
-describe('accepts anything with two real words', () => {
+describe('a real note passes with nothing to say about it', () => {
   test.each([['plain', 'fixed the invoice bug'],
              ['with digits', 'found 4 errors'],
              ['punctuation heavy', '->Van sale doc (needs screenshots)'],
              ['mixed', 'KRA KPI + billing checked']])(
-    'accepts %s', (_label, input) => {
-      expect(validateWorkdayNote(input).ok).toBe(true);
+    'accepts %s and offers no hint', (_label, input) => {
+      const r = validateWorkdayNote(input);
+      expect(r.ok).toBe(true);
+      expect(r.hint).toBe('');
     });
 });
 

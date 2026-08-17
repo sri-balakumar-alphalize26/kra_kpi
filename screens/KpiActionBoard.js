@@ -1287,7 +1287,8 @@ export default function KpiActionBoard({
   const [workdayBusy, setWorkdayBusy] = useState(false);
   const [endSummary, setEndSummary] = useState(null); // payload for the End Workday popup
   const [endNote, setEndNote] = useState('');
-  const [endNoteErr, setEndNoteErr] = useState('');   // shown under the box, never a toast
+  // Advice while typing, never a blocker — the note is optional and always was.
+  const [endNoteHint, setEndNoteHint] = useState('');
   const [endBusy, setEndBusy] = useState(false);
   const [live, setLive] = useState(null); // live_status payload for the activity strip
 
@@ -1929,8 +1930,11 @@ export default function KpiActionBoard({
   async function confirmEndWorkday() {
     // Optional, so an empty note sails through. This only stops a note that was typed
     // but says nothing. Never blocks on anything else — ending the day is one-way.
+    // The note never blocks. It is labelled "(optional)" and it means it — an empty
+    // box ends the day, and so does one word. validateWorkdayNote only trims and
+    // clamps now; anything it wants to say about a thin note is a hint shown while
+    // typing, not a refusal at the point of pressing the button.
     const check = validateWorkdayNote(endNote);
-    if (!check.ok) { setEndNoteErr(check.reason); return; }
     log.info('end workday confirmed', { note: !!check.value });
     setEndBusy(true);
     try {
@@ -4444,7 +4448,7 @@ export default function KpiActionBoard({
                   multiline
                   maxLength={NOTE_MAX}
                   value={endNote}
-                  onChangeText={(v) => { setEndNote(v); if (endNoteErr) setEndNoteErr(''); }}
+                  onChangeText={(v) => { setEndNote(v); setEndNoteHint(validateWorkdayNote(v).hint); }}
                   // A real note from this team, in their own shorthand (-> bullets, + to
                   // chain items). People copy the shape of the example they are shown.
                   placeholder={'Module documents\n->Signage scan module doc\n\nApp documents\n->Van sale doc\n->Price checker doc(Need to add screenshots)\n\nChats server connecting issue + Dark/light mode switch bug + Build taken for testing'}
@@ -4460,7 +4464,10 @@ export default function KpiActionBoard({
                     ? ` It is also posted to the team's WhatsApp group${endSummary?.wa_group_name ? ` (${endSummary.wa_group_name})` : ''}.`
                     : ''}
                 </Text>
-                {endNoteErr ? <Text style={s.fieldErr}>{endNoteErr}</Text> : null}
+                {/* Muted, not red. The box is optional and a thin note still ends
+                    the day, so this is a suggestion while typing — nothing here is
+                    a problem to be corrected before you can leave. */}
+                {endNoteHint ? <Text style={s.fieldTip}>{endNoteHint}</Text> : null}
               </View>
             </ScrollView>
 
@@ -5107,6 +5114,9 @@ const s = StyleSheet.create({
   fieldLabel: { fontSize: 13.5, fontWeight: '800', color: COLORS.navy, marginTop: 14, marginBottom: 7 },
   fieldHint: { fontSize: 11.5, color: COLORS.muted, marginTop: 6, lineHeight: 16 },
   fieldErr: { fontSize: 12, color: COLORS.red, fontWeight: '700', marginTop: 6 },
+  // Advice, not a fault — deliberately not red. Used for the End Workday note,
+  // which is optional and must never look like something blocking the button.
+  fieldTip: { fontSize: 11.5, color: COLORS.amber, fontWeight: '600', marginTop: 6, lineHeight: 16 },
   fieldHint: { fontSize: 12, color: COLORS.muted, marginTop: 5 },
   // Inline validation inside a dialog. Clears itself as soon as the user starts
   // fixing the thing it complains about.

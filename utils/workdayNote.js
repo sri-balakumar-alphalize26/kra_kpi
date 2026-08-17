@@ -39,26 +39,36 @@ function wordCount(note) {
   return words ? words.length : 0;
 }
 
-// Returns { ok, reason, value }.
-//   ok     — safe to submit
-//   reason — why not, for showing next to the field (empty when ok)
+// Returns { ok, reason, hint, value }.
+//   ok     — always true; see below
+//   reason — kept for callers that still read it, always ''
+//   hint   — advice to show beside the field, never a blocker
 //   value  — the note to send, trimmed and clamped to NOTE_MAX
+//
+// NOTHING HERE BLOCKS. It used to refuse a note of fewer than two words, which
+// meant typing "Finished" and pressing Logout & Send Summary did nothing visible
+// — the refusal rendered beside the note box, far above the button, so the button
+// read as broken. Worse, it made a box labelled "(optional)" behave as compulsory
+// the moment you put anything in it: empty was allowed, one word was not.
+//
+// The two-word idea survives as a HINT, because "done" really does carry no more
+// than an empty box. But it is advice now. The server has never refused a day over
+// its note — its own comment says ending the day is one-way and nothing may stand
+// between someone and closing it — and this is the client agreeing.
 function validateWorkdayNote(note) {
   const raw = String(note == null ? '' : note);
   const trimmed = raw.trim();
 
-  // Optional: nothing typed is fine, and ends the day.
-  if (!trimmed) return { ok: true, reason: '', value: '' };
+  if (!trimmed) return { ok: true, reason: '', hint: '', value: '' };
 
-  if (wordCount(trimmed) < MIN_WORDS) {
-    return {
-      ok: false,
-      reason: 'Please write a few words about what you did today, or leave it empty.',
-      value: trimmed.slice(0, NOTE_MAX),
-    };
-  }
-
-  return { ok: true, reason: '', value: trimmed.slice(0, NOTE_MAX) };
+  return {
+    ok: true,
+    reason: '',
+    hint: wordCount(trimmed) < MIN_WORDS
+      ? 'Tip: a few words about what you did will read better on the snapshot.'
+      : '',
+    value: trimmed.slice(0, NOTE_MAX),
+  };
 }
 
 module.exports = { validateWorkdayNote, wordCount, NOTE_MAX, MIN_WORDS };

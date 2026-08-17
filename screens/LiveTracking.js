@@ -105,6 +105,7 @@ function Row({ row, nowMs, fetchedAt, onReopen }) {
   // server sends them all in active_tasks (scalars stay the first one for older
   // builds), so the pill becomes one-per-task instead of one arbitrary task.
   const running = kind === 'task' && row.active_tasks?.length ? row.active_tasks : null;
+  const multiCount = row.active_task_count || running?.length || 0;
   const tick = (secs) => fmtElapsed((secs || 0) + Math.max(0, Math.floor((nowMs - fetchedAt) / 1000)));
 
   let text;
@@ -128,8 +129,15 @@ function Row({ row, nowMs, fetchedAt, onReopen }) {
         <PulseDot active={!!row.active} />
         {running ? (
           <View style={s.pillWrap}>
-            {running.length > 1 ? (
-              <Text style={s.multiTxt}>Multi-tasking {running.length} tasks</Text>
+            {/* The server's own count, not the length of the array it sent. Same
+                answer today; different the moment the route caps active_tasks,
+                and then the badge would quietly under-report. Styled as a badge
+                to match the web rather than plain grey text. */}
+            {multiCount > 1 ? (
+              <View style={s.multiBadge}>
+                <MaterialCommunityIcons name="content-duplicate" size={12} color="#fff" />
+                <Text style={s.multiTxt}>Multi-tasking {multiCount}</Text>
+              </View>
             ) : null}
             {running.map((at) => (
               <View key={at.id} style={[s.pill, { backgroundColor: meta.bg }]}>
@@ -151,12 +159,15 @@ function Row({ row, nowMs, fetchedAt, onReopen }) {
       </View>
       {/* Why they're away, in their own words. The pill says "Lunch"; this says
           "back by 2, dentist" — the half that decides whether to chase someone. */}
+      {/* Untruncated. Two lines is enough for "Lunch" and not enough for the
+          sentence that says whether anyone needs to do anything about it, which
+          is the only reason this field exists. The web renders it whole too. */}
       {row.activity_note ? (
-        <Text style={s.actNote} numberOfLines={2}>{row.activity_note}</Text>
+        <Text style={s.actNote}>{row.activity_note}</Text>
       ) : null}
       {/* Reopened by an admin — shown on the same screen as the Reopen button. */}
       {row.reopened_reason ? (
-        <Text style={s.reopenNote} numberOfLines={2}>
+        <Text style={s.reopenNote}>
           Reopened{row.reopened_by ? ` by ${row.reopened_by}` : ''}: {row.reopened_reason}
         </Text>
       ) : null}
@@ -179,6 +190,13 @@ export default function LiveTracking({ onBack }) {
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);      // full payload
   const [isMock, setIsMock] = useState(false);
+  // A poll failed but we still have rows worth showing. Not an error — the board
+  // is real, it has just stopped moving, and saying so beats either lying or
+  // blanking.
+  const [stale, setStale] = useState(false);
+  // Read inside load()'s catch, which is memoised with an empty dep array and so
+  // cannot see `data`. A ref is how it asks "do we have anything on screen?".
+  const hasRowsRef = useRef(false);
   const [nowMs, setNowMs] = useState(Date.now());
   const fetchedAtRef = useRef(Date.now());
   // Reopen-day dialog. A real modal rather than a prompt: the reason is
@@ -189,11 +207,23 @@ export default function LiveTracking({ onBack }) {
   const [reopenErr, setReopenErr] = useState('');
   const [reopenBusy, setReopenBusy] = useState(false);
 
+  // A failed poll must NOT take the board away.
+  //
+  // This used to set `error` from the catch whether the call was a background
+  // poll or not, and the render checks `error` before `rows` — so one flaky
+  // fifteen-second poll replaced a full board with a Retry screen. On a screen
+  // whose whole job is "who is working right now", a moment of bad wifi looked
+  // exactly like everyone having gone home.
+  //
+  // Now a silent failure only sets `stale`. The rows stay, and the header says
+  // the numbers have stopped moving. `error` is reserved for the case where
+  // there is genuinely nothing to show.
   const load = useCallback(async (silent) => {
     if (!silent) setError(null);
     try {
       const res = await fetchLiveTracking();
       if (res && res.status === false) {
+        if (silent) { setStale(true); return; }
         setError(res.message || 'Could not load live tracking.');
         return;
       }
@@ -201,14 +231,20 @@ export default function LiveTracking({ onBack }) {
       setIsMock(!!res.isMock);
       fetchedAtRef.current = Date.now();
       setNowMs(Date.now());
+      setStale(false);
       setError(null);
     } catch (e) {
       log.warn('load failed', e?.message);
+      // Keep whatever is on screen if we have anything at all — even a
+      // non-silent retry that fails should not wipe a board we already drew.
+      if (silent || hasRowsRef.current) { setStale(true); return; }
       setError(e?.message || 'Could not load live tracking.');
     }
   }, []);
 
-  // Initial load.
+  // Initial load. `loading` is set on every non-silent load, not just this one,
+  // so the header Refresh button visibly does something — it used to call
+  // load(false) and show nothing at all, which read as a dead button.
   useEffect(() => { (async () => { setLoading(true); await load(false); setLoading(false); })(); }, [load]);
 
   // Poll every 15s.
@@ -260,6 +296,7 @@ export default function LiveTracking({ onBack }) {
   }, [reopenFor, reopenReason, load]);
 
   const rows = data?.rows || [];
+  hasRowsRef.current = rows.length > 0;
 
   return (
     <View style={s.root}>
@@ -270,10 +307,33 @@ export default function LiveTracking({ onBack }) {
           <Ionicons name="chevron-back" size={24} color={COLORS.navy} />
         </TouchableOpacity>
         <Text style={s.title} numberOfLines={1}>Live Tracking</Text>
-        <TouchableOpacity onPress={() => load(false)} style={s.iconBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name="refresh" size={20} color={COLORS.navy} />
+        <TouchableOpacity
+          onPress={async () => { setRefreshing(true); await load(false); setRefreshing(false); }}
+          style={s.iconBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          {/* Spins while it works. It used to call load(false) and show nothing,
+              so on a fast network it looked like the button did nothing and on a
+              slow one like it had missed the tap. */}
+          {refreshing
+            ? <ActivityIndicator size="small" color={COLORS.navy} />
+            : <Ionicons name="refresh" size={20} color={COLORS.navy} />}
         </TouchableOpacity>
       </View>
+
+      {/* When the board was last actually answered for, and whether it still is.
+          Between polls the elapsed figures keep ticking locally, so without this
+          a frozen board and a live one look identical. */}
+      {data?.as_of ? (
+        <View style={s.asOfRow}>
+          <Ionicons
+            name={stale ? 'cloud-offline-outline' : 'time-outline'}
+            size={12} color={stale ? COLORS.amber : COLORS.faint}
+          />
+          <Text style={[s.asOfTxt, stale && s.asOfStale]}>
+            {stale ? `Not updating — last good reading ${data.as_of}` : `as of ${data.as_of}`}
+          </Text>
+        </View>
+      ) : null}
 
       {isMock && (
         <View style={s.mockBar}>
@@ -412,7 +472,12 @@ const s = StyleSheet.create({
   // Stacks the per-task pills when someone is multitasking. flexShrink so a long
   // task name wraps inside the card instead of pushing the row off a phone.
   pillWrap: { flexShrink: 1, gap: 5 },
-  multiTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.muted },
+  multiTxt: { fontSize: 11.5, fontWeight: '800', color: '#fff' },
+  multiBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.navy, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, alignSelf: 'flex-start' },
+  // Freshness line under the header.
+  asOfRow: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 16, paddingBottom: 6 },
+  asOfTxt: { fontSize: 11, color: COLORS.faint, fontWeight: '600' },
+  asOfStale: { color: COLORS.amber, fontWeight: '800' },
 
   reopenBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',

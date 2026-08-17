@@ -10,13 +10,34 @@ const log = createLogger('LiveTracking');
 
 // Offline demo shape — mirrors the route's payload so the screen renders without a
 // server (matches services/loginManagement.js etc.).
+// The mock had drifted well behind the route: no active_tasks, no
+// active_task_count, no activity_note, no reopened_reason, no day_done. So the
+// three things the screen exists to show — multi-tasking, why someone is away,
+// and the Reopen button — could never appear in demo mode, and anyone judging
+// the screen from a disconnected device would conclude they were missing.
 const MOCK = {
-  status: true, as_of: '', cutoff_display: '10:40',
-  total: 3, present_count: 2, active_count: 1, absent_count: 1, late_count: 1,
+  status: true, as_of: '09:41', cutoff_display: '10:40',
+  total: 4, present_count: 3, active_count: 2, absent_count: 1, late_count: 1,
   rows: [
-    { user_id: 1, name: 'Ravi', attendance: 'present', arrival: '09:20', started: true, active: true, activity_kind: 'task', activity_label: 'Fix login bug', elapsed_seconds: 11040, elapsed_display: '3h 4min' },
-    { user_id: 2, name: 'Salim', attendance: 'late', arrival: '12:00', started: true, active: false, activity_kind: 'break', activity_label: 'Break', elapsed_seconds: 900, elapsed_display: '15 min' },
-    { user_id: 3, name: 'Meera', attendance: 'absent', arrival: '', started: false, active: false, activity_kind: 'offline', activity_label: '', elapsed_seconds: 0, elapsed_display: '' },
+    // Multi-tasking: two timers at once, which is what active_tasks is for.
+    { user_id: 1, name: 'Ravi', attendance: 'present', arrival: '09:20', started: true, active: true,
+      activity_kind: 'task', activity_label: 'Fix login bug', elapsed_seconds: 11040, elapsed_display: '3h 4min',
+      active_task_count: 2,
+      active_tasks: [
+        { id: 101, name: 'Fix login bug', elapsed_seconds: 11040, elapsed_display: '3h 4min' },
+        { id: 102, name: 'Invoice PDF spacing', elapsed_seconds: 2400, elapsed_display: '40 min' },
+      ] },
+    // Away, with the note that decides whether anyone needs to chase it.
+    { user_id: 2, name: 'Salim', attendance: 'late', arrival: '12:00', started: true, active: false,
+      activity_kind: 'break', activity_label: 'Break', elapsed_seconds: 900, elapsed_display: '15 min',
+      activity_note: 'Dentist — back by 2. Ping me if the client calls about the invoice run.' },
+    // Ended their day and had it reopened: exercises both the amber note and the
+    // Reopen button, which are otherwise unreachable offline.
+    { user_id: 4, name: 'Priya', attendance: 'present', arrival: '09:05', started: true, active: false,
+      activity_kind: 'idle', activity_label: '', elapsed_seconds: 0, elapsed_display: '',
+      day_done: true, reopened_by: 'Administrator', reopened_reason: 'Timesheet was missing the Friday deploy.' },
+    { user_id: 3, name: 'Meera', attendance: 'absent', arrival: '', started: false, active: false,
+      activity_kind: 'offline', activity_label: '', elapsed_seconds: 0, elapsed_display: '' },
   ],
 };
 
