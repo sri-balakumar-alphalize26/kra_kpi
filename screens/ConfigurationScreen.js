@@ -1,25 +1,33 @@
 // CONFIGURATION — mobile port of the Odoo web "Configuration" screen
-// (kpi_configuration.js). Four sections, all auto-save:
-//   1. Country & Mobile Format — country picker → dial code + digit length
-//   2. Timers — client approval window
-//   3. Urgent-pause recipients — extra WhatsApp numbers (local, dial added)
-//   4. Developers — Multi-task toggle + per-dev WhatsApp number
+// (kpi_configuration.js). All sections auto-save:
+//   1. Timers — admin accept, client approval, queue/urgent nudge, standard day
+//   2. Daily Task Report & Retention
+//   3. Developers — Multi-task toggle + per-dev WhatsApp number
+//   4. WhatsApp Group Reports — which updates get posted, and in what words
 // Admin-only (opened from a Home Quick Action tile).
+//
+// The destination GROUP is deliberately not chosen here — that stays on the web.
+// Picking the wrong group posts to it, which has happened, and doing it safely
+// needs the group list, naming and confirmation flow.
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Switch,
   ActivityIndicator, Modal, FlatList, StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { BlurView } from 'expo-blur';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
+import GradientButton, { GRAD_SEND } from '../components/GradientButton';
+import { renderWaTemplate, splitBold } from '../utils/waPreview';
 import { createLogger } from '../api/logger';
 import {
   fetchConfig, setUrgentNudge, setUserCountry, setMultitask, setDevWa,
-  setClientApproval, setQueueNudge, setStandardHours,
+  setClientApproval, setQueueNudge, setStandardHours, setAdminAccept,
   setSnapshotRetention, setReportRetention, setDailyReport,
 } from '../services/config';
+import { fetchGroupEvents, setGroupEvent, testGroupEvent } from '../services/waGroup';
 
 const log = createLogger('ConfigurationScreen');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -79,6 +87,18 @@ export default function ConfigurationScreen({ onBack }) {
   const [dailyMM, setDailyMM] = useState('00');
   const [dailyCoverage, setDailyCoverage] = useState('yesterday');
   const [optPicker, setOptPicker] = useState(null);   // { title, options, current, onPick }
+  const [adminAccept, setAdminAcceptVal] = useState('5');
+  // A failed load used to leave the defaults on screen looking like saved
+  // settings. Say so instead — a wrong number here changes how the team works.
+  const [loadError, setLoadError] = useState('');
+  // WhatsApp group reporting. Destination is read-only here (web chooses it).
+  const [waGroupJid, setWaGroupJid] = useState('');
+  const [waGroupName, setWaGroupName] = useState('');
+  const [waEvents, setWaEvents] = useState([]);
+  const [waSamples, setWaSamples] = useState({});
+  const [waMsg, setWaMsg] = useState('');
+  const [waConfirm, setWaConfirm] = useState(null);   // { event, label }
+  const [waBusy, setWaBusy] = useState(false);
 
   const flash = useCallback((key) => {
     setSavedFlash(key);
@@ -108,8 +128,22 @@ export default function ConfigurationScreen({ onBack }) {
       setDailyHH(String(dH));
       setDailyMM(String(Math.round((dh - dH) * 60)).padStart(2, '0'));
       setDailyCoverage(c.daily_report_coverage || 'yesterday');
+      setAdminAcceptVal(String(c.admin_accept_minutes ?? 5));
+      setWaGroupJid(c.wa_group_jid || '');
+      setWaGroupName(c.wa_group_name || '');
+      setLoadError('');
+      // Which updates get posted. Pure configuration — no gateway involved — so
+      // it must load even with the phone's WhatsApp offline. Its own try/catch:
+      // failing to read the group events should not blank the whole screen.
+      try {
+        const g = await fetchGroupEvents();
+        if (g?.status) { setWaEvents(g.events || []); setWaSamples(g.samples || {}); }
+      } catch (e) {
+        log.warn('fetchGroupEvents', e?.message);
+      }
     } catch (e) {
       log.warn('load failed', e?.message);
+      setLoadError('Could not load settings — the values below are defaults, not what is saved.');
     }
   }, []);
 
@@ -118,6 +152,16 @@ export default function ConfigurationScreen({ onBack }) {
   }, [load]);
 
   // ── Savers ────────────────────────────────────────────────────────────────
+  const saveAdminAccept = async () => {
+    // max(0, …), NOT max(1, …): 0 is the documented kill switch that turns
+    // auto-accept off entirely, and clamping it up to 1 would silently re-enable
+    // a behaviour someone deliberately disabled. Matches kra_api.py:2556.
+    const parsed = parseInt(adminAccept, 10);
+    const v = Math.max(0, isNaN(parsed) ? 5 : parsed);
+    setAdminAcceptVal(String(v));
+    try { await setAdminAccept(v); flash('adminAccept'); }
+    catch (e) { log.warn('saveAdminAccept', e?.message); }
+  };
   const saveClientApproval = async () => {
     const v = Math.max(1, parseInt(clientApproval) || 5);
     setClientApprovalVal(String(v));
@@ -197,18 +241,92 @@ export default function ConfigurationScreen({ onBack }) {
           wa_number: wa, _wa: toLocal(wa, nd, nl), _saved: true,
         } : d)));
         setTimeout(() => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _saved: false } : d))), 1400);
+        // Changing the country wipes the stored WhatsApp number AND the
+        // app-login mobile server-side (kra_api.py:1808-1818). Silently losing
+        // someone's login number is not something to leave the admin to discover.
+        if (!wa && dev.wa_number) {
+          setWaMsg(`${dev.name}'s WhatsApp number was cleared by the country change — re-enter it. `
+            + 'Their app-login mobile was cleared too.');
+        }
+      } else if (res && res.status === false) {
+        setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, country_id: dev.country_id } : d)));
+        setWaMsg(res.message || 'Not allowed to change that.');
       }
-    } catch (e) { log.warn('setDevCountry', e?.message); }
+    } catch (e) {
+      setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, country_id: dev.country_id } : d)));
+      log.warn('setDevCountry', e?.message);
+    }
+  };
+
+  // ── WhatsApp group reports ────────────────────────────────────────────────
+  const waPreviewOf = useCallback(
+    (tpl) => renderWaTemplate(tpl, waSamples), [waSamples]);
+
+  const saveWaEvent = async (ev, vals) => {
+    // Optimistic, then reconciled with what the server actually stored — the
+    // server owns "empty template means use the default", so the text that comes
+    // back may not be the text we sent.
+    setWaEvents((list) => list.map((e) => (e.event === ev.event ? { ...e, ...vals } : e)));
+    try {
+      const res = await setGroupEvent({ event: ev.event, ...vals });
+      if (res && res.status === false) { setWaMsg(res.message || 'Could not save.'); await load(); return; }
+      setWaEvents((list) => list.map((e) => (e.event === ev.event
+        ? { ...e, enabled: res?.enabled ?? e.enabled, template: res?.template ?? e.template, _saved: true }
+        : e)));
+      setTimeout(() => setWaEvents((list) => list.map((e) => (
+        e.event === ev.event ? { ...e, _saved: false } : e))), 1400);
+    } catch (e) { log.warn('saveWaEvent', e?.message); }
+  };
+
+  // The new value is passed explicitly: RN state has not flushed when a Switch
+  // fires. Same reason as saveDaily(over).
+  const toggleWaEvent = (ev) => saveWaEvent(ev, { enabled: !ev.enabled });
+  const saveWaTemplate = (ev) => saveWaEvent(ev, { template: ev.template || '' });
+  // '' means "use the built-in default" server-side, so Reset never needs to
+  // know what the default text is.
+  const resetWaTemplate = (ev) => saveWaEvent(ev, { template: '' });
+
+  const insertWaToken = (ev, tok) => {
+    const next = `${ev.template || ''}{${tok}}`;
+    setWaEvents((list) => list.map((e) => (e.event === ev.event ? { ...e, template: next } : e)));
+  };
+
+  const runWaTest = async () => {
+    const ev = waConfirm;
+    setWaConfirm(null);
+    if (!ev) return;
+    setWaBusy(true);
+    try {
+      const res = await testGroupEvent(ev.event, waGroupJid);
+      setWaMsg(res?.message || 'No response.');
+    } catch (e) {
+      setWaMsg(e?.message || 'Could not send the test.');
+    } finally { setWaBusy(false); }
   };
   const toggleDev = async (dev) => {
     const next = !dev.allow_multitask;
     setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, allow_multitask: next } : d)));
-    try { await setMultitask(dev.id, next); } catch (e) { log.warn('toggleDev', e?.message); }
+    try {
+      const res = await setMultitask(dev.id, next);
+      // Roll back a refused change. Leaving the switch flipped made an
+      // unauthorised toggle look saved until the next reload.
+      if (res && res.status === false) {
+        setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, allow_multitask: !next } : d)));
+        setWaMsg(res.message || 'Not allowed to change that.');
+      }
+    } catch (e) {
+      setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, allow_multitask: !next } : d)));
+      log.warn('toggleDev', e?.message);
+    }
   };
   const saveDevWa = async (dev, text) => {
     const dd = dev.dial || dial, dl = dev.mobile_length || mobileLength;
     const local = toLocal(text, dd, dl);
-    setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _wa: local } : d)));
+    // A short number saves happily but never resolves to a real WhatsApp
+    // account, so the group report silently falls back to a plain name instead
+    // of tagging anyone. Say so rather than letting it look fine.
+    const invalid = local.length > 0 && local.length < dl;
+    setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _wa: local, _invalid: invalid } : d)));
     try {
       const res = await setDevWa(dev.id, local);
       const stored = res?.wa_number != null ? res.wa_number : (local ? dd + local : '');
@@ -253,8 +371,29 @@ export default function ConfigurationScreen({ onBack }) {
               Idle auto-pause is retired: a sleeping device is not evidence that
               somebody stopped working, and pausing on it cost people their board
               several times a day. There is nothing left to configure. */}
+          {!!loadError && (
+            <View style={s.mockBar}>
+              <Ionicons name="alert-circle-outline" size={14} color={COLORS.amber} />
+              <Text style={s.mockTxt}>{loadError}</Text>
+            </View>
+          )}
+
           <Card color="#0ea5e9" iconLib="mc" icon="clock-outline" title="Timers">
-            <Text style={s.label}>Client approval window (minutes)</Text>
+            <Text style={s.label}>Admin accept window (minutes)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="number-pad"
+                value={adminAccept} onChangeText={setAdminAcceptVal}
+                onEndEditing={saveAdminAccept}
+              />
+              <Text style={s.unit}>min</Text>
+              {savedFlash === 'adminAccept' && <Text style={s.savedTick}>✓</Text>}
+            </View>
+            <Text style={s.hint}>How long an admin has to accept a submitted task before it is
+              accepted automatically. <Text style={{ fontWeight: '800' }}>0 turns auto-accept off</Text> —
+              tasks then wait for a person.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Client approval window (minutes)</Text>
             <View style={s.inlineRow}>
               <TextInput
                 style={[s.input, { width: 90 }]} keyboardType="number-pad"
@@ -441,11 +580,140 @@ export default function ConfigurationScreen({ onBack }) {
                   />
                   {dev._saved && <Text style={s.devSavedInline}>✓</Text>}
                 </View>
+                {dev._invalid && (
+                  <Text style={s.devInvalid}>
+                    Enter {dev.mobile_length || mobileLength} digits — a short number cannot be
+                    tagged in the group.
+                  </Text>
+                )}
+              </View>
+            ))}
+          </Card>
+
+          {/* 4. WhatsApp Group Reports — which updates get posted and in what
+              words. The destination group is NOT chosen here: picking the wrong
+              one posts to it, and doing that safely needs the group list, naming
+              and confirmation that only the web screen has. */}
+          <Card color="#25D366" iconLib="mc" icon="whatsapp" title="WhatsApp Group Reports">
+            {waGroupJid ? (
+              <View style={s.waDest}>
+                <Ionicons name="checkmark-circle" size={16} color={COLORS.green} />
+                <View style={{ flex: 1 }}>
+                  <Text style={s.waDestName}>{waGroupName || waGroupJid}</Text>
+                  <Text style={s.waDestHint}>Change the group on the web Configuration screen.</Text>
+                </View>
+              </View>
+            ) : (
+              <View style={s.waDestOff}>
+                <Ionicons name="information-circle-outline" size={16} color={COLORS.muted} />
+                <Text style={s.waDestHint}>No group set — nothing is posted. Choose one on the web.</Text>
+              </View>
+            )}
+
+            {!!waMsg && (
+              <TouchableOpacity onPress={() => setWaMsg('')} activeOpacity={0.8}>
+                <Text style={s.waMsg}>{waMsg}  ✕</Text>
+              </TouchableOpacity>
+            )}
+
+            {waEvents.length === 0 && (
+              <Text style={s.hint}>No reportable updates loaded.</Text>
+            )}
+
+            {waEvents.map((ev) => (
+              <View key={ev.event} style={s.waEvent}>
+                <View style={s.switchRow}>
+                  <Text style={[s.label, { marginBottom: 0, flex: 1 }]}>{ev.label}</Text>
+                  <Switch
+                    value={!!ev.enabled}
+                    onValueChange={() => toggleWaEvent(ev)}
+                    trackColor={{ true: COLORS.primary }}
+                  />
+                  {ev._saved && <Text style={s.savedTick}>✓</Text>}
+                </View>
+                <Text style={s.hint}>{ev.help}</Text>
+
+                {/* Hidden while off: a live preview of something that will never
+                    be sent is just noise. */}
+                {!!ev.enabled && (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={s.label}>Preview — what the group sees</Text>
+                    <View style={s.previewBubble}>
+                      <Text style={s.previewTxt}>
+                        {splitBold(waPreviewOf(ev.template)).map((p, i) => (
+                          <Text key={i} style={p.bold ? { fontWeight: '800' } : null}>{p.text}</Text>
+                        ))}
+                      </Text>
+                    </View>
+
+                    <View style={s.tokenRow}>
+                      <Text style={s.tokenLead}>Insert:</Text>
+                      {(ev.tokens || []).map((tok) => (
+                        <TouchableOpacity key={tok} style={s.tokenChip}
+                          onPress={() => insertWaToken(ev, tok)} activeOpacity={0.7}>
+                          <Text style={s.tokenChipTxt}>{tok}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+
+                    <TextInput
+                      style={s.tplInput} multiline value={ev.template || ''}
+                      placeholder="Message…" placeholderTextColor={COLORS.faint}
+                      onChangeText={(t) => setWaEvents((list) => list.map((e) => (
+                        e.event === ev.event ? { ...e, template: t } : e)))}
+                      onEndEditing={() => saveWaTemplate(ev)}
+                    />
+                    <Text style={s.hint}>Write it in plain English. The name, times and task
+                      details are filled in automatically — the preview above shows exactly what
+                      the group gets.</Text>
+
+                    <View style={s.waBtnRow}>
+                      <TouchableOpacity onPress={() => resetWaTemplate(ev)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Text style={s.tplReset}>↺ Reset to default</Text>
+                      </TouchableOpacity>
+                      <GradientButton
+                        label="Send test" colors={GRAD_SEND}
+                        disabled={!waGroupJid || waBusy}
+                        onPress={() => setWaConfirm(ev)}
+                        icon={<Ionicons name="paper-plane-outline" size={15} color="#fff" />}
+                        style={{ minWidth: 130 }}
+                      />
+                    </View>
+                  </View>
+                )}
               </View>
             ))}
           </Card>
         </ScrollView>
       )}
+
+      {/* Send-test confirmation. Blurred centre card, the same shape this app
+          already uses for logging out — its idiom for "this one is irreversible".
+          The route also refuses unless the group id is echoed back, so this is a
+          real guard, not decoration. */}
+      <Modal visible={!!waConfirm} transparent animationType="fade" onRequestClose={() => setWaConfirm(null)}>
+        <BlurView intensity={30} tint="dark" experimentalBlurMethod="dimezisBlurView" style={s.confirmBlur}>
+          <View style={s.confirmCard}>
+            <View style={s.confirmIconWrap}>
+              <Ionicons name="logo-whatsapp" size={30} color={COLORS.green} />
+            </View>
+            <Text style={s.confirmTitle}>Send a test message?</Text>
+            <Text style={s.confirmBody}>
+              A sample “{waConfirm?.label}” message will be posted to{' '}
+              <Text style={{ fontWeight: '800' }}>{waGroupName || waGroupJid}</Text>.
+              {'\n\n'}Everyone in that group will see it. It is marked as a test.
+            </Text>
+            <View style={s.confirmBtns}>
+              <TouchableOpacity style={s.confirmCancel} onPress={() => setWaConfirm(null)}>
+                <Text style={s.confirmCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <GradientButton label="Send test" colors={GRAD_SEND} onPress={runWaTest}
+                style={{ flex: 1 }} />
+            </View>
+          </View>
+        </BlurView>
+      </Modal>
 
       {/* Per-developer country picker */}
       <Modal visible={!!pickCountryForDev} transparent animationType="fade" onRequestClose={() => setPickCountryForDev(null)}>
@@ -554,6 +822,64 @@ const s = StyleSheet.create({
   dialBadgeSmTxt: { fontSize: 14, fontWeight: '800', color: COLORS.navy },
   devWaInput: { flex: 1, borderWidth: 1, borderColor: COLORS.line, borderLeftWidth: 0, borderTopRightRadius: 10, borderBottomRightRadius: 10, height: 44, paddingHorizontal: 12, fontSize: 15, color: COLORS.ink, backgroundColor: '#fff' },
   devSavedInline: { fontSize: 16, color: COLORS.green, fontWeight: '900', marginLeft: 8 },
+  devInvalid: { fontSize: 11.5, color: COLORS.red, marginTop: 5, fontWeight: '700' },
+
+  // ── WhatsApp group reports ───────────────────────────────────────────────
+  waDest: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10,
+    borderRadius: 10, backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#A7F3D0',
+  },
+  waDestOff: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10,
+    borderRadius: 10, backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: COLORS.line,
+  },
+  waDestName: { fontSize: 14, fontWeight: '800', color: COLORS.ink },
+  waDestHint: { fontSize: 11.5, color: COLORS.muted, marginTop: 1 },
+  waMsg: {
+    marginTop: 10, padding: 9, borderRadius: 9, backgroundColor: '#FEF3C7',
+    color: '#78350F', fontSize: 12.5, fontWeight: '600', overflow: 'hidden',
+  },
+  waEvent: { marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: COLORS.line },
+  // #DCF8C6 is the WhatsApp bubble green — identical to the web preview and to
+  // the OTP preview on Login Management, so all three read as the same thing.
+  previewBubble: {
+    backgroundColor: '#DCF8C6', borderRadius: 12, padding: 12,
+    borderWidth: 1, borderColor: '#C5EBB0', marginTop: 4,
+  },
+  previewTxt: { fontSize: 13.5, color: '#0B3D0B', lineHeight: 20 },
+  tokenRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10 },
+  tokenLead: { fontSize: 11.5, color: COLORS.muted, fontWeight: '700' },
+  tokenChip: {
+    paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999,
+    borderWidth: 1, borderColor: COLORS.line, backgroundColor: '#fff',
+  },
+  tokenChipTxt: { fontSize: 11.5, fontWeight: '700', color: COLORS.primary },
+  tplInput: {
+    borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, padding: 12,
+    minHeight: 110, fontSize: 14, color: COLORS.ink, backgroundColor: '#fff',
+    textAlignVertical: 'top', marginTop: 8,
+  },
+  tplReset: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary },
+  waBtnRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 12 },
+
+  // Confirm dialog — mirrors the logout dialog's blurred centre card.
+  confirmBlur: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30 },
+  confirmCard: {
+    width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 18,
+    padding: 20, alignItems: 'center', ...SHADOW,
+  },
+  confirmIconWrap: {
+    width: 56, height: 56, borderRadius: 28, backgroundColor: '#ECFDF5',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 12,
+  },
+  confirmTitle: { fontSize: 17, fontWeight: '900', color: COLORS.navy, marginBottom: 8 },
+  confirmBody: { fontSize: 13.5, color: COLORS.muted, textAlign: 'center', lineHeight: 20 },
+  confirmBtns: { flexDirection: 'row', gap: 10, marginTop: 18, alignSelf: 'stretch' },
+  confirmCancel: {
+    flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.line,
+    alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff',
+  },
+  confirmCancelTxt: { fontSize: 14, fontWeight: '800', color: COLORS.muted },
 
   // Centered dialog (not a bottom sheet) — matches the app's other popups.
   modalBackdrop: {

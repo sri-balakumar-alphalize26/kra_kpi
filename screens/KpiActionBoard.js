@@ -4208,7 +4208,16 @@ export default function KpiActionBoard({
                   placeholder={'Module documents\n->Signage scan module doc\n\nApp documents\n->Van sale doc\n->Price checker doc(Need to add screenshots)\n\nChats server connecting issue + Dark/light mode switch bug + Build taken for testing'}
                   placeholderTextColor={COLORS.faint}
                 />
-                <Text style={s.fieldHint}>Saved with your workday snapshot and sent in the daily summary.</Text>
+                {/* Say where the note actually goes. It is posted to the team's
+                    WhatsApp group verbatim, and ending a day cannot be undone —
+                    finding that out afterwards is not a fair way to learn it.
+                    Driven by the server so it only claims what is configured. */}
+                <Text style={s.fieldHint}>
+                  Saved with your workday snapshot and sent in the daily summary.
+                  {endSummary?.wa_group_end_posts
+                    ? ` It is also posted to the team's WhatsApp group${endSummary?.wa_group_name ? ` (${endSummary.wa_group_name})` : ''}.`
+                    : ''}
+                </Text>
                 {endNoteErr ? <Text style={s.fieldErr}>{endNoteErr}</Text> : null}
               </View>
             </ScrollView>

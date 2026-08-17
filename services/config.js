@@ -15,6 +15,7 @@ export async function fetchConfig() {
     log.info('fetchConfig — no server, mock');
     return {
       isMock: true,
+      admin_accept_minutes: 5,
       client_approval_minutes: 5,
       queue_nudge_minutes: 30,
       urgent_nudge_minutes: 5,
@@ -36,12 +37,20 @@ export async function fetchConfig() {
       developers: [
         { id: 3, name: 'Dev One', login: 'dev1', allow_multitask: false, wa_number: '' },
       ],
+      // Where workday/task updates are posted. The destination is chosen on the
+      // web; the app shows it so the group editor can say which group a test
+      // message would land in.
+      wa_group_jid: '',
+      wa_group_name: '',
     };
   }
   const cfg = await jsonRpc(serverUrl, '/kpi_config/get', {});
   const devs = await jsonRpc(serverUrl, '/kpi_multitask/list', {});
   return {
     isMock: false,
+    // `?? 5`, never `|| 5`: 0 is a real setting here — it turns auto-accept off
+    // — and `||` would silently promote it back to 5.
+    admin_accept_minutes: cfg?.admin_accept_minutes ?? 5,
     client_approval_minutes: cfg?.client_approval_minutes ?? 5,
     queue_nudge_minutes: cfg?.queue_nudge_minutes ?? 30,
     urgent_nudge_minutes: cfg?.urgent_nudge_minutes ?? 5,
@@ -59,7 +68,18 @@ export async function fetchConfig() {
     mobile_length: Number(cfg?.mobile_length) || 10,
     countries: cfg?.countries || [],
     developers: (devs?.developers) || [],
+    wa_group_jid: cfg?.wa_group_jid || '',
+    wa_group_name: cfg?.wa_group_name || '',
   };
+}
+
+// Minutes an admin has to accept a submitted task before it auto-accepts.
+// 0 is the documented kill switch (auto-accept off), so callers clamp with
+// max(0, …) rather than max(1, …) — matching kra_api.py:2556.
+export async function setAdminAccept(minutes) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, minutes };
+  return jsonRpc(serverUrl, '/kpi_config/set_admin_accept', { minutes });
 }
 
 // Minutes a client has to approve the assigned developer before auto-approve.
