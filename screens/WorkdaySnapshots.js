@@ -250,15 +250,21 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId, mine }) {
       </View>
       <Banner />
 
+      {/* 365 matches the web's "1 year". Without it the app could not reach a
+          snapshot older than a quarter, and the notification-focus effect above
+          gives up with "focus snapshot not in range" when a tap points further
+          back than the current window. */}
       <View style={s.rangeRow}>
-        {[7, 30, 90].map((n) => (
+        {[7, 30, 90, 365].map((n) => (
           <TouchableOpacity
             key={n}
             style={[s.rangePill, limitDays === n && s.rangePillOn]}
             onPress={() => { setLimitDays(n); load(n); }}
             activeOpacity={0.85}
           >
-            <Text style={[s.rangeTxt, limitDays === n && s.rangeTxtOn]}>Last {n} days</Text>
+            <Text style={[s.rangeTxt, limitDays === n && s.rangeTxtOn]}>
+              {n === 365 ? 'Last 1 year' : `Last ${n} days`}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -322,6 +328,42 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId, mine }) {
                     Productive {dev.productive_display} · {dev.task_count} task{dev.task_count !== 1 ? 's' : ''} · vs {dev.standard_hours}h standard
                   </Text>
 
+                  {/* What the developer wrote at End Workday.
+                      The note has always been stored — on the session AND frozen onto
+                      the snapshot — drawn into the PNG and posted to the WhatsApp
+                      group. It was simply never read back here, which made it
+                      write-only in the app: typed once, then unreadable by the person
+                      who typed it. The image only carries a single truncated line of
+                      it, so this block is the only place the whole note exists.
+
+                      Newlines are preserved deliberately. It is prose somebody typed
+                      into a 120pt box, and collapsing their paragraphing is how a
+                      day's summary turns into a wall. */}
+                  {dev.note ? (
+                    <View style={s.noteBox}>
+                      <View style={s.noteHead}>
+                        <Ionicons name="create-outline" size={13} color={COLORS.muted} />
+                        <Text style={s.noteHeadTxt}>End-of-day note</Text>
+                      </View>
+                      <Text style={s.noteTxt}>{dev.note}</Text>
+                    </View>
+                  ) : null}
+
+                  {/* Sits directly under the note, as it does on the web: if the day
+                      was reopened, the figures above may no longer be the ones the
+                      client was sent, and the reason is what says so. */}
+                  {dev.reopen_reason ? (
+                    <View style={s.reopenBox}>
+                      <View style={s.noteHead}>
+                        <Ionicons name="lock-open-outline" size={13} color="#B45309" />
+                        <Text style={s.reopenHeadTxt}>Reopened workday</Text>
+                        {dev.reopened_by ? <Text style={s.reopenWho}>— by {dev.reopened_by}</Text> : null}
+                      </View>
+                      {dev.reopened_at ? <Text style={s.reopenWhen}>on {dev.reopened_at}</Text> : null}
+                      <Text style={s.reopenTxt}>{dev.reopen_reason}</Text>
+                    </View>
+                  ) : null}
+
                   {/* Level 3 — the image */}
                   {openDevs[dev.snapshot_id] && (
                     <View style={s.imgBox}>
@@ -358,6 +400,12 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId, mine }) {
                               <Text style={s.imgBtnTxt}>Share</Text>
                             </TouchableOpacity>
                           </View>
+                          {/* When this picture was frozen. A snapshot is a claim about
+                              a day, and "which day" is not the same question as "when
+                              was this taken" once a day has been reopened and re-ended. */}
+                          {dev.generated_at ? (
+                            <Text style={s.savedAt}>Saved {dev.generated_at}</Text>
+                          ) : null}
                         </>
                       )}
                     </View>
@@ -475,6 +523,18 @@ const s = StyleSheet.create({
   presPill: { borderRadius: 7, paddingHorizontal: 8, paddingVertical: 3 },
   presTxt: { fontSize: 12, fontWeight: '900' },
   devMeta: { fontSize: 11, color: COLORS.faint, marginLeft: 22, marginTop: 3 },
+  // The end-of-day note and, under it, why the day was reopened. Indented to the
+  // same 22 as devMeta so they read as belonging to the developer above them.
+  noteBox: { marginLeft: 22, marginTop: 8, padding: 9, borderRadius: 9, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: COLORS.line },
+  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 4, flexWrap: 'wrap' },
+  noteHeadTxt: { fontSize: 10.5, fontWeight: '900', color: COLORS.muted, letterSpacing: 0.3, textTransform: 'uppercase' },
+  noteTxt: { fontSize: 12.5, color: COLORS.ink, lineHeight: 18 },
+  reopenBox: { marginLeft: 22, marginTop: 8, padding: 9, borderRadius: 9, backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FCD34D' },
+  reopenHeadTxt: { fontSize: 10.5, fontWeight: '900', color: '#B45309', letterSpacing: 0.3, textTransform: 'uppercase' },
+  reopenWho: { fontSize: 10.5, color: COLORS.muted, fontWeight: '600' },
+  reopenWhen: { fontSize: 10.5, color: COLORS.muted, marginBottom: 3 },
+  reopenTxt: { fontSize: 12.5, color: '#92400E', lineHeight: 18 },
+  savedAt: { fontSize: 10.5, color: COLORS.faint, textAlign: 'center', marginTop: 6 },
 
   imgBox: { marginTop: 10 },
   imgLoading: { paddingVertical: 26, alignItems: 'center' },
