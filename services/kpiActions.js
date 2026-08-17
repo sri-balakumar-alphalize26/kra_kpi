@@ -195,6 +195,15 @@ export async function fetchTaskDetails(kpiId) {
       reassignments: res.reassignments || [],
       files: res.files || [],
       links: res.links || [],
+      // The estimate's chain and the task's audit trail. This mapping is an
+      // allow-list, so a field the route starts sending is invisible to the screen
+      // until it is named here — which is exactly what happened to these two.
+      // Defaulted, so an older server that does not send them degrades to the
+      // single latest-reason line rather than throwing.
+      estimate_history: res.estimate_history || [],
+      activity_log: res.activity_log || [],
+      activity_total: res.activity_total || 0,
+      activity_limit: res.activity_limit || 0,
     };
   } catch (e) {
     log.warn('fetchTaskDetails failed', e?.message);

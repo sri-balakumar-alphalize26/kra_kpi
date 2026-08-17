@@ -1229,6 +1229,14 @@ export default function KpiActionBoard({
   // Null closes the dialog; the board stays exactly where it was.
   const [addTimeFor, setAddTimeFor] = useState(null);
 
+  // The app's own alert/confirm, replacing Alert.alert. The OS dialog is square,
+  // grey and system-font — visibly not this app, on a screen that is otherwise
+  // rounded cards and gradients. `dlg` holds one at a time; a confirm is any that
+  // carries onConfirm.
+  const [dlg, setDlg] = useState(null);
+  const say = useCallback((title, message, tone = 'info') => setDlg({ title, message, tone }), []);
+  const confirm = useCallback((opts) => setDlg({ ...opts, tone: opts.tone || 'warn' }), []);
+
   // Cross-fade the body when switching board ⇄ list (also fades in on first mount).
   //
   // Fades from 0.6, not from 0. At 0 the screen went completely blank the instant
