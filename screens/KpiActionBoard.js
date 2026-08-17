@@ -3,9 +3,9 @@
 // Important, Urgent, In Progress, Paused, …), each with a count badge and its
 // cards stacked vertically. Each card exposes the state-appropriate actions
 // (Start / Resume / Complete / Pause / Reassign).
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Dimensions,
+  View, Text, ScrollView, FlatList, TouchableOpacity, TextInput, StyleSheet, Dimensions,
   ActivityIndicator, Alert, Modal, StatusBar as RNStatusBar, Animated, Easing,
   Platform, UIManager, LayoutAnimation, findNodeHandle, Keyboard,
 } from 'react-native';
@@ -321,6 +321,18 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
   const canResume = ['paused', 'hold', 'rework'].includes(st);
   const canComplete = ['in_progress', 'paused', 'hold', 'rework'].includes(st);
   const canPause = st === 'in_progress';
+  // Offer Add time only once the work is at or past the number it was given.
+  // Mirrors canAddTime in kpi_action.js:1989 — same states, same 80% threshold,
+  // and the same "no estimate means offer it immediately", since any time spent
+  // overruns an estimate of zero. The server still has the final say (it refuses
+  // once the client owns the number, and for someone else's task); this only
+  // decides whether the button is worth showing.
+  const canAddTime = (() => {
+    if (!['in_progress', 'paused'].includes(st)) return false;
+    const estSec = estimateSecs(task);
+    if (estSec <= 0) return true;
+    return (task.timer_total_seconds || 0) >= estSec * 0.8;
+  })();
   // The SERVER's answer on whether work may begin (kra.kpi._start_block, shipped
   // as can_start), not a second opinion derived from task_state. A paused or
   // never-started workday, an unaccepted task and an unapproved client all land
@@ -371,7 +383,32 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
         ) : null}
         <MetaRow icon="time-outline" label="Time" value={fmtHMS(liveSeconds(task, nowMs))}
           valueColor={running ? COLORS.green : undefined} />
-        <MetaRow icon="flag-outline" label="Estimate" value={task.estimate_display || '00:00'} />
+        {/* Why the estimate grew, on the card rather than only in the audit log —
+            an estimate that changed with nothing explaining it reads exactly like
+            one that was simply wrong. /kra_kpi/tasks/get has always sent these
+            three fields (kra_api.py map_rec) and the app read none of them, so the
+            overrun was only explicable by opening Task Details or the web.
+
+            The count and the reason are checked separately, matching the web: an
+            extension can exist without a reason surviving on the record, and the
+            reason is overwritten on each extension so only the latest is here. */}
+        <MetaRow
+          icon="flag-outline" label="Estimate" value={task.estimate_display || '00:00'}
+          trailing={task.estimate_extension_count ? (
+            <View
+              style={s.extBadge}
+              accessibilityLabel={`Extended ${task.estimate_extension_count} time(s) by ${task.estimate_extended_by_name || 'someone'}`}
+            >
+              <Ionicons name="arrow-up" size={10} color="#B45309" />
+              <Text style={s.extBadgeTxt}>extended {task.estimate_extension_count}</Text>
+            </View>
+          ) : null}
+        />
+        {/* One line, always. The lane is a fixed 278px and the reason can be 255
+            characters; the web truncates it to a single line for the same reason. */}
+        {task.estimate_extend_reason ? (
+          <Text style={s.extReason} numberOfLines={1}>{task.estimate_extend_reason}</Text>
+        ) : null}
       </View>
 
       {/* What the requester actually asked for. /kra_kpi/tasks/get has always sent
@@ -477,8 +514,18 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
                   what you moved to. Per-card on purpose — with multitask running
                   only this task pauses and the others carry on ticking. */}
               {canPause && <Btn label="Switch" icon="swap-horizontal" kind="ghost" onPress={() => onAction('switch', task)} />}
+              {/* Extend the estimate from the card, the way the web does. It only
+                  appears once the work is near or past the number it was given —
+                  in_progress or paused, and 80% of the estimate spent — because
+                  before that there is nothing to explain. A task with no estimate
+                  at all offers it straight away, since anything is an overrun of
+                  zero. Matches canAddTime in kpi_action.js:1989. */}
+              {canAddTime && <Btn label="Add time" icon="hourglass-outline" kind="purple" onPress={() => onAction('addTime', task)} />}
               {canComplete && <Btn label="Complete" icon="checkmark-circle" kind="red" onPress={() => onAction('complete', task)} />}
-              {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="ghostRed" onPress={() => onAction('partial', task)} />}
+              {/* Teal, not ghostRed. Sharing Delete's colour made a routine
+                  "some of it is done" read as destructive — the web gave it its
+                  own class (kpi-btn-partial) for exactly that reason. */}
+              {canComplete && <Btn label="Partial Finish" icon="flag-outline" kind="teal" onPress={() => onAction('partial', task)} />}
               {/* Developer finished it → admin reviews: Approve (with QA checklist) sends it
                   to the client; Reject sends it back to the same developer with a reason. */}
               {isAdmin && st === 'partially_completed' && (
@@ -598,7 +645,7 @@ function MeetingPicker({ people, busy, query, setQuery, picked, setPicked }) {
 // by area is what makes both reachable — the old version put the accordion on
 // the whole row and the details on the name alone, so which one you got depended
 // on hitting a word.
-function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin,
+function TaskListRowBase({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmin,
                        reminder, pulse, onRowRef, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
@@ -639,7 +686,10 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
           flex) is what makes "name → details, anywhere else → dropdown" reliable:
           the inner touchable swallows taps on the text, everything else — the
           spacer, the Live pill, the arrow — falls through to the outer one. */}
-      <TouchableOpacity style={s.listHead} onPress={onToggle} activeOpacity={0.7}>
+      {/* Reports its own id, so the parent hands every row one stable callback
+          rather than a fresh closure each render. The arrow is created inside the
+          memoised component, so it is only rebuilt when this row actually is. */}
+      <TouchableOpacity style={s.listHead} onPress={() => onToggle(task.id)} activeOpacity={0.7}>
         <View style={[s.listDot, { backgroundColor: p.fg }]} />
         <TouchableOpacity style={s.listNameHit} activeOpacity={0.6} disabled={!canOpen}
           onPress={() => canOpen && onOpenDetail(task)}>
@@ -652,12 +702,16 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
             numberOfLines={1} ellipsizeMode="clip">{task.name}</Text>
           <Svg style={s.listNameFade} width={FADE_W} height="100%" pointerEvents="none">
             <Defs>
-              <SvgLinearGradient id="nameFade" x1="0" y1="0" x2="1" y2="0">
+              {/* Per-row id. SVG ids are document-global, so every row sharing
+                  "nameFade" meant they all painted with whichever definition
+                  mounted last — the same collision GradientButton was fixed for
+                  in 514f818. Keyed on the task id, which is already unique here. */}
+              <SvgLinearGradient id={`nameFade-${task.id}`} x1="0" y1="0" x2="1" y2="0">
                 <Stop offset="0" stopColor="#ffffff" stopOpacity="0" />
                 <Stop offset="1" stopColor="#ffffff" stopOpacity="1" />
               </SvgLinearGradient>
             </Defs>
-            <Rect x="0" y="0" width={FADE_W} height="100%" fill="url(#nameFade)" />
+            <Rect x="0" y="0" width={FADE_W} height="100%" fill={`url(#nameFade-${task.id})`} />
           </Svg>
         </TouchableOpacity>
         <View style={s.listSpacer} />
@@ -695,7 +749,11 @@ function TaskListRow({ task, expanded, onToggle, onAction, busyId, nowMs, isAdmi
   );
 }
 
-function TaskCard({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onMeasure, onOpenDetail, readOnly = false }) {
+// Memoised for the same reason as TaskCard — an expanded lane can hold hundreds
+// of rows, and each one mounts two Animated.Values and its own SVG gradient.
+const TaskListRow = React.memo(TaskListRowBase);
+
+function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onMeasure, onOpenDetail, readOnly = false }) {
   // Same rule as TaskListRow: with the client → not the developer's to open.
   const canOpen = onOpenDetail && (isAdmin || task.task_state !== 'awaiting_client');
   const p = PRIORITY[task.priority] || PRIORITY.regular;
@@ -736,7 +794,10 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onM
   return (
     <Animated.View
       style={{ transform: [{ scale }] }}
-      onLayout={onMeasure ? (e) => onMeasure(e.nativeEvent.layout.y) : undefined}
+      // Reports its own id alongside the offset, so the parent can hand one stable
+      // callback to every card instead of minting a closure per row — which is what
+      // lets React.memo below actually hold.
+      onLayout={onMeasure ? (e) => onMeasure(task.id, e.nativeEvent.layout.y) : undefined}
     >
     <View style={s.card}>
       {/* Notification-focus highlight — a contrasting wash + ring that fades in
@@ -778,20 +839,37 @@ function TaskCard({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onM
   );
 }
 
+// Memoised, because the board re-renders every second: a clock tick drives the
+// live timer, and without this every card in every lane was rebuilt each time —
+// hundreds of them, for one running task's seconds column. The call sites pass
+// `nowMs` only to the task that is actually running (0 otherwise), so an idle
+// card's props are genuinely unchanged and the memo holds.
+const TaskCard = React.memo(TaskCardBase);
+
 // A lane column that fades + slides up on mount, staggered by its index so the
-// columns cascade in left-to-right when the board first renders. Plays once.
+// columns cascade in left-to-right the FIRST time the board is shown.
 // Keeps the lane's onLayout (used to record its x-offset for scroll-to-focus).
-function AnimatedLane({ index, style, onLayout, children }) {
-  const enter = useRef(new Animated.Value(0)).current;
+//
+// `stagger` is what makes it play once rather than once per mount. The board
+// subtree unmounts every time the view toggles, so this used to replay in full on
+// each switch: nine lanes at delay index*80 plus 380ms of duration meant the last
+// lane did not finish arriving until roughly a second after the tap. That second
+// WAS the "switching is slow" — nothing was being fetched or regrouped, the board
+// was just refusing to show itself. Off, the lanes are simply there.
+function AnimatedLane({ index, stagger, style, onLayout, children }) {
+  const enter = useRef(new Animated.Value(stagger ? 0 : 1)).current;
   useEffect(() => {
-    Animated.timing(enter, {
+    if (!stagger) { enter.setValue(1); return undefined; }
+    const anim = Animated.timing(enter, {
       toValue: 1,
       duration: 380,
       delay: index * 80,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start();
-  }, [enter, index]);
+    });
+    anim.start();
+    return () => anim.stop();
+  }, [enter, index, stagger]);
   const animStyle = {
     opacity: enter,
     transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [22, 0] }) }],
@@ -803,12 +881,52 @@ function AnimatedLane({ index, style, onLayout, children }) {
   );
 }
 
+// Card-button gradients, lifted from the web's kra_style.scss so the two boards
+// read as one product. Each pair is the 135° gradient that class paints:
+//
+//   primary   btn-primary        Start
+//   green     btn-success        Resume / Accept / Approve
+//   amber     btn-warning        Pause / Revert
+//   red       btn-danger         Complete
+//   teal      kpi-btn-partial    Partial Finish — its OWN colour. It used to share
+//                                ghostRed with Delete, which is what the web fixed
+//                                by giving it a class of its own.
+//   purple    kpi-btn-addtime    Add time
+//   ghost     btn-secondary      Switch / Reassign
+//   ghostRed  btn-outline-danger Reject / Delete
+const BTN_GRAD = {
+  primary:  ['#00b3ff', '#0066ff'],
+  green:    ['#39ff6a', '#00c853'],
+  amber:    ['#ffd000', '#ff8a00'],
+  red:      ['#ff4d6d', '#e00030'],
+  teal:     ['#2ee6d6', '#00a99d'],
+  purple:   ['#8b7bff', '#4b32e0'],
+  ghost:    ['#9aa8bd', '#5b6b82'],
+  ghostRed: ['#ff8fa3', '#ff2d55'],
+};
+
 // `blocked` = the server won't allow this yet. Dimmed, but deliberately still
 // pressable: the handler answers with the reason instead of the action, which is
 // the only way to explain a gated button on a device with no tooltips.
 function Btn({ label, icon, kind, onPress, blocked = false }) {
+  const grad = BTN_GRAD[kind];
+  // Per-instance id, via useId for the same reason GradientButton uses it: SVG ids
+  // are document-global, so a shared one leaves every button painted with whichever
+  // definition mounted last. A board can hold hundreds of these at once.
+  const gid = `bg${String(useId()).replace(/[^a-zA-Z0-9]/g, '')}`;
+  // Measured, not `width="100%"`. These buttons size themselves to their label, and
+  // a percentage in react-native-svg resolves against the SVG viewport as it was
+  // when the rect was laid out — which for an auto-width button is before the text
+  // has measured. The result was a gradient that stopped short of the right edge:
+  // the button looked half-painted. Numbers cannot drift like that.
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const onBtnLayout = (e) => {
+    const { width, height } = e.nativeEvent.layout;
+    setSize((p) => (p.w === width && p.h === height ? p : { w: width, h: height }));
+  };
   return (
     <TouchableOpacity
+      onLayout={onBtnLayout}
       style={[s.btn, s[`btn_${kind}`], blocked && s.btnBlocked]}
       // Haptics live HERE rather than in the eight call sites, so every action
       // button feels the same and a new one can't be added without it. A blocked
@@ -818,8 +936,24 @@ function Btn({ label, icon, kind, onPress, blocked = false }) {
       onPress={(e) => { blocked ? H.err() : H.tap(); onPress && onPress(e); }}
       activeOpacity={0.85}
     >
-      <Ionicons name={blocked ? 'lock-closed' : icon} size={14} color={s[`btnTxt_${kind}`].color} />
-      <Text style={[s.btnTxt, s[`btnTxt_${kind}`]]}>{label}</Text>
+      {/* The gradient sits behind the label as an absolutely-filled SVG, the same
+          way GradientButton does it — react-native-svg is already a dependency,
+          and expo-linear-gradient would be a native module added for something
+          the installed library draws. A blocked button keeps its flat fill, so
+          "dimmed and unavailable" still reads differently from "ready". */}
+      {grad && !blocked && size.w > 0 ? (
+        <Svg style={StyleSheet.absoluteFill} width={size.w} height={size.h} pointerEvents="none">
+          <Defs>
+            <SvgLinearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
+              <Stop offset="0" stopColor={grad[0]} />
+              <Stop offset="1" stopColor={grad[1]} />
+            </SvgLinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width={size.w} height={size.h} rx={10} ry={10} fill={`url(#${gid})`} />
+        </Svg>
+      ) : null}
+      <Ionicons name={blocked ? 'lock-closed' : icon} size={14} color={grad && !blocked ? '#fff' : s[`btnTxt_${kind}`].color} />
+      <Text style={[s.btnTxt, s[`btnTxt_${kind}`], grad && !blocked && { color: '#fff' }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -1079,15 +1213,41 @@ export default function KpiActionBoard({
   // replaces its list. Its own component owns the loading/writes; the board just
   // says which task and takes it back on Back.
   const [detailTask, setDetailTask] = useState(null);
-  const openDetail = useCallback((task) => setDetailTask(task), []);
+  // Set only by the card's Add time button, so Details knows to open its add-time
+  // modal on arrival. Cleared on the way out, or the next plain tap on a card
+  // would reopen it.
+  const [detailAutoAddTime, setDetailAutoAddTime] = useState(false);
+  const openDetail = useCallback((task) => { setDetailAutoAddTime(false); setDetailTask(task); }, []);
 
   // Cross-fade the body when switching board ⇄ list (also fades in on first mount).
+  //
+  // Fades from 0.6, not from 0. At 0 the screen went completely blank the instant
+  // the toggle was tapped, and stayed blank for as long as the new view took to
+  // mount — so a slow switch did not read as slow, it read as broken. Starting
+  // part-visible keeps the content on screen while it settles.
   const bodyFade = useRef(new Animated.Value(1)).current;
   useEffect(() => {
-    bodyFade.setValue(0);
-    Animated.timing(bodyFade, { toValue: 1, duration: 240, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+    bodyFade.setValue(0.6);
+    Animated.timing(bodyFade, { toValue: 1, duration: 180, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
   }, [viewMode, bodyFade]);
   const bodyStyle = { flex: 1, opacity: bodyFade };
+  // The lane cascade is an introduction, so it belongs to the first time the board
+  // is seen — not to every toggle back to it.
+  const laneIntroDone = useRef(false);
+  useEffect(() => { if (viewMode === 'board') laneIntroDone.current = true; }, [viewMode]);
+
+  // Stable identities for the lane FlatLists. Inline versions would be new objects
+  // and new functions on every render — and with the 1s clock tick below, that is
+  // every second — which would defeat the memoised cards entirely.
+  const laneContentStyle = useMemo(() => ({ padding: 10, paddingBottom: 24 }), []);
+  const listContentStyle = useMemo(() => ({ padding: 14, paddingBottom: 28 }), []);
+  const laneKeyExtractor = useCallback((t) => String(t.id), []);
+  const onCardMeasure = useCallback((id, y) => { cardY.current[id] = y; }, []);
+  const onRowRef = useCallback((id, r) => { listRowRefs.current[id] = r; }, []);
+  const onRowToggle = useCallback((id) => {
+    animateNext();
+    setExpandedId((prev) => (prev === id ? null : id));
+  }, []);
 
   // Workday
   // Seed from the cache so re-entry shows the right label immediately; null until
@@ -1519,6 +1679,41 @@ export default function KpiActionBoard({
 
   const lanes = useMemo(() => groupIntoLanes(filtered), [filtered]);
 
+  // The list view as ONE flat array — a heading row per non-empty lane, followed
+  // by that lane's tasks when it is open.
+  //
+  // It used to be a ScrollView mapping every open lane's rows, so opening a lane
+  // built all of them at once and the board's default view paid for it on load.
+  // Flattening lets a single FlatList virtualise headings and rows together;
+  // nesting one list per lane would not, because a VirtualizedList inside a plain
+  // ScrollView cannot windowing-cull what its parent has already laid out.
+  const listData = useMemo(() => {
+    const out = [];
+    for (const l of LANES) {
+      const items = lanes[l.key] || [];
+      if (!items.length) continue;
+      const open = expandedLanes.has(l.key);
+      out.push({ kind: 'head', key: `h:${l.key}`, lane: l, count: items.length, open });
+      if (open) for (const t of items) out.push({ kind: 'row', key: `t:${t.id}`, task: t });
+    }
+    return out;
+  }, [lanes, expandedLanes]);
+  const listKeyExtractor = useCallback((it) => it.key, []);
+  const onLaneToggle = useCallback((key) => {
+    animateNext();
+    setExpandedLanes((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }, []);
+
+  // Deliberately NOT seeding any lane open. Every heading starts closed and the
+  // reader opens the one they want — with 639 tasks, choosing a lane for them is
+  // both a guess and the most expensive thing the screen could do on arrival.
+  // A focus target from a Home stat card is the one exception, and it is applied
+  // in the initial state above.
+
   // ── Notification focus effect ────────────────────────────────────────────
   // When App passes a focusTaskId (from a notification tap): clear filters so
   // the card is guaranteed rendered, scroll the board to the card's lane and
@@ -1786,6 +1981,15 @@ export default function KpiActionBoard({
       setReminderReason(reminders[String(task.id)]?.reason || '');
       setPresetMgrOpen(false);
       setReminderFor(task); setReminderCustom(''); return;
+    }
+    // Add time opens KPI Details with its add-time modal already up, rather than
+    // the board growing a second copy. That modal validates hours/minutes and the
+    // required reason, and surfaces the server's own refusals; a duplicate here
+    // would be one more place for the two to disagree about the same rule.
+    if (kind === 'addTime') {
+      setDetailAutoAddTime(true);
+      setDetailTask(task);
+      return;
     }
     if (kind === 'reassign') {
       setReassignFor(task);
@@ -2169,7 +2373,8 @@ export default function KpiActionBoard({
     return (
       <KpiTaskDetail
         task={detailTask}
-        onBack={() => setDetailTask(null)}
+        autoAddTime={detailAutoAddTime}
+        onBack={() => { setDetailAutoAddTime(false); setDetailTask(null); }}
         onChanged={() => load({ silent: true })}
       />
     );
@@ -2541,6 +2746,7 @@ export default function KpiActionBoard({
               <AnimatedLane
                 key={l.key}
                 index={i}
+                stagger={!laneIntroDone.current}
                 style={s.lane}
                 onLayout={(e) => { laneX.current[l.key] = e.nativeEvent.layout.x; }}
               >
@@ -2549,39 +2755,49 @@ export default function KpiActionBoard({
                   <Text style={s.laneTitle} numberOfLines={1}>{l.label}</Text>
                   <View style={s.laneCount}><Text style={s.laneCountTxt}>{items.length}</Text></View>
                 </View>
-                {/* Lane body — cards stacked vertically.
-                    nestedScrollEnabled lets this scroll up/down inside the
-                    horizontal board ScrollView (required on Android). */}
-                <ScrollView
+                {/* Lane body — a FlatList, not a ScrollView + map.
+                    There is no cap on the task list (an admin's server-side domain
+                    is []), so mapping built every card in every lane on every
+                    switch — hundreds of TaskCards, each with its own meta rows and
+                    button set, in one synchronous commit. Virtualised, a lane
+                    mounts about a screenful and the toggle stops being a stall.
+                    nestedScrollEnabled lets it scroll inside the horizontal board
+                    ScrollView (required on Android). No getItemLayout: card height
+                    varies with description, buttons and the paused/gate pills, and
+                    a wrong one breaks scrolling worse than not having it. */}
+                <FlatList
                   ref={(r) => { laneRefs.current[l.key] = r; }}
                   style={s.laneBody}
-                  contentContainerStyle={{ padding: 10, paddingBottom: 24 }}
+                  contentContainerStyle={laneContentStyle}
+                  data={items}
+                  keyExtractor={laneKeyExtractor}
                   nestedScrollEnabled
                   showsVerticalScrollIndicator
-                >
-                  {items.length === 0 ? (
+                  initialNumToRender={8}
+                  maxToRenderPerBatch={8}
+                  windowSize={5}
+                  removeClippedSubviews
+                  ListEmptyComponent={(
                     <View style={s.laneEmpty}>
                       <MaterialCommunityIcons name="tray" size={28} color={COLORS.faint} />
                       <Text style={s.laneEmptyTxt}>Nothing here yet</Text>
                     </View>
-                  ) : (
-                    items.map((t) => (
-                      <TaskCard
-                        key={t.id}
-                        task={t}
-                        onAction={runAction}
-                        busyId={busyId}
-                        nowMs={nowMs}
-                        isAdmin={isAdmin}
-                        reminder={reminders[String(t.id)]}
-                        pulse={pulseId === t.id}
-                        onMeasure={(y) => { cardY.current[t.id] = y; }}
-                        onOpenDetail={openDetail}
-                        readOnly={readOnly}
-                      />
-                    ))
                   )}
-                </ScrollView>
+                  renderItem={({ item: t }) => (
+                    <TaskCard
+                      task={t}
+                      onAction={runAction}
+                      busyId={busyId}
+                      nowMs={t.task_state === 'in_progress' ? nowMs : 0}
+                      isAdmin={isAdmin}
+                      reminder={reminders[String(t.id)]}
+                      pulse={pulseId === t.id}
+                      onMeasure={onCardMeasure}
+                      onOpenDetail={openDetail}
+                      readOnly={readOnly}
+                    />
+                  )}
+                />
               </AnimatedLane>
             );
           })}
@@ -2591,11 +2807,20 @@ export default function KpiActionBoard({
         /* List view — vertical accordion, grouped by status. Same filtered data,
            same actions; each row expands to reveal the shared TaskDetailBody. */
         <Animated.View style={bodyStyle}>
-        <ScrollView
+        <FlatList
           ref={listScrollRef}
           style={s.listScroll}
-          contentContainerStyle={{ padding: 14, paddingBottom: 28 }}
+          contentContainerStyle={listContentStyle}
           showsVerticalScrollIndicator={false}
+          data={listData}
+          keyExtractor={listKeyExtractor}
+          // Only about a screenful is built up front, so opening a 200-task lane
+          // — or landing on the board at all — costs a screenful rather than the
+          // whole set.
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={7}
+          removeClippedSubviews
           // A tick per "notch" of travel. scrollEventThrottle is the frame rate
           // of the events; the real rate-limiting is inside scrollTick, which
           // needs both a minimum distance and a minimum gap — without the
@@ -2603,57 +2828,42 @@ export default function KpiActionBoard({
           // people turn off.
           scrollEventThrottle={32}
           onScroll={(e) => H.scrollTick(e.nativeEvent.contentOffset.y)}
-        >
-          {filtered.length === 0 ? (
+          ListEmptyComponent={(
             <View style={s.center}>
               <MaterialCommunityIcons name="tray" size={40} color={COLORS.faint} />
               <Text style={s.centerTxt}>No tasks match.</Text>
             </View>
-          ) : (
-            LANES.map((l) => {
-              const items = lanes[l.key] || [];
-              if (items.length === 0) return null;
-              const laneOpen = expandedLanes.has(l.key);
-              return (
-                <View key={l.key} style={{ marginBottom: 16 }}>
-                  {/* Level 1: status heading — tap the arrow to reveal its tasks. */}
-                  <TouchableOpacity
-                    style={[s.listSection, { backgroundColor: l.color }]}
-                    onPress={() => { animateNext(); setExpandedLanes((prev) => {
-                      const next = new Set(prev);
-                      next.has(l.key) ? next.delete(l.key) : next.add(l.key);
-                      return next;
-                    }); }}
-                    activeOpacity={0.85}
-                  >
-                    <Ionicons name={laneOpen ? 'chevron-down' : 'chevron-forward'} size={18} color="#fff" />
-                    <Text style={s.listSectionTxt} numberOfLines={1}>{l.label}</Text>
-                    <View style={s.laneCount}><Text style={s.laneCountTxt}>{items.length}</Text></View>
-                  </TouchableOpacity>
-                  {/* Level 2: task rows — tap the row for details, the arrow for
-                      the action buttons. */}
-                  {laneOpen && items.map((t) => (
-                    <TaskListRow
-                      key={t.id}
-                      task={t}
-                      expanded={expandedId === t.id}
-                      onToggle={() => { animateNext(); setExpandedId(expandedId === t.id ? null : t.id); }}
-                      onAction={runAction}
-                      busyId={busyId}
-                      nowMs={nowMs}
-                      isAdmin={isAdmin}
-                      reminder={reminders[String(t.id)]}
-                      pulse={pulseId === t.id}
-                      onRowRef={(id, r) => { listRowRefs.current[id] = r; }}
-                      onOpenDetail={openDetail}
-                      readOnly={readOnly}
-                    />
-                  ))}
-                </View>
-              );
-            })
           )}
-        </ScrollView>
+          renderItem={({ item }) => (item.kind === 'head' ? (
+            /* Level 1: status heading — tap to reveal its tasks. */
+            <TouchableOpacity
+              style={[s.listSection, { backgroundColor: item.lane.color }, s.listSectionSpaced]}
+              onPress={() => onLaneToggle(item.lane.key)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name={item.open ? 'chevron-down' : 'chevron-forward'} size={18} color="#fff" />
+              <Text style={s.listSectionTxt} numberOfLines={1}>{item.lane.label}</Text>
+              <View style={s.laneCount}><Text style={s.laneCountTxt}>{item.count}</Text></View>
+            </TouchableOpacity>
+          ) : (
+            /* Level 2: task rows — tap the row for details, the arrow for the
+               action buttons. */
+            <TaskListRow
+              task={item.task}
+              expanded={expandedId === item.task.id}
+              onToggle={onRowToggle}
+              onAction={runAction}
+              busyId={busyId}
+              nowMs={item.task.task_state === 'in_progress' ? nowMs : 0}
+              isAdmin={isAdmin}
+              reminder={reminders[String(item.task.id)]}
+              pulse={pulseId === item.task.id}
+              onRowRef={onRowRef}
+              onOpenDetail={openDetail}
+              readOnly={readOnly}
+            />
+          ))}
+        />
         </Animated.View>
       )}
       </Animated.View>
@@ -4314,6 +4524,9 @@ const s = StyleSheet.create({
   // List (accordion) view
   listScroll: { flex: 1 },
   listSection: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 12, marginBottom: 8 },
+  // The gap that used to come from each lane's wrapper View. Flattening the list
+  // for virtualisation removed the wrapper, so the heading carries it itself.
+  listSectionSpaced: { marginTop: 8 },
   listSectionTxt: { flex: 1, color: '#fff', fontSize: 14, fontWeight: '900', letterSpacing: 0.2 },
   listRow: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, marginBottom: 8, overflow: 'hidden' },
   // Notification-arrival highlight: brighter border + a colored wash overlay.
@@ -4513,6 +4726,11 @@ const s = StyleSheet.create({
   descTxt: { fontSize: 12.5, color: COLORS.ink, lineHeight: 18 },
   metaBlock: { gap: 8, marginBottom: 12 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // Estimate extension. Same amber as KpiTaskDetail's estExtend, so the board and
+  // the detail screen describe one state in one colour.
+  extBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#FEF3C7', borderRadius: 7, paddingHorizontal: 6, paddingVertical: 2 },
+  extBadgeTxt: { fontSize: 10.5, fontWeight: '800', color: '#B45309' },
+  extReason: { fontSize: 11.5, color: '#B45309', fontStyle: 'italic', lineHeight: 16, marginTop: -2 },
   metaLabel: { fontSize: 12.5, color: COLORS.muted, width: 66 },
   metaValue: { flex: 1, fontSize: 13, color: COLORS.ink, fontWeight: '700' },
   avatar: { width: 18, height: 18, borderRadius: 9, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
@@ -4520,14 +4738,33 @@ const s = StyleSheet.create({
 
   btnRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 2 },
   btnBusy: { height: 36, justifyContent: 'center', paddingLeft: 6 },
-  btn: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 36, paddingHorizontal: 13, borderRadius: 10 },
-  btnTxt: { fontSize: 12.5, fontWeight: '800' },
+  // overflow:hidden is what makes the gradient fill the whole pill. Without it the
+  // SVG rect paints past the rounded corners and is not clipped to them, which
+  // reads as a button only half coloured.
+  // flexShrink:0 so a button keeps the width its label needs and WRAPS to the next
+  // line instead of being squeezed. btnRow already wraps; without this the last
+  // button on a line was compressed and — now that overflow is hidden for the
+  // gradient — its label was clipped mid-word rather than spilling visibly.
+  // overflow:hidden is what makes the gradient fill the whole pill: without it the
+  // SVG rect paints past the rounded corners instead of being clipped to them.
+  btn: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 36, paddingHorizontal: 13, borderRadius: 10, overflow: 'hidden', flexShrink: 0 },
+  // flexShrink:0 here too — a Text that shrinks lets the button shrink with it,
+  // which is the other half of a label getting clipped instead of wrapping.
+  btnTxt: { fontSize: 12.5, fontWeight: '800', flexShrink: 0 },
   btn_primary: { backgroundColor: COLORS.primary }, btnTxt_primary: { color: '#fff' },
   btn_green: { backgroundColor: COLORS.green }, btnTxt_green: { color: '#fff' },
   btn_amber: { backgroundColor: COLORS.amber }, btnTxt_amber: { color: '#fff' },
   btn_red: { backgroundColor: COLORS.red }, btnTxt_red: { color: '#fff' },
-  btn_ghost: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: COLORS.line }, btnTxt_ghost: { color: COLORS.muted },
-  btn_ghostRed: { backgroundColor: COLORS.redBg, borderWidth: 1.5, borderColor: '#F3C4C0' }, btnTxt_ghostRed: { color: COLORS.red },
+  // Filled, not outlined — the web's btn-secondary and btn-outline-danger are both
+  // gradient-filled with white text. The flat colour here is the gradient's dark
+  // end, so the frame before the button has measured itself (and the blocked
+  // state, which paints no gradient) still reads as the same button.
+  btn_ghost: { backgroundColor: '#5b6b82' }, btnTxt_ghost: { color: '#fff' },
+  btn_ghostRed: { backgroundColor: '#ff2d55' }, btnTxt_ghostRed: { color: '#fff' },
+  // Their own colours, matching kpi-btn-partial and kpi-btn-addtime on the web.
+  // The flat fill is the blocked/fallback state; BTN_GRAD paints the rest.
+  btn_teal: { backgroundColor: '#00a99d' }, btnTxt_teal: { color: '#fff' },
+  btn_purple: { backgroundColor: '#4b32e0' }, btnTxt_purple: { color: '#fff' },
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 30 },
   centerTxt: { fontSize: 14.5, color: COLORS.muted, textAlign: 'center' },

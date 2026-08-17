@@ -153,7 +153,10 @@ function Empty({ text }) {
   return <Text style={s.empty}>{text}</Text>;
 }
 
-export default function KpiTaskDetail({ task, onBack, onChanged }) {
+// autoAddTime: arrived from the board's "Add time" button, so open that modal
+// straight away rather than making the user find the link again on a screen they
+// were sent to for exactly one reason.
+export default function KpiTaskDetail({ task, onBack, onChanged, autoAddTime = false }) {
   const [data, setData] = useState(null);       // { task, meta, manuals, progress, github, reassignments, files, links }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -175,7 +178,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 
   // Add time to the estimate. Reason required — the server refuses without one,
   // and it is what shows on the task next to the new number.
-  const [addOpen, setAddOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(!!autoAddTime);
   const [addH, setAddH] = useState('');
   const [addM, setAddM] = useState('');
   const [addReason, setAddReason] = useState('');
