@@ -1124,6 +1124,13 @@ class KraKpiAPI(http.Controller):
             'estimate_display': f"{k.estimate_hours:02d}:{k.estimate_minutes:02d}",
             'estimate_hours': k.estimate_hours or 0,
             'estimate_minutes': k.estimate_minutes or 0,
+            # Why the estimate grew, carried with the number it grew to. Without
+            # these the app can extend an estimate but never show that it was
+            # extended — which is the half that stops an overrun being argued
+            # about later. /kra_kpi/tasks/get already sends them; this is the
+            # serializer /kra_kpi/task/details uses.
+            'estimate_extend_reason': k.estimate_extend_reason or '',
+            'estimate_extension_count': k.estimate_extension_count or 0,
             'timer_total_seconds': k.timer_total_seconds or 0,
             'timer_start_datetime': timer_start_iso,
             'paused_reason': k.paused_reason or "",

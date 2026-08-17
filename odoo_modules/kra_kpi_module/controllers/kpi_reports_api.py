@@ -3671,6 +3671,22 @@ class KpiReportsAPI(http.Controller):
                                        'task_count'])
             payload = sess._daily_summary_payload(full_day=True)
             payload['status'] = True
+            # Does ending the day post to a WhatsApp group, and is the note part
+            # of it? The End Workday dialog asks for that note, so it has to be
+            # able to say where it goes. Reported as a fact about the current
+            # configuration, never assumed — if no group is set, or the event is
+            # switched off, the app must not claim otherwise.
+            try:
+                Event = request.env['kpi.wa.group.event'].sudo()
+                payload['wa_group_name'] = (
+                    request.env.company.kpi_wa_group_name
+                    or request.env.company.kpi_wa_group_jid or '')
+                payload['wa_group_end_posts'] = bool(
+                    (request.env.company.kpi_wa_group_jid or '').strip()
+                    and Event.is_enabled('workday_end'))
+            except Exception:
+                payload['wa_group_name'] = ''
+                payload['wa_group_end_posts'] = False
             return payload
         except Exception as e:
             import logging
