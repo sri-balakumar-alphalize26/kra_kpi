@@ -673,9 +673,18 @@ class KpiClientInvoice(models.Model):
             })
             _logger.info("invoice %s revised by %s: %s", inv.name, self.env.user.login, reason)
 
-    def _serialize_for_list(self):
+    def _serialize_for_list(self, for_client=False):
+        """`for_client=True` strips the internal payment-record fields.
+
+        Same contract as _serialize_for_ui below, and it has to live here too:
+        these two keys are built in this dict, so a guard that only runs after
+        this method returns would be defeated by the very fields it is meant to
+        remove. `paid_by_name` in particular carries exactly what `paid_by`
+        carries, and `paid_by` was already being stripped — so a client was told
+        which member of staff recorded their payment through the sibling field.
+        """
         self.ensure_one()
-        return {
+        result = {
             'id': self.id,
             'name': self.name or '',
             'invoice_title': self.invoice_title or '',
@@ -710,6 +719,14 @@ class KpiClientInvoice(models.Model):
             'grand_total_hours': round(self.grand_total_hours or 0.0, 2),
             'line_count': len(self.line_ids),
         }
+        if for_client:
+            # WHO settled it and WHEN it was recorded are ours, not theirs. The
+            # client already sees the Paid badge; the staff name behind it is
+            # internal, and both the web and the app only ever render these
+            # inside admin-gated blocks — so removing them costs no reader.
+            result.pop('paid_by_name', None)
+            result.pop('payment_date', None)
+        return result
 
     def get_pdf_data(self):
         """Return everything the OWL/jsPDF generator needs to render a PDF invoice.
@@ -816,7 +833,9 @@ class KpiClientInvoice(models.Model):
         straight out of the browser, so a template-only guard hides nothing at all.
         """
         self.ensure_one()
-        result = self._serialize_for_list()
+        # Pass the flag DOWN — the strip at the bottom of this method cannot reach
+        # keys the list serializer builds, and that is where paid_by_name lives.
+        result = self._serialize_for_list(for_client=for_client)
         result.update({
             'notes': self._notes_as_text(),
             'project_quoted_hours': round(self.client_kra_id.client_quoted or 0.0, 2),

@@ -1413,6 +1413,9 @@ class KpiReportsAPI(http.Controller):
               'paid'    → payment_status = 'paid'
         """
         try:
+            # Decided once, not per row: it drives the payload strip below and
+            # a client's list can be long.
+            is_client_only = self._is_current_user_client_only()
             domain = []
             if params.get('client_kra_id'):
                 # Match the whole subtree, not just the exact node. The picker now
@@ -1457,7 +1460,11 @@ class KpiReportsAPI(http.Controller):
             }
             return {
                 'status': True,
-                'invoices': [i._serialize_for_list() for i in invs],
+                # for_client here too, not only on the detail route: the list is
+                # the payload a client actually receives most often, and it was
+                # carrying paid_by_name and payment_date for every invoice.
+                'invoices': [i._serialize_for_list(for_client=is_client_only)
+                             for i in invs],
                 'counts':   counts,
             }
         except Exception as e:

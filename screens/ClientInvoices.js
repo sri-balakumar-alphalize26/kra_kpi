@@ -322,8 +322,15 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
         setBusy('claim');
         try {
           const r = await svc.clientMarkPaid(id, vals.method, vals.note || '');
-          if (r?.status) { if (r.data) setDetail(r.data); flash('ok', "Thanks — we've told the team you've paid."); }
-          else flash('err', r?.message || 'Could not send.');
+          if (r?.status) {
+            // Refresh whichever view asked. Called from a list row, updating only
+            // `detail` would leave the row still offering "I've paid" for an
+            // invoice already claimed — and the server refuses the second claim,
+            // so the button would be one that can only fail.
+            if (r.data && mode === 'detail') setDetail(r.data);
+            else loadList(statusFilter);
+            flash('ok', "Thanks — we've told the team you've paid.");
+          } else flash('err', r?.message || 'Could not send.');
         } catch (e) { flash('err', 'Could not send.'); }
         finally { setBusy(null); }
       },
@@ -544,6 +551,26 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
                       <Ionicons name="arrow-undo-outline" size={14} color={COLORS.muted} /><Text style={[s.rowBtnTxt, { color: COLORS.muted }]}>Revert</Text>
                     </TouchableOpacity>
                   ) : null}
+                  {/* The client's own "I've paid", on the ROW — matching the web, where
+                      it has always been here. The app offered it only inside the
+                      invoice, so paying meant opening each one first; the whole reason
+                      to look at this list is to settle what is owed. A claim, not a
+                      settlement: it notifies the admins, who confirm. Once claimed the
+                      button is replaced rather than disabled, because the server
+                      refuses a second claim and a button that only ever errors is
+                      worse than a line of text saying what is happening. */}
+                  {portal && item.state !== 'draft' && item.payment_status !== 'paid' ? (
+                    item.client_paid_claim ? (
+                      <View style={s.rowClaimed}>
+                        <Ionicons name="hourglass-outline" size={13} color="#B45309" />
+                        <Text style={s.rowClaimedTxt}>Awaiting confirmation</Text>
+                      </View>
+                    ) : (
+                      <TouchableOpacity style={[s.rowBtn, s.rowBtnPaid]} onPress={() => clientPaid(item.id)} activeOpacity={0.85}>
+                        <Ionicons name="cash-outline" size={14} color="#fff" /><Text style={[s.rowBtnTxt, { color: '#fff' }]}>I've paid</Text>
+                      </TouchableOpacity>
+                    )
+                  ) : null}
                 </View>
               </View>
             )}
@@ -603,7 +630,12 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
                 <View style={[s.stateBadge, { backgroundColor: (STATE_COLOR[d.state] || '#64748B') + '22' }]}>
                   <Text style={[s.stateTxt, { color: STATE_COLOR[d.state] || '#64748B' }]}>{d.state}</Text>
                 </View>
-                {d.payment_status === 'paid' && d.paid_by_name ? <Text style={s.paidBy}>Paid · {d.paid_by_name}</Text> : null}
+                {/* Admin only. This showed the CLIENT which member of staff recorded
+                    their payment — `paid_by_name` carries exactly what `paid_by` does,
+                    and the server strips `paid_by` for clients while this sibling rode
+                    through untouched. The server now strips both, and this gate keeps
+                    the app honest against a server that has not been upgraded yet. */}
+                {!portal && d.payment_status === 'paid' && d.paid_by_name ? <Text style={s.paidBy}>Paid · {d.paid_by_name}</Text> : null}
               </View>
               {/* How the money actually arrived, admin only — the server withholds
                   these fields from clients for the same reason. Without it the note
@@ -641,15 +673,23 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
                 <View style={s.claimHint}>
                   <Ionicons name="cash-outline" size={13} color="#B45309" />
                   <View style={{ flex: 1 }}>
+                    {/* Both sides get the method and the date. For the admin they are
+                        what there is to reconcile against; for the CLIENT they are the
+                        receipt — the server sends client_paid_method_label and
+                        client_paid_claim_date to them precisely so, in its own words,
+                        they "can see their claim registered, rather than tapping Paid
+                        into silence and claiming again". The web has always shown them
+                        and the app showed the client neither. */}
                     <Text style={s.claimHintTxt}>
                       {portal
-                        ? 'You reported paying this invoice.'
+                        ? `You reported paying this invoice${d.client_paid_method_label ? ` by ${d.client_paid_method_label}` : ''}${d.client_paid_claim_date ? ` on ${d.client_paid_claim_date}` : ''}.`
                         : `Client marked this as paid${d.client_paid_claim_date ? ` on ${d.client_paid_claim_date}` : ''}${d.client_paid_method_label ? ` by ${d.client_paid_method_label}` : ''}.`}
                     </Text>
-                    {/* The client's own reference. The admin reconciling the payment
-                        is the one person who needs it, and it was being collected
-                        and then never shown to anybody. */}
-                    {!portal && d.client_paid_notes ? <Text style={s.claimNote}>{d.client_paid_notes}</Text> : null}
+                    {/* The reference the client typed. The admin needs it to reconcile —
+                        and the client needs to see the reference they gave, which is the
+                        only way to notice they sent the wrong one. It is their own text;
+                        withholding it from them was never protecting anything. */}
+                    {d.client_paid_notes ? <Text style={s.claimNote}>{d.client_paid_notes}</Text> : null}
                     {portal ? (
                       <Text style={s.claimNote}>Awaiting confirmation — we'll mark it paid once the payment is checked.</Text>
                     ) : (
@@ -675,8 +715,12 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
               {d.revised_on ? (
                 <View style={s.revisedHint}>
                   <Ionicons name="create-outline" size={13} color={COLORS.primary} />
+                  {/* The count matters as much as the latest reason: only the newest
+                      reason survives on the record, so "revised 3 times" is the only
+                      sign that the two earlier changes happened at all. */}
                   <Text style={s.revisedHintTxt}>
                     Revised on {d.revised_on}{d.revision_reason ? ` — ${d.revision_reason}` : ''}
+                    {d.revision_count > 1 ? ` (revised ${d.revision_count} times)` : ''}
                   </Text>
                 </View>
               ) : null}
@@ -1424,6 +1468,11 @@ const s = StyleSheet.create({
   rowBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9, borderWidth: 1, borderColor: COLORS.line, backgroundColor: '#fff' },
   rowBtnTxt: { fontSize: 12, fontWeight: '800', color: COLORS.primary },
   rowBtnPaid: { backgroundColor: COLORS.green, borderColor: COLORS.green },
+  // Replaces the "I've paid" button once the claim is in. Deliberately not a
+  // button: the amber matches the CLAIMED badge on the same row, and there is
+  // nothing left to press until an admin confirms.
+  rowClaimed: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 11, paddingVertical: 7 },
+  rowClaimedTxt: { fontSize: 12, fontWeight: '800', color: '#B45309' },
 
   showAmtRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, borderTopWidth: 1, borderTopColor: '#F1F4F9', paddingTop: 10 },
 
