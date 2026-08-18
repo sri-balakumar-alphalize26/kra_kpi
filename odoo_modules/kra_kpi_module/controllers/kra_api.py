@@ -9,6 +9,11 @@ from odoo.addons.kra_kpi_module.models.kpi_workflow import (
 # so the pause note, the non-task note and the idle note all share one number —
 # the same way kpi_reports_api.py imports it.
 from odoo.addons.kra_kpi_module.models.kpi_nontask_block import NOTE_MAX
+# Imported rather than reimplemented so the READ path caps an unclosed segment at
+# exactly the instant the self-heal would have written into it
+# (kpi_work_session._get_or_open_today). Two spellings of "end of that day" would
+# drift apart, and this one already handles the IST offset correctly.
+from odoo.addons.kra_kpi_module.models.kpi_work_session import _local_day_end_utc
 import json
 import logging
 import base64
@@ -18,6 +23,24 @@ import pytz
 import re
 
 _logger = logging.getLogger(__name__)
+
+
+def _log_day_end_utc(log):
+    """The instant an unclosed kpi.time.log stops being allowed to accrue.
+
+    A running segment is normally read as `now - start_time`, which is right while
+    it really is running. It stops being right the moment the segment is an
+    ORPHAN — never closed, because stale rows are only healed when that developer
+    next opens a workday, and one who stops logging in never triggers that. Read
+    live, such a row reports days of work nobody did.
+
+    Capping at the end of the log's own local day matches what the self-heal
+    writes when it eventually runs, so the number does not jump when it does.
+    """
+    day = log.work_date or (log.start_time.date() if log.start_time else None)
+    if not day:
+        return log.start_time
+    return _local_day_end_utc(day, log.user_id)
 
 
 def normalize_wa(number, dial, length):
@@ -917,7 +940,15 @@ class KraKpiAPI(http.Controller):
                     continue
                 d = time_map.setdefault(a.kpi_id.id, {}).setdefault(
                     a.user_id.id, {'name': a.user_id.name, 'seconds': 0.0})
-                d['seconds'] += max(0.0, (now - a.start_time).total_seconds())
+                # Bounded at the end of the segment's OWN day. A log that was never
+                # closed keeps accruing `now - start_time` for as long as it stays
+                # open, so one orphan adds days of imaginary work to a developer's
+                # total on that task — and orphans do exist: they are only healed
+                # when that user next opens a workday (_get_or_open_today), so
+                # somebody who stops logging in leaves one open indefinitely.
+                # The same cap the self-heal writes, applied on read.
+                d['seconds'] += max(0.0, (min(now, _log_day_end_utc(a)) - a.start_time)
+                                    .total_seconds())
 
         # Seconds each listed task got TODAY, for the caller. Drives the board's
         # "Today" lane: start task 1, pause, task 2, pause, task 3 — then going
@@ -950,9 +981,19 @@ class KraKpiAPI(http.Controller):
             # The running segment has duration_seconds 0 until it is closed, so a
             # task started today and still going would otherwise report 0 and be
             # missing from its own lane.
+            #
+            # work_date HERE TOO, and it is not optional: without it every log
+            # that was never closed counted as today's work forever. A timer left
+            # running yesterday lunchtime put its task in Today the next morning
+            # reading "18h 4m" — now minus a start_time from the previous day —
+            # so the lane that is supposed to empty itself at midnight instead
+            # kept the one task nobody had touched. The date filter is the whole
+            # midnight mechanism; the open segment must obey it like every closed
+            # one, and work_date is stored on this row already.
             now = fields.Datetime.now()
             for a in TimeLog.search([('kpi_id', 'in', kpis.ids),
                                      ('user_id', '=', request.env.user.id),
+                                     ('work_date', '=', today),
                                      ('is_active', '=', True)]):
                 if not (a.kpi_id and a.start_time):
                     continue
@@ -1162,9 +1203,13 @@ class KraKpiAPI(http.Controller):
                  ('work_date', '=', fields.Date.context_today(request.env.user))],
                 ['duration_seconds:sum'], ['kpi_id'], lazy=False):
             _today_secs += _g.get('duration_seconds') or 0.0
+        # Same work_date filter as the board route — the two serializers must
+        # agree, or a card refreshed through this path would rejoin the Today
+        # lane it was just correctly dropped from.
         _now = fields.Datetime.now()
         for _a in _tl.search([('kpi_id', '=', k.id),
                               ('user_id', '=', request.env.user.id),
+                              ('work_date', '=', fields.Date.context_today(request.env.user)),
                               ('is_active', '=', True)]):
             if _a.start_time:
                 _today_secs += max(0.0, (_now - _a.start_time).total_seconds())

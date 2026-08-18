@@ -377,9 +377,18 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
             <View key={tu.user_id} style={s.metaRow}>
               <View style={s.avatar}><Text style={s.avatarTxt}>{initials(tu.user_name)}</Text></View>
               <Text style={[s.metaValue, { flex: 1 }]} numberOfLines={1}>
-                {tu.user_name}{tu.is_current ? ' (currently working)' : ''}
+                {/* is_current is `uid === k.user_id.id` (kra_api.py map_rec) — it means
+                    "this row is the task's CURRENT ASSIGNEE", not "is working right
+                    now". Labelling it "currently working" put that phrase on every
+                    paused, on-hold and completed task the assignee had ever touched,
+                    which is the one reading it cannot support. Whether work is
+                    actually running is task_state, so say that only when it is. */}
+                {tu.user_name}{tu.is_current ? (running ? ' (currently working)' : ' (assignee)') : ''}
               </Text>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: tu.is_current ? COLORS.green : COLORS.muted, marginLeft: 8 }}>{tu.display}</Text>
+              {/* Green on the same condition as the label above, for the same reason:
+                  it is the "live" colour everywhere else on this card, so painting
+                  the assignee green on a paused task said running twice over. */}
+              <Text style={{ fontSize: 13, fontWeight: '700', color: (tu.is_current && running) ? COLORS.green : COLORS.muted, marginLeft: 8 }}>{tu.display}</Text>
             </View>
           ))
         ) : (
