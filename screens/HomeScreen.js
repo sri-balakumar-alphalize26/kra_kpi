@@ -8,6 +8,7 @@ import {
   TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import Constants from 'expo-constants';
 import { BlurView } from 'expo-blur';
 import Svg, { Path, Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -29,6 +30,14 @@ import { requestOtp, verifyOtp } from '../services/appAuth';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+
+// The version in the footer below, taken from the app config instead of typed
+// in. It was hardcoded `v1.0` here and in the other screen's footer, so it was
+// already wrong while app.json said 1.0.0 and stayed wrong when that became
+// 1.1.0 — a bump could never reach it. expoConfig IS app.json, so the number
+// on screen and the number we ship cannot disagree again.
+const APP_VERSION = Constants.expoConfig?.version || '';
+
 
 // 369-brand colors (sampled from the logo): steel blue letters + orange arrow.
 const BRAND_BLUE = '#2E86C7';
@@ -1173,7 +1182,7 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
           <Text style={s.logoutTxt}>Log Out</Text>
         </TouchableOpacity>
 
-        <Text style={s.profFooter}>Alphalize KRA & KPI · v1.0</Text>
+        <Text style={s.profFooter}>Alphalize KRA & KPI | v{APP_VERSION}</Text>
         </Animated.View>
       </ScrollView>
     </View>

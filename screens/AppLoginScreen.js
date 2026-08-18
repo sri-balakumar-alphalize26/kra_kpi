@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView, Platform, ScrollView, Animated, Easing, Dimensions,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path, Circle, Ellipse } from 'react-native-svg';
@@ -17,6 +18,14 @@ import { saveSession } from '../api/session';
 import { loginCheck, appLogin, setAppPassword, requestOtp, verifyOtp, getMobileConfig } from '../services/appAuth';
 import { createLogger } from '../api/logger';
 import * as H from '../utils/haptics';
+
+// The version in the footer below, taken from the app config instead of typed
+// in. It was hardcoded `v1.0` here and in the other screen's footer, so it was
+// already wrong while app.json said 1.0.0 and stayed wrong when that became
+// 1.1.0 — a bump could never reach it. expoConfig IS app.json, so the number
+// on screen and the number we ship cannot disagree again.
+const APP_VERSION = Constants.expoConfig?.version || '';
+
 
 const log = createLogger('AppLogin');
 const { width: SW } = Dimensions.get('window');
@@ -441,7 +450,7 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
           {/* Footer — pinned above the phone's nav/gesture bar. */}
           <View style={[s.footer, { paddingBottom: 14 + insets.bottom }]}>
             <Ionicons name="shield-checkmark" size={13} color={COLORS.muted} />
-            <Text style={s.footerTxt}>Secure login · Alphalize · v1.0</Text>
+            <Text style={s.footerTxt}>Secure login · Alphalize · v{APP_VERSION}</Text>
           </View>
         </View>
       </View>
