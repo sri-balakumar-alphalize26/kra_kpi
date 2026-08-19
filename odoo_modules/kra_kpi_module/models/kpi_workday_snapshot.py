@@ -41,6 +41,10 @@ C_PANEL = '#F8FAFC'
 C_GREEN = '#16A34A'
 C_RED = '#DC2626'
 C_BLUE = '#1E40AF'
+# Paused. The same amber the app uses for every paused marker, so the saved
+# image and the screen agree; C_MUTED read as disabled text beside two figures
+# that carry colour.
+C_AMBER = '#B45309'
 AWAY_COLORS = {
     'break': '#F59E0B', 'lunch': '#10B981', 'meeting': '#3B82F6',
     'away': '#6B7280', 'leave': '#8B5CF6', 'urgent': '#EF4444',
@@ -254,7 +258,7 @@ class KpiWorkdaySnapshot(models.Model):
         # Only when the day was actually paused — an always-present "0m Paused"
         # tile would just make every normal day look like it had a gap.
         if (p.get('paused_seconds') or 0) > 0:
-            tiles.append(('Workday paused', p.get('paused_display', '0m'), C_MUTED,
+            tiles.append(('Workday paused', p.get('paused_display', '0m'), C_AMBER,
                           'outside Presence'))
         # Width derived from the tile COUNT — it was hardcoded to 3, so adding a
         # tile silently drew it off the edge of the image.

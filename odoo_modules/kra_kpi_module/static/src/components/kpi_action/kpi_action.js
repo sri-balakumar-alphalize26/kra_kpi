@@ -3582,10 +3582,13 @@ The paused task stays "
                                      Presence is time at work (the pause is OFF it),
                                      Accounted is the whole day explained (the pause is IN
                                      it), so the gap between the two IS the pause.
-                                     grid-column:1/-1 holds them on their own row — an
-                                     auto-fit wrap that put them on different lines would
-                                     undo the box. -->
-                                <div class="border rounded" style="grid-column:1/-1; display:flex;">
+                                     span 2 keeps them ADJACENT without claiming a row of
+                                     their own: 1/-1 forced a line break and dropped the
+                                     pair below Login and Productive, which pushed the two
+                                     headline figures off the top of the popup. Spanning
+                                     two cells is all the box needs — they still cannot
+                                     be split across lines, because it is one element. -->
+                                <div class="border rounded" style="grid-column:span 2; display:flex;">
                                     <div class="p-3" style="flex:1;">
                                         <div class="text-muted small">Presence (at work)</div>
                                         <!-- Green at/over the standard day, red under it. met_standard is
@@ -3614,7 +3617,7 @@ The paused task stays "
                                      reads as a deliberate pause rather than as missing data. -->
                                 <div class="p-3 border rounded">
                                     <div class="text-muted small">Workday paused</div>
-                                    <div class="fw-bold text-secondary" style="font-size:1.3rem;">${data.paused_display || '0m'}</div>
+                                    <div class="fw-bold" style="font-size:1.3rem; color:#B45309;">${data.paused_display || '0m'}</div>
                                     <div class="small text-muted">outside Presence, not worked time</div>
                                 </div>` : ''}
                             </div>
@@ -3680,6 +3683,7 @@ The paused task stays "
                              finish from burying the day.
                              NOT to be confused with "Pause all" on the live strip,
                              which stops the TASKS and leaves the workday running. -->
+                        ${this.state.workdayPaused ? '' : `
                         <div class="alert alert-warning py-2 px-3 mx-3 mb-0 small d-flex align-items-center justify-content-between gap-2">
                             <span>
                                 <i class="fa fa-pause-circle me-1"></i>
@@ -3690,7 +3694,7 @@ The paused task stays "
                                     id="pauseWorkdayBtn">
                                 <i class="fa fa-pause me-1"></i> Pause Workday
                             </button>
-                        </div>
+                        </div>`}
                         <div class="modal-footer">
                             <button type="button" class="btn btn-outline-secondary" id="continueWorkdayBtn">
                                 <i class="fa fa-arrow-left me-1"></i> Continue Working
@@ -3706,7 +3710,10 @@ The paused task stays "
         document.getElementById("modalContainer").innerHTML = modalHTML;
         document.getElementById("closeModalBtn").addEventListener("click", () => this.closeModal());
         document.getElementById("continueWorkdayBtn").addEventListener("click", () => this.closeModal());
-        document.getElementById("pauseWorkdayBtn").addEventListener("click", async () => {
+        // Optional chaining because the button is not rendered on an already
+        // paused day -- without it this throws and every listener wired AFTER it
+        // (End Workday included) is silently never attached.
+        document.getElementById("pauseWorkdayBtn")?.addEventListener("click", async () => {
             this.closeModal();
             await this.pauseWorkday();
         });

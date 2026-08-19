@@ -894,17 +894,24 @@ class KraKpiAPI(http.Controller):
         # carry it in the context. _start_block asks it per task (it is the first
         # thing that decides can_start), and without this that is one session
         # query per row. The rule itself stays in kra.kpi._actor_workday_open.
-        _wd_open, _wd_paused = True, False
-        if not is_manager_or_admin:
-            _sess = request.env['kpi.work.session'].sudo().search([
-                ('user_id', '=', current_user.id),
-                ('session_date', '=', fields.Date.context_today(request.env.user)),
-                ('state', '=', 'open'),
-            ], limit=1)
-            # Paused counts as not-open for starting work; the separate flag only
-            # picks which message the card shows ("Start" vs "Resume" your day).
-            _wd_paused = bool(_sess and _sess.is_paused)
-            _wd_open = bool(_sess) and not _wd_paused
+        _sess = request.env['kpi.work.session'].sudo().search([
+            ('user_id', '=', current_user.id),
+            ('session_date', '=', fields.Date.context_today(request.env.user)),
+            ('state', '=', 'open'),
+        ], limit=1)
+        # Paused counts as not-open for starting work; the separate flag only
+        # picks which message the card shows ("Start" vs "Resume" your day).
+        _wd_paused = bool(_sess and _sess.is_paused)
+        # An admin with NO workday may still work; an admin who paused one may
+        # not. This mirrors the same split in kra.kpi._actor_workday_open, and
+        # the two have to agree — this context value short-circuits that
+        # method, so a disagreement means the board and the server render
+        # different answers for the same button.
+        #
+        # The lookup now runs for admins too. It is one indexed search with
+        # limit=1 per board load, which is what it already cost everybody else.
+        _wd_open = (not _wd_paused) if is_manager_or_admin \
+            else (bool(_sess) and not _wd_paused)
         # Same trick for the single-task limit: resolve the caller's running
         # tasks once instead of one search per row in _multitask_blocker. Only
         # meaningful for the caller's own rows, which is what that helper checks

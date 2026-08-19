@@ -4579,6 +4579,11 @@ export default function KpiActionBoard({
                 the date (one start + one end); pausing is not — which is what a
                 4am finish needs. Not the same as "Pause all" on the tasks, which
                 stops the TIMERS and leaves the workday running. */}
+            {/* Gone once the day is ALREADY paused: the offer makes no sense
+                (the server answers "your workday is already paused") and the
+                button would toggle straight back to Resume, which is not what
+                a control labelled Pause should do. It returns on resume. */}
+            {workdayPaused ? null : (
             <View style={s.pauseInstead}>
               <Ionicons name="pause-circle-outline" size={18} color="#92400E" />
               <Text style={s.pauseInsteadTxt}>
@@ -4594,6 +4599,7 @@ export default function KpiActionBoard({
                 <Text style={s.pauseInsteadBtnTxt}>Pause</Text>
               </TouchableOpacity>
             </View>
+            )}
 
             <View style={s.modalFoot}>
               <TouchableOpacity style={s.footCancel} onPress={() => setEndSummary(null)}>
@@ -5165,11 +5171,13 @@ const s = StyleSheet.create({
   // could not do this: it sets flexBasis to 0, so five tiles always "fit" and
   // the row never wrapped no matter how narrow the screen got.
   statTile: { flexGrow: 1, flexBasis: 128, minWidth: 128, backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, padding: 10 },
-  // Presence + Accounted in one box, divided by a rule. flexBasis '100%' keeps it
-  // on its OWN row at every width: the whole point is that the two figures are
-  // compared, and a wrap that separated them would undo the box. The halves split
-  // whatever that row is, so this needs no IS_NARROW branch.
-  pairTile: { flexGrow: 1, flexBasis: '100%', flexDirection: 'row', backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line },
+  // Presence + Accounted in one box, divided by a rule. Sized as TWO statTiles
+  // (128 + 128 + the 8 gap between them) so it flows inline beside Login and
+  // Productive instead of claiming a row. '100%' did claim one, which dropped the
+  // pair below the fold and put the day's two headline figures under the two
+  // least interesting ones. It still cannot be split across lines whatever the
+  // width, because it is a single element - which is the property that mattered.
+  pairTile: { flexGrow: 1, flexBasis: 264, minWidth: 240, flexDirection: 'row', backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line },
   pairHalf: { flex: 1, padding: 10 },
   // The dividing line. Inset vertically so it reads as a separator between two
   // readings rather than as the border of two boxes pushed together.

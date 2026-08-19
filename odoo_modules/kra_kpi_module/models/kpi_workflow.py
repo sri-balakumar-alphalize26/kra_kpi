@@ -870,16 +870,23 @@ class KpiWorkflow(models.Model):
         if cached is not None:
             return bool(cached)
         try:
-            if self._user_is_kpi_admin():
-                return True
-            # is_paused counts as "not open": a paused workday means the
-            # developer has stopped, so nothing may start inside it.
-            return bool(self.env['kpi.work.session'].sudo().search_count([
+            Session = self.env['kpi.work.session'].sudo()
+            base = [
                 ('user_id', '=', self.env.user.id),
                 ('session_date', '=', fields.Date.context_today(self)),
                 ('state', '=', 'open'),
-                ('is_paused', '=', False),
-            ]))
+            ]
+            # An admin need not open a workday at all — they are not logging
+            # developer time against a session, so the absence of one cannot
+            # block them. An admin who HAS opened one and then PAUSED it is a
+            # different statement, and it is honoured: the blanket skip made
+            # Pause Workday a no-op for exactly the people most likely to be
+            # testing it, and Start stayed live on a frozen day.
+            if self._user_is_kpi_admin():
+                return not Session.search_count(base + [('is_paused', '=', True)])
+            # is_paused counts as "not open": a paused workday means the
+            # developer has stopped, so nothing may start inside it.
+            return bool(Session.search_count(base + [('is_paused', '=', False)]))
         except Exception as exc:
             # Never let a lookup failure be the thing that stops someone working.
             _logger.warning("workday-open check failed for user %s: %s",
