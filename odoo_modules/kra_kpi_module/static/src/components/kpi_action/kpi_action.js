@@ -3475,6 +3475,24 @@ The paused task stays "
             return;
         }
         const anyConcurrent = (data.tasks || []).some(t => t.concurrent);
+        // "09:30–18:15 · 1h 20m paused" — the line under Presence that
+        // reconciles it with the day's own stamps. Presence stops while the workday
+        // is frozen, so it no longer equals logout - login, and an unexplained
+        // mismatch between a figure and the timestamps beside it is exactly what
+        // made the raw clock the definition before this. Mirrors presenceFootnote()
+        // in screens/KpiActionBoard.js — the two must not drift.
+        //
+        // logout_at is empty while the day is still open (this popup is a PREVIEW
+        // until End Workday is actually pressed), so the range degrades to just
+        // the start rather than printing a dangling dash.
+        const presenceFoot = (() => {
+            if (!(data.paused_seconds > 0)) return '';
+            // HH:MM, not HH:MM:SS — same trim the app and the PNG header use.
+            const hm = (s) => ((s || '').split(' ')[1] || s || '').slice(0, 5);
+            const from = hm(data.login_at), to = hm(data.logout_at);
+            const span = from ? (to ? from + '–' + to : from) : '';
+            return (span ? span + ' · ' : '') + (data.paused_display || '0m') + ' paused';
+        })();
         const tasksHTML = (data.tasks && data.tasks.length)
             ? data.tasks.map(t => `
                 <tr${t.concurrent ? ' style="border-left:4px solid #f59e0b;"' : ''}>
@@ -3559,32 +3577,45 @@ The paused task stays "
                                     <div class="text-muted small">Productive (task time)</div>
                                     <div class="fw-bold text-success" style="font-size:1.3rem;">${data.productive_display || '0m'}</div>
                                 </div>
-                                <div class="p-3 border rounded">
-                                    <div class="text-muted small">Presence (wall clock)</div>
-                                    <!-- Green at/over the standard day, red under it. met_standard is
-                                         decided server-side so the web popup, the app and the saved
-                                         image can never disagree on the verdict. -->
-                                    <div class="fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}" style="font-size:1.3rem;">${data.presence_display || '0m'}</div>
-                                    ${data.standard_display ? `<div class="small fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}">${data.met_standard ? '✓' : '▾'} ${data.standard_display} standard</div>` : ''}
-                                </div>
-                                <!-- One figure for the whole day's accounted time, so
-                                     "is my day explained?" doesn't mean adding five
-                                     boxes up by eye. Accounted + Other/Idle = Presence. -->
-                                <div class="p-3 border rounded">
-                                    <div class="text-muted small">Accounted</div>
-                                    <div class="fw-bold text-primary" style="font-size:1.3rem;">${data.accounted_display || '0m'}</div>
-                                    <div class="small text-muted">task + meeting + lunch + break + no-tasks + paused</div>
+                                <!-- Presence and Accounted share ONE box, split by a rule.
+                                     They are the pair that has to be read together:
+                                     Presence is time at work (the pause is OFF it),
+                                     Accounted is the whole day explained (the pause is IN
+                                     it), so the gap between the two IS the pause.
+                                     grid-column:1/-1 holds them on their own row — an
+                                     auto-fit wrap that put them on different lines would
+                                     undo the box. -->
+                                <div class="border rounded" style="grid-column:1/-1; display:flex;">
+                                    <div class="p-3" style="flex:1;">
+                                        <div class="text-muted small">Presence (at work)</div>
+                                        <!-- Green at/over the standard day, red under it. met_standard is
+                                             decided server-side so the web popup, the app and the saved
+                                             image can never disagree on the verdict. -->
+                                        <div class="fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}" style="font-size:1.3rem;">${data.presence_display || '0m'}</div>
+                                        ${data.standard_display ? `<div class="small fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}">${data.met_standard ? '✓' : '▾'} ${data.standard_display} standard</div>` : ''}
+                                        ${presenceFoot ? `<div class="small text-muted">${presenceFoot}</div>` : ''}
+                                    </div>
+                                    <div style="width:1px; background:#dee2e6; margin:.5rem 0;"></div>
+                                    <!-- One figure for the whole day's accounted time, so
+                                         "is my day explained?" doesn't mean adding five
+                                         boxes up by eye. Accounted + Other/Idle = the CLOCK,
+                                         not Presence, now that the pause sits outside it. -->
+                                    <div class="p-3" style="flex:1;">
+                                        <div class="text-muted small">Accounted</div>
+                                        <div class="fw-bold text-primary" style="font-size:1.3rem;">${data.accounted_display || '0m'}</div>
+                                        <div class="small text-muted">task + meeting + lunch + break + no-tasks + paused</div>
+                                    </div>
                                 </div>
                                 ${(data.paused_seconds || 0) > 0 ? `
-                                <!-- Inside Presence: Presence is the raw login->logout clock,
-                                     so paused time is already in it. Shown on its own line so a
-                                     long gap reads as a deliberate pause rather than missing
-                                     data, and so the standard-day verdict (which excludes it)
-                                     is explicable. -->
+                                <!-- OUTSIDE Presence: Presence stops while the day is frozen,
+                                     so paused time is no longer in it — it is in Accounted
+                                     instead, which makes this figure exactly the gap between
+                                     those two numbers. Shown on its own line so a long gap
+                                     reads as a deliberate pause rather than as missing data. -->
                                 <div class="p-3 border rounded">
                                     <div class="text-muted small">Workday paused</div>
                                     <div class="fw-bold text-secondary" style="font-size:1.3rem;">${data.paused_display || '0m'}</div>
-                                    <div class="small text-muted">inside Presence, not worked time</div>
+                                    <div class="small text-muted">outside Presence, not worked time</div>
                                 </div>` : ''}
                             </div>
                             ${(data.break_seconds || data.lunch_seconds || data.meeting_seconds || data.other_seconds || data.away_seconds || data.no_tasks_seconds || data.other_idle_seconds || (data.away_events && data.away_events.length)) ? `
@@ -5588,15 +5619,18 @@ The paused task stays "
     livePresenceDisplay() {
         const ls = this.state.liveStatus;
         if (!ls || !ls.login_raw) return this.formatTime(0);
-        // The raw clock since login, matching the server's presence_seconds.
+        // TIME AT WORK: the clock since login MINUS whatever the workday has been
+        // paused for, matching the server's presence_seconds (which takes off the
+        // same two pieces) and the app's presenceLive().
         //
-        // This used to subtract paused_base and freeze at paused_since, because
-        // Presence then MEANT time-at-work. It no longer does: Presence is
-        // login -> now, so a 09:30 start reads 12h at 21:30 whatever happened in
-        // between, and paused time is reported separately and inside Accounted.
-        // Subtracting here would put this strip back in disagreement with the
-        // End Workday summary it leads into.
-        return this.formatTime(Math.max(0, this._elapsedSince(ls.login_raw, 0)));
+        // BOTH halves are needed. paused_base holds the COMPLETED pauses;
+        // paused_since is the one currently open, which the server deliberately
+        // never folds into paused_seconds. Read only the base and this clock runs
+        // straight through the freeze, which is what pausing exists to stop.
+        const paused = (ls.paused_base || 0)
+            + (ls.paused_since ? this._elapsedSince(ls.paused_since, 0) : 0);
+        return this.formatTime(
+            Math.max(0, this._elapsedSince(ls.login_raw, 0) - paused));
     }
     liveProductiveDisplay() {
         const ls = this.state.liveStatus;

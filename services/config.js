@@ -107,7 +107,8 @@ export async function setUrgentNudge(minutes) {
 }
 
 // A normal working day, in hours. The End Workday summary compares it against
-// PRESENCE (wall clock): at/over reads green, under reads red.
+// PRESENCE (time at work, pauses already deducted): at/over reads green, under
+// reads red.
 export async function setStandardHours(hours) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true, hours };

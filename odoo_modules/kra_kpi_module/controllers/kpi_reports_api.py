@@ -4101,10 +4101,11 @@ class KpiReportsAPI(http.Controller):
                 key, label = _period_key(s.session_date)
                 slot_id = (s.user_id.id, key)
                 slot = bucket[slot_id]
-                # Presence is the raw login->logout clock, so a week with 15h of
-                # deliberate pauses reports 15h more Presence than time worked.
-                # Carrying paused alongside it is what keeps that readable rather
-                # than looking like inflated hours.
+                # Presence is time at work, so a week with 15h of deliberate
+                # pauses has already had those 15h taken off it. Paused is carried
+                # alongside anyway: it is what reconstructs the raw clock
+                # (presence + paused) for anyone reconciling against rostered
+                # hours, and it is what explains a short week.
                 s_paused = s._paused_total()
                 slot['productive_seconds'] += float(s.productive_seconds or 0.0)
                 slot['presence_seconds']   += float(s.presence_seconds or 0.0)
@@ -4961,9 +4962,10 @@ class KpiReportsAPI(http.Controller):
                 d = str(s.session_date)
                 days[d]['presence'] += float(s.presence_seconds or 0.0)
                 days[d]['productive'] += float(s.productive_seconds or 0.0)
-                # Presence counts paused time (it is the raw login->logout clock),
-                # so a day the developer froze for hours reads long here. Carried
-                # alongside so they can see why, instead of doubting the figure.
+                # Presence EXCLUDES paused time (it stops while the day is
+                # frozen), so a day the developer froze for hours reads SHORT
+                # here. Carried alongside so they can see why, instead of
+                # doubting the figure.
                 days[d]['paused'] += s._paused_total()
                 days[d]['sessions'] += 1
 

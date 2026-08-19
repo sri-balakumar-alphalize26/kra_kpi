@@ -221,7 +221,7 @@ const FADE_W = 28;
 // two task clocks above it were ticking — the same numbers on the same screen
 // disagreeing. The server counts every active log, so summing them all is what
 // makes the live figure converge on the one it will be replaced by.
-function productiveLive(live, nowMs) {
+export function productiveLive(live, nowMs) {
   const base = live?.productive_base || 0;
   const running = live?.active_tasks?.length
     ? live.active_tasks
@@ -232,20 +232,44 @@ function productiveLive(live, nowMs) {
   );
 }
 
-// Live Presence — the raw clock since login, matching the server's
-// presence_seconds exactly (kpi.work.session._compute_totals).
+// Live Presence — TIME AT WORK: the clock since login MINUS whatever the
+// workday has been paused for. Matches the server's presence_seconds exactly
+// (kpi.work.session._compute_totals), which takes off the same two pieces.
 //
-// This used to subtract paused_base and freeze at paused_since, because Presence
-// then MEANT time-at-work. It no longer does: Presence is now login -> now, so a
-// 09:30 start reads 12h at 21:30 whatever happened in between, and paused time is
-// reported on its own line and inside Accounted instead. Subtracting here would
-// put the strip back in disagreement with the summary it introduces.
+// BOTH halves of the pause are needed. paused_base holds the COMPLETED pauses;
+// paused_since is the one currently open, which the server deliberately never
+// folds into paused_seconds. Read only the base and this clock would run straight
+// through the freeze — the exact thing pausing exists to stop.
 //
-// The `· paused` marker beside this is what tells the developer the day is frozen;
-// the clock itself is deliberately still moving, because wall-clock time is.
-function presenceLive(live, nowMs) {
+// The `· paused` marker beside this is what says why it has stopped, so a
+// deliberately frozen clock cannot read as a stuck display.
+export function presenceLive(live, nowMs) {
   if (!live?.login_raw) return 0;
-  return Math.max(0, secsSince(live.login_raw, nowMs));
+  const paused = (live.paused_base || 0)
+    + (live.paused_since ? secsSince(live.paused_since, nowMs) : 0);
+  return Math.max(0, secsSince(live.login_raw, nowMs) - paused);
+}
+
+// "09:30–18:15 · 1h 20m paused" — the line under Presence that
+// reconciles it with the day's own stamps. Presence stops while the workday is
+// frozen, so it no longer equals logout - login, and an unexplained mismatch
+// between a figure and the two timestamps beside it is exactly what made the raw
+// clock the definition before this.
+//
+// logout_at is empty while the day is still open (the End Workday PREVIEW is
+// rendered before the session closes), so the range degrades to just the start
+// rather than printing a dangling dash. Empty when nothing was paused: with no
+// pause Presence DOES equal the stamps, and there is nothing to explain.
+export function presenceFootnote(sum) {
+  if (!sum || !(sum.paused_seconds > 0)) return '';
+  // HH:MM, not HH:MM:SS. The stamps arrive as '%Y-%m-%d %H:%M:%S' and the whole
+  // line has to survive numberOfLines={1} in half a tile on a phone; seconds are
+  // three characters twice over and say nothing. Same trim the PNG header uses.
+  const hm = (stamp) => ((stamp || '').split(' ')[1] || stamp || '').slice(0, 5);
+  const from = hm(sum.login_at);
+  const to = hm(sum.logout_at);
+  const span = from ? (to ? from + '–' + to : from) : '';
+  return (span ? span + ' · ' : '') + (sum.paused_display || '0m') + ' paused';
 }
 
 // The Today lane's indigo, shared by its header (via LANES) and the "Today" meta
@@ -1969,6 +1993,14 @@ export default function KpiActionBoard({
       if (workdayPaused) H.ok(); else H.warn();
       setWorkdayPaused(!workdayPaused);
       await load({ silent: true });
+      // load() refetches TASKS only — it never touches `live`. Without this the
+      // strip keeps drawing the pre-pause payload until the 15s poll lands, so
+      // Presence and Productive both visibly carry on counting after the tap,
+      // which reads as the pause not having worked. Every other action that
+      // changes live state already refreshes here, and the web board does the
+      // same inside its own pauseWorkday; the app was the one path that did not.
+      // It also re-publishes the home-screen widget, via applyLive.
+      await refreshLive();
     } catch (e) {
       showError('Something went wrong', e.message || 'Failed');
     } finally {
@@ -4341,47 +4373,62 @@ export default function KpiActionBoard({
                     <Text style={s.statTileLbl}>{IS_NARROW ? 'Productive' : 'Productive (task time)'}</Text>
                     <Text style={[s.statTileBig, { color: COLORS.green }]}>{endSummary?.productive_display || '0m'}</Text>
                   </View>
-                  <View style={s.statTile}>
-                    <Text style={s.statTileLbl}>{IS_NARROW ? 'Presence' : 'Presence (wall clock)'}</Text>
-                    {/* Green at/over the standard day, red under it. The verdict is
-                        decided server-side (met_standard) so the app, the web popup
-                        and the saved image always agree. */}
-                    <Text style={[s.statTileBig, {
-                      color: endSummary?.met_standard ? COLORS.green : COLORS.red,
-                    }]}>
-                      {endSummary?.presence_display || '0m'}
-                    </Text>
-                    {endSummary?.standard_display ? (
-                      <Text style={[s.statTileFoot, {
+                  {/* Presence and Accounted share ONE box, split by a rule.
+                      They are the pair that has to be read together: Presence is
+                      time at work (the pause is OFF it), Accounted is the whole
+                      day explained (the pause is IN it), so the gap between the
+                      two IS the pause. As two free-standing tiles the wrapping
+                      row was allowed to put them on different lines, which is
+                      precisely when that comparison stops being visible. */}
+                  <View style={s.pairTile}>
+                    <View style={s.pairHalf}>
+                      <Text style={s.statTileLbl}>{IS_NARROW ? 'Presence' : 'Presence (at work)'}</Text>
+                      {/* Green at/over the standard day, red under it. The verdict is
+                          decided server-side (met_standard) so the app, the web popup
+                          and the saved image always agree. */}
+                      <Text style={[s.statTileBig, {
                         color: endSummary?.met_standard ? COLORS.green : COLORS.red,
                       }]}>
-                        {endSummary.met_standard ? '✓ ' : '▾ '}
-                        {endSummary.standard_display} standard
+                        {endSummary?.presence_display || '0m'}
                       </Text>
-                    ) : null}
-                  </View>
-                  {/* One figure for the whole day's accounted time, so "is my day
-                      explained?" doesn't mean adding five boxes up by eye.
-                      Accounted + Other/Idle = Presence, always. */}
-                  <View style={s.statTile}>
-                    <Text style={s.statTileLbl}>Accounted</Text>
-                    <Text style={[s.statTileBig, { color: COLORS.blue || '#2563EB' }]}>
-                      {endSummary?.accounted_display || '0m'}
-                    </Text>
-                    {/* 48 chars wraps to three lines in a 114dp tile. The full
-                        breakdown is a nicety; on a phone the one term a reader
-                        would not have guessed is the one worth keeping. */}
-                    <Text style={s.statTileFoot}>
-                      {IS_NARROW ? '+ paused' : 'task + meeting + lunch + break + no-tasks + paused'}
-                    </Text>
+                      {endSummary?.standard_display ? (
+                        <Text style={[s.statTileFoot, {
+                          color: endSummary?.met_standard ? COLORS.green : COLORS.red,
+                        }]}>
+                          {endSummary.met_standard ? '✓ ' : '▾ '}
+                          {endSummary.standard_display} standard
+                        </Text>
+                      ) : null}
+                      {presenceFootnote(endSummary) ? (
+                        <Text style={s.pairFoot} numberOfLines={1}>
+                          {presenceFootnote(endSummary)}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={s.pairRule} />
+                    {/* One figure for the whole day's accounted time, so "is my day
+                        explained?" doesn't mean adding five boxes up by eye.
+                        Accounted + Other/Idle = the clock, always — the clock,
+                        not Presence, now that the pause sits outside Presence. */}
+                    <View style={s.pairHalf}>
+                      <Text style={s.statTileLbl}>Accounted</Text>
+                      <Text style={[s.statTileBig, { color: COLORS.blue || '#2563EB' }]}>
+                        {endSummary?.accounted_display || '0m'}
+                      </Text>
+                      {/* 48 chars wraps to three lines in a 114dp tile. The full
+                          breakdown is a nicety; on a phone the one term a reader
+                          would not have guessed is the one worth keeping. */}
+                      <Text style={s.statTileFoot}>
+                        {IS_NARROW ? '+ paused' : 'task + meeting + lunch + break + no-tasks + paused'}
+                      </Text>
+                    </View>
                   </View>
                   {/* Only when the day was actually frozen. Reported on its own
                       line rather than dropped, because a six-hour hole with no
                       explanation reads as a tracking failure to whoever reviews
-                      the day. It sits INSIDE Presence — Presence is the raw
-                      login→logout clock — but is not worked time, which is why
-                      it lands in Accounted and is taken off the standard-day
-                      check. */}
+                      the day. It sits OUTSIDE Presence — Presence stops while
+                      the day is frozen — and INSIDE Accounted, so this figure is
+                      exactly the gap between those two numbers. */}
                   {(endSummary?.paused_seconds || 0) > 0 ? (
                     <View style={s.statTile}>
                       <Text style={s.statTileLbl}>Workday paused</Text>
@@ -4389,7 +4436,7 @@ export default function KpiActionBoard({
                         {endSummary?.paused_display || '0m'}
                       </Text>
                       <Text style={s.statTileFoot}>
-                        {IS_NARROW ? 'in Presence' : 'inside Presence, not worked time'}
+                        {IS_NARROW ? 'not in Presence' : 'outside Presence, not worked time'}
                       </Text>
                     </View>
                   ) : null}
@@ -5118,6 +5165,18 @@ const s = StyleSheet.create({
   // could not do this: it sets flexBasis to 0, so five tiles always "fit" and
   // the row never wrapped no matter how narrow the screen got.
   statTile: { flexGrow: 1, flexBasis: 128, minWidth: 128, backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, padding: 10 },
+  // Presence + Accounted in one box, divided by a rule. flexBasis '100%' keeps it
+  // on its OWN row at every width: the whole point is that the two figures are
+  // compared, and a wrap that separated them would undo the box. The halves split
+  // whatever that row is, so this needs no IS_NARROW branch.
+  pairTile: { flexGrow: 1, flexBasis: '100%', flexDirection: 'row', backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line },
+  pairHalf: { flex: 1, padding: 10 },
+  // The dividing line. Inset vertically so it reads as a separator between two
+  // readings rather than as the border of two boxes pushed together.
+  pairRule: { width: 1, backgroundColor: COLORS.line, marginVertical: 8 },
+  // login–logout · paused, under Presence. Muted and lighter than
+  // statTileFoot: it explains the figure, it is not a verdict on it.
+  pairFoot: { fontSize: 10, color: COLORS.muted, fontWeight: '700', marginTop: 3 },
   statTileLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '700' },
   statTileVal: { fontSize: 13, color: COLORS.ink, fontWeight: '800', marginTop: 4 },
   // 19 is right in a ~220dp tablet tile; in a ~134dp phone tile it crowds the

@@ -103,12 +103,18 @@ class KpiWorkdaySnapshot(models.Model):
     # kpi.work.session will drift; these must not.
     presence_seconds = fields.Float(string='Presence (s)')
     productive_seconds = fields.Float(string='Productive (s)')
-    # Presence became the raw login->logout clock (pauses included) in 19.0.2.6.
-    # Rows written before that used the old meaning, where paused time was
-    # subtracted out, and cannot be recomputed — the underlying sessions may be
-    # gone and paused was never stored. Deliberately NOT backfilled: an old row
-    # reads 0.0 here, which is how you tell the two eras apart. Read a
-    # zero-paused row as "unknown", not as "the day had no pauses".
+    # THREE eras of `presence_seconds`, and this column is how you tell them
+    # apart. Originally presence subtracted paused time; 19.0.2.6 made it the raw
+    # login->logout clock with pauses included; it now subtracts again, because
+    # Pause Workday is meant to stop the clock.
+    #
+    # Pre-19.0.2.6 rows cannot be recomputed — the underlying sessions may be
+    # gone and paused was never stored — and are deliberately NOT backfilled: an
+    # old row reads 0.0 here, so read a zero-paused row as "unknown", not as "the
+    # day had no pauses". 19.0.2.6-era rows DO carry paused, so a stored presence
+    # from that window is the raw clock and its at-work figure is
+    # presence - paused. Nothing is rewritten either way: a snapshot is a record
+    # of what was reported on the day, not a view that follows the definition.
     paused_seconds = fields.Float(string='Paused (s)')
     standard_hours = fields.Float(string='Standard Day (h)')
     met_standard = fields.Boolean(string='Met the Standard Day')
@@ -235,11 +241,12 @@ class KpiWorkdaySnapshot(models.Model):
             ('Productive (task time)', p.get('productive_display', '0m'), C_GREEN, ''),
             # Words, not a tick: U+2713 is inside the emoji range _clean() strips,
             # and "over/under" says it plainly anyway. Colour carries it too.
-            ('Presence (wall clock)', p.get('presence_display', '0m'), verdict,
+            ('Presence (at work)', p.get('presence_display', '0m'), verdict,
              '%s %s standard' % ('over' if met else 'under', p.get('standard_display', ''))),
             # Everything the day is accounted for by, in one number: task work +
             # meeting + lunch + break + no-tasks (+ away/other) + paused.
-            # Accounted plus Other/Idle is exactly Presence.
+            # Accounted plus Other/Idle is exactly the CLOCK -- not Presence, now
+            # that the pause sits outside Presence and inside this.
             ('Accounted', p.get('accounted_display', '0m'), C_INK,
              'task+meet+lunch+break+paused'),
             ('Tasks touched', str(p.get('task_count', 0)), C_INK, ''),
@@ -248,18 +255,38 @@ class KpiWorkdaySnapshot(models.Model):
         # tile would just make every normal day look like it had a gap.
         if (p.get('paused_seconds') or 0) > 0:
             tiles.append(('Workday paused', p.get('paused_display', '0m'), C_MUTED,
-                          'inside Presence'))
+                          'outside Presence'))
         # Width derived from the tile COUNT — it was hardcoded to 3, so adding a
         # tile silently drew it off the edge of the image.
         tw = (IMG_W - PAD * 2 - (len(tiles) - 1) * 12) / float(len(tiles))
+
+        def _x0(i):
+            return PAD + i * (tw + 12)
+
+        # Presence and Accounted are drawn as ONE box divided by a rule, the same
+        # pairing the app popup and the web popup use: Presence is time at work,
+        # Accounted is the day explained, and the gap between them IS the pause.
+        # Only the OUTLINES change here -- every label keeps the exact x it would
+        # have had, so the rest of the row is untouched and nothing reflows.
+        #
+        # Found by label rather than hardcoded: the list above has grown before
+        # (the paused tile), and an index would silently pair the wrong two boxes
+        # the next time something is inserted above them.
+        pair_i = next((i for i, t in enumerate(tiles)
+                       if t[0].startswith('Presence')), -1)
         for i, (lbl, val, col, foot) in enumerate(tiles):
-            x0 = PAD + i * (tw + 12)
-            d.rounded_rectangle([x0, y, x0 + tw, y + 92], radius=10,
-                                fill=C_PANEL, outline=C_LINE)
-            text((x0 + 14, y + 12), lbl, f_lbl, C_MUTED)
-            text((x0 + 14, y + 32), val, f_big, col)
+            if i == pair_i:
+                d.rounded_rectangle([_x0(i), y, _x0(i + 1) + tw, y + 92], radius=10,
+                                    fill=C_PANEL, outline=C_LINE)
+                d.line([_x0(i + 1) - 6, y + 10, _x0(i + 1) - 6, y + 82],
+                       fill=C_LINE, width=1)
+            elif i != pair_i + 1:
+                d.rounded_rectangle([_x0(i), y, _x0(i) + tw, y + 92], radius=10,
+                                    fill=C_PANEL, outline=C_LINE)
+            text((_x0(i) + 14, y + 12), lbl, f_lbl, C_MUTED)
+            text((_x0(i) + 14, y + 32), val, f_big, col)
             if foot:
-                text((x0 + 14, y + 70), foot, f_small, col)
+                text((_x0(i) + 14, y + 70), foot, f_small, col)
         y += 92 + 18
 
         # ---- Away time ----------------------------------------------------

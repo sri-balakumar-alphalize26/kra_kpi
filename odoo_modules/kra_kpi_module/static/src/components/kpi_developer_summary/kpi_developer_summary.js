@@ -71,9 +71,9 @@ export class KpiDeveloperSummary extends Component {
                                     <th>Developer</th>
                                     <th class="text-end">Productive</th>
                                     <th class="text-end">Presence</th>
-                                    <!-- Presence is the raw login->logout clock, pauses included.
+                                    <!-- Presence is time at work, so pauses are already off it.
                                          Without this column a developer who pauses a few hours a
-                                         day just looks like they logged more hours. -->
+                                         day just looks like they logged fewer hours. -->
                                     <th class="text-end">Paused</th>
                                     <th class="text-end">Tasks</th>
                                     <th class="text-end">Sessions</th>

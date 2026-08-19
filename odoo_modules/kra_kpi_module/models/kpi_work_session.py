@@ -3,7 +3,8 @@
 The session is a thin wrapper around the existing `kpi.time.log` rows:
   * `productive_seconds` = SUM(duration_seconds) of the developer's time-logs
     whose work_date matches this session_date.
-  * `presence_seconds`   = wall-clock = (logout_at or now) - login_at.
+  * `presence_seconds`   = time at work = (logout_at or now) - login_at, MINUS
+    any time the day was paused (Pause Workday).
 
 So we do NOT duplicate time-tracking data; we just record the day boundaries
 + a state flag so we know if the session is still open (developer logged in)
@@ -246,9 +247,9 @@ class KpiWorkSession(models.Model):
     is_paused = fields.Boolean(
         string='Workday Paused', default=False, copy=False,
         help="The developer paused their whole workday. Tasks cannot run until "
-             "they resume. Presence keeps accruing (it is the raw login->logout "
-             "clock); the paused time is reported separately and does not count "
-             "towards the standard day.")
+             "they resume, and Presence stops accruing for as long as it lasts. "
+             "The paused time is reported separately, counts towards Accounted "
+             "(the day explained) and does not count towards the standard day.")
     paused_at = fields.Datetime(
         string='Paused At', readonly=True, copy=False,
         help="Start of the CURRENT pause. Empty while the workday is running.")
@@ -343,7 +344,7 @@ class KpiWorkSession(models.Model):
         compute='_compute_totals',
     )
     presence_seconds = fields.Float(
-        string='Presence (wall clock)',
+        string='Presence (at work)',
         compute='_compute_totals',
     )
     task_count = fields.Integer(
@@ -392,22 +393,20 @@ class KpiWorkSession(models.Model):
             rec.task_count = len(set(logs.mapped('kpi_id').ids))
             end = rec.logout_at or fields.Datetime.now()
             try:
-                # PRESENCE IS THE CLOCK: login -> logout, nothing subtracted.
-                # Start at 09:30 and finish at 21:30 and this reads 12h, always,
-                # so it can be checked against a wristwatch. It used to subtract
-                # paused time, which made the headline figure disagree with the
-                # two timestamps printed either side of it.
+                # PRESENCE IS TIME AT WORK: the login -> logout clock MINUS the
+                # time the developer deliberately froze the day for. Pause Workday
+                # stops this figure — that is the point of pausing.
                 #
-                # Paused time is not lost — it moved. It is reported on its own
-                # line and folded into `accounted`, so
-                # `accounted + other_idle == presence` still holds exactly.
+                # The raw clock is not lost: it is recoverable anywhere as
+                # presence + paused, and both halves are carried side by side in
+                # every payload that reports either.
                 #
-                # Whether the day MET the standard is judged separately, on
-                # presence minus paused (see met_standard in
-                # _daily_summary_payload) — a day frozen for five hours shows the
-                # honest 12h here but must not read as a full day's work.
+                # _paused_total() rather than the stored `paused_seconds`: the
+                # CURRENTLY OPEN pause is deliberately never written to the row,
+                # so a day read while it is still frozen would otherwise
+                # under-subtract by however long the developer has been away.
                 span = (end - rec.login_at).total_seconds()
-                rec.presence_seconds = max(0.0, span)
+                rec.presence_seconds = max(0.0, span - rec._paused_total())
             except (TypeError, AttributeError):
                 # login_at is unset — a session row that exists before the
                 # developer has actually logged in. Anything else is a bug and
@@ -782,17 +781,19 @@ class KpiWorkSession(models.Model):
             'nontask': nontask,
             'idle_prompt': idle_prompt,
             'idle_prompt_seq': idle_prompt_seq,
-            'login_raw': login_raw,           # anchor for live Presence (now - login)
+            'login_raw': login_raw,           # anchor for live Presence (now - login - paused)
             'productive_base': productive_base,  # finished-log seconds; add running task live
             # `is_paused` drives the paused banner and the refused Start buttons.
             #
-            # paused_base / paused_since are no longer read by either client:
-            # Presence is now the raw (now - login_raw) clock, pauses included, so
-            # there is nothing to subtract. They are still emitted because app
-            # builds already in the field read them, and an installed binary
-            # cannot be upgraded in step with the server. Safe to drop once those
-            # builds are gone — a client that misses them falls back to 0, which
-            # is the current behaviour anyway.
+            # paused_base / paused_since are how a client takes the pause OFF the
+            # live Presence clock: base is the completed pauses, since is the open
+            # one (false when not paused). BOTH are needed — the open pause is
+            # deliberately never written to paused_seconds, so a client reading
+            # only base would keep counting Presence straight through the freeze.
+            #
+            # They were briefly dead, during the period when Presence meant the
+            # raw login->logout clock. An older installed build that ignores them
+            # just keeps that older behaviour rather than breaking.
             'is_paused': bool(sess and sess.is_paused),
             'paused_base': float(sess.paused_seconds or 0.0) if sess else 0.0,
             'paused_since': ((sess.paused_at.isoformat() + 'Z')
@@ -1404,10 +1405,14 @@ class KpiWorkSession(models.Model):
         presence   = sum(sessions.mapped('presence_seconds'))
         # Time the developer deliberately froze the day for. Reported on its own
         # line rather than dropped: a six-hour hole with no explanation reads as
-        # a tracking failure to whoever reviews the day. Presence INCLUDES it —
-        # presence is the raw login->logout clock — so it is folded into
-        # `accounted` and taken back out of `other_idle` below.
+        # a tracking failure to whoever reviews the day. Presence EXCLUDES it —
+        # presence is time at work — so it is added to `accounted` and left
+        # out of `other_idle` below.
         paused_secs = sessions._paused_total()
+        # The wall clock: presence as it stood before the pauses came off it. The
+        # day reconciles against THIS rather than against presence, now that the
+        # paused minutes sit outside presence — see `other_idle` below.
+        raw_span   = presence + paused_secs
 
         # First login + last logout across all of today's sessions for display.
         login_candidates  = [s.login_at  for s in sessions if s.login_at]
@@ -1528,25 +1533,39 @@ class KpiWorkSession(models.Model):
         # single total on the session rather than intervals (see _paused_total), so
         # there is nothing to merge. It is added, and the result held to the clock.
         accounted = _measure(explained) + paused_secs
-        if accounted > presence:
+        # Held to the RAW SPAN, not to presence. Accounted legitimately exceeds
+        # presence on any paused day — that is the shape of the two figures now:
+        # presence is time at work, accounted is the day explained, and the pause
+        # is exactly the difference. Clamping at presence would delete the gap
+        # this pair exists to show.
+        #
+        # Against the raw span it is still impossible, and now means something
+        # sharper than it used to: nothing may run during a pause —
+        # action_pause_workday closes tasks, breaks and blocks before it stamps
+        # paused_at — so an overshoot here is an interval that survived one.
+        # An orphaned open kpi.time.log is the known path.
+        if accounted > raw_span:
             # Previously invisible: the overshoot landed in a negative residual
             # that max(0.0, ...) silently swallowed, so the only symptom was a
             # total that looked wrong to a human. Say it out loud instead — this
             # line is what identifies the workflow path that left an interval
             # open, which the arithmetic below can correct but not prevent.
             _logger.warning(
-                "workday accounted (%.0fs) exceeds presence (%.0fs) by %.0fs for "
-                "user=%s date=%s — some interval is counted twice; look for a "
-                "break or block left open across task work",
-                accounted, presence, accounted - presence,
+                "workday accounted (%.0fs) exceeds the clock (%.0fs) by %.0fs for "
+                "user=%s date=%s — some interval is counted twice or ran through "
+                "a pause; look for a break, block or time-log left open",
+                accounted, raw_span, accounted - raw_span,
                 self.user_id.login, self.session_date)
-            accounted = presence
-        # Residual idle = presence not covered by productive work OR any metered
-        # reason. Paused is part of `accounted` because presence INCLUDES paused
-        # time (it is the raw login->logout clock); leaving it out would report
-        # every deliberate pause as unexplained idle — the opposite of what the
-        # developer told us by pausing.
-        other_idle = max(0.0, presence - accounted)
+            accounted = raw_span
+        # Residual idle = time AT WORK not covered by productive work or any
+        # metered reason. The pause is taken back OFF `accounted` here because it
+        # is no longer inside presence: comparing the two directly would subtract
+        # a pause from a figure that never contained it, and every paused day
+        # would produce a negative residual floored to zero.
+        #
+        # The day still reconciles exactly, one level up:
+        #     accounted + other_idle == raw_span
+        other_idle = max(0.0, presence - (accounted - paused_secs))
 
         # The company's standard working day. `or 9.0` covers a company row that
         # predates the field (a stored 0 would make every day green).
@@ -1594,19 +1613,20 @@ class KpiWorkSession(models.Model):
             # PAUSED. Measured as a union above — minutes explained by two things
             # at once (a pause left open across task work) are counted once.
             #
-            # Paused belongs here now that presence is the raw login->logout clock.
-            # Leave it out and every deliberate pause reappears as unexplained
-            # idle, which is the exact opposite of what pausing communicated.
+            # Paused belongs here because this is the DAY EXPLAINED, not the time
+            # worked. Presence is the time worked, and the pause is exactly the
+            # difference between the two — which is why accounted can, and on a
+            # paused day should, read HIGHER than presence.
             #
             # It is the counterpart to other_idle, and the two are what reconcile
-            # the day: accounted + other_idle == presence, always. That now holds
-            # by construction rather than by trusting the buckets not to overlap,
+            # the day: accounted + other_idle == raw_span, always. That holds by
+            # construction rather than by trusting the buckets not to overlap,
             # which is what it used to rest on — and what broke it.
             'accounted_seconds':  float(accounted),
             'accounted_display':  _fmt_hms(accounted),
-            # Workday paused (e.g. stopped at 04:00, back at 10:00). INSIDE
-            # presence (presence is the whole span) but NOT worked time — which is
-            # why met_standard below measures presence minus this.
+            # Workday paused (e.g. stopped at 04:00, back at 10:00). OUTSIDE
+            # presence — presence stops while the day is frozen — and inside
+            # accounted, so this figure IS the gap between those two numbers.
             'paused_seconds':     float(paused_secs),
             'paused_display':     _fmt_hms(paused_secs),
             # A normal working day vs what was actually here. Decided ONCE, server
@@ -1614,12 +1634,11 @@ class KpiWorkSession(models.Model):
             # a different verdict for the same day.
             'standard_hours':     float(std_hours),
             'standard_display':   _fmt_hms(std_seconds),
-            # Judged on WORKED time, not the raw clock. Presence deliberately
-            # includes paused time now so the headline figure matches the two
-            # timestamps beside it — but a day frozen for five hours must not
-            # therefore read as a full day. Subtracting the pause here is what
-            # keeps the honest clock from becoming a generous one.
-            'met_standard':       bool((presence - paused_secs) >= std_seconds),
+            # Judged on WORKED time. Presence already excludes paused time, so
+            # this is a plain comparison now — subtracting the pause a second
+            # time here would deduct it twice and fail a day that actually met
+            # the standard.
+            'met_standard':       bool(presence >= std_seconds),
             'task_count':         len(tasks),
             'tasks':              tasks,
             'auto_closed':        any(sessions.mapped('auto_closed')),

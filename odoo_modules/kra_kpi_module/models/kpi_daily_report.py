@@ -123,9 +123,9 @@ class KpiDailyReport(models.Model):
                 }
             a['presence_seconds'] += s.presence_seconds or 0.0
             a['productive_seconds'] += s.productive_seconds or 0.0
-            # Presence is the raw login->logout clock and counts paused time, so
-            # a frozen day reports long. Carried through to the PDF so whoever
-            # reviews it can see the gap was declared, not unexplained.
+            # Presence is time at work, so a frozen day reports SHORT. Carried
+            # through to the PDF so whoever reviews it can see the missing hours
+            # were declared, not unexplained.
             a['paused_seconds'] += s._paused_total()
             a['sessions'] += 1
             a['auto_closed'] = a['auto_closed'] or bool(s.auto_closed)
@@ -333,8 +333,8 @@ class KpiDailyReport(models.Model):
         story.append(Spacer(1, 10))
 
         # Paused sits next to Presence because it is the thing that explains it:
-        # Presence is the raw login->logout clock, so without this column a day
-        # deliberately frozen for hours is indistinguishable from a long one.
+        # Presence stops while the day is frozen, so without this column a day
+        # deliberately paused for hours is indistinguishable from a short one.
         # Blank rather than '0m' on ordinary days — a column of zeroes just adds
         # noise to the common case.
         head = ['Employee', 'Login → Logout', 'Presence', 'Paused', 'Productive', 'Tasks', 'Done']
