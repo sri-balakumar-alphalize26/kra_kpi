@@ -1,0 +1,145 @@
+# 45 — Pause Workday: the three things 19.0.4.4 changed, through the real UI.
+#
+#   1. A paused workday BLOCKS START, for admins too. _actor_workday_open() used
+#      to open with `if _user_is_kpi_admin(): return True`, skipping the is_paused
+#      check, so Pause did nothing for an admin and Start stayed live on a frozen
+#      day. Run this as an ADMIN or it proves nothing — a developer was always
+#      blocked correctly.
+#   2. Presence and Accounted share ONE box, inline beside Login and Productive.
+#      grid-column:1/-1 / flexBasis '100%' used to drop the pair onto its own row.
+#   3. The Pause button is GONE from the End Workday popup once already paused,
+#      and comes back on resume.
+#
+# The idle prompt ("Not on a task?") is the reason for the repeated dismiss blocks.
+# It fires from the moment the workday opens — live_status sets idle_prompt when
+# nothing is running and no reason has been given — and it covers the whole screen,
+# including the End Workday modal. It re-asks on a bump of idle_check_count, so it
+# can reappear between any two steps here. snoozeIdle (the "let me start it" link)
+# only closes it and records nothing, which is why it is safe to tap on sight.
+#
+# It stops appearing once PAUSED: live_status gates idle_prompt on `not is_paused`,
+# because a paused day has already answered the question.
+appId: host.exp.exponent
+---
+- runFlow: _enter-app.yaml
+- tapOn: "KPI Action Board"
+- extendedWaitUntil:
+    visible: ".*Workday.*"
+    timeout: 90000
+
+# Open the day. Tolerates a day already open, so the flow is re-runnable.
+- runFlow:
+    when:
+      visible: "Start Workday"
+    commands:
+      - tapOn: "Start Workday"
+      - extendedWaitUntil:
+          visible: "End Workday"
+          timeout: 60000
+# A previous run (or a real pause) leaves the day frozen, which hides the Pause
+# offer and would fail the fix-2 step for entirely the wrong reason. Normalise to
+# "open and running" first, so the flow is re-runnable.
+- runFlow:
+    when:
+      visible: ".*Your workday is paused.*"
+    commands:
+      - tapOn: "Resume"
+      - extendedWaitUntil:
+          notVisible: ".*Your workday is paused.*"
+          timeout: 60000
+- runFlow:
+    when:
+      visible: ".*let me start it.*"
+    commands:
+      - tapOn: ".*let me start it.*"
+      - waitForAnimationToEnd:
+          timeout: 4000
+- takeScreenshot: 45-01-workday-open
+
+# ── FIX 2 — the paired box, and FIX 3's first half — Pause IS offered ─────────
+- tapOn: "End Workday"
+- extendedWaitUntil:
+    visible: "Accounted"
+    timeout: 90000
+- runFlow:
+    when:
+      visible: ".*let me start it.*"
+    commands:
+      - tapOn: ".*let me start it.*"
+      - waitForAnimationToEnd:
+          timeout: 4000
+# All four tiles on ONE row is the fix; the screenshot is the evidence for that.
+- assertVisible: '.*Presence \(at work\).*'
+- assertVisible: "Accounted"
+- assertVisible: ".*Coming back later today.*"
+- takeScreenshot: 45-02-box-inline-and-pause-offered
+
+# ── Pause ─────────────────────────────────────────────────────────────────────
+- tapOn: "Pause"
+- extendedWaitUntil:
+    visible: ".*Your workday is paused.*"
+    timeout: 60000
+- takeScreenshot: 45-03-paused-banner
+
+# -- FIX 1 -- the UI says Start is refused on a frozen day --------------------
+# The BANNER is the assertion, not the per-card gate pill. gateLabel() does render
+# "Resume your workday to work on tasks" as a pill (utils/taskGate.js:47), but only
+# on CARDS -- the board opens in list view, whose rows are one-liners that navigate
+# to KPI Details on tap, and the only route to card view is an icon-only toggle
+# with no accessible text, sitting at a Y that MOVES once this very banner appears.
+# Point-tapping it would make the suite flaky in order to assert something the
+# banner already states in words.
+#
+# The BEHAVIOURAL proof is one layer down and is exact: scripts/e2e-workday-pause.mjs
+# asserts can_start === false with start_block_reason 'workday_paused' on all 54
+# tasks, and that /kra_kpi/task/start is refused with "Your workday is paused."
+# The app holds no opinion of its own -- Start is blocked={task.can_start === false}
+# (KpiActionBoard.js:378, :568-569) -- so that is the same fact, asserted where it
+# can be asserted without ambiguity.
+- assertVisible: ".*Tasks can.t be started.*"
+- takeScreenshot: 45-04-paused-blocks-start
+
+# ── FIX 3 — the Pause button is gone while paused ────────────────────────────
+- tapOn: "End Workday"
+- extendedWaitUntil:
+    visible: "Accounted"
+    timeout: 90000
+# NOTE the .* wrapping. Maestro FULL-matches its selector regex, so a bare
+# substring silently never matches — and on an assertNotVisible that means the
+# check passes without testing anything. This assertion is exactly that shape.
+- assertNotVisible: ".*Coming back later today.*"
+- takeScreenshot: 45-05-pause-button-gone
+
+# ── and it returns on resume ─────────────────────────────────────────────────
+- tapOn: ".*Continue Working.*"
+- extendedWaitUntil:
+    visible: "Resume"
+    timeout: 30000
+- tapOn: "Resume"
+- extendedWaitUntil:
+    notVisible: ".*Your workday is paused.*"
+    timeout: 60000
+- runFlow:
+    when:
+      visible: ".*let me start it.*"
+    commands:
+      - tapOn: ".*let me start it.*"
+      - waitForAnimationToEnd:
+          timeout: 4000
+- tapOn: "End Workday"
+- extendedWaitUntil:
+    visible: "Accounted"
+    timeout: 90000
+- runFlow:
+    when:
+      visible: ".*let me start it.*"
+    commands:
+      - tapOn: ".*let me start it.*"
+      - waitForAnimationToEnd:
+          timeout: 4000
+- assertVisible: ".*Coming back later today.*"
+- takeScreenshot: 45-06-pause-button-back
+
+# Leave the day OPEN, not ended: ending is one-way for the date and would force a
+# revert before this flow could run again.
+- tapOn: ".*Continue Working.*"
