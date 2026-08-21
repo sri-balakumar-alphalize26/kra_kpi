@@ -91,6 +91,9 @@ they opened themselves does.
 | `45-06-pause-button-back.png` | **fix 3 other half** — Pause returns after Resume |
 | `46-01-dev-readonly-no-workday.png` | **the asymmetry** — a DEVELOPER with no workday is read-only: "Start your workday to work on tasks". An admin in the same state was not |
 | `46-02-dev-pause-button-gone.png` | the same Pause-button removal, as a developer |
+| `47-01-web-running.png` | the WEB popup with the day running — paired box, Pause offered |
+| `47-02-web-paused.png` | the WEB popup paused — amber `Workday paused 11m`, footnote `17:25–18:45 · 11m paused`, and **no Pause strip** |
+| `47-03-png-paused-tile.png` | the saved PNG with the amber paused tile actually drawn |
 
 `45-05` is the one to look at. Five tiles on **one row** — `Login · Productive · Presence
 (at work) 14m · Accounted 9m · Workday paused 9m` — with the new footnote under Presence
@@ -115,15 +118,36 @@ would have failed the two visible assertions first.
   icon-only toggle with no accessible text sitting at a Y that moves once the paused banner
   appears. Point-tapping it would have made the suite flaky to assert something the banner
   already states in words, and that Layer 2 proves exactly.
-- **The web (OWL) board.** The served bundle was confirmed to contain `grid-column:span 2`
-  and `color:#B45309`, but nobody has opened the web End Workday popup and looked at it.
-  The app and the PNG are proven; the web is inferred from the bytes it serves.
-- **The amber "Workday paused" tile in the PNG.** The snapshot that was generated had
-  `paused_seconds: 0`, so that branch never drew. The `C_MUTED -> C_AMBER` swap is a
-  one-constant change in a tile already proven to render, but it is unobserved.
+Both of these were open in the first pass and are now closed — see `47-*` above.
+
+- The **web popup** was driven with Playwright (`chromium`, `sales_test`) and asserted:
+  `Presence (at work)` present, `Coming back later today` **true** while running and
+  **false** while paused, the `Workday paused` tile present, `#B45309` present. The board
+  behind it also shows the per-card gate pill "Resume your workday to wo…", which is the
+  assertion the app flow could not reach — the web board renders cards by default.
+- The **PNG paused tile** now draws: pause, hold, resume banks the seconds, and ending the
+  day redraws the image. Note snapshots are **one row per user per day and UPDATED in
+  place**, not appended — reading "the newest id" gets whoever ended last, not you.
 
 ## Notes for next time
 
+- **The Odoo asset minifier eats spaces at text-node boundaries**, and it is visible in
+  the product. In the served `web.assets_web.min.js`:
+
+  | source | served | renders |
+  |---|---|---|
+  | `outside Presence, not worked time` | `outside Presence,not worked time` | missing space after the comma |
+  | `${data.standard_display} standard` | `${...}standard` | **"9hstandard"** |
+
+  The `9h standard` one is **pre-existing** and predates this work, as is
+  `Away time(inside Presence — ...`. Only the first is a label added here. Cosmetic, but
+  it is in the End Workday popup where people read the day's verdict, and the fix
+  (a non-breaking space, or moving the space inside the interpolation) is not something
+  to do to one label while leaving the rest.
+- The **idle prompt** ("Not on a task?") fires on the **web board too**, from the same
+  `live_status` flag, and it is modal there as well — Escape does not close it, only its
+  own snooze link does. Any browser automation against this board has to dismiss it
+  before the first click, exactly as the Maestro flow does.
 - The **idle prompt** ("Not on a task?") fires the moment the workday opens — `live_status`
   sets `idle_prompt` when nothing is running and no reason has been given — and it covers
   the whole screen, the End Workday modal included. It re-asks, so it can appear between
