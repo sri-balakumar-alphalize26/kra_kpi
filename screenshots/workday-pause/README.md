@@ -1,13 +1,18 @@
 # workday-pause
 
 First end-to-end test of the three app-visible fixes in `dd6bd06`, on tablet
-`R52N410F5QE` (SM_T510, Expo Go over Metro) as **Mitchell Admin**, 21 Aug 2026.
+`R52N410F5QE` (SM_T510, Expo Go over Metro), 21 Aug 2026 — run twice, once as
+**Mitchell Admin** and once as a **developer**.
 
-Run against **`sales_test`**, not the live database — deliberately. The flow starts,
-pauses, resumes and reopens a workday, and it has to run **as an admin**: the bug was that
+Run against **`sales_test`**, not the live database — deliberately: the flow starts,
+pauses, resumes and ends workdays.
+
+The **admin** run is the one that proves the fix. The bug was that
 `_actor_workday_open()` opened with `if _user_is_kpi_admin(): return True`, skipping the
-`is_paused` check entirely. A developer was always blocked correctly, so running this as
-one would have passed without testing anything.
+`is_paused` check entirely, so an admin-only run of the old code would have shown Start
+still live on a frozen day. A developer was always blocked correctly — so the
+**developer** run is a regression check on the branch beside it, which was rebuilt as
+`base + [...]` in the same edit.
 
 `sales_test` was upgraded `19.0.4.2 → 19.0.4.4` first. Confirmed on the stored
 `latest_version`, not `installed_version` — the latter is a compute that reads the
@@ -19,8 +24,13 @@ Two layers, because they prove different halves:
 |---|---|
 | `scripts/e2e-workday-pause.mjs` | the RULE — `can_start`, the refusal, the arithmetic |
 | `.maestro/regression/45-workday-pause.yaml` | the SCREEN — what a person actually sees |
+| `.maestro/regression/46-workday-pause-dev.yaml` | the same screen as a DEVELOPER, plus the one thing that differs |
 
-## Layer 2 — `node scripts/e2e-workday-pause.mjs` → **16/16**
+Both layers were run **as an admin AND as a developer**. The script is role-aware:
+exactly one assertion differs, and it is the one a refactor could most plausibly
+invert.
+
+## Layer 2, as an admin — `node scripts/e2e-workday-pause.mjs` → **15/15**
 
 Drives the endpoints the app calls, in the order it calls them.
 
@@ -35,6 +45,33 @@ PASS  Presence stopped at paused_at                — presence=0h 0m 9s vs
                                                       paused_at-login=0h 0m 9s drift=0.0s
 PASS  can_start is true again after resume         — can_start=true
 ```
+
+### As a developer — `ODOO_LOGIN=apitest_dev ... node scripts/e2e-workday-pause.mjs` → **16/16**
+
+```
+role: DEVELOPER  (kra_admin=false system=false)
+PASS  ASYMMETRY -- developer with no workday cannot start
+                                                   — 4 of 4 blocked
+PASS  ASYMMETRY -- and the reason is the missing workday
+                                                   — 4 of 4 report start_block_reason 'workday'
+PASS  THE FIX — can_start is false while paused    — can_start=false
+PASS  no task anywhere is startable while paused   — 0 of 4 still startable
+PASS  starting a task is refused while paused      — "Your workday is paused. Resume it
+                                                      before working on 'REQ-025'."
+```
+
+**The asymmetry, asserted from both sides.** With no workday open:
+
+| Role | `can_start` |
+|---|---|
+| admin | **allowed** — `task 4 can_start=true` |
+| developer | **blocked** — `4 of 4`, reason `workday` |
+
+For a developer the domain in `_actor_workday_open()` is unchanged — it was only
+rebuilt as `base + [...]` — so the developer run is a regression check. It matters
+because if the admin rule had leaked to everyone, a developer could start a task with
+no session and their time would log against nothing, which is the hole the workday
+gate exists to close.
 
 `0 of 54` matters: `can_start` is per row, so a gate that caught only some tasks would
 still leave a live Start button somewhere on the board. And `admin with no workday can
@@ -52,6 +89,8 @@ they opened themselves does.
 | `45-04-paused-blocks-start.png` | **fix 1** — "Tasks can't be started" |
 | `45-05-pause-button-gone.png` | **fix 3** — the whole Pause strip absent; footer goes straight to Continue Working / Logout |
 | `45-06-pause-button-back.png` | **fix 3 other half** — Pause returns after Resume |
+| `46-01-dev-readonly-no-workday.png` | **the asymmetry** — a DEVELOPER with no workday is read-only: "Start your workday to work on tasks". An admin in the same state was not |
+| `46-02-dev-pause-button-gone.png` | the same Pause-button removal, as a developer |
 
 `45-05` is the one to look at. Five tiles on **one row** — `Login · Productive · Presence
 (at work) 14m · Accounted 9m · Workday paused 9m` — with the new footnote under Presence
@@ -76,8 +115,12 @@ would have failed the two visible assertions first.
   icon-only toggle with no accessible text sitting at a Y that moves once the paused banner
   appears. Point-tapping it would have made the suite flaky to assert something the banner
   already states in words, and that Layer 2 proves exactly.
-- **The developer branch on a device.** `apitest_dev` only exercises the path that already
-  worked; Layer 2 covers it far more cheaply.
+- **The web (OWL) board.** The served bundle was confirmed to contain `grid-column:span 2`
+  and `color:#B45309`, but nobody has opened the web End Workday popup and looked at it.
+  The app and the PNG are proven; the web is inferred from the bytes it serves.
+- **The amber "Workday paused" tile in the PNG.** The snapshot that was generated had
+  `paused_seconds: 0`, so that branch never drew. The `C_MUTED -> C_AMBER` swap is a
+  one-constant change in a tile already proven to render, but it is unobserved.
 
 ## Notes for next time
 
@@ -89,6 +132,16 @@ would have failed the two visible assertions first.
 - The flow **leaves the day open, not ended**. Ending is one-way for the date and would
   force an admin revert (`/kpi_workday/revert`) before the flow could run again. It also
   self-normalises: if it starts on a paused day it resumes first, so it is re-runnable.
+- **The script used to sabotage its own second run**, and it is worth knowing why. Its
+  "clean slate" step ended any open workday so the no-workday assertion would be
+  observable — but ending a day sets `day_done`, and one-start-one-end-per-day then
+  refuses to reopen the date. `/kpi_workday/ping` quietly did nothing, every assertion
+  after it ran against a closed day, and the one that expects Start to be *refused*
+  instead **started a task and left it running** — an orphaned open `kpi.time.log`, the
+  exact thing that later reads as work nobody did. It now ends *and* reverts
+  (`/kpi_workday/revert`), refuses to continue rather than emit a cascade of failures
+  tracing back to one unopenable day, and puts a wrongly-started task back if that
+  assertion ever fails. A failing test must not also leave a mess.
 - `maestro hierarchy` hung and left Maestro's on-device driver wedged on port 7001; the
   next run died with `Command failed (tcp:7001): closed`. `adb shell am force-stop
   dev.mobile.maestro` plus an `adb kill-server`/`start-server` cleared it.

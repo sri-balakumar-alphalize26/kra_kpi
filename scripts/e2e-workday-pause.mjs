@@ -1,5 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Layer 2 — Backend API end-to-end test for PAUSE WORKDAY as an ADMIN.
+// Layer 2 — Backend API end-to-end test for PAUSE WORKDAY. Role-aware: run it as
+// an ADMIN to prove the fix, and as a DEVELOPER to prove the branch beside it did
+// not regress.
 //
 // Drives the REAL Odoo JSON-RPC endpoints the app calls, in the order the app
 // calls them, and asserts the rule that 19.0.4.4 changed:
@@ -9,12 +11,18 @@
 // _actor_workday_open() used to open with `if _user_is_kpi_admin(): return True`,
 // which skipped the is_paused check entirely, so Pause Workday did nothing for an
 // admin and Start stayed live on a frozen day. A developer was always blocked
-// correctly — so this test is only meaningful run as an ADMIN.
+// correctly, so the ADMIN run is the one that proves the fix.
 //
-// The other half of the rule has to hold as well and is asserted here too: an
-// admin with NO open session may still start. They are not logging developer time
-// against a session, so the absence of one cannot block them; only a pause they
-// opened themselves does.
+// EXACTLY ONE assertion differs by role — the state with no workday open:
+//
+//   ADMIN     -> allowed. They log no developer time against a session, so the
+//                absence of one cannot block them; only a pause they opened does.
+//   DEVELOPER -> blocked, reason 'workday'. Their task time has to land inside a
+//                session or it is recorded against nothing.
+//
+// That asymmetry is the thing a refactor could most plausibly invert, which is why
+// it is asserted rather than assumed. Everything else about a pause is identical
+// for both roles, so this is one script rather than two that could drift.
 //
 // There is no UI and no device. The app is a pure renderer of this: /kra_kpi/
 // tasks/get ships can_start + start_block_reason per task (kra_api.py:96-97) and
@@ -101,28 +109,77 @@ function findTask(tasks, id) {
   if (!auth?.uid) throw new Error('auth failed');
   const UID = auth.uid;
 
-  // The test is only meaningful as an admin — a developer was always blocked
-  // correctly, so running this as one would prove nothing and pass anyway.
+  // WHICH ROLE decides exactly one assertion below. Everything else about a pause
+  // is identical for both, which is why this is one script rather than two that
+  // could drift apart.
   const isAdmin = await kw('res.users', 'has_group', [[UID], 'kra_kpi_module.group_kra_admin'])
     .catch(() => null);
   const isSystem = await kw('res.users', 'has_group', [[UID], 'base.group_system']).catch(() => null);
-  check('actor is an admin (else this proves nothing)', !!(isAdmin || isSystem),
-        `kra_admin=${isAdmin} system=${isSystem}`);
+  const ADMIN = !!(isAdmin || isSystem);
+  console.log(`role: ${ADMIN ? 'ADMIN' : 'DEVELOPER'}  (kra_admin=${isAdmin} system=${isSystem})`);
+  console.log('');
 
-  // ── 0. Clean slate: no open session ───────────────────────────────────────
-  const s0 = await rpc('/kpi_workday/status', {});
+  // -- 0. Normalise to "no open session, and re-openable" ---------------------
+  // The asymmetry below is only observable with NO open session, so a day already
+  // open has to be closed first. But ending one sets day_done, and
+  // one-start-one-end-per-day then REFUSES to reopen the date -- which is exactly
+  // how the second run of this script went wrong: /kpi_workday/ping quietly did
+  // nothing, every assertion after it ran against a closed day, and the one that
+  // expects Start to be refused instead STARTED a task and left it running.
+  //
+  // So end it and then REVERT it. /kpi_workday/revert is the admin undo of an
+  // explicit End Workday: it clears day_done and leaves the date re-openable.
+  let s0 = await rpc('/kpi_workday/status', {});
   if (s0?.is_open) {
-    console.log('   (a workday was already open — ending it so the test starts clean)');
+    console.log('   (a workday was open -- ending it so the asymmetry is observable)');
     await rpc('/kpi_workday/end', { note: '' });
+    s0 = await rpc('/kpi_workday/status', {});
+  }
+  if (s0?.day_done) {
+    try {
+      await rpc('/kpi_workday/revert', { reason: 'e2e-workday-pause: reopening the date' });
+      s0 = await rpc('/kpi_workday/status', {});
+      console.log('   (reverted the ended day so it can be reopened)');
+    } catch (e) {
+      console.log('   (could not revert the ended day: ' + e.message + ')');
+    }
+  }
+  // Refuse to continue rather than emit a cascade of failures that all trace back
+  // to one unopenable day. A developer cannot revert, so this is the likely exit
+  // on a repeat dev run within the same date.
+  if (s0?.is_open || s0?.day_done) {
+    console.error(`
+Cannot run: need a date with no open session and not already `
+                + `ended (is_open=${s0?.is_open} day_done=${s0?.day_done}). `
+                + `Revert it as an admin, or run tomorrow.`);
+    process.exit(2);
   }
 
-  // ── 1. Admin with NO open session may still start ─────────────────────────
-  // The half of the rule that must NOT change. Asserted before opening a day,
-  // while that state is genuinely observable.
+  // -- 1. THE ASYMMETRY, with no open session ---------------------------------
+  // The one assertion that differs by role, and the one a refactor of
+  // _actor_workday_open() could most plausibly invert:
+  //
+  //   ADMIN     -> allowed. They log no developer time against a session, so the
+  //                absence of one cannot block them. Only a pause they opened
+  //                themselves does.
+  //   DEVELOPER -> blocked, reason 'workday'. Their task time has to land inside
+  //                a session or it is recorded against nothing, which is exactly
+  //                the hole the workday gate exists to close.
+  //
+  // Asserted BEFORE opening a day, while that state is genuinely observable.
   const t0 = await rpc('/kra_kpi/tasks/get', { my_tasks_only: false });
   const free = pickStartable(t0?.tasks);
-  check('admin with no workday can still start', !!free,
-        free ? `task ${free.id} can_start=true` : 'NO startable task — admin is being blocked without a session');
+  if (ADMIN) {
+    check('ASYMMETRY -- admin with no workday can still start', !!free,
+          free ? `task ${free.id} can_start=true` : 'NO startable task -- admin is blocked without a session');
+  } else {
+    const all = t0?.tasks || [];
+    const byWorkday = all.filter((t) => t.start_block_reason === 'workday');
+    check('ASYMMETRY -- developer with no workday cannot start', !free && all.length > 0,
+          `${all.filter((t) => t.can_start === false).length} of ${all.length} blocked`);
+    check('ASYMMETRY -- and the reason is the missing workday', byWorkday.length > 0,
+          `${byWorkday.length} of ${all.length} report start_block_reason 'workday'`);
+  }
 
   // ── 2. Open the workday ───────────────────────────────────────────────────
   await rpc('/kpi_workday/ping', {});
@@ -170,6 +227,17 @@ function findTask(tasks, id) {
   } catch (e) {
     refused = true;                      // a ValidationError is also a refusal
     refusal = e.message;
+  }
+  // If it was NOT refused the task is now RUNNING, and leaving it that way
+  // leaves an orphaned open kpi.time.log behind -- the exact thing that then
+  // counts as work nobody did. A failing test must not also make a mess, so
+  // put it back before reporting.
+  if (!refused) {
+    try {
+      await rpc('/kra_kpi/task/pause',
+        { kpi_id: target.id, reason: 'e2e cleanup -- start was not refused', reason_code: 'other', meeting_with_ids: [] });
+      console.log('   (cleaned up: the task that should not have started was paused again)');
+    } catch (e) { console.log('   (COULD NOT clean up the started task: ' + e.message + ')'); }
   }
   check('starting a task is refused while paused', refused, refusal.slice(0, 120));
   check('the refusal names the pause', /pause/i.test(refusal), refusal.slice(0, 120));

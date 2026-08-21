@@ -1,0 +1,27 @@
+# 46 — the same pause behaviour, as a DEVELOPER, plus the one thing that differs.
+#
+# 45 proves the reported bug (a paused workday blocks Start for ADMINS, which it
+# did not before 19.0.4.4). This proves the branch beside it did not regress when
+# _actor_workday_open() was split in two: for a developer the domain is unchanged,
+# just rebuilt as `base + [...]`, so everything 45 asserts must still hold here.
+#
+# THE ASYMMETRY is the reason this flow exists rather than a note saying "unchanged".
+# With NO workday open:
+#
+#   * a DEVELOPER is blocked  — read-only, "Start your workday to work on tasks"
+#   * an ADMIN is allowed     — they log no developer time against a session, so
+#                               the absence of one cannot block them
+#
+# If the admin rule had leaked to everyone in the refactor, a developer could start
+# a task with no session and their time would log against nothing — precisely the
+# hole the workday gate was added to close. That is what the assertion below pins.
+appId: host.exp.exponent
+---
+- runFlow: _enter-app.yaml
+
+# Developer, no workday → read-only. Assert BEFORE anything opens a day.
+- assertVisible: ".*Start your workday to work on tasks.*"
+- takeScreenshot: 46-01-dev-readonly-no-workday
+
+# Everything else is identical for both roles, so it is the same flow, not a copy.
+- runFlow: 45-workday-pause.yaml
