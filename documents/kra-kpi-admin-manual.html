@@ -269,9 +269,14 @@ p.imgc { color: #6B7280; font-size: 9pt; margin: 0; text-align: center; }
 <p class="imgc">Live Tracking &mdash; the team list with attendance states and current tasks</p>
 </td></tr></table>
 
+<h3>Step 13a &nbsp; Reopen a Workday</h3>
+<p>End Workday is one-way for the developer &mdash; one start and one end per day &mdash; so if somebody ends their day by accident, only an admin can give it back. From <b>Live Tracking</b>, reopen their day and type a reason.</p>
+<p>The reason is <b>sent to them word for word</b> and shown on their board, because it is the only thing that explains why their day suddenly reopened. Their summary has already gone to the owner and coordinator by that point, so say plainly what changed.</p>
+
 <h3>Step 14 &nbsp; Use the Board as an Admin</h3>
 <p>Open <b>KPI Action Board</b>. A badge tells you whose tasks you are looking at &mdash; <b>Coordinator &middot; All</b> for everyone's, or <b>My Tasks</b> for your own. Tap it to switch.</p>
 <p>As an Admin your task cards carry extra buttons that Users never see: <b>Accept</b>, <b>Reject</b>, <b>Approve</b>, <b>Revert</b>, <b>Reassign</b> and <b>Delete</b>.</p>
+<p>The first lane is <b>&#128340; Today</b>, in indigo &mdash; what has been worked on today, most time first. It is not a stage work moves through, so a task shows up there <b>as well as</b> in its own status lane; seeing the same card twice is correct. The lane’s tasks are deliberately left out of the board’s totals, so the counts still add up, and it empties itself at midnight.</p>
 
 <table class="img"><tr><td>
 <img src="screenshots/admin/14-action-board.png" width="325" height="520">
@@ -405,8 +410,11 @@ p.imgc { color: #6B7280; font-size: 9pt; margin: 0; text-align: center; }
 <tr style="background:#F7F9FC"><td><b>Finalized</b></td><td>Locked. Its tasks are now committed to this invoice.</td></tr>
 <tr><td><b>Sent</b></td><td>Issued to the client. They can see it in their Invoices screen.</td></tr>
 <tr style="background:#F7F9FC"><td><b>Payment Due</b></td><td>Issued and awaiting payment.</td></tr>
-<tr><td><b>Paid</b></td><td>Settled. Use <b>Mark Paid</b> to set this, or <b>Revert</b> to undo a mistake.</td></tr>
+<tr><td><b>Paid</b></td><td>Settled. Use <b>Mark Paid</b> on the invoice row and record how it was paid.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Claimed</b></td><td>The client has raised a claim against it. It is its own filter on the Invoices screen, and it is not counted as due &mdash; while a claim is open the invoice cannot be revised or reset to draft.</td></tr>
 </table>
+
+<p><b>Revert</b> undoes a payment marked in error. It <b>requires a reason</b>, and unlike the private payment notes that reason is <b>published</b> &mdash; it shows in red on the invoice row and as a banner on the invoice itself, on your side and the client’s. Write it for them to read.</p>
 
 <p>Use <b>PDF</b> and <b>Share</b> to send a copy outside the app.</p>
 

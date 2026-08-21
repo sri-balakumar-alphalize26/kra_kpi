@@ -141,19 +141,20 @@ p.imgc { color: #6B7280; font-size: 9pt; margin: 0; text-align: center; }
 <p class="imgc">KPI Action Board &mdash; the lanes with task cards, and the status filter at the top</p>
 </td></tr></table>
 
-<h3>The Nine Lanes</h3>
+<h3>The Ten Lanes</h3>
 
 <table class="t">
 <tr><th style="width:28%">Lane</th><th>What it means for you</th></tr>
-<tr><td><b>Pending Review</b></td><td>A task you created yourself that an admin has not yet accepted. You can still work on it.</td></tr>
-<tr style="background:#F7F9FC"><td><b>Regular</b></td><td>Not started yet, normal priority.</td></tr>
-<tr><td><b>Important</b></td><td>Not started yet, marked important.</td></tr>
-<tr style="background:#F7F9FC"><td><b>Urgent</b></td><td>Not started yet, marked urgent. Do these first.</td></tr>
-<tr><td><b>In Progress</b></td><td>Running right now. Time is counting.</td></tr>
-<tr style="background:#F7F9FC"><td><b>Paused</b></td><td>You stopped the clock. Tap <b>Resume</b> to pick it back up.</td></tr>
-<tr><td><b>Pending Approvals</b></td><td>You finished it and an admin is checking it. Nothing for you to do unless it comes back.</td></tr>
-<tr style="background:#F7F9FC"><td><b>Awaiting Client</b></td><td>The admin approved it and the client is signing off. Nothing for you to do.</td></tr>
-<tr><td><b>Completed</b></td><td>Finished and signed off. Done.</td></tr>
+<tr><td><b>&#128340; Today</b></td><td>What you have worked on <b>today</b>, most time first. It is indigo because it is not a stage work moves through &mdash; it is a shortcut for finding a task again. A task you touched today appears <b>here as well as</b> in its own status lane, so seeing the same card twice is correct, not a fault. The lane empties itself at midnight.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Pending Review</b></td><td>A task you created yourself that an admin has not yet accepted. You can still work on it.</td></tr>
+<tr><td><b>Regular</b></td><td>Not started yet, normal priority.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Important</b></td><td>Not started yet, marked important.</td></tr>
+<tr><td><b>Urgent</b></td><td>Not started yet, marked urgent. Do these first.</td></tr>
+<tr style="background:#F7F9FC"><td><b>In Progress</b></td><td>Running right now. Time is counting.</td></tr>
+<tr><td><b>Paused</b></td><td>You stopped the clock. Tap <b>Resume</b> to pick it back up.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Pending Approvals</b></td><td>You finished it and an admin is checking it. Nothing for you to do unless it comes back.</td></tr>
+<tr><td><b>Awaiting Client</b></td><td>The admin approved it and the client is signing off. Nothing for you to do.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Completed</b></td><td>Finished and signed off. Done.</td></tr>
 </table>
 
 <p>Use the filter at the top of the board to show one lane at a time &mdash; choose <b>All Statuses</b> to see everything again.</p>
@@ -165,6 +166,10 @@ p.imgc { color: #6B7280; font-size: 9pt; margin: 0; text-align: center; }
 <img src="screenshots/user/09-task-card.png" width="308" height="431">
 <p class="imgc">A task card with its buttons &mdash; Start, Remind me</p>
 </td></tr></table>
+
+<h3>Step 10a &nbsp; Add Time to the Estimate</h3>
+<p>If a task is going to take longer than its estimate, do not just run over it &mdash; say so. Open the task and tap <b>+ Add time to the estimate</b>, enter how much longer you need and why. The extension is recorded against the task with your name on it.</p>
+<p>The card then <b>explains its own overrun</b>: it shows the reason you gave, how many times the estimate has been extended, and who extended it last. Nobody has to go digging through an audit log to find out why a task ran long.</p>
 
 <h3>Step 11 &nbsp; Pause a Task</h3>
 <p>When you stop working &mdash; a break, lunch, a meeting, anything &mdash; tap <b>Pause</b> and pick the reason. This is how your day adds up correctly at the end.</p>
@@ -291,8 +296,12 @@ p.imgc { color: #6B7280; font-size: 9pt; margin: 0; text-align: center; }
 <table class="n"><tr><td><b>IMPORTANT</b> &nbsp;Choosing <b>I have no tasks</b> tells your admins immediately &mdash; the popup says so: <i>&ldquo;Your admins will be told straight away.&rdquo;</i> That is the point. It is how you get work assigned, not something to avoid.</td></tr></table>
 
 <h3>Step 20 &nbsp; Pause Your Whole Workday</h3>
-<p><b>Pause Workday</b> freezes your entire day without ending it. Use it when you leave for a long stretch but will be back. A banner explains what is happening:</p>
+<p><b>Pause Workday</b> freezes your entire day without ending it. Use it when you leave for a long stretch but will be back.</p>
+<table class="n"><tr><td><b>WHERE IS IT?</b> &nbsp;Pause lives <b>inside the End Workday popup</b>, not on the board. Tap <b>End Workday</b> and look at the amber strip near the bottom: &ldquo;Coming back later today? <b>Pause</b> instead.&rdquo; It sits next to End on purpose, because that is the moment you are choosing between stopping for now and stopping for good.</td></tr></table>
+<p>A banner then explains what is happening:</p>
 <p><i>&ldquo;Your workday is paused. Tasks can't be started, and paused time won't count as worked time. Tap Resume when you're back.&rdquo;</i></p>
+
+<p>While you are paused, a green <b>Resume</b> button appears in the header beside End Workday. The Pause offer itself disappears from the End Workday popup for as long as the day is frozen &mdash; there is nothing left to pause &mdash; and comes back when you resume.</p>
 
 <table class="n"><tr><td><b>IMPORTANT</b> &nbsp;<b>Pause Workday</b> can be undone. <b>End Workday</b> cannot. If you are coming back today, always pause &mdash; never end.</td></tr></table>
 
@@ -351,11 +360,16 @@ p.imgc { color: #6B7280; font-size: 9pt; margin: 0; text-align: center; }
 
 <h3>My Snapshots</h3>
 <p>A saved picture of every End Workday summary you have sent. Tap one to view it full size, download it, or share it.</p>
+<p>The <b>note you typed when you ended the day</b> is saved with the snapshot and shown here, so you can read back what you said you worked on. If an admin reopened that day, the reason they gave is shown too.</p>
 
 <table class="img"><tr><td>
 <img src="screenshots/user/19-my-snapshots.png" width="325" height="520">
 <p class="imgc">My Snapshots &mdash; the list of saved end-of-day summary images</p>
 </td></tr></table>
+
+<h3>Task Documents</h3>
+<p>Everything attached to the work in one place: the client’s requirement files, progress updates, user manuals and linked GitHub branches. Open a repository to jump straight to the branch, or tap a file to open it.</p>
+<p>Filter by <b>assignee</b> to see only your own tasks’ documents &mdash; on a busy project that is the difference between a usable list and a very long one.</p>
 
 <h3>Notifications</h3>
 <p>Tap the bell on Home. Three tabs sort everything for you:</p>
