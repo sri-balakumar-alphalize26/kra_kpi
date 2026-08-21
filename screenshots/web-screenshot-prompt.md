@@ -96,6 +96,9 @@ still; Maestro (`.maestro/regression/`) when it has to be driven. The tablet is
 
 ## Worked example
 
-`workday-pause/47-04-web-paused-spacing-fixed.png` came from exactly this prompt. Its pair
-with `47-02-web-paused.png` is what proved the asset-minifier spacing fix — `9hstandard`
-became `9h standard` between the two.
+`workday-pause/47-03-png-paused-tile.png` came from exactly this prompt.
+
+Its value was as one of a **before/after pair**: the two web captures either side of the
+asset-minifier fix showed `9hstandard` becoming `9h standard`, which is what proved the
+fix had actually reached the browser. Those two have since been deleted — the pair is the
+part worth copying, not the files.

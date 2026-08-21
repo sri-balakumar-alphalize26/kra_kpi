@@ -62,6 +62,41 @@ try {
         }
       }
 
+      # STOP THINGS BREAKING ACROSS PAGES. HTML carries no pagination, so the
+      # imported document had NOTHING holding it together -- measured on the
+      # built file: keepNext 0, keepLines 0, cantSplit 0, tblHeader 0. That is
+      # why a table row came out half on one page and half on the next, and why
+      # a heading could sit alone at the foot of a page with its section
+      # overleaf. None of this changes a word of content; it only decides where
+      # Word is allowed to cut.
+
+      # 1. Widow/orphan control across the whole body, in one call rather than
+      #    per paragraph. Stops a lone first/last line stranded on its own page.
+      $doc.Content.ParagraphFormat.WidowControl = $true
+
+      # 2. Headings stay with what they introduce. Set on the STYLE so it holds
+      #    for every heading, including any added later. The numeric constants
+      #    are wdStyleHeading1/2/3 -- names are localised, these are not.
+      foreach ($h in @(-2, -3, -4)) {
+        $hs = $doc.Styles.Item($h).ParagraphFormat
+        $hs.KeepWithNext = $true
+        $hs.KeepTogether = $true
+      }
+
+      foreach ($tbl in $doc.Tables) {
+        # 3. A row is an atom. This is the one that produced the reported
+        #    "half here, remainder on the next page" -- a figure and its caption
+        #    share a cell, so without this the picture and its own caption could
+        #    land on different pages.
+        $tbl.Rows.AllowBreakAcrossPages = $false
+
+        # 4. Repeat the header row when a real data table does span pages, so
+        #    the continuation is still readable. Only tables big enough to have
+        #    a header: the figure and callout boxes are single-row, and marking
+        #    their only row as a heading would repeat the whole box.
+        if ($tbl.Rows.Count -ge 3) { $tbl.Rows.Item(1).HeadingFormat = $true }
+      }
+
       # No $doc.Convert() here: it throws "This command is not available" on a
       # read-only document, and SaveAs2 with wdFormatDocumentDefault already
       # writes a real .docx rather than a renamed web archive.

@@ -91,8 +91,6 @@ they opened themselves does.
 | `45-06-pause-button-back.png` | **fix 3 other half** — Pause returns after Resume |
 | `46-01-dev-readonly-no-workday.png` | **the asymmetry** — a DEVELOPER with no workday is read-only: "Start your workday to work on tasks". An admin in the same state was not |
 | `46-02-dev-pause-button-gone.png` | the same Pause-button removal, as a developer |
-| `47-01-web-running.png` | the WEB popup with the day running — paired box, Pause offered |
-| `47-02-web-paused.png` | the WEB popup paused — amber `Workday paused 11m`, footnote `17:25–18:45 · 11m paused`, and **no Pause strip** |
 | `47-03-png-paused-tile.png` | the saved PNG with the amber paused tile actually drawn |
 
 `45-05` is the one to look at. Five tiles on **one row** — `Login · Productive · Presence
