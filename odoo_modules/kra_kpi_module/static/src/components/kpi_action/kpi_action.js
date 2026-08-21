@@ -3501,7 +3501,7 @@ The paused task stays "
                     <td class="text-end">
                         ${t.duration_display || '0m'}
                         ${t.concurrent && t.solo_seconds > 0
-                            ? `<div class="text-muted" style="font-size:.72rem;">${t.solo_display} alone · ${t.shared_display} shared</div>`
+                            ? `<div class="text-muted" style="font-size:.72rem;">${t.solo_display}&#32;alone · ${t.shared_display}&#32;shared</div>`
                             : ''}
                     </td>
                 </tr>
@@ -3595,7 +3595,7 @@ The paused task stays "
                                              decided server-side so the web popup, the app and the saved
                                              image can never disagree on the verdict. -->
                                         <div class="fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}" style="font-size:1.3rem;">${data.presence_display || '0m'}</div>
-                                        ${data.standard_display ? `<div class="small fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}">${data.met_standard ? '✓' : '▾'} ${data.standard_display} standard</div>` : ''}
+                                        ${data.standard_display ? `<div class="small fw-bold ${data.met_standard ? 'text-success' : 'text-danger'}">${data.met_standard ? '✓' : '▾'} ${data.standard_display}&#32;standard</div>` : ''}
                                         ${presenceFoot ? `<div class="small text-muted">${presenceFoot}</div>` : ''}
                                     </div>
                                     <div style="width:1px; background:#dee2e6; margin:.5rem 0;"></div>
@@ -3618,12 +3618,12 @@ The paused task stays "
                                 <div class="p-3 border rounded">
                                     <div class="text-muted small">Workday paused</div>
                                     <div class="fw-bold" style="font-size:1.3rem; color:#B45309;">${data.paused_display || '0m'}</div>
-                                    <div class="small text-muted">outside Presence, not worked time</div>
+                                    <div class="small text-muted">outside Presence,&#32;not worked time</div>
                                 </div>` : ''}
                             </div>
                             ${(data.break_seconds || data.lunch_seconds || data.meeting_seconds || data.other_seconds || data.away_seconds || data.no_tasks_seconds || data.other_idle_seconds || (data.away_events && data.away_events.length)) ? `
                             <div class="border rounded p-2 mb-3" style="background:#fff8e1;">
-                                <div class="fw-bold mb-2"><i class="fa fa-coffee me-1"></i> Away time <span class="text-muted fw-normal small">(inside Presence — never counted as Productive)</span></div>
+                                <div class="fw-bold mb-2"><i class="fa fa-coffee me-1"></i> Away time&#32;<span class="text-muted fw-normal small">(inside Presence — never counted as Productive)</span></div>
                                 <div class="mb-2" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(96px,1fr)); gap:.5rem;">
                                     <div class="p-2 border rounded bg-white text-center"><div class="text-muted small">Break</div><div class="fw-bold">${data.break_display || '0m'}</div></div>
                                     <div class="p-2 border rounded bg-white text-center"><div class="text-muted small">Lunch</div><div class="fw-bold">${data.lunch_display || '0m'}</div></div>
@@ -3637,11 +3637,11 @@ The paused task stays "
                                     // Same colour the Map chip uses for this type — one source,
                                     // so the list and the Map can never disagree again.
                                     const bg = awayColor(e.type);
-                                    const from = e.from ? ` <span class="text-muted">from "${(e.from||'').replace(/</g,'&lt;')}"</span>` : '';
+                                    const from = e.from ? `&#32;<span class="text-muted">from&#32;"${(e.from||'').replace(/</g,'&lt;')}"</span>` : '';
                                     // Who a meeting was with, before the note — "with Priya, Arun — sprint planning".
-                                    const who = e['with'] ? ` <span class="text-muted">with ${(e['with']||'').replace(/</g,'&lt;')}</span>` : '';
-                                    const note = e.note ? ` <span class="text-muted fst-italic">— ${(e.note||'').replace(/</g,'&lt;')}</span>` : '';
-                                    return `<li class="mb-1"><span class="badge me-1" style="background:${bg};color:#fff;">${e.label}</span> ${e.start} – ${e.end} <span class="text-muted">(${e.duration_display})</span>${from}${who}${note}</li>`;
+                                    const who = e['with'] ? `&#32;<span class="text-muted">with ${(e['with']||'').replace(/</g,'&lt;')}</span>` : '';
+                                    const note = e.note ? `&#32;<span class="text-muted fst-italic">— ${(e.note||'').replace(/</g,'&lt;')}</span>` : '';
+                                    return `<li class="mb-1"><span class="badge me-1" style="background:${bg};color:#fff;">${e.label}</span> ${e.start}&#32;– ${e.end}&#32;<span class="text-muted">(${e.duration_display})</span>${from}${who}${note}</li>`;
                                 }).join('')}</ul>` : ''}
                             </div>` : ''}
                             ${timelineSection}
@@ -3688,7 +3688,7 @@ The paused task stays "
                             <span>
                                 <i class="fa fa-pause-circle me-1"></i>
                                 Coming back later today? <b>Pause</b> instead — your day stays
-                                open, and the time away will not count as worked time.
+                                open,&#32;and the time away will not count as worked time.
                             </span>
                             <button type="button" class="btn btn-sm btn-warning text-dark fw-semibold flex-shrink-0"
                                     id="pauseWorkdayBtn">
