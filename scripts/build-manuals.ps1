@@ -1,4 +1,4 @@
-# Build the role-based user manuals: documents\*.html -> .docx + .pdf
+# Build the role-based user manuals: documents\*.html -> .docx
 #
 # Word is the converter (it is already installed, and it is the only thing that
 # reads our HTML and writes a real .docx). Driving it over COM keeps the HTML as
@@ -25,7 +25,6 @@ if (-not $sources) { throw "No matching .html sources in $docs" }
 
 # Word format codes (WdSaveFormat).
 $wdFormatDocumentDefault = 16   # .docx
-$wdFormatPDF             = 17   # .pdf
 
 Write-Host "Converting $($sources.Count) manual(s) via Word..." -ForegroundColor Cyan
 
@@ -38,26 +37,44 @@ try {
     $base = Join-Path $src.DirectoryName $src.BaseName
     Write-Host "  $($src.Name)" -NoNewline
 
-    # ReadOnly + AddToRecentFiles:false so building never mutates the source
-    # or clutters Word's MRU list.
-    $doc = $word.Documents.Open($src.FullName, $false, $true, $false)
+    # NOT ReadOnly, deliberately. Word imports <img> from HTML as LINKED
+    # pictures, and the links have to be broken below before saving -- which it
+    # refuses to do on a read-only document. The source is still never written:
+    # SaveAs2 re-points the document at the .docx, so the Close($false) in the
+    # finally block cannot touch the .html.
+    # AddToRecentFiles:false just keeps Word's MRU list clean.
+    $doc = $word.Documents.Open($src.FullName, $false, $false, $false)
     try {
+      # EMBED THE IMAGES. Opening HTML gives linked pictures, so the .docx only
+      # holds file paths -- 0 bytes of image data. It looks fine on the machine
+      # that built it and shows red X placeholders everywhere the moment it is
+      # emailed or the screenshots folder moves. Verified: before this, the
+      # built files had word/media = 0 and 15/21/11 r:link entries.
+      #
+      # SavePictureWithDocument copies the bytes in; BreakLink then turns the
+      # linked picture into a plain embedded one. Iterated BACKWARDS because
+      # breaking a link re-indexes the collection.
+      for ($i = $doc.InlineShapes.Count; $i -ge 1; $i--) {
+        $shape = $doc.InlineShapes.Item($i)
+        if ($null -ne $shape.LinkFormat) {
+          $shape.LinkFormat.SavePictureWithDocument = $true
+          $shape.LinkFormat.BreakLink()
+        }
+      }
+
       # No $doc.Convert() here: it throws "This command is not available" on a
       # read-only document, and SaveAs2 with wdFormatDocumentDefault already
       # writes a real .docx rather than a renamed web archive.
       $doc.SaveAs2("$base.docx", $wdFormatDocumentDefault)
 
-      # PDF via ExportAsFixedFormat rather than SaveAs2: it exposes OptimizeFor,
-      # and screen-optimised output is a fraction of the size. These PDFs get
-      # downloaded over mobile data from the in-app User Manual screen, so the
-      # saving matters. Args: path, format(17=PDF), openAfter, optimizeFor
-      # (1 = wdExportOptimizeForOnScreen).
-      $doc.ExportAsFixedFormat("$base.pdf", $wdFormatPDF, $false, 1)
+      # No PDF: Word is the only output wanted. Nothing linked to the PDFs that
+      # used to be written beside these files -- the in-app User Manual screen
+      # serves whatever an admin uploads into kpi.user.manual, not this folder.
     } finally {
       $doc.Close($false)
       [System.Runtime.InteropServices.Marshal]::ReleaseComObject($doc) | Out-Null
     }
-    Write-Host "  ->  .docx + .pdf" -ForegroundColor Green
+    Write-Host "  ->  .docx" -ForegroundColor Green
   }
 } finally {
   # Always quit, or a headless WINWORD.EXE is left running and the next build
@@ -69,6 +86,6 @@ try {
 }
 
 Write-Host "`nDone. Output in $docs" -ForegroundColor Cyan
-Get-ChildItem (Join-Path $docs '*.docx'), (Join-Path $docs '*.pdf') |
+Get-ChildItem (Join-Path $docs '*.docx') |
   Sort-Object Name |
   Format-Table Name, @{N = 'KB'; E = { [math]::Round($_.Length / 1KB, 1) } }, LastWriteTime -AutoSize
