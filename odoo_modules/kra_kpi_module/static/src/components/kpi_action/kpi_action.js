@@ -651,6 +651,7 @@ export class KpiAction extends Component {
                             <div class="mb-3">
                                 <label class="form-label fw-bold">Attach File (optional)</label>
                                 <input type="file" class="form-control"
+                                       t-ref="progressFileInput"
                                        t-on-change="handleProgressFileUpload"/>
                                 <div class="text-danger small mt-1">⚠ Large files take time — keep this tab open until 100%. Max 50 MB. For bigger files, add a Drive or GitHub link instead.</div>
                                 <div t-if="state.uploadState.error" class="text-danger small mt-1 fw-bold" t-esc="state.uploadState.error"/>
@@ -2358,6 +2359,9 @@ export class KpiAction extends Component {
         this.kpiScrollTop = useRef('kpiScrollTop');
         this.kpiScrollTopInner = useRef('kpiScrollTopInner');
         this.kpiKanbanRow = useRef('kpiKanbanRow');
+        // The progress-update file input, so _resetProgressForm can clear the
+        // filename the browser keeps showing after a successful upload.
+        this.progressFileInput = useRef('progressFileInput');
 
         onMounted(() => {
             // Read the workday session state (DOES NOT create one).  This
@@ -4063,6 +4067,15 @@ The paused task stays "
         this.state.progressForm.related_links = [];
         this.state.progressForm.link_input = '';
         this.state.uploadState = { active: false, percent: 0, loaded: 0, total: 0, error: '', xhr: null };
+        // Clearing the STATE is not enough: a file input shows the chosen name
+        // from input.value, which OWL cannot clear declaratively — a file input's
+        // value is not settable from the vdom. So after a successful submit the
+        // update saved, appeared under Attached Files, and the picker still read
+        // "myfile.pdf" as though nothing had happened. The oversize-reject path
+        // already did this by hand (handleProgressFileUpload); the success path
+        // never did.
+        const el = this.progressFileInput?.el;
+        if (el) { el.value = ''; }
     }
 
     async _reloadProgressLists() {

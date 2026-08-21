@@ -23,6 +23,7 @@ import logging
 import re
 
 from dateutil.relativedelta import relativedelta
+from psycopg2 import IntegrityError
 
 from odoo import api, fields, models
 
@@ -433,14 +434,38 @@ class KpiWorkdaySnapshot(models.Model):
             # its summary is stale when it is the freshest thing there is.
             'superseded': False,
         }
-        rec = self.sudo().search([
+        Snap = self.sudo()
+        dom = [
             ('user_id', '=', session.user_id.id),
             ('session_date', '=', session.session_date),
-        ], limit=1)
+        ]
+        rec = Snap.search(dom, limit=1)
         if rec:
             rec.write(vals)
         else:
-            rec = self.sudo().create(vals)
+            # SAVEPOINT around the INSERT, because search-then-create is
+            # check-then-act against UNIQUE (user_id, session_date) and it loses:
+            # the 5-minute midnight cron and the daily one BOTH call
+            # _close_overdue(), so two workers can search (finding nothing) and
+            # then create the same day.
+            #
+            # Without the savepoint the duplicate aborted the whole TRANSACTION.
+            # The caller's try/except swallowed the Python exception, but the
+            # cursor was already dead, so every later statement in that cron run
+            # failed with "current transaction is aborted" — losing the snapshot,
+            # the daily summary, AND every session still to be closed in that run.
+            # Observed on 2026-07-19 (session 180). The savepoint scopes the
+            # failure to this one INSERT and leaves the transaction usable.
+            try:
+                with self.env.cr.savepoint():
+                    rec = Snap.create(vals)
+            except IntegrityError:
+                # The other writer won. Same developer, same day — so write ours
+                # over theirs and keep the rule that the last redraw wins.
+                rec = Snap.search(dom, limit=1)
+                if not rec:
+                    raise
+                rec.write(vals)
         _logger.info("workday snapshot saved: %s %s (%s bytes)",
                      session.user_id.login, session.session_date, len(png))
         return rec

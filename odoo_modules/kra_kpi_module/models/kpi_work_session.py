@@ -1991,79 +1991,151 @@ class KpiWorkSession(models.Model):
             return
         any_kpi._notify('workday_auto_closed', **ctx)
 
+    def _close_one_overdue(self, s):
+        """Close ONE straggler — the whole body of the old _close_overdue loop.
+
+        Split out so the caller can wrap each session in its own savepoint: a
+        failure here used to abort the transaction and take every session still
+        queued in that run down with it."""
+        # logout_at = end of session_date IN THE DEVELOPER'S TIMEZONE — caps
+        # presence growth. session_date is a local date, so a naive combine
+        # stored as UTC put this 05:29 the next morning for IST and inflated
+        # every auto-closed cross-midnight day by the offset.
+        #
+        # COMPUTED FIRST, because the task pause below has to close at the
+        # SAME instant the session does. It used to be computed after, so
+        # _pause_running_task() stamped now() while logout_at got the day-end:
+        # a cron firing late then recorded task time after the session had
+        # ended. One real case ran a log to 13h07m against a 5h20m session,
+        # which pushed Accounted above Presence and floored other_idle to 0 —
+        # silently, on the screen whose whole job is to reconcile.
+        eod = _local_day_end_utc(s.session_date, s.user_id)
+        # Stop a task the developer left running when the day rolled over,
+        # capped at that same day-end.
+        try:
+            s._pause_running_task(at=eod)
+        except Exception as exc:
+            _logger.warning("overdue-close pause failed for session %s: %s", s.id, exc)
+        # Bank a pause that was never resumed BEFORE anything reads presence.
+        # "Paused at 04:00 and went to bed" is the case this exists for: the
+        # pause has to end at the same instant the day does, or presence for
+        # the date is computed against a pause with no end.
+        if s.is_paused and s.paused_at:
+            s.sudo().write({
+                'is_paused': False,
+                'paused_at': False,
+                'paused_seconds': (s.paused_seconds or 0.0)
+                                  + max(0.0, (eod - s.paused_at).total_seconds()),
+            })
+        s.write({
+            'logout_at':   eod,
+            'state':       'closed',
+            'auto_closed': True,
+        })
+        # Same full cleanup a manual End Workday does — close the open
+        # Break/Lunch/Meeting (capped at eod via logout_at) and un-pair. Runs
+        # BEFORE the snapshot below so the saved image reflects the finalized
+        # day, and stops a stale 'active' break/task carrying into tomorrow
+        # (which would silence the idle prompt / show a phantom activity).
+        try:
+            s._finalize_day_cleanup()
+        except Exception as exc:
+            _logger.warning("overdue-close cleanup failed for session %s: %s", s.id, exc)
+        try:
+            # full_day=True to match action_end_day — this is the same day's
+            # record, and it must not differ just because a cron closed it.
+            payload = s._daily_summary_payload(full_day=True)
+            # The image matters MOST here: this fires for exactly the people
+            # who forgot to end their day, and there is no browser in a cron —
+            # which is why the whole thing renders server-side.
+            snap = s._capture_snapshot(payload)
+            s._fire_daily_summary(payload, snapshot=snap)
+        except Exception as exc:
+            _logger.warning("overdue-close summary failed for session %s: %s", s.id, exc)
+        # Tell the developer we auto-closed the workday they left open.
+        try:
+            s._fire_workday_auto_closed()
+        except Exception as exc:
+            _logger.warning("overdue-close notify failed for session %s: %s", s.id, exc)
+
     @api.model
     def _close_overdue(self):
-        """Close every OPEN session from a previous day (it crossed midnight):
-        pause a task the developer left running, close it (cap logout at that
-        day's 23:59:59), fire the daily summary, and notify the developer it was
-        auto-closed. Idempotent — safe to run frequently. Returns count closed."""
-        today = fields.Date.context_today(self)
+        """Close every OPEN session whose day has ENDED in the DEVELOPER'S OWN
+        timezone (it crossed midnight): pause a task they left running, close it
+        (cap logout at that day's 23:59:59), fire the daily summary, and notify
+        them it was auto-closed. Idempotent — safe to run frequently.
+        Returns the number actually closed.
+        """
+        # The day is over WHEN IT IS OVER FOR THE DEVELOPER, not for UTC. This
+        # filtered on `session_date < fields.Date.context_today(self)`, and in a
+        # cron self.env.user is __system__ — whose tz is EMPTY — so 'today'
+        # resolved in UTC. For an Asia/Kolkata team that date cannot roll over
+        # before 05:30 local, which made local midnight structurally unreachable:
+        # the 5-minute cron ran ~66 times between 00:00 and 05:29 IST and closed
+        # nothing. Measured in production, days were closing 9-11 hours late.
+        #
+        # The SQL stays a cheap indexed superset (no timezone is a full day from
+        # UTC); _local_day_end_utc then decides per developer. Sharing that helper
+        # is the point — it is the same one that computes the cap written to
+        # logout_at, so 'is this day over' can no longer disagree with the instant
+        # we stamp as its end.
+        now = fields.Datetime.now()
         stragglers = self.sudo().search([
             ('state', '=', 'open'),
-            ('session_date', '<', today),
-        ])
+            ('session_date', '<=', fields.Date.context_today(self)),
+        ]).filtered(lambda s: s.session_date
+                    and now >= _local_day_end_utc(s.session_date, s.user_id))
+        closed = 0
         for s in stragglers:
-            # logout_at = end of session_date IN THE DEVELOPER'S TIMEZONE — caps
-            # presence growth. session_date is a local date, so a naive combine
-            # stored as UTC put this 05:29 the next morning for IST and inflated
-            # every auto-closed cross-midnight day by the offset.
-            #
-            # COMPUTED FIRST, because the task pause below has to close at the
-            # SAME instant the session does. It used to be computed after, so
-            # _pause_running_task() stamped now() while logout_at got the day-end:
-            # a cron firing late then recorded task time after the session had
-            # ended. One real case ran a log to 13h07m against a 5h20m session,
-            # which pushed Accounted above Presence and floored other_idle to 0 —
-            # silently, on the screen whose whole job is to reconcile.
-            eod = _local_day_end_utc(s.session_date, s.user_id)
-            # Stop a task the developer left running when the day rolled over,
-            # capped at that same day-end.
+            # One savepoint per session. Without it a single failure — a duplicate
+            # snapshot was the real case — aborted the whole transaction, and every
+            # session still queued in this run died on 'current transaction is
+            # aborted' rather than being closed.
             try:
-                s._pause_running_task(at=eod)
+                with self.env.cr.savepoint():
+                    self._close_one_overdue(s)
+                closed += 1
             except Exception as exc:
-                _logger.warning("overdue-close pause failed for session %s: %s", s.id, exc)
-            # Bank a pause that was never resumed BEFORE anything reads presence.
-            # "Paused at 04:00 and went to bed" is the case this exists for: the
-            # pause has to end at the same instant the day does, or presence for
-            # the date is computed against a pause with no end.
-            if s.is_paused and s.paused_at:
-                s.sudo().write({
-                    'is_paused': False,
-                    'paused_at': False,
-                    'paused_seconds': (s.paused_seconds or 0.0)
-                                      + max(0.0, (eod - s.paused_at).total_seconds()),
-                })
-            s.write({
-                'logout_at':   eod,
-                'state':       'closed',
-                'auto_closed': True,
-            })
-            # Same full cleanup a manual End Workday does — close the open
-            # Break/Lunch/Meeting (capped at eod via logout_at) and un-pair. Runs
-            # BEFORE the snapshot below so the saved image reflects the finalized
-            # day, and stops a stale 'active' break/task carrying into tomorrow
-            # (which would silence the idle prompt / show a phantom activity).
-            try:
-                s._finalize_day_cleanup()
-            except Exception as exc:
-                _logger.warning("overdue-close cleanup failed for session %s: %s", s.id, exc)
-            try:
-                # full_day=True to match action_end_day — this is the same day's
-                # record, and it must not differ just because a cron closed it.
-                payload = s._daily_summary_payload(full_day=True)
-                # The image matters MOST here: this fires for exactly the people
-                # who forgot to end their day, and there is no browser in a cron —
-                # which is why the whole thing renders server-side.
-                snap = s._capture_snapshot(payload)
-                s._fire_daily_summary(payload, snapshot=snap)
-            except Exception as exc:
-                _logger.warning("overdue-close summary failed for session %s: %s", s.id, exc)
-            # Tell the developer we auto-closed the workday they left open.
-            try:
-                s._fire_workday_auto_closed()
-            except Exception as exc:
-                _logger.warning("overdue-close notify failed for session %s: %s", s.id, exc)
-        return len(stragglers)
+                _logger.exception("overdue-close failed for session %s: %s", s.id, exc)
+        return closed
+
+    def _close_one_idle(self, s):
+        """Close ONE forgotten workday — the body of the _close_idle_workdays loop.
+
+        Split out for the same reason as _close_one_overdue: so each session can
+        run inside its own savepoint and a failure cannot poison the rest."""
+        # Cap logout at the last heartbeat (last time the dev was present), not
+        # now — the idle window is not working time.
+        #
+        # The SAME cap has to reach the task pause, and computing it here is
+        # what lets it. Previously logout_at was capped but the running
+        # kpi.time.log still closed at now(), so the idle window this code
+        # exists to exclude was counted as task time anyway — the comment
+        # above was true of the session and false of the work.
+        cap = s.last_heartbeat or now
+        try:
+            s._pause_running_task(at=cap)
+        except Exception as exc:
+            _logger.warning("idle-close pause failed for session %s: %s", s.id, exc)
+        s.write({
+            'logout_at':   cap,
+            'state':       'closed',
+            'auto_closed': True,
+        })
+        try:
+            s._finalize_day_cleanup()
+        except Exception as exc:
+            _logger.warning("idle-close cleanup failed for session %s: %s", s.id, exc)
+        try:
+            payload = s._daily_summary_payload(full_day=True)
+            snap = s._capture_snapshot(payload)
+            s._fire_daily_summary(payload, snapshot=snap)
+        except Exception as exc:
+            _logger.warning("idle-close summary failed for session %s: %s", s.id, exc)
+        try:
+            s._fire_workday_auto_closed()
+        except Exception as exc:
+            _logger.warning("idle-close notify failed for session %s: %s", s.id, exc)
 
     @api.model
     def _close_idle_workdays(self):
@@ -2105,39 +2177,14 @@ class KpiWorkSession(models.Model):
                 _logger.info("idle-close: skipping session %s — %s is on a declared break/lunch",
                              s.id, s.user_id.login)
                 continue
-            closed += 1
-            # Cap logout at the last heartbeat (last time the dev was present), not
-            # now — the idle window is not working time.
-            #
-            # The SAME cap has to reach the task pause, and computing it here is
-            # what lets it. Previously logout_at was capped but the running
-            # kpi.time.log still closed at now(), so the idle window this code
-            # exists to exclude was counted as task time anyway — the comment
-            # above was true of the session and false of the work.
-            cap = s.last_heartbeat or now
+            # Own savepoint per session, matching _close_overdue — one failure
+            # must not abort the transaction the remaining sessions still need.
             try:
-                s._pause_running_task(at=cap)
+                with self.env.cr.savepoint():
+                    self._close_one_idle(s)
+                closed += 1
             except Exception as exc:
-                _logger.warning("idle-close pause failed for session %s: %s", s.id, exc)
-            s.write({
-                'logout_at':   cap,
-                'state':       'closed',
-                'auto_closed': True,
-            })
-            try:
-                s._finalize_day_cleanup()
-            except Exception as exc:
-                _logger.warning("idle-close cleanup failed for session %s: %s", s.id, exc)
-            try:
-                payload = s._daily_summary_payload(full_day=True)
-                snap = s._capture_snapshot(payload)
-                s._fire_daily_summary(payload, snapshot=snap)
-            except Exception as exc:
-                _logger.warning("idle-close summary failed for session %s: %s", s.id, exc)
-            try:
-                s._fire_workday_auto_closed()
-            except Exception as exc:
-                _logger.warning("idle-close notify failed for session %s: %s", s.id, exc)
+                _logger.exception("idle-close failed for session %s: %s", s.id, exc)
         if closed:
             _logger.info("idle-close: auto-ended %s forgotten workday(s) (>%s min idle)", closed, minutes)
         return closed
@@ -2214,7 +2261,14 @@ class KpiWorkSession(models.Model):
             retro += 1
             try:
                 payload = new_s._daily_summary_payload()
-                new_s._fire_daily_summary(payload)
+                # Draw and store the day BEFORE sending it. This path had no
+                # _capture_snapshot at all, so a developer who logged task time
+                # but never opened the board got a WhatsApp summary and no saved
+                # snapshot — the only auto-close route still missing one after
+                # the July fix, and the cause of both remaining gaps in the data
+                # (2026-07-29 and 2026-07-31). Same order as _close_one_overdue.
+                snap = new_s._capture_snapshot(payload)
+                new_s._fire_daily_summary(payload, snapshot=snap)
             except Exception as exc:
                 _logger.warning("auto_close retro-summary failed for user %s: %s", uid, exc)
 
