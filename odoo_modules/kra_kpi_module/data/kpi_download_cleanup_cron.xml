@@ -1,0 +1,24 @@
+<odoo>
+    <data noupdate="1">
+        <!-- Daily cleanup — deletes stored KRA report downloads once they pass the
+             configured retention (res.company.kpi_download_retention_number /
+             _unit, default 30 days; 0 = keep forever).
+
+             These are the largest blobs the module keeps — a ZIP of per-task PDFs
+             for a month of work — so unlike the snapshot cron, which only clears
+             the image and keeps its stats row, this removes the whole record: the
+             file IS the record, and a row without its bytes would only advertise a
+             download nobody can fetch.
+
+             See models/kpi_report_download.py._gc_downloads. -->
+        <record id="ir_cron_kpi_download_cleanup" model="ir.cron">
+            <field name="name">KRA/KPI: Delete old report downloads</field>
+            <field name="model_id" ref="model_kpi_report_download"/>
+            <field name="state">code</field>
+            <field name="code">model._gc_downloads()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

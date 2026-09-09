@@ -42,3 +42,4 @@ from . import kpi_wa_group_report
 from . import kpi_wa_group_capture
 from . import kpi_wa_inbound_hook
 from . import kpi_file_attachment
+from . import kpi_report_download

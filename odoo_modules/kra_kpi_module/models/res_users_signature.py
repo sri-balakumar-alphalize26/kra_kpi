@@ -37,6 +37,23 @@ class ResUsers(models.Model):
         help="When ON, this developer may have more than one task In Progress at the same time. "
              "Default OFF keeps one active timer per developer.")
 
+    # ---- KRA Report: what this user last had on screen -------------------- #
+    # The KRA Report is a working document, not just a view: rows get trimmed,
+    # people get renamed for the report, tasks get added to it. Losing all of that
+    # to a closed tab or a sudden shutdown meant rebuilding it by hand.
+    #
+    # Server-side per user rather than localStorage on purpose. The board's
+    # view-mode toggle is a reading preference and is happy to be per-browser;
+    # this is unsaved work, and "it came back on my other machine" is the point.
+    # One JSON blob rather than a column per thing: the shape is the report
+    # screen's business and will move with it.
+    kpi_kra_report_state = fields.Text(
+        string='KRA Report saved view',
+        help="JSON: the filter selection, search text, trimmed rows, report-only "
+             "name overrides and report-only rows this user last had on the KRA "
+             "Report. Written by /kpi_reports/kra/state_set; cleared by the "
+             "screen's Clear button.")
+
     kpi_wa_number = fields.Char(
         string='KPI WhatsApp number',
         help="This developer's WhatsApp number, used to identify them in Urgent-pause / "

@@ -343,7 +343,27 @@ export class KpiCreate extends Component {
                 <!-- KPI Name -->
                 <div class="mb-3">
                     <label class="form-label fw-bold">KPI Name</label>
-                    <input type="text" class="form-control" t-model="state.name"/>
+                    <input type="text" class="form-control" t-model="state.name"
+                           t-on-input="onNameTyped"/>
+                    <!-- Says what is already there; refuses nothing. Creating a KPI
+                         used to fail outright on a duplicate name, which read as a
+                         data rule but was not one — the same work legitimately
+                         recurs under a KRA ("Monthly report", "Sprint review") and
+                         people were inventing "... 2" to get past it. -->
+                    <t t-if="state.nameMatches.length">
+                        <div class="alert alert-warning py-2 px-2 mt-2 mb-0 small">
+                            <i class="fa fa-info-circle me-1"></i>
+                            <t t-esc="state.nameMatches.length"/> task(s) under this KRA already use this name:
+                            <t t-foreach="state.nameMatches" t-as="m" t-key="m.id">
+                                <div class="ms-3">
+                                    <span t-if="m.external_ref" class="badge bg-secondary me-1" t-esc="m.external_ref"/>
+                                    <t t-esc="m.name"/>
+                                    <span class="text-muted" t-if="m.assignee"> · <t t-esc="m.assignee"/></span>
+                                </div>
+                            </t>
+                            <div class="text-muted mt-1">You can still save — this is only a heads-up.</div>
+                        </div>
+                    </t>
                 </div>
 
                 <!-- ============================================ -->
@@ -688,6 +708,8 @@ export class KpiCreate extends Component {
             toast: { show: false, text: '', kind: 'warning' },
             name: "",
             kra_id: "",
+            // Existing tasks with the typed name under the chosen KRA. Advisory.
+            nameMatches: [],
             estimate_hours: 0,
             estimate_minutes: 0,        
             kra_list: [],
@@ -947,7 +969,12 @@ export class KpiCreate extends Component {
             this._toast('KRA created successfully!', 'success');
         } catch (e) {
             console.error('Error creating KRA:', e);
-            this._toast('Error creating KRA', 'danger');
+            // The duplicate-name refusal is the common case here and it names the
+            // clash — showing "Error creating KRA" instead threw that away and left
+            // people retyping the same name.
+            const msg = (e && e.data && e.data.message)
+                || (e && e.message) || 'Error creating KRA';
+            this._toast(msg, 'danger');
         }
     }
 
@@ -1320,6 +1347,27 @@ export class KpiCreate extends Component {
             
             this.notification.add(errorMsg, { type: "danger" });
         }
+    }
+
+    /**
+     * Look up tasks already using this name under the chosen KRA.
+     *
+     * Debounced, because it fires per keystroke; and failure is swallowed, because
+     * a hint that cannot load must never stand between someone and saving.
+     */
+    onNameTyped() {
+        if (this._nameTimer) clearTimeout(this._nameTimer);
+        this._nameTimer = setTimeout(async () => {
+            const name = (this.state.name || '').trim();
+            if (!name || !this.state.kra_id) { this.state.nameMatches = []; return; }
+            try {
+                const res = await this.orm.call('kra.kpi', 'find_name_matches',
+                                                [name, parseInt(this.state.kra_id, 10)]);
+                this.state.nameMatches = res || [];
+            } catch (e) {
+                this.state.nameMatches = [];
+            }
+        }, 350);
     }
 
     cancel() {

@@ -144,6 +144,40 @@ export class KpiConfiguration extends Component {
                         </div>
                         <small class="text-muted d-block mt-2">Reports stay viewable and downloadable until deleted.
                             <b>0 = keep forever.</b></small>
+
+                        <!-- Presets rather than the bare number+unit above, because
+                             this is the setting people actually reach for: these are
+                             the largest files the module keeps, and "30 days" is a
+                             decision, not an arithmetic exercise. Custom still exposes
+                             the same two fields underneath. -->
+                        <label class="form-label fw-semibold mt-4">Keep downloaded KRA reports for</label>
+                        <div class="input-group" style="max-width:280px;">
+                            <select class="form-select" t-on-change="(ev) => this.saveDownloadPreset(ev)">
+                                <option value="7" t-att-selected="downloadPreset() === '7'">7 days</option>
+                                <option value="30" t-att-selected="downloadPreset() === '30'">30 days</option>
+                                <option value="45" t-att-selected="downloadPreset() === '45'">45 days</option>
+                                <option value="60" t-att-selected="downloadPreset() === '60'">60 days</option>
+                                <option value="90" t-att-selected="downloadPreset() === '90'">90 days</option>
+                                <option value="0" t-att-selected="downloadPreset() === '0'">Keep forever</option>
+                                <option value="custom" t-att-selected="downloadPreset() === 'custom'">Custom…</option>
+                            </select>
+                            <span t-if="state.savedDownloadRetention" class="input-group-text text-success bg-white border-success">✓</span>
+                        </div>
+                        <t t-if="downloadPreset() === 'custom'">
+                            <div class="input-group mt-2" style="max-width:280px;">
+                                <input type="number" min="0" class="form-control"
+                                       t-model.number="state.download_retention_number"
+                                       t-on-change="() => this.saveDownloadRetention()"/>
+                                <select class="form-select" t-on-change="(ev) => this.saveDownloadRetentionUnit(ev)">
+                                    <option value="days" t-att-selected="state.download_retention_unit === 'days'">Days</option>
+                                    <option value="months" t-att-selected="state.download_retention_unit === 'months'">Months</option>
+                                    <option value="years" t-att-selected="state.download_retention_unit === 'years'">Years</option>
+                                </select>
+                            </div>
+                        </t>
+                        <small class="text-muted d-block mt-2">Copies of the ZIP/PDF/Excel packs an admin
+                            downloads from the KRA Report. These are the largest files the module stores.
+                            <b>Keep forever will grow without limit.</b></small>
                     </div>
                 </div>
 
@@ -447,6 +481,9 @@ export class KpiConfiguration extends Component {
             report_retention_number: 3,
             report_retention_unit: "months",
             savedReportRetention: false,
+            download_retention_number: 30,
+            download_retention_unit: "days",
+            savedDownloadRetention: false,
         });
         onWillStart(async () => {
             try {
@@ -472,6 +509,8 @@ export class KpiConfiguration extends Component {
                     if (cfg.snapshot_retention_unit) this.state.snapshot_retention_unit = cfg.snapshot_retention_unit;
                     if (cfg.report_retention_number != null) this.state.report_retention_number = cfg.report_retention_number;
                     if (cfg.report_retention_unit) this.state.report_retention_unit = cfg.report_retention_unit;
+                    if (cfg.download_retention_number != null) this.state.download_retention_number = cfg.download_retention_number;
+                    if (cfg.download_retention_unit) this.state.download_retention_unit = cfg.download_retention_unit;
                 }
                 const devs = await rpc("/kpi_multitask/list", {});
                 if (devs?.status) this.state.developers = devs.developers;
@@ -703,6 +742,54 @@ export class KpiConfiguration extends Component {
     saveReportRetentionUnit(ev) {
         this.state.report_retention_unit = ev.target.value || "months";
         this.saveReportRetention();
+    }
+
+    /**
+     * Which entry the preset dropdown should show for the stored pair.
+     *
+     * Anything that is not one of the presets — including a value set before this
+     * dropdown existed, or by the older number+unit convention — comes back as
+     * Custom with its real value visible, rather than being silently rounded to
+     * the nearest preset.
+     */
+    downloadPreset() {
+        const n = parseInt(this.state.download_retention_number) || 0;
+        const u = this.state.download_retention_unit || "days";
+        if (n === 0) return "0";
+        if (u === "days" && [7, 30, 45, 60, 90].includes(n)) return String(n);
+        return "custom";
+    }
+
+    saveDownloadPreset(ev) {
+        const v = ev.target.value;
+        if (v === "custom") {
+            // Seed the custom boxes with something sane rather than 0, which the
+            // dropdown would immediately read back as "Keep forever" and the
+            // Custom fields would vanish again.
+            if (this.downloadPreset() !== "custom") {
+                this.state.download_retention_number = 30;
+                this.state.download_retention_unit = "months";
+                this.saveDownloadRetention();
+            }
+            return;
+        }
+        this.state.download_retention_number = parseInt(v) || 0;
+        this.state.download_retention_unit = "days";
+        this.saveDownloadRetention();
+    }
+
+    async saveDownloadRetention() {
+        const number = Math.max(0, parseInt(this.state.download_retention_number) || 0);
+        this.state.download_retention_number = number;
+        try {
+            await rpc("/kpi_config/set_download_retention",
+                      { number, unit: this.state.download_retention_unit });
+            this._flash(this.state, "savedDownloadRetention");
+        } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+    saveDownloadRetentionUnit(ev) {
+        this.state.download_retention_unit = ev.target.value || "days";
+        this.saveDownloadRetention();
     }
 
     _waSay(msg, kind = "info") {

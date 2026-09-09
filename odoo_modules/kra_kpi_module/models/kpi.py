@@ -959,6 +959,32 @@ class KpiMaster(models.Model):
         return super().write(vals)
 
     @api.model
+    def find_name_matches(self, name, kra_id, limit=5):
+        """Existing tasks under this KRA whose name matches — for the create form's
+        "already used here" hint.
+
+        Advisory only: create_kpi does not refuse a duplicate (see the note there).
+        Scoped to the one KRA because that is the only place a repeated name is
+        actually confusing; the same name under a different project is normal.
+        """
+        name = (name or '').strip()
+        if not name or not kra_id:
+            return []
+        try:
+            kra_id = int(kra_id)
+        except (TypeError, ValueError):
+            return []
+        rows = self.sudo().search(
+            [('name', '=ilike', name), ('kra_id', '=', kra_id)], limit=limit)
+        return [{
+            'id': r.id,
+            'name': r.name or '',
+            'external_ref': r.external_ref or '',
+            'state': r.task_state or '',
+            'assignee': r.user_id.name if r.user_id else '',
+        } for r in rows]
+
+    @api.model
     def create_kpi(self, vals):
         if isinstance(vals, (list, tuple)) and vals:
             vals = vals[0]
@@ -969,17 +995,16 @@ class KpiMaster(models.Model):
         if not kpi_name:
             raise ValidationError("KPI name is required")
         
-        existing_kpi = self.search([
-            ('name', '=ilike', kpi_name),
-            ('kra_id', '=', vals.get('kra_id'))
-        ], limit=1)
-        
-        if existing_kpi:
-            raise ValidationError(
-                f"A KPI with the name '{kpi_name}' already exists. "
-                f"Please choose a different name."
-            )
-
+        # A duplicate task name is NOT refused. It used to raise, which read as a
+        # data-integrity rule but is not one: the same piece of work legitimately
+        # recurs under a KRA — "Monthly report", "Sprint review" — and the old
+        # behaviour forced people to invent "Monthly report 2" to get past it.
+        # Unlike kra.master, where a duplicate genuinely makes the tree ambiguous,
+        # two tasks with one name are merely two tasks.
+        #
+        # The warning now lives in the UI instead: kra.kpi.find_name_matches feeds
+        # a suggestion under the name field while typing. Callers wanting to check
+        # first can use that; nothing here blocks.
         rec_vals = {
             'name': vals.get('name'),
             'kra_id': vals.get('kra_id'),

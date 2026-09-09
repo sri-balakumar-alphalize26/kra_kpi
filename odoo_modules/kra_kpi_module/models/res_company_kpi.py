@@ -168,6 +168,23 @@ class ResCompany(models.Model):
         [('days', 'Days'), ('months', 'Months'), ('years', 'Years')],
         string='Report Retention Unit', default='months')
 
+    # ---- Downloaded KRA report retention --------------------------------- #
+    # Same number+unit shape as its two siblings above, so the GC method needs no
+    # special cases. The Configuration screen offers 7/30/45/60/90 days as presets
+    # over these fields and falls back to showing the raw pair for anything else.
+    # Defaults to 30 DAYS rather than the siblings' 3 months: these are the largest
+    # blobs the module stores (a ZIP of PDFs), so keeping them for a quarter by
+    # default would grow the filestore faster than anyone expects.
+    kpi_download_retention_number = fields.Integer(
+        string='Download Retention',
+        default=30,
+        help="Delete stored KRA report downloads (kpi.report.download) older than "
+             "this many days/months/years (unit below). 0 = keep forever. Read by "
+             "kpi.report.download._gc_downloads.")
+    kpi_download_retention_unit = fields.Selection(
+        [('days', 'Days'), ('months', 'Months'), ('years', 'Years')],
+        string='Download Retention Unit', default='days')
+
     kpi_wa_sender_number = fields.Char(
         string='App OTP Sender (WhatsApp)',
         help="WhatsApp number shown to users as the sender of password-reset codes. "

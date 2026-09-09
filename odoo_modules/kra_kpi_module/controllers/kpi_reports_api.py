@@ -1,5 +1,10 @@
 from odoo import http, fields
 from odoo.http import request
+
+# Timestamps shown to a user must be in THEIR timezone, and kra_api already owns
+# that conversion. Imported rather than re-implemented so the two controllers
+# cannot drift into formatting the same value differently.
+from .kra_api import convert_to_user_tz
 from datetime import timedelta
 import json
 import re
@@ -876,6 +881,131 @@ class KpiReportsAPI(http.Controller):
                 'message': str(e),
                 'kras': {}, 'employees': {}, 'task_types': {}, 'task_states': {},
             }
+
+    # ------------------------------------------------------------------ #
+    #  KRA Report: admin gate, saved view, and download history           #
+    # ------------------------------------------------------------------ #
+
+    def _kra_report_admin_ok(self):
+        """Who may edit the KRA Report rather than only read it.
+
+        The screen is reachable by managers, but adding tasks, renaming people and
+        storing downloads are admin actions — same triple every other admin screen
+        in this file uses."""
+        user = request.env.user
+        return (user.has_group('kra_kpi_module.group_kra_admin')
+                or user.has_group('kra_kpi_module.group_kra_owner')
+                or user.has_group('base.group_system'))
+
+    @http.route('/kpi_reports/kra/context', type='json', auth='user', methods=['POST'], csrf=False)
+    def kra_report_context(self, **params):
+        """What the screen needs to know about the caller on load: whether the
+        edit affordances appear, and the saved view to restore."""
+        user = request.env.user
+        return {
+            'status': True,
+            'is_admin': self._kra_report_admin_ok(),
+            'user_id': user.id,
+            'saved_state': user.sudo().kpi_kra_report_state or '',
+        }
+
+    @http.route('/kpi_reports/kra/state_set', type='json', auth='user', methods=['POST'], csrf=False)
+    def kra_report_state_set(self, **params):
+        """Store (or clear) this user's KRA Report working view.
+
+        Per user, not per company: this is unsaved work — trimmed rows, report-only
+        renames, report-only tasks — and it belongs to whoever was building it.
+        Passing an empty state is how the screen's Clear button wipes it."""
+        user = request.env.user
+        state = params.get('state')
+        # Written with sudo because a plain employee may not write their own
+        # res.users row, and this is their own preference data either way.
+        user.sudo().kpi_kra_report_state = state if state else False
+        return {'status': True}
+
+    @http.route('/kpi_reports/kra/download_save', type='json', auth='user', methods=['POST'], csrf=False)
+    def kra_report_download_save(self, **params):
+        """Keep a copy of a report the browser just handed the user.
+
+        The PDF/Excel/ZIP are built client-side and never reach the server, so this
+        is the only way the file can exist afterwards. Deliberately best-effort:
+        the user already has their download, so a failure here must be reported
+        without pretending the download itself failed."""
+        if not self._kra_report_admin_ok():
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            rec_id = request.env['kpi.report.download'].sudo().record_download({
+                'data_b64': params.get('data_b64') or '',
+                'filename': params.get('filename') or 'report',
+                'kind': params.get('kind') or 'zip',
+                'from_date': params.get('from_date') or False,
+                'to_date': params.get('to_date') or False,
+                'row_count': params.get('row_count') or 0,
+                'filters_json': params.get('filters_json') or '',
+            })
+            if not rec_id:
+                return {'status': False, 'message': 'The file could not be stored.'}
+            return {'status': True, 'id': rec_id}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("download_save failed: %s", e)
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_reports/kra/download_list', type='json', auth='user', methods=['POST'], csrf=False)
+    def kra_report_download_list(self, **params):
+        """Past downloads, newest first. Never returns the blobs — the list would
+        be tens of megabytes; download_file fetches one on demand."""
+        if not self._kra_report_admin_ok():
+            return {'status': False, 'message': 'Not authorized', 'downloads': []}
+        try:
+            limit = min(int(params.get('limit') or 50), 200)
+        except (TypeError, ValueError):
+            limit = 50
+        rows = request.env['kpi.report.download'].sudo().search([], limit=limit)
+        return {'status': True, 'downloads': [{
+            'id': r.id,
+            'filename': r.filename or 'report',
+            'kind': r.kind or 'zip',
+            'file_size': r.file_size or 0,
+            'row_count': r.row_count or 0,
+            'from_date': str(r.from_date) if r.from_date else '',
+            'to_date': str(r.to_date) if r.to_date else '',
+            'user_name': r.user_id.name or '',
+            'generated_at': convert_to_user_tz(r.generated_at) if r.generated_at else '',
+        } for r in rows]}
+
+    @http.route('/kpi_reports/kra/download_file', type='json', auth='user', methods=['POST'], csrf=False)
+    def kra_report_download_file(self, **params):
+        """One stored download's bytes, base64. JSON rather than an http route for
+        the same reason /kpi/progress/file_b64 is: an external browser handed a URL
+        sends no session cookie and lands on the login page instead of the file."""
+        if not self._kra_report_admin_ok():
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            rec = request.env['kpi.report.download'].sudo().browse(int(params.get('id') or 0))
+        except (TypeError, ValueError):
+            return {'status': False, 'message': 'Bad id'}
+        if not rec.exists() or not rec.file:
+            return {'status': False, 'message': 'File not found'}
+        data = rec.file
+        if isinstance(data, bytes):
+            data = data.decode()
+        return {'status': True, 'filename': rec.filename or 'report',
+                'kind': rec.kind or 'zip', 'data_b64': data}
+
+    @http.route('/kpi_reports/kra/download_delete', type='json', auth='user', methods=['POST'], csrf=False)
+    def kra_report_download_delete(self, **params):
+        """Remove one stored download before its retention runs out."""
+        if not self._kra_report_admin_ok():
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            rec = request.env['kpi.report.download'].sudo().browse(int(params.get('id') or 0))
+        except (TypeError, ValueError):
+            return {'status': False, 'message': 'Bad id'}
+        if not rec.exists():
+            return {'status': False, 'message': 'Not found'}
+        rec.unlink()
+        return {'status': True}
 
     # ============================================================
     #              KRA EMPLOYEE REPORT APIs

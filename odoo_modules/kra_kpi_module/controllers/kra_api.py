@@ -353,12 +353,24 @@ class KraKpiAPI(http.Controller):
         if is_sub and parent_id:
             kra_vals["parent_id"] = int(parent_id)
 
-        kra = request.env["kra.master"].create(kra_vals)
+        # Through create_kra, not create(). This route called create() directly and
+        # so accepted duplicates in silence, while the model method and the rename
+        # route both refuse them — the same tree could end up with two identically
+        # named siblings depending only on which door the request came through.
+        #
+        # create_kra raises ValidationError; this route's callers expect
+        # {status: False, message}, so the refusal is translated rather than
+        # escaping as a 500.
+        try:
+            # Returns the id, not the record.
+            kra_id = request.env["kra.master"].create_kra(kra_vals)
+        except ValidationError as e:
+            return {"status": False, "message": str(e.args[0] if e.args else e)}
 
         return {
             "status": True,
             "message": "KRA Created",
-            "id": kra.id,
+            "id": kra_id,
         }
 
     @http.route('/kra_kpi/create_kpi', type='json', auth='user', methods=['POST'], csrf=False)
@@ -2703,6 +2715,8 @@ class KraKpiAPI(http.Controller):
                 'daily_report_coverage': c.kpi_daily_report_coverage or 'yesterday',
                 'report_retention_number': c.kpi_report_retention_number or 0,
                 'report_retention_unit': c.kpi_report_retention_unit or 'months',
+                'download_retention_number': c.kpi_download_retention_number or 0,
+                'download_retention_unit': c.kpi_download_retention_unit or 'days',
                 'country_id': c.kpi_country_id.id if c.kpi_country_id else False,
                 'country_dial_code': dial,
                 'mobile_length': length,
@@ -2849,6 +2863,42 @@ class KraKpiAPI(http.Controller):
         c = request.env.company.sudo()
         c.kpi_report_retention_number = number
         c.kpi_report_retention_unit = unit
+        return {'status': True, 'number': number, 'unit': unit}
+
+    @http.route('/kra_kpi/kpi/name_matches', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_name_matches(self, **params):
+        """Tasks already using this name under this KRA. A hint, never a refusal —
+        see kra.kpi.create_kpi."""
+        try:
+            matches = request.env['kra.kpi'].find_name_matches(
+                params.get('name') or '', params.get('kra_id'))
+            return {'status': True, 'matches': matches}
+        except Exception as e:
+            # A failed hint must never stop someone creating a task.
+            _logger.warning("kpi_name_matches failed: %s", e)
+            return {'status': True, 'matches': []}
+
+    @http.route('/kpi_config/set_download_retention', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_download_retention(self, **params):
+        """How long to keep stored KRA report downloads before the cleanup cron
+        deletes them. number 0 = keep forever; unit in days/months/years.
+
+        The Configuration screen offers 7/30/45/60/90 days as presets, but they
+        arrive here as the same number+unit pair a Custom value does — the presets
+        are a convenience over these two fields, not a separate setting."""
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        try:
+            number = max(0, int(params.get('number') or 0))
+        except (TypeError, ValueError):
+            number = 0
+        unit = params.get('unit')
+        if unit not in ('days', 'months', 'years'):
+            unit = 'days'
+        c = request.env.company.sudo()
+        c.kpi_download_retention_number = number
+        c.kpi_download_retention_unit = unit
         return {'status': True, 'number': number, 'unit': unit}
 
     @http.route('/kpi_config/set_daily_report', type='json', auth='user', methods=['POST'], csrf=False)

@@ -103,3 +103,6 @@ access_kpi_wa_group_event_system,kpi.wa.group.event.system,model_kpi_wa_group_ev
 access_kpi_file_attachment_admin,kpi.file.attachment.admin,model_kpi_file_attachment,base.group_system,1,1,1,1
 access_kpi_file_attachment_manager,kpi.file.attachment.manager,model_kpi_file_attachment,kra_kpi_module.group_kra_manager,1,1,1,1
 access_kpi_file_attachment_employee,kpi.file.attachment.employee,model_kpi_file_attachment,base.group_user,1,1,1,1
+access_kpi_report_download_admin,kpi.report.download.admin,model_kpi_report_download,base.group_system,1,1,1,1
+access_kpi_report_download_manager,kpi.report.download.manager,model_kpi_report_download,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_report_download_owner,kpi.report.download.owner,model_kpi_report_download,kra_kpi_module.group_kra_owner,1,1,1,1

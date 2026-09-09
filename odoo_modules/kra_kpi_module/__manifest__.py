@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.4.7",
+    "version": "19.0.4.8",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -20,6 +20,7 @@
         "data/kpi_notification_cleanup_cron.xml",
         "data/kpi_snapshot_cleanup_cron.xml",
         "data/kpi_daily_report_cron.xml",
+        "data/kpi_download_cleanup_cron.xml",
         "data/kpi_queue_nudge_cron.xml",
         "data/kpi_idle_check_cron.xml",
         "data/kpi_urgent_nudge_cron.xml",

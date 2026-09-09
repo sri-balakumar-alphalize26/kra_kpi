@@ -200,6 +200,335 @@ export class KpiKraReport extends Component {
 
     static template = xml/* xml */`
         <div class="o_kpi_kra_report p-4">
+
+            <!-- Asked AFTER the format is chosen: the ZIP menu decides what goes in
+                 the archive, this decides who and when it covers, and the period
+                 also decides how the archive is foldered. -->
+            <div t-if="state.dl.open" class="modal d-block" tabindex="-1"
+                 style="background: rgba(0,0,0,0.5); z-index:2000;">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header bg-warning">
+                            <h5 class="modal-title"><i class="fa fa-download me-2"/>Download options</h5>
+                            <button type="button" class="btn-close" t-on-click="closeDownloadDialog"/>
+                        </div>
+                        <div class="modal-body">
+                            <label class="form-label fw-bold">Who</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" id="dlAll"
+                                       t-att-checked="state.dl.scope === 'all'"
+                                       t-on-change="() => state.dl.scope = 'all'"/>
+                                <label class="form-check-label" for="dlAll">Everyone in this report</label>
+                            </div>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="radio" id="dlEmp"
+                                       t-att-checked="state.dl.scope === 'employee'"
+                                       t-on-change="() => state.dl.scope = 'employee'"/>
+                                <label class="form-check-label" for="dlEmp">Only these people</label>
+                            </div>
+                            <t t-if="state.dl.scope === 'employee'">
+                                <select multiple="multiple" class="form-select mb-3" size="5"
+                                        t-on-change="onDlEmployees">
+                                    <t t-foreach="state.employees" t-as="e" t-key="e.id">
+                                        <option t-att-value="e.id"
+                                                t-att-selected="state.dl.employeeIds.includes(e.id)"
+                                                t-esc="e.name"/>
+                                    </t>
+                                </select>
+                            </t>
+
+                            <label class="form-label fw-bold mt-2">Period</label>
+                            <select class="form-select mb-2" t-model="state.dl.period">
+                                <option value="range">The report's date range</option>
+                                <option value="day">A single day</option>
+                                <option value="month">A month</option>
+                            </select>
+                            <t t-if="state.dl.period === 'day'">
+                                <input type="date" class="form-control mb-2" t-model="state.dl.day"/>
+                            </t>
+                            <t t-if="state.dl.period === 'month'">
+                                <input type="month" class="form-control mb-2" t-model="state.dl.month"/>
+                            </t>
+
+                            <t t-if="state.dl.kind === 'zip'">
+                                <div class="alert alert-light border small mb-2">
+                                    <i class="fa fa-folder-open-o me-1"/>
+                                    Per-task files are foldered
+                                    <strong>Month / Week / Person</strong>, with the whole-report and
+                                    per-project files at the top of the archive.
+                                </div>
+                            </t>
+
+                            <div class="form-check" t-if="state.isAdmin">
+                                <input class="form-check-input" type="checkbox" id="dlKeep"
+                                       t-model="state.dl.saveCopy"/>
+                                <label class="form-check-label" for="dlKeep">
+                                    Keep a copy in the download history
+                                </label>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" t-on-click="closeDownloadDialog">Cancel</button>
+                            <button class="btn btn-primary" t-att-disabled="state.dl.busy"
+                                    t-on-click="confirmDownload">
+                                <i class="fa fa-download me-1"/>
+                                <t t-esc="state.dl.busy ? 'Preparing…' : 'Download'"/>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Past downloads, so "send me that pack again" does not mean
+                 rebuilding the filters and hoping the data has not moved. -->
+            <div t-if="state.history.open" class="modal d-block" tabindex="-1"
+                 style="background: rgba(0,0,0,0.5); z-index:2000;">
+                <div class="modal-dialog modal-lg modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header bg-secondary text-white">
+                            <h5 class="modal-title"><i class="fa fa-history me-2"/>Download history</h5>
+                            <button type="button" class="btn-close btn-close-white" t-on-click="closeHistory"/>
+                        </div>
+                        <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
+                            <div t-if="state.history.loading" class="text-muted small py-3">
+                                <i class="fa fa-spinner fa-spin me-2"/>Loading…
+                            </div>
+                            <div t-elif="!state.history.rows.length" class="text-muted small py-3">
+                                Nothing downloaded yet. Files are kept for as long as
+                                Configuration says, then removed automatically.
+                            </div>
+                            <table t-else="" class="table table-sm table-hover align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Downloaded</th><th>File</th><th>Covering</th>
+                                        <th class="text-end">Size</th><th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <t t-foreach="state.history.rows" t-as="h" t-key="h.id">
+                                        <tr>
+                                            <td class="small">
+                                                <t t-esc="h.generated_at"/>
+                                                <div class="text-muted" t-esc="h.user_name"/>
+                                            </td>
+                                            <td class="small">
+                                                <span class="badge bg-light text-dark border me-1" t-esc="h.kind"/>
+                                                <t t-esc="h.filename"/>
+                                            </td>
+                                            <td class="small text-muted">
+                                                <t t-esc="h.from_date"/> → <t t-esc="h.to_date"/>
+                                                · <t t-esc="h.row_count"/> rows
+                                            </td>
+                                            <td class="small text-end text-nowrap" t-esc="fmtSize(h.file_size)"/>
+                                            <td class="text-end text-nowrap">
+                                                <button class="btn btn-sm btn-outline-primary me-1"
+                                                        t-on-click="() => this.redownload(h)">
+                                                    <i class="fa fa-download"/>
+                                                </button>
+                                                <button class="btn btn-sm btn-outline-danger"
+                                                        t-on-click="() => this.deleteHistory(h)">
+                                                    <i class="fa fa-trash"/>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </t>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" t-on-click="closeHistory">Close</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Add a task. The full field set, not the board's short one: this is
+                 the screen an admin builds a client's report on, so a task added
+                 here needs to arrive complete rather than needing a second visit. -->
+            <div t-if="state.nt" class="modal d-block" tabindex="-1"
+                 style="background: rgba(0,0,0,0.5); z-index:2000;">
+                <div class="modal-dialog modal-lg modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header bg-primary text-white">
+                            <h5 class="modal-title"><i class="fa fa-plus me-2"/>New Task</h5>
+                            <button type="button" class="btn-close btn-close-white" t-on-click="closeNewTask"/>
+                        </div>
+                        <div class="modal-body" style="max-height:65vh; overflow-y:auto;">
+                            <div class="row g-2">
+                                <div class="col-md-8">
+                                    <label class="form-label fw-bold">Task Name *</label>
+                                    <input type="text" class="form-control" t-model="state.nt.name"
+                                           t-on-input="onNewTaskName"/>
+                                    <!-- Says what already exists, refuses nothing. The
+                                         same name recurs legitimately under a KRA. -->
+                                    <t t-if="state.ntMatches.length">
+                                        <div class="alert alert-warning py-2 px-2 mt-1 mb-0 small">
+                                            <i class="fa fa-info-circle me-1"/>
+                                            <t t-esc="state.ntMatches.length"/> task(s) here already use this name:
+                                            <t t-foreach="state.ntMatches" t-as="m" t-key="m.id">
+                                                <div class="ms-3">
+                                                    <span t-if="m.external_ref" class="badge bg-secondary me-1" t-esc="m.external_ref"/>
+                                                    <t t-esc="m.name"/>
+                                                    <span class="text-muted" t-if="m.assignee"> · <t t-esc="m.assignee"/></span>
+                                                </div>
+                                            </t>
+                                            <div class="text-muted mt-1">You can still save — this is only a heads-up.</div>
+                                        </div>
+                                    </t>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">Priority</label>
+                                    <select class="form-select" t-model="state.nt.priority">
+                                        <option value="regular">Regular</option>
+                                        <option value="important">Important</option>
+                                        <option value="urgent">Urgent</option>
+                                    </select>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Project (KRA) *</label>
+                                    <select class="form-select" t-model="state.nt.kra_id"
+                                            t-on-change="onNewTaskName">
+                                        <option value="">— pick a project —</option>
+                                        <t t-foreach="state.kras" t-as="k" t-key="k.id">
+                                            <option t-att-value="k.id" t-esc="k.display or k.name"/>
+                                        </t>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Assignee</label>
+                                    <select class="form-select" t-model="state.nt.user_id">
+                                        <option value="">— unassigned —</option>
+                                        <t t-foreach="state.employees" t-as="e" t-key="e.id">
+                                            <option t-att-value="e.id" t-esc="e.name"/>
+                                        </t>
+                                    </select>
+                                </div>
+
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Estimate (h)</label>
+                                    <input type="number" min="0" class="form-control" t-model.number="state.nt.estimate_hours"/>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Estimate (m)</label>
+                                    <input type="number" min="0" max="59" class="form-control" t-model.number="state.nt.estimate_minutes"/>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Deadline</label>
+                                    <input type="date" class="form-control" t-model="state.nt.deadline"/>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">Remind after (days)</label>
+                                    <input type="number" min="0" class="form-control" t-model.number="state.nt.reminder_days"/>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">Hours</label>
+                                    <input type="number" min="0" class="form-control" t-model.number="state.nt.reminder_hours"/>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">Minutes</label>
+                                    <input type="number" min="0" class="form-control" t-model.number="state.nt.reminder_minutes"/>
+                                </div>
+
+                                <div class="col-12">
+                                    <label class="form-label fw-bold">Description</label>
+                                    <textarea class="form-control" rows="3" t-model="state.nt.description"/>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Checklist</label>
+                                    <textarea class="form-control" rows="3" t-model="state.nt.checklist"/>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold">Guidelines</label>
+                                    <textarea class="form-control" rows="3" t-model="state.nt.guidelines"/>
+                                </div>
+
+                                <div class="col-12">
+                                    <div class="d-flex flex-wrap gap-3 mt-1">
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntMand" t-model="state.nt.is_mandatory"/><label class="form-check-label" for="ntMand">Mandatory</label></div>
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntAuto" t-model="state.nt.auto_assign"/><label class="form-check-label" for="ntAuto">Auto-assign</label></div>
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntAutoEst" t-model="state.nt.auto_estimated"/><label class="form-check-label" for="ntAutoEst">Auto-estimated</label></div>
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntPerm" t-model="state.nt.is_permanent"/><label class="form-check-label" for="ntPerm">Permanent</label></div>
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntSvc" t-model="state.nt.service_kpi"/><label class="form-check-label" for="ntSvc">Service KPI</label></div>
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntMeet" t-model="state.nt.is_meeting"/><label class="form-check-label" for="ntMeet">Meeting</label></div>
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntMgr" t-model="state.nt.is_manager_review_needed"/><label class="form-check-label" for="ntMgr">Coordinator review</label></div>
+                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntCust" t-model="state.nt.is_customer_review_needed"/><label class="form-check-label" for="ntCust">Customer review</label></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div t-if="state.nt.error" class="alert alert-danger py-2 mt-3 mb-0" t-esc="state.nt.error"/>
+                        </div>
+                        <div class="modal-footer d-flex justify-content-between align-items-start">
+                            <button class="btn btn-link text-muted" t-on-click="closeNewTask">Cancel</button>
+                            <div class="text-end">
+                                <div class="d-flex gap-2 justify-content-end">
+                                    <button class="btn btn-outline-primary"
+                                            t-att-disabled="state.ntBusy"
+                                            t-on-click="() => this.submitNewTask('report')">
+                                        This report only
+                                    </button>
+                                    <button class="btn btn-primary"
+                                            t-att-disabled="state.ntBusy"
+                                            t-on-click="() => this.submitNewTask('everywhere')">
+                                        <t t-esc="state.ntBusy ? 'Creating…' : 'Everywhere'"/>
+                                    </button>
+                                </div>
+                                <!-- Said before the click, not after: a report-only
+                                     task is inert, and that is easy to pick by
+                                     accident when the buttons sit side by side. -->
+                                <div class="text-muted small mt-1" style="max-width:34rem;">
+                                    <strong>This report only</strong> adds a row here and nowhere else — it
+                                    will read 0h forever and will not appear on the board.
+                                    <strong>Everywhere</strong> creates a real task.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rename a person. Two buttons rather than a checkbox, because the
+                 two outcomes are not degrees of the same thing: one writes an alias
+                 onto this report, the other edits the person's record everywhere. -->
+            <div t-if="state.rename" class="modal d-block" tabindex="-1"
+                 style="background: rgba(0,0,0,0.5); z-index:2000;">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header bg-primary text-white">
+                            <h5 class="modal-title"><i class="fa fa-user me-2"/>Rename</h5>
+                            <button type="button" class="btn-close btn-close-white" t-on-click="cancelRename"/>
+                        </div>
+                        <div class="modal-body">
+                            <label class="form-label fw-bold">Name</label>
+                            <input type="text" class="form-control" t-model="state.rename.value"/>
+                            <div class="form-text">
+                                Currently <strong t-esc="state.rename.realName"/> on their user record.
+                            </div>
+                            <div t-if="state.rename.error" class="text-danger small mt-2 fw-bold"
+                                 t-esc="state.rename.error"/>
+                        </div>
+                        <div class="modal-footer d-flex justify-content-between">
+                            <button class="btn btn-link text-muted" t-on-click="cancelRename">Cancel</button>
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-outline-primary"
+                                        t-att-disabled="state.rename.busy"
+                                        title="Show this name on this report only. The person's record is not changed."
+                                        t-on-click="() => this.saveRename('report')">
+                                    This report only
+                                </button>
+                                <button class="btn btn-primary"
+                                        t-att-disabled="state.rename.busy"
+                                        title="Change the person's name everywhere it appears"
+                                        t-on-click="() => this.saveRename('everywhere')">
+                                    <t t-esc="state.rename.busy ? 'Saving…' : 'Everywhere'"/>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Header -->
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2 class="fw-bold">
@@ -220,31 +549,31 @@ export class KpiKraReport extends Component {
                         <div class="o_kra_zip_panel shadow" t-if="state.zipMenuOpen">
                             <div class="o_kra_zip_hint">What should the archive contain?</div>
                             <button type="button" class="o_kra_zip_item"
-                                    t-on-click="() => this.downloadZip({ pdf: true })">
+                                    t-on-click="() => this.openDownloadDialog('zip', { pdf: true })">
                                 <i class="fa fa-file-pdf-o me-2 text-danger"></i>PDF pack
                                 <span class="text-muted small d-block ms-4">full report + one PDF per task</span>
                             </button>
                             <button type="button" class="o_kra_zip_item"
-                                    t-on-click="() => this.downloadZip({ excel: true })">
+                                    t-on-click="() => this.openDownloadDialog('zip', { excel: true })">
                                 <i class="fa fa-file-excel-o me-2 text-success"></i>Excel pack
                                 <span class="text-muted small d-block ms-4">full report + one workbook per project</span>
                             </button>
                             <button type="button" class="o_kra_zip_item"
-                                    t-on-click="() => this.downloadZip({ pdf: true, excel: true })">
+                                    t-on-click="() => this.openDownloadDialog('zip', { pdf: true, excel: true })">
                                 <i class="fa fa-files-o me-2 text-secondary"></i>Both packs
                                 <span class="text-muted small d-block ms-4">everything above, in one archive</span>
                             </button>
                         </div>
                     </span>
                     <button class="btn btn-success me-2"
-                            t-on-click="downloadPDF"
+                            t-on-click="() =&gt; this.openDownloadDialog('pdf')"
                             t-if="state.reportGenerated"
                             t-att-disabled="isStale"
                             t-att-title="isStale ? 'Filters changed — click Generate Report first' : 'Download report as PDF'">
                         <i class="fa fa-file-pdf-o me-2"></i>Download PDF
                     </button>
                     <button class="btn btn-info me-2"
-                            t-on-click="downloadExcel"
+                            t-on-click="() =&gt; this.openDownloadDialog('excel')"
                             t-if="state.reportGenerated"
                             t-att-disabled="isStale"
                             t-att-title="isStale ? 'Filters changed — click Generate Report first' : 'Download report as Excel'">
@@ -435,12 +764,45 @@ export class KpiKraReport extends Component {
                             <i class="fa fa-table me-2 text-secondary"></i>
                             KRA Details
                         </h5>
-                        <div class="input-group" style="max-width: 300px;">
-                            <span class="input-group-text"><i class="fa fa-search"></i></span>
-                            <input type="text" class="form-control" placeholder="Search..." 
-                                   t-model="state.searchQuery" t-on-input="onSearchChange"/>
+                        <div class="d-flex align-items-center gap-2">
+                            <t t-if="state.isAdmin">
+                                <button class="btn btn-outline-primary btn-sm"
+                                        t-on-click="openNewTask"
+                                        title="Add a task to this report, or to the system">
+                                    <i class="fa fa-plus me-1"></i>New Task
+                                </button>
+                            </t>
+                            <!-- Everything on this screen is remembered until it is
+                                 cleared: filters, trimmed rows, renames, report-only
+                                 tasks. This is the way back to a blank report. -->
+                            <button class="btn btn-outline-secondary btn-sm"
+                                    t-on-click="clearReport"
+                                    t-att-title="hasLocalEdits() ? 'Discard this report and start fresh' : 'Reset the filters and empty the table'">
+                                <i class="fa fa-eraser me-1"></i>Clear
+                                <span t-if="hasLocalEdits()" class="badge bg-warning text-dark ms-1"
+                                      t-esc="localEditCount()"/>
+                            </button>
+                            <t t-if="state.isAdmin">
+                                <button class="btn btn-outline-secondary btn-sm"
+                                        t-on-click="openHistory" title="Reports downloaded earlier">
+                                    <i class="fa fa-history me-1"></i>History
+                                </button>
+                            </t>
+                            <div class="input-group" style="max-width: 300px;">
+                                <span class="input-group-text"><i class="fa fa-search"></i></span>
+                                <input type="text" class="form-control" placeholder="Search..."
+                                       t-model="state.searchQuery" t-on-input="onSearchChange"/>
+                            </div>
                         </div>
                     </div>
+                    <t t-if="hasLocalEdits()">
+                        <div class="alert alert-warning py-2 small mb-3">
+                            <i class="fa fa-pencil me-1"></i>
+                            This report has <strong t-esc="localEditCount()"/> unsaved change(s) that exist
+                            only here — trimmed rows, renamed people or report-only tasks. They are
+                            remembered until you press Clear.
+                        </div>
+                    </t>
                     
                     <t t-if="getFilteredData().length > 0">
                         <div class="table-responsive">
@@ -497,10 +859,31 @@ export class KpiKraReport extends Component {
                                                     <span class="text-muted">-</span>
                                                 </t>
                                             </td>
-                                            <td class="fw-bold text-primary" t-esc="row.kpi_name"/>
+                                            <td class="fw-bold text-primary">
+                                                <t t-esc="row.kpi_name"/>
+                                                <!-- A report-only task looks identical to a real one
+                                                     once exported, and nothing is tracking time
+                                                     against it — so it says so, here and in the
+                                                     exports. -->
+                                                <span t-if="row.is_local"
+                                                      class="badge bg-warning text-dark ms-1"
+                                                      title="Added to this report only — not a real task, no time is tracked against it">
+                                                    report only
+                                                </span>
+                                            </td>
                                             <td>
                                                 <i class="fa fa-user-circle me-1 text-muted"></i>
-                                                <t t-esc="row.employee_name"/>
+                                                <t t-esc="displayName(row)"/>
+                                                <span t-if="isRenamed(row)" class="badge bg-info text-dark ms-1"
+                                                      t-att-title="'Renamed for this report only — really ' + row.employee_name">
+                                                    renamed
+                                                </span>
+                                                <button t-if="state.isAdmin and row.employee_id"
+                                                        type="button" class="btn btn-link btn-sm p-0 ms-1 text-muted"
+                                                        title="Rename this person"
+                                                        t-on-click="() => this.beginRename(row)">
+                                                    <i class="fa fa-pencil"></i>
+                                                </button>
                                             </td>
                                             <td class="text-center">
                                                 <t t-if="row.task_type">
@@ -601,6 +984,10 @@ export class KpiKraReport extends Component {
 
     setup() {
         this.actionService = useService("action");
+        // Creating a task goes through the ORM method kra.kpi.create_kpi, the same
+        // door the Create KPI screen uses — it is the one create path that applies
+        // the module's own validation rather than a raw create().
+        this.orm = useService("orm");
         
         const today = new Date().toISOString().split('T')[0];
         
@@ -631,7 +1018,44 @@ export class KpiKraReport extends Component {
             // Signature of the filters that produced state.reportData, so we can
             // tell when the boxes have moved on since the last Generate.
             generatedSignature: '',
+
+            // Whether the edit affordances appear at all. The screen is readable
+            // by managers; adding tasks, renaming people and keeping downloads
+            // are admin actions. The server re-checks every one of them.
+            isAdmin: false,
+
+            // ---- Report-local edits (all saved with the view, all dropped by
+            // Clear). This screen is a working document, not just a view: rows get
+            // trimmed, people get renamed for one report, tasks get added to it.
+            // employee_id -> the name to show INSTEAD of the real one.
+            nameOverrides: {},
+            // Tasks that exist in this report and nowhere else.
+            localRows: [],
+
+            // The download dialog, raised after the format is chosen.
+            dl: {
+                open: false, kind: '', include: {},
+                scope: 'all', employeeIds: [],
+                period: 'range', day: '', month: '',
+                saveCopy: true, busy: false,
+            },
+
+            // Create-task modal (full Create KPI field set).
+            nt: null,
+            ntBusy: false,
+            ntMatches: [],
+
+            // Inline rename of an employee cell.
+            rename: null,
+
+            // Stored downloads.
+            history: { open: false, rows: [], loading: false },
         });
+
+        // Saving the working view is a background courtesy — it must never make
+        // the screen feel slow, and a burst of filter clicks must not become a
+        // burst of writes.
+        this._stateTimer = null;
 
         this.zipMenuRef = useRef("zipMenu");
         useExternalListener(window, "click", (ev) => {
@@ -652,8 +1076,111 @@ export class KpiKraReport extends Component {
 
         onWillStart(async () => {
             await this.loadFilterOptions();
+            // Before the counts: restoring a saved view changes the filters, and
+            // refreshing counts against the defaults first would only be thrown
+            // away a moment later.
+            await this.loadContext();
             await this.refreshFilterCounts();
         });
+    }
+
+    // ---- The working view: restore, save, clear -------------------------- //
+
+    /**
+     * Who the caller is, and what they last had on screen.
+     *
+     * The screen used to rebuild its whole state on every mount, so a closed tab
+     * or a sudden shutdown lost the trimmed rows and renames along with it — work
+     * that only ever existed in the browser.
+     */
+    async loadContext() {
+        try {
+            const res = await rpc('/kpi_reports/kra/context', {});
+            if (!res || res.status === false) return;
+            this.state.isAdmin = !!res.is_admin;
+            if (res.saved_state) {
+                this._restoreState(res.saved_state);
+            }
+        } catch (e) {
+            // A failed restore must not stop the screen loading — the user simply
+            // gets the default empty report they used to get every time.
+            console.error('KRA report: could not load saved view', e);
+        }
+    }
+
+    _restoreState(raw) {
+        let saved;
+        try { saved = JSON.parse(raw); } catch (e) { return; }
+        if (!saved || typeof saved !== 'object') return;
+        Object.assign(this.state.filters, saved.filters || {});
+        this.state.searchQuery = saved.searchQuery || '';
+        this.state.removedRowIds = saved.removedRowIds || [];
+        this.state.nameOverrides = saved.nameOverrides || {};
+        this.state.localRows = saved.localRows || [];
+        // Re-run rather than restoring the rows themselves. The report is a view
+        // of live data: handing back a month-old copy of it under today's filters
+        // would be a quieter kind of wrong than showing nothing.
+        if (saved.generatedSignature) {
+            this.generateReport();
+        }
+    }
+
+    _stateSnapshot() {
+        return JSON.stringify({
+            filters: { ...this.state.filters },
+            searchQuery: this.state.searchQuery,
+            removedRowIds: [...this.state.removedRowIds],
+            nameOverrides: { ...this.state.nameOverrides },
+            localRows: [...this.state.localRows],
+            generatedSignature: this.state.generatedSignature,
+        });
+    }
+
+    /** Debounced, fire-and-forget. */
+    persistState() {
+        if (this._stateTimer) clearTimeout(this._stateTimer);
+        this._stateTimer = setTimeout(async () => {
+            try {
+                await rpc('/kpi_reports/kra/state_set', { state: this._stateSnapshot() });
+            } catch (e) {
+                console.error('KRA report: could not save view', e);
+            }
+        }, 600);
+    }
+
+    /**
+     * Wipe the working view back to a blank report for today.
+     *
+     * Confirmed, because it throws away real work — trimmed rows, report-only
+     * renames and any report-only tasks, none of which exist anywhere else.
+     */
+    async clearReport() {
+        const n = this.state.removedRowIds.length
+            + Object.keys(this.state.nameOverrides).length
+            + this.state.localRows.length;
+        const warn = n
+            ? `This discards ${n} change(s) made to this report — trimmed rows, renames and report-only tasks. They exist nowhere else.`
+            : 'This clears the filters and the table so you can start a fresh report.';
+        if (!window.confirm(warn + '\n\nClear the report?')) return;
+
+        const today = new Date().toISOString().split('T')[0];
+        Object.assign(this.state.filters, {
+            from_date: today, to_date: today, employee_ids: [], kra_ids: [],
+            excluded_kra_ids: [], task_types: [], task_states: [], time_frame: '',
+        });
+        this.state.searchQuery = '';
+        this.state.removedRowIds = [];
+        this.state.nameOverrides = {};
+        this.state.localRows = [];
+        this.state.reportData = [];
+        this.state.reportGenerated = false;
+        this.state.generatedSignature = '';
+        try {
+            await rpc('/kpi_reports/kra/state_set', { state: '' });
+        } catch (e) {
+            console.error('KRA report: could not clear saved view', e);
+        }
+        await this.refreshFilterCounts();
     }
 
     // ---- Live filter counts --------------------------------------------- //
@@ -779,13 +1306,24 @@ export class KpiKraReport extends Component {
     // ---- Trimming rows out of this report -------------------------------- //
 
     removeRow(rowId) {
+        // A report-only row has no life outside this report, so trimming it means
+        // deleting it rather than hiding it — otherwise it would sit in the removed
+        // list forever with nothing able to bring it back.
+        const local = this.state.localRows.findIndex(r => r.id === rowId);
+        if (local !== -1) {
+            this.state.localRows.splice(local, 1);
+            this.persistState();
+            return;
+        }
         if (!this.state.removedRowIds.includes(rowId)) {
             this.state.removedRowIds.push(rowId);
+            this.persistState();
         }
     }
 
     restoreRows() {
         this.state.removedRowIds = [];
+        this.persistState();
     }
 
     async loadFilterOptions() {
@@ -852,6 +1390,11 @@ export class KpiKraReport extends Component {
                 this.state.removedRowIds = [];
                 this.state.generatedSignature = this.filtersSignature();
                 this.state.reportGenerated = true;
+                // Renames and report-only rows deliberately SURVIVE a re-Generate:
+                // they are edits to the report being built, not to the query. Only
+                // the trimmed-row list resets, because those ids refer to rows this
+                // run may not even have returned.
+                this.persistState();
             } else {
                 alert('Error generating report: ' + (result.message || 'Unknown error'));
             }
@@ -880,7 +1423,267 @@ export class KpiKraReport extends Component {
     }
 
     onSearchChange() {
-        // Search is reactive through getFilteredData()
+        // Search is reactive through getFilteredData(); this only records it as
+        // part of the working view so it comes back with everything else.
+        this.persistState();
+    }
+
+    // ---- Download history ------------------------------------------------ //
+
+    onDlEmployees(ev) {
+        this.state.dl.employeeIds = Array.from(ev.target.selectedOptions)
+            .map(o => parseInt(o.value, 10))
+            .filter(n => !isNaN(n));
+    }
+
+    fmtSize(bytes) {
+        const n = bytes || 0;
+        if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+        if (n >= 1024) return Math.round(n / 1024) + ' KB';
+        return n + ' B';
+    }
+
+    async openHistory() {
+        this.state.history.open = true;
+        this.state.history.loading = true;
+        try {
+            const res = await rpc('/kpi_reports/kra/download_list', {});
+            this.state.history.rows = (res && res.downloads) || [];
+        } catch (e) {
+            this.state.history.rows = [];
+            console.error('KRA report: could not load download history', e);
+        } finally {
+            this.state.history.loading = false;
+        }
+    }
+    closeHistory() { this.state.history.open = false; }
+
+    /** Hand back the stored bytes as the file they were downloaded as. */
+    async redownload(row) {
+        try {
+            const res = await rpc('/kpi_reports/kra/download_file', { id: row.id });
+            if (!res || res.status === false) {
+                alert((res && res.message) || 'That file is no longer available.');
+                return;
+            }
+            const bin = atob(res.data_b64 || '');
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const blob = new Blob([bytes], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = res.filename || 'report';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            alert('Could not fetch that file.');
+        }
+    }
+
+    async deleteHistory(row) {
+        if (!window.confirm(`Delete "${row.filename}"? This cannot be undone.`)) return;
+        try {
+            const res = await rpc('/kpi_reports/kra/download_delete', { id: row.id });
+            if (res && res.status === false) {
+                alert(res.message || 'Could not delete that file.');
+                return;
+            }
+            this.state.history.rows = this.state.history.rows.filter(r => r.id !== row.id);
+        } catch (e) {
+            alert('Could not delete that file.');
+        }
+    }
+
+    // ---- Adding a task from this screen ---------------------------------- //
+
+    _blankTask() {
+        return {
+            name: '', kra_id: '', estimate_hours: 0, estimate_minutes: 0,
+            priority: 'regular', user_id: '', deadline: '',
+            reminder_days: 0, reminder_hours: 0, reminder_minutes: 0,
+            description: '', checklist: '', guidelines: '',
+            is_mandatory: false, auto_assign: false, auto_estimated: false,
+            is_permanent: false, service_kpi: false, is_meeting: false,
+            is_manager_review_needed: false, is_customer_review_needed: false,
+            error: '',
+        };
+    }
+
+    openNewTask() {
+        const t = this._blankTask();
+        // Pre-fill the project from whatever the report is already scoped to —
+        // adding a task from a report about one KRA almost always means adding it
+        // to that KRA.
+        if ((this.state.filters.kra_ids || []).length === 1) {
+            t.kra_id = String(this.state.filters.kra_ids[0]);
+        }
+        this.state.nt = t;
+        this.state.ntMatches = [];
+    }
+    closeNewTask() { this.state.nt = null; this.state.ntMatches = []; }
+
+    /**
+     * A duplicate name no longer blocks anything — this only says what is already
+     * there, so the person typing can decide. Debounced: it fires per keystroke.
+     */
+    async onNewTaskName() {
+        const t = this.state.nt;
+        if (!t) return;
+        if (this._ntTimer) clearTimeout(this._ntTimer);
+        this._ntTimer = setTimeout(async () => {
+            if (!t.name.trim() || !t.kra_id) { this.state.ntMatches = []; return; }
+            try {
+                const res = await rpc('/kra_kpi/kpi/name_matches', {
+                    name: t.name, kra_id: parseInt(t.kra_id, 10),
+                });
+                this.state.ntMatches = (res && res.matches) || [];
+            } catch (e) {
+                this.state.ntMatches = [];
+            }
+        }, 350);
+    }
+
+    /** `scope` is 'report' or 'everywhere'. */
+    async submitNewTask(scope) {
+        const t = this.state.nt;
+        if (!t) return;
+        if (!t.name.trim()) { t.error = 'Task name is required.'; return; }
+        if (!t.kra_id) { t.error = 'Pick a project.'; return; }
+        t.error = '';
+
+        if (scope === 'report') {
+            // No kra.kpi record. A negative id so it can never collide with a real
+            // row's id in removedRowIds or in a t-key.
+            const kra = (this.state.kras || []).find(k => String(k.id) === String(t.kra_id)) || {};
+            const emp = (this.state.employees || []).find(e => String(e.id) === String(t.user_id)) || {};
+            this.state.localRows.unshift({
+                id: -(Date.now()),
+                is_local: true,
+                kra_id: parseInt(t.kra_id, 10),
+                kra_path: kra.name || kra.display || '—',
+                root_kra: kra.name || '—',
+                sub_kra: '-',
+                kpi_name: t.name.trim(),
+                external_ref: '',
+                task_type: '',
+                task_state: 'assigned',
+                task_state_label: 'Report only',
+                priority: t.priority,
+                deadline: t.deadline || '',
+                employee_id: t.user_id ? parseInt(t.user_id, 10) : 0,
+                employee_name: emp.name || '—',
+                // Zero, and it stays zero: nothing is tracking this.
+                time_worked_seconds: 0,
+                time_worked_hours: 0,
+                time_worked_display: '0h 0m',
+                user_breakdown: [],
+            });
+            this.state.nt = null;
+            this.state.ntMatches = [];
+            this.persistState();
+            return;
+        }
+
+        this.state.ntBusy = true;
+        try {
+            await this.orm.call('kra.kpi', 'create_kpi', [{
+                name: t.name.trim(),
+                kra_id: parseInt(t.kra_id, 10),
+                estimate_hours: parseInt(t.estimate_hours, 10) || 0,
+                estimate_minutes: parseInt(t.estimate_minutes, 10) || 0,
+                priority: t.priority,
+                user_id: t.user_id ? parseInt(t.user_id, 10) : false,
+                deadline: t.deadline || false,
+                reminder_days: parseInt(t.reminder_days, 10) || 0,
+                reminder_hours: parseInt(t.reminder_hours, 10) || 0,
+                reminder_minutes: parseInt(t.reminder_minutes, 10) || 0,
+                description: t.description,
+                checklist: t.checklist,
+                guidelines: t.guidelines,
+                is_mandatory: t.is_mandatory,
+                auto_assign: t.auto_assign,
+                auto_estimated: t.auto_estimated,
+                is_permanent: t.is_permanent,
+                service_kpi: t.service_kpi,
+                is_meeting: t.is_meeting,
+                is_manager_review_needed: t.is_manager_review_needed,
+                is_customer_review_needed: t.is_customer_review_needed,
+            }]);
+            this.state.nt = null;
+            this.state.ntMatches = [];
+            // Re-run so the new task arrives as a real row with real data, rather
+            // than a hand-built copy that would drift from it immediately.
+            await this.generateReport();
+        } catch (e) {
+            t.error = (e && e.data && e.data.message) || (e && e.message) || 'Could not create the task.';
+        } finally {
+            this.state.ntBusy = false;
+        }
+    }
+
+    // ---- Renaming the person on a row ------------------------------------ //
+
+    beginRename(row) {
+        this.state.rename = {
+            employee_id: row.employee_id,
+            realName: row.employee_name || '',
+            value: this.displayName(row),
+            busy: false,
+            error: '',
+        };
+    }
+    cancelRename() { this.state.rename = null; }
+
+    /**
+     * `scope` is 'report' or 'everywhere'.
+     *
+     * The two are genuinely different actions and the dialog says so: one is an
+     * alias on a piece of paper, the other edits the person's record and shows up
+     * on every screen they appear on.
+     */
+    async saveRename(scope) {
+        const r = this.state.rename;
+        if (!r) return;
+        const name = (r.value || '').trim();
+        if (!name) { r.error = 'Enter a name.'; return; }
+
+        if (scope === 'report') {
+            if (name === r.realName) {
+                // Same as the real name: that is not an override, it is a no-op,
+                // and storing it would leave a "renamed" badge that says nothing.
+                delete this.state.nameOverrides[r.employee_id];
+            } else {
+                this.state.nameOverrides[r.employee_id] = name;
+            }
+            this.state.rename = null;
+            this.persistState();
+            return;
+        }
+
+        r.busy = true;
+        r.error = '';
+        try {
+            const res = await rpc('/kpi_user_access/update', {
+                user_id: r.employee_id, name,
+            });
+            if (res && res.status === false) {
+                r.error = res.message || "Couldn't rename that person.";
+                return;
+            }
+            // The real name changed, so any report-local alias for them is now
+            // stale — drop it rather than leaving an override nobody asked for.
+            delete this.state.nameOverrides[r.employee_id];
+            this.state.rename = null;
+            this.persistState();
+            await this.generateReport();
+        } catch (e) {
+            r.error = (e && e.message) || "Couldn't rename that person.";
+        } finally {
+            if (this.state.rename) this.state.rename.busy = false;
+        }
     }
 
     /**
@@ -888,11 +1691,35 @@ export class KpiKraReport extends Component {
      * table footer, the KRA Summary, the PDF, the spreadsheet and the ZIP all
      * read through here, so a removed row can never leave a stale total behind.
      */
+    /** How many report-local edits are in play — drives the Clear badge. */
+    localEditCount() {
+        return this.state.removedRowIds.length
+            + Object.keys(this.state.nameOverrides).length
+            + this.state.localRows.length;
+    }
+    hasLocalEdits() { return this.localEditCount() > 0; }
+
+    /**
+     * The name to SHOW for a row's employee.
+     *
+     * An override is display-only and belongs to this report; the res.users record
+     * is untouched. Anywhere a name is rendered or exported it has to come through
+     * here, or the table and the ZIP would disagree about who did the work.
+     */
+    displayName(row) {
+        const alias = this.state.nameOverrides[row.employee_id];
+        return alias || row.employee_name || '';
+    }
+    isRenamed(row) { return !!this.state.nameOverrides[row.employee_id]; }
+
     getFilteredData() {
         const removed = this.state.removedRowIds;
+        // Report-only rows first: they were added by hand, so they belong where
+        // the person who added them can see them, not buried after 200 real rows.
+        const base = this.state.localRows.concat(this.state.reportData);
         const kept = removed.length
-            ? this.state.reportData.filter(row => !removed.includes(row.id))
-            : this.state.reportData;
+            ? base.filter(row => !removed.includes(row.id))
+            : base;
 
         if (!this.state.searchQuery.trim()) {
             return kept;
@@ -1196,7 +2023,150 @@ export class KpiKraReport extends Component {
      *   add at the top level. The project + per-task PDFs are always included:
      *   they are the reason the ZIP exists.
      */
+    // ---- The download dialog + the Month / Week / User tree -------------- //
+
+    /**
+     * Raised once the FORMAT is chosen — the ZIP menu already asked PDF/Excel/both,
+     * so this is the second question, not a replacement for the first.
+     */
+    openDownloadDialog(kind, include = {}) {
+        this.state.zipMenuOpen = false;
+        Object.assign(this.state.dl, {
+            open: true, kind, include,
+            scope: 'all',
+            employeeIds: [...(this.state.filters.employee_ids || [])],
+            period: 'range',
+            day: this.state.filters.from_date || '',
+            month: (this.state.filters.from_date || '').slice(0, 7),
+            saveCopy: this.state.isAdmin,
+            busy: false,
+        });
+    }
+    closeDownloadDialog() { this.state.dl.open = false; }
+
+    /** Rows the download should actually contain, after the dialog's own filters. */
+    _rowsForDownload() {
+        let rows = this.getFilteredData();
+        const d = this.state.dl;
+        if (d.scope === 'employee' && d.employeeIds.length) {
+            rows = rows.filter(r => d.employeeIds.includes(r.employee_id));
+        }
+        if (d.period === 'day' && d.day) {
+            rows = rows.filter(r => this._rowDate(r) === d.day);
+        } else if (d.period === 'month' && d.month) {
+            rows = rows.filter(r => this._rowDate(r).slice(0, 7) === d.month);
+        }
+        return rows;
+    }
+
+    /**
+     * The date a row belongs to.
+     *
+     * Deliberately the row's OWN date and never "now": a September report pulled
+     * in October must file under September, or every folder in the archive is
+     * wrong in a way nobody notices until they go looking for last month's work.
+     * Falls back to the report's from_date, which is the period being reported on.
+     */
+    _rowDate(row) {
+        return (row.deadline || '').slice(0, 10)
+            || (this.state.filters.from_date || '');
+    }
+
+    /** ISO week number, so week folders match how people actually count weeks. */
+    _isoWeek(dateStr) {
+        const d = new Date(dateStr + 'T00:00:00');
+        if (isNaN(d)) return { year: 0, week: 0, start: '', end: '' };
+        const target = new Date(d.valueOf());
+        // ISO: Thursday decides the year, Monday starts the week.
+        const dayNr = (d.getDay() + 6) % 7;
+        target.setDate(target.getDate() - dayNr + 3);
+        const firstThursday = new Date(target.getFullYear(), 0, 4);
+        const firstDayNr = (firstThursday.getDay() + 6) % 7;
+        firstThursday.setDate(firstThursday.getDate() - firstDayNr + 3);
+        const week = 1 + Math.round((target - firstThursday) / (7 * 24 * 3600 * 1000));
+        const monday = new Date(d.valueOf());
+        monday.setDate(monday.getDate() - dayNr);
+        const sunday = new Date(monday.valueOf());
+        sunday.setDate(sunday.getDate() + 6);
+        const dd = (x) => String(x.getDate()).padStart(2, '0');
+        return {
+            year: target.getFullYear(), week,
+            start: dd(monday), end: dd(sunday),
+        };
+    }
+
+    _monthFolder(dateStr) {
+        const d = new Date(dateStr + 'T00:00:00');
+        if (isNaN(d)) return 'Undated';
+        const name = d.toLocaleString(undefined, { month: 'long' });
+        return `${dateStr.slice(0, 7)} ${name}`;
+    }
+
+    /**
+     * Month / Week / User, each segment sanitised.
+     *
+     * EVERY segment goes through _safeFilename, not just the leaf: a client or a
+     * person whose name contains a slash would otherwise silently create an extra
+     * folder level and scatter the archive.
+     */
+    _treePath(row) {
+        const date = this._rowDate(row);
+        const w = this._isoWeek(date);
+        const month = this._safeFilename(this._monthFolder(date));
+        const week = this._safeFilename(
+            w.week ? `Week ${w.week} (${w.start}-${w.end})` : 'Undated');
+        const who = this._safeFilename(this.displayName(row) || 'Unassigned');
+        return `${month}/${week}/${who}`;
+    }
+
+    async confirmDownload() {
+        const d = this.state.dl;
+        d.busy = true;
+        try {
+            if (d.kind === 'zip') await this._runZip(d.include, this._rowsForDownload());
+            else if (d.kind === 'pdf') await this.downloadPDF();
+            else if (d.kind === 'excel') await this.downloadExcel();
+            d.open = false;
+        } finally {
+            d.busy = false;
+        }
+    }
+
+    /**
+     * Keep a copy of what was just handed over.
+     *
+     * Best-effort on purpose: the user already has their file, so a storage
+     * failure is worth telling them about but must not read as a failed download.
+     */
+    async _saveDownloadCopy(blob, filename, kind, rows) {
+        if (!this.state.dl.saveCopy || !this.state.isAdmin) return;
+        try {
+            const b64 = await new Promise((resolve, reject) => {
+                const fr = new FileReader();
+                fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+                fr.onerror = reject;
+                fr.readAsDataURL(blob);
+            });
+            const res = await rpc('/kpi_reports/kra/download_save', {
+                data_b64: b64, filename, kind,
+                from_date: this.state.filters.from_date || false,
+                to_date: this.state.filters.to_date || false,
+                row_count: rows.length,
+                filters_json: this.filtersSignature(),
+            });
+            if (res && res.status === false) {
+                console.warn('KRA report: download not stored —', res.message);
+            }
+        } catch (e) {
+            console.warn('KRA report: download not stored', e);
+        }
+    }
+
     async downloadZip(include = {}) {
+        return this._runZip(include, this.getFilteredData());
+    }
+
+    async _runZip(include = {}, rowsIn = null) {
         this.state.zipMenuOpen = false;
         try {
             if (!window.JSZip) {
@@ -1208,7 +2178,7 @@ export class KpiKraReport extends Component {
                 return;
             }
 
-            const rows = this.getFilteredData();
+            const rows = rowsIn || this.getFilteredData();
             if (!rows.length) {
                 alert('No tasks to export.');
                 return;
@@ -1237,18 +2207,25 @@ export class KpiKraReport extends Component {
                          this._buildFullReportPdf().output('blob'));
 
                 for (const [projectName, projectRows] of groups.entries()) {
-                    const safeProject = this._safeFilename(projectName);
-                    // 1 summary PDF per project
-                    zip.file(`${safeProject}.pdf`,
+                    // 1 summary PDF per project, at the archive root where it can
+                    // be found without walking into the tree.
+                    zip.file(`${this._safeFilename(projectName)}.pdf`,
                              this._buildProjectSummaryPdf(projectName, projectRows));
+                }
 
-                    // 1 folder per project, 1 PDF per task inside
-                    const folder = zip.folder(safeProject);
-                    projectRows.forEach((r, idx) => {
-                        const refPart = r.external_ref ? `${r.external_ref} ` : `${String(idx + 1).padStart(3, '0')} `;
-                        const fname = this._safeFilename(refPart + (r.kpi_name || 'task')) + '.pdf';
-                        folder.file(fname, this._buildTaskDetailPdf(r));
-                    });
+                // Per-task PDFs go into Month / Week / User instead of one folder
+                // per project. A month of work under a single project folder was a
+                // flat list of hundreds of files; this is how people actually look
+                // for them — whose work, which week.
+                let seq = 0;
+                for (const r of rows) {
+                    seq += 1;
+                    const refPart = r.external_ref
+                        ? `${r.external_ref} ` : `${String(seq).padStart(3, '0')} `;
+                    const localTag = r.is_local ? ' (report only)' : '';
+                    const fname = this._safeFilename(
+                        refPart + (r.kpi_name || 'task') + localTag) + '.pdf';
+                    zip.folder(this._treePath(r)).file(fname, this._buildTaskDetailPdf(r));
                 }
             }
 
@@ -1268,14 +2245,18 @@ export class KpiKraReport extends Component {
             const fromDate = this.state.filters.from_date || 'all';
             const toDate = this.state.filters.to_date || 'all';
             const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+            const zipName = `KRA_Report_${fromDate}_to_${toDate}.zip`;
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `KRA_Report_${fromDate}_to_${toDate}.zip`;
+            link.download = zipName;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
+            // After the download, never before: storing it is a convenience and
+            // must not delay handing the user their file.
+            await this._saveDownloadCopy(blob, zipName, 'zip', rows);
         } catch (err) {
             console.error('Error generating ZIP:', err);
             alert('Error generating ZIP. See browser console for details.');

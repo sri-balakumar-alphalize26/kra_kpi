@@ -1,3 +1,7 @@
+// FIRST, before anything else: installs the Buffer/process globals that ExcelJS
+// and JSZip read at module scope. See shims.js and metro.config.js.
+import './shims';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';
