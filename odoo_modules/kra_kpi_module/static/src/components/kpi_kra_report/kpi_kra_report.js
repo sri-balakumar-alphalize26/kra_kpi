@@ -30,6 +30,42 @@ function typeStyle(taskType) {
     return TYPE_STYLES[(taskType || '').toUpperCase()] || TYPE_STYLE_DEFAULT;
 }
 
+// Spreadsheet palette, mirroring the PDF so the two documents read as the same
+// report: the detail table is slate-headed with grey stripes, the project
+// summary green-headed with faint green stripes.
+const HEAD_FILL = 'FF343A40';         // [52,58,64]    detail header
+const HEAD_FILL_SUMMARY = 'FF218838'; // [33,136,56]   project-summary header
+const BAND_FILL = 'FFF5F5F5';         // [245,245,245] detail stripe
+const BAND_FILL_SUMMARY = 'FFF0F8F0'; // [240,248,240] summary stripe
+const TOTAL_FILL = 'FFECF0F1';        // [236,240,241] totals
+
+function paintHeader(row, fill = HEAD_FILL) {
+    row.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+        cell.alignment = { vertical: 'middle', wrapText: true };
+    });
+    return row;
+}
+
+// Applied before any per-cell fill (the Type badge), so the badge wins.
+function paintBand(row, index, fill) {
+    if (index % 2 === 1) {
+        row.eachCell((cell) => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+        });
+    }
+    return row;
+}
+
+function paintTotal(row) {
+    row.eachCell((cell) => {
+        cell.font = { bold: true };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TOTAL_FILL } };
+    });
+    return row;
+}
+
 /**
  * One checkbox dropdown, shared by the KRA / Employee / Type / State filters.
  *
@@ -182,18 +218,21 @@ export class KpiKraReport extends Component {
                             <i class="fa fa-caret-down ms-2"></i>
                         </button>
                         <div class="o_kra_zip_panel shadow" t-if="state.zipMenuOpen">
-                            <div class="o_kra_zip_hint">Include in the ZIP, alongside the per-task PDFs:</div>
+                            <div class="o_kra_zip_hint">What should the archive contain?</div>
                             <button type="button" class="o_kra_zip_item"
                                     t-on-click="() => this.downloadZip({ pdf: true })">
-                                <i class="fa fa-file-pdf-o me-2 text-danger"></i>Full PDF only
+                                <i class="fa fa-file-pdf-o me-2 text-danger"></i>PDF pack
+                                <span class="text-muted small d-block ms-4">full report + one PDF per task</span>
                             </button>
                             <button type="button" class="o_kra_zip_item"
                                     t-on-click="() => this.downloadZip({ excel: true })">
-                                <i class="fa fa-file-excel-o me-2 text-success"></i>Full Excel only
+                                <i class="fa fa-file-excel-o me-2 text-success"></i>Excel pack
+                                <span class="text-muted small d-block ms-4">full report + one workbook per project</span>
                             </button>
                             <button type="button" class="o_kra_zip_item"
                                     t-on-click="() => this.downloadZip({ pdf: true, excel: true })">
-                                <i class="fa fa-files-o me-2 text-secondary"></i>Both
+                                <i class="fa fa-files-o me-2 text-secondary"></i>Both packs
+                                <span class="text-muted small d-block ms-4">everything above, in one archive</span>
                             </button>
                         </div>
                     </span>
@@ -1189,30 +1228,41 @@ export class KpiKraReport extends Component {
             const fromLabel = this.state.filters.from_date || 'all';
             const toLabel = this.state.filters.to_date || 'all';
 
-            // Whole-report files, built from the same code the standalone
-            // buttons use so the ZIP copy can never differ from the direct one.
+            // The menu picks the FLAVOUR of the archive, not just extras. Asking
+            // for Excel used to still bury one workbook under 400+ per-task PDFs.
+            // Whole-report files come from the same builders the standalone
+            // buttons use, so the ZIP copy can never differ from a direct one.
             if (include.pdf) {
                 zip.file(`KRA_Report_${fromLabel}_to_${toLabel}_full.pdf`,
                          this._buildFullReportPdf().output('blob'));
+
+                for (const [projectName, projectRows] of groups.entries()) {
+                    const safeProject = this._safeFilename(projectName);
+                    // 1 summary PDF per project
+                    zip.file(`${safeProject}.pdf`,
+                             this._buildProjectSummaryPdf(projectName, projectRows));
+
+                    // 1 folder per project, 1 PDF per task inside
+                    const folder = zip.folder(safeProject);
+                    projectRows.forEach((r, idx) => {
+                        const refPart = r.external_ref ? `${r.external_ref} ` : `${String(idx + 1).padStart(3, '0')} `;
+                        const fname = this._safeFilename(refPart + (r.kpi_name || 'task')) + '.pdf';
+                        folder.file(fname, this._buildTaskDetailPdf(r));
+                    });
+                }
             }
+
             if (include.excel) {
-                const buffer = await this._buildWorkbook().xlsx.writeBuffer();
-                zip.file(`KRA_Report_${fromLabel}_to_${toLabel}_full.xlsx`, buffer);
-            }
+                zip.file(`KRA_Report_${fromLabel}_to_${toLabel}_full.xlsx`,
+                         await this._buildWorkbook().xlsx.writeBuffer());
 
-            for (const [projectName, projectRows] of groups.entries()) {
-                const safeProject = this._safeFilename(projectName);
-                // 1 summary PDF per project
-                const summaryBlob = this._buildProjectSummaryPdf(projectName, projectRows);
-                zip.file(`${safeProject}.pdf`, summaryBlob);
-
-                // 1 folder per project, 1 PDF per task inside
-                const folder = zip.folder(safeProject);
-                projectRows.forEach((r, idx) => {
-                    const refPart = r.external_ref ? `${r.external_ref} ` : `${String(idx + 1).padStart(3, '0')} `;
-                    const fname = this._safeFilename(refPart + (r.kpi_name || 'task')) + '.pdf';
-                    folder.file(fname, this._buildTaskDetailPdf(r));
-                });
+                // One workbook per project — the Excel counterpart of the
+                // per-project PDFs, written by the same sheet writer.
+                for (const [projectName, projectRows] of groups.entries()) {
+                    const buffer = await this._buildProjectWorkbook(projectName, projectRows)
+                        .xlsx.writeBuffer();
+                    zip.file(`${this._safeFilename(projectName)}.xlsx`, buffer);
+                }
             }
 
             const fromDate = this.state.filters.from_date || 'all';
@@ -1435,7 +1485,7 @@ export class KpiKraReport extends Component {
             const doc = this._buildFullReportPdf();
             const fromDate = this.state.filters.from_date;
             const toDate = this.state.filters.to_date;
-            doc.save(`KRA_Report__to_.pdf`);
+            doc.save(`KRA_Report_${fromDate}_to_${toDate}.pdf`);
         } catch (error) {
             console.error('Error generating PDF:', error);
             alert('Error generating PDF. Please try again.');
@@ -1457,26 +1507,8 @@ export class KpiKraReport extends Component {
         workbook.creator = 'KRA / KPI Management System';
         workbook.created = new Date();
 
-        const HEAD_FILL = 'FF343A40';   // same slate as the PDF header
-        const TOTAL_FILL = 'FFECF0F1';
         const rows = this.getFilteredData();
         const totalHours = +(rows.reduce((s, r) => s + (r.time_worked_seconds || 0), 0) / 3600).toFixed(2);
-
-        const paintHeader = (row) => {
-            row.eachCell((cell) => {
-                cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD_FILL } };
-                cell.alignment = { vertical: 'middle', wrapText: true };
-            });
-            return row;
-        };
-        const paintTotal = (row) => {
-            row.eachCell((cell) => {
-                cell.font = { bold: true };
-                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TOTAL_FILL } };
-            });
-            return row;
-        };
 
         // What this export actually covers. Kept on both tabs so neither can be
         // forwarded on its own and read as the complete picture.
@@ -1501,21 +1533,33 @@ export class KpiKraReport extends Component {
         s1.addRow([`Employee: ${this.state.appliedFilters.employee_name || 'All Employees'}`]);
         s1.addRow([`Type: ${this.state.appliedFilters.task_type_name || 'All Types'}`
             + ` | State: ${this.state.appliedFilters.task_state_name || 'All States'}`]);
+        // The same headline figures the PDF prints above its project table, from
+        // the same three helpers the on-screen cards use — so the spreadsheet,
+        // the PDF and the screen can never quote different totals.
+        s1.addRow([`Total Tasks: ${rows.length}`
+            + ` | Total Time Worked: ${this.getTotalTimeWorked()}`
+            + ` | Employees: ${this.getUniqueEmployeeCount()}`]).font = { bold: true };
         if (search) {
             s1.addRow([`Search: "${search}"`]);
         }
         if (removed) {
             s1.addRow([`${removed} rows removed from this report`]).font = { bold: true };
         }
+        // The task rows live on the other tab, and that tab has been missed
+        // more than once — say so, with the count, so this sheet can never be
+        // taken for the whole report.
+        const pointer = s1.addRow([`→ Task-wise details (${rows.length} rows) are on the "Task Details" tab`]);
+        pointer.font = { bold: true, color: { argb: HEAD_FILL } };
         s1.addRow([]);
 
         const s1Header = paintHeader(s1.addRow(['#', 'KRA Hierarchy Path', 'Tasks',
-            'Employees', 'Employee Names', 'Total Hours', 'Total Time']));
+            'Employees', 'Employee Names', 'Total Hours', 'Total Time']), HEAD_FILL_SUMMARY);
 
         const projectSummary = this.getProjectSummary();
         projectSummary.forEach((g, i) => {
             const row = s1.addRow([i + 1, g.kra_path, g.task_count, g.employee_count,
                                    g.employees, g.total_hours, g.total_display]);
+            paintBand(row, i, BAND_FILL_SUMMARY);
             row.getCell(6).numFmt = '0.00';
         });
         const s1Total = paintTotal(s1.addRow(['', 'GRAND TOTAL',
@@ -1527,23 +1571,37 @@ export class KpiKraReport extends Component {
         s1.views = [{ state: 'frozen', ySplit: s1Header.number }];
 
         // ================= Sheet 2: Task Details =================
-        const s2 = workbook.addWorksheet('Task Details');
-        s2.columns = [{ width: 6 }, { width: 46 }, { width: 24 }, { width: 44 },
-                      { width: 20 }, { width: 10 }, { width: 26 }, { width: 14 }, { width: 14 }];
+        this._writeTaskDetailsSheet(workbook.addWorksheet('Task Details'), rows, scope);
 
-        s2.addRow([scope]).font = { italic: true, color: { argb: 'FF6C757D' } };
-        const s2Header = paintHeader(s2.addRow(['#', 'KRA Hierarchy Path', 'Sub KRA', 'Task Name',
+        return workbook;
+    }
+
+    /**
+     * Writes the task-wise detail table onto `sheet`. Shared by the main
+     * workbook and the per-project workbooks in the ZIP, so their colours,
+     * widths, freeze and filter cannot drift apart.
+     */
+    _writeTaskDetailsSheet(sheet, rows, scopeLine) {
+        sheet.columns = [{ width: 6 }, { width: 46 }, { width: 24 }, { width: 44 },
+                         { width: 20 }, { width: 10 }, { width: 26 }, { width: 14 }, { width: 14 }];
+
+        sheet.addRow([scopeLine]).font = { italic: true, color: { argb: 'FF6C757D' } };
+        const header = paintHeader(sheet.addRow(['#', 'KRA Hierarchy Path', 'Sub KRA', 'Task Name',
             'Employee', 'Type', 'State', 'Total Hours', 'Time Worked']));
         const TYPE_COL = 6;
 
+        const employees = new Set();
+        let seconds = 0;
         rows.forEach((row, index) => {
-            const added = s2.addRow([
+            const added = sheet.addRow([
                 index + 1, row.kra_path, row.sub_kra, row.kpi_name, row.employee_name,
                 row.task_type || '-', row.task_state_label || '-',
                 row.time_worked_hours, row.time_worked_display,
             ]);
+            paintBand(added, index, BAND_FILL);
             added.getCell(8).numFmt = '0.00';
-            // Type badge, same palette as the web table and the PDF.
+            // Type badge, same palette as the web table and the PDF. Set after
+            // the band so the badge colour wins on striped rows.
             if (row.task_type) {
                 const style = typeStyle(row.task_type);
                 const cell = added.getCell(TYPE_COL);
@@ -1551,19 +1609,40 @@ export class KpiKraReport extends Component {
                 cell.font = { bold: true, color: { argb: style.fg } };
                 cell.alignment = { horizontal: 'center' };
             }
+            if (row.employee_id) employees.add(row.employee_id);
+            seconds += (row.time_worked_seconds || 0);
         });
-        const s2Total = paintTotal(s2.addRow(['', 'TOTAL', '', `${rows.length} Tasks`,
-            `${this.getUniqueEmployeeCount()} Employees`, '', '', totalHours,
-            this.getTotalTimeWorked()]));
-        s2Total.getCell(8).numFmt = '0.00';
+
+        const hours = +(seconds / 3600).toFixed(2);
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const total = paintTotal(sheet.addRow(['', 'TOTAL', '', `${rows.length} Tasks`,
+            `${employees.size} Employees`, '', '', hours, `${h}h ${m}m`]));
+        total.getCell(8).numFmt = '0.00';
 
         // Header only: two frozen rows can never swallow the viewport.
-        s2.views = [{ state: 'frozen', ySplit: s2Header.number }];
-        s2.autoFilter = {
-            from: { row: s2Header.number, column: 1 },
-            to: { row: s2Header.number, column: 9 },
+        sheet.views = [{ state: 'frozen', ySplit: header.number }];
+        sheet.autoFilter = {
+            from: { row: header.number, column: 1 },
+            to: { row: header.number, column: 9 },
         };
+        return sheet;
+    }
 
+    /** Excel sheet names: no []:*?/\ and 31 characters maximum. */
+    _safeSheetName(name) {
+        const cleaned = String(name || '').replace(/[[\]:*?/\\]/g, '-').trim().slice(0, 31);
+        return cleaned || 'Tasks';
+    }
+
+    /** One project's tasks as a standalone workbook, for the Excel ZIP. */
+    _buildProjectWorkbook(projectName, projectRows) {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'KRA / KPI Management System';
+        workbook.created = new Date();
+        const sheet = workbook.addWorksheet(this._safeSheetName(projectName));
+        this._writeTaskDetailsSheet(sheet, projectRows,
+            `${projectName} — ${this.state.filters.from_date} to ${this.state.filters.to_date}`);
         return workbook;
     }
 
