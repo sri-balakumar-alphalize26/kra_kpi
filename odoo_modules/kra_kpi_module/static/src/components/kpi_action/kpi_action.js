@@ -186,6 +186,9 @@ export class KpiAction extends Component {
                             <t t-else="">
                                 <div class="text-muted small">— No links on this update —</div>
                             </t>
+                            <div t-if="state.progressEdit.link_error"
+                                 class="text-danger small mt-1 fw-bold"
+                                 t-esc="state.progressEdit.link_error"/>
                         </div>
 
                         <div class="mb-2">
@@ -355,8 +358,18 @@ export class KpiAction extends Component {
                                                 <select t-if="state.metaEdit.editing"
                                                         class="form-select form-select-sm"
                                                         t-model="state.metaEdit.kra_id">
-                                                    <t t-foreach="state.detailData.available_kras or []" t-as="k" t-key="k.id">
-                                                        <option t-att-value="k.id" t-esc="k.display"/>
+                                                    <!-- Grouped by client. The list is now every KRA
+                                                         in the system, so without the headings a
+                                                         project under another client is one more
+                                                         indistinguishable line in a long list —
+                                                         and picking it moves the task to that
+                                                         client. -->
+                                                    <t t-foreach="kraGroups()" t-as="grp" t-key="grp.root_id">
+                                                        <optgroup t-att-label="grp.root_name">
+                                                            <t t-foreach="grp.items" t-as="k" t-key="k.id">
+                                                                <option t-att-value="k.id" t-esc="k.display"/>
+                                                            </t>
+                                                        </optgroup>
                                                     </t>
                                                 </select>
                                                 <span t-else="" t-esc="state.detailData.kra"/>
@@ -594,7 +607,11 @@ export class KpiAction extends Component {
                                                         target="_blank">
                                                             <i class="fa fa-download"></i> Download
                                                         </a>
-                                                        <button class="btn btn-danger btn-sm"
+                                                        <!-- Only for people the route will actually
+                                                             let through: it used to render for
+                                                             everyone and then refuse them. -->
+                                                        <button t-if="manual.can_edit"
+                                                                class="btn btn-danger btn-sm"
                                                                 t-on-click="() => this.deleteManual(manual.id)">
                                                             <i class="fa fa-trash"></i>
                                                         </button>
@@ -620,13 +637,43 @@ export class KpiAction extends Component {
                                             <label class="form-label fw-bold">Upload Manual File(s) *</label>
                                             <input type="file" multiple="multiple"
                                                 class="form-control"
+                                                t-ref="manualFileInput"
                                                 t-on-change="handleManualUpload"
                                                 accept=".pdf,.doc,.docx"/>
                                             <small class="text-muted">Supported: PDF, DOC, DOCX — pick several to attach them all to one entry</small>
-                                            <t t-if="state.manualForm.files.length > 1">
-                                                <ul class="list-unstyled small text-muted mt-2 mb-0">
+                                            <!-- The pick, before it is sent. Shown from the first
+                                                 file, not the second: with one file this is where
+                                                 you check you picked the right one. Each row can be
+                                                 dropped, so spotting three wrong PDFs out of ten no
+                                                 longer means re-picking all ten. -->
+                                            <t t-if="state.manualForm.files.length">
+                                                <!-- No count text here: the "Selected:" alert below
+                                                     and the file control above both already carry
+                                                     it. This row is just the bulk-remove button. -->
+                                                <div class="d-flex align-items-center gap-2 mt-2">
+                                                    <t t-if="selectedPickedCount('manual')">
+                                                        <button class="btn btn-sm btn-outline-danger py-0 px-2"
+                                                                type="button" style="font-size:.75rem;"
+                                                                t-on-click="() => this.removeSelectedPicked('manual')">
+                                                            <i class="fa fa-times me-1"/>Remove <t t-esc="selectedPickedCount('manual')"/>
+                                                        </button>
+                                                    </t>
+                                                </div>
+                                                <ul class="list-unstyled small text-muted mt-1 mb-0">
                                                     <t t-foreach="state.manualForm.files" t-as="mf" t-key="mf_index">
-                                                        <li><i class="fa fa-file-o me-1"/><t t-esc="mf.name"/></li>
+                                                        <li class="d-flex align-items-center gap-2 py-1">
+                                                            <input class="form-check-input mt-0" type="checkbox"
+                                                                   t-att-checked="state.manualFileSel[mf_index]"
+                                                                   t-on-change="() => this.toggleManualFileSel(mf_index)"/>
+                                                            <i class="fa fa-file-o"/>
+                                                            <span class="text-truncate" t-esc="mf.name"/>
+                                                            <span class="ms-auto text-nowrap" t-esc="_fmtBytes(mf.size)"/>
+                                                            <button class="btn btn-link btn-sm p-0 text-danger"
+                                                                    type="button" title="Remove this file"
+                                                                    t-on-click="() => this.removeManualFile(mf_index)">
+                                                                <i class="fa fa-times"/>
+                                                            </button>
+                                                        </li>
                                                     </t>
                                                 </ul>
                                             </t>
@@ -764,6 +811,11 @@ export class KpiAction extends Component {
                                     </button>
                                 </div>
                                 <small class="text-muted">Add GitHub repos, Google Drive, websites, or any related links</small>
+                                <!-- Typing a URL and pressing Submit used to discard it in
+                                     silence, then clear the box, so it looked saved. -->
+                                <div t-if="state.progressForm.link_error"
+                                     class="text-danger small mt-1 fw-bold"
+                                     t-esc="state.progressForm.link_error"/>
                                 
                                 <!-- Display added links -->
                                 <t t-if="state.progressForm.related_links.length > 0">
@@ -790,10 +842,44 @@ export class KpiAction extends Component {
                                 <input type="file" class="form-control" multiple="multiple"
                                        t-ref="progressFileInput"
                                        t-on-change="handleProgressFileUpload"/>
-                                <t t-if="state.progressForm.fileObjs.length > 1">
-                                    <ul class="list-unstyled small text-muted mt-2 mb-0">
+                                <!-- Same "Selected:" summary the manual form shows, so the two
+                                     upload forms read alike. The count is NOT repeated on the
+                                     row below: it already appears here and in the file control
+                                     itself, and three copies of one number is two too many. -->
+                                <t t-if="state.progressForm.file_name">
+                                    <div class="alert alert-info mt-2 mb-0 py-2">
+                                        <i class="fa fa-file"></i> Selected: <t t-esc="state.progressForm.file_name"/>
+                                        <span t-if="state.progressForm.size_display" class="text-muted ms-1">
+                                            (<t t-esc="state.progressForm.size_display"/>)
+                                        </span>
+                                    </div>
+                                </t>
+                                <!-- Same removable pick list as the manual form above. -->
+                                <t t-if="state.progressForm.fileObjs.length">
+                                    <div class="d-flex align-items-center gap-2 mt-2">
+                                        <t t-if="selectedPickedCount('progress')">
+                                            <button class="btn btn-sm btn-outline-danger py-0 px-2"
+                                                    type="button" style="font-size:.75rem;"
+                                                    t-on-click="() => this.removeSelectedPicked('progress')">
+                                                <i class="fa fa-times me-1"/>Remove <t t-esc="selectedPickedCount('progress')"/>
+                                            </button>
+                                        </t>
+                                    </div>
+                                    <ul class="list-unstyled small text-muted mt-1 mb-0">
                                         <t t-foreach="state.progressForm.fileObjs" t-as="pf" t-key="pf_index">
-                                            <li><i class="fa fa-file-o me-1"/><t t-esc="pf.name"/></li>
+                                            <li class="d-flex align-items-center gap-2 py-1">
+                                                <input class="form-check-input mt-0" type="checkbox"
+                                                       t-att-checked="state.progressFileSel[pf_index]"
+                                                       t-on-change="() => this.toggleProgressFileSel(pf_index)"/>
+                                                <i class="fa fa-file-o"/>
+                                                <span class="text-truncate" t-esc="pf.name"/>
+                                                <span class="ms-auto text-nowrap" t-esc="_fmtBytes(pf.size)"/>
+                                                <button class="btn btn-link btn-sm p-0 text-danger"
+                                                        type="button" title="Remove this file"
+                                                        t-on-click="() => this.removeProgressFile(pf_index)">
+                                                    <i class="fa fa-times"/>
+                                                </button>
+                                            </li>
                                         </t>
                                     </ul>
                                 </t>
@@ -845,7 +931,20 @@ export class KpiAction extends Component {
                                     <input type="text" class="form-control"
                                            t-model="state.progressForm.branch_name"
                                            placeholder="main, feature/new-module, ..."/>
-                                    <small class="text-muted">Branch name or short description</small>
+                                    <!-- The branch is required and is "main" most of the time, so
+                                         typing it every single link was pure friction. Offered only
+                                         once a repo URL is present (there is nothing to branch off
+                                         otherwise) and only while the field is empty, so it stops
+                                         nagging the moment a real branch is typed. -->
+                                    <t t-if="state.progressForm.github_url and !state.progressForm.branch_name">
+                                        <button class="btn btn-sm btn-outline-secondary py-0 px-2 mt-1"
+                                                type="button" style="font-size:.75rem;"
+                                                title="Use the main branch"
+                                                t-on-click="() => state.progressForm.branch_name = 'main'">
+                                            <i class="fa fa-code-fork me-1"/>Use main
+                                        </button>
+                                    </t>
+                                    <small class="d-block text-muted">Branch name or short description</small>
                                 </div>
                             </div>
                             <div class="mt-2">
@@ -1611,6 +1710,21 @@ export class KpiAction extends Component {
                                             · started <t t-esc="state.liveBreak.start_display"/>
                                             · <span class="font-monospace"><t t-esc="liveBreakDisplay()"/></span>
                                         </span>
+                                        <!-- Straight back to the task the break came from. The pill
+                                             already names it, and naming it is not much use without
+                                             a way back — otherwise coming off lunch means finding
+                                             that task again down a board of eleven lanes. Resuming
+                                             closes this break by itself (resume_task stops the break
+                                             log), so there is nothing to end first. -->
+                                        <t t-if="state.liveBreak.source_task_id">
+                                            <button class="btn btn-sm btn-success py-0 px-2"
+                                                    style="font-size:.72rem;"
+                                                    t-att-disabled="state.breakSwitchBusy"
+                                                    t-att-title="'Resume &quot;' + state.liveBreak.source_task_name + '&quot;'"
+                                                    t-on-click="() => this.resumeAwayTask(state.liveBreak.source_task_id)">
+                                                <i class="fa fa-play me-1"></i> Resume
+                                            </button>
+                                        </t>
                                         <!-- The other reasons, right beside it — the same one-click
                                              switch the no-task pill above already offers. A meeting
                                              called mid-break used to mean resuming the task and
@@ -1625,6 +1739,17 @@ export class KpiAction extends Component {
                                                 <t t-esc="br.label"/>
                                             </button>
                                         </t>
+                                        <!-- Sits with the reasons because that is where you look for
+                                             it, but it is not one of them: it ends the break and
+                                             opens a no-tasks block, which is the only reason that
+                                             reaches the admins. Red, because it asks someone to act. -->
+                                        <button class="btn btn-sm btn-outline-danger py-0 px-2"
+                                                style="font-size:.72rem;"
+                                                t-att-disabled="state.breakSwitchBusy"
+                                                title="End this break and tell your admins you have nothing to work on"
+                                                t-on-click="declareNoTasks">
+                                            📭 I have no tasks
+                                        </button>
                                     </t>
                                     <!-- Move to the next task in one action. Only offered
                                          while something is actually running — with nothing
@@ -1817,6 +1942,19 @@ export class KpiAction extends Component {
                                                     t-on-click="clearStatusFilter"><i class="fa fa-times"></i></button>
                                         </span>
                                     </t>
+                                </div>
+                            </t>
+
+                            <!-- How many matched, right under the box you typed in. The header
+                                 carries the same figure, but it is two screens up on a real
+                                 board, so a search that found nothing looked identical to one
+                                 that found something further down the lanes. Its own block
+                                 rather than part of the chip row above, so it also shows when
+                                 the search box alone is in use. -->
+                            <t t-if="searchSummary()">
+                                <div class="mt-2 small fw-semibold"
+                                     t-att-class="getTotalFilteredCount() ? 'text-success' : 'text-danger'">
+                                    <i class="fa fa-filter me-1"/><t t-esc="searchSummary()"/>
                                 </div>
                             </t>
                         </div>
@@ -2267,10 +2405,39 @@ export class KpiAction extends Component {
     // column reads as a missing stage. The list has no such shape to preserve, and
     // a stack of "Nothing here yet" headings is just scrolling, so it drops the
     // empty ones. Same rule the app's list view follows (KpiActionBoard listData).
+    //
+    // WHILE SEARCHING, that pipeline order stops being the useful one. Eleven lanes
+    // are 265px each, so a search matching two tasks in Completed put both hits off
+    // the right-hand edge behind nine "Nothing here yet" columns — you had to scroll
+    // to find what you had just searched for. So under an active search or filter,
+    // lanes holding matches come first, most matches first, and the empty ones fall
+    // to the end. With nothing filtered the order is left exactly as it was: the
+    // board's fixed shape is what makes it readable the rest of the time.
     get visibleColumns() {
         const cols = this.columns;
-        if (this.state.viewMode !== 'list') return cols;
-        return cols.filter(c => this.laneCount(c.key) > 0);
+        const filtering = this.hasActiveFilters();
+        // Counted ONCE per render. laneCount re-filters the lane's array on every
+        // call, and a sort comparator would call it O(n log n) times — on every
+        // keystroke in the search box.
+        const counts = new Map();
+        for (const c of cols) {
+            // Paid is an archive on its own route and never goes through the search
+            // pipeline, so its full count would otherwise sort it to the front of a
+            // search it took no part in.
+            counts.set(c.key, (filtering && c.key === 'paid') ? 0 : this.laneCount(c.key));
+        }
+        let out = cols;
+        if (this.state.viewMode === 'list') out = cols.filter(c => counts.get(c.key) > 0);
+        if (!filtering) return out;
+        // Pipeline position is the tie-break, so equal-scoring lanes stay in an order
+        // the reader already knows rather than shuffling between renders.
+        const order = new Map(out.map((c, i) => [c.key, i]));
+        return [...out].sort((a, b) => {
+            const ca = counts.get(a.key), cb = counts.get(b.key);
+            if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1;
+            if (ca !== cb) return cb - ca;
+            return order.get(a.key) - order.get(b.key);
+        });
     }
 
     // List lanes start closed, like the app's — opening the view on every task of
@@ -2453,7 +2620,7 @@ export class KpiAction extends Component {
             id: update.id,
             summary: update.summary || '',
             related_links: [...(update.links || [])],
-            link_input: '',
+            link_input: '', link_error: '',
             file_name: update.file_name || '',
             clear_file: false,
             saving: false,
@@ -2470,6 +2637,7 @@ export class KpiAction extends Component {
         catch (e) { this._toast('Please enter a valid URL (e.g., https://example.com)', 'warning'); return; }
         this.state.progressEdit.related_links.push(link);
         this.state.progressEdit.link_input = '';
+        this.state.progressEdit.link_error = '';
     }
     removeEditLink(index) {
         this.state.progressEdit.related_links.splice(index, 1);
@@ -2478,6 +2646,9 @@ export class KpiAction extends Component {
         const e = this.state.progressEdit;
         const summary = (e.summary || '').trim();
         if (!summary) { this._toast('Summary is required.', 'warning'); return; }
+        const linkErr = this.pendingLinkError(e);
+        if (linkErr) { e.link_error = linkErr; return; }
+        e.link_error = '';
         e.saving = true;
         try {
             const res = await rpc('/kpi/progress/update', {
@@ -2694,12 +2865,15 @@ export class KpiAction extends Component {
             },
             progressUpdates: [],
             progressExpanded: {},     // which history entries are un-clamped, keyed by id
+            // Ticked rows in the not-yet-submitted file picks, keyed by array index.
+            progressFileSel: {},
+            manualFileSel: {},
             progressSelected: {},     // which history entries are ticked, keyed by id
             progressBusy: false,      // a delete is in flight
             // The edit popup, seeded from the entry being edited with the same
             // fields the create form collects.
             progressEdit: {
-                open: false, id: null, summary: '', related_links: [], link_input: '',
+                open: false, id: null, summary: '', related_links: [], link_input: '', link_error: '',
                 file_name: '', clear_file: false, saving: false,
             },
             showRejectionModal: false,
@@ -2710,8 +2884,11 @@ export class KpiAction extends Component {
                 uploaded_file: null,
                 fileObjs: [],       // every file picked for THIS update
                 file_name: '',
+                size_display: '',   // combined size, mirroring manualForm
+
                 related_links: [],  // 🆕 NEW
                 link_input: '',
+                link_error: '',   // pasted a URL but never pressed Add Link
                 github_url: '',
                 branch_name: '',
             },
@@ -2898,9 +3075,12 @@ export class KpiAction extends Component {
         this.kpiScrollTop = useRef('kpiScrollTop');
         this.kpiScrollTopInner = useRef('kpiScrollTopInner');
         this.kpiKanbanRow = useRef('kpiKanbanRow');
-        // The progress-update file input, so _resetProgressForm can clear the
-        // filename the browser keeps showing after a successful upload.
+        // The two file inputs. A file control renders its label from its OWN
+        // FileList, so removing a file from our state array left it still reading
+        // "3 files" — and the manual one, having had no ref at all, also kept the
+        // filename on screen after a successful upload.
         this.progressFileInput = useRef('progressFileInput');
+        this.manualFileInput = useRef('manualFileInput');
 
         onMounted(() => {
             // Read the workday session state (DOES NOT create one).  This
@@ -4051,6 +4231,39 @@ export class KpiAction extends Component {
         const autoNote = data.auto_closed
             ? `<div class="alert alert-warning small mt-2">Auto-closed earlier by cron.</div>`
             : '';
+        // Tasks worked today with no progress note against them. A day's hours with
+        // nothing written about them is invisible to everyone downstream, and by
+        // tomorrow nobody can reconstruct where they went — but this warns, it does
+        // not block: ending the day is one-way and refusing it would strand people.
+        // Links and files stay optional; only the summary is asked for.
+        this._missingProgress = (data.missing_progress || []).slice();
+        const missingProgressHTML = this._missingProgress.length ? `
+            <div class="alert alert-warning mt-3 mb-2" id="missingProgressBox">
+                <div class="fw-bold mb-1">
+                    <i class="fa fa-exclamation-triangle me-1"></i>
+                    ${this._missingProgress.length === 1
+                        ? '1 task you worked on today has no progress update'
+                        : `${this._missingProgress.length} tasks you worked on today have no progress update`}
+                </div>
+                <div class="small text-muted mb-2">
+                    Add one below, or end your day anyway — this will not stop you.
+                </div>
+                ${this._missingProgress.map((m, i) => `
+                    <div class="mb-2" data-mp-row="${i}">
+                        <div class="small fw-semibold">
+                            ${m.external_ref ? `<span class="badge bg-secondary me-1">${(m.external_ref||'').replace(/</g,'&lt;')}</span>` : ''}
+                            ${(m.name || '').replace(/</g,'&lt;')}
+                        </div>
+                        <div class="input-group input-group-sm mt-1">
+                            <input type="text" class="form-control" data-mp-input="${i}"
+                                   maxlength="500"
+                                   placeholder="What did you do on this today?"/>
+                            <button class="btn btn-outline-primary" type="button" data-mp-save="${i}">Save</button>
+                        </div>
+                        <div class="small mt-1 d-none" data-mp-msg="${i}"></div>
+                    </div>
+                `).join('')}
+            </div>` : '';
         // 🗺 Workday Map — render the day's flow as chips: start → task → break → … → end.
         // Server sends a ready-to-render `timeline` list; each task chip shows its
         // outcome + the last reason/note typed underneath (in brackets).
@@ -4193,6 +4406,7 @@ export class KpiAction extends Component {
                                 <tbody>${tasksHTML}</tbody>
                             </table>
                             ${(data.allow_multitask || anyConcurrent) ? `<div class="small text-warning mb-2"><b>⚡ = multi-tasked together</b> — the ⚡ tasks (amber line) ran at the same time, so Productive can exceed Presence (expected).</div>` : ''}
+                            ${missingProgressHTML}
                             <!-- Was 2 rows, capped at 500, labelled only "Optional" — and it
                                  showed: 3 notes in 213 sessions, the longest 51 characters.
                                  A real day's summary runs ~400 characters over a dozen lines.
@@ -4257,6 +4471,45 @@ export class KpiAction extends Component {
         document.getElementById("pauseWorkdayBtn")?.addEventListener("click", async () => {
             this.closeModal();
             await this.pauseWorkday();
+        });
+        // Inline "add the missing note" rows. Saved one at a time and struck through
+        // in place rather than re-rendering the modal, so the note already typed in
+        // the box below is not thrown away mid-flow.
+        (this._missingProgress || []).forEach((m, i) => {
+            const btn = document.querySelector(`[data-mp-save="${i}"]`);
+            const input = document.querySelector(`[data-mp-input="${i}"]`);
+            const msg = document.querySelector(`[data-mp-msg="${i}"]`);
+            if (!btn || !input) return;
+            btn.addEventListener("click", async () => {
+                const summary = (input.value || '').trim();
+                if (!summary) {
+                    msg.className = 'small mt-1 text-danger';
+                    msg.textContent = 'Write something first.';
+                    return;
+                }
+                btn.disabled = true;
+                try {
+                    const res = await rpc('/kpi/progress/create', {
+                        kpi_id: m.kpi_id, summary,
+                    });
+                    if (res && res.status) {
+                        input.disabled = true;
+                        msg.className = 'small mt-1 text-success';
+                        msg.textContent = 'Saved.';
+                        const row = document.querySelector(`[data-mp-row="${i}"]`);
+                        if (row) row.style.opacity = '.6';
+                    } else {
+                        btn.disabled = false;
+                        msg.className = 'small mt-1 text-danger';
+                        msg.textContent = (res && res.message) || "Couldn't save that.";
+                    }
+                } catch (e) {
+                    btn.disabled = false;
+                    msg.className = 'small mt-1 text-danger';
+                    msg.textContent = (e && e.message) || "Couldn't save that.";
+                }
+                if (msg) msg.classList.remove('d-none');
+            });
         });
         document.getElementById("endWorkdayConfirmBtn").addEventListener("click", async () => {
             const note = document.getElementById("endWorkdayNote")?.value || '';
@@ -4565,6 +4818,7 @@ export class KpiAction extends Component {
         this.state.uploadState.error = '';
         this.state.progressForm.fileObjs = [];
         this.state.progressForm.file_name = '';
+        this.state.progressForm.size_display = '';
         if (!picked.length) return;
 
         const MAX = 50 * 1024 * 1024;
@@ -4578,13 +4832,107 @@ export class KpiAction extends Component {
             return;
         }
         this.state.progressForm.fileObjs = picked;
+        // Selection is by array index, so a fresh pick must not inherit ticks that
+        // pointed at the previous one.
+        this.state.progressFileSel = {};
         this.state.progressForm.file_name = picked.length === 1
             ? picked[0].name : `${picked.length} files`;
+        this.state.progressForm.size_display = this._fmtBytes(this._totalBytes(picked));
     }
 
     // Total bytes queued, for the progress ring's denominator.
     _totalBytes(files) { return (files || []).reduce((n, f) => n + (f.size || 0), 0); }
 
+    // ---- Dropping files from a pick, before it is submitted --------------------
+    // Picking ten documents and spotting three you did not want used to mean
+    // re-picking all ten: a file input's FileList cannot be edited, and the list
+    // under the picker was display-only. Both submit paths read these arrays and
+    // not the input's own FileList, so splicing the array IS the fix.
+    //
+    // The input keeps saying "10 files" from its own FileList no matter what the
+    // array holds, so it is cleared once the array empties — the same trap
+    // _resetProgressForm already documents.
+    removeProgressFile(index) {
+        this.state.progressForm.fileObjs.splice(index, 1);
+        this.state.uploadState.error = '';
+        this._syncPickedNames('progress');
+    }
+    removeManualFile(index) {
+        this.state.manualForm.files.splice(index, 1);
+        this.state.manualForm.error = '';
+        this._syncPickedNames('manual');
+    }
+    toggleProgressFileSel(index) {
+        this.state.progressFileSel[index] = !this.state.progressFileSel[index];
+    }
+    toggleManualFileSel(index) {
+        this.state.manualFileSel[index] = !this.state.manualFileSel[index];
+    }
+    selectedPickedCount(which) {
+        const sel = which === 'manual' ? this.state.manualFileSel : this.state.progressFileSel;
+        const len = which === 'manual'
+            ? this.state.manualForm.files.length : this.state.progressForm.fileObjs.length;
+        let n = 0;
+        for (let i = 0; i < len; i++) if (sel[i]) n++;
+        return n;
+    }
+    // Descending, so each splice cannot shift an index still to be removed.
+    removeSelectedPicked(which) {
+        const sel = which === 'manual' ? this.state.manualFileSel : this.state.progressFileSel;
+        const arr = which === 'manual'
+            ? this.state.manualForm.files : this.state.progressForm.fileObjs;
+        for (let i = arr.length - 1; i >= 0; i--) if (sel[i]) arr.splice(i, 1);
+        if (which === 'manual') {
+            this.state.manualFileSel = {};
+            this.state.manualForm.error = '';
+        } else {
+            this.state.progressFileSel = {};
+            this.state.uploadState.error = '';
+        }
+        this._syncPickedNames(which);
+    }
+    // Write the surviving files back into the control's own FileList.
+    //
+    // A file input renders "3 files" from its OWN list, which nothing was updating —
+    // so after removing two, the control still claimed three while the list below it
+    // said one. DataTransfer is the only way to hand an input a new FileList.
+    //
+    // Cosmetic: what actually uploads is the state array. So a browser that refuses
+    // the assignment must not break anything — fall back to clearing the control
+    // only once the array empties, which is what it did before.
+    _syncFileInput(which, files) {
+        const el = which === 'manual'
+            ? this.manualFileInput?.el : this.progressFileInput?.el;
+        if (!el) return;
+        try {
+            const dt = new DataTransfer();
+            for (const f of files) dt.items.add(f);
+            el.files = dt.files;
+        } catch (e) {
+            if (!files.length) el.value = '';
+        }
+    }
+
+    // Keeps the summary label and the file input honest after a removal.
+    _syncPickedNames(which) {
+        if (which === 'manual') {
+            const files = this.state.manualForm.files;
+            this.state.manualForm.file_name = files.length === 1
+                ? files[0].name : (files.length ? `${files.length} files` : '');
+            this.state.manualForm.size_display = files.length
+                ? this._fmtBytes(this._totalBytes(files)) : '';
+            this.state.manualFileSel = {};
+            this._syncFileInput('manual', files);
+        } else {
+            const files = this.state.progressForm.fileObjs;
+            this.state.progressForm.file_name = files.length === 1
+                ? files[0].name : (files.length ? `${files.length} files` : '');
+            this.state.progressForm.size_display = files.length
+                ? this._fmtBytes(this._totalBytes(files)) : '';
+            this.state.progressFileSel = {};
+            this._syncFileInput('progress', files);
+        }
+    }
     _mb(bytes) { return (bytes / (1024 * 1024)).toFixed(1) + ' MB'; }
 
     // Circular ring geometry (r = 30) + MB label.
@@ -4602,9 +4950,11 @@ export class KpiAction extends Component {
         this.state.progressForm.summary = '';
         this.state.progressForm.uploaded_file = null;
         this.state.progressForm.file_name = '';
+        this.state.progressForm.size_display = '';
         this.state.progressForm.fileObjs = [];
         this.state.progressForm.related_links = [];
         this.state.progressForm.link_input = '';
+        this.state.progressForm.link_error = '';
         this.state.uploadState = { active: false, percent: 0, loaded: 0, total: 0, error: '', xhr: null };
         // Clearing the STATE is not enough: a file input shows the chosen name
         // from input.value, which OWL cannot clear declaratively — a file input's
@@ -4641,6 +4991,14 @@ export class KpiAction extends Component {
             if (el) el.focus();
             return;
         }
+        // Before the file/no-file split, so it covers both submit paths — the
+        // multipart branch below builds its own payload and would otherwise skip it.
+        const linkErr = this.pendingLinkError(this.state.progressForm);
+        if (linkErr) {
+            this.state.progressForm.link_error = linkErr;
+            return;
+        }
+        this.state.progressForm.link_error = '';
         // WITH files → live multipart upload (circular %-ring).
         if ((this.state.progressForm.fileObjs || []).length) {
             return this._submitWithFile(this.state.progressForm.fileObjs);
@@ -4937,6 +5295,7 @@ export class KpiAction extends Component {
         // Keep the Files themselves — the multipart upload posts them directly, so
         // there is no FileReader to wait on and the button enables immediately.
         this.state.manualForm.files = picked;
+        this.state.manualFileSel = {};
         this.state.manualForm.file_name = picked.length === 1
             ? picked[0].name : `${picked.length} files`;
         this.state.manualForm.size_display = this._fmtBytes(this._totalBytes(picked));
@@ -4995,6 +5354,13 @@ export class KpiAction extends Component {
         const form = this.state.manualForm;
         if (!(form.files || []).length) {
             form.error = 'Please select a file.';
+            return;
+        }
+        // Checked before form.error is cleared below, or the message would be wiped
+        // on the same tick it was set.
+        const linkErr = this.pendingLinkError(form);
+        if (linkErr) {
+            form.error = linkErr;
             return;
         }
         form.error = '';
@@ -5096,6 +5462,25 @@ export class KpiAction extends Component {
             this._toast('Failed to delete manual', 'danger');
         }
     }
+    // A link typed into the box but never added used to be thrown away in silence:
+    // every submit path serialises the related_links ARRAY, and the success handler
+    // then blanks link_input — so the update saved with no link, the box emptied,
+    // and it looked exactly like it had worked.
+    //
+    // Called by all three forms before they submit. Returns '' when there is nothing
+    // pending, otherwise the message to show and a refusal to submit. It does not
+    // auto-add: a half-typed URL silently attached to someone's progress note is the
+    // same class of surprise in the other direction.
+    pendingLinkError(formState) {
+        const pending = (formState.link_input || '').trim();
+        if (!pending) return '';
+        let valid = true;
+        try { new URL(pending); } catch (e) { valid = false; }
+        return valid
+            ? `You typed a link but didn't add it. Press "Add Link", or clear the box.`
+            : `"${pending}" is in the link box but is not a valid URL. Fix it and press "Add Link", or clear the box.`;
+    }
+
     addLink() {
         const link = this.state.progressForm.link_input.trim();
         
@@ -5114,8 +5499,9 @@ export class KpiAction extends Component {
         
         this.state.progressForm.related_links.push(link);
         this.state.progressForm.link_input = '';
+        this.state.progressForm.link_error = '';
     }
-    
+
     removeLink(index) {
         this.state.progressForm.related_links.splice(index, 1);
     }
@@ -5251,6 +5637,7 @@ export class KpiAction extends Component {
         this.state.progressForm.summary = '';
         this.state.progressForm.uploaded_file = null;
         this.state.progressForm.file_name = '';
+        this.state.progressForm.size_display = '';
         this.state.progressForm.related_links = [];  // 🆕 NEW
         this.state.progressForm.link_input = '';   // 🆕 NEW
         this.state.progressForm.github_url = '';      // 🆕 NEW
@@ -5323,18 +5710,47 @@ export class KpiAction extends Component {
         if (!e.kra_id) { this._toast('Please pick a project.', 'warning'); return; }
         this.state.metaEdit.saving = true;
         try {
-            const r = await rpc('/kpi_action/update_meta', {
+            const payload = {
                 id: this.state.detailKpiId,
                 name: name,
                 type: e.type,
                 kra_id: parseInt(e.kra_id, 10),
-            });
+            };
+            let r = await rpc('/kpi_action/update_meta', payload);
+            // The dropdown lists every client's projects, so the pick may move this
+            // task to a different client. The server refuses that on the first try
+            // and says so; ask, then repeat the call with the acknowledgement.
+            if (!r.status && r.needs_confirm) {
+                const ok = await this._confirm(
+                    'Move to a different client?',
+                    `This task is filed under "${r.from_client}". Saving moves it to `
+                    + `"${r.to_client}", where that client's people will see it instead.`,
+                    'Move it', 'btn-warning');
+                if (!ok) return;
+                r = await rpc('/kpi_action/update_meta',
+                              { ...payload, confirm_client_move: true });
+            }
             if (!r.status) { this._toast('Save failed: ' + (r.message || 'unknown'), 'danger'); return; }
             this.state.metaEdit = { editing: false, saving: false, name: '', type: '', kra_id: '' };
             await this.loadKpiDetail(this.state.detailKpiId);
         } finally {
             this.state.metaEdit.saving = false;
         }
+    }
+
+    // available_kras arrives already sorted by client then path; this only walks it
+    // once to break it into <optgroup> runs.
+    kraGroups() {
+        const out = [];
+        let cur = null;
+        for (const k of (this.state.detailData.available_kras || [])) {
+            if (!cur || cur.root_id !== k.root_id) {
+                cur = { root_id: k.root_id, root_name: k.root_name || '—', items: [] };
+                out.push(cur);
+            }
+            cur.items.push(k);
+        }
+        return out;
     }
 
     yesNo(value) {
@@ -6288,6 +6704,33 @@ export class KpiAction extends Component {
         return BREAK_SWITCH_REASONS.filter((r) => r.code !== cur);
     }
 
+    // "I have no tasks" while a task is paused. It cannot go through switchBreak:
+    // no_tasks is not a pause_reason_code and not a break_type — it exists only as a
+    // kpi.nontask.block reason, and it is the one reason admins are told about.
+    //
+    // So it ENDS the break and opens a no-tasks block instead, leaving the task
+    // paused. That reads oddly next to a paused task, but it is what the developer
+    // means: whatever they paused is not something they can carry on with, and the
+    // point of saying so is that an admin hears it and assigns work.
+    async declareNoTasks() {
+        if (this.state.breakSwitchBusy) return;
+        this.state.breakSwitchBusy = 'no_tasks';
+        try {
+            const res = await rpc('/kpi_workday/idle_reason', { reason: 'no_tasks', note: '' });
+            if (res && res.status === false) {
+                this._toast((res && res.message) || "Couldn't save that.", 'danger');
+                return;
+            }
+            this._toast('Your admins have been told you have no tasks.', 'success');
+            await this.loadLiveStatus();
+            await this.refresh();
+        } catch (e) {
+            this._toast("Couldn't save that: " + ((e && e.message) || e), 'danger');
+        } finally {
+            this.state.breakSwitchBusy = '';
+        }
+    }
+
     // One click: close the open break at now, open the new one at the same now.
     // The server splits the interval rather than relabelling it, so the Workday Map
     // shows Break THEN Meeting instead of one block that never happened.
@@ -7079,6 +7522,32 @@ export class KpiAction extends Component {
         return count;
     }
     
+    // What the filter bar says about the current result set.
+    //
+    // The board already had a "Showing X of Y tasks" line, but it lives in the page
+    // header — about two screens above the search box on a real board — so after
+    // typing a search there was nothing next to the box saying whether it had
+    // matched two tasks or none.
+    //
+    // Both counts come from getTotalFilteredCount / getTotalTaskCount rather than a
+    // fresh sum, because those two already skip the `today` lane: a task worked
+    // today sits in Today AND in its status lane, so summing every lane reports it
+    // twice. Paid work is in neither total (it loads by its own route), so the
+    // wording never claims to be a count of everything.
+    searchSummary() {
+        if (!this.hasActiveFilters()) return '';
+        const found = this.getTotalFilteredCount();
+        const total = this.getTotalTaskCount();
+        const noun = found === 1 ? 'task' : 'tasks';
+        const q = (this.state.searchQuery || '').trim();
+        if (q) {
+            return found
+                ? `${found} ${noun} found for "${q}"`
+                : `No tasks match "${q}"`;
+        }
+        return found ? `${found} of ${total} tasks` : 'No tasks match these filters';
+    }
+
     // Event Handlers
     onSearchInput(event) {
         this.state.searchQuery = event.target.value;
