@@ -27,6 +27,7 @@ import {
   selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
   acceptSelfCreated, rejectSelfCreated,
   IDLE_REASONS, setIdleReason, endNonTask, IDLE_NOTE_MAX,
+  sinceResume, BREAK_SWITCH_REASONS, switchBreak,
 } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
 import { scheduleTaskReminder, cancelTaskReminder } from '../services/reminders';
@@ -429,6 +430,19 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
         ) : null}
         <MetaRow icon="time-outline" label="Time" value={fmtHMS(liveSeconds(task, nowMs))}
           valueColor={running ? COLORS.green : undefined} />
+        {/* A SECOND clock, for a task that was resumed rather than started: the
+            Time row above keeps climbing across the whole task, which answers
+            "what has this cost" and not "how long have I been back on it". The
+            reason comes from pause_reason_code, so it says what you came back
+            FROM. Nothing new is fetched for this — see sinceResume(). */}
+        {(() => {
+          const sr = sinceResume(task);
+          return sr ? (
+            <MetaRow icon="play-circle-outline" label="Resumed"
+              value={`${fmtHMS(secsSince(sr.startIso, nowMs))} ${sr.label}`}
+              valueColor={COLORS.green} />
+          ) : null;
+        })()}
         {/* What this task cost TODAY, which is the number the Today lane sorts by —
             without it the ordering there has no visible reason. Absent when zero,
             so a task not touched today doesn't gain a line reading "0h 0m 0s".
@@ -1358,6 +1372,7 @@ export default function KpiActionBoard({
   // "Not on a task?" — Meeting / Break / No tasks.
   const [idlePopup, setIdlePopup] = useState(false);
   const [idleBusy, setIdleBusy] = useState(null);   // the reason code being sent
+  const [breakSwitchBusy, setBreakSwitchBusy] = useState(null); // break reason code being switched to
   const [idleNote, setIdleNote] = useState('');     // optional, shows on the Map
   const [nontaskBusy, setNontaskBusy] = useState(false);
   // Switching ENDS the running block and starts another — a real edit to the day's
@@ -1755,6 +1770,25 @@ export default function KpiActionBoard({
       if (res && res.ask_again) setIdlePopup(true);
     } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
     finally { setNontaskBusy(false); }
+  }
+
+  // Change the reason on a break that is already running, without touching the
+  // task it came from. The old way round was Resume then Pause-with-a-new-reason:
+  // two calls that can half-apply, and which bank a few seconds of task time in
+  // between that nobody worked. switch_break closes one break and opens the next
+  // at the same instant, so Presence and the away buckets stay whole.
+  async function doSwitchBreak(code) {
+    log.info('switch break', { code });
+    setBreakSwitchBusy(code);
+    try {
+      const res = await switchBreak(code);
+      if (res && res.status === false) {
+        showError("Couldn't switch that", res.message || 'Failed');
+        return;
+      }
+      await refreshLive();
+    } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
+    finally { setBreakSwitchBusy(null); }
   }
 
   // Filter by search + assignee + priority + status, then group into lanes.
@@ -2742,11 +2776,37 @@ export default function KpiActionBoard({
 
             {/* Row 2: break pill (full width — shows the whole line) */}
             {live.active_break ? (
-              <View style={s.breakPill}>
-                <Text style={s.breakPillTxt}>
-                  ☕ {live.active_break.type_label}{live.active_break.source_task_name ? ` (from "${live.active_break.source_task_name}")` : ''} · started {live.active_break.start_display} · {fmtHMS(secsSince(live.active_break.start_raw, nowMs))}
-                </Text>
-              </View>
+              <>
+                <View style={s.breakPill}>
+                  <Text style={s.breakPillTxt}>
+                    ☕ {live.active_break.type_label}{live.active_break.source_task_name ? ` (from "${live.active_break.source_task_name}")` : ''} · started {live.active_break.start_display} · {fmtHMS(secsSince(live.active_break.start_raw, nowMs))}
+                  </Text>
+                </View>
+                {/* The same one-tap switching the non-task block above already
+                    offers, for the case a task is PAUSED behind the break: a
+                    break that turns into a meeting used to mean Resume then
+                    Pause again, which is two chances to half-apply and banks a
+                    few seconds of task time nobody worked. The reason in force
+                    is filtered out — switching to it is a server-side no-op and
+                    a button that does nothing is worse than no button. */}
+                {!readOnly ? (
+                  <View style={s.breakSwitchRow}>
+                    {BREAK_SWITCH_REASONS.filter((r) => r.code !== live.active_break.type).map((r) => (
+                      <TouchableOpacity
+                        key={r.code}
+                        style={s.nontaskSwitch}
+                        onPress={() => doSwitchBreak(r.code)}
+                        disabled={!!breakSwitchBusy}
+                        activeOpacity={0.85}
+                      >
+                        {breakSwitchBusy === r.code
+                          ? <ActivityIndicator size="small" color={COLORS.primary} />
+                          : <Text style={s.nontaskSwitchTxt}>{r.emoji} {r.label}</Text>}
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </>
             ) : null}
 
             {/* Row 3: Presence · Productive */}
@@ -4738,6 +4798,9 @@ const s = StyleSheet.create({
   nontaskSwitchTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
   // Says why there is no End button, so its absence reads as designed, not missing.
   nontaskHint: { fontSize: 10.5, color: COLORS.faint, marginTop: 2 },
+  // Same chips as nontaskBtnRow, but this row follows the break pill directly
+  // rather than sitting inside nontaskBox, so it carries its own top gap.
+  breakSwitchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
 
   // Switch confirm — same centered-card idiom as the other confirm popups.
   confirmWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 26 },

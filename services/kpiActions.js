@@ -90,6 +90,44 @@ export const LANES = [
 // reads as "not today" and leaves the board exactly as it was.
 export const isTodayTask = (t) => (t.today_seconds || 0) > 0;
 
+// The second clock on a running card: how long since the task was picked back
+// up, and what it was picked back up FROM. Mirrors sinceResume on the web board.
+//
+// Nothing new comes from the server for this. `timer_start_datetime` is the
+// CURRENT run's start and `timer_total_seconds` is everything banked before it,
+// so banked time plus a live start means the task was RESUMED rather than
+// started — and the elapsed figure restarts from that resume. That is the number
+// someone coming back to a task actually wants; the total keeps climbing across
+// the whole task and answers a different question.
+export const SINCE_RESUME_LABELS = {
+  break: 'after break',
+  lunch: 'after lunch',
+  meeting: 'after meeting',
+  leave: 'after leave',
+  urgent: 'after urgent work',
+  priority_task: 'after another task',
+  technical_issue: 'after a technical issue',
+  awaiting_approval: 'after approval',
+  away: 'after away',
+};
+
+// Returns { label, startIso } for a resumed running task, else null. Deliberately
+// returns the ANCHOR rather than a second count: the screen already ticks its own
+// clock off timer_start_datetime (liveSeconds/secsSince), and a number computed
+// here would be stale the moment it was rendered.
+export function sinceResume(t) {
+  if (!t || t.task_state !== 'in_progress' || !t.timer_start_datetime) return null;
+  // No banked time means this is the first start, not a resume — there is
+  // nothing for it to be "since".
+  if (!((t.timer_total_seconds || 0) > 0)) return null;
+  return {
+    startIso: t.timer_start_datetime,
+    // An older server sends no pause_reason_code; a task resumed from a reason we
+    // have no wording for still deserves the clock, just without the story.
+    label: SINCE_RESUME_LABELS[t.pause_reason_code] || 'since resume',
+  };
+}
+
 // Decide which STATUS lane a task belongs to. Matches the OWL board's grouping.
 //
 // Deliberately never returns 'today'. Today is an additional membership, not an
@@ -248,6 +286,29 @@ export async function fetchTaskDetails(kpiId) {
   } catch (e) {
     log.warn('fetchTaskDetails failed', e?.message);
     return { ok: false, message: 'Could not load details' };
+  }
+}
+
+// One KIND of activity at a time, for the Logs picker on the details screen.
+//
+// 'all' is NOT fetched: /kra_kpi/task/details already carries the full log, so
+// asking again would be a second round-trip for bytes we hold. The two narrower
+// kinds do go to the server, because each fetches its own 200-row window and a
+// pause log sliced out of the "all" window would silently lose the older rows.
+export async function fetchActivity(kpiId, kind = 'pause') {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, activity_log: [], activity_total: 0 };
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi_action/activity', { kpi_id: kpiId, kind });
+    if (!res?.status) return { status: false, message: res?.message || 'Could not load the log' };
+    return {
+      status: true,
+      activity_log: res.activity_log || [],
+      activity_total: res.activity_total || 0,
+    };
+  } catch (e) {
+    log.warn('fetchActivity failed', e?.message);
+    return { status: false, message: 'Could not load the log' };
   }
 }
 
@@ -422,30 +483,51 @@ export const createProgress = (kpiId, summary) =>
 // too-big file is refused instantly instead of after a long doomed upload.
 export const MAX_PROGRESS_BYTES = 50 * 1024 * 1024;
 
-// Progress update, with an optional attachment and related links.
+// Progress update, with optional attachments and related links.
 //
 // Two paths, mirroring exactly what the web detail pane does:
-//   file    -> multipart POST /kpi/progress/upload_file  (50 MB, streams the file)
-//   no file -> JSON  POST /kpi/progress/create           ("unchanged path")
+//   files   -> multipart POST /kpi/progress/upload_file  (50 MB each, streamed)
+//   none    -> JSON  POST /kpi/progress/create           ("unchanged path")
 // Do NOT push a file through /kpi/progress/create: it's the small-payload route,
 // and base64 inflates the body ~33% while holding the whole file in memory.
-export async function submitProgressUpdate(kpiId, { summary, links, file }, onProgress) {
+//
+// `files` is an ARRAY. An entry keeps its first file on its own Binary field and
+// the rest as kpi.file.attachment rows, but that split is the server's business —
+// from here it is one update carrying N files, sent as ONE request so it cannot
+// half-succeed and leave an entry holding some of what was picked.
+export async function submitProgressUpdate(kpiId, { summary, links, files }, onProgress) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true, message: 'Mock — not sent to a server' };
 
-  if (file?.uri) {
-    if (file.size && file.size > MAX_PROGRESS_BYTES) {
-      return { status: false, message: 'That file is over the 50 MB limit. Add a Drive or GitHub link instead.' };
+  const picked = (files || []).filter((f) => f?.uri);
+  if (picked.length) {
+    // Both caps matter, and they fail for different reasons. The server refuses
+    // any SINGLE file over 50 MB; a set where each file passes can still be a
+    // multi-hundred-MB request that dies slowly on a phone connection, so the
+    // total is checked too. Refusing here costs nothing — refusing after a
+    // ten-minute upload costs the whole upload.
+    const tooBig = picked.find((f) => f.size && f.size > MAX_PROGRESS_BYTES);
+    if (tooBig) {
+      return { status: false, message: `${tooBig.name} is over the 50 MB limit. Add a Drive or GitHub link instead.` };
+    }
+    const total = picked.reduce((n, f) => n + (f.size || 0), 0);
+    if (total > MAX_PROGRESS_BYTES) {
+      return { status: false, message: 'Those files come to over 50 MB together. Send them as two updates, or add a Drive or GitHub link.' };
     }
     const fd = new FormData();
     fd.append('kpi_id', String(kpiId));
     fd.append('summary', summary || '');
     fd.append('related_links', JSON.stringify(links || []));
-    fd.append('file', {
-      uri: file.uri,
-      name: file.name || 'file',
-      type: file.mimeType || 'application/octet-stream',
-    });
+    // The SAME key once per file — that is what files.getlist('file') reads on
+    // the route. Numbered keys (file0, file1) would arrive as separate fields
+    // and the route would see only the last one.
+    for (const f of picked) {
+      fd.append('file', {
+        uri: f.uri,
+        name: f.name || 'file',
+        type: f.mimeType || 'application/octet-stream',
+      });
+    }
     return await httpUpload(serverUrl, '/kpi/progress/upload_file', fd, 180000, onProgress);
   }
 
@@ -459,15 +541,43 @@ export async function submitProgressUpdate(kpiId, { summary, links, file }, onPr
   }, 45000, null, null);
 }
 
+// Edit an entry already submitted. `clearFile` drops the entry's own attachment;
+// it is separate from summary/links because "leave the file alone" and "remove
+// the file" are different intents and an absent field cannot express the second.
+// Server-gated by kpi.progress own-row rules — never re-derive who may edit here,
+// read `can_edit` off the row the route sent.
+export const updateProgress = (progressId, { summary, links, clearFile } = {}) =>
+  action('/kpi/progress/update', {
+    progress_id: progressId,
+    summary: summary || '',
+    related_links: JSON.stringify(links || []),
+    clear_file: !!clearFile,
+  });
+
+export const deleteProgress = (progressId) =>
+  action('/kpi/progress/delete', { progress_id: progressId });
+
+// Bulk delete answers per id rather than failing the batch: the route returns
+// `deleted` / `refused` / `missing`, so a selection that spans someone else's
+// entry still removes your own instead of refusing the lot.
+export const deleteProgressBulk = (progressIds) =>
+  action('/kpi/progress/delete_bulk', { progress_ids: progressIds || [] });
+
 // A progress file's bytes, for View / Download. Base64 over the authenticated
 // JSON channel — an <Image> or external browser pointed at /kpi/progress/view
 // sends no session cookie and lands on the login page instead of the file.
-export async function fetchProgressFile(progressId) {
+// `attachmentId` addresses one of the entry's EXTRA files (the 2nd..Nth); the
+// entry's own first file is still addressed by progress_id. The web serves the
+// extras over /kpi/attachment/download, which is no use here — that route is
+// type='http' and an app request carries no session cookie, so it would land on
+// the login page. Same authenticated JSON door, one more id.
+export async function fetchProgressFile(progressId, attachmentId = 0) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: false, message: 'No server connection' };
   try {
     // 60s: a 50 MB file is ~67 MB of base64 coming back.
-    const res = await jsonRpc(serverUrl, '/kpi/progress/file_b64', { progress_id: progressId }, 60000);
+    const res = await jsonRpc(serverUrl, '/kpi/progress/file_b64',
+      attachmentId ? { attachment_id: attachmentId } : { progress_id: progressId }, 60000);
     return res || { status: false, message: 'Empty response' };
   } catch (e) {
     log.warn('fetchProgressFile failed', e?.message);
@@ -537,6 +647,26 @@ export const PAUSE_REASONS = [
   { code: 'other', label: 'Other', emoji: '✍', quick: true },
   { code: 'urgent', label: 'Urgent', emoji: '🚨', quick: true },
 ];
+
+// One-tap reason change on a break that is ALREADY open. The three that a break
+// realistically turns into — a break becomes a meeting, lunch runs into a
+// meeting — and nothing else: switching to 'other' or 'urgent' needs a note, so
+// those stay in the full pause picker where there is a box to type it in.
+//
+// Deliberately not resume-then-pause. That is two calls that can half-apply, and
+// it also banks a spurious run of task time between them; switch_break closes one
+// break and opens the next at the SAME instant, so the day stays whole.
+export const BREAK_SWITCH_REASONS = [
+  { code: 'break', label: 'Break', emoji: '☕' },
+  { code: 'lunch', label: 'Lunch', emoji: '🍽' },
+  { code: 'meeting', label: 'Meeting', emoji: '👥' },
+];
+
+// No task id: the route scopes to the caller's own open break, so it cannot be
+// aimed at anyone else. Switching to the reason already in force is a no-op
+// server-side, not an error.
+export const switchBreak = (reasonCode) =>
+  action('/kra_kpi/break/switch', { reason_code: reasonCode });
 
 // Why a client rejected the developer assigned to their task. Same shape as
 // PAUSE_REASONS above: `quick` renders as a one-tap button, so the common case

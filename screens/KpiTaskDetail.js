@@ -37,12 +37,57 @@ import {
   fetchTaskDetails, submitProgressUpdate, addGithubLink, deleteGithubLink,
   deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime,
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
+  fetchActivity, updateProgress, deleteProgress,
 } from '../services/kpiActions';
 import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
 import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('KpiDetail');
+
+// The Logs picker on the Activity popup. 'all' is served from the details payload
+// this screen already holds; the two narrower kinds each fetch their own 200-row
+// window, which is why they are a server call and not a filter over 'all' — a
+// pause log sliced out of the "all" window would quietly lose the older rows.
+const ACTIVITY_KINDS = [
+  { key: 'all', label: 'All activity' },
+  { key: 'pause', label: 'Pause log' },
+  { key: 'heading', label: 'Heading changes' },
+];
+
+// A 'meta_updated' row carries the old and new heading/KRA as JSON in `detail`.
+// Unread, the row says only "Renamed" — that something changed, but not what,
+// which is the one question a heading-change log exists to answer. Anything that
+// doesn't parse falls back to no detail line rather than showing raw JSON.
+// An entry's files as one list, whichever shape the server sent.
+//
+// `files` is the current shape: id 0 is the entry's own first file, the rest are
+// kpi.file.attachment ids. has_file/file_name are the older single-file shape and
+// are still what an un-upgraded server sends, so both are handled — a task detail
+// that silently showed no attachments would look like a task with none.
+function entryFiles(p) {
+  if (Array.isArray(p.files) && p.files.length) {
+    return p.files.map((f) => ({
+      key: `progress-${p.id}-${f.id}`,
+      id: p.id,
+      attachment_id: f.id || 0,
+      file_name: f.file_name || 'file',
+    }));
+  }
+  return p.has_file
+    ? [{ key: `progress-${p.id}-0`, id: p.id, attachment_id: 0, file_name: p.file_name }]
+    : [];
+}
+
+function actDetail(e) {
+  if (!e || e.event !== 'meta_updated' || !e.detail) return null;
+  let d;
+  try { d = JSON.parse(e.detail); } catch (_) { return null; }
+  const parts = [];
+  if (d.name_from || d.name_to) parts.push(`"${d.name_from || '—'}" → "${d.name_to || '—'}"`);
+  if (d.kra_from || d.kra_to) parts.push(`KRA: ${d.kra_from || '—'} → ${d.kra_to || '—'}`);
+  return parts.length ? parts.join('   ·   ') : null;
+}
 
 // Clear the Android status bar — same value the board's header uses, so the two
 // screens line up when you swap between them.
@@ -181,6 +226,16 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // Activity popup, and which day groups are open inside it.
   const [actOpen, setActOpen] = useState(false);
   const [actDays, setActDays] = useState(() => new Set());
+  const [actKind, setActKind] = useState('all');
+  const [actRows, setActRows] = useState([]);        // rows for a NON-'all' kind
+  const [actRowsTotal, setActRowsTotal] = useState(0);
+  const [actLoading, setActLoading] = useState(false);
+
+  // Editing one already-submitted progress entry. Its own modal rather than
+  // re-using the Submit form above: that form lives further up the page, and
+  // scrolling someone away from the row they tapped to edit it is disorienting.
+  const [pgEdit, setPgEdit] = useState(null);   // { id, summary, links, linkInput, fileName, clearFile }
+  const [pgEditBusy, setPgEditBusy] = useState(false);
 
   const load = useCallback(async (quiet) => {
     log.info('load details', { kpi_id: task.id, quiet: !!quiet });
@@ -233,6 +288,20 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // Returns the file HANDLE only — no base64. The progress route takes the file
   // as multipart straight from this uri, so a 40 MB video never becomes a 53 MB
   // string in memory. Manual upload reads base64 on demand (its route is JSON).
+  // Several handles at once, for a progress update that carries more than one
+  // document. Same no-base64 contract as pickFile.
+  async function pickFiles() {
+    const res = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true, type: '*/*', multiple: true,
+    });
+    if (res.canceled) { log.info('file pick cancelled'); return []; }
+    const out = (res.assets || [])
+      .filter(Boolean)
+      .map((f) => ({ uri: f.uri, name: f.name || 'file', size: f.size || 0, mimeType: f.mimeType }));
+    log.info('files picked', { count: out.length });
+    return out;
+  }
+
   async function pickFile() {
     const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, type: '*/*' });
     if (res.canceled) { log.info('file pick cancelled'); return null; }
@@ -270,17 +339,32 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   }
 
   async function onPickProgressFile() {
-    log.info('pick progress file');
+    log.info('pick progress files');
     try {
-      const f = await pickFile();
-      if (!f) return;
-      // Refuse at pick time — never start an upload that the server will reject.
-      if (f.size && f.size > MAX_PROGRESS_BYTES) {
-        log.warn('progress file too big', { name: f.name, size: f.size });
-        flash('err', `${f.name} is ${humanSize(f.size)} — over the 50 MB limit. Add a Drive or GitHub link instead.`);
+      const picked = await pickFiles();
+      if (!picked.length) return;
+      // Refuse at pick time — never start an upload the server will reject. Both
+      // limits are checked: one oversized file, and a set that only goes over
+      // when added to what is already staged.
+      const tooBig = picked.find((f) => f.size && f.size > MAX_PROGRESS_BYTES);
+      if (tooBig) {
+        log.warn('progress file too big', { name: tooBig.name, size: tooBig.size });
+        flash('err', `${tooBig.name} is ${humanSize(tooBig.size)} — over the 50 MB limit. Add a Drive or GitHub link instead.`);
         return;
       }
-      setPgFile(f);
+      // Same file picked twice is a slip, not an intent — drop the duplicate
+      // rather than uploading it and listing it on the entry twice.
+      const merged = [...pgFiles];
+      for (const f of picked) {
+        if (!merged.some((x) => x.uri === f.uri)) merged.push(f);
+      }
+      const total = merged.reduce((n, f) => n + (f.size || 0), 0);
+      if (total > MAX_PROGRESS_BYTES) {
+        log.warn('progress files too big together', { count: merged.length, total });
+        flash('err', `Those files come to ${humanSize(total)} — over the 50 MB limit for one update. Send them as two updates, or add a link.`);
+        return;
+      }
+      setPgFiles(merged);
     } catch (e) {
       log.error('progress file read failed', e?.message);
       flash('err', e?.message || 'Could not read that file');
@@ -347,7 +431,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const [pgSummary, setPgSummary] = useState('');
   const [pgLink, setPgLink] = useState('');
   const [pgLinks, setPgLinks] = useState([]);
-  const [pgFile, setPgFile] = useState(null);
+  const [pgFiles, setPgFiles] = useState([]);
   const [pgPct, setPgPct] = useState(0);
   const [pgRate, setPgRate] = useState(null);
   const [pgBusy, setPgBusy] = useState(false);
@@ -373,7 +457,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 
     log.info('submit progress →', {
       kpi_id: task.id, links: links.length,
-      file: pgFile?.name || null, size: pgFile?.size || 0,
+      files: pgFiles.length, size: pgFiles.reduce((n, f) => n + (f.size || 0), 0),
     });
     setPgBusy(true); setPgPct(0); setPgRate(null);
     try {
@@ -381,7 +465,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       const rate = makeRateTracker();
       const res = await submitProgressUpdate(
         task.id,
-        { summary: pgSummary.trim(), links, file: pgFile },
+        { summary: pgSummary.trim(), links, files: pgFiles },
         (sent, total) => {
           const r = rate(sent, total);
           setPgPct(r.percent);
@@ -395,7 +479,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       }
       log.info('submit progress ← ok', { kpi_id: task.id, progress_id: res?.progress_id });
       flash('ok', 'Progress update submitted');
-      setPgSummary(''); setPgLink(''); setPgLinks([]); setPgFile(null);
+      setPgSummary(''); setPgLink(''); setPgLinks([]); setPgFiles([]);
       load(true);
       onChanged && onChanged();
     } catch (e) {
@@ -439,7 +523,9 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     const { kind, id } = confirmDel;
     log.info('delete →', { kind, id });
     setDelBusy(true);
-    const res = kind === 'manual' ? await deleteManual(id) : await deleteGithubLink(id);
+    const res = kind === 'manual' ? await deleteManual(id)
+      : kind === 'progress' ? await deleteProgress(id)
+      : await deleteGithubLink(id);
     setDelBusy(false);
     setConfirmDel(null);
     if (res?.status === false) {
@@ -448,8 +534,63 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       return;
     }
     log.info('delete ← ok', { kind, id });
-    flash('ok', kind === 'manual' ? 'Manual deleted' : 'GitHub link deleted');
+    flash('ok', kind === 'manual' ? 'Manual deleted' : kind === 'progress' ? 'Update deleted' : 'GitHub link deleted');
     load(true);
+  }
+
+  // ---- Edit one progress entry --------------------------------------------
+  // Seeded from the row as the server sent it, so an edit that changes only the
+  // summary re-sends the links unchanged rather than blanking them.
+  function openProgressEdit(entry) {
+    setPgEdit({
+      id: entry.id,
+      summary: entry.summary || '',
+      links: parseLinks(entry.related_links),
+      linkInput: '',
+      fileName: entry.has_file ? (entry.file_name || 'the attached file') : '',
+      clearFile: false,
+    });
+  }
+
+  async function saveProgressEdit() {
+    if (!pgEdit) return;
+    // A link left in the box counts, exactly as the Submit form promises above —
+    // otherwise typing one and tapping Save silently drops it.
+    const pending = normalizeUrl(pgEdit.linkInput);
+    const links = pending && !pgEdit.links.includes(pending)
+      ? [...pgEdit.links, pending] : pgEdit.links;
+    log.info('edit progress →', { id: pgEdit.id, links: links.length, clearFile: pgEdit.clearFile });
+    setPgEditBusy(true);
+    const res = await updateProgress(pgEdit.id, {
+      summary: pgEdit.summary, links, clearFile: pgEdit.clearFile,
+    });
+    setPgEditBusy(false);
+    if (res?.status === false) {
+      log.warn('edit refused', { id: pgEdit.id, message: res.message });
+      flash('err', res.message || 'Could not save the changes');
+      return;
+    }
+    setPgEdit(null);
+    flash('ok', 'Update saved');
+    load(true);
+  }
+
+  // ---- Activity: switch which log is shown ---------------------------------
+  async function chooseActKind(k) {
+    setActKind(k);
+    setActDays(new Set());          // day groups belong to the old list
+    if (k === 'all') return;        // already in hand, no round-trip
+    setActLoading(true);
+    const res = await fetchActivity(task.id, k);
+    setActLoading(false);
+    if (res?.status === false) {
+      log.warn('activity refused', { kind: k, message: res.message });
+      flash('err', res.message || 'Could not load the log');
+      setActRows([]); setActRowsTotal(0);
+      return;
+    }
+    setActRows(res.activity_log || []);
+    setActRowsTotal(res.activity_total || 0);
   }
 
   // ---- Attached files: View / Download / View note -------------------------
@@ -465,12 +606,12 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // Progress files and manuals live in different models, so they have their own
   // routes — but everything downstream (cache, view, download) is identical, so
   // `kind` picks the fetcher and the rest is shared.
-  const fetchBytes = (id, kind) => (kind === 'manual' ? fetchManualFile(id) : fetchProgressFile(id));
+  const fetchBytes = (id, kind, attId = 0) => (kind === 'manual' ? fetchManualFile(id) : fetchProgressFile(id, attId));
 
   // Pull the bytes over the authenticated JSON channel, drop them in the cache,
   // and hand back a file:// uri anything local can open.
-  async function cacheFile(id, kind) {
-    const res = await fetchBytes(id, kind);
+  async function cacheFile(id, kind, attId = 0) {
+    const res = await fetchBytes(id, kind, attId);
     if (!res?.status) {
       flash('err', res?.message || 'Could not fetch the file');
       return null;
@@ -489,10 +630,12 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   }
 
   async function onViewFile(f, kind = 'progress') {
-    log.info('view file →', { id: f.id, kind, name: f.file_name });
-    setFileBusy(`${kind}-${f.id}`);
+    log.info('view file →', { id: f.id, kind, name: f.file_name, att: f.attachment_id || 0 });
+    // `key` distinguishes several files hanging off ONE entry; anything without
+    // it (the task-level Documents list) keeps the original entry-wide key.
+    setFileBusy(f.key || `${kind}-${f.id}`);
     try {
-      const c = await cacheFile(f.id, kind);
+      const c = await cacheFile(f.id, kind, f.attachment_id || 0);
       if (!c) return;
       if (isImageName(c.file_name) || (c.mimetype || '').startsWith('image/')) {
         // Show it right here rather than punting to another app.
@@ -510,10 +653,10 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   }
 
   async function onDownloadFile(f, kind = 'progress') {
-    log.info('download file →', { id: f.id, kind, name: f.file_name });
-    setFileBusy(`${kind}-${f.id}`);
+    log.info('download file →', { id: f.id, kind, name: f.file_name, att: f.attachment_id || 0 });
+    setFileBusy(f.key || `${kind}-${f.id}`);
     try {
-      const res = await fetchBytes(f.id, kind);
+      const res = await fetchBytes(f.id, kind, f.attachment_id || 0);
       if (!res?.status) { flash('err', res?.message || 'Could not fetch the file'); return; }
 
       let name = res.file_name || 'file';
@@ -597,15 +740,20 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const activityTotal = data?.activity_total || 0;
   // Newest day first, grouped on the date half of the server's timestamp — the
   // same grouping the web's popup uses, so the two read identically.
+  // 'all' is served from the details payload already in hand; a narrower kind has
+  // its own fetched window. Deciding it in ONE place keeps the slice note, the day
+  // groups and the empty state from ever disagreeing about what is on screen.
+  const actEffectiveRows = actKind === 'all' ? (data?.activity_log || []) : actRows;
+  const actEffectiveTotal = actKind === 'all' ? activityTotal : actRowsTotal;
   const actGroups = useMemo(() => {
     const by = new Map();
-    for (const e of (data?.activity_log || [])) {
+    for (const e of actEffectiveRows) {
       const day = String(e.at || '').slice(0, 10) || '—';
       if (!by.has(day)) by.set(day, []);
       by.get(day).push(e);
     }
     return Array.from(by, ([day, rows]) => ({ day, rows }));
-  }, [data]);
+  }, [actEffectiveRows]);
   const kind = KIND[meta.kind] || KIND.requirement;
   const pr = PRIORITY[t.priority] || PRIORITY.regular;
 
@@ -914,31 +1062,42 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 is still included when you submit.
               </Text>
 
-              <Text style={s.label}>Attach File (optional)</Text>
+              <Text style={s.label}>Attach Files (optional)</Text>
+              {/* One update can carry several documents. They go up as a single
+                  request, so the entry either gets all of them or none — never
+                  half a set, which is what N separate uploads would risk. */}
               <TouchableOpacity style={s.filePick} onPress={onPickProgressFile}>
                 <Ionicons name="attach-outline" size={16} color={COLORS.primary} />
                 <Text style={s.filePickTxt} numberOfLines={1}>
-                  {pgFile ? `${pgFile.name}  ·  ${humanSize(pgFile.size)}` : 'Choose a file'}
+                  {pgFiles.length ? 'Add another file' : 'Choose files'}
                 </Text>
-                {!!pgFile && (
-                  <TouchableOpacity onPress={() => setPgFile(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Ionicons name="close-circle" size={16} color={COLORS.faint} />
-                  </TouchableOpacity>
-                )}
               </TouchableOpacity>
+              {pgFiles.map((f, i) => (
+                <View key={`${f.uri}-${i}`} style={s.linkChip}>
+                  <Ionicons name="document-outline" size={13} color={COLORS.primary} />
+                  <Text style={s.linkChipTxt} numberOfLines={1}>
+                    {f.name}  ·  {humanSize(f.size)}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setPgFiles(pgFiles.filter((_, x) => x !== i))}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close-circle" size={15} color={COLORS.faint} />
+                  </TouchableOpacity>
+                </View>
+              ))}
               {/* Same warning the web shows under its file input (kpi_action.js). */}
               <Text style={s.fileWarn}>
                 ⚠ Large files take time — keep this screen open until 100%. Max 50 MB.
                 For bigger files, add a Drive or GitHub link instead.
               </Text>
 
-              {pgBusy && !!pgFile && (
+              {pgBusy && pgFiles.length > 0 && (
                 <View style={{ marginTop: 10 }}>
                   <View style={s.barTrack}><View style={[s.barFill, { width: `${pgPct}%` }]} /></View>
                   <Text style={s.pctTxt}>
                     {pgRate
                       ? `${humanSize(pgRate.sent)} / ${humanSize(pgRate.total)} · ${pgPct}%`
-                      : `${humanSize(pgFile.size)} · ${pgPct}%`}
+                      : `${humanSize(pgFiles.reduce((n, f) => n + (f.size || 0), 0))} · ${pgPct}%`}
                     {pgRate && fmtSpeed(pgRate.speed) ? `  ·  ${fmtSpeed(pgRate.speed)}` : ''}
                     {pgRate && fmtEta(pgRate.eta) ? `  ·  ${fmtEta(pgRate.eta)} left` : ''}
                   </Text>
@@ -1185,12 +1344,35 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                           <Text style={s.linkTxt} numberOfLines={1}>🔗 {l}</Text>
                         </TouchableOpacity>
                       ))}
-                      {!!p.has_file && (
-                        <TouchableOpacity style={s.histFile} onPress={() => onViewFile({ id: p.id, file_name: p.file_name })}>
+                      {entryFiles(p).map((f) => (
+                        <TouchableOpacity key={f.key} style={s.histFile}
+                          onPress={() => onViewFile(f)} disabled={fileBusy === f.key}>
                           <Ionicons name="download-outline" size={13} color={COLORS.primary} />
-                          <Text style={s.histFileTxt} numberOfLines={1}>{p.file_name}</Text>
+                          <Text style={s.histFileTxt} numberOfLines={1}>{f.file_name}</Text>
                         </TouchableOpacity>
-                      )}
+                      ))}
+                      {/* Gated on the server's own answer (can_edit off the row),
+                          never re-derived here — the record rules are what actually
+                          decide, and a button offering what the route refuses is
+                          worse than no button. Own entry, or manager/admin. */}
+                      {p.can_edit ? (
+                        <View style={s.histActions}>
+                          <TouchableOpacity style={s.histAct} onPress={() => openProgressEdit(p)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="create-outline" size={13} color={COLORS.primary} />
+                            <Text style={s.histActTxt}>Edit</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={s.histAct}
+                            onPress={() => setConfirmDel({
+                              kind: 'progress', id: p.id,
+                              name: (p.summary || '').trim().slice(0, 80) || 'this update',
+                            })}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="trash-outline" size={13} color={COLORS.red} />
+                            <Text style={[s.histActTxt, { color: COLORS.red }]}>Delete</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ) : null}
                     </Animated.View>
                   ))
                 )}
@@ -1228,12 +1410,16 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                   <Ionicons name="trash" size={26} color={COLORS.red} />
                 </View>
                 <Text style={s.cTitle}>
-                  {confirmDel.kind === 'manual' ? 'Delete this manual?' : 'Delete this GitHub link?'}
+                  {confirmDel.kind === 'manual' ? 'Delete this manual?'
+                    : confirmDel.kind === 'progress' ? 'Delete this update?'
+                    : 'Delete this GitHub link?'}
                 </Text>
                 <Text style={s.cName} numberOfLines={2}>{confirmDel.name}</Text>
                 <Text style={s.cMsg}>
                   {confirmDel.kind === 'manual'
                     ? 'The file and its description will be removed for everyone. This cannot be undone.'
+                    : confirmDel.kind === 'progress'
+                    ? 'The update, its links and any attached file will be removed for everyone. This cannot be undone.'
                     : 'The repository link will be removed for everyone. This cannot be undone.'}
                 </Text>
                 <View style={s.cBtns}>
@@ -1243,6 +1429,78 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                   <TouchableOpacity style={[s.primBtn, { backgroundColor: COLORS.red }, delBusy && s.btnOff]}
                     onPress={doDelete} disabled={delBusy}>
                     {delBusy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.primBtnTxt}>Delete</Text>}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+        </Modal>
+
+        {/* Edit an already-submitted update. Its own modal rather than re-using
+            the Submit form: that form sits further up the page, and scrolling
+            somebody away from the row they tapped to edit it is disorienting. */}
+        <Modal visible={!!pgEdit} transparent animationType="fade" onRequestClose={() => setPgEdit(null)}>
+          {!!pgEdit && (
+            <View style={s.cWrap}>
+              <View style={s.editCard}>
+                <Text style={s.editTitle}>Edit update</Text>
+                <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+                  <Text style={s.label}>Progress Summary <Text style={s.req}>*</Text></Text>
+                  <TextInput style={[s.input, s.textarea]} multiline
+                    placeholder="Describe the work done, issues found, next steps…"
+                    placeholderTextColor={COLORS.faint}
+                    value={pgEdit.summary}
+                    onChangeText={(v) => setPgEdit({ ...pgEdit, summary: v })} />
+
+                  <Text style={s.label}>Related Links</Text>
+                  <View style={s.linkRow}>
+                    <TextInput style={[s.input, { flex: 1 }]} placeholder="https://github.com/… or https://drive.google.com/…"
+                      placeholderTextColor={COLORS.faint} autoCapitalize="none" keyboardType="url"
+                      value={pgEdit.linkInput}
+                      onChangeText={(v) => setPgEdit({ ...pgEdit, linkInput: v })} />
+                    <TouchableOpacity style={s.linkAdd} onPress={() => {
+                      const url = normalizeUrl(pgEdit.linkInput);
+                      if (!url) { flash('err', 'That does not look like a link — paste a full URL, e.g. https://drive.google.com/…'); return; }
+                      if (pgEdit.links.includes(url)) { flash('err', 'That link is already added'); return; }
+                      setPgEdit({ ...pgEdit, links: [...pgEdit.links, url], linkInput: '' });
+                    }}>
+                      <Ionicons name="add" size={16} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                  {pgEdit.links.map((l, i) => (
+                    <View key={`${l}-${i}`} style={s.linkChip}>
+                      <Ionicons name="link" size={13} color={COLORS.primary} />
+                      <Text style={s.linkChipTxt} numberOfLines={1}>{l}</Text>
+                      <TouchableOpacity
+                        onPress={() => setPgEdit({ ...pgEdit, links: pgEdit.links.filter((_, x) => x !== i) })}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="close-circle" size={15} color={COLORS.faint} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <Text style={s.linkHint}>
+                    A link left in the box is still included when you save.
+                  </Text>
+
+                  {/* Removing the file is its OWN decision: "leave it alone" and
+                      "take it off" are different intents, and an absent field
+                      cannot express the second. Replacing a file is a new update. */}
+                  {pgEdit.fileName ? (
+                    <TouchableOpacity style={s.clearFileRow} activeOpacity={0.8}
+                      onPress={() => setPgEdit({ ...pgEdit, clearFile: !pgEdit.clearFile })}>
+                      <Ionicons name={pgEdit.clearFile ? 'checkbox' : 'square-outline'} size={17}
+                        color={pgEdit.clearFile ? COLORS.red : COLORS.muted} />
+                      <Text style={s.clearFileTxt} numberOfLines={2}>Remove {pgEdit.fileName}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </ScrollView>
+                <View style={s.cBtns}>
+                  <TouchableOpacity style={s.ghostBtn} onPress={() => setPgEdit(null)} disabled={pgEditBusy}>
+                    <Text style={s.ghostBtnTxt}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[s.primBtn, (!pgEdit.summary.trim() || pgEditBusy) && s.btnOff]}
+                    onPress={saveProgressEdit} disabled={!pgEdit.summary.trim() || pgEditBusy}>
+                    {pgEditBusy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.primBtnTxt}>Save</Text>}
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1302,14 +1560,30 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                   <Ionicons name="close" size={22} color={COLORS.muted} />
                 </TouchableOpacity>
               </View>
+              {/* Which log. The narrower two each fetch their own window, so a
+                  pause that scrolled out of the "all" slice is still reachable. */}
+              <View style={s.actKindRow}>
+                {ACTIVITY_KINDS.map((k) => (
+                  <TouchableOpacity key={k.key} activeOpacity={0.85}
+                    style={[s.actKindChip, actKind === k.key && s.actKindChipOn]}
+                    onPress={() => chooseActKind(k.key)} disabled={actLoading}>
+                    <Text style={[s.actKindTxt, actKind === k.key && s.actKindTxtOn]}>{k.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
               {/* Say when it is a slice. A capped list that looks complete is how
                   somebody concludes an event never happened. */}
-              {activityTotal > (data?.activity_log || []).length ? (
+              {actEffectiveTotal > actEffectiveRows.length ? (
                 <Text style={s.actSlice}>
-                  {activityTotal} entries — showing the most recent {(data?.activity_log || []).length}.
+                  {actEffectiveTotal} entries — showing the most recent {actEffectiveRows.length}.
                 </Text>
               ) : null}
               <ScrollView style={{ maxHeight: 420 }}>
+                {actLoading ? (
+                  <View style={{ paddingVertical: 24 }}>
+                    <ActivityIndicator color={COLORS.primary} />
+                  </View>
+                ) : null}
                 {actGroups.map((g, gi) => {
                   const open = actDays.has(g.day) || (gi === 0 && !actDays.size);
                   return (
@@ -1329,6 +1603,10 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                           <Text style={s.actTime}>{String(e.at || '').slice(11, 16)}</Text>
                           <View style={{ flex: 1 }}>
                             <Text style={s.actLabel}>{e.label || e.event}</Text>
+                            {(() => {
+                              const d = actDetail(e);
+                              return d ? <Text style={s.actDetail}>{d}</Text> : null;
+                            })()}
                             {!!e.actor && <Text style={s.actActor}>{e.actor}</Text>}
                           </View>
                         </View>
@@ -1336,7 +1614,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                     </View>
                   );
                 })}
-                {!actGroups.length ? <Text style={s.actEmpty}>Nothing recorded yet.</Text> : null}
+                {!actGroups.length && !actLoading ? <Text style={s.actEmpty}>Nothing recorded yet.</Text> : null}
               </ScrollView>
             </View>
           </View>
@@ -1464,6 +1742,25 @@ const s = StyleSheet.create({
   wideBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: COLORS.primary, height: 46, borderRadius: 10, marginTop: 14 },
   wideBtnTxt: { color: '#fff', fontWeight: '900', fontSize: 14 },
   btnOff: { opacity: 0.45 },
+
+  // Edit / Delete on a progress-history row, and the edit modal they open.
+  histActions: { flexDirection: 'row', gap: 14, marginTop: 8 },
+  histAct: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  histActTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
+  // Wider and left-aligned where cCard is a narrow centred confirm — this one
+  // holds a form, not a sentence.
+  editCard: { width: '100%', maxWidth: 460, backgroundColor: '#fff', borderRadius: 18, padding: 18 },
+  editTitle: { fontSize: 16, fontWeight: '900', color: COLORS.navy, marginBottom: 10 },
+  clearFileRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  clearFileTxt: { flex: 1, fontSize: 12.5, fontWeight: '700', color: COLORS.muted },
+
+  // Which activity log is on screen.
+  actKindRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  actKindChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: '#EEF2F8' },
+  actKindChipOn: { backgroundColor: COLORS.primary },
+  actKindTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.muted },
+  actKindTxtOn: { color: '#fff' },
+  actDetail: { fontSize: 11.5, color: COLORS.ink, marginTop: 2 },
 
   warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, backgroundColor: '#FEF3C7', borderRadius: 9, padding: 10, marginBottom: 10, marginTop: 4 },
   warnTxt: { flex: 1, fontSize: 12.5, color: '#92400E', fontWeight: '700', lineHeight: 17 },

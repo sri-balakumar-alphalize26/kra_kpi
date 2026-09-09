@@ -1481,6 +1481,12 @@ class KraKpiAPI(http.Controller):
                 'uploaded_by': m.uploader_name or '',
                 'upload_date': convert_to_user_tz(m.upload_date),
                 'related_links': m.related_links or '[]',
+                # Every document on the entry, not just the first. file_name above
+                # still describes the FIRST one and is left alone, so a client that
+                # reads only that keeps working.
+                'files': self._entry_files_payload(
+                    m, 'manual_file', '/kpi/manual/download/',
+                    has_primary=bool(m.file_name)),
             } for m in manuals],
             'progress': [{
                 'id': p.id,
@@ -1495,6 +1501,12 @@ class KraKpiAPI(http.Controller):
                 # without this the edit and delete controls have nothing to gate on
                 # and would have to re-derive a rule the server already owns.
                 'can_edit': self._may_edit_progress(p),
+                # The whole set of files, where has_file/file_name above describe
+                # only the first. Same reason as can_edit: this route, not
+                # /kpi/progress/list, is where the app reads its history from.
+                'files': self._entry_files_payload(
+                    p, 'uploaded_file', '/kpi/progress/download?progress_id=',
+                    has_primary=bool(p.uploaded_file)),
             } for p in progress],
             'github': [{
                 'id': g.id,
@@ -3650,6 +3662,40 @@ class KraKpiAPI(http.Controller):
         Gated by the task's own rule: admin/coordinator any, developer own,
         client never — a file must not be readable where its task isn't.
         """
+        # An entry can now hold more than one file: the first lives on the entry's
+        # own Binary field, the 2nd..Nth are kpi.file.attachment rows, and
+        # attachment_id asks for one of those. The app cannot use the
+        # /kpi/attachment/download route that serves them on the web — it is
+        # type='http', and per the note above an app request carries no session
+        # cookie — so the extra files need the same authenticated JSON door the
+        # first one already has.
+        att_id = int(params.get('attachment_id') or 0)
+        if att_id:
+            att = request.env['kpi.file.attachment'].sudo().browse(att_id)
+            if not att.exists() or not att.file:
+                return {'status': False, 'message': 'File not found'}
+            parent, _pf = self._attachment_parent(att)
+            if not parent:
+                return {'status': False, 'message': 'File not found'}
+            # Gated on the parent TASK exactly as the primary file is — an
+            # attachment must not be readable where its task is not.
+            denied = self._may_view_kpi_details(parent.kpi_id)
+            if denied:
+                return {'status': False, 'message': denied}
+            file_name = att.file_name or 'file'
+            mime_type = (att.mimetype or mimetypes.guess_type(file_name)[0]
+                         or 'application/octet-stream')
+            data_b64 = att.file
+            if isinstance(data_b64, bytes):
+                data_b64 = data_b64.decode()
+            return {
+                'status': True,
+                'file_name': file_name,
+                'mimetype': mime_type,
+                'data_b64': data_b64,
+                'size': len(base64.b64decode(att.file)),
+            }
+
         pid = int(params.get('progress_id') or 0)
         if not pid:
             return {'status': False, 'message': 'progress_id required'}
