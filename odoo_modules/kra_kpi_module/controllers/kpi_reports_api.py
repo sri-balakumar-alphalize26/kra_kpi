@@ -711,6 +711,69 @@ class KpiReportsAPI(http.Controller):
     #                     KRA REPORT APIs
     # ============================================================
     
+    @staticmethod
+    def _id_list(raw):
+        """Coerce a posted id list into ints, dropping blanks/junk."""
+        if not raw:
+            return []
+        if not isinstance(raw, (list, tuple)):
+            raw = [raw]
+        ids = []
+        for value in raw:
+            try:
+                as_int = int(value)
+            except (TypeError, ValueError):
+                continue
+            if as_int:
+                ids.append(as_int)
+        return ids
+
+    @staticmethod
+    def _csv_param(raw):
+        """Join a posted list of plain string values into the model's CSV form."""
+        if not raw:
+            return ''
+        if not isinstance(raw, (list, tuple)):
+            raw = [raw]
+        return ','.join(str(v).strip() for v in raw if str(v).strip())
+
+    def _report_from_params(self, params):
+        """Build the transient report record from a posted filter payload.
+
+        Shared by /kra/generate, /kra/summary and /kra/filter_counts so the
+        payload is parsed in exactly one place — three copies is how a new
+        filter ends up silently ignored by one of the routes.
+        """
+        employee_id = params.get('employee_id')
+        kra_id = params.get('kra_id')
+        return request.env['kpi.kra.report'].create({
+            'from_date': params.get('from_date'),
+            'to_date': params.get('to_date'),
+            'employee_id': int(employee_id) if employee_id else False,
+            'employee_ids': [(6, 0, self._id_list(params.get('employee_ids')))],
+            'kra_id': int(kra_id) if kra_id else False,
+            'kra_ids': [(6, 0, self._id_list(params.get('kra_ids')))],
+            'excluded_kra_ids': [(6, 0, self._id_list(params.get('excluded_kra_ids')))],
+            'task_types': self._csv_param(params.get('task_types')),
+            'task_states': self._csv_param(params.get('task_states')),
+            'time_frame': params.get('time_frame') or False,
+        })
+
+    @staticmethod
+    def _employee_label(report):
+        """'Ravi, Karthick' / 'All Employees', for the header lines."""
+        users = report.employee_ids or report.employee_id
+        return ', '.join(users.mapped('name')) if users else 'All Employees'
+
+    @staticmethod
+    def _state_label(report):
+        """Readable state names rather than raw codes, e.g. 'Verification Pending'."""
+        codes = report._split_csv(report.task_states)
+        if not codes:
+            return 'All States'
+        labels = dict(request.env['kra.kpi']._fields['task_state'].selection)
+        return ', '.join(labels.get(code, code) for code in codes)
+
     @http.route('/kpi_reports/kra/get_filters', type='json', auth='user', methods=['POST'], csrf=False)
     def get_kra_report_filters(self, **params):
         """Get filter options (KRAs and Employees) for KRA Report"""
@@ -719,11 +782,15 @@ class KpiReportsAPI(http.Controller):
             
             kras = kra_report.get_all_kras_for_filter()
             employees = kra_report.get_all_employees_for_filter()
-            
+            task_types = kra_report.get_all_task_types_for_filter()
+            task_states = kra_report.get_all_task_states_for_filter()
+
             return {
                 'status': True,
                 'kras': kras,
                 'employees': employees,
+                'task_types': task_types,
+                'task_states': task_states,
             }
         except Exception as e:
             import logging
@@ -734,6 +801,8 @@ class KpiReportsAPI(http.Controller):
                 'message': str(e),
                 'kras': [],
                 'employees': [],
+                'task_types': [],
+                'task_states': [],
             }
     
     @http.route('/kpi_reports/kra/generate', type='json', auth='user', methods=['POST'], csrf=False)
@@ -742,18 +811,10 @@ class KpiReportsAPI(http.Controller):
         try:
             from_date = params.get('from_date')
             to_date = params.get('to_date')
-            employee_id = params.get('employee_id')
-            kra_id = params.get('kra_id')
-            time_frame = params.get('time_frame')
-            
-            report = request.env['kpi.kra.report'].create({
-                'from_date': from_date,
-                'to_date': to_date,
-                'employee_id': int(employee_id) if employee_id else False,
-                'kra_id': int(kra_id) if kra_id else False,
-                'time_frame': time_frame or False,
-            })
-            
+            task_types = self._csv_param(params.get('task_types'))
+
+            report = self._report_from_params(params)
+
             report_data = report.get_report_data()
             summary_data = report.get_kra_summary()
             
@@ -765,8 +826,10 @@ class KpiReportsAPI(http.Controller):
                 'filters': {
                     'from_date': from_date,
                     'to_date': to_date,
-                    'employee_name': request.env['res.users'].browse(int(employee_id)).name if employee_id else 'All Employees',
-                    'kra_name': request.env['kra.master'].browse(int(kra_id)).name if kra_id else 'All KRAs',
+                    'employee_name': self._employee_label(report),
+                    'kra_name': report._kra_filter_label(),
+                    'task_type_name': task_types.replace(',', ', ') if task_types else 'All Types',
+                    'task_state_name': self._state_label(report),
                 }
             }
         except Exception as e:
@@ -782,18 +845,7 @@ class KpiReportsAPI(http.Controller):
     def get_kra_report_summary(self, **params):
         """Get KRA Report summary grouped by KRA hierarchy"""
         try:
-            from_date = params.get('from_date')
-            to_date = params.get('to_date')
-            employee_id = params.get('employee_id')
-            kra_id = params.get('kra_id')
-            
-            report = request.env['kpi.kra.report'].create({
-                'from_date': from_date,
-                'to_date': to_date,
-                'employee_id': int(employee_id) if employee_id else False,
-                'kra_id': int(kra_id) if kra_id else False,
-            })
-            
+            report = self._report_from_params(params)
             summary_data = report.get_kra_summary()
             
             return {
@@ -808,7 +860,23 @@ class KpiReportsAPI(http.Controller):
                 'status': False,
                 'message': str(e),
             }
-    
+
+    @http.route('/kpi_reports/kra/filter_counts', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_kra_filter_counts(self, **params):
+        """Per-option counts for the filter dropdowns, scoped to the other filters."""
+        try:
+            report = self._report_from_params(params)
+            return dict(report.get_filter_counts(), status=True)
+        except Exception as e:
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.error(f"Error in get_kra_filter_counts: {str(e)}")
+            return {
+                'status': False,
+                'message': str(e),
+                'kras': {}, 'employees': {}, 'task_types': {}, 'task_states': {},
+            }
+
     # ============================================================
     #              KRA EMPLOYEE REPORT APIs
     # ============================================================

@@ -61,6 +61,9 @@
             "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js",
             # JSZip for bundling per-project + per-task PDFs into one archive
             "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+            # ExcelJS: the KRA Report spreadsheet needs real cell fills for the
+            # Type badges, which a CSV cannot carry at all.
+            "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js",
             
             # Shared utils
             "kra_kpi_module/static/src/utils/upload_with_progress.js",

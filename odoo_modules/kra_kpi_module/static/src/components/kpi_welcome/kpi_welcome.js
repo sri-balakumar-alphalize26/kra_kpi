@@ -17,6 +17,15 @@
 // Master page uses (see components/dashboard/dashboard.js + css/kra_style.scss).
 import { Component, xml } from "@odoo/owl";
 import { registry } from "@web/core/registry";
+import { useService } from "@web/core/utils/hooks";
+
+// The KPI Action Board is reached through this menu item. We look the button up
+// by MENU xmlid rather than by action, because /web/webclient/load_menus only
+// returns menus the user may actually see (ir.ui.menu._visible_menu_ids) — so a
+// hit here is already the group check that menu.xml declares
+// (groups="kra_kpi_module.group_kra_developer"). No hasGroup() call needed, and
+// nobody gets a button that would only hand them an access error.
+const KPI_ACTION_MENU_XMLID = "kra_kpi_module.menu_kpi_action_screen";
 
 export class KpiWelcome extends Component {
     // position:relative is set HERE rather than on the shared .o_kra_dashboard
@@ -38,9 +47,48 @@ export class KpiWelcome extends Component {
                 <p class="text-muted mb-0" style="max-width: 520px;">
                     Pick a section from the menu above to get started.
                 </p>
+
+                <t t-if="kpiActionMenu">
+                    <button type="button" class="btn btn-primary btn-lg mt-4 o_kra_welcome_cta"
+                            t-on-click="openKpiActions">
+                        <i class="fa fa-bolt me-2"></i>
+                        <t t-esc="kpiActionMenu.name"/>
+                    </button>
+                </t>
             </div>
         </div>
     `;
+
+    setup() {
+        this.menuService = useService("menu");
+        this.kpiActionMenu = this._findKpiActionMenu();
+    }
+
+    /**
+     * Menu data is already in the browser — the webclient loads it at boot and
+     * caches it in localStorage — so this is a lookup, not a request. The page
+     * keeps its promise of never depending on the server to render.
+     */
+    _findKpiActionMenu() {
+        try {
+            return this.menuService.getAll()
+                .find((menu) => menu && menu.xmlid === KPI_ACTION_MENU_XMLID) || null;
+        } catch {
+            // Worst case the button is absent; the rest of the page is unaffected.
+            return null;
+        }
+    }
+
+    /**
+     * selectMenu() rather than doAction(): it clears the breadcrumbs AND marks
+     * the menu current, so the button lands exactly where clicking "KPI Actions"
+     * in the menu bar would, with that entry highlighted.
+     */
+    openKpiActions() {
+        if (this.kpiActionMenu) {
+            this.menuService.selectMenu(this.kpiActionMenu);
+        }
+    }
 }
 
 registry.category("actions").add("kra_kpi_welcome", KpiWelcome);

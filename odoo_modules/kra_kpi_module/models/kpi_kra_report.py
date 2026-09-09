@@ -16,6 +16,36 @@ class KpiKraReport(models.TransientModel):
     to_date = fields.Date(string='To Date', required=True, default=fields.Date.today)
     employee_id = fields.Many2one('res.users', string='Employee')
     kra_id = fields.Many2one('kra.master', string='KRA')
+
+    # Multi-select include / exclude. A client such as Nexgenn owns several
+    # sub-clients (Van Sale, Golden Spoon, ...) as child KRAs, and a single
+    # report often needs "this client except that one sub-client", or two
+    # unrelated sub-clients together — neither of which kra_id alone can say.
+    # kra_id is kept so any caller still posting a single id keeps working.
+    kra_ids = fields.Many2many(
+        'kra.master', 'kpi_kra_report_kra_rel', 'report_id', 'kra_id_rel',
+        string='KRAs')
+    excluded_kra_ids = fields.Many2many(
+        'kra.master', 'kpi_kra_report_excl_kra_rel', 'report_id', 'kra_id_rel',
+        string='Excluded KRAs',
+        help="These KRAs and everything below them are left out of the report.")
+
+    # employee_id is kept as the single-id fallback, same as kra_id.
+    employee_ids = fields.Many2many(
+        'res.users', 'kpi_kra_report_user_rel', 'report_id', 'user_id_rel',
+        string='Employees')
+
+    # Comma-separated rather than Many2many because neither dimension is a
+    # record: the type is a prefix inside external_ref and the state is a
+    # Selection. kpi.client.invoice.filter_task_types stores its types the
+    # same way, for the same reason.
+    task_types = fields.Char(
+        string='Task Types',
+        help="Comma-separated external_ref prefixes (REQ,UPT,BUG). Empty = every type.")
+    task_states = fields.Char(
+        string='Task States',
+        help="Comma-separated task_state codes. Empty = every state.")
+
     time_frame = fields.Selection([
         ('today', 'Today'),
         ('yesterday', 'Yesterday'),
@@ -104,6 +134,70 @@ class KpiKraReport(models.TransientModel):
         get_children(kra_id)
         return result
 
+    def _resolve_kra_scope(self):
+        """Resolve the include / exclude pickers into two flat id sets.
+
+        Returns (included_ids, excluded_ids) where included_ids is None when no
+        include restriction was asked for (i.e. "all KRAs").  Both sides expand
+        to whole subtrees: excluding Golden Spoon drops its sub-projects too.
+        """
+        self.ensure_one()
+
+        include_roots = set(self.kra_ids.ids)
+        if self.kra_id:
+            include_roots.add(self.kra_id.id)
+
+        included = None
+        if include_roots:
+            included = set()
+            for root_id in include_roots:
+                included.update(self._get_all_child_kra_ids(root_id))
+
+        excluded = set()
+        for root_id in self.excluded_kra_ids.ids:
+            excluded.update(self._get_all_child_kra_ids(root_id))
+
+        return (sorted(included) if included is not None else None), sorted(excluded)
+
+    @staticmethod
+    def _split_csv(value):
+        """Split a comma-separated filter value into clean, non-empty parts."""
+        return [part.strip() for part in (value or '').split(',') if part.strip()]
+
+    def _task_type_domain(self):
+        """OR-of-ilike over the external_ref prefixes selected.
+
+        There is no doc_type column to filter on — the Requirement / Update /
+        Bug type lives in the ref itself (REQ-012 / UPT-004 / BUG-021), so this
+        mirrors the domain kpi.client.invoice already builds for the same job.
+        A task with no external_ref matches no prefix, so picking any type
+        deliberately drops it.
+        """
+        self.ensure_one()
+        prefixes = [p.upper() for p in self._split_csv(self.task_types)]
+        if not prefixes:
+            return []
+
+        # Odoo domains are prefix notation: N terms OR-ed together need N-1
+        # leading '|' operators.
+        domain = ['|'] * (len(prefixes) - 1)
+        for prefix in prefixes:
+            domain.append(('external_ref', '=ilike', prefix + '-%'))
+        return domain
+
+    def _kra_filter_label(self):
+        """Human-readable summary of the KRA filter, for report/export headers."""
+        self.ensure_one()
+
+        included = self.kra_ids or self.kra_id
+        label = ', '.join(self._get_kra_full_path(k) for k in included) if included else 'All KRAs'
+
+        if self.excluded_kra_ids:
+            excluded = ', '.join(k.name for k in self.excluded_kra_ids)
+            label = f"{label} (excluding {excluded})"
+
+        return label
+
     def _format_time_hours(self, seconds):
         """
         Convert seconds to hours with proper formatting
@@ -125,25 +219,44 @@ class KpiKraReport(models.TransientModel):
             'total_hours': round(total_hours, 2)
         }
 
-    def get_report_data(self):
-        """
-        Generate KRA Report data with full hierarchical structure
-        Returns list of dicts with: kra_path, sub_kra, kpi_name, employee_name, time_worked
+    def _build_domain(self, skip=None):
+        """Search domain for the current filters.
+
+        `skip` omits one facet ('employee' | 'kra' | 'type' | 'state') so that
+        facet's own counts stay meaningful — a faceted list has to show what
+        selecting a value WOULD give, not what the current selection already
+        gives, otherwise every unticked option reads 0.
         """
         self.ensure_one()
 
-        # Build domain
         domain = [('user_id', '!=', False)]  # Only tasks with assignees
-        
-        # Employee filter
-        if self.employee_id:
-            domain.append(('user_id', '=', self.employee_id.id))
-        
-        # KRA filter - include all children of selected KRA
-        if self.kra_id:
-            kra_ids = self._get_all_child_kra_ids(self.kra_id.id)
-            domain.append(('kra_id', 'in', kra_ids))
-        
+
+        # Employee filter — union of the multi-select and the single-id fallback
+        if skip != 'employee':
+            employee_ids = set(self.employee_ids.ids)
+            if self.employee_id:
+                employee_ids.add(self.employee_id.id)
+            if employee_ids:
+                domain.append(('user_id', 'in', sorted(employee_ids)))
+
+        # KRA filter - each picked KRA pulls in its whole subtree, then the
+        # excluded subtrees are subtracted (exclude wins over include).
+        if skip != 'kra':
+            included_kra_ids, excluded_kra_ids = self._resolve_kra_scope()
+            if included_kra_ids is not None:
+                domain.append(('kra_id', 'in', included_kra_ids))
+            if excluded_kra_ids:
+                domain.append(('kra_id', 'not in', excluded_kra_ids))
+
+        # Task type (external_ref prefix) and task state. Both are balanced
+        # sub-expressions, so they AND with everything already in the domain.
+        if skip != 'type':
+            domain += self._task_type_domain()
+        if skip != 'state':
+            task_states = self._split_csv(self.task_states)
+            if task_states:
+                domain.append(('task_state', 'in', task_states))
+
         # Date filter: a task is in range if it has at least one kpi.time.log
         # row whose work_date falls within [from_date, to_date].  We fall back
         # to the task's own deadline / create_date when the task has no logs
@@ -188,12 +301,66 @@ class KpiKraReport(models.TransientModel):
             elif meta_domain:
                 domain += meta_domain
 
+        return domain
+
+    def get_filter_counts(self):
+        """Per-option task counts for each filter dropdown.
+
+        Each facet is counted with its OWN selection skipped, so the list keeps
+        telling you what ticking another value would return.
+        """
+        self.ensure_one()
+        Kpi = self.env['kra.kpi']
+
+        kras = {}
+        for group in Kpi.read_group(
+                self._build_domain('kra') + [('kra_id', '!=', False)], ['kra_id'], ['kra_id']):
+            kras[group['kra_id'][0]] = group['kra_id_count']
+
+        employees = {}
+        for group in Kpi.read_group(
+                self._build_domain('employee'), ['user_id'], ['user_id']):
+            if group['user_id']:
+                employees[group['user_id'][0]] = group['user_id_count']
+
+        states = {}
+        for group in Kpi.read_group(
+                self._build_domain('state') + [('task_state', '!=', False)],
+                ['task_state'], ['task_state']):
+            states[group['task_state']] = group['task_state_count']
+
+        # No ORM grouping on a string prefix, so bucket the refs in Python.
+        types = {}
+        for kpi in Kpi.search(self._build_domain('type') + [('external_ref', '!=', False)]):
+            prefix = (kpi.external_ref or '').split('-')[0].strip().upper()
+            if prefix:
+                types[prefix] = types.get(prefix, 0) + 1
+
+        return {
+            'kras': kras,
+            'employees': employees,
+            'task_types': types,
+            'task_states': states,
+        }
+
+    def get_report_data(self):
+        """
+        Generate KRA Report data with full hierarchical structure
+        Returns list of dicts with: kra_path, sub_kra, kpi_name, employee_name, time_worked
+        """
+        self.ensure_one()
+
         # Search for KPIs
-        kpi_tasks = self.env['kra.kpi'].search(domain, order='kra_id, user_id, id')
+        kpi_tasks = self.env['kra.kpi'].search(
+            self._build_domain(), order='kra_id, user_id, id')
+
+        # Raw task_state codes read badly on a client-facing report
+        # ("partially_completed"), so carry the Selection's own labels along.
+        state_labels = dict(self.env['kra.kpi']._fields['task_state'].selection)
         
         import logging
         _logger = logging.getLogger(__name__)
-        _logger.info(f"KRA Report Domain: {domain}")
+        _logger.info(f"KRA Report Domain: {self._build_domain()}")
         _logger.info(f"Found {len(kpi_tasks)} tasks")
 
         result = []
@@ -263,7 +430,12 @@ class KpiKraReport(models.TransientModel):
                 'kra_level': kra_level,  # Depth level
                 'kpi_name': kpi.name,
                 'external_ref': kpi.external_ref or '',
+                # There is no doc_type field on kra.kpi — the Requirement /
+                # Update / Bug type lives in the external_ref prefix
+                # (REQ-012 / UPT-004 / BUG-021), same as the invoice picker reads it.
+                'task_type': (kpi.external_ref or '').split('-')[0].strip().upper(),
                 'task_state': kpi.task_state or '',
+                'task_state_label': state_labels.get(kpi.task_state, kpi.task_state or ''),
                 'priority': kpi.priority or 'regular',
                 'deadline': str(kpi.deadline) if kpi.deadline else '',
                 'employee_id': kpi.user_id.id if kpi.user_id else False,
@@ -322,8 +494,17 @@ class KpiKraReport(models.TransientModel):
     def get_all_kras_for_filter(self):
         """Get all KRAs formatted for dropdown filter with hierarchy indication"""
         kras = self.env['kra.master'].search([], order='sequence, id')
+
+        # Tasks sitting on the node ITSELF, not its subtree. 21 of the real KRAs
+        # are a root with a child of the identical name, and the per-node count
+        # is the only thing on screen that tells the two rows apart.
+        task_counts = {}
+        for group in self.env['kra.kpi'].read_group(
+                [('kra_id', '!=', False)], ['kra_id'], ['kra_id']):
+            task_counts[group['kra_id'][0]] = group['kra_id_count']
+
         result = []
-        
+
         for kra in kras:
             # Build path for display
             level = 0
@@ -343,9 +524,39 @@ class KpiKraReport(models.TransientModel):
                 'display_name': f"{prefix}{kra.name}",
                 'level': level,
                 'parent_id': kra.parent_id.id if kra.parent_id else False,
+                'parent_name': kra.parent_id.name if kra.parent_id else '',
+                'task_count': task_counts.get(kra.id, 0),
             })
-        
+
         return result
+
+    @api.model
+    def get_all_task_types_for_filter(self):
+        """The external_ref prefixes actually in use (REQ / UPT / BUG / ...).
+
+        Read through the ORM rather than raw SQL so record rules still apply.
+        """
+        counts = {}
+        for kpi in self.env['kra.kpi'].search([('external_ref', '!=', False)]):
+            prefix = (kpi.external_ref or '').split('-')[0].strip().upper()
+            if prefix:
+                counts[prefix] = counts.get(prefix, 0) + 1
+
+        return [{'id': prefix, 'name': prefix, 'task_count': count}
+                for prefix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+    @api.model
+    def get_all_task_states_for_filter(self):
+        """Only the task states actually in use, with their readable labels."""
+        labels = dict(self.env['kra.kpi']._fields['task_state'].selection)
+
+        counts = {}
+        for group in self.env['kra.kpi'].read_group(
+                [('task_state', '!=', False)], ['task_state'], ['task_state']):
+            counts[group['task_state']] = group['task_state_count']
+
+        return [{'id': code, 'name': labels.get(code, code), 'task_count': count}
+                for code, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
     @api.model
     def get_all_employees_for_filter(self):

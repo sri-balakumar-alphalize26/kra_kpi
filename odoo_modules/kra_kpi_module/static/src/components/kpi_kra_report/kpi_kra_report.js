@@ -1,10 +1,167 @@
 /** @odoo-module **/
-import { Component, xml, useState, onWillStart } from "@odoo/owl";
+import { Component, xml, useState, onWillStart, useRef, useExternalListener, useEffect } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { rpc } from "@web/core/network/rpc";
 import { useService } from "@web/core/utils/hooks";
 
+/**
+ * One palette for the Requirement / Update / Bug badge, so the web table, the
+ * PDF and the spreadsheet cannot drift apart. `cls` is the class the web uses;
+ * `rgb` / `text` drive jsPDF; `argb` / `fg` drive ExcelJS.
+ *
+ * The fills are the values Odoo's BACKEND THEME actually compiles these classes
+ * to, read out of web.assets_web.min.css — not Bootstrap's defaults. Odoo
+ * repaints .bg-primary as its own purple RGB(113,99,158) rather than #0D6EFD,
+ * and .bg-secondary as a pale RGB(222,226,230), so using the Bootstrap palette
+ * here would have made every exported REQ badge the wrong colour.
+ * Text colours are chosen for contrast on those fills.
+ */
+const TYPE_STYLES = {
+    REQ: { cls: 'bg-primary', rgb: [113, 99, 158], text: [255, 255, 255], argb: 'FF71639E', fg: 'FFFFFFFF' },
+    UPT: { cls: 'bg-warning text-dark', rgb: [255, 193, 7], text: [0, 0, 0], argb: 'FFFFC107', fg: 'FF000000' },
+    UPD: { cls: 'bg-warning text-dark', rgb: [255, 193, 7], text: [0, 0, 0], argb: 'FFFFC107', fg: 'FF000000' },
+    BUG: { cls: 'bg-danger', rgb: [220, 53, 69], text: [255, 255, 255], argb: 'FFDC3545', fg: 'FFFFFFFF' },
+};
+const TYPE_STYLE_DEFAULT = {
+    cls: 'bg-secondary', rgb: [222, 226, 230], text: [33, 37, 41], argb: 'FFDEE2E6', fg: 'FF212529',
+};
+
+function typeStyle(taskType) {
+    return TYPE_STYLES[(taskType || '').toUpperCase()] || TYPE_STYLE_DEFAULT;
+}
+
+/**
+ * One checkbox dropdown, shared by the KRA / Employee / Type / State filters.
+ *
+ * Options are plain {id, name} dicts. `level` indents the row and marks it with
+ * a ↳; `task_count` shows as a muted badge — which is the only thing telling
+ * apart the 21 KRA pairs where a root and its child carry the identical name
+ * (Internal oman > Internal oman, Nexgennpos > Nexgennpos, ...).
+ *
+ * The ⊘ exclude column renders only when onToggleExcept is supplied, so KRA
+ * keeps its exclusions while the other three stay plain include-lists.
+ */
+export class MultiSelectPicker extends Component {
+    static props = {
+        options: { type: Array },
+        selected: { type: Array },
+        excluded: { type: Array, optional: true },
+        emptyLabel: { type: String },
+        hint: { type: String, optional: true },
+        allOption: { type: Boolean, optional: true },
+        onToggle: { type: Function },
+        onToggleExcept: { type: Function, optional: true },
+        onClear: { type: Function },
+    };
+
+    static template = xml/* xml */`
+        <div class="o_kra_picker" t-ref="root">
+            <button type="button" class="form-select text-start o_kra_picker_toggle"
+                    t-on-click="toggleOpen">
+                <t t-esc="label()"/>
+            </button>
+            <div class="o_kra_picker_panel shadow" t-if="state.open">
+                <div class="o_kra_picker_actions">
+                    <span class="text-muted small" t-esc="props.hint || 'Tick to select'"/>
+                    <button type="button" class="btn btn-sm btn-link p-0"
+                            t-on-click="() => this.props.onClear()">Clear</button>
+                </div>
+                <div class="o_kra_picker_row" t-if="props.allOption">
+                    <div class="o_kra_picker_name fw-bold" t-on-click="() => this.props.onClear()">
+                        <i class="fa me-2"
+                           t-att-class="props.selected.length ? 'fa-square-o text-muted' : 'fa-check-square-o text-primary'"/>
+                        <t t-esc="props.emptyLabel"/>
+                    </div>
+                </div>
+                <t t-foreach="props.options" t-as="opt" t-key="opt.id">
+                    <div class="o_kra_picker_row"
+                         t-att-class="{'is-excluded': isExcluded(opt.id), 'is-empty': isEmpty(opt)}">
+                        <div class="o_kra_picker_name"
+                             t-att-style="'padding-left: ' + ((opt.level || 0) * 20) + 'px'"
+                             t-on-click="() => this.onRowClick(opt)">
+                            <i class="fa me-2"
+                               t-att-class="isSelected(opt.id) ? 'fa-check-square-o text-primary' : 'fa-square-o text-muted'"/>
+                            <t t-if="opt.level">↳ </t>
+                            <t t-esc="opt.name"/>
+                        </div>
+                        <span class="badge o_kra_picker_count"
+                              t-if="opt.task_count !== undefined"
+                              t-esc="opt.task_count"/>
+                        <button type="button" class="btn btn-sm o_kra_picker_except"
+                                t-if="props.onToggleExcept"
+                                t-att-class="isExcluded(opt.id) ? 'btn-danger' : 'btn-outline-danger'"
+                                t-att-title="isExcluded(opt.id) ? 'Excluded — click to put back' : 'Exclude this and everything under it'"
+                                t-on-click="() => this.props.onToggleExcept(opt.id)">⊘</button>
+                    </div>
+                </t>
+            </div>
+        </div>
+    `;
+
+    setup() {
+        this.state = useState({ open: false });
+        this.rootRef = useRef("root");
+        useExternalListener(window, "click", (ev) => {
+            const el = this.rootRef.el;
+            if (this.state.open && el && !el.contains(ev.target)) {
+                this.state.open = false;
+            }
+        });
+    }
+
+    get excludedIds() {
+        return this.props.excluded || [];
+    }
+
+    isSelected(id) {
+        return this.props.selected.includes(id);
+    }
+
+    isExcluded(id) {
+        return this.excludedIds.includes(id);
+    }
+
+    /**
+     * An option that would return nothing under the other filters. A SELECTED
+     * option is never treated as empty — otherwise, once its count fell to 0,
+     * there would be no way to untick it.
+     */
+    isEmpty(opt) {
+        return opt.task_count === 0 && !this.isSelected(opt.id);
+    }
+
+    onRowClick(opt) {
+        if (!this.isEmpty(opt)) {
+            this.props.onToggle(opt.id);
+        }
+    }
+
+    toggleOpen() {
+        this.state.open = !this.state.open;
+    }
+
+    nameOf(id) {
+        const opt = this.props.options.find((o) => o.id === id);
+        return opt ? opt.name : '';
+    }
+
+    label() {
+        const selected = this.props.selected;
+        let text = this.props.emptyLabel;
+        if (selected.length) {
+            const names = selected.slice(0, 2).map((id) => this.nameOf(id)).join(', ');
+            text = selected.length > 2 ? `${names} +${selected.length - 2}` : names;
+        }
+        if (this.excludedIds.length) {
+            text += `  − ${this.excludedIds.length} excluded`;
+        }
+        return text;
+    }
+}
+
 export class KpiKraReport extends Component {
+    static components = { MultiSelectPicker };
+
     static template = xml/* xml */`
         <div class="o_kpi_kra_report p-4">
             <!-- Header -->
@@ -14,22 +171,44 @@ export class KpiKraReport extends Component {
                     KRA Report
                 </h2>
                 <div>
-                    <button class="btn btn-warning me-2"
-                            t-on-click="downloadZip"
-                            t-if="state.reportGenerated"
-                            title="Download project + per-task PDFs bundled in one ZIP">
-                        <i class="fa fa-file-archive-o me-2"></i>Download ZIP
-                    </button>
+                    <!-- ZIP always carries the project + per-task PDFs; the
+                         dropdown decides which whole-report files ride along. -->
+                    <span class="o_kra_zip_menu me-2" t-if="state.reportGenerated" t-ref="zipMenu">
+                        <button class="btn btn-warning"
+                                t-on-click="toggleZipMenu"
+                                t-att-disabled="isStale"
+                                t-att-title="isStale ? 'Filters changed — click Generate Report first' : 'Bundle the per-task PDFs, plus the full report files you choose'">
+                            <i class="fa fa-file-archive-o me-2"></i>Download ZIP
+                            <i class="fa fa-caret-down ms-2"></i>
+                        </button>
+                        <div class="o_kra_zip_panel shadow" t-if="state.zipMenuOpen">
+                            <div class="o_kra_zip_hint">Include in the ZIP, alongside the per-task PDFs:</div>
+                            <button type="button" class="o_kra_zip_item"
+                                    t-on-click="() => this.downloadZip({ pdf: true })">
+                                <i class="fa fa-file-pdf-o me-2 text-danger"></i>Full PDF only
+                            </button>
+                            <button type="button" class="o_kra_zip_item"
+                                    t-on-click="() => this.downloadZip({ excel: true })">
+                                <i class="fa fa-file-excel-o me-2 text-success"></i>Full Excel only
+                            </button>
+                            <button type="button" class="o_kra_zip_item"
+                                    t-on-click="() => this.downloadZip({ pdf: true, excel: true })">
+                                <i class="fa fa-files-o me-2 text-secondary"></i>Both
+                            </button>
+                        </div>
+                    </span>
                     <button class="btn btn-success me-2"
                             t-on-click="downloadPDF"
                             t-if="state.reportGenerated"
-                            title="Download report as PDF">
+                            t-att-disabled="isStale"
+                            t-att-title="isStale ? 'Filters changed — click Generate Report first' : 'Download report as PDF'">
                         <i class="fa fa-file-pdf-o me-2"></i>Download PDF
                     </button>
                     <button class="btn btn-info me-2"
                             t-on-click="downloadExcel"
                             t-if="state.reportGenerated"
-                            title="Download report as Excel">
+                            t-att-disabled="isStale"
+                            t-att-title="isStale ? 'Filters changed — click Generate Report first' : 'Download report as Excel'">
                         <i class="fa fa-file-excel-o me-2"></i>Download Excel
                     </button>
                     <button class="btn btn-secondary" t-on-click="backToDashboard">
@@ -66,27 +245,52 @@ export class KpiKraReport extends Component {
                         <label class="form-label fw-bold">To Date</label>
                         <input type="date" class="form-control" t-model="state.filters.to_date"/>
                     </div>
-                    <!-- KRA Filter -->
-                    <div class="col-md-3">
+                    <!-- KRA Filter: multi include + multi exclude -->
+                    <div class="col-md-4">
                         <label class="form-label fw-bold">KRA</label>
-                        <select class="form-select" t-model="state.filters.kra_id">
-                            <option value="">All KRAs</option>
-                            <t t-foreach="state.kras" t-as="kra" t-key="kra.id">
-                                <option t-att-value="kra.id">
-                                    <t t-esc="kra.display_name"/>
-                                </option>
-                            </t>
-                        </select>
+                        <MultiSelectPicker
+                            options="state.kras"
+                            selected="state.filters.kra_ids"
+                            excluded="state.filters.excluded_kra_ids"
+                            emptyLabel="'All KRAs'"
+                            hint="'Tick to include, ⊘ to exclude'"
+                            onToggle="(id) => this.toggleKra(id)"
+                            onToggleExcept="(id) => this.toggleKraException(id)"
+                            onClear="() => this.clearKraSelection()"/>
                     </div>
                     <!-- Employee Filter -->
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label class="form-label fw-bold">Employee</label>
-                        <select class="form-select" t-model="state.filters.employee_id">
-                            <option value="">All Employees</option>
-                            <t t-foreach="state.employees" t-as="emp" t-key="emp.id">
-                                <option t-att-value="emp.id" t-esc="emp.name"/>
-                            </t>
-                        </select>
+                        <MultiSelectPicker
+                            options="state.employees"
+                            selected="state.filters.employee_ids"
+                            emptyLabel="'All Employees'"
+                            onToggle="(id) => this.toggleEmployee(id)"
+                            onClear="() => this.clearList('employee_ids')"/>
+                    </div>
+                </div>
+                <div class="row g-3 mt-0">
+                    <!-- Task Type: the external_ref prefix (REQ / UPT / BUG / ...) -->
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">Type</label>
+                        <MultiSelectPicker
+                            options="state.taskTypes"
+                            selected="state.filters.task_types"
+                            emptyLabel="'All Types'"
+                            allOption="true"
+                            onToggle="(id) => this.toggleTaskType(id)"
+                            onClear="() => this.clearList('task_types')"/>
+                    </div>
+                    <!-- Task State -->
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">State</label>
+                        <MultiSelectPicker
+                            options="state.taskStates"
+                            selected="state.filters.task_states"
+                            emptyLabel="'All States'"
+                            allOption="true"
+                            onToggle="(id) => this.toggleTaskState(id)"
+                            onClear="() => this.clearList('task_states')"/>
                     </div>
                 </div>
                 <div class="mt-3 d-flex gap-2">
@@ -101,8 +305,53 @@ export class KpiKraReport extends Component {
                 </div>
             </div>
 
+            <!-- Filters moved on since these results were fetched. Downloads are
+                 blocked rather than warned about: an export that disagrees with
+                 the boxes above it reaches a client as a finished document. -->
+            <t t-if="isStale">
+                <div class="alert alert-warning d-flex align-items-center gap-2">
+                    <i class="fa fa-exclamation-triangle"></i>
+                    <div>
+                        Filters changed — click <b>Generate Report</b> to apply them.
+                        Downloads stay disabled until you do, so an export can never
+                        disagree with the filters above.
+                    </div>
+                </div>
+            </t>
+
             <!-- Report Results -->
             <t t-if="state.reportGenerated">
+                <!-- What the numbers below actually cover. Until now this only
+                     existed in the PDF header, so a stale table looked correct. -->
+                <div class="text-muted small mb-3">
+                    <i class="fa fa-filter me-1"></i>
+                    Showing <b t-esc="state.appliedFilters.kra_name || 'All KRAs'"/>
+                    · <t t-esc="state.appliedFilters.employee_name || 'All Employees'"/>
+                    · <t t-esc="state.appliedFilters.task_type_name || 'All Types'"/>
+                    · <t t-esc="state.appliedFilters.task_state_name || 'All States'"/>
+                    · <t t-esc="state.appliedFilters.from_date"/> → <t t-esc="state.appliedFilters.to_date"/>
+                    <t t-if="state.searchQuery.trim()">
+                        · matching "<t t-esc="state.searchQuery.trim()"/>"
+                    </t>
+                    <t t-if="state.removedRowIds.length">
+                        · <span class="text-danger"><t t-esc="state.removedRowIds.length"/> rows removed</span>
+                    </t>
+                </div>
+
+                <!-- Trimmed rows. Worded "from this report" so nobody reads it
+                     as having deleted actual work. -->
+                <t t-if="state.removedRowIds.length">
+                    <div class="alert alert-secondary py-2 d-flex align-items-center gap-2">
+                        <i class="fa fa-scissors"></i>
+                        <div>
+                            <b t-esc="state.removedRowIds.length"/> row(s) removed from this report —
+                            the tasks themselves are untouched.
+                            <button type="button" class="btn btn-sm btn-link p-0 align-baseline"
+                                    t-on-click="restoreRows">Restore all</button>
+                        </div>
+                    </div>
+                </t>
+
                 <!-- Summary Cards -->
                 <div class="row mb-4">
                     <div class="col-md-4">
@@ -110,7 +359,7 @@ export class KpiKraReport extends Component {
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-0 opacity-75">Total Tasks</h6>
-                                    <h3 class="mb-0 fw-bold" t-esc="state.reportData.length"/>
+                                    <h3 class="mb-0 fw-bold" t-esc="getFilteredData().length"/>
                                 </div>
                                 <i class="fa fa-tasks fa-2x opacity-50"></i>
                             </div>
@@ -159,7 +408,7 @@ export class KpiKraReport extends Component {
                             <table class="table table-bordered table-hover table-sm">
                                 <thead class="table-dark">
                                     <tr>
-                                        <th class="text-center" style="width: 50px;">#</th>
+                                        <th class="text-center" style="width: 64px; white-space: nowrap;">#</th>
                                         <th style="min-width: 280px;">
                                             <i class="fa fa-sitemap me-1"></i>
                                             KRA Hierarchy Path
@@ -176,10 +425,19 @@ export class KpiKraReport extends Component {
                                             <i class="fa fa-user me-1"></i>
                                             Employee
                                         </th>
+                                        <th class="text-center" style="width: 90px;">
+                                            <i class="fa fa-tag me-1"></i>
+                                            Type
+                                        </th>
+                                        <th style="min-width: 140px;">
+                                            <i class="fa fa-info-circle me-1"></i>
+                                            State
+                                        </th>
                                         <th class="text-center" style="width: 120px;">
                                             <i class="fa fa-clock-o me-1"></i>
                                             Time Worked
                                         </th>
+                                        <th class="text-center" style="width: 44px;"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -206,7 +464,23 @@ export class KpiKraReport extends Component {
                                                 <t t-esc="row.employee_name"/>
                                             </td>
                                             <td class="text-center">
+                                                <t t-if="row.task_type">
+                                                    <span class="badge" t-att-class="taskTypeClass(row.task_type)" t-esc="row.task_type"/>
+                                                </t>
+                                                <t t-else="">
+                                                    <span class="text-muted">—</span>
+                                                </t>
+                                            </td>
+                                            <td>
+                                                <span class="badge bg-light text-dark border" t-esc="row.task_state_label || '—'"/>
+                                            </td>
+                                            <td class="text-center">
                                                 <span class="badge bg-info" t-esc="row.time_worked_display"/>
+                                            </td>
+                                            <td class="text-center">
+                                                <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1"
+                                                        title="Remove this row from the report (the task itself is not deleted)"
+                                                        t-on-click="() => this.removeRow(row.id)">✕</button>
                                             </td>
                                         </tr>
                                     </t>
@@ -214,10 +488,11 @@ export class KpiKraReport extends Component {
                                 <tfoot class="table-light fw-bold">
                                     <tr>
                                         <td class="text-center">-</td>
-                                        <td colspan="4">Total</td>
+                                        <td colspan="6">Total</td>
                                         <td class="text-center">
                                             <span class="badge bg-success" t-esc="getTotalTimeWorked()"/>
                                         </td>
+                                        <td></td>
                                     </tr>
                                 </tfoot>
                             </table>
@@ -231,8 +506,10 @@ export class KpiKraReport extends Component {
                     </t>
                 </div>
 
-                <!-- KRA Summary Section -->
-                <t t-if="state.summaryData.length > 0">
+                <!-- KRA Summary Section. Built client-side from getProjectSummary()
+                     rather than the server's payload, so it follows the search box
+                     and any removed rows instead of quietly showing the full set. -->
+                <t t-if="getProjectSummary().length > 0">
                     <div class="card p-4 mt-4 shadow-sm">
                         <h5 class="fw-bold mb-3">
                             <i class="fa fa-bar-chart me-2 text-secondary"></i>
@@ -249,14 +526,14 @@ export class KpiKraReport extends Component {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <t t-foreach="state.summaryData" t-as="summary" t-key="summary.kra_path">
+                                    <t t-foreach="getProjectSummary()" t-as="summary" t-key="summary.kra_path">
                                         <tr>
                                             <td style="font-size: 0.95rem;" t-esc="summary.kra_path"/>
                                             <td class="text-center">
-                                                <span class="badge bg-primary" t-esc="summary.kpi_count"/>
+                                                <span class="badge bg-primary" t-esc="summary.task_count"/>
                                             </td>
                                             <td class="text-center">
-                                                <span class="badge bg-info" t-esc="summary.total_time_display"/>
+                                                <span class="badge bg-info" t-esc="summary.total_display"/>
                                             </td>
                                             <td class="text-center">
                                                 <span class="badge bg-secondary" t-esc="summary.employee_count"/>
@@ -294,21 +571,182 @@ export class KpiKraReport extends Component {
             filters: {
                 from_date: today,
                 to_date: today,
-                employee_id: '',
-                kra_id: '',
+                employee_ids: [],
+                kra_ids: [],
+                excluded_kra_ids: [],
+                task_types: [],
+                task_states: [],
                 time_frame: '',
             },
             kras: [],
             employees: [],
+            taskTypes: [],
+            taskStates: [],
             reportData: [],
-            summaryData: [],
             searchQuery: '',
+            // Rows trimmed out of THIS report before sending it. The kra.kpi
+            // records are untouched and return on the next Generate.
+            removedRowIds: [],
             appliedFilters: {},
+            zipMenuOpen: false,
+            // Signature of the filters that produced state.reportData, so we can
+            // tell when the boxes have moved on since the last Generate.
+            generatedSignature: '',
         });
+
+        this.zipMenuRef = useRef("zipMenu");
+        useExternalListener(window, "click", (ev) => {
+            const el = this.zipMenuRef.el;
+            if (this.state.zipMenuOpen && el && !el.contains(ev.target)) {
+                this.state.zipMenuOpen = false;
+            }
+        });
+
+        // Counts follow whatever the filters currently say. Keyed on the same
+        // signature the stale-results guard uses, so it fires for the date
+        // inputs and Quick Select too — not just the pickers.
+        this._countsTimer = null;
+        useEffect(
+            () => { this.scheduleCountRefresh(); },
+            () => [this.filtersSignature()]
+        );
 
         onWillStart(async () => {
             await this.loadFilterOptions();
+            await this.refreshFilterCounts();
         });
+    }
+
+    // ---- Live filter counts --------------------------------------------- //
+
+    scheduleCountRefresh() {
+        clearTimeout(this._countsTimer);
+        this._countsTimer = setTimeout(() => this.refreshFilterCounts(), 250);
+    }
+
+    async refreshFilterCounts() {
+        const issuedFor = this.filtersSignature();
+        try {
+            const result = await rpc('/kpi_reports/kra/filter_counts', {
+                from_date: this.state.filters.from_date,
+                to_date: this.state.filters.to_date,
+                employee_ids: this.state.filters.employee_ids,
+                kra_ids: this.state.filters.kra_ids,
+                excluded_kra_ids: this.state.filters.excluded_kra_ids,
+                task_types: this.state.filters.task_types,
+                task_states: this.state.filters.task_states,
+            });
+            // A slower earlier reply must not overwrite a newer one.
+            if (!result.status || issuedFor !== this.filtersSignature()) {
+                return;
+            }
+            this.applyCounts(this.state.kras, result.kras);
+            this.applyCounts(this.state.employees, result.employees);
+            this.applyCounts(this.state.taskTypes, result.task_types);
+            this.applyCounts(this.state.taskStates, result.task_states);
+        } catch (error) {
+            console.error('Error refreshing filter counts:', error);
+        }
+    }
+
+    /** Absent from the reply means nothing matched, so 0 rather than "unknown". */
+    applyCounts(options, counts) {
+        const byId = counts || {};
+        for (const opt of options) {
+            opt.task_count = byId[opt.id] || 0;
+        }
+    }
+
+    // ---- Stale-results guard -------------------------------------------- //
+
+    /**
+     * Identity of the current filter selection.
+     *
+     * The id arrays are sorted so that ticking A-then-B and B-then-A read as the
+     * same filter rather than a spurious change. time_frame is deliberately left
+     * out: it is only a shortcut that writes from_date / to_date, and those are
+     * already compared — including it would flag "Today" as changed even when the
+     * dates it set are identical.
+     */
+    filtersSignature() {
+        const f = this.state.filters;
+        return JSON.stringify({
+            from_date: f.from_date,
+            to_date: f.to_date,
+            employee_ids: [...f.employee_ids].sort((a, b) => a - b),
+            kra_ids: [...f.kra_ids].sort((a, b) => a - b),
+            excluded_kra_ids: [...f.excluded_kra_ids].sort((a, b) => a - b),
+            task_types: [...f.task_types].sort(),
+            task_states: [...f.task_states].sort(),
+        });
+    }
+
+    get isStale() {
+        return this.state.reportGenerated
+            && this.filtersSignature() !== this.state.generatedSignature;
+    }
+
+    // ---- Filter selections ---------------------------------------------- //
+
+    /** Add or remove a value from one of the filter arrays, in place. */
+    _toggleIn(list, value) {
+        const at = list.indexOf(value);
+        if (at === -1) {
+            list.push(value);
+        } else {
+            list.splice(at, 1);
+        }
+    }
+
+    clearList(name) {
+        this.state.filters[name] = [];
+    }
+
+    toggleKra(kraId) {
+        this._toggleIn(this.state.filters.kra_ids, kraId);
+        if (this.state.filters.kra_ids.includes(kraId)) {
+            // Including a KRA cancels any exception on it.
+            this.state.filters.excluded_kra_ids =
+                this.state.filters.excluded_kra_ids.filter((id) => id !== kraId);
+        }
+    }
+
+    toggleKraException(kraId) {
+        this._toggleIn(this.state.filters.excluded_kra_ids, kraId);
+        if (this.state.filters.excluded_kra_ids.includes(kraId)) {
+            // Exclude wins over include, so drop it from the include list.
+            this.state.filters.kra_ids =
+                this.state.filters.kra_ids.filter((id) => id !== kraId);
+        }
+    }
+
+    clearKraSelection() {
+        this.state.filters.kra_ids = [];
+        this.state.filters.excluded_kra_ids = [];
+    }
+
+    toggleEmployee(userId) {
+        this._toggleIn(this.state.filters.employee_ids, userId);
+    }
+
+    toggleTaskType(prefix) {
+        this._toggleIn(this.state.filters.task_types, prefix);
+    }
+
+    toggleTaskState(code) {
+        this._toggleIn(this.state.filters.task_states, code);
+    }
+
+    // ---- Trimming rows out of this report -------------------------------- //
+
+    removeRow(rowId) {
+        if (!this.state.removedRowIds.includes(rowId)) {
+            this.state.removedRowIds.push(rowId);
+        }
+    }
+
+    restoreRows() {
+        this.state.removedRowIds = [];
     }
 
     async loadFilterOptions() {
@@ -317,6 +755,8 @@ export class KpiKraReport extends Component {
             if (result.status) {
                 this.state.kras = result.kras || [];
                 this.state.employees = result.employees || [];
+                this.state.taskTypes = result.task_types || [];
+                this.state.taskStates = result.task_states || [];
             }
         } catch (error) {
             console.error('Error loading filter options:', error);
@@ -357,15 +797,21 @@ export class KpiKraReport extends Component {
             const result = await rpc('/kpi_reports/kra/generate', {
                 from_date: this.state.filters.from_date,
                 to_date: this.state.filters.to_date,
-                employee_id: this.state.filters.employee_id || false,
-                kra_id: this.state.filters.kra_id || false,
+                employee_ids: this.state.filters.employee_ids,
+                kra_ids: this.state.filters.kra_ids,
+                excluded_kra_ids: this.state.filters.excluded_kra_ids,
+                task_types: this.state.filters.task_types,
+                task_states: this.state.filters.task_states,
                 time_frame: this.state.filters.time_frame || false,
             });
             
             if (result.status) {
                 this.state.reportData = result.data || [];
-                this.state.summaryData = result.summary || [];
                 this.state.appliedFilters = result.filters || {};
+                // Only on success: a failed run must leave the previous results
+                // marked stale rather than blessing them as current.
+                this.state.removedRowIds = [];
+                this.state.generatedSignature = this.filtersSignature();
                 this.state.reportGenerated = true;
             } else {
                 alert('Error generating report: ' + (result.message || 'Unknown error'));
@@ -383,10 +829,14 @@ export class KpiKraReport extends Component {
         this.state.filters = {
             from_date: today,
             to_date: today,
-            employee_id: '',
-            kra_id: '',
+            employee_ids: [],
+            kra_ids: [],
+            excluded_kra_ids: [],
+            task_types: [],
+            task_states: [],
             time_frame: '',
         };
+        this.state.removedRowIds = [];
         this.state.searchQuery = '';
     }
 
@@ -394,18 +844,38 @@ export class KpiKraReport extends Component {
         // Search is reactive through getFilteredData()
     }
 
+    /**
+     * The rows every number on this screen is derived from — the cards, the
+     * table footer, the KRA Summary, the PDF, the spreadsheet and the ZIP all
+     * read through here, so a removed row can never leave a stale total behind.
+     */
     getFilteredData() {
+        const removed = this.state.removedRowIds;
+        const kept = removed.length
+            ? this.state.reportData.filter(row => !removed.includes(row.id))
+            : this.state.reportData;
+
         if (!this.state.searchQuery.trim()) {
-            return this.state.reportData;
+            return kept;
         }
-        
+
         const query = this.state.searchQuery.toLowerCase().trim();
-        return this.state.reportData.filter(row => 
+        return kept.filter(row =>
             row.kra_path.toLowerCase().includes(query) ||
             row.sub_kra.toLowerCase().includes(query) ||
             row.kpi_name.toLowerCase().includes(query) ||
-            row.employee_name.toLowerCase().includes(query)
+            row.employee_name.toLowerCase().includes(query) ||
+            (row.task_type || '').toLowerCase().includes(query) ||
+            (row.task_state_label || '').toLowerCase().includes(query)
         );
+    }
+
+    /**
+     * Colour for the Requirement / Update / Bug badge, matching the palette the
+     * Accept dialog uses so the same task reads the same way in both screens.
+     */
+    taskTypeClass(taskType) {
+        return typeStyle(taskType).cls;
     }
 
     getTotalTimeWorked() {
@@ -587,11 +1057,12 @@ export class KpiKraReport extends Component {
             styles: { fontSize: 8.5, cellPadding: 2, overflow: 'linebreak' },
             headStyles: { fillColor: [52, 58, 64], textColor: 255, fontStyle: 'bold' },
             alternateRowStyles: { fillColor: [245, 245, 245] },
+            // Pin only the narrow fixed-content columns; the text columns are
+            // left auto so autoTable distributes the rest of the printable
+            // width. Hand-tuned millimetres drifted past the page edge before.
             columnStyles: {
-                0: { cellWidth: 10 },
-                1: { cellWidth: 20 },
-                2: { cellWidth: 95 },
-                3: { cellWidth: 40 },
+                0: { cellWidth: 12, halign: 'center', overflow: 'visible' },
+                1: { cellWidth: 22 },
                 4: { cellWidth: 26, halign: 'right' },
             },
             didParseCell: (cd) => {
@@ -618,7 +1089,7 @@ export class KpiKraReport extends Component {
         doc.text(this.formatKraPathForPdf(row.kpi_name || 'Task'), 14, 12);
         doc.setFontSize(9);
         doc.setFont(undefined, 'normal');
-        doc.text(`Ref: ${row.external_ref || '—'}    State: ${row.task_state || '—'}`, 14, 18);
+        doc.text(`Ref: ${row.external_ref || '—'}    State: ${row.task_state_label || row.task_state || '—'}`, 14, 18);
 
         doc.setTextColor(0, 0, 0);
         doc.setFontSize(10);
@@ -628,8 +1099,9 @@ export class KpiKraReport extends Component {
                 ['KRA Hierarchy', this.formatKraPathForPdf(row.kra_path || '')],
                 ['Sub-KRA', row.sub_kra || '—'],
                 ['External Ref', row.external_ref || '—'],
+                ['Type', row.task_type || '—'],
                 ['Priority', row.priority || '—'],
-                ['Task State', row.task_state || '—'],
+                ['Task State', row.task_state_label || row.task_state || '—'],
                 ['Deadline', row.deadline || '—'],
                 ['Primary Assignee', row.employee_name || '—'],
                 ['Total Time Worked', row.time_worked_display || '0h 0m'],
@@ -637,7 +1109,9 @@ export class KpiKraReport extends Component {
             startY: 28,
             styles: { fontSize: 9.5, cellPadding: 2.5 },
             headStyles: { fillColor: [52, 58, 64], textColor: 255, fontStyle: 'bold' },
-            columnStyles: { 0: { cellWidth: 55, fontStyle: 'bold' }, 1: { cellWidth: 130 } },
+            // Label pinned, value auto — so a long KRA path can never push the
+            // table past the right margin.
+            columnStyles: { 0: { cellWidth: 50, fontStyle: 'bold' } },
         });
 
         // User-breakdown table
@@ -665,17 +1139,26 @@ export class KpiKraReport extends Component {
             styles: { fontSize: 9.5, cellPadding: 2.5 },
             headStyles: { fillColor: [33, 136, 56], textColor: 255, fontStyle: 'bold' },
             columnStyles: {
-                0: { cellWidth: 12 },
-                1: { cellWidth: 95 },
-                2: { cellWidth: 40, halign: 'right' },
-                3: { cellWidth: 40, halign: 'right' },
+                0: { cellWidth: 12, halign: 'center', overflow: 'visible' },
+                2: { cellWidth: 38, halign: 'right' },
+                3: { cellWidth: 38, halign: 'right' },
             },
         });
 
         return doc.output('blob');
     }
 
-    async downloadZip() {
+    toggleZipMenu() {
+        this.state.zipMenuOpen = !this.state.zipMenuOpen;
+    }
+
+    /**
+     * @param {{pdf?: boolean, excel?: boolean}} include - whole-report files to
+     *   add at the top level. The project + per-task PDFs are always included:
+     *   they are the reason the ZIP exists.
+     */
+    async downloadZip(include = {}) {
+        this.state.zipMenuOpen = false;
         try {
             if (!window.JSZip) {
                 alert('JSZip not loaded yet. Refresh the page and try again.');
@@ -702,6 +1185,20 @@ export class KpiKraReport extends Component {
             }
 
             const zip = new window.JSZip();
+
+            const fromLabel = this.state.filters.from_date || 'all';
+            const toLabel = this.state.filters.to_date || 'all';
+
+            // Whole-report files, built from the same code the standalone
+            // buttons use so the ZIP copy can never differ from the direct one.
+            if (include.pdf) {
+                zip.file(`KRA_Report_${fromLabel}_to_${toLabel}_full.pdf`,
+                         this._buildFullReportPdf().output('blob'));
+            }
+            if (include.excel) {
+                const buffer = await this._buildWorkbook().xlsx.writeBuffer();
+                zip.file(`KRA_Report_${fromLabel}_to_${toLabel}_full.xlsx`, buffer);
+            }
 
             for (const [projectName, projectRows] of groups.entries()) {
                 const safeProject = this._safeFilename(projectName);
@@ -735,8 +1232,12 @@ export class KpiKraReport extends Component {
         }
     }
 
-    async downloadPDF() {
-        try {
+    /**
+     * The full report as a jsPDF doc. Split out from downloadPDF so the ZIP can
+     * embed exactly the same document rather than building a second one.
+     */
+    _buildFullReportPdf() {
+        {
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF('l', 'mm', 'a4'); // Landscape for more columns
             
@@ -744,6 +1245,14 @@ export class KpiKraReport extends Component {
             const toDate = this.state.filters.to_date;
             const filterKra = this.state.appliedFilters.kra_name || 'All KRAs';
             const filterEmployee = this.state.appliedFilters.employee_name || 'All Employees';
+            // The search box narrows the exported rows too, so the file has to
+            // say so — otherwise a client gets a partial report that looks whole.
+            const search = this.state.searchQuery.trim();
+            const filterSearch = search ? ` | Search: "${search}"` : '';
+            // A trimmed report must never be mistaken for a complete one.
+            const trimmed = this.state.removedRowIds.length
+                ? ` | ${this.state.removedRowIds.length} rows removed`
+                : '';
             
             // Header
             doc.setFillColor(52, 58, 64);
@@ -758,7 +1267,10 @@ export class KpiKraReport extends Component {
             doc.setFont(undefined, 'normal');
             doc.text(`Generated: ${new Date().toLocaleString()}`, 200, 10);
             doc.text(`Period: ${fromDate} to ${toDate}`, 200, 15);
-            doc.text(`KRA: ${filterKra} | Employee: ${filterEmployee}`, 200, 20);
+            doc.text(`KRA: ${filterKra} | Employee: ${filterEmployee}${filterSearch}`, 200, 20);
+            doc.text(`Type: ${this.state.appliedFilters.task_type_name || 'All Types'}`
+                     + ` | State: ${this.state.appliedFilters.task_state_name || 'All States'}`
+                     + trimmed, 200, 25);
             
             // Summary Stats
             doc.setTextColor(0, 0, 0);
@@ -769,7 +1281,7 @@ export class KpiKraReport extends Component {
             const summaryY = 40;
             doc.setFontSize(9);
             doc.setFont(undefined, 'normal');
-            doc.text(`Total Tasks: ${this.state.reportData.length}`, 14, summaryY);
+            doc.text(`Total Tasks: ${this.getFilteredData().length}`, 14, summaryY);
             doc.text(`Total Time Worked: ${this.getTotalTimeWorked()}`, 100, summaryY);
             doc.text(`Employees: ${this.getUniqueEmployeeCount()}`, 200, summaryY);
             
@@ -805,10 +1317,8 @@ export class KpiKraReport extends Component {
                 headStyles: { fillColor: [33, 136, 56], textColor: 255, fontStyle: 'bold' },
                 alternateRowStyles: { fillColor: [240, 248, 240] },
                 columnStyles: {
-                    0: { cellWidth: 12 },
-                    1: { cellWidth: 110 },
-                    2: { cellWidth: 20, halign: 'right' },
-                    3: { cellWidth: 110 },
+                    0: { cellWidth: 12, halign: 'center', overflow: 'visible' },
+                    2: { cellWidth: 18, halign: 'right' },
                     4: { cellWidth: 30, halign: 'right' },
                 },
                 didParseCell: (cellData) => {
@@ -831,16 +1341,20 @@ export class KpiKraReport extends Component {
                 'Sub KRA',
                 'Task Name',
                 'Employee',
+                'Type',
+                'State',
                 'Time Worked'
             ]];
 
-            // Table data (removed Status, use > instead of → for PDF)
+            // Table data (use > instead of → for PDF)
             const data = this.getFilteredData().map((row, index) => [
                 index + 1,
                 this.formatKraPathForPdf(row.kra_path),
                 row.sub_kra,
                 row.kpi_name,
                 row.employee_name,
+                row.task_type || '-',
+                row.task_state_label || '-',
                 row.time_worked_display
             ]);
 
@@ -851,6 +1365,8 @@ export class KpiKraReport extends Component {
                 '-',
                 `${this.getFilteredData().length} Tasks`,
                 `${this.getUniqueEmployeeCount()} Employees`,
+                '-',
+                '-',
                 this.getTotalTimeWorked()
             ]);
 
@@ -873,18 +1389,29 @@ export class KpiKraReport extends Component {
                     fillColor: [245, 245, 245]
                 },
                 columnStyles: {
-                    0: { cellWidth: 12 },    // #
-                    1: { cellWidth: 95 },    // KRA Path (wider)
-                    2: { cellWidth: 40 },    // Sub KRA
-                    3: { cellWidth: 70 },    // Task Name
-                    4: { cellWidth: 45 },    // Employee
-                    5: { cellWidth: 30 },    // Time
+                    0: { cellWidth: 12, halign: 'center', overflow: 'visible' },  // # — never wrap a serial
+                    5: { cellWidth: 16, halign: 'center' },  // Type
+                    7: { cellWidth: 24, halign: 'right' },   // Time
+                    // Path / Sub KRA / Task Name / Employee / State stay auto.
                 },
                 didParseCell: (cellData) => {
+                    const isTotals = cellData.row.index === data.length - 1;
                     // Bold the totals row
-                    if (cellData.row.index === data.length - 1) {
+                    if (isTotals) {
                         cellData.cell.styles.fillColor = [236, 240, 241];
                         cellData.cell.styles.fontStyle = 'bold';
+                        return;
+                    }
+                    // Type column, coloured to match the web badges. Body rows
+                    // only — the header keeps the table's own dark fill.
+                    if (cellData.section === 'body' && cellData.column.index === 5) {
+                        const raw = cellData.cell.raw;
+                        if (raw && raw !== '-') {
+                            const style = typeStyle(raw);
+                            cellData.cell.styles.fillColor = style.rgb;
+                            cellData.cell.styles.textColor = style.text;
+                            cellData.cell.styles.fontStyle = 'bold';
+                        }
                     }
                 }
             });
@@ -899,90 +1426,168 @@ export class KpiKraReport extends Component {
                 doc.text(`Page ${i} of ${pageCount}`, 260, 200);
             }
             
-            // Save
-            const filename = `KRA_Report_${fromDate}_to_${toDate}.pdf`;
-            doc.save(filename);
-            
+            return doc;
+        }
+    }
+
+    async downloadPDF() {
+        try {
+            const doc = this._buildFullReportPdf();
+            const fromDate = this.state.filters.from_date;
+            const toDate = this.state.filters.to_date;
+            doc.save(`KRA_Report__to_.pdf`);
         } catch (error) {
             console.error('Error generating PDF:', error);
             alert('Error generating PDF. Please try again.');
         }
     }
 
+    /**
+     * The full report as an ExcelJS workbook. Split out from downloadExcel so
+     * the ZIP can embed the identical spreadsheet.
+     *
+     * TWO sheets, not one stacked sheet: the summary table has 7 columns and the
+     * detail table has 9, and a worksheet carries a single set of column widths —
+     * so one sheet could never fit both. It also keeps each freeze small. An
+     * earlier single-sheet version froze at the detail header (~row 32), which
+     * made the frozen block taller than the window and left nothing to scroll.
+     */
+    _buildWorkbook() {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'KRA / KPI Management System';
+        workbook.created = new Date();
+
+        const HEAD_FILL = 'FF343A40';   // same slate as the PDF header
+        const TOTAL_FILL = 'FFECF0F1';
+        const rows = this.getFilteredData();
+        const totalHours = +(rows.reduce((s, r) => s + (r.time_worked_seconds || 0), 0) / 3600).toFixed(2);
+
+        const paintHeader = (row) => {
+            row.eachCell((cell) => {
+                cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD_FILL } };
+                cell.alignment = { vertical: 'middle', wrapText: true };
+            });
+            return row;
+        };
+        const paintTotal = (row) => {
+            row.eachCell((cell) => {
+                cell.font = { bold: true };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TOTAL_FILL } };
+            });
+            return row;
+        };
+
+        // What this export actually covers. Kept on both tabs so neither can be
+        // forwarded on its own and read as the complete picture.
+        const search = this.state.searchQuery.trim();
+        const removed = this.state.removedRowIds.length;
+        const scope = `Period ${this.state.filters.from_date} to ${this.state.filters.to_date}`
+            + ` | KRA: ${this.state.appliedFilters.kra_name || 'All KRAs'}`
+            + ` | Employee: ${this.state.appliedFilters.employee_name || 'All Employees'}`
+            + ` | Type: ${this.state.appliedFilters.task_type_name || 'All Types'}`
+            + ` | State: ${this.state.appliedFilters.task_state_name || 'All States'}`
+            + (search ? ` | Search: "${search}"` : '')
+            + (removed ? ` | ${removed} rows removed` : '');
+
+        // ================= Sheet 1: Summary =================
+        const s1 = workbook.addWorksheet('Summary');
+        s1.columns = [{ width: 6 }, { width: 52 }, { width: 10 }, { width: 12 },
+                      { width: 46 }, { width: 14 }, { width: 16 }];
+
+        s1.addRow(['KRA Report']).font = { bold: true, size: 14 };
+        s1.addRow([`Period: ${this.state.filters.from_date} to ${this.state.filters.to_date}`]);
+        s1.addRow([`KRA: ${this.state.appliedFilters.kra_name || 'All KRAs'}`]);
+        s1.addRow([`Employee: ${this.state.appliedFilters.employee_name || 'All Employees'}`]);
+        s1.addRow([`Type: ${this.state.appliedFilters.task_type_name || 'All Types'}`
+            + ` | State: ${this.state.appliedFilters.task_state_name || 'All States'}`]);
+        if (search) {
+            s1.addRow([`Search: "${search}"`]);
+        }
+        if (removed) {
+            s1.addRow([`${removed} rows removed from this report`]).font = { bold: true };
+        }
+        s1.addRow([]);
+
+        const s1Header = paintHeader(s1.addRow(['#', 'KRA Hierarchy Path', 'Tasks',
+            'Employees', 'Employee Names', 'Total Hours', 'Total Time']));
+
+        const projectSummary = this.getProjectSummary();
+        projectSummary.forEach((g, i) => {
+            const row = s1.addRow([i + 1, g.kra_path, g.task_count, g.employee_count,
+                                   g.employees, g.total_hours, g.total_display]);
+            row.getCell(6).numFmt = '0.00';
+        });
+        const s1Total = paintTotal(s1.addRow(['', 'GRAND TOTAL',
+            projectSummary.reduce((s, g) => s + g.task_count, 0),
+            this.getUniqueEmployeeCount(), '', totalHours, this.getTotalTimeWorked()]));
+        s1Total.getCell(6).numFmt = '0.00';
+
+        // Small enough to always leave a scrollable region below it.
+        s1.views = [{ state: 'frozen', ySplit: s1Header.number }];
+
+        // ================= Sheet 2: Task Details =================
+        const s2 = workbook.addWorksheet('Task Details');
+        s2.columns = [{ width: 6 }, { width: 46 }, { width: 24 }, { width: 44 },
+                      { width: 20 }, { width: 10 }, { width: 26 }, { width: 14 }, { width: 14 }];
+
+        s2.addRow([scope]).font = { italic: true, color: { argb: 'FF6C757D' } };
+        const s2Header = paintHeader(s2.addRow(['#', 'KRA Hierarchy Path', 'Sub KRA', 'Task Name',
+            'Employee', 'Type', 'State', 'Total Hours', 'Time Worked']));
+        const TYPE_COL = 6;
+
+        rows.forEach((row, index) => {
+            const added = s2.addRow([
+                index + 1, row.kra_path, row.sub_kra, row.kpi_name, row.employee_name,
+                row.task_type || '-', row.task_state_label || '-',
+                row.time_worked_hours, row.time_worked_display,
+            ]);
+            added.getCell(8).numFmt = '0.00';
+            // Type badge, same palette as the web table and the PDF.
+            if (row.task_type) {
+                const style = typeStyle(row.task_type);
+                const cell = added.getCell(TYPE_COL);
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: style.argb } };
+                cell.font = { bold: true, color: { argb: style.fg } };
+                cell.alignment = { horizontal: 'center' };
+            }
+        });
+        const s2Total = paintTotal(s2.addRow(['', 'TOTAL', '', `${rows.length} Tasks`,
+            `${this.getUniqueEmployeeCount()} Employees`, '', '', totalHours,
+            this.getTotalTimeWorked()]));
+        s2Total.getCell(8).numFmt = '0.00';
+
+        // Header only: two frozen rows can never swallow the viewport.
+        s2.views = [{ state: 'frozen', ySplit: s2Header.number }];
+        s2.autoFilter = {
+            from: { row: s2Header.number, column: 1 },
+            to: { row: s2Header.number, column: 9 },
+        };
+
+        return workbook;
+    }
+
     async downloadExcel() {
         try {
-            const q = (s) => `"${String(s == null ? '' : s).replace(/"/g, '""')}"`;
-            let csv = '';
-
-            // -------- SECTION A: Project-wise summary --------
-            csv += 'PROJECT-WISE SUMMARY\n';
-            csv += ['#', 'KRA Hierarchy Path', 'Tasks', 'Employees Count', 'Employees', 'Total Time (Hours)', 'Total Time (Display)'].join(',') + '\n';
-            const projectSummary = this.getProjectSummary();
-            projectSummary.forEach((g, i) => {
-                csv += [
-                    i + 1,
-                    q(g.kra_path),
-                    g.task_count,
-                    g.employee_count,
-                    q(g.employees),
-                    g.total_hours,
-                    q(g.total_display),
-                ].join(',') + '\n';
+            const workbook = this._buildWorkbook();
+            const buffer = await workbook.xlsx.writeBuffer();
+            const blob = new Blob([buffer], {
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             });
-            csv += [
-                '-', q('GRAND TOTAL'),
-                projectSummary.reduce((s, g) => s + g.task_count, 0),
-                this.getUniqueEmployeeCount(),
-                q(''),
-                +(this.getFilteredData().reduce((s, r) => s + (r.time_worked_seconds || 0), 0) / 3600).toFixed(2),
-                q(this.getTotalTimeWorked()),
-            ].join(',') + '\n';
-
-            // Blank separator
-            csv += '\n';
-
-            // -------- SECTION B: Task-wise details --------
-            csv += 'TASK-WISE DETAILS\n';
-            const headers = ['#', 'KRA Hierarchy Path', 'Sub KRA', 'Task Name', 'Employee', 'Time Worked (Hours)', 'Time Worked (Display)'];
-            csv += headers.join(',') + '\n';
-
-            this.getFilteredData().forEach((row, index) => {
-                const rowData = [
-                    index + 1,
-                    q(row.kra_path),
-                    q(row.sub_kra),
-                    q(row.kpi_name),
-                    q(row.employee_name),
-                    row.time_worked_hours,
-                    q(row.time_worked_display),
-                ];
-                csv += rowData.join(',') + '\n';
-            });
-
-            // Add totals row
-            csv += [
-                '-', q('TOTAL'), q('-'),
-                q(`${this.getFilteredData().length} Tasks`),
-                q(`${this.getUniqueEmployeeCount()} Employees`),
-                +(this.getFilteredData().reduce((s, r) => s + (r.time_worked_seconds || 0), 0) / 3600).toFixed(2),
-                q(this.getTotalTimeWorked()),
-            ].join(',') + '\n';
-            
-            // Download
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement('a');
             const url = URL.createObjectURL(blob);
-            
+
             const fromDate = this.state.filters.from_date;
             const toDate = this.state.filters.to_date;
-            
+
             link.setAttribute('href', url);
-            link.setAttribute('download', `KRA_Report_${fromDate}_to_${toDate}.csv`);
+            link.setAttribute('download', `KRA_Report_${fromDate}_to_${toDate}.xlsx`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            
+            URL.revokeObjectURL(url);
+
         } catch (error) {
             console.error('Error generating Excel:', error);
             alert('Error generating Excel. Please try again.');

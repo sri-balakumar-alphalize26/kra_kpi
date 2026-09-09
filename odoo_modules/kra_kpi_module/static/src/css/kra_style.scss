@@ -1191,6 +1191,26 @@
         height: 320px;
         opacity: 0.08;
     }
+
+    /* The call-to-action sits over the animated gradient, so it needs its own
+       shadow to read as a raised control rather than a painted-on rectangle. */
+    .o_kra_welcome_cta {
+        padding: 0.65rem 1.75rem;
+        border-radius: 999px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+
+        &:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+        }
+
+        &:active {
+            transform: translateY(0);
+        }
+    }
 }
 
 /* =========================================================
@@ -1595,5 +1615,130 @@
     to {
         opacity: 1;
         transform: translateX(0);
+    }
+}
+/* KRA Report — multi include / exclude picker */
+.o_kra_picker {
+    position: relative;
+
+    .o_kra_picker_toggle {
+        cursor: pointer;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .o_kra_picker_panel {
+        position: absolute;
+        z-index: 1050;
+        top: calc(100% + 2px);
+        left: 0;
+        right: 0;
+        max-height: 320px;
+        overflow-y: auto;
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 0.375rem;
+        padding: 0.25rem 0;
+    }
+
+    .o_kra_picker_actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0.75rem 0.5rem;
+        border-bottom: 1px solid #eee;
+    }
+
+    .o_kra_picker_row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.2rem 0.75rem;
+
+        &:hover {
+            background: #f6f8fa;
+        }
+
+        &.is-excluded .o_kra_picker_name {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        /* Nothing would come back for this option under the other filters.
+           Kept in place rather than hidden so the list length is stable and
+           rows don't jump under the cursor while filtering. */
+        &.is-empty .o_kra_picker_name {
+            opacity: 0.4;
+            cursor: default;
+        }
+    }
+
+    .o_kra_picker_name {
+        display: flex;
+        align-items: center;
+        flex: 1 1 auto;
+        margin: 0;
+        cursor: pointer;
+        font-weight: 400;
+    }
+
+    .o_kra_picker_except {
+        flex: 0 0 auto;
+        line-height: 1;
+        padding: 0.1rem 0.4rem;
+    }
+
+    /* Task count per option. On the KRA list this is what separates the 21
+       root/child pairs that carry the identical name. */
+    .o_kra_picker_count {
+        flex: 0 0 auto;
+        min-width: 2.2rem;
+        background: #eef1f4;
+        color: #5c6773;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+/* KRA Report — Download ZIP dropdown */
+.o_kra_zip_menu {
+    position: relative;
+    display: inline-block;
+
+    .o_kra_zip_panel {
+        position: absolute;
+        z-index: 1050;
+        top: calc(100% + 4px);
+        right: 0;
+        min-width: 260px;
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 0.375rem;
+        padding: 0.25rem 0;
+        text-align: left;
+    }
+
+    .o_kra_zip_hint {
+        padding: 0.4rem 0.9rem 0.5rem;
+        font-size: 0.8rem;
+        color: #6c757d;
+        border-bottom: 1px solid #eee;
+    }
+
+    .o_kra_zip_item {
+        display: block;
+        width: 100%;
+        border: 0;
+        background: none;
+        text-align: left;
+        padding: 0.45rem 0.9rem;
+        white-space: nowrap;
+
+        &:hover {
+            background: #f6f8fa;
+        }
     }
 }
