@@ -3762,6 +3762,19 @@ class KpiReportsAPI(http.Controller):
             except Exception:
                 payload['wa_group_name'] = ''
                 payload['wa_group_end_posts'] = False
+            # Which of today's tasks have no progress note yet. Carried on THIS
+            # payload rather than fetched separately because the End Workday modal
+            # already waits on this call — the check costs nothing extra.
+            #
+            # Advisory only. /kpi_workday/end must never refuse to close a day (see
+            # its docstring), so this warns and the developer may still go home.
+            try:
+                payload['missing_progress'] = Session._tasks_missing_progress_today(user=user)
+            except Exception as exc:
+                # A broken warning must not stop someone ending their day.
+                import logging
+                logging.getLogger(__name__).warning("missing_progress failed: %s", exc)
+                payload['missing_progress'] = []
             return payload
         except Exception as e:
             import logging

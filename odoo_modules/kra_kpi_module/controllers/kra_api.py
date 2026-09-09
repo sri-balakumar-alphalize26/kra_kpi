@@ -1490,6 +1490,11 @@ class KraKpiAPI(http.Controller):
                 'employee_name': p.employee_name or '',
                 'create_date': convert_to_user_tz(p.create_date),
                 'related_links': p.related_links or '[]',
+                # Whether THIS user may edit or delete the entry. The app reads its
+                # progress history from here, not from /kpi/progress/list, so
+                # without this the edit and delete controls have nothing to gate on
+                # and would have to re-derive a rule the server already owns.
+                'can_edit': self._may_edit_progress(p),
             } for p in progress],
             'github': [{
                 'id': g.id,
@@ -3197,27 +3202,37 @@ class KraKpiAPI(http.Controller):
             or user.has_group('base.group_system')
         )
 
-        # Project picker — sibling sub-KRAs under the same root client.
-        # Walk up to root and enumerate descendants so user can move the task
-        # to a different project under the same client.
+        # Project picker — EVERY KRA, grouped by client.
+        #
+        # It used to list only the descendants of this task's own root client, minus
+        # the root itself. Two things were wrong with that: a task filed under the
+        # wrong client could not be corrected here at all, and a task with no kra_id
+        # got an empty dropdown — while the save route's guard, which only fires when
+        # the task already HAS a root, happily let that same task go anywhere.
+        #
+        # Moving a task between clients is still the dangerous one, so it is not
+        # silent: the save route asks for confirmation naming both clients (see
+        # update_kpi_meta). Listing it and gating it beats hiding it.
         available_kras = []
-        if kpi.kra_id:
-            root = kpi.kra_id
+        for k in request.env['kra.master'].sudo().search([]):
+            path = []
+            cur = k
+            while cur:
+                path.insert(0, cur.name or '')
+                cur = cur.parent_id
+            root = k
             while root.parent_id:
                 root = root.parent_id
-            for kid in root._get_descendant_ids():
-                k = request.env['kra.master'].sudo().browse(kid)
-                if not k.exists() or k.id == root.id:
-                    continue
-                path = []
-                cur = k
-                while cur:
-                    path.insert(0, cur.name or '')
-                    cur = cur.parent_id
-                available_kras.append({
-                    'id': k.id, 'name': k.name or '',
-                    'display': ' > '.join(path),
-                })
+            available_kras.append({
+                'id': k.id, 'name': k.name or '',
+                'display': ' > '.join(path),
+                # Drives the <optgroup> headings, and lets the client warn about a
+                # client-crossing pick before it posts.
+                'root_id': root.id,
+                'root_name': root.name or '',
+            })
+        # Client, then path — so each group reads as a tree rather than id order.
+        available_kras.sort(key=lambda a: (a['root_name'].lower(), a['display'].lower()))
 
         return {
             "id": kpi.id,
@@ -3338,9 +3353,25 @@ class KraKpiAPI(http.Controller):
                 new_root = kra
                 while new_root.parent_id:
                     new_root = new_root.parent_id
+                # Crossing to another client is allowed, but never silently: it moves
+                # one client's work into another client's project, and a mis-click in
+                # a long dropdown looks identical to a deliberate move. This used to
+                # be a flat refusal, which meant a task filed under the wrong client
+                # could not be corrected here at all.
+                #
+                # The flag has to be sent explicitly, so any caller that does not know
+                # about this gate still gets the old refusing behaviour rather than
+                # moving tasks by accident.
                 if old_root and new_root and old_root.id != new_root.id:
-                    return {'status': False,
-                            'message': 'Cannot move task to a different client. Choose a sub-project under the same client.'}
+                    if not params.get('confirm_client_move'):
+                        return {
+                            'status': False,
+                            'needs_confirm': True,
+                            'from_client': old_root.name or '',
+                            'to_client': new_root.name or '',
+                            'message': 'This moves the task from "%s" to "%s".' % (
+                                old_root.name or '', new_root.name or ''),
+                        }
                 updates['kra_id'] = kra_id
 
             if updates:
@@ -3546,11 +3577,16 @@ class KraKpiAPI(http.Controller):
                 vals['summary'] = summary
             if 'related_links' in params:
                 vals['related_links'] = params.get('related_links') or '[]'
-            if params.get('clear_file'):
-                vals['uploaded_file'] = False
-                vals['file_name'] = False
             if vals:
                 progress.write(vals)
+            # Done AFTER the write, and through the promotion helper rather than by
+            # blanking the fields: this used to set uploaded_file/file_name to False
+            # and leave the kpi.file.attachment rows behind, so the entry went on
+            # showing files the modal had just said were removed — and had no primary
+            # left for the app or the /view, /download and file_b64 routes, all of
+            # which read only the scalar field.
+            if params.get('clear_file'):
+                self._promote_next_file(progress, 'uploaded_file')
             return {'status': True, 'message': 'Progress update saved', 'id': progress.id}
         except Exception as e:
             _logger.error("update_progress_update failed: %s", str(e))
@@ -3764,6 +3800,36 @@ class KraKpiAPI(http.Controller):
             })
         return len(files)
 
+    def _promote_next_file(self, record, primary_field):
+        """Move the entry's next attachment onto its own Binary field.
+
+        Needed whenever the PRIMARY file goes away. The entry's first file lives on
+        `primary_field` and everything that is not this web UI — the mobile app and
+        the /view, /download and file_b64 routes — reads only that field. So an
+        entry left holding kpi.file.attachment rows with an empty primary is not a
+        smaller entry, it is a broken one: the web shows files that every other
+        client reports as absent.
+
+        Returns True when a file was promoted, False when the entry is now empty.
+        """
+        link = 'progress_id' if record._name == 'kpi.progress' else 'manual_id'
+        nxt = request.env['kpi.file.attachment'].sudo().search(
+            [(link, '=', record.id)], order='sequence, id', limit=1)
+        if not nxt:
+            record.sudo().write({primary_field: False, 'file_name': False})
+            return False
+        record.sudo().write({primary_field: nxt.file, 'file_name': nxt.file_name})
+        nxt.unlink()
+        return True
+
+    def _attachment_parent(self, att):
+        """The entry an attachment hangs off, as (record, primary_field)."""
+        if att.progress_id:
+            return att.progress_id, 'uploaded_file'
+        if att.manual_id:
+            return att.manual_id, 'manual_file'
+        return None, None
+
     def _entry_files_payload(self, record, primary_field, download_route, has_primary=None):
         """Every file on an entry as [{id, file_name, url}].
 
@@ -3801,10 +3867,21 @@ class KraKpiAPI(http.Controller):
 
         The entry's FIRST file keeps its existing per-entry route; this serves the
         2nd..Nth, which have no entry id of their own to be addressed by.
+
+        Gated on the parent TASK's visibility, not merely on being logged in. Without
+        that check this route handed any authenticated user any attachment they could
+        guess an id for — the sequential-integer id makes that trivial — while its
+        sibling /kpi/progress/file_b64 has always gated on the same rule.
+        404 rather than a refusal, so it does not confirm which ids exist.
         """
         try:
-            att = request.env['kpi.file.attachment'].browse(int(attachment_id))
+            att = request.env['kpi.file.attachment'].sudo().browse(int(attachment_id))
             if not att.exists() or not att.file:
+                return request.not_found()
+            parent, _primary = self._attachment_parent(att)
+            if not parent or not parent.exists():
+                return request.not_found()
+            if self._may_view_kpi_details(parent.kpi_id):
                 return request.not_found()
             file_name = att.file_name or 'download'
             headers = [
@@ -3986,6 +4063,9 @@ class KraKpiAPI(http.Controller):
                     'files': self._entry_files_payload(
                         manual, 'manual_file', '/kpi/manual/download/',
                         has_primary=bool(manual.file_name)),
+                    # Whether to offer Delete at all — the button used to render for
+                    # everyone and the route then refused them.
+                    'can_edit': self._may_edit_manual(manual),
                     'description': manual.description or '',
                     'related_links': manual.related_links or '[]',
                     'uploaded_by': manual.uploader_name,
@@ -4174,27 +4254,36 @@ class KraKpiAPI(http.Controller):
             _logger.error(f"Error viewing daily report: {str(e)}")
             return request.not_found()
 
+    def _may_edit_manual(self, manual):
+        """Own upload, or an admin. Mirrors _may_edit_progress for the manual side."""
+        user = request.env.user
+        if self._is_kra_admin(user):
+            return True
+        return bool(manual.uploaded_by and manual.uploaded_by.id == user.id)
+
     @http.route('/kpi/manual/delete', type='json', auth='user', methods=['POST'], csrf=False)
     def delete_user_manual(self, **params):
-        """Delete a user manual — admin only.
+        """Delete a user manual — its uploader, or an admin.
 
-        The route had no role check, and ir.model.access.csv grants
-        base.group_user full CRUD on kpi.user.manual INCLUDING unlink, so any
-        employee could delete any manual. The ACL is left as-is (employees still
-        read/create/write manuals); this closes the one route that exposed the
-        delete.
+        The route originally had no role check at all, and ir.model.access.csv
+        grants base.group_user full CRUD on kpi.user.manual INCLUDING unlink, so
+        any employee could delete any manual; it was then locked to admins only.
+        That over-corrected: the person who had just uploaded the wrong document
+        could not remove it either, and had to find an admin to undo their own
+        mistake. Own uploads are now theirs to delete; everything else still needs
+        an admin. The ACL stays as-is — this route remains the gate.
         """
         try:
-            if not self._is_kra_admin(request.env.user):
-                return {'status': False, 'message': 'Not authorized'}
             manual_id = params.get('manual_id')
             if not manual_id:
                 return {'status': False, 'message': 'manual_id is required'}
-            
-            manual = request.env['kpi.user.manual'].browse(int(manual_id))
+
+            manual = request.env['kpi.user.manual'].sudo().browse(int(manual_id))
             if not manual.exists():
                 return {'status': False, 'message': 'Manual not found'}
-            
+            if not self._may_edit_manual(manual):
+                return {'status': False, 'message': 'Not authorized'}
+
             manual.unlink()
             
             return {

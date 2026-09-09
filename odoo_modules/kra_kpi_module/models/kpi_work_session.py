@@ -477,6 +477,63 @@ class KpiWorkSession(models.Model):
         own workday today (and so may not start another until tomorrow)?"""
         return bool(self._ended_session_today(user=user))
 
+    @api.model
+    def _tasks_missing_progress_today(self, user=None):
+        """Tasks this user worked on today with no progress summary from them today.
+
+        What the End Workday screen warns about. A day's work with no note against
+        it is invisible to everyone downstream — the manager reads these, and by
+        tomorrow nobody can reconstruct what the hours went on.
+
+        Two grouped queries, no per-task loop:
+
+        1. worked today, from kpi.time.log's `work_date`. That field is stored,
+           indexed and computed in the DEVELOPER's timezone, so "today" means their
+           day, not the server's — which is the whole reason it exists. The active
+           rows are included deliberately: a task started an hour ago and still
+           running has duration_seconds == 0 and would otherwise be missed, and it
+           is exactly the task most likely to have no note yet.
+        2. of those, the ones that already carry a summary from this user inside
+           their local day. kpi.progress has no work_date of its own, so the window
+           is built from the same local-day helpers used elsewhere in this file
+           rather than by comparing UTC dates — kpi_employee_report does the latter
+           and gets the boundary wrong for anyone not on UTC.
+
+        Whitespace-only summaries are filtered in Python: the model requires the
+        field, but " " satisfies that and says nothing.
+
+        Returns [{'kpi_id', 'name', 'external_ref'}], newest task first.
+        """
+        user = user or self.env.user
+        today = fields.Date.context_today(self.with_user(user))
+        Log = self.env['kpi.time.log'].sudo()
+
+        worked = Log.read_group(
+            [('user_id', '=', user.id), ('work_date', '=', today)],
+            ['kpi_id'], ['kpi_id'], lazy=False)
+        worked_ids = {g['kpi_id'][0] for g in worked if g.get('kpi_id')}
+        if not worked_ids:
+            return []
+
+        start = _local_day_start_utc(today, user)
+        end = _local_day_end_utc(today, user)
+        done = self.env['kpi.progress'].sudo().search([
+            ('user_id', '=', user.id),
+            ('kpi_id', 'in', list(worked_ids)),
+            ('create_date', '>=', start),
+            ('create_date', '<=', end),
+        ])
+        covered = {p.kpi_id.id for p in done if (p.summary or '').strip()}
+
+        missing = worked_ids - covered
+        if not missing:
+            return []
+        return [{
+            'kpi_id': k.id,
+            'name': k.name or '',
+            'external_ref': k.external_ref or '',
+        } for k in self.env['kra.kpi'].sudo().browse(sorted(missing, reverse=True)).exists()]
+
     # ------------------------------------------------------------------ #
     # Open / fetch today's session — idempotent                          #
     # ------------------------------------------------------------------ #
@@ -684,6 +741,10 @@ class KpiWorkSession(models.Model):
                 'type_label': dict(Break._fields['break_type'].selection).get(brk.break_type, brk.break_type),
                 'start_raw': (brk.start_time.isoformat() + 'Z') if brk.start_time else False,
                 'start_display': _to_user_tz_str(brk.start_time, user, fmt='%H:%M') if brk.start_time else '',
+                # The id, not just the name: the strip names the task the break came
+                # from, and naming it is not much use without being able to go back
+                # to it — the Resume button on the pill needs something to resume.
+                'source_task_id': brk.source_task_id.id if brk.source_task_id else False,
                 'source_task_name': brk.source_task_id.name if brk.source_task_id else '',
                 'reason_note': brk.reason_note or '',
             }
