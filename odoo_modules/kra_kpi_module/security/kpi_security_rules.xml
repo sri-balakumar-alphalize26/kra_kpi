@@ -58,7 +58,10 @@
         <field name="perm_read" eval="True"/>
         <field name="perm_write" eval="True"/>
         <field name="perm_create" eval="True"/>
-        <field name="perm_unlink" eval="False"/>
+        <!-- Own rows only, which the domain above already guarantees. A developer
+             who mistypes their own progress note had no way to remove it — the
+             entry stood for good and the only fix was to ask a manager. -->
+        <field name="perm_unlink" eval="True"/>
     </record>
 
     <!-- Progress Updates: Managers see all updates -->

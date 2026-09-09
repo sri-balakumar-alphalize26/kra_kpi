@@ -415,6 +415,40 @@
     min-width: 0;
 }
 
+/* ----- List view -----
+   The same lanes and the same task cards as the grid, stacked full-width and opened
+   one at a time. The grid is eleven 265px lanes, so on anything narrower than a desk
+   monitor reading it means scrolling sideways past lanes you did not want; the list
+   trades the pipeline shape for rows you can actually read. Only the container
+   changes — every card inside is the grid's card. */
+.kpi-listview {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.kpi-listview .kpi-lane-row {
+    width: 100%;
+    min-width: 0;
+}
+/* A closed lane is a heading and nothing else, and an open one is as tall as its
+   tasks — the grid's 400px floor would leave a stack of empty boxes. */
+.kpi-listview .kpi-column-card {
+    min-height: 0;
+    height: auto;
+    /* Clips the header's square bottom corners to the card's radius, so a closed
+       lane reads as one rounded bar rather than a header poking out of a card. */
+    overflow: hidden;
+}
+.kpi-listview .kpi-header {
+    user-select: none;
+}
+/* Full page width here, so there is no reason for the list to scroll inside its own
+   box the way a 265px column has to — the page scrolls instead. */
+.kpi-listview .kpi-task-list {
+    max-height: none;
+    overflow: visible;
+}
+
 /* Soft-focus the rest of the lane so the hovered card reads as the one in focus.
    CSS cannot blur "the background" behind an element — only real elements — so this
    softens the sibling cards instead.
@@ -477,6 +511,12 @@
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+}
+/* "Show more" lifts the clamp on the entry itself — there is no second copy of
+   the text to reveal, so the whole summary has to fit here. */
+.timeline-summary.expanded {
+    -webkit-line-clamp: unset;
+    overflow: visible;
 }
 /* Brief highlight when a file's "View note" jumps to its history entry (Part D). */
 .kpi-flash { animation: kpiFlash 1.6s ease; }

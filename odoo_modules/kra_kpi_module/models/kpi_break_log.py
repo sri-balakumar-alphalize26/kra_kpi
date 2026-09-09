@@ -138,6 +138,45 @@ class KpiBreakLog(models.Model):
         return rec.id
 
     @api.model
+    def switch_break(self, break_type, user_id=None, reason_note=None,
+                     meeting_with_ids=None, at=None):
+        """Change an open break to a different reason WITHOUT resuming the task.
+
+        The everyday case this exists for: paused a task for a break, then a meeting
+        gets called. Ending the break to start a meeting used to mean resuming the
+        task and pausing it again just to be asked for a new reason.
+
+        It has to SPLIT, not relabel. start_break reuses the open row and rewrites
+        break_type in place while keeping the original start_time — correct for
+        re-entering the same break, but used here it would file the whole elapsed
+        break as Meeting and leave the Workday Map showing one block that never
+        happened. So: close the current one at `now`, open the next one at the same
+        `now`, exactly as _set_nontask_reason does for the no-task case.
+
+        Same reason in and out is a no-op — a double tap must not chop the break
+        into two.
+        """
+        if not user_id:
+            user_id = self.env.user.id
+        btype = break_type if break_type in self._KNOWN_TYPES else 'other'
+        now = at or fields.Datetime.now()
+        active = self.search([('user_id', '=', user_id), ('is_active', '=', True)], limit=1)
+        if not active:
+            return {'switched_from': False,
+                    'break_id': self.start_break(btype, user_id=user_id,
+                                                 reason_note=reason_note, at=now,
+                                                 meeting_with_ids=meeting_with_ids)}
+        if active.break_type == btype:
+            return {'switched_from': False, 'break_id': active.id}
+        previous = active.break_type
+        source_task_id = active.source_task_id.id if active.source_task_id else False
+        self.stop_break(user_id=user_id, at=now)
+        new_id = self.start_break(btype, user_id=user_id, source_task_id=source_task_id,
+                                  reason_note=reason_note, at=now,
+                                  meeting_with_ids=meeting_with_ids)
+        return {'switched_from': previous, 'break_id': new_id}
+
+    @api.model
     def stop_break(self, user_id=None, at=None):
         """Close the user's active break/lunch (if any).
 

@@ -741,7 +741,29 @@ class KpiBackup(models.Model):
                     attachment_count += 1
                 except Exception as e:
                     _logger.error(f"Error adding manual file {manual.id}: {str(e)}")
-        
+
+        # The 2nd..Nth file of a progress update or a manual. Those entries hold
+        # their FIRST file on their own Binary field (already archived above); the
+        # rest live in kpi.file.attachment, and without this an entry with three
+        # screenshots would back up only one of them.
+        if self.include_progress or self.include_manuals:
+            domain = []
+            if not self.include_manuals:
+                domain = [('progress_id', '!=', False)]
+            elif not self.include_progress:
+                domain = [('manual_id', '!=', False)]
+            for att in self.env['kpi.file.attachment'].search(domain):
+                try:
+                    file_data = base64.b64decode(att.file)
+                    parent = 'progress' if att.progress_id else 'manual'
+                    parent_id = att.progress_id.id or att.manual_id.id
+                    filename = (f"entry_attachments/{parent}_{parent_id}_"
+                                f"{att.id}_{att.file_name or 'file'}")
+                    zip_file.writestr(filename, file_data)
+                    attachment_count += 1
+                except Exception as e:
+                    _logger.error(f"Error adding entry attachment {att.id}: {str(e)}")
+
         self.attachment_count = attachment_count
 
     def action_restore_backup(self):

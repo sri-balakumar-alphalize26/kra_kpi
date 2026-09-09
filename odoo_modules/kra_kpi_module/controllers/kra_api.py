@@ -556,6 +556,50 @@ class KraKpiAPI(http.Controller):
         rec.pause_task(reason, reason_code=reason_code, meeting_with_ids=meeting_with_ids)
         return {'status': True, 'message': 'Task paused', 'id': rec.id}
 
+    @http.route('/kra_kpi/break/switch', type='json', auth='user', methods=['POST'], csrf=False)
+    def break_switch(self, **params):
+        """Change the reason on an OPEN break without resuming the task.
+
+        Paused for a break, then a meeting is called: the only way through used to be
+        resume-then-pause-again, which puts a fake sliver of work time on the task and
+        makes you re-answer a question you already answered. This is the same
+        one-click switch the no-task strip already has (/kpi_workday/idle_reason),
+        for the case where the break came from pausing a task.
+
+        The paused task's own reason is rewritten too, so the card badge and the
+        Workday Map agree about what is happening right now.
+        """
+        reason = (params.get('reason') or '').strip()[:NOTE_MAX]
+        reason_code = params.get('reason_code') or ''
+        if not reason_code:
+            return {'status': False, 'message': 'reason_code missing'}
+        if reason_code not in dict(
+                request.env['kra.kpi']._fields['pause_reason_code'].selection):
+            return {'status': False, 'message': 'Unknown pause reason.'}
+
+        meeting_with_ids = self._clean_meeting_ids(reason_code, params.get('meeting_with_ids'))
+        if meeting_with_ids is False:
+            return {'status': False, 'message': 'Invalid meeting participants.'}
+
+        user = request.env.user
+        Break = request.env['kpi.break.log'].sudo()
+        active = Break.search([('user_id', '=', user.id), ('is_active', '=', True)], limit=1)
+        if not active:
+            return {'status': False, 'message': 'No break is running.'}
+
+        source_task = active.source_task_id
+        res = Break.switch_break(reason_code, user_id=user.id, reason_note=reason,
+                                 meeting_with_ids=meeting_with_ids)
+        # Keep the task the break came from in step — it still shows the OLD reason
+        # on its card otherwise, which is the thing the developer is looking at.
+        if source_task and source_task.exists() and source_task.task_state == 'paused':
+            vals = {'pause_reason_code': reason_code}
+            if reason:
+                vals['paused_reason'] = reason
+            source_task.sudo().write(vals)
+        return {'status': True, 'switched_from': res.get('switched_from') or '',
+                'break_id': res.get('break_id')}
+
     # Deliberately a BLOCK-list of the two finished states rather than an allow-list of
     # the live ones. An allow-list has to be kept in step with the state vocabulary, and
     # the first version of this already missed pre_approval_pending — refusing to extend
@@ -1094,6 +1138,10 @@ class KraKpiAPI(http.Controller):
                 'today_seconds': round(today_map.get(k.id) or 0.0, 2),
                 'timer_start_datetime': timer_start_iso,  # For real-time timer calculation
                 'paused_reason': k.paused_reason or "",
+                # Survives the resume (resume_task never clears it), which is what
+                # lets the card say "40m after lunch" rather than just the lifetime
+                # total once work picks back up.
+                'pause_reason_code': k.pause_reason_code or "",
                 'description': k.description or "",
                 'progress_count': k.progress_count or 0,
                 'completed_by_id': k.completed_by.id if k.completed_by else False,
@@ -1252,6 +1300,7 @@ class KraKpiAPI(http.Controller):
             'today_seconds': round(_today_secs, 2),
             'timer_start_datetime': timer_start_iso,
             'paused_reason': k.paused_reason or "",
+            'pause_reason_code': k.pause_reason_code or "",
             'description': k.description or "",
             'progress_count': k.progress_count or 0,
             'completed_by_id': k.completed_by.id if k.completed_by else False,
@@ -3043,29 +3092,80 @@ class KraKpiAPI(http.Controller):
             })
         return out
 
-    def _activity_log(self, kpi):
+    # Which events each log kind covers. The detail pane offers these as a dropdown
+    # so a rename is not buried under hundreds of pause rows. Filtering happens HERE
+    # and not in the browser: ACTIVITY_LIMIT slices the payload before the client
+    # sees it, so filtering a mixed slice would silently drop older pause entries.
+    ACTIVITY_KINDS = {
+        'pause':   ['pause', 'resume'],
+        'heading': ['meta_updated'],
+    }
+
+    # Events whose raw key does not read well once underscores are stripped.
+    ACTIVITY_LABELS = {
+        'meta_updated': 'Renamed',
+    }
+
+    def _activity_log(self, kpi, kind='all'):
         """Everything that happened to this task, newest first.
 
         A reader for the audit trail already being written on every start, pause,
         switch and extension — not new tracking. Capped, and the true total is returned
         alongside so the UI can say it is showing a slice rather than implying the task
         only ever had 50 events.
+
+        `kind` narrows to one log ('pause', 'heading'); 'all' keeps every event.
+        The cap applies per kind, so each log gets its own full window.
         """
         Log = request.env['kpi.action.log'].sudo()
-        rows = Log.search([('kpi_id', '=', kpi.id)], order='id desc', limit=self.ACTIVITY_LIMIT)
+        domain = [('kpi_id', '=', kpi.id)]
+        events = self.ACTIVITY_KINDS.get(kind)
+        if events:
+            domain.append(('event', 'in', events))
+        rows = Log.search(domain, order='id desc', limit=self.ACTIVITY_LIMIT)
         return {
-            'activity_total': Log.search_count([('kpi_id', '=', kpi.id)]),
+            'activity_kind': kind,
+            'activity_total': Log.search_count(domain),
             'activity_limit': self.ACTIVITY_LIMIT,
             'activity_log': [{
                 'id': e.id,
                 'event': e.event or '',
-                'label': (e.event or '').replace('_', ' ').strip().capitalize(),
+                'label': (self.ACTIVITY_LABELS.get(e.event)
+                          or (e.event or '').replace('_', ' ').strip().capitalize()),
                 'actor': e.actor_label or (e.actor_user_id.name if e.actor_user_id else ''),
                 'at': convert_to_user_tz(e.create_date) if e.create_date else '',
                 'detail': (e.payload_json or '')[:400],
                 'success': e.success,
             } for e in rows],
         }
+
+    @http.route('/kpi_action/activity', type='json', auth='user', methods=['POST'], csrf=False)
+    def get_kpi_activity(self, **params):
+        """One log at a time for the detail pane's log dropdown.
+
+        The detail payload already ships the 'all' log, so this is only hit when the
+        reader picks a specific kind — and it re-runs the search rather than filtering
+        the slice the pane already has, which is the whole point (see ACTIVITY_KINDS).
+        """
+        try:
+            kpi_id = int(params.get('kpi_id') or 0)
+            if not kpi_id:
+                return {'status': False, 'message': 'KPI id required.'}
+            kpi = request.env['kra.kpi'].sudo().browse(kpi_id)
+            if not kpi.exists():
+                return {'status': False, 'message': 'Task not found.'}
+            denied = self._may_view_kpi_details(kpi)
+            if denied:
+                return {'status': False, 'message': denied}
+            kind = params.get('kind') or 'all'
+            if kind != 'all' and kind not in self.ACTIVITY_KINDS:
+                kind = 'all'
+            payload = self._activity_log(kpi, kind=kind)
+            payload['status'] = True
+            return payload
+        except Exception as e:
+            _logger.error("get_kpi_activity failed: %s", e)
+            return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_action/details', type='json', auth='user')
     def get_kpi_action_details(self, id):
@@ -3187,6 +3287,10 @@ class KraKpiAPI(http.Controller):
             if not kpi.exists():
                 return {'status': False, 'message': 'Task not found.'}
 
+            # Captured before the write so the audit row can say what it changed FROM.
+            old_name = kpi.name or ''
+            old_kra = kpi.kra_id.display_name if kpi.kra_id else ''
+
             updates = {}
 
             new_name = (params.get('name') or '').strip()
@@ -3241,6 +3345,21 @@ class KraKpiAPI(http.Controller):
 
             if updates:
                 kpi.write(updates)
+                # A rename used to leave no trace at all — not in Activity, not
+                # anywhere. Record it on the same audit trail every other lifecycle
+                # event already writes to, so the detail pane's heading log has
+                # something to read.
+                request.env['kpi.action.log'].log(
+                    kpi.id, 'meta_updated', source='web',
+                    actor_user_id=user.id,
+                    payload={
+                        'name_from': old_name,
+                        'name_to': kpi.name or '',
+                        'kra_from': old_kra,
+                        'kra_to': kpi.kra_id.display_name if kpi.kra_id else '',
+                        'fields': list(updates.keys()),
+                    },
+                )
 
             return {'status': True, 'updated': list(updates.keys()),
                     'name': kpi.name, 'kra_id': kpi.kra_id.id if kpi.kra_id else False}
@@ -3271,14 +3390,22 @@ class KraKpiAPI(http.Controller):
                 'summary': summary,
                 'uploaded_file': uploaded_file,
                 'file_name': file_name,
-                'related_links': related_links,  
+                'related_links': related_links,
                 'user_id': request.env.user.id,
             })
-            
+
+            # Multi-file callers send `files: [{file_data, file_name}, ...]`. The
+            # scalar uploaded_file/file_name above still carries a single-file
+            # caller (the mobile app), so both shapes work on the same route.
+            extra_files = self._collect_upload_files(params, 'files', None, None)
+            if extra_files:
+                self._store_entry_files(progress, 'uploaded_file', extra_files)
+
             return {
                 'status': True,
                 'message': 'Progress update submitted successfully',
                 'progress_id': progress.id,
+                'file_count': len(extra_files) or (1 if uploaded_file else 0),
                 'create_date': convert_to_user_tz(progress.create_date),
             }
         except Exception as e:
@@ -3296,24 +3423,35 @@ class KraKpiAPI(http.Controller):
             kpi_id = params.get('kpi_id')
             summary = params.get('summary') or ''
             related_links = params.get('related_links') or '[]'
-            f = request.httprequest.files.get('file')
+            # getlist, not get: the form now allows several files on one update.
+            # A single-file post still lands here as a one-item list, so older
+            # callers are unaffected.
+            uploads = request.httprequest.files.getlist('file')
             if not kpi_id:
                 return request.make_json_response({'status': False, 'message': 'kpi_id missing'})
-            if not f:
+            if not uploads:
                 return request.make_json_response({'status': False, 'message': 'No file received'})
-            data = f.read()
-            if len(data) > MAX_UPLOAD_BYTES:
-                return request.make_json_response(
-                    {'status': False, 'message': 'File exceeds the 50 MB limit.'})
+            files = []
+            for f in uploads:
+                data = f.read()
+                # Per file, not per request: the cap exists because one screen
+                # recording can be enormous, and summing them would refuse three
+                # perfectly ordinary screenshots.
+                if len(data) > MAX_UPLOAD_BYTES:
+                    return request.make_json_response(
+                        {'status': False,
+                         'message': f'"{f.filename}" exceeds the 50 MB limit.'})
+                files.append((f.filename, data))
             p = request.env['kpi.progress'].create({
                 'kpi_id': int(kpi_id),
                 'summary': summary,
-                'uploaded_file': base64.b64encode(data),
-                'file_name': f.filename,
                 'related_links': related_links,
                 'user_id': request.env.user.id,
             })
-            return request.make_json_response({'status': True, 'id': p.id, 'file_name': f.filename})
+            self._store_entry_files(p, 'uploaded_file', files)
+            return request.make_json_response({'status': True, 'id': p.id,
+                                               'file_name': files[0][0],
+                                               'file_count': len(files)})
         except Exception as e:
             _logger.error("upload_progress_file failed: %s", str(e))
             return request.make_json_response({'status': False, 'message': str(e)})
@@ -3328,26 +3466,139 @@ class KraKpiAPI(http.Controller):
             
             domain = [('kpi_id', '=', int(kpi_id))]
             progress_list = request.env['kpi.progress'].search(domain, order='create_date desc')
-            
+
             updates = []
             for progress in progress_list:
+                # Read the blob-presence ONCE — uploaded_file is attachment-backed,
+                # so each test pulls the whole file off disk.
+                has_file = bool(progress.uploaded_file)
                 updates.append({
                     'id': progress.id,
                     'summary': progress.summary,
+                    # file_name / has_file describe the entry's FIRST file and are
+                    # kept for the app and anything else already reading them;
+                    # `files` is the whole set.
                     'file_name': progress.file_name,
-                    'has_file': bool(progress.uploaded_file),
+                    'has_file': has_file,
+                    'files': self._entry_files_payload(
+                        progress, 'uploaded_file', '/kpi/progress/download?progress_id=',
+                        has_primary=has_file),
                     'employee_name': progress.employee_name,
                     'create_date': convert_to_user_tz(progress.create_date),
                     'user_id': progress.user_id.id,
                     'related_links': progress.related_links or '[]',
+                    # Drives whether the row offers Edit / a delete checkbox. The
+                    # server re-checks on every write and delete regardless — this
+                    # only stops offering an action that would be refused.
+                    'can_edit': self._may_edit_progress(progress),
                 })
-            
+
             return {
                 'status': True,
                 'updates': updates,
             }
         except Exception as e:
             _logger.error(f"Error fetching progress updates: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
+    def _may_edit_progress(self, progress):
+        """Own entry, or a manager/admin.
+
+        Mirrors the record rules (progress_employee_own_rule is own-rows,
+        progress_manager_all_rule is everything) so the UI and the ORM agree about
+        who may touch what.
+        """
+        user = request.env.user
+        if self._is_kra_admin(user):
+            return True
+        if user.has_group('kra_kpi_module.group_kra_manager') or user.has_group('base.group_system'):
+            return True
+        return progress.user_id.id == user.id
+
+    @http.route('/kpi/progress/update', type='json', auth='user', methods=['POST'], csrf=False)
+    def update_progress_update(self, **params):
+        """Edit an existing progress entry.
+
+        There was create and read and nothing else, so a mistyped progress note was
+        permanent — the entry stood as written and the only way out was a manager
+        deleting it, which they also could not do from the app.
+
+        Takes the same fields the create form collects. Only keys actually present
+        are written, so a caller sending just `summary` cannot blank the links.
+        """
+        try:
+            progress_id = int(params.get('progress_id') or 0)
+            if not progress_id:
+                return {'status': False, 'message': 'progress_id is required'}
+            progress = request.env['kpi.progress'].sudo().browse(progress_id)
+            if not progress.exists():
+                return {'status': False, 'message': 'Progress update not found'}
+            if not self._may_edit_progress(progress):
+                return {'status': False, 'message': 'Not authorized to edit this update.'}
+
+            vals = {}
+            if 'summary' in params:
+                summary = (params.get('summary') or '').strip()
+                # summary is required on the model; an empty write would raise a
+                # bare integrity error rather than say what was wrong.
+                if not summary:
+                    return {'status': False, 'message': 'Summary cannot be empty.'}
+                vals['summary'] = summary
+            if 'related_links' in params:
+                vals['related_links'] = params.get('related_links') or '[]'
+            if params.get('clear_file'):
+                vals['uploaded_file'] = False
+                vals['file_name'] = False
+            if vals:
+                progress.write(vals)
+            return {'status': True, 'message': 'Progress update saved', 'id': progress.id}
+        except Exception as e:
+            _logger.error("update_progress_update failed: %s", str(e))
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi/progress/delete', type='json', auth='user', methods=['POST'], csrf=False)
+    def delete_progress_update(self, **params):
+        """Remove one progress entry (own, or any as a manager)."""
+        try:
+            progress_id = int(params.get('progress_id') or 0)
+            if not progress_id:
+                return {'status': False, 'message': 'progress_id is required'}
+            progress = request.env['kpi.progress'].sudo().browse(progress_id)
+            if not progress.exists():
+                return {'status': False, 'message': 'Progress update not found'}
+            if not self._may_edit_progress(progress):
+                return {'status': False, 'message': 'Not authorized to delete this update.'}
+            progress.unlink()
+            return {'status': True, 'message': 'Progress update deleted'}
+        except Exception as e:
+            _logger.error("delete_progress_update failed: %s", str(e))
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi/progress/delete_bulk', type='json', auth='user', methods=['POST'], csrf=False)
+    def delete_progress_updates(self, **params):
+        """Select-all / delete-selected for Progress History.
+
+        Deletes what the caller is allowed to and REPORTS what it refused rather
+        than failing the whole batch: a manager clearing a task's history and a
+        developer clearing their own rows out of the same list is the normal case,
+        and silently dropping the request because one row belonged to someone else
+        would be worse than doing the part that is permitted.
+        """
+        try:
+            raw_ids = params.get('progress_ids') or []
+            ids = [int(i) for i in raw_ids if str(i).strip().isdigit()]
+            if not ids:
+                return {'status': False, 'message': 'No entries selected.'}
+            records = request.env['kpi.progress'].sudo().browse(ids).exists()
+            allowed = records.filtered(lambda p: self._may_edit_progress(p))
+            refused = len(records) - len(allowed)
+            deleted = len(allowed)
+            if allowed:
+                allowed.unlink()
+            return {'status': True, 'deleted': deleted, 'refused': refused,
+                    'missing': len(ids) - len(records)}
+        except Exception as e:
+            _logger.error("delete_progress_updates failed: %s", str(e))
             return {'status': False, 'message': str(e)}
     @http.route('/kpi/progress/file_b64', type='json', auth='user', methods=['POST'], csrf=False)
     def get_progress_file_b64(self, **params):
@@ -3445,6 +3696,127 @@ class KraKpiAPI(http.Controller):
             return request.not_found()
 
     # ============================================
+    # Multi-file attachments on one entry
+    # ============================================
+    # Progress notes and task manuals were one-file-per-row, so attaching three
+    # screenshots to a single note meant writing the same note three times. These
+    # helpers put N files on ONE entry.
+    #
+    # The split is deliberate: the FIRST file stays on the parent's own Binary
+    # field, the rest become kpi.file.attachment rows. Every existing reader — the
+    # /view and /download routes, the file_b64 routes, and the mobile app, which is
+    # not being changed — reads those scalar fields, so old entries and old clients
+    # keep working untouched.
+
+    @staticmethod
+    def _collect_upload_files(params, files_key, single_data_key, single_name_key):
+        """Normalise a JSON payload's file(s) into [(name, raw_bytes)].
+
+        Accepts the new `files: [{file_data, file_name}, ...]` list AND the original
+        scalar pair, so callers that predate multi-upload (the app) are unaffected.
+        """
+        out = []
+        for entry in (params.get(files_key) or []):
+            if not isinstance(entry, dict):
+                continue
+            data_b64 = entry.get('file_data') or entry.get('data') or ''
+            name = entry.get('file_name') or entry.get('name') or 'file'
+            if not data_b64:
+                continue
+            try:
+                out.append((name, base64.b64decode(data_b64)))
+            except Exception:
+                continue
+        if not out and single_data_key and params.get(single_data_key):
+            try:
+                out.append((params.get(single_name_key) or 'file',
+                            base64.b64decode(params.get(single_data_key))))
+            except Exception:
+                pass
+        return out
+
+    def _store_entry_files(self, record, primary_field, files):
+        """Write [(name, raw_bytes)] onto one entry.
+
+        files[0] goes on `primary_field` (+ file_name) so the entry still reads
+        correctly to everything that knows nothing about kpi.file.attachment;
+        files[1:] become attachment rows in pick order.
+        """
+        if not files:
+            return 0
+        first_name, first_data = files[0]
+        record.sudo().write({
+            primary_field: base64.b64encode(first_data),
+            'file_name': first_name,
+        })
+        if len(files) == 1:
+            return 1
+        link = 'progress_id' if record._name == 'kpi.progress' else 'manual_id'
+        Att = request.env['kpi.file.attachment'].sudo()
+        seq = 10
+        for name, data in files[1:]:
+            seq += 10
+            Att.create({
+                link: record.id,
+                'file': base64.b64encode(data),
+                'file_name': name,
+                'sequence': seq,
+            })
+        return len(files)
+
+    def _entry_files_payload(self, record, primary_field, download_route, has_primary=None):
+        """Every file on an entry as [{id, file_name, url}].
+
+        The parent's own file is id 0 — it is served by the entry's existing
+        download route, not by an attachment id.
+
+        `has_primary` lets a caller that has already tested the field pass the
+        answer in. Binary fields are attachment-backed, so reading one pulls the
+        whole file just to ask whether it is there — twice per row, in a list of
+        fifty updates, for nothing.
+        """
+        out = []
+        if has_primary is None:
+            has_primary = bool(record[primary_field])
+        if has_primary:
+            out.append({
+                'id': 0,
+                'file_name': record.file_name or 'download',
+                'url': '%s%s' % (download_route, record.id),
+            })
+        link = 'progress_id' if record._name == 'kpi.progress' else 'manual_id'
+        extras = request.env['kpi.file.attachment'].sudo().search(
+            [(link, '=', record.id)], order='sequence, id')
+        for att in extras:
+            out.append({
+                'id': att.id,
+                'file_name': att.file_name or 'download',
+                'url': '/kpi/attachment/download?attachment_id=%s' % att.id,
+            })
+        return out
+
+    @http.route('/kpi/attachment/download', type='http', auth='user', methods=['GET'])
+    def download_entry_attachment(self, attachment_id, **kwargs):
+        """Download one of an entry's extra files.
+
+        The entry's FIRST file keeps its existing per-entry route; this serves the
+        2nd..Nth, which have no entry id of their own to be addressed by.
+        """
+        try:
+            att = request.env['kpi.file.attachment'].browse(int(attachment_id))
+            if not att.exists() or not att.file:
+                return request.not_found()
+            file_name = att.file_name or 'download'
+            headers = [
+                ('Content-Type', att.mimetype or 'application/octet-stream'),
+                ('Content-Disposition', f'attachment; filename="{file_name}"'),
+            ]
+            return request.make_response(base64.b64decode(att.file), headers)
+        except Exception as e:
+            _logger.error("download_entry_attachment failed: %s", str(e))
+            return request.not_found()
+
+    # ============================================
     # 📚 UPDATED: Multiple User Manuals API
     # ============================================
 
@@ -3502,34 +3874,41 @@ class KraKpiAPI(http.Controller):
             description = params.get('description', '')
             related_links = params.get('related_links', '[]')
 
-            if not file_data:
+            # Accepts the new `files: [{file_data, file_name}, ...]` list as well as
+            # the original scalar pair, so the mobile app's single-file posts keep
+            # working on the same route.
+            files = self._collect_upload_files(params, 'files', 'file_data', 'file_name')
+            if not files:
                 return {'status': False, 'message': 'A file is required'}
-
-            # Decode to measure the real size and to prove it is valid base64 —
-            # a truncated read used to be stored happily and then 404 on view.
-            try:
-                raw = base64.b64decode(file_data, validate=True)
-            except Exception:
+            # The scalar path used to decode with validate=True to prove the base64
+            # was intact — a truncated read was stored happily and then 404'd on
+            # view. _collect_upload_files drops anything that will not decode, so
+            # an empty result here means exactly that.
+            if file_data and len(files) == 1 and not files[0][1]:
                 return {'status': False, 'message': 'The file could not be read. Please pick it again.'}
 
-            kpi, err = self._check_manual_upload(kpi_id, file_name, len(raw))
-            if err:
-                return {'status': False, 'message': err}
+            # Validated per file: the extension and size rules are about a file,
+            # not about a request, and one bad file should name itself.
+            kpi = None
+            for name, raw in files:
+                kpi, err = self._check_manual_upload(kpi_id, name, len(raw))
+                if err:
+                    return {'status': False, 'message': err}
 
             manual = request.env['kpi.user.manual'].create({
                 'kpi_id': kpi.id,
-                'manual_file': file_data,
-                'file_name': file_name,
                 'description': description,
                 'related_links': related_links,
                 'uploaded_by': request.env.user.id,
                 'upload_date': fields.Datetime.now(),
             })
+            self._store_entry_files(manual, 'manual_file', files)
 
             return {
                 'status': True,
                 'message': 'User manual uploaded successfully',
                 'manual_id': manual.id,
+                'file_count': len(files),
             }
         except Exception as e:
             _logger.error(f"Error uploading user manual: {str(e)}")
@@ -3548,28 +3927,35 @@ class KraKpiAPI(http.Controller):
             kpi_id = params.get('kpi_id')
             description = params.get('description') or ''
             related_links = params.get('related_links') or '[]'
-            f = request.httprequest.files.get('file')
-            if not f:
+            # getlist, not get — one manual entry can carry several documents now.
+            uploads = request.httprequest.files.getlist('file')
+            if not uploads:
                 return request.make_json_response({'status': False, 'message': 'No file received'})
-            data = f.read()
 
-            kpi, err = self._check_manual_upload(kpi_id, f.filename, len(data))
-            if err:
-                return request.make_json_response({'status': False, 'message': err})
+            files = []
+            kpi = None
+            for f in uploads:
+                data = f.read()
+                # Per file: the extension and size rules describe a file, and a
+                # refusal should name which one was wrong.
+                kpi, err = self._check_manual_upload(kpi_id, f.filename, len(data))
+                if err:
+                    return request.make_json_response({'status': False, 'message': err})
+                files.append((f.filename, data))
 
             manual = request.env['kpi.user.manual'].create({
                 'kpi_id': kpi.id,
-                'manual_file': base64.b64encode(data),
-                'file_name': f.filename,
                 'description': description,
                 'related_links': related_links,
                 'uploaded_by': request.env.user.id,
                 'upload_date': fields.Datetime.now(),
             })
+            self._store_entry_files(manual, 'manual_file', files)
             return request.make_json_response({
                 'status': True,
                 'message': 'User manual uploaded successfully',
                 'manual_id': manual.id,
+                'file_count': len(files),
             })
         except Exception as e:
             _logger.error("upload_user_manual_file failed: %s", str(e))
@@ -3591,7 +3977,15 @@ class KraKpiAPI(http.Controller):
             for manual in manuals:
                 manual_list.append({
                     'id': manual.id,
+                    # file_name is the entry's first file, kept for existing readers;
+                    # `files` is every document on the entry.
                     'file_name': manual.file_name,
+                    # file_name stands in for "has a file" so this list does not pull
+                    # every manual's bytes off disk just to decide whether to list
+                    # it — every writer of manual_file sets file_name alongside it.
+                    'files': self._entry_files_payload(
+                        manual, 'manual_file', '/kpi/manual/download/',
+                        has_primary=bool(manual.file_name)),
                     'description': manual.description or '',
                     'related_links': manual.related_links or '[]',
                     'uploaded_by': manual.uploader_name,

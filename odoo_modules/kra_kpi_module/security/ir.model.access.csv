@@ -12,7 +12,7 @@ access_kra_warehouse_manager,kra.warehouse.manager,model_kra_warehouse,kra_kpi_m
 access_kra_warehouse_employee,kra.warehouse.employee,model_kra_warehouse,base.group_user,1,0,0,0
 access_kpi_progress_admin,kpi.progress.admin,model_kpi_progress,base.group_system,1,1,1,1
 access_kpi_progress_manager,kpi.progress.manager,model_kpi_progress,kra_kpi_module.group_kra_manager,1,1,1,1
-access_kpi_progress_employee,kpi.progress.employee,model_kpi_progress,base.group_user,1,1,1,0
+access_kpi_progress_employee,kpi.progress.employee,model_kpi_progress,base.group_user,1,1,1,1
 access_kpi_unit_report_admin,kpi.unit.report.admin,model_kpi_unit_report,base.group_system,1,1,1,1
 access_kpi_unit_report_manager,kpi.unit.report.manager,model_kpi_unit_report,kra_kpi_module.group_kra_manager,1,1,1,1
 access_kpi_performance_report_admin,kpi.performance.report.admin,model_kpi_performance_report,base.group_system,1,1,1,1
@@ -100,3 +100,6 @@ access_kpi_wa_group_system,kpi.wa.group.system,model_kpi_wa_group,base.group_sys
 access_kpi_wa_group_event_admin,kpi.wa.group.event.admin,model_kpi_wa_group_event,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_wa_group_event_owner,kpi.wa.group.event.owner,model_kpi_wa_group_event,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_wa_group_event_system,kpi.wa.group.event.system,model_kpi_wa_group_event,base.group_system,1,1,1,1
+access_kpi_file_attachment_admin,kpi.file.attachment.admin,model_kpi_file_attachment,base.group_system,1,1,1,1
+access_kpi_file_attachment_manager,kpi.file.attachment.manager,model_kpi_file_attachment,kra_kpi_module.group_kra_manager,1,1,1,1
+access_kpi_file_attachment_employee,kpi.file.attachment.employee,model_kpi_file_attachment,base.group_user,1,1,1,1

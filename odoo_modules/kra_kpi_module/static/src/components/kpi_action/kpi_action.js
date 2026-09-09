@@ -59,6 +59,17 @@ const IDLE_REASONS = [
       note: 'Recorded on your Workday Map, and your admins are told right away so they can assign you work.',
       alert: true },
 ];
+// While a task is PAUSED the open interval is a kpi.break.log, not a non-task block,
+// so the strip's idle switcher above does not reach it — yet this is the commonest
+// version of the same problem: paused for a break, then a meeting gets called.
+// Switching used to mean resuming the task and pausing it again just to be asked for
+// a new reason, which puts a fake sliver of work on the task.
+// 'no_tasks' is deliberately absent: a paused task IS a task.
+const BREAK_SWITCH_REASONS = [
+    { code: 'break',   label: '☕ On a break' },
+    { code: 'lunch',   label: '🍽 Lunch' },
+    { code: 'meeting', label: '👥 In a meeting' },
+];
 // "Not now" buys this long before the popup asks again — enough to find and click
 // a task's Start button, too short to duck the question all day.
 const IDLE_SNOOZE_MS = 60000;
@@ -77,7 +88,7 @@ export class KpiAction extends Component {
                 <div class="modal-content">
                     <div class="modal-header bg-secondary text-white">
                         <h5 class="modal-title">
-                            <i class="fa fa-history me-2"/>Activity
+                            <i class="fa fa-history me-2"/><t t-esc="activityKindLabel()"/>
                         </h5>
                         <button type="button" class="btn-close btn-close-white"
                                 t-on-click="() => state.activityOpen = false"/>
@@ -85,10 +96,16 @@ export class KpiAction extends Component {
                     <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
                         <!-- Says plainly when this is a slice, so the list is never
                              mistaken for the task's whole history. -->
-                        <div t-if="state.detailData.activity_total > (state.detailData.activity_log || []).length"
+                        <div t-if="activityTotal() > activityRows().length"
                              class="small text-muted fst-italic mb-2">
-                            <t t-esc="state.detailData.activity_total"/> entries —
-                            showing the most recent <t t-esc="state.detailData.activity_log.length"/>.
+                            <t t-esc="activityTotal()"/> entries —
+                            showing the most recent <t t-esc="activityRows().length"/>.
+                        </div>
+                        <div t-if="state.activityLoading" class="text-muted small py-3">
+                            <i class="fa fa-spinner fa-spin me-2"/>Loading…
+                        </div>
+                        <div t-elif="!activityRows().length" class="text-muted small py-3">
+                            Nothing recorded in this log yet.
                         </div>
                         <t t-foreach="activityGroups()" t-as="g" t-key="g.date">
                             <div class="d-flex align-items-center border-bottom py-2"
@@ -113,6 +130,104 @@ export class KpiAction extends Component {
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary"
                                 t-on-click="() => state.activityOpen = false">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit a Progress History entry. Carries the same three fields the create
+             form does — description, links, attachment — because an edit popup that
+             offers less than the form that made the entry cannot express what is
+             already in it, and saving would quietly drop the rest. -->
+        <div t-if="state.progressEdit.open" class="modal d-block" tabindex="-1"
+             style="background: rgba(0,0,0,0.5); z-index:2100;">
+            <div class="modal-dialog modal-lg modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header bg-primary text-white">
+                        <h5 class="modal-title"><i class="fa fa-pencil me-2"/>Edit progress update</h5>
+                        <button type="button" class="btn-close btn-close-white"
+                                t-on-click="closeProgressEdit"/>
+                    </div>
+                    <div class="modal-body" style="max-height:65vh; overflow-y:auto;">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Progress Summary *</label>
+                            <textarea class="form-control" rows="5"
+                                      t-model="state.progressEdit.summary"
+                                      placeholder="Describe the work done, issues faced, next steps..."/>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">🔗 Related Links</label>
+                            <div class="input-group mb-2">
+                                <input type="url" class="form-control"
+                                       t-model="state.progressEdit.link_input"
+                                       placeholder="https://github.com/repo or https://drive.google.com/..."/>
+                                <button class="btn btn-outline-primary" type="button"
+                                        t-on-click="addEditLink">
+                                    <i class="fa fa-plus"/> Add Link
+                                </button>
+                            </div>
+                            <t t-if="state.progressEdit.related_links.length">
+                                <ul class="list-group">
+                                    <t t-foreach="state.progressEdit.related_links" t-as="link" t-key="link_index">
+                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                            <a t-att-href="link" target="_blank" class="text-truncate"
+                                               style="max-width: 80%;">
+                                                <i class="fa fa-link"/> <t t-esc="link"/>
+                                            </a>
+                                            <button class="btn btn-sm btn-danger"
+                                                    t-on-click="() => this.removeEditLink(link_index)">
+                                                <i class="fa fa-times"/>
+                                            </button>
+                                        </li>
+                                    </t>
+                                </ul>
+                            </t>
+                            <t t-else="">
+                                <div class="text-muted small">— No links on this update —</div>
+                            </t>
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label fw-bold">Attached file</label>
+                            <t t-if="state.progressEdit.file_name and !state.progressEdit.clear_file">
+                                <div class="d-flex align-items-center gap-2">
+                                    <a t-att-href="'/kpi/progress/download?progress_id=' + state.progressEdit.id"
+                                       class="btn btn-sm btn-outline-primary" target="_blank">
+                                        <i class="fa fa-download"/> <t t-esc="state.progressEdit.file_name"/>
+                                    </a>
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            t-on-click="() => state.progressEdit.clear_file = true">
+                                        <i class="fa fa-times me-1"/>Remove
+                                    </button>
+                                </div>
+                            </t>
+                            <t t-elif="state.progressEdit.clear_file">
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="text-danger small">
+                                        <i class="fa fa-trash me-1"/>File will be removed when you save.
+                                    </span>
+                                    <button class="btn btn-sm btn-outline-secondary"
+                                            t-on-click="() => state.progressEdit.clear_file = false">Undo</button>
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <div class="text-muted small">— No file on this update —</div>
+                            </t>
+                            <div class="text-muted small mt-1">
+                                To add files, submit a new update — existing attachments can only be removed here.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary"
+                                t-on-click="closeProgressEdit">Cancel</button>
+                        <button type="button" class="btn btn-primary"
+                                t-att-disabled="state.progressEdit.saving"
+                                t-on-click="saveProgressEdit">
+                            <i class="fa fa-save me-1"/>
+                            <t t-esc="state.progressEdit.saving ? 'Saving…' : 'Save changes'"/>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -435,6 +550,21 @@ export class KpiAction extends Component {
                                                             </p>
                                                         </t>
                                                         
+                                                        <!-- The rest of the documents on this entry. The
+                                                             heading above names the first one; without
+                                                             this the other two of a three-file upload
+                                                             would be stored but unreachable. -->
+                                                        <t t-if="(manual.files or []).length > 1">
+                                                            <div class="mb-2 d-flex flex-wrap gap-2">
+                                                                <t t-foreach="manual.files.slice(1)" t-as="mfile" t-key="mfile.id">
+                                                                    <a t-att-href="mfile.url" target="_blank"
+                                                                       class="btn btn-sm btn-outline-secondary">
+                                                                        <i class="fa fa-download"></i> <t t-esc="mfile.file_name"/>
+                                                                    </a>
+                                                                </t>
+                                                            </div>
+                                                        </t>
+
                                                         <!-- Related Links -->
                                                         <t t-if="manual.links and manual.links.length > 0">
                                                             <div class="mb-2">
@@ -487,12 +617,19 @@ export class KpiAction extends Component {
                                 <t t-if="state.showManualUpload">
                                     <div class="border rounded p-3 bg-white">
                                         <div class="mb-3">
-                                            <label class="form-label fw-bold">Upload Manual File *</label>
-                                            <input type="file" 
-                                                class="form-control" 
+                                            <label class="form-label fw-bold">Upload Manual File(s) *</label>
+                                            <input type="file" multiple="multiple"
+                                                class="form-control"
                                                 t-on-change="handleManualUpload"
                                                 accept=".pdf,.doc,.docx"/>
-                                            <small class="text-muted">Supported: PDF, DOC, DOCX</small>
+                                            <small class="text-muted">Supported: PDF, DOC, DOCX — pick several to attach them all to one entry</small>
+                                            <t t-if="state.manualForm.files.length > 1">
+                                                <ul class="list-unstyled small text-muted mt-2 mb-0">
+                                                    <t t-foreach="state.manualForm.files" t-as="mf" t-key="mf_index">
+                                                        <li><i class="fa fa-file-o me-1"/><t t-esc="mf.name"/></li>
+                                                    </t>
+                                                </ul>
+                                            </t>
                                         </div>
                                         
                                         <t t-if="state.manualForm.error">
@@ -580,7 +717,7 @@ export class KpiAction extends Component {
                                                  screen to say why. -->
                                             <button class="btn btn-primary"
                                                     t-on-click="submitUserManual"
-                                                    t-att-disabled="!state.manualForm.file or state.manualForm.uploading">
+                                                    t-att-disabled="!state.manualForm.files.length or state.manualForm.uploading">
                                                 <t t-if="state.manualForm.uploading">
                                                     <i class="fa fa-spinner fa-spin"></i> Uploading…
                                                 </t>
@@ -649,11 +786,18 @@ export class KpiAction extends Component {
                                 </t>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label fw-bold">Attach File (optional)</label>
-                                <input type="file" class="form-control"
+                                <label class="form-label fw-bold">Attach Files (optional)</label>
+                                <input type="file" class="form-control" multiple="multiple"
                                        t-ref="progressFileInput"
                                        t-on-change="handleProgressFileUpload"/>
-                                <div class="text-danger small mt-1">⚠ Large files take time — keep this tab open until 100%. Max 50 MB. For bigger files, add a Drive or GitHub link instead.</div>
+                                <t t-if="state.progressForm.fileObjs.length > 1">
+                                    <ul class="list-unstyled small text-muted mt-2 mb-0">
+                                        <t t-foreach="state.progressForm.fileObjs" t-as="pf" t-key="pf_index">
+                                            <li><i class="fa fa-file-o me-1"/><t t-esc="pf.name"/></li>
+                                        </t>
+                                    </ul>
+                                </t>
+                                <div class="text-danger small mt-1">⚠ Large files take time — keep this tab open until 100%. Max 50 MB per file. For bigger files, add a Drive or GitHub link instead.</div>
                                 <div t-if="state.uploadState.error" class="text-danger small mt-1 fw-bold" t-esc="state.uploadState.error"/>
                             </div>
 
@@ -756,7 +900,7 @@ export class KpiAction extends Component {
                             <div class="card p-4 mb-3 bg-light border-primary">
                                 <h4 class="fw-bold mb-3">📎 Attached Files</h4>
                                 <div class="list-group">
-                                    <t t-foreach="state.attachedFiles" t-as="file" t-key="file.id">
+                                    <t t-foreach="state.attachedFiles" t-as="file" t-key="file.key">
                                         <div class="list-group-item d-flex justify-content-between align-items-center">
                                             <div>
                                                 <i class="fa fa-file text-primary me-2"></i>
@@ -913,33 +1057,108 @@ export class KpiAction extends Component {
                              default and capped server-side, because a task worked over
                              months carries hundreds of entries and the pane still has to
                              open quickly. -->
-                        <div t-if="(state.detailData.activity_log || []).length" class="mb-3">
-                            <button class="btn btn-outline-secondary" t-on-click="openActivity">
+                        <!-- One button, three logs. Renames and pauses land on the same
+                             audit trail, so a mixed list buried a rename under hundreds
+                             of pause rows — the dropdown picks which log to read and the
+                             server returns that kind's own full window. -->
+                        <div t-if="(state.detailData.activity_log || []).length" class="mb-3 dropdown">
+                            <button class="btn btn-outline-secondary dropdown-toggle"
+                                    type="button" data-bs-toggle="dropdown" aria-expanded="false">
                                 <i class="fa fa-history me-2"/>
-                                Activity
+                                Logs
                                 <span class="badge bg-secondary ms-2" t-esc="state.detailData.activity_total"/>
                             </button>
+                            <ul class="dropdown-menu">
+                                <t t-foreach="activityKinds" t-as="k" t-key="k.key">
+                                    <li>
+                                        <button class="dropdown-item" type="button"
+                                                t-on-click="() => this.openActivity(k.key)">
+                                            <i t-att-class="'fa me-2 ' + k.icon"/>
+                                            <t t-esc="k.label"/>
+                                        </button>
+                                    </li>
+                                </t>
+                            </ul>
                         </div>
 
                         <!-- Progress History -->
                         <div class="card p-4">
-                            <h4 class="fw-bold mb-3">Progress History</h4>
-                            
+                            <div class="d-flex align-items-center flex-wrap gap-2 mb-3">
+                                <h4 class="fw-bold mb-0">Progress History</h4>
+                                <!-- Select-all / delete-selected, offered only when there
+                                     is something this user is actually allowed to remove.
+                                     Own entries for a developer, everything for a manager
+                                     — the same split the record rules enforce. -->
+                                <t t-if="deletableProgress().length">
+                                    <div class="ms-auto d-flex align-items-center gap-2">
+                                        <div class="form-check mb-0">
+                                            <input class="form-check-input" type="checkbox"
+                                                   id="progSelectAll"
+                                                   t-att-checked="allProgressSelected()"
+                                                   t-on-change="toggleSelectAllProgress"/>
+                                            <label class="form-check-label small" for="progSelectAll">
+                                                Select all
+                                            </label>
+                                        </div>
+                                        <t t-if="selectedProgressIds().length">
+                                            <button class="btn btn-sm btn-danger"
+                                                    t-att-disabled="state.progressBusy"
+                                                    t-on-click="deleteSelectedProgress">
+                                                <i class="fa fa-trash me-1"/>
+                                                Delete <t t-esc="selectedProgressIds().length"/>
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-secondary"
+                                                    t-on-click="clearProgressSelection">Clear</button>
+                                        </t>
+                                    </div>
+                                </t>
+                            </div>
+
                             <t t-if="state.progressUpdates.length">
                                 <div class="timeline">
                                     <t t-foreach="state.progressUpdates" t-as="update" t-key="update.id">
                                         <div class="timeline-entry" t-att-id="'prog-' + update.id">
-                                            <div class="timeline-head small text-muted mb-1">
+                                            <div class="timeline-head small text-muted mb-1 d-flex align-items-center gap-1">
+                                                <t t-if="update.can_edit">
+                                                    <input class="form-check-input mt-0 me-1" type="checkbox"
+                                                           t-att-checked="isProgressSelected(update.id)"
+                                                           t-on-change="() => this.toggleProgressSelected(update.id)"/>
+                                                </t>
                                                 <i class="fa fa-user-circle me-1"></i>
                                                 <strong t-esc="update.employee_name"/>
                                                 <span class="mx-1">•</span>
                                                 <span t-esc="formatDate(update.create_date)"/>
+                                                <!-- Edit reopens the entry holding what was written —
+                                                     description, links and the attachment — rather than
+                                                     an empty form that would replace it on save. -->
+                                                <t t-if="update.can_edit">
+                                                    <span class="ms-auto d-flex gap-1">
+                                                        <button class="btn btn-link btn-sm p-0 small"
+                                                                title="Edit this update"
+                                                                t-on-click="() => this.openProgressEdit(update)">
+                                                            <i class="fa fa-pencil"/> Edit
+                                                        </button>
+                                                        <button class="btn btn-link btn-sm p-0 small text-danger"
+                                                                title="Delete this update"
+                                                                t-att-disabled="state.progressBusy"
+                                                                t-on-click="() => this.deleteOneProgress(update)">
+                                                            <i class="fa fa-trash"/>
+                                                        </button>
+                                                    </span>
+                                                </t>
                                             </div>
-                                            <div class="timeline-summary" style="white-space: pre-wrap;" t-esc="update.summary"/>
-                                            <details t-if="update.summary and update.summary.length > 180" class="mt-1">
-                                                <summary class="small text-primary" style="cursor:pointer;">Show more</summary>
-                                                <div class="mt-1" style="white-space: pre-wrap;" t-esc="update.summary"/>
-                                            </details>
+                                            <!-- ONE render of the summary. This was a clamped copy PLUS a
+                                                 <details> that printed the whole summary again underneath,
+                                                 so expanding a long update showed its first three lines
+                                                 twice. The clamp is toggled in place instead. -->
+                                            <div style="white-space: pre-wrap;"
+                                                 t-att-class="'timeline-summary' + (state.progressExpanded[update.id] ? ' expanded' : '')"
+                                                 t-esc="update.summary"/>
+                                            <button t-if="update.summary and update.summary.length > 180"
+                                                    class="btn btn-link btn-sm p-0 small text-primary"
+                                                    t-on-click="() => this.toggleProgressExpanded(update.id)">
+                                                <t t-esc="state.progressExpanded[update.id] ? 'Show less' : 'Show more'"/>
+                                            </button>
                                             <t t-if="update.links and update.links.length > 0">
                                                 <div class="mt-2">
                                                     <strong class="text-primary small">🔗 Related Links:</strong>
@@ -954,12 +1173,21 @@ export class KpiAction extends Component {
                                                     </ul>
                                                 </div>
                                             </t>
-                                            <t t-if="update.has_file">
-                                                <a t-att-href="'/kpi/progress/download?progress_id=' + update.id"
-                                                   class="btn btn-sm btn-outline-primary mt-2"
-                                                   target="_blank">
-                                                    <i class="fa fa-download"></i> <t t-esc="update.file_name"/>
-                                                </a>
+                                            <!-- Every file on the entry, not just the first. An
+                                                 update can carry several now, and the files list
+                                                 already carries the right URL per file — the entry's
+                                                 own download route for the first, an attachment
+                                                 route for the rest. -->
+                                            <t t-if="(update.files or []).length">
+                                                <div class="mt-2 d-flex flex-wrap gap-2">
+                                                    <t t-foreach="update.files" t-as="uf" t-key="uf.id">
+                                                        <a t-att-href="uf.url"
+                                                           class="btn btn-sm btn-outline-primary"
+                                                           target="_blank">
+                                                            <i class="fa fa-download"></i> <t t-esc="uf.file_name"/>
+                                                        </a>
+                                                    </t>
+                                                </div>
                                             </t>
                                         </div>
                                     </t>
@@ -1383,6 +1611,20 @@ export class KpiAction extends Component {
                                             · started <t t-esc="state.liveBreak.start_display"/>
                                             · <span class="font-monospace"><t t-esc="liveBreakDisplay()"/></span>
                                         </span>
+                                        <!-- The other reasons, right beside it — the same one-click
+                                             switch the no-task pill above already offers. A meeting
+                                             called mid-break used to mean resuming the task and
+                                             pausing it again just to be asked why, which put a
+                                             sliver of work time on a task nobody worked on. -->
+                                        <t t-foreach="otherBreakReasons()" t-as="br" t-key="br.code">
+                                            <button class="btn btn-sm btn-outline-primary py-0 px-2"
+                                                    style="font-size:.72rem;"
+                                                    t-att-disabled="state.breakSwitchBusy"
+                                                    t-att-title="'Switch to ' + br.label + ' without resuming the task'"
+                                                    t-on-click="() => this.switchBreak(br.code)">
+                                                <t t-esc="br.label"/>
+                                            </button>
+                                        </t>
                                     </t>
                                     <!-- Move to the next task in one action. Only offered
                                          while something is actually running — with nothing
@@ -1511,6 +1753,18 @@ export class KpiAction extends Component {
                                         <i class="fa fa-times me-1"></i> Clear
                                     </button>
                                 </t>
+
+                                <!-- Grid ⇄ list, the same toggle the app has. The kanban
+                                     is eleven lanes wide, so on a narrow screen reading
+                                     it means scrolling sideways past lanes you don't want;
+                                     the list stacks them and opens one at a time. -->
+                                <button class="btn btn-outline-secondary btn-sm"
+                                        style="height: 32px; font-size: 0.8rem;"
+                                        t-att-title="state.viewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'"
+                                        t-on-click="toggleViewMode">
+                                    <i t-att-class="'fa me-1 ' + (state.viewMode === 'list' ? 'fa-th' : 'fa-list')"/>
+                                    <t t-esc="state.viewMode === 'list' ? 'Grid' : 'List'"/>
+                                </button>
                             </div>
 
                             <!-- Active filter chips. The dropdowns alone don't say what is
@@ -1570,20 +1824,32 @@ export class KpiAction extends Component {
 
                     <!-- Top scrollbar mirror — synced with the kanban row below so admin can
                          scroll horizontally without going to the bottom of the page. -->
-                    <div class="kpi-scrolltop" t-ref="kpiScrollTop">
+                    <!-- Grid only: in list view the lanes stack, nothing scrolls
+                         sideways, and a mirror of a scrollbar that isn't there is
+                         just a grey bar across the top of the board. -->
+                    <div t-if="state.viewMode !== 'list'" class="kpi-scrolltop" t-ref="kpiScrollTop">
                         <div class="kpi-scrolltop-inner" t-ref="kpiScrollTopInner"></div>
                     </div>
 
-                    <div class="row g-3" t-ref="kpiKanbanRow">
-                        <t t-foreach="columns" t-as="col" t-key="col.key">
-                            <div class="col kpi-lane">
+                    <!-- One lane loop for both views. The card markup inside is long and
+                         identical either way, so the views differ by container class and
+                         by whether a lane's body is open — duplicating the loop would mean
+                         two copies of ~300 lines drifting apart. -->
+                    <div t-att-class="state.viewMode === 'list' ? 'kpi-listview' : 'row g-3'" t-ref="kpiKanbanRow">
+                        <t t-foreach="visibleColumns" t-as="col" t-key="col.key">
+                            <div t-att-class="state.viewMode === 'list' ? 'kpi-lane-row' : 'col kpi-lane'">
                                 <div class="kpi-column-card h-100" t-att-class="'kpi-' + col.key">
-                                    
-                                    <div class="kpi-header" t-att-class="'kpi-' + col.key">
+
+                                    <div class="kpi-header" t-att-class="'kpi-' + col.key"
+                                         t-att-style="state.viewMode === 'list' ? 'cursor:pointer;' : ''"
+                                         t-on-click="() => this.toggleLane(col.key)">
+                                        <i t-if="state.viewMode === 'list'"
+                                           t-att-class="'fa me-2 ' + (isLaneOpen(col.key) ? 'fa-caret-down' : 'fa-caret-right')"/>
                                         <span t-esc="col.label"/>
                                         <span class="badge bg-white text-dark ms-2" style="font-size: 0.75rem;"
-                                              t-esc="col.key === 'paid' ? state.paidTasks.length : getFilteredTasksByState(col.key).length"/>
+                                              t-esc="laneCount(col.key)"/>
                                     </div>
+                                    <t t-if="state.viewMode !== 'list' or isLaneOpen(col.key)">
 
                                     <!-- Paid is an archive, not a workload: the tasks are settled,
                                          there is nothing to act on, and they are filed away
@@ -1782,6 +2048,18 @@ export class KpiAction extends Component {
                                                         </t>
                                                         Time: <t t-esc="getDisplayTime(task)"/>
                                                     </div>
+                                                    <!-- Second clock, right under the total. That total is a
+                                                         lifetime figure, so after a lunch break it still reads
+                                                         "5h" and says nothing about the stretch being worked
+                                                         now — which is the half you actually want back. -->
+                                                    <t t-set="since" t-value="sinceResume(task)"/>
+                                                    <t t-if="since">
+                                                        <div class="small text-primary fw-semibold">
+                                                            <i class="fa fa-play-circle me-1"/>
+                                                            <t t-esc="since.display"/>
+                                                            <span class="text-muted fw-normal ms-1" t-esc="since.label"/>
+                                                        </div>
+                                                    </t>
                                                     <div class="text-muted small">
                                                         Estimate: <t t-esc="task.estimate_display"/>
                                                         <span t-if="task.estimate_extension_count"
@@ -1951,6 +2229,7 @@ export class KpiAction extends Component {
                                             </div>
                                         </t>
                                     </div>
+                                    </t>
                                 </div>
                             </div>
                         </t>
@@ -1974,6 +2253,48 @@ export class KpiAction extends Component {
     get columns() {
         if (this.state.isAdmin) return this._allColumns;
         return this._allColumns.filter(c => c.key !== 'paid');
+    }
+
+    // How many cards a lane is showing right now, filters included. `paid` is an
+    // archive on its own route and never goes through the filter pipeline.
+    laneCount(key) {
+        return key === 'paid'
+            ? this.state.paidTasks.length
+            : this.getFilteredTasksByState(key).length;
+    }
+
+    // The grid shows every lane, empty or not — it is a pipeline, and a missing
+    // column reads as a missing stage. The list has no such shape to preserve, and
+    // a stack of "Nothing here yet" headings is just scrolling, so it drops the
+    // empty ones. Same rule the app's list view follows (KpiActionBoard listData).
+    get visibleColumns() {
+        const cols = this.columns;
+        if (this.state.viewMode !== 'list') return cols;
+        return cols.filter(c => this.laneCount(c.key) > 0);
+    }
+
+    // List lanes start closed, like the app's — opening the view on every task of
+    // every lane is the wall the accordion exists to avoid.
+    isLaneOpen(key) { return !!this.state.expandedLanes[key]; }
+    toggleLane(key) {
+        if (this.state.viewMode !== 'list') return;
+        this.state.expandedLanes[key] = !this.state.expandedLanes[key];
+    }
+    setViewMode(mode) {
+        this.state.viewMode = mode === 'list' ? 'list' : 'grid';
+        // Remembered per browser: this is a reading preference, not board state,
+        // and having it snap back to grid on every reload is the thing that makes
+        // a view toggle feel broken.
+        try { localStorage.setItem('kpi_action_view_mode', this.state.viewMode); } catch (e) { /* private mode */ }
+    }
+    toggleViewMode() {
+        this.setViewMode(this.state.viewMode === 'list' ? 'grid' : 'list');
+        // The top scrollbar mirror only exists in grid, so its refs are gone while
+        // the list is showing and the listeners wired at mount are attached to a
+        // dead node. Re-wire once the grid markup is back on screen.
+        if (this.state.viewMode === 'grid') {
+            setTimeout(() => this._setupTopScrollSync(), 0);
+        }
     }
     // Extending an estimate is for work still in flight. Once the client has signed
     // off, that number is what they accepted — and may be what they were billed on —
@@ -2016,7 +2337,7 @@ export class KpiAction extends Component {
     // "YYYY-MM-DD HH:MM:SS" in the user's timezone, so the split is positional and there
     // is no second date format to keep in step with the rest of the screens.
     activityGroups() {
-        const rows = this.state.detailData.activity_log || [];
+        const rows = this.activityRows();
         const byDate = new Map();
         for (const ev of rows) {
             const date = String(ev.at || '').slice(0, 10) || 'unknown';
@@ -2038,19 +2359,216 @@ export class KpiAction extends Component {
     isActivityDateOpen(d) {
         return !!this.state.activityExpanded[d];
     }
-    openActivity() {
+    // Progress History entries are clamped to 3 lines; this lifts the clamp on one
+    // entry rather than rendering a second copy of the text below it.
+    toggleProgressExpanded(id) {
+        this.state.progressExpanded[id] = !this.state.progressExpanded[id];
+    }
+
+    // ---- Progress History: select, delete, edit -------------------------------
+    // Only rows the server said this user may touch. can_edit comes from
+    // _may_edit_progress, and every route re-checks it — hiding a control is a
+    // courtesy, not a permission.
+    deletableProgress() {
+        return (this.state.progressUpdates || []).filter(u => u.can_edit);
+    }
+    isProgressSelected(id) { return !!this.state.progressSelected[id]; }
+    toggleProgressSelected(id) {
+        this.state.progressSelected[id] = !this.state.progressSelected[id];
+    }
+    selectedProgressIds() {
+        return this.deletableProgress()
+            .filter(u => this.state.progressSelected[u.id])
+            .map(u => u.id);
+    }
+    allProgressSelected() {
+        const rows = this.deletableProgress();
+        return rows.length > 0 && rows.every(u => this.state.progressSelected[u.id]);
+    }
+    toggleSelectAllProgress() {
+        const rows = this.deletableProgress();
+        const selectAll = !this.allProgressSelected();
+        for (const u of rows) this.state.progressSelected[u.id] = selectAll;
+    }
+    clearProgressSelection() { this.state.progressSelected = {}; }
+
+    async deleteSelectedProgress() {
+        const ids = this.selectedProgressIds();
+        if (!ids.length) { this._toast('Nothing selected.', 'warning'); return; }
+        const ok = await this._confirm(
+            ids.length === 1 ? 'Delete this update?' : `Delete ${ids.length} updates?`,
+            'This removes the note, its links and any attached file. It cannot be undone.',
+            'Delete', 'btn-danger');
+        if (!ok) return;
+        this.state.progressBusy = true;
+        try {
+            const res = await rpc('/kpi/progress/delete_bulk', { progress_ids: ids });
+            if (res && res.status === false) {
+                this._toast(res.message || "Couldn't delete those.", 'danger');
+                return;
+            }
+            // The route deletes what it can and reports the rest rather than failing
+            // the batch, so say so instead of implying everything went.
+            const refused = (res && res.refused) || 0;
+            this._toast(
+                refused ? `Deleted ${res.deleted}; ${refused} belonged to someone else.`
+                        : `Deleted ${res.deleted}.`,
+                refused ? 'warning' : 'success');
+            this.clearProgressSelection();
+            await this.loadProgressUpdates(this.state.detailKpiId);
+        } catch (e) {
+            this._toast("Couldn't delete those: " + ((e && e.message) || e), 'danger');
+        } finally {
+            this.state.progressBusy = false;
+        }
+    }
+
+    async deleteOneProgress(update) {
+        const ok = await this._confirm(
+            'Delete this update?',
+            'This removes the note, its links and any attached file. It cannot be undone.',
+            'Delete', 'btn-danger');
+        if (!ok) return;
+        this.state.progressBusy = true;
+        try {
+            const res = await rpc('/kpi/progress/delete', { progress_id: update.id });
+            if (res && res.status === false) {
+                this._toast(res.message || "Couldn't delete that.", 'danger');
+                return;
+            }
+            delete this.state.progressSelected[update.id];
+            await this.loadProgressUpdates(this.state.detailKpiId);
+        } catch (e) {
+            this._toast("Couldn't delete that: " + ((e && e.message) || e), 'danger');
+        } finally {
+            this.state.progressBusy = false;
+        }
+    }
+
+    // Seeded from the entry itself: the popup has to arrive holding what was
+    // written, not an empty form that silently replaces it on save.
+    openProgressEdit(update) {
+        Object.assign(this.state.progressEdit, {
+            open: true,
+            id: update.id,
+            summary: update.summary || '',
+            related_links: [...(update.links || [])],
+            link_input: '',
+            file_name: update.file_name || '',
+            clear_file: false,
+            saving: false,
+        });
+    }
+    closeProgressEdit() {
+        this.state.progressEdit.open = false;
+        this.state.progressEdit.id = null;
+    }
+    addEditLink() {
+        const link = (this.state.progressEdit.link_input || '').trim();
+        if (!link) { this._toast('Please enter a link', 'warning'); return; }
+        try { new URL(link); }
+        catch (e) { this._toast('Please enter a valid URL (e.g., https://example.com)', 'warning'); return; }
+        this.state.progressEdit.related_links.push(link);
+        this.state.progressEdit.link_input = '';
+    }
+    removeEditLink(index) {
+        this.state.progressEdit.related_links.splice(index, 1);
+    }
+    async saveProgressEdit() {
+        const e = this.state.progressEdit;
+        const summary = (e.summary || '').trim();
+        if (!summary) { this._toast('Summary is required.', 'warning'); return; }
+        e.saving = true;
+        try {
+            const res = await rpc('/kpi/progress/update', {
+                progress_id: e.id,
+                summary,
+                related_links: JSON.stringify(e.related_links || []),
+                clear_file: !!e.clear_file,
+            });
+            if (res && res.status === false) {
+                this._toast(res.message || "Couldn't save that.", 'danger');
+                return;
+            }
+            this.closeProgressEdit();
+            await this.loadProgressUpdates(this.state.detailKpiId);
+            this._toast('Progress update saved.', 'success');
+        } catch (err) {
+            this._toast("Couldn't save that: " + ((err && err.message) || err), 'danger');
+        } finally {
+            e.saving = false;
+        }
+    }
+    // The three logs the dropdown offers. 'all' is the whole audit trail and is
+    // already in the detail payload; the others are narrower reads of the same
+    // table, fetched per kind so the 200-row cap applies to each on its own
+    // rather than slicing a mixed list and losing the older rows of one kind.
+    static ACTIVITY_KINDS = [
+        { key: 'all',     label: 'All activity',      icon: 'fa-history' },
+        { key: 'pause',   label: 'Pause log',         icon: 'fa-pause-circle' },
+        { key: 'heading', label: 'Heading change log', icon: 'fa-pencil' },
+    ];
+    get activityKinds() { return this.constructor.ACTIVITY_KINDS; }
+    activityKindLabel() {
+        const k = this.activityKinds.find(k => k.key === this.state.activityKind);
+        return k ? k.label : 'Activity';
+    }
+    // 'all' comes from the detail payload the pane already loaded; a narrower kind
+    // comes from its own fetch. Keeping them separate means switching back to All
+    // costs no round-trip.
+    activityRows() {
+        if (this.state.activityKind === 'all') {
+            return this.state.detailData.activity_log || [];
+        }
+        return this.state.activityRows || [];
+    }
+    activityTotal() {
+        if (this.state.activityKind === 'all') {
+            return this.state.detailData.activity_total || 0;
+        }
+        return this.state.activityTotal || 0;
+    }
+    async openActivity(kind = 'all') {
+        this.state.activityKind = kind;
+        this.state.activityOpen = true;
+        if (kind !== 'all') {
+            this.state.activityRows = [];
+            this.state.activityTotal = 0;
+            this.state.activityLoading = true;
+            try {
+                const res = await rpc('/kpi_action/activity',
+                                      { kpi_id: this.state.detailKpiId, kind });
+                if (res && res.status === false) {
+                    this._toast(res.message || "Couldn't load that log.", 'danger');
+                } else {
+                    this.state.activityRows = (res && res.activity_log) || [];
+                    this.state.activityTotal = (res && res.activity_total) || 0;
+                }
+            } catch (e) {
+                this._toast("Couldn't load that log: " + ((e && e.message) || e), 'danger');
+            } finally {
+                this.state.activityLoading = false;
+            }
+        }
         // Newest day open, the rest folded: opening fully collapsed means a click before
         // you can read anything, and fully expanded is the wall the popup exists to avoid.
         // Reset each time, so it never reopens in a half-open state from last visit.
         const groups = this.activityGroups();
         this.state.activityExpanded = groups.length ? { [groups[0].date]: true } : {};
-        this.state.activityOpen = true;
     }
     activityDetail(ev) {
         let p = {};
         try { p = JSON.parse(ev.detail || '{}'); } catch (e) { return ev.detail || ''; }
         if (ev.event === 'estimate_extended') {
             return `${p.from} → ${p.to}` + (p.reason ? ` · "${p.reason}"` : '');
+        }
+        if (ev.event === 'meta_updated') {
+            // A meta edit can move the project without touching the name, so say
+            // whichever actually changed rather than printing "X → X".
+            const bits = [];
+            if (p.name_from !== p.name_to) bits.push(`"${p.name_from}" → "${p.name_to}"`);
+            if (p.kra_from !== p.kra_to) bits.push(`Project: ${p.kra_from || '—'} → ${p.kra_to || '—'}`);
+            return bits.join(' · ') || 'No visible change';
         }
         if (p.reason) return String(p.reason);
         if (p.note) return String(p.note);
@@ -2149,6 +2667,10 @@ export class KpiAction extends Component {
             tasksByState: {},
             activityOpen: false,      // the Activity popup
             activityExpanded: {},     // which day sections are open, keyed by date
+            activityKind: 'all',      // which log the dropdown picked
+            activityRows: [],         // rows for a narrowed kind ('all' reads detailData)
+            activityTotal: 0,
+            activityLoading: false,
             paidTasks: [],        // settled work, admin-only Paid lane (own route — archived)
             paidTruncated: false, // more paid tasks exist than the lane shows
             allTasks: [],  // 🆕 NEW: Store all tasks for filtering
@@ -2171,12 +2693,22 @@ export class KpiAction extends Component {
                 status: '',
             },
             progressUpdates: [],
+            progressExpanded: {},     // which history entries are un-clamped, keyed by id
+            progressSelected: {},     // which history entries are ticked, keyed by id
+            progressBusy: false,      // a delete is in flight
+            // The edit popup, seeded from the entry being edited with the same
+            // fields the create form collects.
+            progressEdit: {
+                open: false, id: null, summary: '', related_links: [], link_input: '',
+                file_name: '', clear_file: false, saving: false,
+            },
             showRejectionModal: false,
             rejectedTasks: [],
             seenRejectionIds: [],  // 🆕 NEW: Track which rejected tasks we've already shown
             progressForm: {
                 summary: '',
                 uploaded_file: null,
+                fileObjs: [],       // every file picked for THIS update
                 file_name: '',
                 related_links: [],  // 🆕 NEW
                 link_input: '',
@@ -2187,7 +2719,7 @@ export class KpiAction extends Component {
             manualsList: [],
             
             manualForm: {
-                file: null,           // the File itself — posted as multipart
+                files: [],            // the Files themselves — posted as multipart
                 file_data: null,      // legacy base64 slot, no longer written
                 file_name: '',
                 size_display: '',
@@ -2233,6 +2765,13 @@ export class KpiAction extends Component {
             idleBusy: '',           // the reason code in flight
             idleNote: '',           // optional, shows on the Workday Map
             nontaskBusy: false,
+            breakSwitchBusy: '',    // the break reason code in flight
+            // 'grid' (the kanban row) or 'list' (stacked lane accordion, like the app).
+            viewMode: (() => {
+                try { return localStorage.getItem('kpi_action_view_mode') === 'list' ? 'list' : 'grid'; }
+                catch (e) { return 'grid'; }
+            })(),
+            expandedLanes: {},      // which list lanes are open, keyed by lane key
             // Switching ENDS the running block and starts another — a real edit to
             // the day, and a mis-click would cut a meeting short. Confirm first.
             switchTo: null,         // an IDLE_REASONS entry, or null
@@ -3411,10 +3950,8 @@ export class KpiAction extends Component {
             title: 'Reopen this workday?',
             message: 'The reason is sent to the developer word for word — it is the only '
                    + 'thing that explains why their day suddenly reopened. Everyone who '
-                   + "received the day's summary is told too.
-
-The paused task stays "
-                   + 'paused; they press Resume to pick it back up.',
+                   + "received the day's summary is told too.\n\n"
+                   + 'The paused task stays paused; they press Resume to pick it back up.',
             input: true, inputLabel: 'Reason', required: true,
             placeholder: 'e.g. forgot to log the afternoon site visit',
             okLabel: 'Reopen workday', okClass: 'btn-warning',
@@ -4022,29 +4559,31 @@ The paused task stays "
 
     // Progress Update Methods
     handleProgressFileUpload(event) {
-        const file = event.target.files[0];
+        // Several files land on ONE update now — three screenshots of the same bug
+        // used to mean writing the same note three times, once per file.
+        const picked = Array.from(event.target.files || []);
         this.state.uploadState.error = '';
-        if (!file) {
-            this.state.progressForm.fileObj = null;
-            this.state.progressForm.file_name = '';
-            return;
-        }
+        this.state.progressForm.fileObjs = [];
+        this.state.progressForm.file_name = '';
+        if (!picked.length) return;
+
         const MAX = 50 * 1024 * 1024;
-        if (file.size > MAX) {
-            this.state.uploadState.error = 'That file is ' + this._mb(file.size) +
+        // Per file, matching the server: summing them would refuse three ordinary
+        // screenshots on a limit meant for one screen recording.
+        const tooBig = picked.find((f) => f.size > MAX);
+        if (tooBig) {
+            this.state.uploadState.error = `"${tooBig.name}" is ` + this._mb(tooBig.size) +
                 ' — over the 50 MB limit. Add a Drive or GitHub link instead.';
-            this.state.progressForm.fileObj = null;
-            this.state.progressForm.file_name = '';
             event.target.value = '';
             return;
         }
-        this.state.progressForm.fileObj = file;
-        this.state.progressForm.file_name = file.name;
-        // keep base64 too for any legacy path that still reads uploaded_file
-        const reader = new FileReader();
-        reader.onload = () => { this.state.progressForm.uploaded_file = reader.result.split(',')[1]; };
-        reader.readAsDataURL(file);
+        this.state.progressForm.fileObjs = picked;
+        this.state.progressForm.file_name = picked.length === 1
+            ? picked[0].name : `${picked.length} files`;
     }
+
+    // Total bytes queued, for the progress ring's denominator.
+    _totalBytes(files) { return (files || []).reduce((n, f) => n + (f.size || 0), 0); }
 
     _mb(bytes) { return (bytes / (1024 * 1024)).toFixed(1) + ' MB'; }
 
@@ -4063,7 +4602,7 @@ The paused task stays "
         this.state.progressForm.summary = '';
         this.state.progressForm.uploaded_file = null;
         this.state.progressForm.file_name = '';
-        this.state.progressForm.fileObj = null;
+        this.state.progressForm.fileObjs = [];
         this.state.progressForm.related_links = [];
         this.state.progressForm.link_input = '';
         this.state.uploadState = { active: false, percent: 0, loaded: 0, total: 0, error: '', xhr: null };
@@ -4102,9 +4641,9 @@ The paused task stays "
             if (el) el.focus();
             return;
         }
-        // WITH a file → live multipart upload (circular %-ring).
-        if (this.state.progressForm.fileObj) {
-            return this._submitWithFile(this.state.progressForm.fileObj);
+        // WITH files → live multipart upload (circular %-ring).
+        if ((this.state.progressForm.fileObjs || []).length) {
+            return this._submitWithFile(this.state.progressForm.fileObjs);
         }
         // No file → JSON create (unchanged path).
         try {
@@ -4127,11 +4666,16 @@ The paused task stays "
         }
     }
 
-    async _submitWithFile(fileObj) {
+    async _submitWithFile(fileObjs) {
+        // One request carrying every file, not one request per file: they belong to
+        // a single update, so a partial failure must not leave half an entry
+        // behind. FormData repeats the 'file' key and the route reads getlist.
+        const files = Array.isArray(fileObjs) ? fileObjs : [fileObjs];
         const us = this.state.uploadState;
-        us.active = true; us.percent = 0; us.loaded = 0; us.total = fileObj.size; us.error = '';
+        us.active = true; us.percent = 0; us.loaded = 0;
+        us.total = this._totalBytes(files); us.error = '';
         const fd = new FormData();
-        fd.append('file', fileObj);
+        for (const f of files) fd.append('file', f);
         fd.append('kpi_id', this.state.detailKpiId);
         fd.append('summary', this.state.progressForm.summary);
         fd.append('related_links', JSON.stringify(this.state.progressForm.related_links));
@@ -4266,17 +4810,26 @@ The paused task stays "
             const result = await rpc('/kpi/progress/list', { kpi_id: kpi_id });
             if (result.status) {
                 // Extract only updates that have files, in reverse order (latest first)
-                this.state.attachedFiles = result.updates
-                    .filter(update => update.has_file)
-                    .map(update => ({
-                        id: update.id,
-                        file_name: update.file_name,
+                // Flattened over the files of each update, not one row per update:
+                // an update can carry several files now, and listing only the first
+                // would quietly hide the rest from this card.
+                this.state.attachedFiles = result.updates.flatMap(update =>
+                    (update.files || []).map(f => ({
+                        // Unique per FILE — the row key was the update id, which
+                        // repeats once an update has more than one file.
+                        key: `${update.id}:${f.id}`,
+                        id: update.id,                   // Part D: scrollToNote target
+                        file_name: f.file_name,
                         employee_name: update.employee_name,
                         create_date: update.create_date,
                         summary: update.summary || '',   // Part D: link back to the note
-                        view_url: `/kpi/progress/view?progress_id=${update.id}`,
-                        download_url: `/kpi/progress/download?progress_id=${update.id}`
-                    }));
+                        // Only the entry's own file has an inline viewer route; the
+                        // extras are served as downloads, so View points at the same
+                        // URL rather than a 404.
+                        view_url: f.id === 0
+                            ? `/kpi/progress/view?progress_id=${update.id}` : f.url,
+                        download_url: f.url,
+                    })));
             }
         } catch (error) {
             console.error('Error loading attached files:', error);
@@ -4354,31 +4907,39 @@ The paused task stays "
     static MANUAL_EXTENSIONS = ['.pdf', '.doc', '.docx'];
 
     handleManualUpload(event) {
-        const file = event.target.files[0];
+        // One manual entry can carry several documents — a spec plus its annexes
+        // used to need one entry each, with the same description retyped.
+        const picked = Array.from(event.target.files || []);
         this.state.manualForm.error = '';
-        this.state.manualForm.file = null;
+        this.state.manualForm.files = [];
         this.state.manualForm.file_name = '';
         this.state.manualForm.size_display = '';
-        if (!file) { return; }
+        if (!picked.length) { return; }
 
-        const name = (file.name || '').toLowerCase();
-        if (!KpiAction.MANUAL_EXTENSIONS.some((ext) => name.endsWith(ext))) {
-            this.state.manualForm.error = 'Only PDF, DOC and DOCX files can be uploaded as a manual.';
-            event.target.value = '';
-            return;
+        // Validated per file, and the message names the offender — with several
+        // picked at once "that file is too big" would not say which.
+        for (const file of picked) {
+            const name = (file.name || '').toLowerCase();
+            if (!KpiAction.MANUAL_EXTENSIONS.some((ext) => name.endsWith(ext))) {
+                this.state.manualForm.error =
+                    `"${file.name}" is not a PDF, DOC or DOCX.`;
+                event.target.value = '';
+                return;
+            }
+            if (file.size > KpiAction.MANUAL_MAX_BYTES) {
+                this.state.manualForm.error =
+                    `"${file.name}" is ${this._fmtBytes(file.size)}. The limit is ` +
+                    `${KpiAction.MANUAL_MAX_BYTES / (1024 * 1024)} MB per file.`;
+                event.target.value = '';
+                return;
+            }
         }
-        if (file.size > KpiAction.MANUAL_MAX_BYTES) {
-            this.state.manualForm.error =
-                `That file is ${this._fmtBytes(file.size)}. The limit is ` +
-                `${KpiAction.MANUAL_MAX_BYTES / (1024 * 1024)} MB.`;
-            event.target.value = '';
-            return;
-        }
-        // Keep the File itself — the multipart upload posts it directly, so
+        // Keep the Files themselves — the multipart upload posts them directly, so
         // there is no FileReader to wait on and the button enables immediately.
-        this.state.manualForm.file = file;
-        this.state.manualForm.file_name = file.name;
-        this.state.manualForm.size_display = this._fmtBytes(file.size);
+        this.state.manualForm.files = picked;
+        this.state.manualForm.file_name = picked.length === 1
+            ? picked[0].name : `${picked.length} files`;
+        this.state.manualForm.size_display = this._fmtBytes(this._totalBytes(picked));
     }
 
     _fmtBytes(n) {
@@ -4432,7 +4993,7 @@ The paused task stays "
 
     async submitUserManual() {
         const form = this.state.manualForm;
-        if (!form.file) {
+        if (!(form.files || []).length) {
             form.error = 'Please select a file.';
             return;
         }
@@ -4445,7 +5006,9 @@ The paused task stays "
         try {
             const fd = new FormData();
             fd.append('kpi_id', this.state.detailKpiId);
-            fd.append('file', form.file, form.file.name);
+            // One request for the whole set — they are one manual entry, so a
+            // partial failure must not leave half of it behind.
+            for (const f of form.files) fd.append('file', f, f.name);
             fd.append('description', form.description || '');
             fd.append('related_links', JSON.stringify(form.related_links || []));
 
@@ -4499,7 +5062,7 @@ The paused task stays "
      *  different points and they had started to disagree about which keys exist. */
     _blankManualForm() {
         return {
-            file: null,
+            files: [],            // every document picked for THIS manual entry
             file_data: null,
             file_name: '',
             size_display: '',
@@ -5719,6 +6282,39 @@ The paused task stays "
         return IDLE_REASONS.filter((r) => r.code !== cur);
     }
 
+    // The break reasons that AREN'T the one running, for the paused-task pill.
+    otherBreakReasons() {
+        const cur = (this.state.liveBreak && this.state.liveBreak.type) || '';
+        return BREAK_SWITCH_REASONS.filter((r) => r.code !== cur);
+    }
+
+    // One click: close the open break at now, open the new one at the same now.
+    // The server splits the interval rather than relabelling it, so the Workday Map
+    // shows Break THEN Meeting instead of one block that never happened.
+    async switchBreak(code) {
+        if (this.state.breakSwitchBusy) return;
+        this.state.breakSwitchBusy = code;
+        try {
+            const res = await rpc('/kra_kpi/break/switch', { reason_code: code });
+            if (res && res.status === false) {
+                this._toast((res && res.message) || "Couldn't switch that.", 'danger');
+                return;
+            }
+            const from = res && res.switched_from;
+            const label = (BREAK_SWITCH_REASONS.find((r) => r.code === code) || {}).label || code;
+            if (from) {
+                const fromLabel = (BREAK_SWITCH_REASONS.find((r) => r.code === from) || {}).label || from;
+                this._toast(`${fromLabel} → ${label}`, 'success');
+            }
+            await this.loadLiveStatus();
+            await this.refresh();
+        } catch (e) {
+            this._toast("Couldn't switch that: " + ((e && e.message) || e), 'danger');
+        } finally {
+            this.state.breakSwitchBusy = '';
+        }
+    }
+
     openIdleModal() { this.state.idleModalOpen = true; }
 
     // Closing WITHOUT answering buys a short grace, then it asks again. The modal
@@ -6131,6 +6727,44 @@ The paused task stays "
         }
         // For other tasks, just show the stored time
         return this.formatTime(task.timer_total_seconds || 0);
+    }
+
+    // What the pause was for, phrased for the "since" figure below.
+    static SINCE_RESUME_LABELS = {
+        break: 'after break',
+        lunch: 'after lunch',
+        meeting: 'after meeting',
+        leave: 'after leave',
+        urgent: 'after urgent work',
+        priority_task: 'after switching',
+        technical_issue: 'after issue',
+        awaiting_approval: 'after approval',
+        away: 'after away',
+    };
+
+    // The lifetime total answers "how long has this task taken" — which, once you
+    // come back from lunch, is not the question being asked. This is the other
+    // half: how long since you picked it back up.
+    //
+    // No new field is needed for it. timer_start_datetime is re-stamped on every
+    // resume (kpi.py:627), so it already IS the since-resume anchor, and
+    // resume_task never clears pause_reason_code, so the reason that caused the
+    // break is still there to name it.
+    //
+    // Null on a task that has never been paused: there is no "since" to show on a
+    // task still inside its first run, and the total already says everything.
+    sinceResume(task) {
+        if (!task || task.task_state !== 'in_progress') return null;
+        if (!task.timer_start_datetime || !task.pause_reason_code) return null;
+        if (!(task.timer_total_seconds > 0)) return null;
+        const started = new Date(task.timer_start_datetime).getTime();
+        if (isNaN(started)) return null;
+        const secs = Math.floor((this.state.currentTime - started) / 1000);
+        if (secs < 0) return null;
+        return {
+            display: this.formatTime(secs),
+            label: this.constructor.SINCE_RESUME_LABELS[task.pause_reason_code] || 'since resume',
+        };
     }
 
     // 🆕 NEW: Toggle task filter between All Tasks and My Tasks
