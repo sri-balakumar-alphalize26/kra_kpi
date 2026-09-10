@@ -140,6 +140,15 @@ export function laneForTask(t) {
   if (t.is_self_created && !t.admin_accepted) return 'pending_review';
   switch (t.task_state) {
     case 'in_progress': return 'in_progress';
+    // hold and rework sit with paused DELIBERATELY, and this is a known,
+    // deliberate divergence from the web board — do not "fix" it to match.
+    // kpi_action.js has no branch for either, so both fall through to
+    // `key = t.priority` and are then pushed only `if (groups[key])`: a task
+    // whose priority is not one of the three lane keys is silently dropped and
+    // appears on the web board nowhere at all. Both states are real
+    // (models/kpi.py) and rework is in the server's own _RESUMABLE_STATES, i.e.
+    // work already underway — which is what the Paused lane holds. Losing a task
+    // off the board is the worse failure, so the app keeps it.
     case 'paused':
     case 'hold':
     case 'rework': return 'paused';

@@ -17,7 +17,8 @@ import GradientBackground from '../components/GradientBackground';
 // The same picker New Invoice uses. Dates were hand-typed here, which is the one
 // remaining way to get a malformed range into a report.
 import DateGridModal from '../components/DateGridModal';
-import { fetchWorkReport, fetchWorkReportClients, fetchWorkReportPdf } from '../services/workReport';
+import { fetchWorkReport, fetchWorkReportClients } from '../services/workReport';
+import { makeWorkReportPdf } from '../utils/workReportPdf';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('WorkReport');
@@ -129,7 +130,11 @@ export default function WorkReport({ onBack }) {
   const downloadPdf = async () => {
     setPdfBusy(true);
     try {
-      const res = await fetchWorkReportPdf(paramsOf());
+      // Built from the RESULT payload that produced what is on screen,
+      // never from paramsOf(), which reads the CURRENT filters. Change the preset
+      // after Generate and the old call exported a different window than the
+      // badges showed. There is nothing left to desync from.
+      const res = makeWorkReportPdf(result, showHours);
       if (!res?.status || !res.data_b64) { flash('err', res?.message || 'Could not build the PDF.'); return; }
       const name = (res.file_name || 'Work_Report.pdf').split(/[\\/]/).pop();
 
@@ -170,7 +175,7 @@ export default function WorkReport({ onBack }) {
     setShareBusy(true);
     log.info('share: start');
     try {
-      const res = await fetchWorkReportPdf(paramsOf());
+      const res = makeWorkReportPdf(result, showHours);
       if (!res?.status || !res.data_b64) { flash('err', res?.message || 'Could not build the PDF.'); return; }
       const name = (res.file_name || 'Work_Report.pdf').split(/[\\/]/).pop();
       const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;

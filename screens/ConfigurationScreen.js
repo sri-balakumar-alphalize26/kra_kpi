@@ -306,9 +306,15 @@ export default function ConfigurationScreen({ onBack }) {
   // know what the default text is.
   const resetWaTemplate = (ev) => saveWaEvent(ev, { template: '' });
 
+  // Tapping a token has to SAVE, not just type. The template is written on the
+  // textarea's onEndEditing, and inserting a token never touches the textarea —
+  // so an admin tapped {deadline}, watched it appear in the box and in the
+  // preview, went back, and found it gone. The web's equivalent ends with the
+  // same save call (kpi_configuration.js waInsertToken).
   const insertWaToken = (ev, tok) => {
     const next = `${ev.template || ''}{${tok}}`;
     setWaEvents((list) => list.map((e) => (e.event === ev.event ? { ...e, template: next } : e)));
+    return saveWaEvent(ev, { template: next });
   };
 
   const runWaTest = async () => {

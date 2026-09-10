@@ -2222,11 +2222,21 @@ export default function KpiActionBoard({
           + 'logged against it. The assigned developer and the client who raised it '
           + 'are notified.',
         confirmLabel: 'Delete',
-        onConfirm: async () => {
+        // The reason is not paperwork: the developer and the client who raised
+        // the task are both told this task is gone, and without a reason they
+        // are told only that. The service has always accepted one; nothing sent
+        // it. Required, because "deleted, no reason given" is the outcome this
+        // is meant to prevent.
+        input: {
+          label: 'Why is it being deleted? (required)',
+          placeholder: 'e.g. Raised twice — REQ-041 covers this',
+          required: true,
+        },
+        onConfirm: async (reason) => {
           setDlg((d) => (d ? { ...d, busy: true } : d));
           setBusyId(task.id);
           try {
-            const res = await adminDeleteTask(task.id);
+            const res = await adminDeleteTask(task.id, reason);
             if (res && res.status === false) {
               // The server re-checks: a board rendered before someone started
               // the task is refused here, not honoured.
@@ -2525,7 +2535,12 @@ export default function KpiActionBoard({
   // tells them what to fix, so it's required (the server allows an empty one,
   // but "No reason given" helps nobody).
   async function submitRejectSelf() {
-    if (!rejectNote.trim()) return;
+    // Say why nothing happened. A bare `return` left the Confirm button looking
+    // broken: tapped, nothing moved, no message. The button is also dimmed while
+    // the box is empty, so this is the belt to that braces.
+    if (!rejectNote.trim()) {
+      return say('A note is required', 'Say what needs to change — it is the only thing the developer gets.', 'warn');
+    }
     const task = rejectFor;
     const note = rejectNote.trim();
     setRejectFor(null);
@@ -2584,7 +2599,12 @@ export default function KpiActionBoard({
   // Admin rejects the developer's work → back to the SAME developer (paused) with
   // the reason; they Resume to continue. A reason is required.
   async function submitRejectDone() {
-    if (!rejectDoneNote.trim()) return;
+    // The web asks for at least ten characters here and says so; a one-word
+    // rejection tells the developer nothing about what to change. Same length
+    // rule, and — unlike the old bare `return` — an answer either way.
+    if (rejectDoneNote.trim().length < 10) {
+      return say('Say a little more', 'Please give a reason of at least 10 characters — this is what the developer works from.', 'warn');
+    }
     const task = rejectDoneFor;
     const note = rejectDoneNote.trim();
     setRejectDoneFor(null);
@@ -3169,6 +3189,7 @@ export default function KpiActionBoard({
         confirmLabel={dlg?.confirmLabel}
         destructive={dlg?.destructive}
         busy={dlg?.busy}
+        input={dlg?.input}
         onConfirm={dlg?.onConfirm}
         onClose={() => setDlg(null)}
       />
@@ -4181,8 +4202,8 @@ export default function KpiActionBoard({
             <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
               <TouchableOpacity style={s.footCancel} onPress={() => setRejectDoneFor(null)}><Text style={s.footCancelTxt}>Cancel</Text></TouchableOpacity>
               <TouchableOpacity
-                style={[s.footConfirm, { backgroundColor: COLORS.red }, !rejectDoneNote.trim() && { opacity: 0.5 }]}
-                onPress={submitRejectDone} disabled={!rejectDoneNote.trim()}
+                style={[s.footConfirm, { backgroundColor: COLORS.red }, rejectDoneNote.trim().length < 10 && { opacity: 0.5 }]}
+                onPress={submitRejectDone} disabled={rejectDoneNote.trim().length < 10}
               >
                 <Text style={s.footConfirmTxt}>Send back</Text>
               </TouchableOpacity>

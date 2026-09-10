@@ -1180,7 +1180,16 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     setPrompt({
       title: 'Add adjustment', fields: [{ key: 'description', label: 'Description', val: '' }, { key: 'quoted_hours', label: 'Hours', val: '0', numeric: true }],
       onOk: async (vals) => {
-        const r = await svc.addAdjustment({ invoice_id: detail.id, description: vals.description || 'Adjustment', quoted_hours: parseFloat(vals.quoted_hours) || 0 });
+        // Both were silently forgiving, and both go on the client's invoice.
+        // A blank description booked a line called "Adjustment", which says
+        // nothing to whoever reads the invoice; "2h" typed in the hours box
+        // became 0 through parseFloat's fallback, so the line was added and
+        // charged nothing, with no complaint. The web refuses each.
+        const desc = (vals.description || '').trim();
+        if (!desc) { Alert.alert('Description required', 'Say what the adjustment is for — it appears on the client’s invoice.'); return; }
+        const hours = parseFloat(vals.quoted_hours);
+        if (!isFinite(hours)) { Alert.alert('That is not a number', 'Enter the hours as a number, e.g. 2 or 1.5.'); return; }
+        const r = await svc.addAdjustment({ invoice_id: detail.id, description: desc, quoted_hours: hours });
         if (r?.status) refreshDetail(); else Alert.alert('Invoice', r?.message || 'Could not add.');
       },
     });

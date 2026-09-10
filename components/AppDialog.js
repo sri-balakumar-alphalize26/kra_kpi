@@ -13,8 +13,8 @@
 // A confirm is any call that passes onConfirm; without one this is an alert with
 // a single dismiss button. Cancel is always available and always safe.
 
-import React from 'react';
-import { Modal, View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { Modal, View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../theme';
 
@@ -34,11 +34,21 @@ export default function AppDialog({
   cancelLabel = 'Cancel',
   destructive = false,
   busy = false,
+  // Optional single free-text field, for a confirm that has to carry a reason
+  // with it. Off unless `input` is passed, so every existing caller is
+  // unaffected. `inputRequired` dims and disables the confirm until it is filled;
+  // the text arrives as the argument to onConfirm.
+  input = null,              // { label, placeholder, required }
   onConfirm,
   onClose,
 }) {
   const t = TONE[tone] || TONE.info;
   const isConfirm = !!onConfirm;
+  const [text, setText] = useState('');
+  // Clear between openings — a reason typed for one task must never arrive
+  // attached to the next.
+  useEffect(() => { if (!visible) setText(''); }, [visible]);
+  const inputBlocked = !!(input && input.required && !text.trim());
   return (
     <Modal visible={!!visible} transparent animationType="fade" onRequestClose={busy ? undefined : onClose}>
       <View style={s.backdrop}>
@@ -54,6 +64,20 @@ export default function AppDialog({
               <Text style={s.msg}>{message}</Text>
             </ScrollView>
           )}
+          {!!input && (
+            <View style={s.inputWrap}>
+              {!!input.label && <Text style={s.inputLabel}>{input.label}</Text>}
+              <TextInput
+                style={s.input}
+                placeholder={input.placeholder || ''}
+                placeholderTextColor={COLORS.faint}
+                value={text}
+                onChangeText={setText}
+                multiline
+                editable={!busy}
+              />
+            </View>
+          )}
           <View style={s.btns}>
             {isConfirm && (
               <TouchableOpacity style={s.cancel} onPress={busy ? undefined : onClose} activeOpacity={0.85}>
@@ -61,8 +85,8 @@ export default function AppDialog({
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={[s.ok, { backgroundColor: destructive ? COLORS.red : t.fg }, busy && { opacity: 0.6 }]}
-              onPress={busy ? undefined : (isConfirm ? onConfirm : onClose)}
+              style={[s.ok, { backgroundColor: destructive ? COLORS.red : t.fg }, (busy || inputBlocked) && { opacity: 0.6 }]}
+              onPress={(busy || inputBlocked) ? undefined : (isConfirm ? () => onConfirm(text.trim()) : onClose)}
               activeOpacity={0.85}
             >
               <Text style={s.okTxt}>{busy ? 'Working…' : confirmLabel}</Text>
@@ -80,6 +104,13 @@ const s = StyleSheet.create({
   iconWrap: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   title: { fontSize: 16.5, fontWeight: '900', color: COLORS.navy, textAlign: 'center', marginBottom: 6 },
   msg: { fontSize: 13.5, color: COLORS.muted, lineHeight: 20, textAlign: 'center' },
+  inputWrap: { alignSelf: 'stretch', marginTop: 14 },
+  inputLabel: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy, marginBottom: 6 },
+  input: {
+    borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 12, paddingHorizontal: 12,
+    paddingVertical: 10, minHeight: 74, textAlignVertical: 'top', fontSize: 14, color: COLORS.ink,
+    backgroundColor: '#fff',
+  },
   btns: { flexDirection: 'row', gap: 10, marginTop: 18, alignSelf: 'stretch' },
   cancel: {
     flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.line,

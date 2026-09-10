@@ -26,10 +26,8 @@ export async function fetchWorkReport(params) {
   return res || { status: false };
 }
 
-// The branded PDF (base64). 60s timeout — a big period is a few hundred KB.
-export async function fetchWorkReportPdf(params) {
-  const { serverUrl } = await getConnection();
-  if (!serverUrl) return { status: false, message: 'No server' };
-  const res = await jsonRpc(serverUrl, '/kpi_reports/period_work/pdf', params || {}, 60000);
-  return res || { status: false };
-}
+// fetchWorkReportPdf is gone. The PDF is built on the device now
+// (utils/workReportPdf.js, a port of the web's own builder), because the
+// server's /period_work/pdf could not do two things the screen needs: draw from
+// the RESULT rather than the current filters, and honour "Show hours". It took
+// the filters as parameters and always printed hours.

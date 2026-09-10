@@ -247,6 +247,16 @@ export default function KraKpiDashboard({ onBack }) {
     } else if (modal.type === 'kpi') {
       if (!modal.name.trim()) { Alert.alert('Required', 'Enter a KPI name'); return; }
       if (!modal.kraId) { Alert.alert('Required', 'Select a KRA for this KPI'); return; }
+      // Assignee and estimate are mandatory on the web (kpi_create.js) and the
+      // server backstops neither — create_kpi checks only the name. So the phone
+      // was the one way left to put an unassigned, un-estimated task on the
+      // board, which then sits in no lane anyone owns and blows every estimate
+      // comparison, since any time spent overruns an estimate of zero.
+      if (!modal.userId) { Alert.alert('Required', 'Choose who this KPI is for.'); return; }
+      if (!(parseInt(modal.hours, 10) > 0 || parseInt(modal.minutes, 10) > 0)) {
+        Alert.alert('Required', 'Enter an estimate — hours and/or minutes.');
+        return;
+      }
       setModal(null);
       await runMutation(() => svc.createKpi({
         name: modal.name, kraId: modal.kraId,
@@ -636,12 +646,12 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit }) {
 
                   <View style={s.row2}>
                     <View style={s.col}>
-                      <Text style={s.mLabel}>Hours</Text>
+                      <Text style={s.mLabel}>Hours <Text style={s.req}>*</Text></Text>
                       <TextInput style={s.mNum} keyboardType="number-pad" value={String(modal.hours)}
                         onChangeText={(t) => set({ hours: t.replace(/[^0-9]/g, '') })} />
                     </View>
                     <View style={s.col}>
-                      <Text style={s.mLabel}>Minutes</Text>
+                      <Text style={s.mLabel}>Minutes <Text style={s.req}>*</Text></Text>
                       <TextInput style={s.mNum} keyboardType="number-pad" value={String(modal.minutes)}
                         onChangeText={(t) => { let m = parseInt(t.replace(/[^0-9]/g, ''), 10); if (isNaN(m)) m = 0; if (m > 59) m = 59; set({ minutes: String(m) }); }} />
                     </View>
@@ -650,7 +660,7 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit }) {
                   <Text style={s.mLabel}>Priority</Text>
                   <Selector value={prioLabel} onPress={() => setPicker('priority')} />
 
-                  <Text style={s.mLabel}>Assignee (optional)</Text>
+                  <Text style={s.mLabel}>Assignee <Text style={s.req}>*</Text></Text>
                   <Selector value={userName} placeholder="— None —" onPress={() => setPicker('user')} />
                 </>
               )}
