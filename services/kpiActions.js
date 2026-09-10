@@ -724,6 +724,21 @@ export async function getWorkdayStatus() {
   log.info('workday status ←', { is_open: res?.is_open, today_closed: res?.today_closed, day_done: res?.day_done });
   return res || { is_open: false, day_done: false };
 }
+// Marks today's open session alive. This is the ONLY thing the admin Live
+// Tracking board reads to decide who is "working right now" — it compares
+// last_heartbeat against a cutoff of at least a minute (kpi_reports_api.py,
+// live_tracking) — so a client that never sends one reads as idle within minutes
+// of Start Workday even with a task running. The web board has always sent this;
+// the app never did, which made every phone-only developer look away on the
+// admin's screen. Never opens a session: a heartbeat must not start a workday.
+export async function sendHeartbeat() {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, was_away: false };
+  // Deliberately not through action(): this fires for the whole workday, and its
+  // two log lines a beat would bury everything else worth reading in the log.
+  return jsonRpc(serverUrl, '/kpi_action/heartbeat', {});
+}
+
 export const startWorkday = () => action('/kpi_workday/ping', {});
 export const endWorkday = (note = '') => action('/kpi_workday/end', { note });
 // Freeze the whole day without ending it — tasks stop, Presence stops, and it can

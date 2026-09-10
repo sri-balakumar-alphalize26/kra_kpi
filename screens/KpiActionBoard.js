@@ -23,7 +23,7 @@ import {
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists,
   CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
-  getWorkdayStatus, startWorkday, endWorkday, pauseWorkday, resumeWorkday,
+  getWorkdayStatus, startWorkday, endWorkday, pauseWorkday, resumeWorkday, sendHeartbeat,
   selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
   acceptSelfCreated, rejectSelfCreated,
   IDLE_REASONS, setIdleReason, endNonTask, IDLE_NOTE_MAX,
@@ -151,6 +151,11 @@ const POLL_MS = 20000;   // silent live refresh interval
 // used to duck the question for the rest of the day.
 const IDLE_SNOOZE_MS = 60000;
 const TICK_MS = 1000;    // live-timer tick for in-progress cards
+// Heartbeat cadence. The server's "working right now" cutoff is at least a
+// minute wide (max(1, away_after_minutes), default 5), so 30s stays comfortably
+// inside even the tightest setting while costing a fraction of the traffic the
+// 15s live-strip poll already carries.
+const HEARTBEAT_MS = 30000;
 const { width: SW, height: SH } = Dimensions.get('window');
 const LANE_MAX_H = Math.round(SH * 0.78); // lane card-scroll height, adapts to screen
 
@@ -1737,6 +1742,30 @@ export default function KpiActionBoard({
   // appearing/disappearing is the only feedback these actions give.
   const refreshLive = useCallback(
     () => getLiveStatus().then(applyLive).catch(() => {}), [applyLive]);
+
+  // Keep today's session marked alive, so the admin's Live Tracking board does
+  // not report this developer as away while they are working. That board reads
+  // heartbeat freshness and nothing else; the app sent no heartbeat at all, so a
+  // phone-only developer went grey — and dropped out of the "Active now" count —
+  // a few minutes after starting their day. Gated on an open workday because the
+  // stamp only means anything on an open session: with none, the route no-ops.
+  useEffect(() => {
+    if (!workdayOpen) return undefined;
+    let alive = true;
+    const beat = async () => {
+      try {
+        const r = await sendHeartbeat();
+        // The old auto-away cron is off by default, but a session it paused still
+        // carries awayed_task_id and the heartbeat is what clears it. Pull the
+        // board back into line rather than leaving a card that says it is running.
+        if (alive && r?.was_away) { await refreshLive(); load({ silent: true }); }
+      } catch (e) { /* offline: the next beat covers it */ }
+    };
+    beat();
+    const id = setInterval(beat, HEARTBEAT_MS);
+    log.info('heartbeat started', { everyMs: HEARTBEAT_MS });
+    return () => { alive = false; clearInterval(id); };
+  }, [workdayOpen, refreshLive, load]);
 
   async function chooseIdleReason(code) {
     log.info('idle reason', { code, hasNote: !!idleNote.trim() });
