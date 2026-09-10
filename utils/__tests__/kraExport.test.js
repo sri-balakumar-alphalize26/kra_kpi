@@ -18,6 +18,7 @@ const {
   makeReportPdf, makeReportExcel, makeReportZip,
   buildProjectWorkbook, projectSummary, totalTimeWorked, uniqueEmployeeCount,
   safeFilename, typeStyle, groupByProject,
+  rowDate, isoWeek, monthFolder, treePath,
 } = require('../kraExport');
 
 // Two projects, three tasks, two employees — the smallest shape that can expose
@@ -200,10 +201,15 @@ describe('ZIP', () => {
     const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
     expect(names.some((n) => n.endsWith('.xlsx'))).toBe(false);
     expect(names).toContain('KRA_Report_2026-09-01_to_2026-09-09_full.pdf');
+    // Project summaries stay at the ROOT, where they can be found without
+    // walking into the tree.
     expect(names).toContain('App.pdf');
-    expect(names).toContain('App/REQ-001 Login screen.pdf');
-    expect(names).toContain('App/BUG-002 Signup screen.pdf');
-    expect(names).toContain('Portal/UPT-003 Invoice export.pdf');
+    expect(names).toContain('Portal.pdf');
+    // Per-task PDFs file under Month / Week / User, not one folder per project:
+    // a month of work under a single project folder is a flat list of hundreds.
+    expect(names).toContain('2026-09 September/Week 36 (31-06)/Ravi/REQ-001 Login screen.pdf');
+    expect(names).toContain('2026-09 September/Week 36 (31-06)/Priya/BUG-002 Signup screen.pdf');
+    expect(names).toContain('2026-09 September/Week 38 (14-20)/Ravi/UPT-003 Invoice export.pdf');
     // 1 full + 2 project summaries + 3 task PDFs
     expect(names).toHaveLength(6);
   });
@@ -234,6 +240,29 @@ describe('ZIP', () => {
     expect(steps[steps.length - 1]).toEqual([9, 9]);
   });
 
+  it('files an undated task under the report period, never under today', async () => {
+    // A September report pulled in October must still file under September. Using
+    // "now" would put every folder in the archive a month out, in a way nobody
+    // notices until they go looking for last month's work.
+    expect(rowDate({ deadline: '' }, '2026-09-01')).toBe('2026-09-01');
+    expect(rowDate({ deadline: '2026-09-20' }, '2026-09-01')).toBe('2026-09-20');
+    expect(rowDate({}, '')).toBe('');
+  });
+
+  it('sanitises EVERY segment of the tree, not just the leaf', async () => {
+    // A person or client whose name carries a slash would otherwise silently
+    // create an extra folder level and scatter the archive.
+    const path = treePath({ deadline: '2026-09-01', employee_name: 'A/B Ltd' }, '2026-09-01');
+    expect(path).toBe('2026-09 September/Week 36 (31-06)/A-B Ltd');
+    expect(path.split('/')).toHaveLength(3);
+  });
+
+  it('gives an unparseable date its own folder rather than crashing', async () => {
+    expect(monthFolder('not-a-date')).toBe('Undated');
+    expect(isoWeek('not-a-date').week).toBe(0);
+    expect(treePath({ deadline: 'not-a-date' }, '')).toBe('Undated/Undated/Unassigned');
+  });
+
   it('refuses an empty report rather than writing an empty archive', async () => {
     await expect(makeReportZip({ ...CTX, rows: [] }, { pdf: true })).rejects.toThrow('No tasks');
   });
@@ -242,6 +271,17 @@ describe('ZIP', () => {
     const noRef = [{ ...ROWS[0], external_ref: '' }];
     const out = await makeReportZip({ ...CTX, rows: noRef }, { pdf: true });
     const zip = await JSZip.loadAsync(out.data_b64, { base64: true });
-    expect(Object.keys(zip.files)).toContain('App/001 Login screen.pdf');
+    expect(Object.keys(zip.files)).toContain('2026-09 September/Week 36 (31-06)/Ravi/001 Login screen.pdf');
+  });
+
+  it('serials the whole archive, not each folder, so two weeks cannot both hold a 001', async () => {
+    // Both rows lose their ref, and they fall in different week folders. Numbering
+    // per-folder would give each of them "001"; the point of a serial is that it
+    // identifies a file across the archive.
+    const noRefs = [{ ...ROWS[0], external_ref: '' }, { ...ROWS[2], external_ref: '' }];
+    const out = await makeReportZip({ ...CTX, rows: noRefs }, { pdf: true });
+    const names = Object.keys((await JSZip.loadAsync(out.data_b64, { base64: true })).files);
+    expect(names).toContain('2026-09 September/Week 36 (31-06)/Ravi/001 Login screen.pdf');
+    expect(names).toContain('2026-09 September/Week 38 (14-20)/Ravi/002 Invoice export.pdf');
   });
 });

@@ -54,6 +54,40 @@ export async function fetchKraReport(params) {
   return { status: true, data: res.data || [], summary: res.summary || [], filters: res.filters || {} };
 }
 
+// What the screen needs to know about the caller on load: whether the edit
+// affordances apply, and the working view to restore.
+//
+// `saved_state` is a JSON STRING on res.users, and the Odoo web screen writes the
+// same field — so whatever comes back may have been written by the browser.
+export async function fetchKraContext() {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, is_admin: false, saved_state: '' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi_reports/kra/context', {});
+    if (!res?.status) return { status: false, is_admin: false, saved_state: '' };
+    return { status: true, is_admin: !!res.is_admin, user_id: res.user_id, saved_state: res.saved_state || '' };
+  } catch (e) {
+    // A failed restore must never stop the screen loading — the user just gets
+    // the blank report they used to get every time.
+    log.warn('context failed', e?.message);
+    return { status: false, is_admin: false, saved_state: '' };
+  }
+}
+
+// Store the working view. Passing an empty string is how it gets cleared.
+export async function saveKraState(state) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true };
+  try {
+    return await jsonRpc(serverUrl, '/kpi_reports/kra/state_set', { state: state || '' });
+  } catch (e) {
+    // Fire-and-forget: losing a saved view is a nuisance, not a failure worth
+    // interrupting anybody over.
+    log.warn('state_set failed', e?.message);
+    return { status: false };
+  }
+}
+
 // How many tasks each filter option would return, for the counts beside every
 // checkbox. Each facet is counted with ITS OWN selection skipped, so a count
 // answers "what would ticking this give me" rather than "what is selected now".

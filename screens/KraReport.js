@@ -27,7 +27,9 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import DateGridModal from '../components/DateGridModal';
 import { fmtYMD } from '../utils/dateGrid';
-import { fetchKraFilters, fetchKraReport, fetchKraFilterCounts } from '../services/kraReport';
+import {
+  fetchKraFilters, fetchKraReport, fetchKraFilterCounts, fetchKraContext, saveKraState,
+} from '../services/kraReport';
 import {
   typeStyle, totalTimeWorked, uniqueEmployeeCount, makeReportPdf, makeReportExcel, makeReportZip,
 } from '../utils/kraExport';
@@ -213,6 +215,16 @@ export default function KraReport({ onBack }) {
   const [zipStep, setZipStep] = useState(null);        // { done, total }
   const [banner, setBanner] = useState(null);
 
+  // Restoring the saved working view. `restored` gates the save effect — without
+  // it the first render would persist an empty state over whatever was stored.
+  const [restored, setRestored] = useState(false);
+  // Keys of the saved view this screen does not itself use — the web keeps report
+  // renames and report-only rows in the SAME res.users field. Held and written
+  // back untouched, so saving from the phone cannot silently wipe work someone
+  // did in the browser.
+  const savedExtras = useRef({});
+  const wantGenerate = useRef(false);
+
   const flash = (kind, msg) => { setBanner({ kind, msg }); setTimeout(() => setBanner(null), 3500); };
 
   // ---- Filter identity, and the stale guard built on it --------------------
@@ -251,6 +263,36 @@ export default function KraReport({ onBack }) {
     })().catch((e) => log.warn('filters failed', e?.message));
   }, []);
 
+  // ---- Restore the working view, once ------------------------------------
+  useEffect(() => {
+    (async () => {
+      const ctx = await fetchKraContext();
+      let saved = null;
+      try { saved = ctx.saved_state ? JSON.parse(ctx.saved_state) : null; } catch (_) { saved = null; }
+      if (saved && typeof saved === 'object') {
+        const f = saved.filters || {};
+        if (f.from_date) setFromDate(f.from_date);
+        if (f.to_date) setToDate(f.to_date);
+        if (f.from_date || f.to_date) setPreset('custom');
+        setEmployeeIds(f.employee_ids || []);
+        setKraIds(f.kra_ids || []);
+        setExcludedKraIds(f.excluded_kra_ids || []);
+        setTypes(f.task_types || []);
+        setStates(f.task_states || []);
+        setSearch(saved.searchQuery || '');
+        setRemovedRowIds(saved.removedRowIds || []);
+        // Everything this screen does not own, kept verbatim.
+        const { filters, searchQuery, removedRowIds, generatedSignature, ...rest } = saved;
+        savedExtras.current = rest;
+        // Re-run rather than restoring the rows themselves: the report is a view
+        // of live data, and handing back a week-old copy of it under today's
+        // filters is a quieter kind of wrong than showing nothing.
+        wantGenerate.current = !!saved.generatedSignature;
+      }
+      setRestored(true);
+    })().catch((e) => { log.warn('restore failed', e?.message); setRestored(true); });
+  }, []);
+
   // Debounced, and guarded against a slower earlier reply overwriting a newer
   // one — ticking three boxes quickly fires three requests that can land in any
   // order, and the counts would then describe a selection nobody is looking at.
@@ -268,6 +310,36 @@ export default function KraReport({ onBack }) {
     }, 250);
     return () => clearTimeout(t);
   }, [signature, paramsOf]);
+
+  // ---- Persist the working view ------------------------------------------
+  // Debounced, fire-and-forget, and gated on `restored` — without that gate the
+  // first render would write an empty view over whatever was stored.
+  //
+  // savedExtras goes in FIRST so this screen's own keys win: it carries the web's
+  // report renames and report-only rows, which must survive a save from the phone
+  // untouched rather than being dropped because this screen has no use for them.
+  useEffect(() => {
+    if (!restored) return undefined;
+    const t = setTimeout(() => {
+      saveKraState(JSON.stringify({
+        ...savedExtras.current,
+        filters: {
+          from_date: fromDate,
+          to_date: toDate,
+          employee_ids: employeeIds,
+          kra_ids: kraIds,
+          excluded_kra_ids: excludedKraIds,
+          task_types: types,
+          task_states: states,
+        },
+        searchQuery: search,
+        removedRowIds,
+        generatedSignature,
+      }));
+    }, 600);
+    return () => clearTimeout(t);
+  }, [restored, fromDate, toDate, employeeIds, kraIds, excludedKraIds, types, states,
+      search, removedRowIds, generatedSignature]);
 
   // ---- Filter toggles ------------------------------------------------------
   const toggleIn = (list, value) => (
@@ -316,6 +388,12 @@ export default function KraReport({ onBack }) {
       setGenerating(false);
     }
   }, [paramsOf, signature]);
+
+  useEffect(() => {
+    if (!restored || !wantGenerate.current) return;
+    wantGenerate.current = false;
+    generate();
+  }, [restored, generate]);
 
   // ---- The rows everything downstream reads -------------------------------
   // Every total, the summary, the table and all three exports go through here,

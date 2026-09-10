@@ -161,6 +161,56 @@ function safeSheetName(name) {
   return cleaned || 'Tasks';
 }
 
+// ── Where a task's PDF files inside the archive ────────────────────────────
+
+// The date a row belongs to.
+//
+// Deliberately the row's OWN date and never "now": a September report pulled in
+// October must file under September, or every folder in the archive is wrong in a
+// way nobody notices until they go looking for last month's work. Falls back to
+// the report's from_date, which is the period being reported on.
+export function rowDate(row, fromDate) {
+  return ((row && row.deadline) || '').slice(0, 10) || (fromDate || '');
+}
+
+// ISO week number, so week folders match how people actually count weeks: Monday
+// starts the week, and its Thursday decides which year the week belongs to.
+export function isoWeek(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d)) return { year: 0, week: 0, start: '', end: '' };
+  const dayNr = (d.getDay() + 6) % 7;                 // Mon = 0
+  const target = new Date(d.valueOf());
+  target.setDate(target.getDate() - dayNr + 3);       // that week's Thursday
+  const firstThursday = new Date(target.getFullYear(), 0, 4);
+  const firstDayNr = (firstThursday.getDay() + 6) % 7;
+  firstThursday.setDate(firstThursday.getDate() - firstDayNr + 3);
+  const week = 1 + Math.round((target - firstThursday) / (7 * 24 * 3600 * 1000));
+  const monday = new Date(d.valueOf());
+  monday.setDate(monday.getDate() - dayNr);
+  const sunday = new Date(monday.valueOf());
+  sunday.setDate(sunday.getDate() + 6);
+  const dd = (x) => String(x.getDate()).padStart(2, '0');
+  return { year: target.getFullYear(), week, start: dd(monday), end: dd(sunday) };
+}
+
+export function monthFolder(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d)) return 'Undated';
+  return `${String(dateStr).slice(0, 7)} ${d.toLocaleString(undefined, { month: 'long' })}`;
+}
+
+// Month / Week / User, with EVERY segment sanitised — not just the leaf. A client
+// or a person whose name contains a slash would otherwise silently create an extra
+// folder level and scatter the archive.
+export function treePath(row, fromDate) {
+  const date = rowDate(row, fromDate);
+  const w = isoWeek(date);
+  const month = safeFilename(monthFolder(date));
+  const week = safeFilename(w.week ? `Week ${w.week} (${w.start}-${w.end})` : 'Undated');
+  const who = safeFilename((row && row.employee_name) || 'Unassigned');
+  return `${month}/${week}/${who}`;
+}
+
 // Group rows into projects, exactly as the ZIP does on the web.
 export function groupByProject(rows) {
   const groups = new Map();
@@ -633,19 +683,27 @@ export async function makeReportZip(ctx, include = {}, onStep) {
       docToB64(buildFullReportPdf(ctx)), { base64: true });
     step();
 
+    // One summary PDF per project, at the archive ROOT where it can be found
+    // without walking into the tree.
     for (const [projectName, projectRows] of groups.entries()) {
-      const safeProject = safeFilename(projectName);
-      zip.file(`${safeProject}.pdf`,
+      zip.file(`${safeFilename(projectName)}.pdf`,
         buildProjectSummaryPdfB64(ctx, projectName, projectRows), { base64: true });
       step();
+    }
 
-      const folder = zip.folder(safeProject);
-      projectRows.forEach((r, idx) => {
-        const refPart = r.external_ref ? `${r.external_ref} ` : `${String(idx + 1).padStart(3, '0')} `;
-        folder.file(`${safeFilename(refPart + (r.kpi_name || 'task'))}.pdf`,
+    // Per-task PDFs go into Month / Week / User rather than one folder per
+    // project. A month of work under a single project folder is a flat list of
+    // hundreds of files; this is how people actually look for them — whose work,
+    // which week. The serial is global rather than per-project, so two tasks
+    // landing in the same week folder cannot both come out as "001".
+    let seq = 0;
+    for (const r of rows) {
+      seq += 1;
+      const refPart = r.external_ref ? `${r.external_ref} ` : `${String(seq).padStart(3, '0')} `;
+      zip.folder(treePath(r, ctx.fromDate))
+        .file(`${safeFilename(refPart + (r.kpi_name || 'task'))}.pdf`,
           buildTaskDetailPdfB64(r), { base64: true });
-        step();
-      });
+      step();
     }
   }
 
