@@ -5,7 +5,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   View, Text, Image, ScrollView, TouchableOpacity, StyleSheet, Dimensions,
   Alert, Modal, ActivityIndicator, Animated, Easing, StatusBar as RNStatusBar,
-  TextInput, KeyboardAvoidingView, Platform,
+  TextInput, KeyboardAvoidingView, Platform, Switch,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -16,6 +16,8 @@ import { COLORS } from '../theme';
 import TabBar from '../components/TabBar';
 import CameraCaptureModal from '../components/CameraCaptureModal';
 import { createLogger } from '../api/logger';
+import * as H from '../utils/haptics';
+import { hapticsEnabled, setHapticsEnabled } from '../utils/haptics';
 import { getConnection, saveSession, getQuickActions, saveQuickActions, getMenuOrder, saveMenuOrder, getAvatar, saveAvatar, clearAvatar } from '../api/session';
 import ReorderableMenu from '../components/ReorderableMenu';
 import { jsonRpc } from '../api/odooApi';
@@ -963,6 +965,25 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
   // uninstall/clear-data. null = none → show the name initials.
   // avatar + setAvatar come from HomeScreen (lifted state + cache) so there's no
   // initials-flash when switching to this tab.
+  // ── Vibration ──────────────────────────────────────────────────────────────
+  // The switch this app has been missing. utils/haptics.js already stores the
+  // flag, caches it in memory so a button press never awaits storage, and loads
+  // it at startup (App.js) — but nothing ever called setHapticsEnabled, so the
+  // whole thing was unreachable and effectively always on.
+  //
+  // Seeded from the cached value rather than re-reading storage: App.js has
+  // already resolved it by the time this tab can be opened, and hapticsEnabled()
+  // is the same value every H.tap() consults.
+  const [haptics, setHaptics] = useState(hapticsEnabled);
+  const onHapticsChange = useCallback(async (on) => {
+    setHaptics(on);
+    // Buzz on the way ON so the switch demonstrates what it just enabled. Turning
+    // it OFF stays silent, which is the whole point.
+    if (on) H.select();
+    await setHapticsEnabled(on);
+    log.info('haptics toggled', { on });
+  }, []);
+
   const [pickerOpen, setPickerOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false); // in-app camera (expo-camera)
   const [rationale, setRationale] = useState(null); // null | 'gallery' — pre-permission popup (gallery only)
@@ -1167,6 +1188,32 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
               <Text style={s.profRowValue} numberOfLines={1}>{r.value}</Text>
             </View>
           ))}
+        </View>
+
+        {/* Preferences — per-DEVICE settings, which is why they live here and not
+            in ConfigurationScreen: that screen is the admin's SERVER settings
+            (retention, WhatsApp, timers) and is admin-only, while these belong to
+            whoever is holding this phone. Every role reaches this tab. */}
+        <Text style={s.profSection}>Preferences</Text>
+        <View style={s.profCard}>
+          <View style={s.profRow}>
+            <View style={s.profRowIcon}>
+              <Ionicons name="phone-portrait-outline" size={18} color={COLORS.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.profRowLabel}>Vibration</Text>
+              {/* Says what it actually governs. Most of what anyone FEELS is the
+                  light tick on checkboxes, filters and chips — those fire once per
+                  row, so a filter list buzzes far more than the handful of big
+                  actions do. */}
+              <Text style={s.prefHint}>Taps, selections and confirmations</Text>
+            </View>
+            <Switch
+              value={haptics}
+              onValueChange={onHapticsChange}
+              trackColor={{ true: COLORS.primary }}
+            />
+          </View>
         </View>
 
         {/* Forgot / change password — only for app-login users (need a mobile).
@@ -1605,6 +1652,7 @@ const s = StyleSheet.create({
   profRowDivider: { borderBottomWidth: 1, borderBottomColor: '#F0F3F8' },
   profRowIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#EAF1FE', alignItems: 'center', justifyContent: 'center' },
   profRowLabel: { fontSize: 13.5, color: COLORS.muted, fontWeight: '600' },
+  prefHint: { fontSize: 11.5, color: COLORS.faint, marginTop: 1 },
   profRowValue: { flex: 1, fontSize: 13.5, color: COLORS.ink, fontWeight: '800', textAlign: 'right' },
 
   profLogout: {
