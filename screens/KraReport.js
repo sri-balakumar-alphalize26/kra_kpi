@@ -29,6 +29,7 @@ import DateGridModal from '../components/DateGridModal';
 import { fmtYMD } from '../utils/dateGrid';
 import {
   fetchKraFilters, fetchKraReport, fetchKraFilterCounts, fetchKraContext, saveKraState,
+  fetchDownloadHistory, fetchStoredDownload, deleteStoredDownload,
 } from '../services/kraReport';
 import {
   typeStyle, totalTimeWorked, uniqueEmployeeCount, projectSummary,
@@ -222,6 +223,9 @@ export default function KraReport({ onBack }) {
   const ntCreatedId = useRef(0);
   // A task was created but this report's filters hide it. { id, name }.
   const [createdHidden, setCreatedHidden] = useState(null);
+  // Reports the WEB saved. null = sheet closed.
+  const [history, setHistory] = useState(null);
+  const [histBusy, setHistBusy] = useState(0);
 
   // Filter SELECTIONS.
   const [kraIds, setKraIds] = useState([]);
@@ -553,6 +557,45 @@ export default function KraReport({ onBack }) {
       setExporting(null);
       setZipStep(null);
     }
+  }
+
+  // ---- Download history (what the web saved) ------------------------------
+  async function openHistory() {
+    H.tap();
+    setHistory({ loading: true, rows: [], error: '' });
+    const res = await fetchDownloadHistory();
+    setHistory(res.status
+      ? { loading: false, rows: res.downloads, error: '' }
+      : { loading: false, rows: [], error: res.message });
+  }
+
+  // Re-fetch one and hand it to the same save path every other document here
+  // uses, so a report a colleague generated on the web lands in a folder of your
+  // choosing exactly like one built on this phone.
+  async function refetchStored(row) {
+    setHistBusy(row.id);
+    try {
+      const res = await fetchStoredDownload(row.id);
+      if (!res?.status || !res.data_b64) { flash('err', res?.message || 'Could not fetch that file.'); return; }
+      await save({
+        filename: res.filename || row.filename,
+        mimeType: row.kind === 'pdf' ? 'application/pdf'
+          : row.kind === 'excel' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            : 'application/zip',
+        data_b64: res.data_b64,
+      });
+    } catch (e) {
+      flash('err', e?.message || 'Could not fetch that file.');
+    } finally { setHistBusy(0); }
+  }
+
+  async function removeStored(row) {
+    setHistBusy(row.id);
+    try {
+      const res = await deleteStoredDownload(row.id);
+      if (res?.status === false) { flash('err', res.message || 'Could not delete that.'); return; }
+      setHistory((h) => (h ? { ...h, rows: h.rows.filter((r) => r.id !== row.id) } : h));
+    } finally { setHistBusy(0); }
   }
 
   // ---- New Task -----------------------------------------------------------
@@ -929,10 +972,19 @@ export default function KraReport({ onBack }) {
               saveKraState('') has documented the empty-string contract all along
               and was never called with it, so a working view built on the web
               could be edited from here but never put down. */}
-          <TouchableOpacity style={s.clearRow} onPress={() => { H.select(); setClearOpen(true); }} activeOpacity={0.8}>
-            <Ionicons name="trash-outline" size={14} color={COLORS.red} />
-            <Text style={s.clearTxt}>Clear this report</Text>
-          </TouchableOpacity>
+          <View style={s.footLinks}>
+            {/* Reports saved from the WEB. Admin-gated by the route itself. */}
+            {isAdmin ? (
+              <TouchableOpacity style={s.clearRow} onPress={openHistory} activeOpacity={0.8}>
+                <Ionicons name="time-outline" size={14} color={COLORS.primary} />
+                <Text style={[s.clearTxt, { color: COLORS.primary }]}>Download history</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity style={s.clearRow} onPress={() => { H.select(); setClearOpen(true); }} activeOpacity={0.8}>
+              <Ionicons name="trash-outline" size={14} color={COLORS.red} />
+              <Text style={s.clearTxt}>Clear this report</Text>
+            </TouchableOpacity>
+          </View>
 
           {/* Hundreds of per-task PDFs take far longer on a phone than in a
               browser, and a screen that just sits there reads as a crash. */}
@@ -1068,6 +1120,65 @@ export default function KraReport({ onBack }) {
         onClear={() => setStates([])}
         onClose={() => setPicker(null)}
       />
+
+      {/* Reports the WEB saved, mirrored here. Read-only on purpose: the app
+          builds its documents on the device and does not post them back, so this
+          is what the browser stored — said plainly rather than leaving someone to
+          wonder why the report they just built on this phone is missing. */}
+      <Modal visible={!!history} transparent animationType="fade" onRequestClose={() => setHistory(null)}>
+        <View style={s.modalBackdrop}>
+          <View style={s.modalSheet}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle}>Download history</Text>
+              <TouchableOpacity onPress={() => setHistory(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={20} color={COLORS.muted} />
+              </TouchableOpacity>
+            </View>
+            {history?.loading ? (
+              <View style={{ padding: 30, alignItems: 'center' }}><ActivityIndicator color={COLORS.primary} /></View>
+            ) : history?.error ? (
+              <Text style={[s.clearBody, { color: '#B91C1C', fontWeight: '700' }]}>{history.error}</Text>
+            ) : !(history?.rows || []).length ? (
+              <Text style={s.clearBody}>Nothing saved yet. Reports downloaded from the web appear here.</Text>
+            ) : (
+              <FlatList
+                style={{ maxHeight: 380 }}
+                data={history.rows}
+                keyExtractor={(r) => String(r.id)}
+                renderItem={({ item }) => (
+                  <View style={s.histRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.histName} numberOfLines={1}>{item.filename}</Text>
+                      <Text style={s.histMeta} numberOfLines={1}>
+                        {item.user_name || '—'} · {item.generated_at || '—'}
+                        {item.row_count ? ` · ${item.row_count} rows` : ''}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => refetchStored(item)} disabled={histBusy === item.id}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ padding: 4 }}
+                    >
+                      {histBusy === item.id
+                        ? <ActivityIndicator size="small" color={COLORS.primary} />
+                        : <Ionicons name="download-outline" size={18} color={COLORS.primary} />}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => removeStored(item)} disabled={histBusy === item.id}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ padding: 4 }}
+                    >
+                      <Ionicons name="trash-outline" size={17} color={COLORS.red} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              />
+            )}
+            <Text style={s.histFoot}>
+              These are the copies saved from the web. Reports built on this phone are written
+              straight to the folder you choose and are not stored on the server.
+            </Text>
+          </View>
+        </View>
+      </Modal>
 
       {/* New Task. Two ways out: a row that lives only in this report, or a real
           task on the board. Nothing is inferred — the button pressed decides. */}
@@ -1683,6 +1794,11 @@ const s = StyleSheet.create({
   dlToggleTxt: { fontSize: 13, fontWeight: '700', color: COLORS.ink },
   dlCount: { fontSize: 12, fontWeight: '800', color: COLORS.primary, marginTop: 14 },
 
+  footLinks: { flexDirection: 'row', justifyContent: 'center', gap: 18 },
+  histRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  histName: { fontSize: 13, fontWeight: '800', color: COLORS.navy },
+  histMeta: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+  histFoot: { fontSize: 11, color: COLORS.muted, lineHeight: 16, paddingHorizontal: 20, paddingVertical: 12 },
   clearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 10 },
   clearTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.red },
   clearBody: { fontSize: 13.5, color: COLORS.muted, lineHeight: 20, paddingHorizontal: 20, paddingTop: 14 },

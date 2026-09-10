@@ -297,7 +297,6 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const [manBusy, setManBusy] = useState(false);
   // True while the file is being base64-encoded, before any bytes move. Its own
   // flag because manPct is meaningless during that phase.
-  const [manEncoding, setManEncoding] = useState(false);
   // Live transfer figures — bytes moved, speed, seconds remaining.
   const [manRate, setManRate] = useState(null);
 
@@ -411,29 +410,19 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 
     const manTotal = manFiles.reduce((n, f) => n + (f.size || 0), 0);
     log.info('upload manual →', { kpi_id: task.id, count: manFiles.length, size: manTotal, links: links.length });
-    setManBusy(true); setManPct(0); setManEncoding(true); setManRate(null);
+    setManBusy(true); setManPct(0); setManRate(null);
     try {
-      // /kpi/manual/upload is a JSON route, so this one does need base64. That
-      // read happens BEFORE a single byte is sent and can take seconds on a big
-      // file, which is why manEncoding exists — the % bar only measures transmit,
-      // so without it the first half of the wait looked like a hung button.
-      const encoded = [];
-      for (const f of manFiles) {
-        const b64 = await FileSystem.readAsStringAsync(f.uri, { encoding: FileSystem.EncodingType.Base64 });
-        encoded.push({ fileData: b64, fileName: f.name });
-      }
-      log.info('manuals read as base64', {
-        count: encoded.length, bytesB64: encoded.reduce((n, f) => n + f.fileData.length, 0),
-      });
-      setManEncoding(false);
-      // Rate + ETA from the callback's OWN numbers. This route is base64-in-JSON,
-      // so `total` is the encoded body (~33% larger than the file on disk) —
-      // computing speed from the files' on-disk sizes instead would read a
-      // third low.
+      // MULTIPART: the picked files stream straight from disk to
+      // /kpi/manual/upload_file, the twin of the route the progress side has
+      // always used. There is no base64 step any more — that read happened
+      // BEFORE a single byte went out and took real seconds on a 25MB manual
+      // (which is what the old "Preparing…" bar was apologising for), put a third
+      // more bytes on the wire, and turned a proxy's 413 into a bare
+      // "Failed to upload".
       const rate = makeRateTracker();
       const res = await uploadManual(
         task.id,
-        { files: encoded, reason: manDesc.trim(), links },
+        { picked: manFiles, reason: manDesc.trim(), links },
         (sent, total) => {
           const r = rate(sent, total);
           setManPct(r.percent);
@@ -457,7 +446,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       // people to check their wifi over a rejected file type.
       log.error('manual upload failed', e?.message);
       flash('err', e?.message || 'Upload failed — check your connection and try again');
-    } finally { setManBusy(false); setManPct(0); setManEncoding(false); setManRate(null); }
+    } finally { setManBusy(false); setManPct(0); setManRate(null); }
   }
 
   // ---- Progress update ----------------------------------------------------
@@ -1173,15 +1162,10 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 
                   {manBusy && (
                     <View style={{ marginTop: 10 }}>
-                      {manEncoding ? (
-                        // Indeterminate on purpose: nothing is on the wire yet, so
-                        // any number here would be a lie. A big file spends real
-                        // seconds in this phase.
-                        <>
-                          <View style={s.barTrack}><View style={[s.barFill, { width: '100%', opacity: 0.35 }]} /></View>
-                          <Text style={s.pctTxt}>Preparing {humanSize(manFiles.reduce((n, f) => n + (f.size || 0), 0))}…</Text>
-                        </>
-                      ) : (
+                      {/* No "Preparing…" phase any more: multipart streams from
+                          disk, so bytes move from the first tick and the bar is
+                          honest for the whole upload rather than the second half. */}
+                      {(
                         <>
                           <View style={s.barTrack}><View style={[s.barFill, { width: `${manPct}%` }]} /></View>
                           {/* Bytes moved, live speed and time left. A percentage on

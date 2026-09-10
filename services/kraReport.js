@@ -74,6 +74,44 @@ export async function fetchKraContext() {
   }
 }
 
+// ── Download history ───────────────────────────────────────────────────────
+// Reports downloaded from the WEB are recorded server-side, with a retention
+// setting in Configuration deciding how long they are kept. That history existed
+// only in the browser, so an admin on a phone could not see — let alone re-fetch
+// — a report a colleague had produced.
+//
+// A READ-ONLY mirror, deliberately. The app builds its own documents on the
+// device and does not post them back, so this lists what the web saved rather
+// than pretending to be a complete record of every download ever made. The
+// screen says so rather than leaving someone to wonder why their own is missing.
+export async function fetchDownloadHistory(limit = 50) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, downloads: [] };
+  const res = await jsonRpc(serverUrl, '/kpi_reports/kra/download_list', { limit });
+  if (!res || res.status === false) {
+    // "Not authorized" below the report's own admin gate — the route's words,
+    // not a guess of ours.
+    return { status: false, message: res?.message || 'Could not load the history.', downloads: [] };
+  }
+  return { status: true, downloads: res.downloads || [] };
+}
+
+// One stored download's bytes, base64. JSON rather than a URL for the same
+// reason every other file fetch here is: a browser handed a URL sends no session
+// cookie and lands on the login page instead of the file.
+export async function fetchStoredDownload(id) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'No server connection' };
+  return jsonRpc(serverUrl, '/kpi_reports/kra/download_file', { id: Number(id) }, 60000);
+}
+
+// Remove one before its retention window runs out.
+export async function deleteStoredDownload(id) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false };
+  return jsonRpc(serverUrl, '/kpi_reports/kra/download_delete', { id: Number(id) });
+}
+
 // Store the working view. Passing an empty string is how it gets cleared.
 export async function saveKraState(state) {
   const { serverUrl } = await getConnection();

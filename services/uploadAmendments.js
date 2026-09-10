@@ -7,7 +7,7 @@
 // mode, so it defaults to 'update', but the service is doc_type-agnostic.
 
 import { getConnection } from '../api/session';
-import { jsonRpc, normalizeUrl } from '../api/odooApi';
+import { jsonRpc, normalizeUrl, httpUpload } from '../api/odooApi';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('UploadSvc');
@@ -241,7 +241,11 @@ export const MANUAL_EXTENSIONS = ['.pdf', '.doc', '.docx'];
 // the original scalar `fileData`/`fileName` pair still works, because
 // screens/UploadAmendments.js posts one file and has no reason to change.
 // The route accepts both shapes (see _collect_upload_files in kra_api.py).
-export async function uploadManual(kpiId, { fileData, fileName, files, reason, links }, onProgress) {
+// `picked: [{ uri, name, size, mimeType }]` streams the files as multipart and is
+// the preferred shape — nothing is read into memory and the % bar measures real
+// bytes rather than base64. The base64 shapes below still work: the client Upload
+// screen has its own reasons for holding encoded data.
+export async function uploadManual(kpiId, { picked, fileData, fileName, files, reason, links }, onProgress) {
   const set = (files || []).filter((f) => f && f.fileData);
   const base = await server();
   // No server configured = mock mode. Reporting plain success here told the user
@@ -250,6 +254,41 @@ export async function uploadManual(kpiId, { fileData, fileName, files, reason, l
     log.warn('uploadManual skipped — no server configured (mock mode)');
     return { status: false, message: 'No server is configured — nothing was uploaded.' };
   }
+  // MULTIPART when the caller hands over file URIs, which is what the picker
+  // already has. /kpi/manual/upload_file is the twin of /kpi/progress/upload_file
+  // and exists for exactly this: base64-in-JSON puts a third more bytes on the
+  // wire, has to read the whole file into memory before a single byte is sent
+  // (seconds of apparently-hung button on a 25MB manual), and turns a proxy's
+  // 413 into a bare "Failed to upload". The progress side has always done it
+  // properly; the manual side posted base64.
+  const streamed = (picked || []).filter((f) => f?.uri);
+  if (streamed.length) {
+    const tooBig = streamed.find((f) => f.size && f.size > MAX_MANUAL_BYTES);
+    if (tooBig) {
+      return Promise.reject(new Error(`${tooBig.name} is over the ${humanSize(MAX_MANUAL_BYTES)} limit.`));
+    }
+    const fd = new FormData();
+    fd.append('kpi_id', String(kpiId));
+    fd.append('description', reason || '');
+    fd.append('related_links', JSON.stringify(links || []));
+    // The SAME key once per file — that is what files.getlist('file') reads.
+    // Numbered keys would arrive as separate fields and only the last survives.
+    for (const f of streamed) {
+      fd.append('file', { uri: f.uri, name: f.name || 'manual', type: f.mimeType || 'application/octet-stream' });
+    }
+    log.info('uploadManual → /kpi/manual/upload_file (multipart)', {
+      kpi_id: kpiId, count: streamed.length,
+      bytes: streamed.reduce((n, f) => n + (f.size || 0), 0),
+    });
+    const up = await httpUpload(base, '/kpi/manual/upload_file', fd, LONG_TIMEOUT, onProgress);
+    if (!up || up.status === false) {
+      log.error('uploadManual ✗', up?.message);
+      throw new Error(up?.message || 'Could not upload');
+    }
+    log.info('uploadManual ←', { kpi_id: kpiId, file_count: up?.file_count });
+    return up;
+  }
+
   const label = set.length ? `${set.length} file(s)` : fileName;
   log.info('uploadManual → /kpi/manual/upload', {
     kpi_id: kpiId, label,
