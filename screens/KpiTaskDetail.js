@@ -709,7 +709,13 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // Progress files and manuals live in different models, so they have their own
   // routes — but everything downstream (cache, view, download) is identical, so
   // `kind` picks the fetcher and the rest is shared.
-  const fetchBytes = (id, kind, attId = 0) => (kind === 'manual' ? fetchManualFile(id) : fetchProgressFile(id, attId));
+  // attId reaches BOTH branches. It used to be dropped on the manual one, so a
+  // manual carrying spec.pdf + appendix.pdf listed both and served spec.pdf for
+  // either — saved under the other file's name, which made it look like the
+  // right file until someone opened it. The server has had the attachment_id
+  // branch since manuals learned to carry more than one document, and
+  // fetchManualFile has always accepted the argument.
+  const fetchBytes = (id, kind, attId = 0) => (kind === 'manual' ? fetchManualFile(id, attId) : fetchProgressFile(id, attId));
 
   // Pull the bytes over the authenticated JSON channel, drop them in the cache,
   // and hand back a file:// uri anything local can open.
