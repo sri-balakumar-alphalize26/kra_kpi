@@ -854,7 +854,7 @@ function TaskListRowBase({ task, expanded, rowKey: myRowKey, onToggle, onAction,
 // of rows, and each one mounts two Animated.Values and its own SVG gradient.
 const TaskListRow = React.memo(TaskListRowBase);
 
-function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, reminder, pulse, onMeasure, onOpenDetail, readOnly = false }) {
+function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, fresh = false, reminder, pulse, onMeasure, onOpenDetail, readOnly = false }) {
   // Same rule as TaskListRow: with the client → not the developer's to open.
   const canOpen = onOpenDetail && (isAdmin || task.task_state !== 'awaiting_client');
   const p = PRIORITY[task.priority] || PRIORITY.regular;
@@ -900,7 +900,7 @@ function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, r
       // lets React.memo below actually hold.
       onLayout={onMeasure ? (e) => onMeasure(task.id, e.nativeEvent.layout.y) : undefined}
     >
-    <View style={s.card}>
+    <View style={[s.card, fresh && s.cardFresh]}>
       {/* Notification-focus highlight — a contrasting wash + ring that fades in
           with the heartbeat, then out. Sits above the card bg, below content. */}
       <Animated.View
@@ -916,7 +916,7 @@ function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, r
             is already the accordion toggle, so there it's an ⓘ button instead. */}
         <TouchableOpacity style={s.cardTop} onPress={() => canOpen && onOpenDetail(task)}
           activeOpacity={0.6} disabled={!canOpen}>
-          <Text style={[s.cardTitle, !!canOpen && s.cardTitleLink]} numberOfLines={2}>{task.name}</Text>
+          <Text style={[s.cardTitle, !!canOpen && s.cardTitleLink, fresh && s.cardTitleFresh]} numberOfLines={2}>{task.name}</Text>
           {canOpen && <Ionicons name="information-circle-outline" size={16} color={COLORS.primary} style={{ marginLeft: 6, marginTop: 2 }} />}
         </TouchableOpacity>
         <View style={s.chipRow}>
@@ -1154,6 +1154,8 @@ export default function KpiActionBoard({
   const [raw, setRaw] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentUserId, setCurrentUserId] = useState(null);
+  // A session for today was closed by the cron rather than by the developer.
+  const [todayClosed, setTodayClosed] = useState(false);
   const [isMock, setIsMock] = useState(false);
   const [myOnly, setMyOnly] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1689,6 +1691,9 @@ export default function KpiActionBoard({
     getWorkdayStatus().then((r) => {
       setWorkdayOpen(!!r?.is_open);
       setDayDone(!!r?.day_done);
+      // Fetched all along and kept nowhere. Without it a midnight auto-close is
+      // indistinguishable from a day that has not started.
+      setTodayClosed(!!r?.today_closed);
       setWorkdayPaused(!!r?.is_paused);
       // An admin reopened this day — say so, and say why. Shown under the workday
       // button, which is where someone looks when their day reopens unexpectedly.
@@ -1856,6 +1861,44 @@ export default function KpiActionBoard({
     finally { setBreakSwitchBusy(null); }
   }
 
+  // Back to the task the break was taken from. Goes through runAction rather than
+  // resumeTask directly, so the can_start gate and the sent-back "Respond &
+  // Resume" branch both still apply — this is a shortcut to the button, not a way
+  // round it. The board may not be showing that task (a filter, a search, the
+  // wrong lane collapsed), so fall back to fetching it by id.
+  async function resumeAwayTask(taskId) {
+    const known = raw.find((t) => t.id === taskId);
+    if (known) { runAction('resume', known); return; }
+    setBreakSwitchBusy('resume');
+    try {
+      const t = await fetchTaskById(taskId);
+      if (t) runAction('resume', t);
+      else showError("Couldn't resume", 'That task could not be loaded.');
+    } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
+    finally { setBreakSwitchBusy(null); }
+  }
+
+  // "I have no tasks", said while a task sits paused behind a break. Not a
+  // switchBreak: no_tasks is not a break type, only a non-task block reason — and
+  // it is the one reason that reaches admins, which is the whole point of saying
+  // it. Ends the break, opens the block, leaves the task paused.
+  async function declareNoTasks() {
+    if (breakSwitchBusy) return;
+    log.info('declare no tasks (from break pill)');
+    setBreakSwitchBusy('no_tasks');
+    try {
+      const res = await setIdleReason('no_tasks', '');
+      if (res && res.status === false) {
+        showError("Couldn't save that", res.message || 'Failed');
+        return;
+      }
+      say('Your admins have been told', 'They know you have no tasks and can assign you work.', 'ok');
+      await refreshLive();
+      await load({ silent: true });
+    } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
+    finally { setBreakSwitchBusy(null); }
+  }
+
   // Filter by search + assignee + priority + status, then group into lanes.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1874,6 +1917,44 @@ export default function KpiActionBoard({
 
   const lanes = useMemo(() => groupIntoLanes(filtered), [filtered]);
 
+  // Whether anything is narrowing the board right now. "Most tasks first" is for
+  // searching only — applied unfiltered it would reorder the lanes by how full
+  // they are, so the pipeline would rearrange itself every time a task moved.
+  const filtering = !!(search.trim() || filterAssignee != null || filterPriority || filterStatus);
+
+  // Lanes holding work first, empty ones last — always, not only under a search.
+  // Eleven lanes at ~265px meant scrolling past "Nothing here yet" columns to
+  // reach the work. Pipeline position survives as the tie-break, so the familiar
+  // order still holds among the lanes that have tasks.
+  const orderedLanes = useMemo(() => {
+    const counts = new Map(LANES.map((l) => [l.key, (lanes[l.key] || []).length]));
+    const order = new Map(LANES.map((l, i) => [l.key, i]));
+    return [...LANES].sort((a, b) => {
+      const ca = counts.get(a.key), cb = counts.get(b.key);
+      if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1;   // work before emptiness
+      if (filtering && ca !== cb) return cb - ca;          // most matches first, searching only
+      return order.get(a.key) - order.get(b.key);
+    });
+  }, [lanes, filtering]);
+
+  // A to-do card nobody has started. Only in the three to-do lanes: zero time in
+  // Queued or Awaiting Client is normal, and marking it there would drown the
+  // signal. Matches isFreshTask in kpi_action.js.
+  const isFreshTask = useCallback((t, laneKey) => (
+    ['regular', 'important', 'urgent'].includes(laneKey) && !(t.timer_total_seconds > 0)
+  ), []);
+
+  // Never-started work sits at the top of its lane: a card added to the bottom of
+  // a long Regular lane is a card nobody sees. Stable otherwise — the server's
+  // order is preserved within each group.
+  const laneItems = useCallback((laneKey) => {
+    const items = lanes[laneKey] || [];
+    if (!['regular', 'important', 'urgent'].includes(laneKey)) return items;
+    const fresh = [], rest = [];
+    for (const t of items) (isFreshTask(t, laneKey) ? fresh : rest).push(t);
+    return fresh.concat(rest);
+  }, [lanes, isFreshTask]);
+
   // The list view as ONE flat array — a heading row per non-empty lane, followed
   // by that lane's tasks when it is open.
   //
@@ -1884,8 +1965,8 @@ export default function KpiActionBoard({
   // ScrollView cannot windowing-cull what its parent has already laid out.
   const listData = useMemo(() => {
     const out = [];
-    for (const l of LANES) {
-      const items = lanes[l.key] || [];
+    for (const l of orderedLanes) {
+      const items = laneItems(l.key);
       if (!items.length) continue;
       const open = expandedLanes.has(l.key);
       out.push({ kind: 'head', key: `h:${l.key}`, lane: l, count: items.length, open });
@@ -1895,7 +1976,7 @@ export default function KpiActionBoard({
       if (open) for (const t of items) out.push({ kind: 'row', key: rowKey(l.key, t.id), task: t });
     }
     return out;
-  }, [lanes, expandedLanes]);
+  }, [orderedLanes, laneItems, expandedLanes]);
   const listKeyExtractor = useCallback((it) => it.key, []);
   const onLaneToggle = useCallback((key) => {
     animateNext();
@@ -2717,7 +2798,7 @@ export default function KpiActionBoard({
             "Workday ended for today" (disabled). */}
         {(() => {
           const showSpinner = !readOnly && (workdayBusy || workdayOpen === null);
-          const wd = workdayButtonState({ workdayOpen: workdayOpen === true, dayDone });
+          const wd = workdayButtonState({ workdayOpen: workdayOpen === true, dayDone, todayClosed });
           const icon = wd.action === 'end' ? 'stop-circle'
             : wd.action === 'none' ? 'checkmark-done-circle' : 'play-circle';
           return (
@@ -2911,6 +2992,24 @@ export default function KpiActionBoard({
                     a button that does nothing is worse than no button. */}
                 {!readOnly ? (
                   <View style={s.breakSwitchRow}>
+                    {/* Straight back to the task the break came from. Without it,
+                        coming off lunch meant finding that task again down a
+                        board of eleven lanes — and the pill has been naming it
+                        this whole time without offering a way to it. Resuming
+                        closes the break by itself (resume_task stops the break
+                        log), so there is nothing to end first. Routed through
+                        runAction so every guard still applies, including the
+                        sent-back "Respond & Resume" branch. */}
+                    {live.active_break.source_task_id ? (
+                      <TouchableOpacity
+                        style={[s.nontaskSwitch, s.breakResume]}
+                        onPress={() => resumeAwayTask(live.active_break.source_task_id)}
+                        disabled={!!breakSwitchBusy}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={[s.nontaskSwitchTxt, { color: '#fff' }]}>▶ Resume</Text>
+                      </TouchableOpacity>
+                    ) : null}
                     {BREAK_SWITCH_REASONS.filter((r) => r.code !== live.active_break.type).map((r) => (
                       <TouchableOpacity
                         key={r.code}
@@ -2924,6 +3023,23 @@ export default function KpiActionBoard({
                           : <Text style={s.nontaskSwitchTxt}>{r.emoji} {r.label}</Text>}
                       </TouchableOpacity>
                     ))}
+                    {/* "I have no tasks" cannot go through switchBreak: no_tasks
+                        is not a break type, it exists only as a non-task block
+                        reason — and it is the ONE reason admins are told about.
+                        So it ends the break and opens that block instead, leaving
+                        the task paused. That is what the developer means: what
+                        they paused is not something they can carry on with, and
+                        the point of saying so is that someone assigns them work. */}
+                    <TouchableOpacity
+                      style={[s.nontaskSwitch, s.nontaskSwitchAlert]}
+                      onPress={declareNoTasks}
+                      disabled={!!breakSwitchBusy}
+                      activeOpacity={0.85}
+                    >
+                      {breakSwitchBusy === 'no_tasks'
+                        ? <ActivityIndicator size="small" color={COLORS.primary} />
+                        : <Text style={s.nontaskSwitchTxt}>📭 I have no tasks</Text>}
+                    </TouchableOpacity>
                   </View>
                 ) : null}
               </>
@@ -3031,8 +3147,8 @@ export default function KpiActionBoard({
           contentContainerStyle={s.boardRow}
           directionalLockEnabled
         >
-          {LANES.map((l, i) => {
-            const items = lanes[l.key] || [];
+          {orderedLanes.map((l, i) => {
+            const items = laneItems(l.key);
             return (
               <AnimatedLane
                 key={l.key}
@@ -3088,6 +3204,7 @@ export default function KpiActionBoard({
                       nowMs={t.task_state === 'in_progress' ? nowMs : 0}
                       isAdmin={isAdmin}
                       currentUserId={currentUserId}
+                      fresh={isFreshTask(t, l.key)}
                       reminder={reminders[String(t.id)]}
                       pulse={pulseId === t.id}
                       onMeasure={l.key === 'today' ? undefined : onCardMeasure}
@@ -4585,6 +4702,40 @@ export default function KpiActionBoard({
 
             <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
               <View style={s.modalPad}>
+                {/* The day was already closed by the cron. Worth saying: the
+                    figures below are of a day that ended without them, and
+                    without this the popup reads as though they are ending it now. */}
+                {endSummary?.auto_closed ? (
+                  <View style={s.autoClosedBox}>
+                    <Ionicons name="moon-outline" size={15} color="#7a5200" />
+                    <Text style={s.autoClosedTxt}>Auto-closed earlier by the system.</Text>
+                  </View>
+                ) : null}
+
+                {/* Tasks worked today with no progress note. A day's hours with
+                    nothing written about them is invisible to everyone
+                    downstream, and by tomorrow nobody can reconstruct where they
+                    went. The server has sent this list for a while and the app
+                    dropped it on the floor. It WARNS and does not block — ending
+                    a day is one-way, and refusing it would strand people. */}
+                {(endSummary?.missing_progress || []).length ? (
+                  <View style={s.missingBox}>
+                    <Text style={s.missingTitle}>
+                      {endSummary.missing_progress.length === 1
+                        ? '1 task you worked on today has no progress update'
+                        : `${endSummary.missing_progress.length} tasks you worked on today have no progress update`}
+                    </Text>
+                    <Text style={s.missingHint}>
+                      Add one from the task, or end your day anyway — this will not stop you.
+                    </Text>
+                    {endSummary.missing_progress.map((m) => (
+                      <Text key={m.id || m.name} style={s.missingRow} numberOfLines={2}>
+                        {m.external_ref ? `${m.external_ref}  ` : ''}{m.name || 'Untitled task'}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+
                 {/* Three stat tiles */}
                 <View style={s.statTiles}>
                   <View style={s.statTile}>
@@ -4974,6 +5125,9 @@ const s = StyleSheet.create({
   // Same chips as nontaskBtnRow, but this row follows the break pill directly
   // rather than sitting inside nontaskBox, so it carries its own top gap.
   breakSwitchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  // The way back to the paused task — the only green thing in the row, because
+  // it is the one that resumes work rather than re-labelling the pause.
+  breakResume: { backgroundColor: COLORS.green, borderColor: COLORS.green },
 
   // Switch confirm — same centered-card idiom as the other confirm popups.
   confirmWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 26 },
@@ -5072,6 +5226,11 @@ const s = StyleSheet.create({
     backgroundColor: '#fff', borderRadius: 14, marginBottom: 12, overflow: 'hidden',
     flexDirection: 'row', ...SHADOW,
   },
+  // Never started, in a to-do lane. The web's `.kpi-task-fresh`: red fill, red
+  // border, black text — the text colour matters, because the default link-blue
+  // title on this fill is close to unreadable.
+  cardFresh: { backgroundColor: '#ffb4b4', borderWidth: 1.5, borderColor: '#dc2626' },
+  cardTitleFresh: { color: '#111827' },
   // Notification-focus highlight overlay: a contrasting wash + ring that the
   // heartbeat fades in then out. Absolute-fills the card, sits under content
   // (pointerEvents none) so buttons stay tappable.
@@ -5378,6 +5537,18 @@ const s = StyleSheet.create({
     backgroundColor: COLORS.amberBg, borderRadius: 10, padding: 10, marginBottom: 12,
     borderWidth: 1, borderColor: '#F3DFA8',
   },
+  autoClosedBox: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.amberBg,
+    borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10, marginBottom: 12,
+  },
+  autoClosedTxt: { fontSize: 12.5, fontWeight: '700', color: '#7a5200' },
+  missingBox: {
+    backgroundColor: COLORS.amberBg, borderRadius: 10, padding: 10, marginBottom: 12,
+    borderWidth: 1, borderColor: '#F3DFA8',
+  },
+  missingTitle: { fontSize: 13, fontWeight: '800', color: '#7a5200' },
+  missingHint: { fontSize: 11.5, color: '#7a5200', marginTop: 2, marginBottom: 6 },
+  missingRow: { fontSize: 12, color: '#7a5200', marginTop: 3, lineHeight: 17 },
   sentBackWho: { fontSize: 12, fontWeight: '800', color: '#7a5200' },
   sentBackNote: { fontSize: 13, fontStyle: 'italic', color: '#7a5200', marginTop: 3, lineHeight: 19 },
   // Same look, WITHOUT flex:1. createdInfoTxt lives inside a row (s.createdInfo)

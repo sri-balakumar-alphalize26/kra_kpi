@@ -125,6 +125,10 @@ function AppInner() {
   // call, so they can never disagree with each other.
   const [workdayOpen, setWorkdayOpen] = useState(false);
   const [dayDone, setDayDone] = useState(false);   // ENDED today → one start + one end per day
+  // A session for today was closed by the CRON, not by the developer. Restart is
+  // still allowed; it only changes what the button is called, so a day the system
+  // cut at midnight does not read as a day that never started.
+  const [todayClosed, setTodayClosed] = useState(false);
   const [gateReady, setGateReady] = useState(false);  // role gate resolved → avoids a Home flash
   const [provisioned, setProvisioned] = useState(false); // device set up (server URL saved)
   const [forceSetup, setForceSetup] = useState(false);   // show Odoo device-setup over the app login
@@ -355,6 +359,7 @@ function AppInner() {
             const st = await getWorkdayStatus();
             wopen = !!st?.is_open;
             ddone = !!st?.day_done;
+            setTodayClosed(!!st?.today_closed);
           } catch (_) {
             // Unreachable → stay read-only rather than guessing "open". A wrongly
             // unlocked board offers buttons that will all fail server-side.
@@ -394,6 +399,7 @@ function AppInner() {
         const st = await getWorkdayStatus();
         setWorkdayOpen(!!st?.is_open);
         setDayDone(!!st?.day_done);
+        setTodayClosed(!!st?.today_closed);
       } catch (_) { /* keep polling */ }
     }, 5000);
     return () => clearInterval(id);
@@ -410,6 +416,7 @@ function AppInner() {
         const st = await getWorkdayStatus();
         setWorkdayOpen(!!st?.is_open);
         setDayDone(!!st?.day_done);
+        setTodayClosed(!!st?.today_closed);
       } catch (_) { /* offline → keep current state */ }
     });
     return () => sub.remove();
@@ -599,7 +606,7 @@ function AppInner() {
       return (
         <KpiActionBoard
           onBack={home} focusTaskId={focusTaskId} onFocusHandled={() => setFocusTaskId(null)}
-          workdayLocked={workdayLocked} dayDone={dayDone}
+          workdayLocked={workdayLocked} dayDone={dayDone} todayClosed={todayClosed}
           onWorkdayStarted={onWorkdayStarted}
           onWorkdayEnded={onWorkdayEnded}
         />
@@ -684,7 +691,7 @@ function AppInner() {
       return (
         <KpiActionBoard
           onBack={home} focusStatus={appScreen.split(':')[1]}
-          workdayLocked={workdayLocked} dayDone={dayDone}
+          workdayLocked={workdayLocked} dayDone={dayDone} todayClosed={todayClosed}
           onWorkdayStarted={onWorkdayStarted}
           onWorkdayEnded={onWorkdayEnded}
         />
@@ -701,7 +708,7 @@ function AppInner() {
         // button. False for admins/clients — they're never locked.
         workdayLocked={workdayLocked}
         workdayOpen={workdayOpen}
-        dayDone={dayDone}
+        dayDone={dayDone} todayClosed={todayClosed}
         // Start Workday straight from the read-only bar — there is no PIN screen
         // to route to any more.
         onWorkdayStarted={onWorkdayStarted}

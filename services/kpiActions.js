@@ -70,7 +70,7 @@ export const LANES = [
   // Indigo matches `.kpi-today .kpi-header` in the module's kra_style.scss, and
   // sits deliberately outside the warm ramp the status lanes use: Today is a view
   // onto the others, not another bucket work moves through.
-  { key: 'today',          label: '🕒 Today',      color: '#4F46E5' },
+  { key: 'today',          label: 'Today',         color: '#4F46E5' },
   { key: 'pending_review', label: 'Pending Review', color: '#7C3AED' },
   { key: 'regular',        label: 'Regular',        color: '#2563EB' },
   { key: 'important',      label: 'Important',      color: '#7C3AED' },

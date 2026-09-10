@@ -318,7 +318,7 @@ function Greeting({ name }) {
   );
 }
 
-function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, onWorkdayStarted }) {
+function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, todayClosed, onWorkdayStarted }) {
   // Starting the workday straight from the read-only bar. Previously this bar's
   // button only routed to the PIN screen; opening the day is now a plain call.
   const [roBusy, setRoBusy] = useState(false);
@@ -667,7 +667,7 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, onWor
           // Same decision as the Action Board button (utils/workdayState.js):
           // Start, or ended-for-today. The button now OPENS the workday directly —
           // it used to route to a PIN screen and wait for a code from the phone.
-          const wd = workdayButtonState({ workdayOpen: !!workdayOpen, dayDone: !!dayDone });
+          const wd = workdayButtonState({ workdayOpen: !!workdayOpen, dayDone: !!dayDone, todayClosed: !!todayClosed });
           return (
             <View style={s.roBar}>
               <Ionicons name={dayDone ? 'checkmark-done' : 'lock-closed'} size={14} color={COLORS.red} />
@@ -1375,7 +1375,7 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
   );
 }
 
-export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, workdayOpen, dayDone, onWorkdayStarted }) {
+export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, workdayOpen, dayDone, todayClosed, onWorkdayStarted }) {
   const [tab, setTab] = useState('home');
   const [logoutOpen, setLogoutOpen] = useState(false);
   const name = (user && user.name) ? user.name.split(' ')[0] : 'Sonia';
@@ -1401,7 +1401,7 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, work
         {tab === 'home'    && (
           <HomeTab
             name={name} onOpen={onOpen} uid={user?.uid}
-            workdayLocked={workdayLocked} workdayOpen={workdayOpen} dayDone={dayDone} onWorkdayStarted={onWorkdayStarted}
+            workdayLocked={workdayLocked} workdayOpen={workdayOpen} dayDone={dayDone} todayClosed={todayClosed} onWorkdayStarted={onWorkdayStarted}
           />
         )}
         {tab === 'profile' && <ProfileTab user={user} onLogout={onLogout} dayDone={dayDone} avatar={avatar} setAvatar={setAvatar} />}

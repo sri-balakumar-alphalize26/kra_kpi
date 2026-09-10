@@ -16,8 +16,22 @@ describe('workdayButtonState', () => {
 
   // Explicit End today → one-per-day: disabled "ended" state, no restart.
   test('dayDone → Workday ended for today (disabled)', () => {
-    expect(workdayButtonState({ workdayOpen: false, dayDone: true }))
+    expect(workdayButtonState({ workdayOpen: false, dayDone: true, todayClosed: true }))
       .toEqual({ label: 'Workday ended for today', action: 'none', disabled: true });
+  });
+
+  // Closed by the cron, not by the developer: restart is still allowed, so the
+  // ACTION is unchanged — only the words, so a day the system cut at midnight
+  // does not read as a day that never started.
+  test('todayClosed → Start New Workday Session (still startable)', () => {
+    expect(workdayButtonState({ workdayOpen: false, dayDone: false, todayClosed: true }))
+      .toEqual({ label: 'Start New Workday Session', action: 'start', disabled: false });
+  });
+
+  // dayDone is checked first, so an explicit End still wins over the cron flag —
+  // both are true on a day that was ended by hand.
+  test('dayDone beats todayClosed', () => {
+    expect(workdayButtonState({ workdayOpen: false, dayDone: true, todayClosed: true }).action).toBe('none');
   });
 
   // The ordering that matters: a session flag left true after the day was ended
