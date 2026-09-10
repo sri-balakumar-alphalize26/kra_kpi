@@ -34,6 +34,10 @@ import {
   typeStyle, totalTimeWorked, uniqueEmployeeCount, projectSummary,
   selectDownloadRows, weekKey, makeReportPdf, makeReportExcel, makeReportZip,
 } from '../utils/kraExport';
+import { createKpi, logManualTime, findNameMatches } from '../services/kraKpi';
+import {
+  validateNewTask, toSeconds, DOC_TYPES, prefixForDocType,
+} from '../utils/newTaskValidation';
 import * as H from '../utils/haptics';
 import { createLogger } from '../api/logger';
 
@@ -207,6 +211,17 @@ export default function KraReport({ onBack }) {
   const [dlPicker, setDlPicker] = useState(null);   // 'employee' | 'period' | 'sort'
   // "Clear the report" confirm — it discards work that exists nowhere else.
   const [clearOpen, setClearOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  // New Task. `nt` null = sheet closed. `ntMatches` is the advisory duplicate-name
+  // hint; `ntCreatedId` survives a half-failed submit — see submitNewTask.
+  const [nt, setNt] = useState(null);
+  const [ntMatches, setNtMatches] = useState([]);
+  const [ntBusy, setNtBusy] = useState(false);
+  const [ntPicker, setNtPicker] = useState(null);   // 'kra' | 'user' | 'type' | 'priority'
+  const [ntDate, setNtDate] = useState(false);
+  const ntCreatedId = useRef(0);
+  // A task was created but this report's filters hide it. { id, name }.
+  const [createdHidden, setCreatedHidden] = useState(null);
 
   // Filter SELECTIONS.
   const [kraIds, setKraIds] = useState([]);
@@ -283,6 +298,10 @@ export default function KraReport({ onBack }) {
   useEffect(() => {
     (async () => {
       const ctx = await fetchKraContext();
+      // Already in the payload and thrown away until now. It gates the New Task
+      // button, matching the web — note the server does NOT re-check it on
+      // create_kpi, so this is parity, not a security boundary.
+      setIsAdmin(!!ctx.is_admin);
       let saved = null;
       try { saved = ctx.saved_state ? JSON.parse(ctx.saved_state) : null; } catch (_) { saved = null; }
       if (saved && typeof saved === 'object') {
@@ -396,16 +415,20 @@ export default function KraReport({ onBack }) {
   };
 
   // ---- Generate ------------------------------------------------------------
-  const generate = useCallback(async () => {
+  // `over` lets a caller run with filter values React has not flushed yet — the
+  // New Task banner clears three filters and must re-run with them cleared, not
+  // with the ones still in state. Returns the rows so the caller can ask whether
+  // what it just created is actually in them.
+  const generate = useCallback(async (over = {}) => {
     H.tap();
     setGenerating(true);
     setError(null);
     try {
-      const res = await fetchKraReport(paramsOf());
+      const res = await fetchKraReport({ ...paramsOf(), ...over });
       if (res.status === false) {
         setError(res.message || 'Could not generate the report.');
         setRows(null);
-        return;
+        return [];
       }
       setRows(res.data || []);
       setAppliedFilters(res.filters || {});
@@ -413,9 +436,11 @@ export default function KraReport({ onBack }) {
       // A fresh report has nothing trimmed out of it yet.
       setRemovedRowIds([]);
       log.info('generated', { rows: (res.data || []).length });
+      return res.data || [];
     } catch (e) {
       log.warn('generate failed', e?.message);
       setError(e?.message || 'Could not generate the report.');
+      return [];
     } finally {
       setGenerating(false);
     }
@@ -527,6 +552,128 @@ export default function KraReport({ onBack }) {
     } finally {
       setExporting(null);
       setZipStep(null);
+    }
+  }
+
+  // ---- New Task -----------------------------------------------------------
+  const openNewTask = () => {
+    H.tap();
+    ntCreatedId.current = 0;
+    setNtMatches([]);
+    setNt({
+      name: '', kra_id: kraIds.length === 1 ? kraIds[0] : '', user_id: '',
+      doc_type: 'requirement', priority: 'regular',
+      estimate_hours: '', estimate_minutes: '', worked_hours: '', worked_minutes: '',
+      deadline: '', description: '', error: '',
+    });
+  };
+
+  // The duplicate-name hint. Debounced 350ms like the web, and it needs BOTH a
+  // name and a project — the server matches within one KRA, so asking without
+  // one is meaningless.
+  useEffect(() => {
+    const name = (nt?.name || '').trim();
+    if (!name || !nt?.kra_id) { setNtMatches([]); return undefined; }
+    const t = setTimeout(async () => {
+      const m = await findNameMatches({ name, kraId: nt.kra_id });
+      setNtMatches(m);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [nt?.name, nt?.kra_id]);
+
+  // "This report only" — a row that exists here and nowhere else. No server call
+  // at all. Same shape the web builds, including the NEGATIVE id, which is what
+  // keeps it from ever colliding with a real row in removedRowIds.
+  function addLocalRow() {
+    const err = validateNewTask(nt);
+    if (err) { setNt((p) => ({ ...p, error: err })); return; }
+    const kra = kras.find((k) => k.id === Number(nt.kra_id));
+    const emp = employees.find((e) => e.id === Number(nt.user_id));
+    const worked = toSeconds(nt.worked_hours, nt.worked_minutes);
+    const h = Math.floor(worked / 3600), m = Math.floor((worked % 3600) / 60);
+    setLocalRows((prev) => [{
+      id: -(Date.now()),
+      is_local: true,
+      kra_id: Number(nt.kra_id),
+      kra_path: kra?.display_name || kra?.name || '—',
+      root_kra: kra?.name || '—',
+      sub_kra: '-',
+      kpi_name: nt.name.trim(),
+      external_ref: '',
+      task_type: prefixForDocType(nt.doc_type),
+      task_state: 'assigned',
+      task_state_label: 'Report only',
+      priority: nt.priority,
+      deadline: nt.deadline || '',
+      employee_id: nt.user_id ? Number(nt.user_id) : 0,
+      employee_name: emp?.name || '—',
+      time_worked_seconds: worked,
+      time_worked_hours: +(worked / 3600).toFixed(2),
+      time_worked_display: `${h}h ${m}m`,
+      user_breakdown: [],
+    }, ...prev]);
+    setNt(null);
+    setNtMatches([]);
+    flash('ok', 'Added to this report only.');
+  }
+
+  // "Everywhere" — a real task. Two calls, and they are NOT transactional: the
+  // web leaves an orphan 0h task on the board when the second one fails, and
+  // pressing the button again creates a SECOND task. ntCreatedId remembers what
+  // was already made, so a retry only re-logs the time.
+  async function submitNewTask() {
+    const err = validateNewTask(nt);
+    if (err) { setNt((p) => ({ ...p, error: err })); return; }
+    setNtBusy(true);
+    const worked = toSeconds(nt.worked_hours, nt.worked_minutes);
+    const name = nt.name.trim();
+    try {
+      let kpiId = ntCreatedId.current;
+      if (!kpiId) {
+        const res = await createKpi({
+          name,
+          kraId: nt.kra_id,
+          docType: nt.doc_type,
+          estimateHours: nt.estimate_hours,
+          estimateMinutes: nt.estimate_minutes,
+          priority: nt.priority,
+          userId: nt.user_id,
+          deadline: nt.deadline || false,
+          // Untrimmed, as the web sends it.
+          description: nt.description,
+        });
+        kpiId = res?.id || 0;
+        ntCreatedId.current = kpiId;
+      }
+      if (worked > 0 && kpiId) {
+        await logManualTime({ kpiId, seconds: worked, userId: nt.user_id });
+      }
+      setNt(null);
+      setNtMatches([]);
+      ntCreatedId.current = 0;
+      const fresh = await generate();
+      // A new task starts as Pre-Approval Approved, so any State, Type or
+      // Employee filter hides the thing that was just created — which reads as
+      // "it didn't save".
+      const shown = (fresh || []).some((r) => r.id === kpiId);
+      if (kpiId && !shown) setCreatedHidden({ id: kpiId, name });
+    } catch (e) {
+      // The sheet STAYS OPEN on failure, holding what was typed.
+      setNt((p) => (p ? { ...p, error: e?.message || 'Could not create the task.' } : p));
+    } finally { setNtBusy(false); }
+  }
+
+  // The banner's "show it" link. Clears the three filters that hide a new task,
+  // exactly as the web does — but the web stops there and leaves the banner up
+  // even when the task is hidden by its KRA or by the date range instead, so the
+  // link reads as broken. Re-check, and say which it is.
+  async function showCreatedTask() {
+    const id = createdHidden?.id;
+    setStates([]); setTypes([]); setEmployeeIds([]);
+    setCreatedHidden(null);
+    const fresh = await generate({ task_states: [], task_types: [], employee_ids: [] });
+    if (id && !(fresh || []).some((r) => r.id === id)) {
+      flash('err', 'Still hidden — it sits outside this report\'s KRA filter or date range.');
     }
   }
 
@@ -662,6 +809,27 @@ export default function KraReport({ onBack }) {
       ) : null}
 
       {error ? <Text style={s.err}>{error}</Text> : null}
+
+      {/* Saved, but this report cannot show it. Says WHY, because "it didn't
+          save" is the natural conclusion otherwise. */}
+      {createdHidden ? (
+        <View style={s.createdBar}>
+          <Ionicons name="checkmark-circle" size={16} color="#166534" />
+          <View style={{ flex: 1 }}>
+            <Text style={s.createdTxt}>
+              <Text style={{ fontWeight: '900' }}>{createdHidden.name}</Text> was saved and is on the
+              KPI Action Board, but this report's filters exclude it — a new task starts as
+              Pre-Approval Approved, so any State, Type or Employee filter hides it.
+            </Text>
+            <TouchableOpacity onPress={showCreatedTask} activeOpacity={0.8}>
+              <Text style={s.createdLink}>Clear those filters and show it</Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity onPress={() => setCreatedHidden(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close" size={16} color="#166534" />
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {rows !== null && !error ? (
         <>
@@ -819,7 +987,15 @@ export default function KraReport({ onBack }) {
           <Ionicons name="chevron-back" size={24} color={COLORS.navy} />
         </TouchableOpacity>
         <Text style={s.headerTitle}>KRA Report</Text>
-        <View style={{ width: 40 }} />
+        {/* Admin only, matching the web. The report is where you notice work is
+            missing from it, so this is where adding it belongs — otherwise it
+            means leaving, creating it elsewhere, coming back and regenerating. */}
+        {isAdmin ? (
+          <TouchableOpacity style={s.iconBtn} onPress={openNewTask} activeOpacity={0.85}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="add-circle-outline" size={24} color={COLORS.primary} />
+          </TouchableOpacity>
+        ) : <View style={{ width: 40 }} />}
       </View>
 
       {!!banner && (
@@ -892,6 +1068,248 @@ export default function KraReport({ onBack }) {
         onClear={() => setStates([])}
         onClose={() => setPicker(null)}
       />
+
+      {/* New Task. Two ways out: a row that lives only in this report, or a real
+          task on the board. Nothing is inferred — the button pressed decides. */}
+      <Modal visible={!!nt} transparent animationType="fade" onRequestClose={() => setNt(null)}>
+        <View style={s.modalBackdrop}>
+          <View style={s.modalSheet}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle}>New Task</Text>
+              <TouchableOpacity onPress={() => setNt(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={20} color={COLORS.muted} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+              <View style={{ padding: 16, paddingTop: 12 }}>
+                <Text style={s.ntLabel}>Task name <Text style={s.ntReq}>*</Text></Text>
+                <TextInput
+                  style={s.ntInput}
+                  placeholder="e.g. Login screen"
+                  placeholderTextColor={COLORS.faint}
+                  value={nt?.name || ''}
+                  onChangeText={(v) => setNt((p) => ({ ...p, name: v, error: '' }))}
+                />
+
+                {/* Advisory only — the server stopped refusing duplicates when
+                    the web gained this, so nothing rejects one now. */}
+                {ntMatches.length ? (
+                  <View style={s.ntMatchBox}>
+                    <Text style={s.ntMatchTitle}>
+                      {ntMatches.length} task{ntMatches.length === 1 ? '' : 's'} here already use this name:
+                    </Text>
+                    {ntMatches.map((m) => (
+                      <Text key={m.id} style={s.ntMatchRow} numberOfLines={1}>
+                        {m.external_ref ? `${m.external_ref}  ` : ''}{m.name}
+                        {m.assignee ? ` · ${m.assignee}` : ''}
+                      </Text>
+                    ))}
+                    <Text style={s.ntMatchFoot}>You can still save — this is only a heads-up.</Text>
+                  </View>
+                ) : null}
+
+                <Text style={s.ntLabel}>Project (KRA) <Text style={s.ntReq}>*</Text></Text>
+                <TouchableOpacity style={s.ntSelect} onPress={() => setNtPicker('kra')} activeOpacity={0.8}>
+                  <Text style={[s.ntSelectTxt, !nt?.kra_id && s.ntSelectEmpty]} numberOfLines={1}>
+                    {kras.find((k) => k.id === Number(nt?.kra_id))?.display_name
+                      || kras.find((k) => k.id === Number(nt?.kra_id))?.name
+                      || '— pick a project —'}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color={COLORS.muted} />
+                </TouchableOpacity>
+
+                <Text style={s.ntLabel}>Assignee <Text style={s.ntReq}>*</Text></Text>
+                <TouchableOpacity style={s.ntSelect} onPress={() => setNtPicker('user')} activeOpacity={0.8}>
+                  <Text style={[s.ntSelectTxt, !nt?.user_id && s.ntSelectEmpty]} numberOfLines={1}>
+                    {employees.find((e) => e.id === Number(nt?.user_id))?.name || '— unassigned —'}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color={COLORS.muted} />
+                </TouchableOpacity>
+
+                {/* Type mints the REQ/UPT/BUG reference, which is what this
+                    report's own Type filter matches on. */}
+                <Text style={s.ntLabel}>Type <Text style={s.ntReq}>*</Text></Text>
+                <View style={s.dlRow}>
+                  {DOC_TYPES.map((d) => (
+                    <TouchableOpacity
+                      key={d.code}
+                      style={[s.dlChip, nt?.doc_type === d.code && s.dlChipOn]}
+                      onPress={() => { H.select(); setNt((p) => ({ ...p, doc_type: d.code })); }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[s.dlChipTxt, nt?.doc_type === d.code && s.dlChipTxtOn]}>
+                        {d.label} → {d.prefix}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={s.ntLabel}>Priority</Text>
+                <View style={s.dlRow}>
+                  {['regular', 'important', 'urgent'].map((p) => (
+                    <TouchableOpacity
+                      key={p}
+                      style={[s.dlChip, nt?.priority === p && s.dlChipOn]}
+                      onPress={() => { H.select(); setNt((v) => ({ ...v, priority: p })); }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[s.dlChipTxt, nt?.priority === p && s.dlChipTxtOn]}>
+                        {p[0].toUpperCase() + p.slice(1)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={s.ntLabel}>Estimate <Text style={s.ntReq}>*</Text></Text>
+                <View style={s.ntPairRow}>
+                  <TextInput
+                    style={s.ntNum} keyboardType="number-pad" placeholder="h"
+                    placeholderTextColor={COLORS.faint}
+                    value={String(nt?.estimate_hours ?? '')}
+                    onChangeText={(v) => setNt((p) => ({ ...p, estimate_hours: v.replace(/[^0-9]/g, ''), error: '' }))}
+                  />
+                  <Text style={s.ntPairSep}>h</Text>
+                  <TextInput
+                    style={s.ntNum} keyboardType="number-pad" placeholder="m"
+                    placeholderTextColor={COLORS.faint}
+                    value={String(nt?.estimate_minutes ?? '')}
+                    onChangeText={(v) => {
+                      let m = parseInt(v.replace(/[^0-9]/g, ''), 10);
+                      if (isNaN(m)) m = '';
+                      else if (m > 59) m = 59;
+                      setNt((p) => ({ ...p, estimate_minutes: String(m), error: '' }));
+                    }}
+                  />
+                  <Text style={s.ntPairSep}>m</Text>
+                </View>
+
+                <Text style={s.ntLabel}>Time worked <Text style={s.ntReq}>*</Text></Text>
+                <View style={s.ntPairRow}>
+                  <TextInput
+                    style={s.ntNum} keyboardType="number-pad" placeholder="h"
+                    placeholderTextColor={COLORS.faint}
+                    value={String(nt?.worked_hours ?? '')}
+                    onChangeText={(v) => setNt((p) => ({ ...p, worked_hours: v.replace(/[^0-9]/g, ''), error: '' }))}
+                  />
+                  <Text style={s.ntPairSep}>h</Text>
+                  <TextInput
+                    style={s.ntNum} keyboardType="number-pad" placeholder="m"
+                    placeholderTextColor={COLORS.faint}
+                    value={String(nt?.worked_minutes ?? '')}
+                    onChangeText={(v) => {
+                      let m = parseInt(v.replace(/[^0-9]/g, ''), 10);
+                      if (isNaN(m)) m = '';
+                      else if (m > 59) m = 59;
+                      setNt((p) => ({ ...p, worked_minutes: String(m), error: '' }));
+                    }}
+                  />
+                  <Text style={s.ntPairSep}>m</Text>
+                </View>
+                <Text style={s.ntHint}>
+                  Work already done, before the task existed. It is filed against today, not the
+                  deadline.
+                </Text>
+
+                <Text style={s.ntLabel}>Deadline</Text>
+                <TouchableOpacity style={s.ntSelect} onPress={() => setNtDate(true)} activeOpacity={0.8}>
+                  <Text style={[s.ntSelectTxt, !nt?.deadline && s.ntSelectEmpty]}>
+                    {nt?.deadline || '— none —'}
+                  </Text>
+                  <Ionicons name="calendar-outline" size={16} color={COLORS.muted} />
+                </TouchableOpacity>
+
+                <Text style={s.ntLabel}>Description</Text>
+                <TextInput
+                  style={[s.ntInput, { minHeight: 70, textAlignVertical: 'top' }]}
+                  multiline
+                  placeholder="Optional"
+                  placeholderTextColor={COLORS.faint}
+                  value={nt?.description || ''}
+                  onChangeText={(v) => setNt((p) => ({ ...p, description: v }))}
+                />
+
+                {nt?.error ? <Text style={s.ntError}>{nt.error}</Text> : null}
+
+                <Text style={s.ntFoot}>
+                  <Text style={{ fontWeight: '900' }}>This report only</Text> adds a row here and
+                  nowhere else — it reads 0h on the board because it is not there.{' '}
+                  <Text style={{ fontWeight: '900' }}>Everywhere</Text> creates a real task.
+                </Text>
+              </View>
+            </ScrollView>
+            <View style={s.ntBtns}>
+              <TouchableOpacity style={s.clearCancel} onPress={() => setNt(null)} disabled={ntBusy} activeOpacity={0.85}>
+                <Text style={s.clearCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.ntLocalBtn, ntBusy && { opacity: 0.5 }]} onPress={addLocalRow} disabled={ntBusy} activeOpacity={0.85}>
+                <Text style={s.ntLocalTxt}>This report only</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.clearConfirm, { backgroundColor: COLORS.primary, flex: 1.2 }, ntBusy && { opacity: 0.6 }]}
+                onPress={submitNewTask} disabled={ntBusy} activeOpacity={0.85}
+              >
+                {ntBusy ? <ActivityIndicator size="small" color="#fff" />
+                  : <Text style={s.clearConfirmTxt}>Everywhere</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Single-select pickers for the New Task sheet. MultiSelectPicker above is
+          multi-select and belongs to the filter bar; bending it to do one-of-many
+          would put the filters' behaviour at risk for the sake of two fields. */}
+      <Modal visible={!!ntPicker} transparent animationType="fade" onRequestClose={() => setNtPicker(null)}>
+        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setNtPicker(null)}>
+          <View style={s.modalSheet}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle}>{ntPicker === 'kra' ? 'Pick a project' : 'Pick an assignee'}</Text>
+              <TouchableOpacity onPress={() => setNtPicker(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={20} color={COLORS.muted} />
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              style={{ maxHeight: 380 }}
+              data={ntPicker === 'kra' ? kras : employees}
+              keyExtractor={(o) => String(o.id)}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => {
+                const on = Number(nt?.[ntPicker === 'kra' ? 'kra_id' : 'user_id']) === item.id;
+                return (
+                  <TouchableOpacity
+                    style={s.ntOptRow}
+                    onPress={() => {
+                      H.select();
+                      setNt((p) => ({ ...p, [ntPicker === 'kra' ? 'kra_id' : 'user_id']: item.id, error: '' }));
+                      setNtPicker(null);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    {/* display_name, not `display` — the web reads a key the
+                        server never sends, so its list shows flat names. */}
+                    <Text style={[s.ntOptTxt, on && s.ntOptOn]} numberOfLines={2}>
+                      {item.display_name || item.name}
+                    </Text>
+                    {on ? <Ionicons name="checkmark" size={17} color={COLORS.primary} /> : null}
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Rendered conditionally, NOT with a visible prop: DateGridModal hardcodes
+          `<Modal visible ...>`, so it shows the moment it mounts — the sibling
+          date picker below does the same. */}
+      {ntDate ? (
+        <DateGridModal
+          title="Deadline"
+          value={nt?.deadline || ''}
+          onCancel={() => setNtDate(false)}
+          onPick={(iso) => { setNt((p) => ({ ...p, deadline: iso })); setNtDate(false); }}
+        />
+      ) : null}
 
       {/* Download options. Every control here NARROWS the report already on
           screen; none of them widens it, so what you get is always a subset of
@@ -1195,6 +1613,60 @@ const s = StyleSheet.create({
   summaryPath: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy },
   summaryMeta: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
   summaryTime: { fontSize: 12, fontWeight: '800', color: COLORS.primary, marginTop: 2 },
+
+  // New Task
+  ntLabel: { fontSize: 12, fontWeight: '900', color: COLORS.navy, marginBottom: 6, marginTop: 12 },
+  ntReq: { color: COLORS.red },
+  ntInput: {
+    borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12,
+    paddingVertical: 10, fontSize: 14, color: COLORS.ink, backgroundColor: '#fff',
+  },
+  ntSelect: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12,
+    height: 44, backgroundColor: '#fff',
+  },
+  ntSelectTxt: { flex: 1, fontSize: 14, color: COLORS.ink },
+  ntSelectEmpty: { color: COLORS.faint },
+  ntPairRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  ntNum: {
+    width: 66, borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10,
+    paddingHorizontal: 10, paddingVertical: 9, fontSize: 14, color: COLORS.ink,
+    backgroundColor: '#fff', textAlign: 'center',
+  },
+  ntPairSep: { fontSize: 13, fontWeight: '800', color: COLORS.muted },
+  ntHint: { fontSize: 11.5, color: COLORS.muted, marginTop: 6, lineHeight: 17 },
+  ntError: {
+    fontSize: 12.5, fontWeight: '700', color: '#B91C1C', backgroundColor: '#FEE2E2',
+    borderRadius: 10, padding: 10, marginTop: 14,
+  },
+  ntFoot: { fontSize: 11.5, color: COLORS.muted, lineHeight: 17, marginTop: 14 },
+  ntBtns: { flexDirection: 'row', gap: 8, padding: 16, paddingTop: 12 },
+  ntLocalBtn: {
+    flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.primary,
+    alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff',
+  },
+  ntLocalTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary },
+  ntOptRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20,
+    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F1F5F9',
+  },
+  ntOptTxt: { flex: 1, fontSize: 13.5, color: COLORS.ink },
+  ntOptOn: { fontWeight: '900', color: COLORS.primary },
+  ntMatchBox: {
+    backgroundColor: COLORS.amberBg, borderRadius: 10, padding: 10, marginTop: 8,
+    borderWidth: 1, borderColor: '#F3DFA8',
+  },
+  ntMatchTitle: { fontSize: 12, fontWeight: '800', color: '#7a5200' },
+  ntMatchRow: { fontSize: 11.5, color: '#7a5200', marginTop: 3 },
+  ntMatchFoot: { fontSize: 11, color: '#7a5200', marginTop: 5, fontStyle: 'italic' },
+
+  createdBar: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#DCFCE7',
+    borderRadius: 12, marginHorizontal: 14, marginBottom: 8, padding: 10,
+  },
+  createdTxt: { fontSize: 12, color: '#166534', lineHeight: 17 },
+  createdLink: { fontSize: 12.5, fontWeight: '900', color: '#166534', marginTop: 6 },
 
   // Download options
   dlLabel: { fontSize: 12, fontWeight: '900', color: COLORS.navy, marginBottom: 6 },

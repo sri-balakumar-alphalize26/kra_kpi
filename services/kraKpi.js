@@ -170,7 +170,15 @@ export async function createKra({ name, parentId }) {
 }
 
 // Create a KPI under a KRA. Returns new id.
-export async function createKpi({ name, kraId, estimateHours, estimateMinutes, priority, userId, description, deadline }) {
+//
+// `docType` ('requirement' | 'update' | 'bug') is optional and OMITTED when
+// falsy, so callers that never had it are unaffected. It is not a stored field
+// but a directive: create_kpi turns it into an `external_ref` of REQ-001 / UPT-
+// / BUG- and prefixes the name with "[Update] " / "[Bug] " (kpi_workflow.py:62).
+// Without it a task lands with no reference at all — and the KRA Report's Type
+// filter matches on exactly that prefix, so the task is invisible to the filter
+// meant to find it.
+export async function createKpi({ name, kraId, estimateHours, estimateMinutes, priority, userId, description, deadline, docType }) {
   const base = await server();
   const payload = {
     name: (name || '').trim(),
@@ -182,11 +190,50 @@ export async function createKpi({ name, kraId, estimateHours, estimateMinutes, p
     description: description || '',
     deadline: deadline || false,
   };
+  if (docType) payload.doc_type = docType;
   if (!base) { log.info('createKpi (mock)', payload); await delay(300); return { isMock: true, id: Math.floor(Math.random() * 1e6) }; }
   log.info('createKpi → kra.kpi.create_kpi', payload);
   const id = await callKw(base, 'kra.kpi', 'create_kpi', [payload]);
   log.info('createKpi ←', { id });
   return { isMock: false, id };
+}
+
+// Work already done before the task existed, recorded against a person.
+//
+// Writes in TWO places, which is the whole reason it exists as its own call:
+// `timer_total_seconds` on the task (what the report's Time Worked column reads)
+// and a kpi.time.log row (what decides whether the task matches a date range at
+// all). Write only one and the task either shows 0h or is invisible to its own
+// period.
+//
+// The trailing `false` is the work_date and is deliberate: the server then files
+// the hours against TODAY. Passing the deadline instead would push work into a
+// month that has not happened yet.
+export async function logManualTime({ kpiId, seconds, userId }) {
+  const base = await server();
+  if (!kpiId || !(seconds > 0)) return { isMock: false, ok: false };
+  if (!base) { log.info('logManualTime (mock)', { kpiId, seconds }); await delay(200); return { isMock: true, ok: true }; }
+  log.info('logManualTime → kra.kpi.log_manual_time', { kpiId, seconds, userId });
+  await callKw(base, 'kra.kpi', 'log_manual_time', [Number(kpiId), Number(seconds), userId ? Number(userId) : false, false]);
+  return { isMock: false, ok: true };
+}
+
+// "N task(s) here already use this name" — advisory only.
+//
+// The server used to REFUSE a duplicate name outright; that check was removed
+// when the web gained this hint, so nothing rejects one now. The route swallows
+// its own errors and answers with an empty list, because a failed hint must
+// never be the thing that stops someone creating a task.
+export async function findNameMatches({ name, kraId }) {
+  const base = await server();
+  if (!base || !String(name || '').trim() || !kraId) return [];
+  try {
+    const res = await jsonRpc(base, '/kra_kpi/kpi/name_matches', { name, kra_id: Number(kraId) });
+    return res?.matches || [];
+  } catch (e) {
+    log.info('name_matches failed (advisory)', e?.message);
+    return [];
+  }
 }
 
 // ---- Edit / Delete --------------------------------------------------------
