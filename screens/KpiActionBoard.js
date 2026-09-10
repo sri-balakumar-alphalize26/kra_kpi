@@ -356,13 +356,23 @@ function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
 // action buttons. Shared by TaskCard (kanban) and TaskListRow (accordion list) so
 // both views behave identically — same button set, same runAction wiring, same
 // busy spinner. Reassign stays gated behind isAdmin, so role behavior is preserved.
-function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, readOnly = false }) {
+function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, currentUserId, reminder, readOnly = false }) {
   const st = task.task_state;
   const running = st === 'in_progress';
   const busy = busyId === task.id;
   const canStart = ['assigned', 'urgent', 'important', 'regular', 'queue_waiting',
     'pre_approval_approved', 'pre_approval_partial'].includes(st);
+  // 'hold' is kept here on purpose even though it is not in the server's
+  // _RESUMABLE_STATES: that constant is the "already underway, skip the approval
+  // checks" shortcut, not a refusal, and can_start below is the server's actual
+  // answer for this task. Dropping it would remove a path that works.
   const canResume = ['paused', 'hold', 'rework'].includes(st);
+  // Deliberately NOT narrowed to the web board's in_progress/paused. The server
+  // states the rule itself — can_complete in /kra_kpi/task/details is
+  // "task_state in (in_progress, paused, hold, rework) AND assignee-or-admin" —
+  // so these four are permitted and the web's own detail panel offers them too.
+  // Its board button list is the stale side; matching it here would have taken a
+  // working path away.
   const canComplete = ['in_progress', 'paused', 'hold', 'rework'].includes(st);
   const canPause = st === 'in_progress';
   // Offer Add time only once the work is at or past the number it was given.
@@ -372,6 +382,11 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
   // once the client owns the number, and for someone else's task); this only
   // decides whether the button is worth showing.
   const canAddTime = (() => {
+    // The ownership half of the rule, which this comment has always claimed to
+    // mirror and did not: kpi_action.js gates on admin-or-assignee first. Without
+    // it the board offered Add time on somebody else's overrunning task, for the
+    // server to refuse. A payload with no user_id (older server) is left alone.
+    if (task.user_id && currentUserId && task.user_id !== currentUserId && !isAdmin) return false;
     if (!['in_progress', 'paused'].includes(st)) return false;
     const estSec = estimateSecs(task);
     if (estSec <= 0) return true;
@@ -619,7 +634,12 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, reminder, read
               {isAdmin && st === 'awaiting_client' && (
                 <Btn label="Revert" icon="arrow-undo" kind="amber" onPress={() => onAction('revertSignoff', task)} />
               )}
-              {isAdmin && <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />}
+              {/* Not on a completed task, matching the web: moving finished work
+                  to a different developer rewrites history rather than changing
+                  who does something. */}
+              {isAdmin && st !== 'completed' && (
+                <Btn label="Reassign" icon="swap-horizontal" kind="ghost" onPress={() => onAction('reassign', task)} />
+              )}
               {/* Remove a task nobody has worked on. can_admin_delete is the
                   SERVER's answer (kra.kpi._may_admin_delete) — never re-derived
                   here, so the button can't offer what the route would refuse. */}
@@ -724,7 +744,7 @@ function MeetingPicker({ people, busy, query, setQuery, picked, setPicked }) {
 // by area is what makes both reachable — the old version put the accordion on
 // the whole row and the details on the name alone, so which one you got depended
 // on hitting a word.
-function TaskListRowBase({ task, expanded, rowKey: myRowKey, onToggle, onAction, busyId, nowMs, isAdmin,
+function TaskListRowBase({ task, expanded, rowKey: myRowKey, onToggle, onAction, busyId, nowMs, isAdmin, currentUserId,
                        reminder, pulse, onRowRef, onOpenDetail, readOnly = false }) {
   const p = PRIORITY[task.priority] || PRIORITY.regular;
   const running = task.task_state === 'in_progress';
@@ -823,7 +843,7 @@ function TaskListRowBase({ task, expanded, rowKey: myRowKey, onToggle, onAction,
             <View style={[s.pillDot, { backgroundColor: p.fg }]} />
             <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
           </View>
-          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} reminder={reminder} readOnly={readOnly} />
+          <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} currentUserId={currentUserId} reminder={reminder} readOnly={readOnly} />
         </View>
       )}
     </Animated.View>
@@ -834,7 +854,7 @@ function TaskListRowBase({ task, expanded, rowKey: myRowKey, onToggle, onAction,
 // of rows, and each one mounts two Animated.Values and its own SVG gradient.
 const TaskListRow = React.memo(TaskListRowBase);
 
-function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse, onMeasure, onOpenDetail, readOnly = false }) {
+function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, reminder, pulse, onMeasure, onOpenDetail, readOnly = false }) {
   // Same rule as TaskListRow: with the client → not the developer's to open.
   const canOpen = onOpenDetail && (isAdmin || task.task_state !== 'awaiting_client');
   const p = PRIORITY[task.priority] || PRIORITY.regular;
@@ -913,7 +933,7 @@ function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, reminder, pulse,
         </View>
 
         {/* Meta + actions (shared with the list view) */}
-        <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} reminder={reminder} readOnly={readOnly} />
+        <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} currentUserId={currentUserId} reminder={reminder} readOnly={readOnly} />
       </View>
     </View>
     </Animated.View>
@@ -1133,6 +1153,7 @@ export default function KpiActionBoard({
 }) {
   const [raw, setRaw] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState(null);
   const [isMock, setIsMock] = useState(false);
   const [myOnly, setMyOnly] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1609,6 +1630,11 @@ export default function KpiActionBoard({
       const res = await fetchTasks({ myTasksOnly: myOnly });
       setRaw(res.tasks);
       setIsAdmin(res.isAdmin);
+      // Already in the payload and, until now, thrown away. Add time needs it:
+      // that button is the assignee's or an admin's, and without knowing who is
+      // looking the board offered it on other people's tasks for the server to
+      // refuse.
+      setCurrentUserId(res.currentUserId);
       setIsMock(res.isMock);
     } catch (e) {
       log.error('load failed', e?.message);
@@ -3041,6 +3067,7 @@ export default function KpiActionBoard({
                       busyId={busyId}
                       nowMs={t.task_state === 'in_progress' ? nowMs : 0}
                       isAdmin={isAdmin}
+                      currentUserId={currentUserId}
                       reminder={reminders[String(t.id)]}
                       pulse={pulseId === t.id}
                       onMeasure={l.key === 'today' ? undefined : onCardMeasure}
@@ -3108,6 +3135,7 @@ export default function KpiActionBoard({
               busyId={busyId}
               nowMs={item.task.task_state === 'in_progress' ? nowMs : 0}
               isAdmin={isAdmin}
+              currentUserId={currentUserId}
               reminder={reminders[String(item.task.id)]}
               pulse={pulseId === item.task.id}
               onRowRef={onRowRef}

@@ -207,7 +207,10 @@ export function treePath(row, fromDate) {
   const w = isoWeek(date);
   const month = safeFilename(monthFolder(date));
   const week = safeFilename(w.week ? `Week ${w.week} (${w.start}-${w.end})` : 'Undated');
-  const who = safeFilename((row && row.employee_name) || 'Unassigned');
+  // display_name, when the report carries a rename for this person, exactly as
+  // the web files the folder under displayName(row). The sheets and the PDFs
+  // still print the real employee_name — also as the web does.
+  const who = safeFilename((row && (row.display_name || row.employee_name)) || 'Unassigned');
   return `${month}/${week}/${who}`;
 }
 
@@ -700,8 +703,11 @@ export async function makeReportZip(ctx, include = {}, onStep) {
     for (const r of rows) {
       seq += 1;
       const refPart = r.external_ref ? `${r.external_ref} ` : `${String(seq).padStart(3, '0')} `;
+      // A hand-added row exists in this report and nowhere else — say so on the
+      // file, so nobody goes looking for the task behind it. Same tag as the web.
+      const localTag = r.is_local ? ' (report only)' : '';
       zip.folder(treePath(r, ctx.fromDate))
-        .file(`${safeFilename(refPart + (r.kpi_name || 'task'))}.pdf`,
+        .file(`${safeFilename(refPart + (r.kpi_name || 'task') + localTag)}.pdf`,
           buildTaskDetailPdfB64(r), { base64: true });
       step();
     }

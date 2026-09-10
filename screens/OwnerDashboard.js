@@ -72,11 +72,19 @@ export default function OwnerDashboard({ onBack }) {
   }
 
   // ---- Invoice ------------------------------------------------------------
+  // Unlike the web, which only prefills the invoice form and leaves Generate to
+  // the invoice screen, this creates the draft outright. That is a reasonable
+  // thing to do from a phone, but it means this dialog is the ONLY thing between
+  // a tap and a real record — so it says exactly what will be created, and what
+  // it will cost to undo, rather than "all certified time logs".
   function confirmInvoice(client, project) {
     const label = project ? `project "${project.project_name}"` : `client "${client.client_name}"`;
+    const n = (project ? project.completed_count : client.completed_count) || 0;
     Alert.alert(
       'Create invoice?',
-      `This will create a draft invoice for ${label} covering all certified time logs.`,
+      `This creates a real draft invoice for ${label}`
+      + (n ? `, covering its ${n} completed task${n === 1 ? '' : 's'}` : ', covering every certified time log')
+      + '.\n\nIt appears immediately in Client Invoices. Removing it again means deleting it there.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -355,8 +363,15 @@ function DrillModal({ drill, setDrill, onInvoice }) {
           )}
 
           <View style={s.drillFoot}>
-            <Text style={s.drillTotal}>{tasks.length} task{tasks.length === 1 ? '' : 's'} · Actual {totalActual.toFixed(1)}h · Quoted {totalQuoted.toFixed(1)}h</Text>
-            <TouchableOpacity style={s.genInvBtn} onPress={onInvoice} activeOpacity={0.9}>
+            {/* 2dp, matching the web. At 1dp two 0.44h tasks read as 0.9h here
+                and 0.88h in the browser, for the same figures. */}
+            <Text style={s.drillTotal}>{tasks.length} task{tasks.length === 1 ? '' : 's'} · Actual {totalActual.toFixed(2)}h · Quoted {totalQuoted.toFixed(2)}h</Text>
+            {/* Disabled with nothing certified, as the web disables it: the call
+                would create an empty draft that then has to be found and deleted. */}
+            <TouchableOpacity
+              style={[s.genInvBtn, !tasks.length && { opacity: 0.5 }]}
+              onPress={onInvoice} disabled={!tasks.length} activeOpacity={0.9}
+            >
               <Ionicons name="document-text-outline" size={16} color="#fff" />
               <Text style={s.genInvTxt}>Generate Invoice</Text>
             </TouchableOpacity>

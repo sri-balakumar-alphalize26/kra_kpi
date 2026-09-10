@@ -192,6 +192,12 @@ export default function KraReport({ onBack }) {
   const [taskStates, setTaskStates] = useState([]);
   const [counts, setCounts] = useState({ kras: {}, employees: {}, task_types: {}, task_states: {} });
 
+  // The working view's own edits, made on the web and now honoured here too:
+  // employee_id -> the name to show INSTEAD of the real one, and tasks that
+  // exist in this report and nowhere else.
+  const [nameOverrides, setNameOverrides] = useState({});
+  const [localRows, setLocalRows] = useState([]);
+
   // Filter SELECTIONS.
   const [kraIds, setKraIds] = useState([]);
   const [excludedKraIds, setExcludedKraIds] = useState([]);
@@ -281,8 +287,18 @@ export default function KraReport({ onBack }) {
         setStates(f.task_states || []);
         setSearch(saved.searchQuery || '');
         setRemovedRowIds(saved.removedRowIds || []);
+        // Two parts of the working view the screen used to hold and ignore. Both
+        // are made on the web, and the phone round-tripped them untouched while
+        // rendering as though they did not exist — so the same saved report
+        // showed a smaller task count, a smaller grand TOTAL and fewer files in
+        // the ZIP depending on which screen you opened it from.
+        setNameOverrides(saved.nameOverrides || {});
+        setLocalRows(saved.localRows || []);
         // Everything this screen does not own, kept verbatim.
-        const { filters, searchQuery, removedRowIds, generatedSignature, ...rest } = saved;
+        const {
+          filters, searchQuery, removedRowIds, generatedSignature,
+          nameOverrides: _n, localRows: _l, ...rest
+        } = saved;
         savedExtras.current = rest;
         // Re-run rather than restoring the rows themselves: the report is a view
         // of live data, and handing back a week-old copy of it under today's
@@ -334,6 +350,12 @@ export default function KraReport({ onBack }) {
         },
         searchQuery: search,
         removedRowIds,
+        // Written back from real state now, not carried blind through
+        // savedExtras — otherwise the first save from the phone after a restore
+        // would still be echoing whatever was read, and any future edit made
+        // here could not survive.
+        nameOverrides,
+        localRows,
         generatedSignature,
       }));
     }, 600);
@@ -399,19 +421,35 @@ export default function KraReport({ onBack }) {
   // Every total, the summary, the table and all three exports go through here,
   // so a trimmed row cannot leave a stale number behind anywhere.
   const visibleRows = useMemo(() => {
+    // Report-only rows FIRST, as the web orders them: they were added by hand,
+    // so they belong where the person who added them can see them rather than
+    // buried after two hundred real ones. Merged here, at the single source, so
+    // the badges, the table, the totals and all three exports count them —
+    // dropping them was what made the phone's grand TOTAL disagree with the
+    // browser's for the very same saved report.
+    const base = localRows.length ? localRows.concat(rows || []) : (rows || []);
     const kept = removedRowIds.length
-      ? (rows || []).filter((r) => !removedRowIds.includes(r.id))
-      : (rows || []);
+      ? base.filter((r) => !removedRowIds.includes(r.id))
+      : base;
+    // Resolve a rename once, here, so nothing downstream has to know about the
+    // override map. employee_name stays the REAL name — the sheets and PDFs
+    // print it, exactly as the web's do; display_name is what the table shows
+    // and what the ZIP files the folder under.
+    const named = Object.keys(nameOverrides).length
+      ? kept.map((r) => (nameOverrides[r.employee_id]
+        ? { ...r, display_name: nameOverrides[r.employee_id] } : r))
+      : kept;
     const q = search.trim().toLowerCase();
-    if (!q) return kept;
-    return kept.filter((r) =>
+    if (!q) return named;
+    return named.filter((r) =>
       (r.kra_path || '').toLowerCase().includes(q)
       || (r.sub_kra || '').toLowerCase().includes(q)
       || (r.kpi_name || '').toLowerCase().includes(q)
       || (r.employee_name || '').toLowerCase().includes(q)
+      || (r.display_name || '').toLowerCase().includes(q)
       || (r.task_type || '').toLowerCase().includes(q)
       || (r.task_state_label || '').toLowerCase().includes(q));
-  }, [rows, removedRowIds, search]);
+  }, [rows, localRows, nameOverrides, removedRowIds, search]);
 
   // What the document builders need. Assembled here so the three export handlers
   // cannot each build a subtly different one.
@@ -638,6 +676,11 @@ export default function KraReport({ onBack }) {
           <View style={[s.typeBadge, { backgroundColor: c.bg }]}>
             <Text style={[s.typeBadgeTxt, { color: c.fg }]}>{item.task_type || '—'}</Text>
           </View>
+          {/* Added by hand — it exists in this report and nowhere else, so it
+              must not read as a task someone can go and look up. */}
+          {!!item.is_local && (
+            <View style={s.localBadge}><Text style={s.localBadgeTxt}>report only</Text></View>
+          )}
           <Text style={s.taskHours}>{item.time_worked_display}</Text>
           <TouchableOpacity onPress={() => {
             H.select();
@@ -649,7 +692,9 @@ export default function KraReport({ onBack }) {
         <Text style={s.taskName} numberOfLines={2}>{item.kpi_name}</Text>
         <Text style={s.taskMeta} numberOfLines={1}>{item.kra_path}</Text>
         <Text style={s.taskMeta2} numberOfLines={1}>
-          {item.employee_name || 'Unassigned'} · {item.task_state_label || '—'}
+          {item.display_name || item.employee_name || 'Unassigned'}
+          {!!item.display_name && <Text style={s.renamedTxt}>  (renamed — really {item.employee_name})</Text>}
+          {' · '}{item.task_state_label || '—'}
         </Text>
       </View>
     );
@@ -848,6 +893,11 @@ const s = StyleSheet.create({
   taskName: { fontSize: 14, fontWeight: '700', color: COLORS.ink, marginTop: 6 },
   taskMeta: { fontSize: 12, color: COLORS.muted, marginTop: 4 },
   taskMeta2: { fontSize: 11.5, color: COLORS.faint, marginTop: 2 },
+  renamedTxt: { fontSize: 10.5, color: COLORS.muted, fontStyle: 'italic' },
+  localBadge: {
+    backgroundColor: '#E0E7FF', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2,
+  },
+  localBadgeTxt: { fontSize: 9.5, fontWeight: '800', color: '#3730A3' },
 
   emptyBox: { alignItems: 'center', gap: 8, paddingVertical: 40 },
   emptyTxt: { fontSize: 13.5, color: COLORS.muted, fontWeight: '600' },
