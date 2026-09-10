@@ -63,8 +63,22 @@
         </field>
     </record>
 
-    <!-- Menu -->
+    <!-- Menu — Coordinator and up ONLY.
+         This screen manages the library; it is not where anyone READS a manual
+         (the app is). Ungated it appeared on every employee's menu bar, and the
+         ACL grants base.group_user read on every record with no record rule to
+         narrow it — so a developer or a client could open this list and read the
+         manuals tagged Admin, which is precisely what app.user.manual's own
+         role filtering exists to prevent ("server-side, so a client can never
+         see admin docs").
+
+         group_kra_admin (Coordinator) is the right gate rather than a list of
+         three: Owner implies Coordinator and base.group_system implies Owner
+         (kra_kpi_module/security/kra_kpi_groups.xml), so naming the one covers
+         all three — the same reason the access CSV beside this now needs only
+         one write row instead of three identical ones. -->
     <menuitem id="app_user_manual_menu_root" name="User Manual"
-              action="app_user_manual_action" sequence="100"/>
+              action="app_user_manual_action" sequence="100"
+              groups="kra_kpi_module.group_kra_admin"/>
 
 </odoo>
