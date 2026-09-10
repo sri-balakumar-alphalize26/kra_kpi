@@ -31,7 +31,8 @@ import {
   fetchKraFilters, fetchKraReport, fetchKraFilterCounts, fetchKraContext, saveKraState,
 } from '../services/kraReport';
 import {
-  typeStyle, totalTimeWorked, uniqueEmployeeCount, makeReportPdf, makeReportExcel, makeReportZip,
+  typeStyle, totalTimeWorked, uniqueEmployeeCount, projectSummary,
+  makeReportPdf, makeReportExcel, makeReportZip,
 } from '../utils/kraExport';
 import * as H from '../utils/haptics';
 import { createLogger } from '../api/logger';
@@ -197,6 +198,10 @@ export default function KraReport({ onBack }) {
   // exist in this report and nowhere else.
   const [nameOverrides, setNameOverrides] = useState({});
   const [localRows, setLocalRows] = useState([]);
+  // The on-screen KRA Summary. Open by default, as on the web.
+  const [summaryOpen, setSummaryOpen] = useState(true);
+  // "Clear the report" confirm — it discards work that exists nowhere else.
+  const [clearOpen, setClearOpen] = useState(false);
 
   // Filter SELECTIONS.
   const [kraIds, setKraIds] = useState([]);
@@ -508,6 +513,28 @@ export default function KraReport({ onBack }) {
     }
   }
 
+  // Put the whole working view down: filters back to the default month, table
+  // gone, and the SERVER copy wiped with the empty string saveKraState documents.
+  // Without that last part the next open would restore everything this just
+  // cleared, which is the opposite of what the button says.
+  async function clearReport() {
+    setClearOpen(false);
+    H.tap();
+    const init = presetRange('this_month');
+    setPreset('this_month');
+    setFromDate(init.from); setToDate(init.to);
+    setEmployeeIds([]); setKraIds([]); setExcludedKraIds([]); setTypes([]); setStates([]);
+    setSearch('');
+    setRemovedRowIds([]);
+    setNameOverrides({});
+    setLocalRows([]);
+    savedExtras.current = {};
+    setRows(null);
+    setGeneratedSignature('');
+    try { await saveKraState(''); } catch (e) { log.warn('clear state failed', e?.message); }
+    flash('ok', 'Report cleared.');
+  }
+
   const downloadPdf = () => runExport('pdf', async () => makeReportPdf(exportCtx()));
   const downloadExcel = () => runExport('excel', () => makeReportExcel(exportCtx()));
   const downloadZip = (include) => {
@@ -596,6 +623,13 @@ export default function KraReport({ onBack }) {
             <View style={s.badge}><Text style={s.badgeTxt}>{visibleRows.length} tasks</Text></View>
             <View style={[s.badge, s.badgeAlt]}><Text style={s.badgeTxt}>{totalTimeWorked(visibleRows)}</Text></View>
             <View style={s.badge}><Text style={s.badgeTxt}>{uniqueEmployeeCount(visibleRows)} employees</Text></View>
+            {/* Collapsible: on a phone the summary can be a dozen rows above the
+                tasks, and someone who came here for one task should not have to
+                scroll past it every time. */}
+            <TouchableOpacity style={s.summaryToggle} onPress={() => { H.select(); setSummaryOpen((v) => !v); }} activeOpacity={0.8}>
+              <Text style={s.summaryToggleTxt}>{summaryOpen ? 'Hide summary' : 'KRA summary'}</Text>
+              <Ionicons name={summaryOpen ? 'chevron-up' : 'chevron-down'} size={13} color={COLORS.primary} />
+            </TouchableOpacity>
           </View>
 
           {/* Exactly which filters produced what is on screen, in the server's own
@@ -621,6 +655,27 @@ export default function KraReport({ onBack }) {
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {/* The KRA Summary, on screen. The app has always computed this table
+              for the Excel tab and the PDF's Section A, and thrown the on-screen
+              version away — so the phone showed a list of tasks where the browser
+              shows where the time actually went. Same projectSummary() the
+              documents use, so the screen and the file cannot disagree, and it
+              follows the search box and trimmed rows because it reads
+              visibleRows. */}
+          {summaryOpen && visibleRows.length ? (
+            <View style={s.summaryCard}>
+              {projectSummary(visibleRows).map((p) => (
+                <View key={p.kra_path} style={s.summaryRow}>
+                  <Text style={s.summaryPath} numberOfLines={2}>{p.kra_path}</Text>
+                  <Text style={s.summaryMeta}>
+                    {p.task_count} task{p.task_count === 1 ? '' : 's'} · {p.employee_count} employee{p.employee_count === 1 ? '' : 's'}
+                  </Text>
+                  <Text style={s.summaryTime}>{p.total_display}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
 
           {removedRowIds.length ? (
             <View style={s.trimBar}>
@@ -654,6 +709,16 @@ export default function KraReport({ onBack }) {
               <Text style={s.pdfTxt}>ZIP</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Start a fresh report. The per-picker Clear buttons only drop one
+              filter each, and nothing on the phone could clear the SAVED view —
+              saveKraState('') has documented the empty-string contract all along
+              and was never called with it, so a working view built on the web
+              could be edited from here but never put down. */}
+          <TouchableOpacity style={s.clearRow} onPress={() => { H.select(); setClearOpen(true); }} activeOpacity={0.8}>
+            <Ionicons name="trash-outline" size={14} color={COLORS.red} />
+            <Text style={s.clearTxt}>Clear this report</Text>
+          </TouchableOpacity>
 
           {/* Hundreds of per-task PDFs take far longer on a phone than in a
               browser, and a screen that just sits there reads as a crash. */}
@@ -782,6 +847,40 @@ export default function KraReport({ onBack }) {
         onClose={() => setPicker(null)}
       />
 
+      {/* Clearing discards trimmed rows, renames and report-only tasks — none of
+          which exist anywhere else — so it counts them first rather than asking
+          "are you sure?" about an amount nobody can see. */}
+      <Modal visible={clearOpen} transparent animationType="fade" onRequestClose={() => setClearOpen(false)}>
+        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setClearOpen(false)}>
+          <View style={s.modalSheet}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle}>Clear this report</Text>
+              <TouchableOpacity onPress={() => setClearOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={20} color={COLORS.muted} />
+              </TouchableOpacity>
+            </View>
+            {(() => {
+              const n = removedRowIds.length + Object.keys(nameOverrides).length + localRows.length;
+              return (
+                <Text style={s.clearBody}>
+                  {n
+                    ? `This discards ${n} change${n === 1 ? '' : 's'} made to this report — trimmed rows, renames and report-only tasks. They exist nowhere else.`
+                    : 'This clears the filters and the table so you can start a fresh report.'}
+                </Text>
+              );
+            })()}
+            <View style={s.clearBtns}>
+              <TouchableOpacity style={s.clearCancel} onPress={() => setClearOpen(false)} activeOpacity={0.85}>
+                <Text style={s.clearCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.clearConfirm} onPress={clearReport} activeOpacity={0.85}>
+                <Text style={s.clearConfirmTxt}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* The ZIP menu picks the FLAVOUR of the archive, not merely extras: asking
           for Excel used to still bury one workbook under a PDF per task. */}
       <Modal visible={zipMenu} transparent animationType="fade" onRequestClose={() => setZipMenu(false)}>
@@ -907,6 +1006,30 @@ const s = StyleSheet.create({
   modalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   modalTitle: { fontSize: 17, fontWeight: '800', color: COLORS.navy },
   modalClose: { fontSize: 18, color: COLORS.muted, fontWeight: '700' },
+
+  // KRA Summary — where the time went, above the list of what it went on.
+  summaryToggle: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 8, paddingVertical: 4 },
+  summaryToggleTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
+  summaryCard: {
+    backgroundColor: '#fff', borderRadius: 12, marginHorizontal: 14, marginBottom: 10,
+    paddingVertical: 4, borderWidth: 1, borderColor: COLORS.line,
+  },
+  summaryRow: { paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  summaryPath: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy },
+  summaryMeta: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+  summaryTime: { fontSize: 12, fontWeight: '800', color: COLORS.primary, marginTop: 2 },
+
+  clearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 10 },
+  clearTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.red },
+  clearBody: { fontSize: 13.5, color: COLORS.muted, lineHeight: 20, paddingHorizontal: 20, paddingTop: 14 },
+  clearBtns: { flexDirection: 'row', gap: 10, padding: 20, paddingTop: 16 },
+  clearCancel: {
+    flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.line,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  clearCancelTxt: { fontSize: 14, fontWeight: '800', color: COLORS.muted },
+  clearConfirm: { flex: 1, height: 44, borderRadius: 12, backgroundColor: COLORS.red, alignItems: 'center', justifyContent: 'center' },
+  clearConfirmTxt: { fontSize: 14, fontWeight: '800', color: '#fff' },
 
   pickerBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#F8FAFF' },
   pickerCount: { fontSize: 11.5, fontWeight: '800', color: COLORS.muted },

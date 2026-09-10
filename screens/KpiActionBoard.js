@@ -2338,7 +2338,10 @@ export default function KpiActionBoard({
     }
     if (kind === 'pause') {
       setPauseFor(task);
-      setPauseCode('break');
+      // Opens on "Moved to another task", as the web's select does. Opening on
+      // Break made Break the path of least resistance for a developer who had
+      // simply switched tasks, which files real work time under a break.
+      setPauseCode('priority_task');
       setPauseNote('');
       setPauseDropdown(false);
       // Never carry a previous meeting's attendees — or a stale error — into a
@@ -2894,7 +2897,7 @@ export default function KpiActionBoard({
                     <TouchableOpacity
                       style={s.pauseAllBtn}
                       onPress={() => {
-                        setPauseAllCode('break'); setPauseAllNote(''); setPauseAllErr('');
+                        setPauseAllCode('priority_task'); setPauseAllNote(''); setPauseAllErr('');
                         setMeetingWith([]); setPeopleQuery('');
                         setPauseAllOpen(true);
                       }}
@@ -3639,7 +3642,11 @@ export default function KpiActionBoard({
               ))}
               <Text style={[s.whyTitle, { marginTop: 12 }]}>Why are you pausing?</Text>
               <View style={s.typeRow}>
-                {PAUSE_REASONS.filter((r) => r.quick).map((r) => {
+                {/* ALL ten reasons, not just the quick chips. Stopping two timers
+                    for a technical issue or for leave is not a rarer thing to do
+                    than stopping one, and the six-chip version left no way to say
+                    either — so those pauses were filed as something they were not. */}
+                {PAUSE_REASONS.map((r) => {
                   const on = pauseAllCode === r.code;
                   return (
                     <TouchableOpacity
@@ -3654,7 +3661,11 @@ export default function KpiActionBoard({
                       }}
                       activeOpacity={0.85}
                     >
-                      <Text style={[s.typeChipTxt, on && s.typeChipTxtOn]}>{r.emoji} {r.label}</Text>
+                      {/* Three of the ten carry no emoji; without this they render
+                          with a leading space where one would have been. */}
+                      <Text style={[s.typeChipTxt, on && s.typeChipTxtOn]}>
+                        {r.emoji ? `${r.emoji} ` : ''}{r.label}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}

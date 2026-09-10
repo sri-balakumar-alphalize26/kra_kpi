@@ -663,6 +663,12 @@ export const MGR_CHECKLIST_ITEMS = [
 // Pause reason codes shown in the picker (subset of the model's selection).
 // `quick` marks the ones surfaced as emoji quick-pick buttons (like the web).
 export const PAUSE_REASONS = [
+  // FIRST, and a quick chip, because it is the commonest reason a developer
+  // pauses: they have not stopped working, they have moved to a different task.
+  // Buried in the picker as "Another Priority Task" it went unread, so people
+  // reached for Break — which files real work time under a break on the Workday
+  // Map and makes the whole day read wrong. Same wording as the web now.
+  { code: 'priority_task', label: 'Moved to another task', emoji: '🔀', quick: true },
   { code: 'break', label: 'Break', emoji: '☕', quick: true },
   { code: 'lunch', label: 'Lunch', emoji: '🍽', quick: true },
   { code: 'meeting', label: 'Meeting', emoji: '👥', quick: true },
@@ -671,7 +677,6 @@ export const PAUSE_REASONS = [
   // polluted those buckets. It ONLY labels the pause — the workday stays open
   // until End Workday, which is a separate and irreversible decision.
   { code: 'day_end', label: 'Day End', emoji: '🌙', quick: true },
-  { code: 'priority_task', label: 'Another Priority Task' },
   { code: 'awaiting_approval', label: 'Waiting for Approval' },
   { code: 'technical_issue', label: 'Technical Issue' },
   { code: 'leave', label: 'Leave' },
