@@ -14,6 +14,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
+import { splitBold } from '../utils/waPreview';
 import {
   getAccess, setMobile, setUserCountry, setRole, toggleLogin, resetPassword, setOtpMessage,
   waConnect, waStatus, waDelete,
@@ -36,10 +37,15 @@ function renderPreview(tpl, subs) {
     .replace(/\{code\}/g, subs.code)
     .replace(/\{minutes\}/g, String(subs.minutes))
     .replace(/\{app\}/g, subs.app);
-  return str.split('*').map((p, i) => (
-    i % 2 === 1
-      ? <Text key={i} style={{ fontWeight: '800' }}>{p}</Text>
-      : <Text key={i}>{p}</Text>
+  // splitBold, not split('*'): only PAIRED markers on one line count. Splitting
+  // on every asterisk made an odd one bold everything after it — "5 * 3" turned
+  // the rest of the message bold in the preview, while WhatsApp itself (and the
+  // web's own paired-only regex) would show it as ordinary text. The correct
+  // implementation was already in this app and simply not used here.
+  return splitBold(str).map((p, i) => (
+    p.bold
+      ? <Text key={i} style={{ fontWeight: '800' }}>{p.text}</Text>
+      : <Text key={i}>{p.text}</Text>
   ));
 }
 

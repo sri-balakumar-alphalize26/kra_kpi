@@ -154,7 +154,13 @@ export default function PaidWork({ onBack }) {
                   </View>
                   <View style={s.stat}>
                     <Text style={s.statLbl}>Estimated</Text>
-                    <Text style={s.statVal}>{t.estimate_display || '—'}</Text>
+                    {/* The server ALWAYS formats this, so an unestimated task
+                        arrives as "00:00" — truthy, and printed as though the
+                        target were zero and had been blown. Read the raw numbers
+                        the way the web does and say there was no estimate. */}
+                    <Text style={s.statVal}>
+                      {(t.estimate_hours || t.estimate_minutes) ? t.estimate_display : 'no estimate'}
+                    </Text>
                   </View>
                   <View style={s.stat}>
                     <Text style={s.statLbl}>Amount</Text>

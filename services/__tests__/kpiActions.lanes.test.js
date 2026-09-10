@@ -42,6 +42,26 @@ describe('the Today lane', () => {
     expect(lanes.today.map((t) => t.id)).toEqual([7]);
     expect(lanes.paused.map((t) => t.id)).toEqual([7]);
   });
+});
+
+describe('hold and rework', () => {
+  // They lane by PRIORITY, matching the module — kpi_action.js has no branch for
+  // either, so both fall through to `key = t.priority`.
+  it('lane by priority, not with paused', () => {
+    expect(laneForTask(task({ task_state: 'hold', priority: 'urgent' }))).toBe('urgent');
+    expect(laneForTask(task({ task_state: 'rework', priority: 'important' }))).toBe('important');
+    expect(laneForTask(task({ task_state: 'hold', priority: 'regular' }))).toBe('regular');
+  });
+
+  // The one thing NOT copied from the web, which pushes only `if (groups[key])`
+  // and so shows such a task in no lane at all. Whatever the priority says, the
+  // task stays on the board.
+  it('still lands somewhere when the priority is not a lane', () => {
+    expect(laneForTask(task({ task_state: 'rework', priority: 'blocker' }))).toBe('regular');
+    const lanes = groupIntoLanes([task({ id: 9, task_state: 'hold', priority: 'blocker' })]);
+    const everywhere = Object.values(lanes).flat().map((t) => t.id);
+    expect(everywhere).toContain(9);
+  });
 
   it('orders by time spent today, most first', () => {
     const lanes = groupIntoLanes([

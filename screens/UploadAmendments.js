@@ -28,6 +28,7 @@ const EXCEL_CSV_TYPES = [
   'text/csv',
   'text/comma-separated-values',
   'application/csv',
+  'text/plain',   // .txt — the server parses it on the same branch as .csv
 ];
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
@@ -170,10 +171,18 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
           // Client: fetch ONLY their own project(s) (scoped server-side) and
           // auto-fill the destination read-only — no client/project pickers.
           const cp = await getClientProjects().catch((e) => { log.warn('getClientProjects failed', e?.message); return { projects: [] }; });
-          const proj = (cp.projects || [])[0] || null;
+          // ALL of them, not just the first. /kpi_client_portal/get_projects
+          // returns every project the client owns, and this screen used to take
+          // projects[0] and lock the field — so a client with two projects could
+          // only ever file against whichever sorted first, with no way to say so.
+          // Keep the first pre-selected (nothing changes for the common
+          // single-project case) and let the existing picker do the rest.
+          const list = cp.projects || [];
+          setSubKras(list);
+          const proj = list[0] || null;
           setClientProjectName(proj ? (proj.display || 'Your project') : '');
           if (proj) setSubKraId(String(proj.id));
-          log.info('mount: loaded (client)', { hasProject: !!proj, project: proj?.display, refPrefix: ref.prefix });
+          log.info('mount: loaded (client)', { projects: list.length, project: proj?.display, refPrefix: ref.prefix });
         } else {
           const [c, u] = await Promise.all([
             svc.getClients(),
@@ -225,15 +234,30 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   const removeRow = (i) => setTasks((t) => t.filter((_, idx) => idx !== i));
   const updateRow = (i, patch) => setTasks((t) => t.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
-  // Merge suggested/imported names into rows, skipping duplicates by name.
+  // Merge suggested/imported rows, skipping duplicates.
+  //
+  // By REF first, and by name only when there is no ref — the rule the web uses.
+  // Deduping on the name alone threw away real work: a sheet listing REQ-014 and
+  // REQ-051 both described "Print receipt" imported as one row, and the second
+  // task was silently gone. A ref is the identity when one exists; two tasks can
+  // legitimately share a description.
   const mergeTaskNames = (items) => {
     setTasks((prev) => {
-      const seen = new Set(prev.map((r) => r.name.trim().toLowerCase()).filter(Boolean));
+      const seenRef = new Set(prev.map((r) => (r.external_ref || '').trim().toLowerCase()).filter(Boolean));
+      const seen = new Set(prev.filter((r) => !(r.external_ref || '').trim())
+        .map((r) => r.name.trim().toLowerCase()).filter(Boolean));
       const additions = [];
       for (const it of items) {
         const name = (typeof it === 'string' ? it : it.name || '').trim();
-        if (!name || seen.has(name.toLowerCase())) continue;
-        seen.add(name.toLowerCase());
+        const ref = ((typeof it === 'object' && it.external_ref) || '').trim();
+        if (!name) continue;
+        if (ref) {
+          if (seenRef.has(ref.toLowerCase())) continue;
+          seenRef.add(ref.toLowerCase());
+        } else {
+          if (seen.has(name.toLowerCase())) continue;
+          seen.add(name.toLowerCase());
+        }
         additions.push({
           ...emptyRow(defaults),
           name: capFirst(name),
@@ -276,10 +300,13 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
       const f = await pickBase64(EXCEL_CSV_TYPES);
       if (!f) return;
       // Guard by extension too — some Android providers ignore the MIME filter.
+      // .txt included: the server parses it on the same branch as .csv
+      // (kpi_reports_api.py) and the web has always accepted it. Refusing it here
+      // turned a file the system handles into a file the phone would not take.
       const ext = (f.name.split('.').pop() || '').toLowerCase();
-      if (!['xlsx', 'xls', 'csv'].includes(ext)) {
-        log.warn('import: rejected non-excel/csv file', { name: f.name, ext });
-        flash('err', 'Please choose an Excel (.xlsx/.xls) or CSV (.csv) file');
+      if (!['xlsx', 'xls', 'csv', 'txt'].includes(ext)) {
+        log.warn('import: rejected unsupported file', { name: f.name, ext });
+        flash('err', 'Please choose an Excel (.xlsx/.xls), CSV (.csv) or text (.txt) file');
         return;
       }
       setImporting(true);
@@ -649,16 +676,35 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
           {isClientOnly ? (
             <>
               <Label>Project</Label>
-              <View style={[s.field, { opacity: 0.9 }]}>
-                <Ionicons name="folder-outline" size={18} color={COLORS.muted} style={s.fIcon} />
-                <Text style={[s.input, { color: COLORS.ink }]} numberOfLines={1}>
-                  {clientProjectName || 'Your project'}
-                </Text>
-                <Ionicons name="lock-closed" size={15} color={COLORS.faint} />
-              </View>
-              <Text style={{ fontSize: 12, color: COLORS.muted, marginTop: 4 }}>
-                Uploads go to your client's project automatically.
-              </Text>
+              {/* One project: nothing to choose, so it stays locked and says so.
+                  Several: the client picks, rather than everything silently
+                  landing on whichever sorted first. */}
+              {subKras.length > 1 ? (
+                <>
+                  <Selector
+                    placeholder="-- Select Project --"
+                    value={subKraName}
+                    error={touched && !subKraId}
+                    onPress={() => setPicker('project')}
+                  />
+                  <Text style={{ fontSize: 12, color: COLORS.muted, marginTop: 4 }}>
+                    You have {subKras.length} projects — choose which one this is for.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <View style={[s.field, { opacity: 0.9 }]}>
+                    <Ionicons name="folder-outline" size={18} color={COLORS.muted} style={s.fIcon} />
+                    <Text style={[s.input, { color: COLORS.ink }]} numberOfLines={1}>
+                      {clientProjectName || 'Your project'}
+                    </Text>
+                    <Ionicons name="lock-closed" size={15} color={COLORS.faint} />
+                  </View>
+                  <Text style={{ fontSize: 12, color: COLORS.muted, marginTop: 4 }}>
+                    Uploads go to your client's project automatically.
+                  </Text>
+                </>
+              )}
             </>
           ) : (
             <>

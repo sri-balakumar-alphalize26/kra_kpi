@@ -93,20 +93,24 @@ function Attendance({ row }) {
 }
 
 // One employee card.
-function Row({ row, nowMs, fetchedAt, onReopen }) {
+function Row({ row, nowMs, fetchedAt, frozen = false, onReopen }) {
   const kind = row.activity_kind || 'offline';
   const meta = ACT[kind] || ACT.offline;
+  // Seconds to add to the server's figure. Zero once the board is stale: the
+  // header already says "Not updating — last good reading 09:41", and a timer
+  // that carries on counting under that line is claiming to know something the
+  // screen has just admitted it does not. The row freezes at its last real
+  // value and starts moving again on the next good poll.
+  const since = frozen ? 0 : Math.max(0, Math.floor((nowMs - fetchedAt) / 1000));
   // Live elapsed: server value + seconds since we fetched (for ongoing kinds).
-  const live = TICKING.has(kind)
-    ? (row.elapsed_seconds || 0) + Math.max(0, Math.floor((nowMs - fetchedAt) / 1000))
-    : 0;
+  const live = TICKING.has(kind) ? (row.elapsed_seconds || 0) + since : 0;
 
   // A developer with multitask enabled can have several timers running. The
   // server sends them all in active_tasks (scalars stay the first one for older
   // builds), so the pill becomes one-per-task instead of one arbitrary task.
   const running = kind === 'task' && row.active_tasks?.length ? row.active_tasks : null;
   const multiCount = row.active_task_count || running?.length || 0;
-  const tick = (secs) => fmtElapsed((secs || 0) + Math.max(0, Math.floor((nowMs - fetchedAt) / 1000)));
+  const tick = (secs) => fmtElapsed((secs || 0) + since);
 
   let text;
   if (kind === 'task') text = `${row.activity_label || 'Task'} · ${fmtElapsed(live)}`;
@@ -374,7 +378,7 @@ export default function LiveTracking({ onBack }) {
           data={rows}
           keyExtractor={(r) => String(r.user_id)}
           renderItem={({ item }) => (
-            <Row row={item} nowMs={nowMs} fetchedAt={fetchedAtRef.current} onReopen={openReopen} />
+            <Row row={item} nowMs={nowMs} fetchedAt={fetchedAtRef.current} frozen={stale} onReopen={openReopen} />
           )}
           contentContainerStyle={{ padding: 14, paddingBottom: 40 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}

@@ -66,6 +66,23 @@ const EVENT_ICON = {
   self_task_rejected:  { lib: 'mc', name: 'clipboard-remove',    color: '#EA580C' },
   workday_auto_closed: { lib: 'mc', name: 'weather-night',       color: '#64748B' },
   daily_report:        { lib: 'mc', name: 'file-chart',          color: '#4338CA' },
+
+  // The rest of _PERSIST_EVENTS (models/kpi_notify.py). These arrive and are
+  // rendered, but had no entry here and so all came out as the same grey bell —
+  // an invoice being paid looked exactly like a workday starting.
+  complete:            { lib: 'mc', name: 'progress-check',      color: '#D97706' },
+  dev_no_task:         { lib: 'mc', name: 'account-question',    color: '#D97706' },
+  invoice_client_paid: { lib: 'mc', name: 'cash-clock',          color: '#D97706' },
+  invoice_ready:       { lib: 'mc', name: 'receipt',             color: '#2563EB' },
+  invoice_paid:        { lib: 'mc', name: 'cash-check',          color: '#16A34A' },
+  task_reverted:       { lib: 'mc', name: 'undo-variant',        color: '#EA580C' },
+  admin_accept_auto:   { lib: 'mc', name: 'robot',               color: '#7C3AED' },
+  pre_approval_auto_released: { lib: 'mc', name: 'lock-open-check', color: '#7C3AED' },
+  pre_approval_window_closed: { lib: 'mc', name: 'clock-remove', color: '#7C3AED' },
+  workday_started:     { lib: 'mc', name: 'weather-sunny',       color: '#64748B' },
+  workday_reverted:    { lib: 'mc', name: 'calendar-refresh',    color: '#64748B' },
+  dev_idle_check:      { lib: 'mc', name: 'account-clock-outline', color: '#64748B' },
+  daily_summary:       { lib: 'mc', name: 'text-box-check',      color: '#4338CA' },
 };
 
 // Events that mean "someone has to DO something" → the Action needed tab.
@@ -77,6 +94,14 @@ const ACTION_EVENTS = new Set([
   'pre_approval_request',
   'pre_approval_reminder',
   'partial_timeout',
+  // Four that exist precisely BECAUSE someone must act, and were visible in All
+  // and Unread while never counting toward the Action-needed badge — which is
+  // the one place people look to find out whether anything is waiting on them.
+  // The reasons are in models/kpi_notify.py's own comments:
+  'complete',              // a developer finished it; an admin must approve or reject
+  'dev_no_task',           // "the one case that IS the admin's problem"
+  'invoice_client_paid',   // the client says they have paid — someone must confirm it
+  'client_task_rejected',  // a client sent work back
 ]);
 
 // "just now" / "5m ago" / "3h ago" / "2d ago" / date. `created` is a server
