@@ -19,7 +19,7 @@ import AddTimeModal from '../components/AddTimeModal';
 import AppDialog from '../components/AppDialog';
 import {
   LANES, groupIntoLanes, laneForTask, isTodayTask, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
-  startTask, pauseTask, resumeTask, completeTask, reassignTask, adminDeleteTask, createProgress,
+  startTask, pauseTask, resumeTask, resumeTaskWithReason, completeTask, reassignTask, adminDeleteTask, createProgress,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists,
   CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
@@ -1267,6 +1267,10 @@ export default function KpiActionBoard({
   const [acceptPriority, setAcceptPriority] = useState('regular');
   const [rejectFor, setRejectFor] = useState(null);
   const [rejectNote, setRejectNote] = useState('');
+  // Respond & Resume: a self-created task an admin sent back owes an answer
+  // before its timer may run again.
+  const [resumeFor, setResumeFor] = useState(null);
+  const [resumeNote, setResumeNote] = useState('');
   // Admin review of a developer-completed task: Approve (with QA checklist) → client; Reject → same dev.
   const [approveFor, setApproveFor] = useState(null);
   const [mgrChecklist, setMgrChecklist] = useState({});
@@ -2290,6 +2294,18 @@ export default function KpiActionBoard({
       return;
     }
 
+    // An admin sent this self-created task back. It owes a "what I changed"
+    // answer before the timer runs again, and /task/resume neither asks for one
+    // nor enforces it — resuming down that route left self_needs_resume_reason
+    // stuck on and the admin-accept clock un-armed, so the task waited on nobody
+    // for good. Only /task/resume_with_reason clears both. Checked AFTER the
+    // can_start gate above so a genuinely blocked task still says why.
+    if (kind === 'resume' && task.is_self_created && task.self_needs_resume_reason) {
+      setResumeFor(task);
+      setResumeNote('');
+      return;
+    }
+
     setBusyId(task.id);
     try {
       const fn = kind === 'start' ? startTask : resumeTask;
@@ -2493,6 +2509,29 @@ export default function KpiActionBoard({
       await rejectSelfCreated(task.id, note, false);
       await load({ silent: true });
     } catch (e) { say('Cannot send back', e.message || 'Failed', 'warn'); }
+    finally { setBusyId(null); }
+  }
+
+  // Developer answers a send-back and resumes in one call. The note is required
+  // on both sides: the server refuses an empty one, and a blank "response" would
+  // clear the flag while telling the admin nothing about what changed.
+  async function submitResumeWithReason() {
+    if (!resumeNote.trim()) return;
+    const task = resumeFor;
+    const note = resumeNote.trim();
+    setResumeFor(null);
+    if (!task) return;
+    setBusyId(task.id);
+    try {
+      const res = await resumeTaskWithReason(task.id, note);
+      if (res && res.status === false) {
+        showError("Can't resume this task", res.message || 'Action failed');
+      } else {
+        H.ok();
+        await refreshLive();
+      }
+      await load({ silent: true });
+    } catch (e) { say('Cannot resume', e.message || 'Failed', 'warn'); }
     finally { setBusyId(null); }
   }
 
@@ -3983,6 +4022,56 @@ export default function KpiActionBoard({
         </View>
       </Modal>
 
+      {/* Developer: answer a send-back, then resume. The admin's note is shown
+          above the box — it is the thing being answered, and hunting for it in
+          the activity log before you can reply is how a reply ends up vague. */}
+      <Modal visible={!!resumeFor} transparent animationType="fade" onRequestClose={() => setResumeFor(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headAmber]}>
+              <Text style={s.headAmberTitle}>↩  Respond &amp; Resume</Text>
+              <TouchableOpacity onPress={() => setResumeFor(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#7a5200" />
+              </TouchableOpacity>
+            </View>
+            <View style={s.modalPad}>
+              <Text style={s.createdName} numberOfLines={2}>{resumeFor?.name}</Text>
+              {!!resumeFor?.self_review_note && (
+                <View style={s.sentBackBox}>
+                  <Text style={s.sentBackWho}>{resumeFor?.self_review_by || 'Admin'} sent this back:</Text>
+                  <Text style={s.sentBackNote}>“{resumeFor.self_review_note}”</Text>
+                </View>
+              )}
+              <Text style={s.modalLabel}>What did you change? (required)</Text>
+              <TextInput
+                style={s.reasonInput}
+                placeholder="e.g. Moved it under Alphalize > Phase 2 and re-estimated to 4h"
+                placeholderTextColor={COLORS.faint}
+                value={resumeNote} onChangeText={setResumeNote} multiline
+              />
+              <View style={s.createdInfo}>
+                <Ionicons name="information-circle-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
+                <Text style={s.createdInfoTxt}>
+                  Your answer goes back to the admin and the acceptance clock starts again,
+                  so the task cannot sit waiting on nobody.
+                </Text>
+              </View>
+            </View>
+            <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setResumeFor(null)}>
+                <Text style={s.footCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.footConfirm, { backgroundColor: COLORS.green }, !resumeNote.trim() && { opacity: 0.5 }]}
+                onPress={submitResumeWithReason} disabled={!resumeNote.trim()}
+              >
+                <Text style={s.footConfirmTxt}>Respond &amp; Resume</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Admin: Approve a developer-completed task (QA checklist) → goes to client. */}
       <Modal visible={!!approveFor} transparent animationType="fade" onRequestClose={() => setApproveFor(null)}>
         <View style={s.modalWrap}>
@@ -5235,6 +5324,13 @@ const s = StyleSheet.create({
   createdName: { fontSize: 15, fontWeight: '700', color: COLORS.ink, marginBottom: 12 },
   createdInfo: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   createdInfoTxt: { flex: 1, fontSize: 12.5, color: COLORS.muted, lineHeight: 18 },
+  // The admin's send-back note, quoted above the reply box.
+  sentBackBox: {
+    backgroundColor: COLORS.amberBg, borderRadius: 10, padding: 10, marginBottom: 12,
+    borderWidth: 1, borderColor: '#F3DFA8',
+  },
+  sentBackWho: { fontSize: 12, fontWeight: '800', color: '#7a5200' },
+  sentBackNote: { fontSize: 13, fontStyle: 'italic', color: '#7a5200', marginTop: 3, lineHeight: 19 },
   // Same look, WITHOUT flex:1. createdInfoTxt lives inside a row (s.createdInfo)
   // where flex makes it fill the line; reused standalone in a column it collapses
   // to nothing, which is why the "developer asked for…" lines rendered blank.

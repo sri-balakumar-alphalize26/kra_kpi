@@ -739,6 +739,15 @@ export async function sendHeartbeat() {
   return jsonRpc(serverUrl, '/kpi_action/heartbeat', {});
 }
 
+// Resume a SENT-BACK self-created task, recording what the developer changed.
+// Not the same call as resumeTask: this is the only route that clears
+// self_needs_resume_reason and re-arms the admin-accept deadline (kra_api.py),
+// so sending a send-back down the plain /task/resume leaves the task flagged as
+// still owing a response, and sitting un-timed, forever. The reason is required
+// server-side — an empty one is refused, not silently accepted.
+export const resumeTaskWithReason = (kpiId, reason) =>
+  action('/kra_kpi/task/resume_with_reason', { kpi_id: kpiId, reason: (reason || '').trim() });
+
 export const startWorkday = () => action('/kpi_workday/ping', {});
 export const endWorkday = (note = '') => action('/kpi_workday/end', { note });
 // Freeze the whole day without ending it — tasks stop, Presence stops, and it can
