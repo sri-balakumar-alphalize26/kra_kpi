@@ -237,7 +237,12 @@ export const MANUAL_EXTENSIONS = ['.pdf', '.doc', '.docx'];
 
 // Attach ONE file to a task. `onProgress(sent, total)` drives the live %.
 // `links` — optional related links, stored as the JSON array the web writes.
-export async function uploadManual(kpiId, { fileData, fileName, reason, links }, onProgress) {
+// `files: [{ fileData, fileName }]` uploads several documents as ONE manual entry;
+// the original scalar `fileData`/`fileName` pair still works, because
+// screens/UploadAmendments.js posts one file and has no reason to change.
+// The route accepts both shapes (see _collect_upload_files in kra_api.py).
+export async function uploadManual(kpiId, { fileData, fileName, files, reason, links }, onProgress) {
+  const set = (files || []).filter((f) => f && f.fileData);
   const base = await server();
   // No server configured = mock mode. Reporting plain success here told the user
   // their manual was uploaded when nothing left the device; say what happened.
@@ -245,13 +250,21 @@ export async function uploadManual(kpiId, { fileData, fileName, reason, links },
     log.warn('uploadManual skipped — no server configured (mock mode)');
     return { status: false, message: 'No server is configured — nothing was uploaded.' };
   }
-  log.info('uploadManual → /kpi/manual/upload', { kpi_id: kpiId, fileName, bytesB64: (fileData || '').length, links: (links || []).length });
+  const label = set.length ? `${set.length} file(s)` : fileName;
+  log.info('uploadManual → /kpi/manual/upload', {
+    kpi_id: kpiId, label,
+    bytesB64: set.length ? set.reduce((n, f) => n + f.fileData.length, 0) : (fileData || '').length,
+    links: (links || []).length,
+  });
   const res = await jsonRpc(
     base, '/kpi/manual/upload',
     {
       kpi_id: kpiId,
-      file_data: fileData,
-      file_name: fileName,
+      // One shape or the other, never both — the route reads `files` first and
+      // sending a stray scalar alongside it would upload the first document twice.
+      ...(set.length
+        ? { files: set.map((f) => ({ file_data: f.fileData, file_name: f.fileName })) }
+        : { file_data: fileData, file_name: fileName }),
       description: reason || '',   // the client's reason for this file
       related_links: JSON.stringify(links || []),
     },
@@ -261,9 +274,9 @@ export async function uploadManual(kpiId, { fileData, fileName, reason, links },
   );
   if (!res || res.status === false) {
     log.error('uploadManual ✗', res?.message);
-    throw new Error(res?.message || `Could not upload ${fileName}`);
+    throw new Error(res?.message || `Could not upload ${label}`);
   }
-  log.info('uploadManual ←', { kpi_id: kpiId, fileName });
+  log.info('uploadManual ←', { kpi_id: kpiId, label, file_count: res?.file_count });
   return res;
 }
 

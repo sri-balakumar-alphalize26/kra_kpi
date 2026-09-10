@@ -585,12 +585,18 @@ export async function fetchProgressFile(progressId, attachmentId = 0) {
   }
 }
 
-// Same, for a user-manual file.
-export async function fetchManualFile(manualId) {
+// Same, for a user-manual file — including its extras.
+//
+// `attachmentId` addresses one of the 2nd..Nth documents on a manual; the manual's
+// own first file is still addressed by manual_id. Mirrors fetchProgressFile: the
+// web serves the extras over /kpi/attachment/download, which is type='http' and so
+// lands an app request on the login page.
+export async function fetchManualFile(manualId, attachmentId = 0) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: false, message: 'No server connection' };
   try {
-    const res = await jsonRpc(serverUrl, '/kpi/manual/file_b64', { manual_id: manualId }, 60000);
+    const res = await jsonRpc(serverUrl, '/kpi/manual/file_b64',
+      attachmentId ? { attachment_id: attachmentId } : { manual_id: manualId }, 60000);
     return res || { status: false, message: 'Empty response' };
   } catch (e) {
     log.warn('fetchManualFile failed', e?.message);

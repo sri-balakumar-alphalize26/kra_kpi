@@ -65,17 +65,20 @@ const ACTIVITY_KINDS = [
 // kpi.file.attachment ids. has_file/file_name are the older single-file shape and
 // are still what an un-upgraded server sends, so both are handled — a task detail
 // that silently showed no attachments would look like a task with none.
-function entryFiles(p) {
-  if (Array.isArray(p.files) && p.files.length) {
-    return p.files.map((f) => ({
-      key: `progress-${p.id}-${f.id}`,
-      id: p.id,
+function entryFiles(entry, kind = 'progress') {
+  if (Array.isArray(entry.files) && entry.files.length) {
+    return entry.files.map((f) => ({
+      key: `${kind}-${entry.id}-${f.id}`,
+      id: entry.id,
       attachment_id: f.id || 0,
       file_name: f.file_name || 'file',
     }));
   }
-  return p.has_file
-    ? [{ key: `progress-${p.id}-0`, id: p.id, attachment_id: 0, file_name: p.file_name }]
+  // A progress entry says outright whether it has one (`has_file`); a manual
+  // never had such a flag because it always has a file, so fall back to the name.
+  const hasPrimary = entry.has_file !== undefined ? entry.has_file : !!entry.file_name;
+  return hasPrimary
+    ? [{ key: `${kind}-${entry.id}-0`, id: entry.id, attachment_id: 0, file_name: entry.file_name }]
     : [];
 }
 
@@ -273,7 +276,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 
   // ---- Manual upload ------------------------------------------------------
   const [manOpen, setManOpen] = useState(false);
-  const [manFile, setManFile] = useState(null);
+  const [manFiles, setManFiles] = useState([]);
   const [manDesc, setManDesc] = useState('');
   const [manLink, setManLink] = useState('');
   const [manLinks, setManLinks] = useState([]);
@@ -312,26 +315,35 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   }
 
   async function onPickManual() {
-    log.info('pick manual file');
+    log.info('pick manual files');
     try {
-      const f = await pickFile();
-      if (!f) return;
-      // Refuse at pick time, exactly like the progress path — this one had no
-      // check at all, and it base64s the WHOLE file into a JS string before any
-      // request starts, so an oversized pick froze (or killed) the app before it
-      // could show an error. The server enforces the same two rules.
-      const ext = (f.name || '').toLowerCase();
-      if (!MANUAL_EXTENSIONS.some((x) => ext.endsWith(x))) {
-        log.warn('manual file wrong type', { name: f.name });
-        flash('err', 'Only PDF, DOC and DOCX files can be uploaded as a manual.');
-        return;
+      const picked = await pickFiles();
+      if (!picked.length) return;
+      // Every file is checked, not just the first: one bad extension in a set of
+      // four should name itself rather than failing the whole upload anonymously.
+      for (const f of picked) {
+        // Refuse at pick time, exactly like the progress path — this route
+        // base64s the WHOLE file into a JS string before any request starts, so an
+        // oversized pick froze (or killed) the app before it could show an error.
+        // The server enforces the same two rules.
+        const ext = (f.name || '').toLowerCase();
+        if (!MANUAL_EXTENSIONS.some((x) => ext.endsWith(x))) {
+          log.warn('manual file wrong type', { name: f.name });
+          flash('err', `${f.name} is not a PDF, DOC or DOCX — only those can be uploaded as a manual.`);
+          return;
+        }
+        if (f.size && f.size > MAX_MANUAL_BYTES) {
+          log.warn('manual file too big', { name: f.name, size: f.size });
+          flash('err', `${f.name} is ${humanSize(f.size)} — over the ${MAX_MANUAL_BYTES / (1024 * 1024)} MB limit. Add a Drive link instead.`);
+          return;
+        }
       }
-      if (f.size && f.size > MAX_MANUAL_BYTES) {
-        log.warn('manual file too big', { name: f.name, size: f.size });
-        flash('err', `${f.name} is ${humanSize(f.size)} — over the ${MAX_MANUAL_BYTES / (1024 * 1024)} MB limit. Add a Drive link instead.`);
-        return;
+      // Same file twice is a slip, not an intent.
+      const merged = [...manFiles];
+      for (const f of picked) {
+        if (!merged.some((x) => x.uri === f.uri)) merged.push(f);
       }
-      setManFile(f);
+      setManFiles(merged);
     } catch (e) {
       log.error('manual file read failed', e?.message);
       flash('err', e?.message || 'Could not read that file');
@@ -372,7 +384,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   }
 
   async function onUploadManual() {
-    if (!manFile || !manDesc.trim()) return;
+    if (!manFiles.length || !manDesc.trim()) return;
 
     // Same trap as the progress form: a link typed but not "+"-ed would be lost.
     let links = manLinks;
@@ -384,23 +396,31 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       log.info('auto-added typed manual link on upload', { url });
     }
 
-    log.info('upload manual →', { kpi_id: task.id, name: manFile.name, size: manFile.size, links: links.length });
+    const manTotal = manFiles.reduce((n, f) => n + (f.size || 0), 0);
+    log.info('upload manual →', { kpi_id: task.id, count: manFiles.length, size: manTotal, links: links.length });
     setManBusy(true); setManPct(0); setManEncoding(true); setManRate(null);
     try {
       // /kpi/manual/upload is a JSON route, so this one does need base64. That
       // read happens BEFORE a single byte is sent and can take seconds on a big
       // file, which is why manEncoding exists — the % bar only measures transmit,
       // so without it the first half of the wait looked like a hung button.
-      const data64 = await FileSystem.readAsStringAsync(manFile.uri, { encoding: FileSystem.EncodingType.Base64 });
-      log.info('manual read as base64', { name: manFile.name, bytesB64: data64.length });
+      const encoded = [];
+      for (const f of manFiles) {
+        const b64 = await FileSystem.readAsStringAsync(f.uri, { encoding: FileSystem.EncodingType.Base64 });
+        encoded.push({ fileData: b64, fileName: f.name });
+      }
+      log.info('manuals read as base64', {
+        count: encoded.length, bytesB64: encoded.reduce((n, f) => n + f.fileData.length, 0),
+      });
       setManEncoding(false);
       // Rate + ETA from the callback's OWN numbers. This route is base64-in-JSON,
       // so `total` is the encoded body (~33% larger than the file on disk) —
-      // computing speed from manFile.size instead would read a third low.
+      // computing speed from the files' on-disk sizes instead would read a
+      // third low.
       const rate = makeRateTracker();
       const res = await uploadManual(
         task.id,
-        { fileData: data64, fileName: manFile.name, reason: manDesc.trim(), links },
+        { files: encoded, reason: manDesc.trim(), links },
         (sent, total) => {
           const r = rate(sent, total);
           setManPct(r.percent);
@@ -411,9 +431,9 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
         log.warn('upload manual refused', { kpi_id: task.id, message: res.message });
         flash('err', res.message || 'Upload failed');
       } else {
-        log.info('upload manual ← ok', { kpi_id: task.id, name: manFile.name });
-        flash('ok', `Uploaded ${manFile.name}`);
-        setManFile(null); setManDesc(''); setManLinks([]); setManLink(''); setManOpen(false);
+        log.info('upload manual ← ok', { kpi_id: task.id, count: manFiles.length });
+        flash('ok', manFiles.length === 1 ? `Uploaded ${manFiles[0].name}` : `Uploaded ${manFiles.length} files`);
+        setManFiles([]); setManDesc(''); setManLinks([]); setManLink(''); setManOpen(false);
         load(true);
       }
     } catch (e) {
@@ -917,6 +937,26 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                           )}
                         </View>
                       </View>
+                      {entryFiles(m, 'manual').slice(1).map((f) => (
+                        <View key={f.key} style={s.extraFile}>
+                          <Ionicons name="document-outline" size={13} color={COLORS.primary} />
+                          <Text style={s.extraFileTxt} numberOfLines={1}>{f.file_name}</Text>
+                          {fileBusy === f.key ? (
+                            <ActivityIndicator size="small" color={COLORS.primary} />
+                          ) : (
+                            <>
+                              <TouchableOpacity onPress={() => onViewFile(f, 'manual')}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                <Ionicons name="eye-outline" size={15} color={COLORS.primary} />
+                              </TouchableOpacity>
+                              <TouchableOpacity onPress={() => onDownloadFile(f, 'manual')}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                <Ionicons name="download-outline" size={15} color={COLORS.green} />
+                              </TouchableOpacity>
+                            </>
+                          )}
+                        </View>
+                      ))}
                       <View style={s.attBtns}>
                         {fileBusy === `manual-${m.id}` ? (
                           <View style={s.attBusy}><ActivityIndicator size="small" color={COLORS.primary} /></View>
@@ -949,12 +989,27 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 </TouchableOpacity>
               ) : (
                 <View style={s.form}>
+                  {/* One manual entry can carry several documents — a spec and its
+                      two appendices belong together, not as three entries. */}
                   <TouchableOpacity style={s.filePick} onPress={onPickManual}>
                     <Ionicons name="cloud-upload-outline" size={16} color={COLORS.primary} />
                     <Text style={s.filePickTxt} numberOfLines={1}>
-                      {manFile ? `${manFile.name}  ·  ${humanSize(manFile.size)}` : 'Choose a file'}
+                      {manFiles.length ? 'Add another file' : 'Choose files'}
                     </Text>
                   </TouchableOpacity>
+                  {manFiles.map((f, i) => (
+                    <View key={`${f.uri}-${i}`} style={s.linkChip}>
+                      <Ionicons name="document-outline" size={13} color={COLORS.primary} />
+                      <Text style={s.linkChipTxt} numberOfLines={1}>
+                        {f.name}  ·  {humanSize(f.size)}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => setManFiles(manFiles.filter((_, x) => x !== i))}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="close-circle" size={15} color={COLORS.faint} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
                   <Text style={s.label}>Description <Text style={s.req}>*</Text></Text>
                   <TextInput style={s.input} placeholder="What is this file?" placeholderTextColor={COLORS.faint}
                     value={manDesc} onChangeText={setManDesc} />
@@ -994,7 +1049,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                         // seconds in this phase.
                         <>
                           <View style={s.barTrack}><View style={[s.barFill, { width: '100%', opacity: 0.35 }]} /></View>
-                          <Text style={s.pctTxt}>Preparing {humanSize(manFile?.size || 0)}…</Text>
+                          <Text style={s.pctTxt}>Preparing {humanSize(manFiles.reduce((n, f) => n + (f.size || 0), 0))}…</Text>
                         </>
                       ) : (
                         <>
@@ -1005,7 +1060,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                           <Text style={s.pctTxt}>
                             {manRate
                               ? `${humanSize(manRate.sent)} / ${humanSize(manRate.total)} · ${manPct}%`
-                              : `${humanSize(manFile?.size || 0)} · ${manPct}%`}
+                              : `${humanSize(manFiles.reduce((n, f) => n + (f.size || 0), 0))} · ${manPct}%`}
                             {manRate && fmtSpeed(manRate.speed) ? `  ·  ${fmtSpeed(manRate.speed)}` : ''}
                             {manRate && fmtEta(manRate.eta) ? `  ·  ${fmtEta(manRate.eta)} left` : ''}
                           </Text>
@@ -1017,8 +1072,8 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                     <TouchableOpacity style={s.ghostBtn} onPress={() => { setManOpen(false); setManFile(null); setManDesc(''); setManLinks([]); setManLink(''); }} disabled={manBusy}>
                       <Text style={s.ghostBtnTxt}>Cancel</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[s.primBtn, (!manFile || !manDesc.trim() || manBusy) && s.btnOff]}
-                      onPress={onUploadManual} disabled={!manFile || !manDesc.trim() || manBusy}>
+                    <TouchableOpacity style={[s.primBtn, (!manFiles.length || !manDesc.trim() || manBusy) && s.btnOff]}
+                      onPress={onUploadManual} disabled={!manFiles.length || !manDesc.trim() || manBusy}>
                       {manBusy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.primBtnTxt}>Upload</Text>}
                     </TouchableOpacity>
                   </View>
@@ -1744,6 +1799,10 @@ const s = StyleSheet.create({
   btnOff: { opacity: 0.45 },
 
   // Edit / Delete on a progress-history row, and the edit modal they open.
+  // A manual's 2nd..Nth document, listed under its own entry.
+  extraFile: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 24, paddingHorizontal: 9, paddingVertical: 6, borderWidth: 1, borderColor: COLORS.line, borderRadius: 8, backgroundColor: '#fff' },
+  extraFileTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: COLORS.ink },
+
   histActions: { flexDirection: 'row', gap: 14, marginTop: 8 },
   histAct: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   histActTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },

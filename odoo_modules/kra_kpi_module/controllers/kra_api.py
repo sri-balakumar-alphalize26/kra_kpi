@@ -1504,7 +1504,13 @@ class KraKpiAPI(http.Controller):
                 'id': p.id,
                 'summary': p.summary or '',
                 'file_name': p.file_name or '',
-                'has_file': bool(p.uploaded_file),
+                # Walrus, so the Binary is read ONCE. uploaded_file is
+                # attachment-backed: every bool() of it pulls the whole file off
+                # the filestore, and this dict needs the answer twice (here and for
+                # has_primary below). _entry_files_payload's own docstring warns
+                # about exactly this — a task with fifty attachments was fetching
+                # every one of them twice to answer a yes/no question.
+                'has_file': (has_primary := bool(p.uploaded_file)),
                 'employee_name': p.employee_name or '',
                 'create_date': convert_to_user_tz(p.create_date),
                 'related_links': p.related_links or '[]',
@@ -1518,7 +1524,7 @@ class KraKpiAPI(http.Controller):
                 # /kpi/progress/list, is where the app reads its history from.
                 'files': self._entry_files_payload(
                     p, 'uploaded_file', '/kpi/progress/download?progress_id=',
-                    has_primary=bool(p.uploaded_file)),
+                    has_primary=has_primary),
             } for p in progress],
             'github': [{
                 'id': g.id,
@@ -4185,6 +4191,38 @@ class KraKpiAPI(http.Controller):
         image loader and any external browser do NOT send — they'd land on the
         login page instead of the file. Gated by the task's own rule.
         """
+        # A manual can hold more than one document: the first lives on the entry's
+        # own Binary field, the 2nd..Nth are kpi.file.attachment rows.
+        # `attachment_id` asks for one of those. Same branch as the sibling
+        # /kpi/progress/file_b64, and for the same reason — the web serves these
+        # over /kpi/attachment/download, which is type='http' and useless to an app
+        # request carrying no session cookie.
+        att_id = int(params.get('attachment_id') or 0)
+        if att_id:
+            att = request.env['kpi.file.attachment'].sudo().browse(att_id)
+            if not att.exists() or not att.file:
+                return {'status': False, 'message': 'File not found'}
+            parent, _pf = self._attachment_parent(att)
+            if not parent:
+                return {'status': False, 'message': 'File not found'}
+            # Gated on the parent TASK exactly as the primary file is.
+            denied = self._may_view_kpi_details(parent.kpi_id)
+            if denied:
+                return {'status': False, 'message': denied}
+            file_name = att.file_name or 'manual'
+            mime_type = (att.mimetype or mimetypes.guess_type(file_name)[0]
+                         or 'application/octet-stream')
+            data_b64 = att.file
+            if isinstance(data_b64, bytes):
+                data_b64 = data_b64.decode()
+            return {
+                'status': True,
+                'file_name': file_name,
+                'mimetype': mime_type,
+                'data_b64': data_b64,
+                'size': len(base64.b64decode(att.file)),
+            }
+
         mid = int(params.get('manual_id') or 0)
         if not mid:
             return {'status': False, 'message': 'manual_id required'}
