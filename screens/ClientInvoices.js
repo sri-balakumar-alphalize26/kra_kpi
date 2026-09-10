@@ -418,10 +418,18 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     const shown = new Set((cForm.kpis || [])
       .filter((k) => typeAllowed(k, cForm.types) && k.billable !== false)
       .map((k) => k.id));
+    // All three ticked means "no type filter" — NOT "these three prefixes".
+    // The server turns any non-empty list into a hard external_ref prefix match
+    // (_populate in models/kpi_client_invoice.py), so sending REQ,UPT,BUG drops
+    // every signed-off task whose ref is blank or carries some other prefix.
+    // The picker above still offers those tasks as tickable, because typeAllowed()
+    // already gets this right — so the admin ticked nine tasks, got a short
+    // invoice, and the server's own diagnosis blamed a filter they never set.
+    const wireTypes = task_types.length < 3 ? task_types : [];
     const params = {
       client_kra_id: cForm.clientId, from_date: cForm.from, to_date: cForm.to,
       billing_method: cForm.billing, invoice_title: cForm.title || false,
-      currency_id: cForm.currencyId || false, task_types,
+      currency_id: cForm.currencyId || false, task_types: wireTypes,
       hourly_rate: parseFloat(cForm.rate) || 0,
       price_req: parseFloat(cForm.priceReq) || 0,
       price_upt: parseFloat(cForm.priceUpt) || 0,
