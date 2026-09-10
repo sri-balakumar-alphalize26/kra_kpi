@@ -93,6 +93,7 @@ const QUICK = [
   // the only place the work still exists to look at.
   { label: 'Paid Work',          lib: 'mc',  name: 'cash-check',       dest: 'paidwork',           adminOnly: true,  section: 'reports',  bg: '#DCFCE7', fg: '#16A34A' },
   { label: 'Work Report',        lib: 'mc',  name: 'chart-box-outline', dest: 'workreport',        adminOnly: true,  section: 'reports',  bg: '#E0F2FE', fg: '#0369A1' },
+  { label: 'KRA Report',         lib: 'mc',  name: 'file-tree-outline', dest: 'krareport',         adminOnly: true,  section: 'reports',  bg: '#EDE9FE', fg: '#6D28D9' },
   { label: 'Client Invoices',    lib: 'mc',  name: 'receipt',          dest: 'clientinvoices',     adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },
   // Client-facing read-only invoices (whitelisted for clients below; adminOnly hides it from developers).
   { label: 'Invoices',           lib: 'mc',  name: 'receipt-text-outline', dest: 'myinvoices',      adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },

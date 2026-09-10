@@ -24,6 +24,7 @@ import PaidWork from './screens/PaidWork';
 import DailyReports from './screens/DailyReports';
 import CompanyBranding from './screens/CompanyBranding';
 import WorkReport from './screens/WorkReport';
+import KraReport from './screens/KraReport';
 import ClientInvoices from './screens/ClientInvoices';
 import MyWorkday from './screens/MyWorkday';
 import TaskDocuments from './screens/TaskDocuments';
@@ -646,6 +647,8 @@ function AppInner() {
       return <CompanyBranding onBack={home} />;
     if (appScreen === 'workreport')
       return <WorkReport onBack={home} />;
+    if (appScreen === 'krareport')
+      return <KraReport onBack={home} />;
     if (appScreen === 'clientinvoices')
       return <ClientInvoices onBack={home} focusInvoiceId={focusInvoiceId} onFocusHandled={() => setFocusInvoiceId(null)} />;
     if (appScreen === 'myinvoices')
