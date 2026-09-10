@@ -75,6 +75,10 @@ const QUICK = [
   { label: 'KRA / KPI Master',   lib: 'mc',  name: 'file-tree',        dest: 'dashboard',          adminOnly: true,  section: 'main',     bg: '#EDE9FE', fg: '#7C3AED' },
   { label: 'KPI Action Board',   lib: 'mc',  name: 'clipboard-check',  dest: 'actionboard',        adminOnly: false, section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
   { label: 'My Workday',         lib: 'mc',  name: 'calendar-clock',   dest: 'myworkday',          adminOnly: false, section: 'reports',  bg: '#CFFAFE', fg: '#0E7490' },
+  // The team-wide answer to My Workday, which is hidden from admins below on the
+  // grounds that "admins use the team-wide reports instead" — until now there
+  // were none on the phone, so an admin had no team report anywhere.
+  { label: 'Employee Tracker',   lib: 'mc',  name: 'account-clock',    dest: 'employeetracker',    adminOnly: true,  section: 'reports',  bg: '#CFFAFE', fg: '#0E7490' },
   { label: 'My Snapshots',       lib: 'mc',  name: 'camera-account',   dest: 'mysnapshots',        adminOnly: false, section: 'reports',  bg: '#E0F2FE', fg: '#0369A1' },
   // Everyone's own tasks and their attachments — the server scopes the list to
   // the tasks you are actually on, so this is not admin-only.

@@ -27,6 +27,7 @@ import WorkReport from './screens/WorkReport';
 import KraReport from './screens/KraReport';
 import ClientInvoices from './screens/ClientInvoices';
 import MyWorkday from './screens/MyWorkday';
+import EmployeeTracker from './screens/EmployeeTracker';
 import TaskDocuments from './screens/TaskDocuments';
 import ClientTasks from './screens/ClientTasks';
 import GenerateClientFiles from './screens/GenerateClientFiles';
@@ -664,6 +665,11 @@ function AppInner() {
     if (appScreen === 'myworkday')
       // Every user's OWN daily workday report (self-scoped server-side).
       return <MyWorkday onBack={home} />;
+    if (appScreen === 'employeetracker')
+      // The team-wide counterpart. /kpi_reports/developer_summary refuses anyone
+      // below Coordinator itself, so the tile's adminOnly is convenience rather
+      // than the boundary.
+      return <EmployeeTracker onBack={home} />;
     if (appScreen === 'taskdocuments')
       // Documents across every task you are on. /task_documents/list scopes to
       // your own tasks server-side, so this needs no role gate here.

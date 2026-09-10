@@ -35,7 +35,7 @@ import GradientButton from '../components/GradientButton';
 import AddTimeModal from '../components/AddTimeModal';
 import {
   fetchTaskDetails, submitProgressUpdate, addGithubLink, deleteGithubLink,
-  deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime,
+  deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime, deleteProgressBulk,
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
   fetchActivity, updateProgress, deleteProgress, updateTaskMeta, fetchProjects,
 } from '../services/kpiActions';
@@ -620,10 +620,17 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // is about to go.
   const [confirmDel, setConfirmDel] = useState(null); // { kind, id, name }
   const [delBusy, setDelBusy] = useState(false);
+  // Bulk delete on Progress History. deleteProgressBulk has existed in the
+  // service with no caller at all, so clearing a run of updates meant confirming
+  // them one at a time.
+  const [selMode, setSelMode] = useState(false);
+  const [selIds, setSelIds] = useState([]);
 
   async function doDelete() {
     if (!confirmDel) return;
     const { kind, id } = confirmDel;
+    // The bulk case has its own route and its own per-id reporting.
+    if (kind === 'bulk') { setConfirmDel(null); await doBulkDelete(); return; }
     log.info('delete →', { kind, id });
     setDelBusy(true);
     const res = kind === 'manual' ? await deleteManual(id)
@@ -639,6 +646,30 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     log.info('delete ← ok', { kind, id });
     flash('ok', kind === 'manual' ? 'Manual deleted' : kind === 'progress' ? 'Update deleted' : 'GitHub link deleted');
     load(true);
+  }
+
+  // Delete a selection in one go. The route answers PER ID — deleted / refused /
+  // missing — rather than failing the batch, so a selection that happens to span
+  // someone else's entry still removes your own. Report what actually happened
+  // instead of a flat "done".
+  async function doBulkDelete() {
+    if (!selIds.length) return;
+    setDelBusy(true);
+    try {
+      const res = await deleteProgressBulk(selIds);
+      if (res?.status === false) { flash('err', res.message || 'Could not delete those'); return; }
+      const gone = res?.deleted ?? selIds.length;
+      const refused = res?.refused ?? 0;
+      flash(refused ? 'err' : 'ok',
+        refused
+          ? `Deleted ${gone}; ${refused} were not yours to delete.`
+          : `Deleted ${gone} update${gone === 1 ? '' : 's'}.`);
+      setSelMode(false);
+      setSelIds([]);
+      load(true);
+    } catch (e) {
+      flash('err', e?.message || 'Could not delete those');
+    } finally { setDelBusy(false); }
   }
 
   // ---- Edit one progress entry --------------------------------------------
@@ -1501,6 +1532,47 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 findNodeHandle-based measurement. */}
             <View onLayout={(e) => { historyY.current = e.nativeEvent.layout.y; }}>
               <Section icon="time-outline" title="Progress History">
+                {/* Only offered when there is something you could actually delete
+                    — the row checkboxes are gated on the server's own can_edit,
+                    so a list of other people's updates would give a Select button
+                    that selects nothing. */}
+                {(data.progress || []).some((p) => p.can_edit) ? (
+                  <View style={s.bulkBar}>
+                    {selMode ? (
+                      <>
+                        <TouchableOpacity onPress={() => { setSelMode(false); setSelIds([]); }}>
+                          <Text style={s.bulkCancel}>Cancel</Text>
+                        </TouchableOpacity>
+                        <View style={{ flex: 1 }} />
+                        <TouchableOpacity
+                          onPress={() => {
+                            const all = (data.progress || []).filter((p) => p.can_edit).map((p) => p.id);
+                            setSelIds(selIds.length === all.length ? [] : all);
+                          }}
+                        >
+                          <Text style={s.bulkLink}>
+                            {selIds.length === (data.progress || []).filter((p) => p.can_edit).length
+                              ? 'Select none' : 'Select all'}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[s.bulkDelBtn, (!selIds.length || delBusy) && { opacity: 0.5 }]}
+                          disabled={!selIds.length || delBusy}
+                          onPress={() => setConfirmDel({ kind: 'bulk', id: 0, name: `${selIds.length} update${selIds.length === 1 ? '' : 's'}` })}
+                        >
+                          <Text style={s.bulkDelTxt}>Delete ({selIds.length})</Text>
+                        </TouchableOpacity>
+                      </>
+                    ) : (
+                      <>
+                        <View style={{ flex: 1 }} />
+                        <TouchableOpacity onPress={() => { setSelMode(true); setSelIds([]); }}>
+                          <Text style={s.bulkLink}>Select</Text>
+                        </TouchableOpacity>
+                      </>
+                    )}
+                  </View>
+                ) : null}
                 {(data.progress || []).length === 0 ? (
                   <Empty text="No progress updates yet. Submit your first update above." />
                 ) : (
@@ -1520,6 +1592,19 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                       ]}
                     >
                       <View style={s.histTop}>
+                        {selMode && p.can_edit ? (
+                          <TouchableOpacity
+                            onPress={() => setSelIds((prev) => (prev.includes(p.id)
+                              ? prev.filter((x) => x !== p.id) : [...prev, p.id]))}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            style={{ marginRight: 8 }}
+                          >
+                            <Ionicons
+                              name={selIds.includes(p.id) ? 'checkbox' : 'square-outline'}
+                              size={18} color={selIds.includes(p.id) ? COLORS.primary : COLORS.faint}
+                            />
+                          </TouchableOpacity>
+                        ) : null}
                         <Text style={s.histWho}>{p.employee_name || 'Someone'}</Text>
                         <Text style={s.histWhen}>{p.create_date}</Text>
                       </View>
@@ -2076,6 +2161,11 @@ const s = StyleSheet.create({
 
   histActions: { flexDirection: 'row', gap: 14, marginTop: 8 },
   histAct: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  bulkBar: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingBottom: 8 },
+  bulkLink: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary },
+  bulkCancel: { fontSize: 12.5, fontWeight: '800', color: COLORS.muted },
+  bulkDelBtn: { backgroundColor: COLORS.red, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
+  bulkDelTxt: { fontSize: 12, fontWeight: '800', color: '#fff' },
   histActTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
   // Wider and left-aligned where cCard is a narrow centred confirm — this one
   // holds a form, not a sentence.

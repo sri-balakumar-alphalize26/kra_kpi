@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { fetchMyWorkday } from '../services/myWorkday';
+import { fmtYMD } from '../utils/dateGrid';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('MyWorkday');
@@ -22,11 +23,16 @@ export default function MyWorkday({ onBack }) {
   const [error, setError] = useState(null);
   const [days, setDays] = useState([]);
   const [expanded, setExpanded] = useState({});
+  // How far back to look. The server defaults to 30 days when sent nothing, so
+  // that stays the default here — the web offers the same three.
+  const [rangeDays, setrangeDays] = useState(30);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetchMyWorkday();
+      const from = new Date();
+      from.setDate(from.getDate() - rangeDays);
+      const res = await fetchMyWorkday(fmtYMD(from), fmtYMD(new Date()));
       if (res && res.status === false) {
         setError(res.message || 'Could not load your workday.');
         setDays([]);
@@ -37,7 +43,7 @@ export default function MyWorkday({ onBack }) {
       log.warn('load failed', e?.message);
       setError(e?.message || 'Could not load your workday.');
     }
-  }, []);
+  }, [rangeDays]);
 
   useEffect(() => { (async () => { setLoading(true); await load(); setLoading(false); })(); }, [load]);
 
@@ -113,6 +119,22 @@ export default function MyWorkday({ onBack }) {
         <View style={{ width: 40 }} />
       </View>
 
+      {/* 7 / 30 / 90, as the web offers. The app sent no dates at all, so it was
+          locked to the server's 30-day default with no way to look further back —
+          which is exactly when someone needs this screen. */}
+      <View style={styles.rangeRow}>
+        {[7, 30, 90].map((d) => (
+          <TouchableOpacity
+            key={d}
+            style={[styles.rangeChip, rangeDays === d && styles.rangeChipOn]}
+            onPress={() => setrangeDays(d)}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.rangeTxt, rangeDays === d && styles.rangeTxtOn]}>{d} days</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color="#1E6FD9" /></View>
       ) : error ? (
@@ -124,7 +146,7 @@ export default function MyWorkday({ onBack }) {
       ) : days.length === 0 ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.center} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
           <Ionicons name="calendar-outline" size={44} color="#94A3B8" />
-          <Text style={styles.empty}>No workday activity in the last 30 days.</Text>
+          <Text style={styles.empty}>No workday activity in the last {rangeDays} days.</Text>
         </ScrollView>
       ) : (
         <FlatList
@@ -141,6 +163,11 @@ export default function MyWorkday({ onBack }) {
 }
 
 const styles = StyleSheet.create({
+  rangeRow: { flexDirection: 'row', gap: 6, paddingHorizontal: 14, paddingBottom: 8 },
+  rangeChip: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: 10, borderWidth: 1.5, borderColor: '#E2E8F0', backgroundColor: '#fff' },
+  rangeChipOn: { backgroundColor: '#1E6FD9', borderColor: '#1E6FD9' },
+  rangeTxt: { fontSize: 12.5, fontWeight: '800', color: '#64748B' },
+  rangeTxtOn: { color: '#fff' },
   root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 52, paddingBottom: 12 },
   backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', ...(SHADOW || {}) },

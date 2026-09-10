@@ -26,3 +26,7 @@ export async function getReassignmentHistory(limit = 200) {
   log.info('history ←', { count: (res.history || []).length });
   return { authorized: true, history: res.history || [] };
 }
+
+// No per-task wrapper here on purpose. /kra_kpi/task/details already returns a
+// task's own `reassignments`, and KpiTaskDetail renders them — so the per-task
+// route would be a second way to fetch what the screen already has.

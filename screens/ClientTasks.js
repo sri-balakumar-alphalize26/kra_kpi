@@ -264,6 +264,10 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   // Stage-2 final sign-off (accepting the FINISHED work → signed certificate).
   const [signFor, setSignFor] = useState(null);        // task being signed off
   const [signName, setSignName] = useState('');        // typed signature
+  // Optional note. Ends up as client_approval_notes and is printed on the
+  // invoice line for this task — the one place the client's own words reach
+  // the document they are billed with.
+  const [signNotes, setSignNotes] = useState('');
   const [signTicks, setSignTicks] = useState({ delivered: false, works: false, authorized: false });
   const [signBusy, setSignBusy] = useState(false);
   const [signErr, setSignErr] = useState('');          // shown inside the sheet, not as a toast
@@ -503,6 +507,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     setSignName('');
     setSignTicks({ delivered: false, works: false, authorized: false });
     setSignErr('');
+    setSignNotes('');
     setSignFor(t);
   }, []);
   const toggleTick = (k) => setSignTicks((p) => ({ ...p, [k]: !p[k] }));
@@ -520,7 +525,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     setSignBusy(true);
     setSignErr('');
     try {
-      await submitClientSignoff(t.id, { signatureText: signName });
+      await submitClientSignoff(t.id, { signatureText: signName, notes: signNotes.trim() });
       setSignFor(null);
       flashToast('Signed off — thank you! The task is complete.');
       load();
@@ -534,7 +539,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     } finally {
       setSignBusy(false);
     }
-  }, [signFor, signReady, signBusy, signName, flashToast, load]);
+  }, [signFor, signReady, signBusy, signName, signNotes, flashToast, load]);
 
   // Tappable status filters. Counts are derived from the SAME list the chips
   // filter, so "In Progress 3" always means exactly the 3 rows you get on tap —
@@ -768,6 +773,13 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 </View>
 
                 <DRow label="Project" value={detail?.project_name || detail?.client_name || '—'} />
+                {/* Sent by /kpi_client_portal/dashboard all along and rendered
+                    nowhere — so the client could see the title of their own task
+                    but not what it actually asked for. HTML-stripped: the field
+                    is a rich-text body server-side. */}
+                {detail?.description ? (
+                  <DRow label="Details" value={String(detail.description).replace(/<[^>]+>/g, '').trim()} />
+                ) : null}
                 <DRow label="Assigned to" value={detail?.primary_assignee || 'Not assigned yet'} />
                 <DRow label="Priority" value={PRIO_LABEL[detail?.priority] || '—'} />
                 {detail?.deadline ? <DRow label="Deadline" value={detail.deadline} /> : null}
@@ -878,8 +890,23 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                     />
                   </>
                 )}
+                {/* Optional, and it does not stay here: the server stores it as
+                    client_approval_notes and the invoice prints it under the
+                    task's description. The service has always accepted it and
+                    the app never sent one, so the client's own words never
+                    reached the invoice they end up reading. */}
+                <Text style={[s.signLead, { marginTop: 14 }]}>Anything to add? (optional)</Text>
+                <TextInput
+                  style={[s.signInput, { minHeight: 64, textAlignVertical: 'top' }]}
+                  multiline
+                  placeholder="e.g. Works as discussed — thanks for the quick turnaround"
+                  placeholderTextColor={COLORS.faint}
+                  value={signNotes}
+                  onChangeText={setSignNotes}
+                />
                 <Text style={s.signNote}>
                   This records your digital approval and generates the completion certificate.
+                  Anything you write above appears on the invoice for this task.
                 </Text>
                 {signErr ? (
                   <View style={s.signErr}>
