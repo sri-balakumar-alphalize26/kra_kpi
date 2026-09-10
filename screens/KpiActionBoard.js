@@ -30,6 +30,7 @@ import {
   sinceResume, BREAK_SWITCH_REASONS, switchBreak,
 } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
+import { serverNow } from '../api/odooApi';
 import { scheduleTaskReminder, cancelTaskReminder } from '../services/reminders';
 import { scheduleTaskAlarm, stopAlarm, alarmAvailable, pickAlarmSound, titleFromUri } from '../services/alarm';
 import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets, getAlarmSound, setAlarmSound, getAlarmSettings, setAlarmSettings } from '../api/session';
@@ -1613,8 +1614,13 @@ export default function KpiActionBoard({
 
   // Live-timer tick: re-render every second so in-progress cards count up.
   useEffect(() => {
-    setNowMs(new Date().getTime());
-    const id = setInterval(() => setNowMs(new Date().getTime()), TICK_MS);
+    // serverNow(), not Date.now(): every anchor these timers count from
+    // (timer_start_datetime, a break's start_raw, login_raw) was written by the
+    // server, so the subtraction has to happen on the server's clock. A device
+    // running fast otherwise shows time that has not passed yet — most visibly on
+    // a break that has only just started and should read zero.
+    setNowMs(serverNow());
+    const id = setInterval(() => setNowMs(serverNow()), TICK_MS);
     return () => clearInterval(id);
   }, []);
 

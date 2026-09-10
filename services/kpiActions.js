@@ -612,6 +612,26 @@ export const addGithubLink = (kpiId, githubUrl, branchName) =>
 export const deleteGithubLink = (linkId) =>
   action('/kpi/github/delete', { link_id: linkId });
 
+// Manager-only: rename a task, retype it, or move it to another KRA.
+//
+// Changing the type is not just a label — the server strips the old [Bug]/[Update]
+// prefix off the name, applies the new one, and rewrites the REQ/UPD/BUG token in
+// the external_ref to match. So the name that comes back may differ from the one
+// sent, which is why the caller reloads rather than trusting its own input.
+//
+// `confirmClientMove` is a deliberate second step. Moving a task to a KRA under a
+// DIFFERENT client root is refused with { needs_confirm: true, from_client, to_client }
+// until it is passed, because a mis-tap in a long project list looks exactly like a
+// deliberate move — and it would put one client's work in another client's project.
+export const updateTaskMeta = (kpiId, { name, type, kraId, confirmClientMove } = {}) =>
+  action('/kpi_action/update_meta', {
+    id: kpiId,
+    name: name || '',
+    type: type || false,
+    kra_id: kraId || false,
+    confirm_client_move: !!confirmClientMove,
+  });
+
 export const deleteManual = (manualId) =>
   action('/kpi/manual/delete', { manual_id: manualId });
 

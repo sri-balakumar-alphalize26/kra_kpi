@@ -151,6 +151,36 @@ export async function callKw(baseUrl, model, method, args = [], kwargs = {}) {
 // and RN implements xhr.upload.onprogress, so it works here on the plain JSON
 // route with no multipart needed. NOTE: `total` is the BASE64 body (~+33% of the
 // file), so drive any bar off these numbers rather than the raw file size.
+// ── Server clock ──────────────────────────────────────────────────────────
+// Every live timer in the app is "now minus a timestamp the SERVER wrote", and
+// until this existed "now" was the device's own clock. A tablet an hour fast (or
+// 65 seconds fast, which is what one of ours actually was) makes a break that has
+// just started read as 1m 14s old the instant it opens — the web is right and the
+// app is wrong, because the web does this arithmetic server-side.
+//
+// Nothing new is fetched for it: every Odoo response already carries an HTTP Date
+// header, so each call quietly re-measures the offset. One-second resolution is
+// ample — the error being corrected is tens of seconds, not milliseconds.
+let skewMs = 0;
+
+function learnSkew(res) {
+  const header = res?.headers?.date || res?.headers?.Date;
+  if (!header) return;
+  const server = Date.parse(header);
+  if (Number.isNaN(server)) return;
+  skewMs = Date.now() - server;
+}
+
+/** Device clock corrected onto the server's, for any elapsed-since calculation. */
+export function serverNow() {
+  return Date.now() - skewMs;
+}
+
+/** How far ahead (+) or behind (-) this device is, in ms. For diagnostics. */
+export function clockSkewMs() {
+  return skewMs;
+}
+
 export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS, db = null, onProgress = null) {
   const base = normalizeUrl(baseUrl);
   log.info('jsonRpc →', path, log.redact(params));
@@ -174,6 +204,7 @@ export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS, 
     log.error('jsonRpc ✗ network/http error', path, err?.message);
     throw err;
   }
+  learnSkew(res);
   if (res.data?.error) {
     const message = res.data.error.data?.message || 'Request failed';
     log.warn('jsonRpc ✗ odoo error', path, message);

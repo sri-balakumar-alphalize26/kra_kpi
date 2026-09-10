@@ -22,7 +22,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, TouchableOpacity, TextInput, StyleSheet, StatusBar as RNStatusBar,
   ActivityIndicator, Animated, Easing, Linking, KeyboardAvoidingView, Platform,
-  Modal, Image, ScrollView,
+  Modal, Image, ScrollView, FlatList,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -37,10 +37,11 @@ import {
   fetchTaskDetails, submitProgressUpdate, addGithubLink, deleteGithubLink,
   deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime,
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
-  fetchActivity, updateProgress, deleteProgress,
+  fetchActivity, updateProgress, deleteProgress, updateTaskMeta, fetchProjects,
 } from '../services/kpiActions';
 import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
 import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
+import { resolveGithubLink } from '../utils/githubLink';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('KpiDetail');
@@ -80,6 +81,18 @@ function entryFiles(entry, kind = 'progress') {
   return hasPrimary
     ? [{ key: `${kind}-${entry.id}-0`, id: entry.id, attachment_id: 0, file_name: entry.file_name }]
     : [];
+}
+
+// "3 files  ·  12.4 MB of 50 MB".
+//
+// The chips say what each file costs; this says what the SET costs, which is the
+// number the cap is actually applied to. Before multi-file the picker button
+// carried it (one file, one size); making it multi-file lost it, so an oversized
+// set was refused with nothing on screen explaining how close it had been.
+function filesTotalLabel(files, cap) {
+  const list = files || [];
+  const total = list.reduce((n, f) => n + (f.size || 0), 0);
+  return `${list.length} file${list.length === 1 ? '' : 's'}  ·  ${humanSize(total)} of ${humanSize(cap)}`;
 }
 
 function actDetail(e) {
@@ -515,10 +528,18 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 
   async function onAddGithub() {
     if (!ghUrl.trim() || !ghBranch.trim()) { flash('err', 'Repository URL and branch are both required'); return; }
-    log.info('add github →', { kpi_id: task.id, url: ghUrl.trim(), branch: ghBranch.trim() });
+    // Tidy the URL one last time in case it was pasted and submitted without the
+    // field ever losing focus. The branch is whatever is visibly in the box — the
+    // web fills that box with a "Use main" button rather than defaulting behind the
+    // reader's back, and a field that says one thing while another is saved is worse
+    // than a little typing.
+    const { url } = resolveGithubLink(ghUrl, ghBranch);
+    const branch = ghBranch.trim();
+    setGhUrl(url);
+    log.info('add github →', { kpi_id: task.id, url, branch });
     setGhBusy(true);
     // The server owns the rules (github.com only, branch required) — show what it says.
-    const res = await addGithubLink(task.id, ghUrl.trim(), ghBranch.trim());
+    const res = await addGithubLink(task.id, url, branch);
     setGhBusy(false);
     if (res?.status === false) {
       log.warn('add github refused', { message: res.message });
@@ -529,6 +550,68 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     flash('ok', 'GitHub link added');
     setGhUrl(''); setGhBranch('');
     load(true);
+  }
+
+  // ---- Rename / retype / move a task (manager only) ------------------------
+  // The web has had this since the heading log was added; without it the app could
+  // READ the "Heading changes" log and never write to it, which is a strange thing
+  // to ship — a viewer for an action the same app cannot perform.
+  const [metaEdit, setMetaEdit] = useState(null);   // { name, type, kraId, kraLabel }
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [projects, setProjects] = useState([]);     // [{ id, display }]
+  const [projectPick, setProjectPick] = useState(false);
+  // The server refuses a cross-client move until it is confirmed; this holds its
+  // answer while we ask.
+  const [clientMove, setClientMove] = useState(null);
+
+  function openMetaEdit() {
+    setMetaEdit({
+      name: t.name || '',
+      type: meta.kind || 'requirement',
+      kraId: null,                       // null = leave the KRA alone
+      // meta.kra is the KRA's own name, which is what the details row shows —
+      // so the button starts out reading exactly what is on screen above it.
+      kraLabel: meta.kra || '',
+    });
+    // Lazily, and only once: the tree is 180+ nodes and most opens of this screen
+    // never touch it.
+    if (!projects.length) {
+      fetchProjects().then(setProjects).catch((e) => log.warn('projects failed', e?.message));
+    }
+  }
+
+  async function saveMetaEdit(confirmClientMove = false) {
+    if (!metaEdit) return;
+    const name = metaEdit.name.trim();
+    if (!name) { flash('err', 'The task needs a name'); return; }
+    log.info('update meta →', { kpi_id: task.id, type: metaEdit.type, kraId: metaEdit.kraId, confirmClientMove });
+    setMetaBusy(true);
+    const res = await updateTaskMeta(task.id, {
+      name, type: metaEdit.type, kraId: metaEdit.kraId, confirmClientMove,
+    });
+    setMetaBusy(false);
+
+    // Not a failure — the server is asking. Moving a task under a different client
+    // root is refused once on purpose, because a mis-tap in a long project list is
+    // indistinguishable from a deliberate move.
+    if (res?.needs_confirm) {
+      log.info('meta needs client-move confirm', { from: res.from_client, to: res.to_client });
+      setClientMove({ from: res.from_client, to: res.to_client, message: res.message });
+      return;
+    }
+    if (res?.status === false) {
+      log.warn('update meta refused', { message: res.message });
+      flash('err', res.message || 'Could not save the changes');
+      return;
+    }
+    log.info('update meta ← ok', { updated: res?.updated });
+    setMetaEdit(null); setClientMove(null);
+    // Reload rather than trusting what we sent: changing the type rewrites the
+    // name's [Bug]/[Update] prefix and the REQ/UPD/BUG token in the reference, so
+    // what comes back is not always what went out.
+    flash('ok', 'Task updated');
+    load(true);
+    onChanged && onChanged();
   }
 
   // ---- Delete (always via a confirm) --------------------------------------
@@ -819,7 +902,14 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
             showsVerticalScrollIndicator={false}
           >
             {/* ── KPI Details ─────────────────────────────────────────── */}
-            <Section icon="document-text-outline" title="KPI Details">
+            <Section icon="document-text-outline" title="KPI Details"
+              right={meta.is_manager ? (
+                <TouchableOpacity style={s.metaEditBtn} onPress={openMetaEdit}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="create-outline" size={14} color={COLORS.primary} />
+                  <Text style={s.metaEditTxt}>Edit</Text>
+                </TouchableOpacity>
+              ) : null}>
               <Text style={s.taskName}>{t.name}</Text>
               <View style={s.tagRow}>
                 {!!meta.external_ref && <View style={s.refBadge}><Text style={s.refTxt}>{meta.external_ref}</Text></View>}
@@ -1010,6 +1100,9 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                       </TouchableOpacity>
                     </View>
                   ))}
+                  {manFiles.length ? (
+                    <Text style={s.fileTotal}>{filesTotalLabel(manFiles, MAX_MANUAL_BYTES)}</Text>
+                  ) : null}
                   <Text style={s.label}>Description <Text style={s.req}>*</Text></Text>
                   <TextInput style={s.input} placeholder="What is this file?" placeholderTextColor={COLORS.faint}
                     value={manDesc} onChangeText={setManDesc} />
@@ -1140,10 +1233,16 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                   </TouchableOpacity>
                 </View>
               ))}
-              {/* Same warning the web shows under its file input (kpi_action.js). */}
+              {pgFiles.length ? (
+                <Text style={s.fileTotal}>{filesTotalLabel(pgFiles, MAX_PROGRESS_BYTES)}</Text>
+              ) : null}
+              {/* Same warning the web shows under its file input (kpi_action.js), but
+                  saying "each" AND "together": the cap is enforced both ways, and a
+                  bare "Max 50 MB" reads as per-file — which would contradict the
+                  total line directly above it. */}
               <Text style={s.fileWarn}>
-                ⚠ Large files take time — keep this screen open until 100%. Max 50 MB.
-                For bigger files, add a Drive or GitHub link instead.
+                ⚠ Large files take time — keep this screen open until 100%. Max 50 MB each,
+                and 50 MB together. For bigger files, add a Drive or GitHub link instead.
               </Text>
 
               {pgBusy && pgFiles.length > 0 && (
@@ -1170,12 +1269,37 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
             {/* ── GitHub ─────────────────────────────────────────────── */}
             <Section icon="logo-github" title="Link a GitHub branch" tint="#111827">
               <Text style={s.label}>Repository URL</Text>
+              {/* On blur, not on every keystroke: transforming mid-type would trim
+                  the URL the moment "…/tree/m" matched and then append the rest of
+                  the branch onto the trimmed URL. Blur is when a paste has settled. */}
               <TextInput style={s.input} placeholder="https://github.com/username/repository"
                 placeholderTextColor={COLORS.faint} value={ghUrl} onChangeText={setGhUrl}
+                onBlur={() => {
+                  const r = resolveGithubLink(ghUrl, ghBranch);
+                  // A changed URL means /tree/<branch> was stripped off it, so the
+                  // branch it named goes in the box where it can be seen and edited.
+                  if (r.url !== ghUrl.trim()) {
+                    setGhUrl(r.url);
+                    if (!ghBranch.trim()) setGhBranch(r.branch);
+                  }
+                }}
                 autoCapitalize="none" keyboardType="url" />
               <Text style={s.label}>Branch</Text>
               <TextInput style={s.input} placeholder="main / feature/xyz"
                 placeholderTextColor={COLORS.faint} value={ghBranch} onChangeText={setGhBranch} autoCapitalize="none" />
+              {/* The same shortcut the web offers, and for the same reason: the branch
+                  is required and is "main" most of the time, so typing it on every link
+                  was pure friction. Shown only once there is a repo to branch off, and
+                  only while the box is empty, so it stops nagging the moment a real
+                  branch is typed. Deliberately a button rather than a silent default —
+                  it puts "main" where it can be seen and changed before saving. */}
+              {ghUrl.trim() && !ghBranch.trim() ? (
+                <TouchableOpacity style={s.useMainBtn} onPress={() => setGhBranch('main')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} activeOpacity={0.8}>
+                  <Ionicons name="git-branch-outline" size={13} color={COLORS.primary} />
+                  <Text style={s.useMainTxt}>Use main</Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity style={[s.wideBtn, { backgroundColor: COLORS.green }, ghBusy && s.btnOff]}
                 onPress={onAddGithub} disabled={ghBusy}>
                 {ghBusy ? <ActivityIndicator color="#fff" size="small" /> : (
@@ -1563,6 +1687,129 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
           )}
         </Modal>
 
+        {/* Rename / retype / move. Manager-only, matching the server's own gate —
+            update_kpi_meta refuses anyone else, so offering it here would only
+            produce a refusal. */}
+        <Modal visible={!!metaEdit} transparent animationType="fade" onRequestClose={() => setMetaEdit(null)}>
+          {!!metaEdit && (
+            <View style={s.cWrap}>
+              <View style={s.editCard}>
+                <Text style={s.editTitle}>Edit task</Text>
+                <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
+                  <Text style={s.label}>Task name <Text style={s.req}>*</Text></Text>
+                  <TextInput style={s.input} placeholder="What is this task?"
+                    placeholderTextColor={COLORS.faint}
+                    value={metaEdit.name}
+                    onChangeText={(v) => setMetaEdit({ ...metaEdit, name: v })} />
+
+                  {/* Changing this is not cosmetic: the server rewrites the name's
+                      [Bug]/[Update] prefix and the REQ/UPD/BUG token in the task
+                      reference to match. */}
+                  <Text style={s.label}>Type</Text>
+                  <View style={s.typeRow}>
+                    {['requirement', 'update', 'bug'].map((k) => {
+                      const on = metaEdit.type === k;
+                      return (
+                        <TouchableOpacity key={k}
+                          style={[s.typeChip, on && { backgroundColor: KIND[k].bg, borderColor: KIND[k].fg }]}
+                          onPress={() => setMetaEdit({ ...metaEdit, type: k })} activeOpacity={0.8}>
+                          <Text style={[s.typeChipTxt, on && { color: KIND[k].fg, fontWeight: '900' }]}>
+                            {KIND[k].label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={s.label}>KRA / Project</Text>
+                  <TouchableOpacity style={s.select} onPress={() => setProjectPick(true)} activeOpacity={0.8}>
+                    <Text style={s.selectTxt} numberOfLines={1}>
+                      {metaEdit.kraLabel || 'Choose a project'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={18} color={COLORS.muted} />
+                  </TouchableOpacity>
+                  <Text style={s.linkHint}>
+                    Leave this alone to keep the task where it is. Moving it to another
+                    client's project asks for confirmation first.
+                  </Text>
+                </ScrollView>
+                <View style={s.cBtns}>
+                  <TouchableOpacity style={s.ghostBtn} onPress={() => setMetaEdit(null)} disabled={metaBusy}>
+                    <Text style={s.ghostBtnTxt}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[s.primBtn, (!metaEdit.name.trim() || metaBusy) && s.btnOff]}
+                    onPress={() => saveMetaEdit(false)} disabled={!metaEdit.name.trim() || metaBusy}>
+                    {metaBusy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.primBtnTxt}>Save</Text>}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+        </Modal>
+
+        {/* Project picker for the edit modal. A flat list of "Client `>` Project `>` Sub"
+            paths rather than a tree: the paths are already unambiguous, and a
+            collapsible tree inside a modal inside a modal is a lot of chrome for
+            something picked once. */}
+        <Modal visible={projectPick} transparent animationType="fade" onRequestClose={() => setProjectPick(false)}>
+          <TouchableOpacity style={s.cWrap} activeOpacity={1} onPress={() => setProjectPick(false)}>
+            <TouchableOpacity style={s.pickerSheet} activeOpacity={1}>
+              <View style={s.pickerHead}>
+                <Text style={s.editTitle}>Choose a project</Text>
+                <TouchableOpacity onPress={() => setProjectPick(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="close" size={22} color={COLORS.muted} />
+                </TouchableOpacity>
+              </View>
+              <FlatList
+                data={projects}
+                keyExtractor={(p) => String(p.id)}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => (
+                  <TouchableOpacity style={s.projRow} activeOpacity={0.7}
+                    onPress={() => {
+                      setMetaEdit((prev) => ({ ...prev, kraId: item.id, kraLabel: item.display }));
+                      setProjectPick(false);
+                    }}>
+                    <Text style={s.projTxt} numberOfLines={2}>{item.display}</Text>
+                  </TouchableOpacity>
+                )}
+                ListEmptyComponent={<Text style={s.actEmpty}>Loading projects…</Text>}
+              />
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* The cross-client confirmation. Names both clients, because "are you sure"
+            without saying what changes is not a question anybody can answer. */}
+        <Modal visible={!!clientMove} transparent animationType="fade" onRequestClose={() => setClientMove(null)}>
+          {!!clientMove && (
+            <View style={s.cWrap}>
+              <View style={s.cCard}>
+                <View style={s.cIcon}>
+                  <Ionicons name="swap-horizontal" size={26} color={COLORS.amber} />
+                </View>
+                <Text style={s.cTitle}>Move to another client?</Text>
+                <Text style={s.cName} numberOfLines={2}>
+                  {clientMove.from} → {clientMove.to}
+                </Text>
+                <Text style={s.cMsg}>
+                  This files the task under a different client. Everything reported for
+                  either client changes with it.
+                </Text>
+                <View style={s.cBtns}>
+                  <TouchableOpacity style={s.ghostBtn} onPress={() => setClientMove(null)} disabled={metaBusy}>
+                    <Text style={s.ghostBtnTxt}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[s.primBtn, metaBusy && s.btnOff]}
+                    onPress={() => saveMetaEdit(true)} disabled={metaBusy}>
+                    {metaBusy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.primBtnTxt}>Move it</Text>}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+        </Modal>
+
         {/* Image viewer — the bytes were fetched over the authenticated channel
             and cached, so this points at a local file:// uri. An <Image> aimed at
             /kpi/progress/view would render the login page instead. */}
@@ -1800,6 +2047,24 @@ const s = StyleSheet.create({
 
   // Edit / Delete on a progress-history row, and the edit modal they open.
   // A manual's 2nd..Nth document, listed under its own entry.
+  // Tabular figures so the total does not jitter as files are added and removed.
+  fileTotal: { fontSize: 11.5, fontWeight: '700', color: COLORS.muted, marginTop: 8, fontVariant: ['tabular-nums'] },
+
+  useMainBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: COLORS.line, backgroundColor: '#fff' },
+  useMainTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
+
+  metaEditBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaEditTxt: { fontSize: 12, fontWeight: '800', color: COLORS.primary },
+  typeRow: { flexDirection: 'row', gap: 8, marginTop: 2 },
+  typeChip: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10, borderWidth: 1.5, borderColor: COLORS.line, backgroundColor: '#fff' },
+  typeChipTxt: { fontSize: 12.5, fontWeight: '700', color: COLORS.muted },
+  select: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12, height: 44, backgroundColor: '#fff' },
+  selectTxt: { flex: 1, fontSize: 14, color: COLORS.ink, fontWeight: '600' },
+  pickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.line },
+  pickerSheet: { width: '100%', maxWidth: 460, maxHeight: '75%', backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden' },
+  projRow: { paddingHorizontal: 18, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F1F4F9' },
+  projTxt: { fontSize: 13.5, color: COLORS.ink, fontWeight: '600' },
+
   extraFile: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, marginLeft: 24, paddingHorizontal: 9, paddingVertical: 6, borderWidth: 1, borderColor: COLORS.line, borderRadius: 8, backgroundColor: '#fff' },
   extraFileTxt: { flex: 1, fontSize: 11.5, fontWeight: '700', color: COLORS.ink },
 
