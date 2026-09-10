@@ -19,6 +19,7 @@ import DateGridModal from '../components/DateGridModal';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/clientInvoices';
 import { fmtYMD as fmt } from '../utils/dateGrid';
+import { makeInvoicePdf } from '../utils/invoicePdf';
 
 const log = createLogger('ClientInvoices');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -243,10 +244,22 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     finally { setBusy(null); }
   };
 
+  // Fetch the invoice DATA and draw the PDF here, with the browser's own builder
+  // (utils/invoicePdf.js). Returns the shape the two handlers below already
+  // expect, so nothing about saving or sharing had to change. This is also what
+  // finally connects the "Show amounts" switch above to the document: the old
+  // server route took no such parameter, so turning it off changed the screen
+  // and nothing else.
+  const buildPdf = async (id) => {
+    const r = await svc.fetchInvoicePdfData(id);
+    if (!r?.status || !r.data) return { status: false, message: r?.message || 'Could not build the PDF.' };
+    return makeInvoicePdf(r.data, showAmounts);
+  };
+
   const downloadPdf = async (id) => {
     setBusy('pdf');
     try {
-      const res = await svc.fetchInvoicePdf(id);
+      const res = await buildPdf(id);
       if (!res?.status || !res.data_b64) { flash('err', res?.message || 'Could not build the PDF.'); return; }
       const name = (res.file_name || 'Invoice.pdf').split(/[\\/]/).pop();
 
@@ -283,7 +296,7 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     setBusy('share');
     log.info('share: start', { invoice: id });
     try {
-      const res = await svc.fetchInvoicePdf(id);
+      const res = await buildPdf(id);
       if (!res?.status || !res.data_b64) { flash('err', res?.message || 'Could not build the PDF.'); return; }
       const name = (res.file_name || 'Invoice.pdf').split(/[\\/]/).pop();
       const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;

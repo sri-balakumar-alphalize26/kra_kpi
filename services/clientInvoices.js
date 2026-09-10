@@ -1,6 +1,10 @@
 // Client Invoices (admin) — wraps /kpi_client_invoice/* in kpi_reports_api.py.
-// All routes are type='json'. The PDF is rendered server-side (reportlab) and
-// returned as base64. Mock-safe with no server.
+// All routes are type='json'. Mock-safe with no server.
+//
+// The PDF is built ON THE DEVICE (utils/invoicePdf.js) from /pdf_data, which is
+// the same route and the same builder the browser uses. It used to come from
+// /pdf, a second renderer written in reportlab that disagreed with the browser's
+// — see the header of utils/invoicePdf.js.
 
 import { getConnection } from '../api/session';
 import { jsonRpc } from '../api/odooApi';
@@ -68,4 +72,9 @@ export const clientMarkPaid = (invoice_id, method, note) =>
 // exactly what you must not do to correct it.
 export const clearPaidClaim = (invoice_id) =>
   call('/kpi_client_invoice/clear_paid_claim', { invoice_id });
-export const fetchInvoicePdf = (invoice_id) => call('/kpi_client_invoice/pdf', { invoice_id }, 60000);
+// The data the browser's PDF builder reads. Read-only; the drawing happens here
+// on the phone. The old /pdf route (server-rendered) is deliberately no longer
+// called — it printed already-billed lines its own total left out, ignored the
+// "Show amounts" toggle and never printed Overall Notes.
+export const fetchInvoicePdfData = (invoice_id) =>
+  call('/kpi_client_invoice/pdf_data', { invoice_id }, 60000);
