@@ -16,7 +16,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput,
-  ActivityIndicator, Modal, Platform, StatusBar as RNStatusBar,
+  ActivityIndicator, Modal, Platform, ScrollView, StatusBar as RNStatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 // SDK 54: the classic writeAsStringAsync + EncodingType live under /legacy.
@@ -32,7 +32,7 @@ import {
 } from '../services/kraReport';
 import {
   typeStyle, totalTimeWorked, uniqueEmployeeCount, projectSummary,
-  makeReportPdf, makeReportExcel, makeReportZip,
+  selectDownloadRows, weekKey, makeReportPdf, makeReportExcel, makeReportZip,
 } from '../utils/kraExport';
 import * as H from '../utils/haptics';
 import { createLogger } from '../api/logger';
@@ -200,6 +200,11 @@ export default function KraReport({ onBack }) {
   const [localRows, setLocalRows] = useState([]);
   // The on-screen KRA Summary. Open by default, as on the web.
   const [summaryOpen, setSummaryOpen] = useState(true);
+  // Download options, asked AFTER the format is chosen (the ZIP menu picks the
+  // flavour first, so this is the second question, not a replacement for it).
+  // `include` is carried through untouched for the ZIP.
+  const [dl, setDl] = useState(null);   // { kind, include, scope, employeeIds, period, day, week, month, sort, workedOnly }
+  const [dlPicker, setDlPicker] = useState(null);   // 'employee' | 'period' | 'sort'
   // "Clear the report" confirm — it discards work that exists nowhere else.
   const [clearOpen, setClearOpen] = useState(false);
 
@@ -457,15 +462,27 @@ export default function KraReport({ onBack }) {
   }, [rows, localRows, nameOverrides, removedRowIds, search]);
 
   // What the document builders need. Assembled here so the three export handlers
-  // cannot each build a subtly different one.
-  const exportCtx = useCallback(() => ({
-    rows: visibleRows,
+  // cannot each build a subtly different one — and it takes the rows as an
+  // argument so the download dialog's narrower set flows through ONE source. The
+  // web learned this the hard way: its dialog's rows reached the ZIP only, and
+  // PDF and Excel silently rebuilt from the whole table, so a report saying
+  // "A month" contained everything.
+  const exportCtx = useCallback((rowsOverride) => ({
+    rows: rowsOverride || visibleRows,
     fromDate,
     toDate,
     applied: appliedFilters,
     search: search.trim(),
     removedCount: removedRowIds.length,
   }), [visibleRows, fromDate, toDate, appliedFilters, search, removedRowIds]);
+
+  // The rows a download should actually contain, after the dialog's own filters.
+  // Starts from visibleRows, so the screen's filters, trims and search still
+  // apply — this narrows, it never widens.
+  const rowsForDownload = useCallback(
+    (d) => (d ? selectDownloadRows(visibleRows, d, fromDate) : visibleRows),
+    [visibleRows, fromDate],
+  );
 
   // ---- Saving a built document --------------------------------------------
   // The recipe the app already uses in six places: ask WHERE first on Android and
@@ -535,12 +552,41 @@ export default function KraReport({ onBack }) {
     flash('ok', 'Report cleared.');
   }
 
-  const downloadPdf = () => runExport('pdf', async () => makeReportPdf(exportCtx()));
-  const downloadExcel = () => runExport('excel', () => makeReportExcel(exportCtx()));
-  const downloadZip = (include) => {
+  // Format first, then options — the ZIP menu asks the flavour, this asks the
+  // rest. Seeded from the filters that produced the table, so the default answer
+  // is "the report I am looking at".
+  const openDownloadDialog = (kind, include = {}) => {
     setZipMenu(false);
-    return runExport('zip', () => makeReportZip(exportCtx(), include, (done, total) => setZipStep({ done, total })));
+    setDl({
+      kind,
+      include,
+      scope: 'all',
+      employeeIds: [...employeeIds],
+      period: 'range',
+      day: fromDate || '',
+      week: weekKey(fromDate),
+      month: (fromDate || '').slice(0, 7),
+      sort: '',
+      workedOnly: false,
+    });
   };
+
+  const confirmDownload = () => {
+    const d = dl;
+    setDl(null);
+    if (!d) return;
+    // ONE row source for every format. The whole point of the dialog.
+    const chosen = rowsForDownload(d);
+    if (!chosen.length) { flash('err', 'Those options leave no rows to export.'); return; }
+    const ctx = exportCtx(chosen);
+    if (d.kind === 'pdf') return runExport('pdf', async () => makeReportPdf(ctx));
+    if (d.kind === 'excel') return runExport('excel', () => makeReportExcel(ctx));
+    return runExport('zip', () => makeReportZip(ctx, d.include, (done, total) => setZipStep({ done, total })));
+  };
+
+  const downloadPdf = () => openDownloadDialog('pdf');
+  const downloadExcel = () => openDownloadDialog('excel');
+  const downloadZip = (include) => openDownloadDialog('zip', include);
 
   // ---- Derived display -----------------------------------------------------
   const summaryLabel = (list, all) => (list.length ? `${list.length} selected` : all);
@@ -847,6 +893,137 @@ export default function KraReport({ onBack }) {
         onClose={() => setPicker(null)}
       />
 
+      {/* Download options. Every control here NARROWS the report already on
+          screen; none of them widens it, so what you get is always a subset of
+          what you were looking at. */}
+      <Modal visible={!!dl} transparent animationType="fade" onRequestClose={() => setDl(null)}>
+        <View style={s.modalBackdrop}>
+          <View style={s.modalSheet}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle}>Download options</Text>
+              <TouchableOpacity onPress={() => setDl(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={20} color={COLORS.muted} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
+              <View style={{ padding: 16, paddingTop: 12 }}>
+                <Text style={s.dlLabel}>Who</Text>
+                <View style={s.dlRow}>
+                  {[{ k: 'all', t: 'Everyone' }, { k: 'employee', t: 'Pick people' }].map((o) => (
+                    <TouchableOpacity
+                      key={o.k}
+                      style={[s.dlChip, dl?.scope === o.k && s.dlChipOn]}
+                      onPress={() => {
+                        H.select();
+                        setDl((p) => ({ ...p, scope: o.k }));
+                        if (o.k === 'employee') setDlPicker('employee');
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[s.dlChipTxt, dl?.scope === o.k && s.dlChipTxtOn]}>{o.t}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {dl?.scope === 'employee' ? (
+                  <TouchableOpacity onPress={() => setDlPicker('employee')} activeOpacity={0.8}>
+                    <Text style={s.dlHint}>
+                      {dl.employeeIds.length
+                        ? `${dl.employeeIds.length} selected — tap to change`
+                        : 'Nobody selected — tap to choose'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                <Text style={[s.dlLabel, { marginTop: 14 }]}>Period</Text>
+                <View style={s.dlRow}>
+                  {[
+                    { k: 'range', t: 'The whole range' },
+                    { k: 'day', t: 'A day' },
+                    { k: 'week', t: 'A week' },
+                    { k: 'month', t: 'A month' },
+                  ].map((o) => (
+                    <TouchableOpacity
+                      key={o.k}
+                      style={[s.dlChip, dl?.period === o.k && s.dlChipOn]}
+                      onPress={() => { H.select(); setDl((p) => ({ ...p, period: o.k })); }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[s.dlChipTxt, dl?.period === o.k && s.dlChipTxtOn]}>{o.t}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {dl?.period === 'day' ? (
+                  <Text style={s.dlHint}>Rows dated {dl.day || '—'}</Text>
+                ) : dl?.period === 'week' ? (
+                  <Text style={s.dlHint}>ISO week {dl.week || '—'} (the week containing {fromDate})</Text>
+                ) : dl?.period === 'month' ? (
+                  <Text style={s.dlHint}>Rows in {dl.month || '—'}</Text>
+                ) : null}
+
+                <Text style={[s.dlLabel, { marginTop: 14 }]}>Sort by</Text>
+                <View style={s.dlRow}>
+                  {[
+                    { k: '', t: 'As shown' },
+                    { k: 'name', t: 'Task name' },
+                    { k: 'kra', t: 'KRA path' },
+                    { k: 'employee', t: 'Employee' },
+                    { k: 'time', t: 'Time worked' },
+                    { k: 'deadline', t: 'Deadline' },
+                  ].map((o) => (
+                    <TouchableOpacity
+                      key={o.k || 'none'}
+                      style={[s.dlChip, (dl?.sort || '') === o.k && s.dlChipOn]}
+                      onPress={() => { H.select(); setDl((p) => ({ ...p, sort: o.k })); }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[s.dlChipTxt, (dl?.sort || '') === o.k && s.dlChipTxtOn]}>{o.t}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <TouchableOpacity
+                  style={s.dlToggleRow}
+                  onPress={() => { H.select(); setDl((p) => ({ ...p, workedOnly: !p.workedOnly })); }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name={dl?.workedOnly ? 'checkbox' : 'square-outline'}
+                    size={19} color={dl?.workedOnly ? COLORS.primary : COLORS.faint}
+                  />
+                  <Text style={s.dlToggleTxt}>Only rows with time worked</Text>
+                </TouchableOpacity>
+
+                {/* Say the number before the file is built, not after. */}
+                <Text style={s.dlCount}>
+                  {rowsForDownload(dl).length} of {visibleRows.length} row{visibleRows.length === 1 ? '' : 's'} will be exported
+                </Text>
+              </View>
+            </ScrollView>
+            <View style={s.clearBtns}>
+              <TouchableOpacity style={s.clearCancel} onPress={() => setDl(null)} activeOpacity={0.85}>
+                <Text style={s.clearCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.clearConfirm, { backgroundColor: COLORS.primary }]} onPress={confirmDownload} activeOpacity={0.85}>
+                <Text style={s.clearConfirmTxt}>Download {String(dl?.kind || '').toUpperCase()}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Who to include, reusing the screen's own picker so the dialog cannot
+          drift from the filter bar's behaviour. */}
+      <MultiSelectPicker
+        visible={dlPicker === 'employee'}
+        title="Include which people"
+        options={employees}
+        counts={counts.employees}
+        selected={dl?.employeeIds || []}
+        onToggle={(id) => setDl((p) => ({ ...p, employeeIds: toggleIn(p.employeeIds, id) }))}
+        onClear={() => setDl((p) => ({ ...p, employeeIds: [] }))}
+        onClose={() => setDlPicker(null)}
+      />
+
       {/* Clearing discards trimmed rows, renames and report-only tasks — none of
           which exist anywhere else — so it counts them first rather than asking
           "are you sure?" about an amount nobody can see. */}
@@ -1018,6 +1195,21 @@ const s = StyleSheet.create({
   summaryPath: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy },
   summaryMeta: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
   summaryTime: { fontSize: 12, fontWeight: '800', color: COLORS.primary, marginTop: 2 },
+
+  // Download options
+  dlLabel: { fontSize: 12, fontWeight: '900', color: COLORS.navy, marginBottom: 6 },
+  dlRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  dlChip: {
+    paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9,
+    borderWidth: 1.5, borderColor: COLORS.line, backgroundColor: '#fff',
+  },
+  dlChipOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  dlChipTxt: { fontSize: 12, fontWeight: '800', color: COLORS.muted },
+  dlChipTxtOn: { color: '#fff' },
+  dlHint: { fontSize: 11.5, color: COLORS.muted, marginTop: 6 },
+  dlToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16 },
+  dlToggleTxt: { fontSize: 13, fontWeight: '700', color: COLORS.ink },
+  dlCount: { fontSize: 12, fontWeight: '800', color: COLORS.primary, marginTop: 14 },
 
   clearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 10 },
   clearTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.red },

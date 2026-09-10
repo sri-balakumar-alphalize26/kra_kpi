@@ -214,6 +214,58 @@ export function treePath(row, fromDate) {
   return `${month}/${week}/${who}`;
 }
 
+// The rows a download should contain, after the Download-options dialog.
+//
+// Pure and exported so it can be tested, because the web's equivalent is a
+// cautionary tale: `_isoWeek` is defined TWICE there, the later object-returning
+// version wins, and the dialog then compares that object to another object with
+// `===`. It never matches, so the web's "A week" download quietly returns zero
+// rows. Same algorithm here, with a key that can actually be equal.
+//
+// Every clause NARROWS. `rows` is already the screen's filtered, trimmed,
+// searched set, and nothing here can widen it — so a download is always a subset
+// of what the person was looking at.
+export function selectDownloadRows(rows, opts = {}, fromDate = '') {
+  let out = rows || [];
+  const d = opts || {};
+  if (d.scope === 'employee' && (d.employeeIds || []).length) {
+    out = out.filter((r) => d.employeeIds.includes(r.employee_id));
+  }
+  if (d.period === 'day' && d.day) {
+    out = out.filter((r) => rowDate(r, fromDate) === d.day);
+  } else if (d.period === 'week' && d.week) {
+    out = out.filter((r) => {
+      const w = isoWeek(rowDate(r, fromDate));
+      return `${w.year}-${w.week}` === d.week;
+    });
+  } else if (d.period === 'month' && d.month) {
+    out = out.filter((r) => rowDate(r, fromDate).slice(0, 7) === d.month);
+  }
+  if (d.workedOnly) out = out.filter((r) => (r.time_worked_seconds || 0) > 0);
+  if (d.sort) {
+    const by = {
+      name: (a, b) => (a.kpi_name || '').localeCompare(b.kpi_name || ''),
+      kra: (a, b) => (a.kra_path || '').localeCompare(b.kra_path || ''),
+      employee: (a, b) => (a.employee_name || '').localeCompare(b.employee_name || ''),
+      time: (a, b) => (b.time_worked_seconds || 0) - (a.time_worked_seconds || 0),
+      // Undated rows last, not first, where they would push the real deadlines
+      // out of view.
+      deadline: (a, b) => (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31'),
+    }[d.sort];
+    // Copy first: the caller's array is memoised, and sorting in place would
+    // reorder the table under the person downloading.
+    if (by) out = [...out].sort(by);
+  }
+  return out;
+}
+
+// The key the dialog stores for "a week", and the one selectDownloadRows
+// compares against. A string, deliberately — see the note above.
+export const weekKey = (ymd) => {
+  const w = isoWeek(ymd);
+  return w.week ? `${w.year}-${w.week}` : '';
+};
+
 // Group rows into projects, exactly as the ZIP does on the web.
 export function groupByProject(rows) {
   const groups = new Map();
