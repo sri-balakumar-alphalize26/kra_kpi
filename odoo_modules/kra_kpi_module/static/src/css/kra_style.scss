@@ -622,9 +622,24 @@
        fullest cards that was the buttons — Delete, Partial Finish, Approve/Reject.
        Hovering restores them (see &:hover below); an even grid that hides Approve
        would be a worse trade than the raggedness it replaced. */
-    height: 248px;
+    /* 248px cut the fullest cards through the MIDDLE OF A LINE — half-height
+       glyphs that read as a rendering fault rather than as "there is more here".
+       A card carrying a client, a description, a per-user time line and a
+       released badge needs about two more lines than 248 allowed. */
+    height: 292px;
     display: flex;
     flex-direction: column;
+
+    /* Whatever still overflows now fades out instead of being sliced, so the
+       clip is legible as truncation. Hover (below) remains the way to see it
+       all; this only changes how the boundary reads. */
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
+
+    &:hover {
+        -webkit-mask-image: none;
+        mask-image: none;
+    }
 
     /* Hover shows the whole card. Deliberately no transition on height: it cannot be
        animated from a fixed value to auto, and a hover that eases open reads as slower
@@ -637,7 +652,7 @@
        absolutely-positioned card would simply be clipped at the lane's edge. */
     &:hover {
         height: auto;
-        min-height: 248px;
+        min-height: 292px;
         z-index: 5;
         box-shadow:
             0 10px 30px rgba(0, 0, 0, 0.18),
@@ -1780,5 +1795,35 @@
         &:hover {
             background: #f6f8fa;
         }
+    }
+}
+
+/* KPI Action Board — work that has landed but has never been started.
+   Only ever applied in the Regular / Important / Urgent lanes (see
+   isFreshTask): zero time elsewhere is normal, so colouring it there would
+   turn the signal into noise. A left bar and a tint rather than a full red
+   card — it has to catch the eye without making the text harder to read. */
+.kpi-task.kpi-task-fresh {
+    /* The WHOLE card reads red, not just its title — at a glance across a lane
+       it is the card that has to stand out, and a coloured heading alone
+       disappears among the badges and the client line under it. */
+    /* !important, and the two-class selector, are both needed: the base .kpi-task
+       rule sets its border with !important too, and a plain override loses to it. */
+    background: #ffb4b4 !important;
+    border: 2px solid #dc3545 !important;
+
+    /* The card paints a translucent sheen over itself; left alone it washes the
+       red back out to nearly white. */
+    &::before { display: none !important; }
+
+    /* Letters stay BLACK. Red text on a red ground was the worst of both — it
+       read as a broken card rather than an urgent one, and the colour is the
+       card's job here, not the type's. Badges keep their own colours: those
+       carry the priority and type, which this must not overwrite. */
+    .fw-bold,
+    .fw-bold.text-primary,
+    .text-muted,
+    .small:not(.badge) {
+        color: #000 !important;
     }
 }

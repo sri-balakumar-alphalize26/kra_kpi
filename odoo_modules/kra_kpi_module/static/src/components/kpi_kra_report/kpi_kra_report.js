@@ -404,7 +404,7 @@ export class KpiKraReport extends Component {
                                     </t>
                                 </div>
                                 <div class="col-md-4">
-                                    <label class="form-label fw-bold">Priority</label>
+                                    <label class="form-label fw-bold">Priority *</label>
                                     <select class="form-select" t-model="state.nt.priority">
                                         <option value="regular">Regular</option>
                                         <option value="important">Important</option>
@@ -423,7 +423,7 @@ export class KpiKraReport extends Component {
                                     </select>
                                 </div>
                                 <div class="col-md-6">
-                                    <label class="form-label fw-bold">Assignee</label>
+                                    <label class="form-label fw-bold">Assignee *</label>
                                     <select class="form-select" t-model="state.nt.user_id">
                                         <option value="">— unassigned —</option>
                                         <t t-foreach="state.employees" t-as="e" t-key="e.id">
@@ -433,7 +433,7 @@ export class KpiKraReport extends Component {
                                 </div>
 
                                 <div class="col-md-3">
-                                    <label class="form-label fw-bold">Type</label>
+                                    <label class="form-label fw-bold">Type *</label>
                                     <select class="form-select" t-model="state.nt.doc_type">
                                         <option value="requirement">Requirement → REQ</option>
                                         <option value="update">Update → UPT</option>
@@ -441,7 +441,7 @@ export class KpiKraReport extends Component {
                                     </select>
                                 </div>
                                 <div class="col-md-3">
-                                    <label class="form-label fw-bold">Estimate (h)</label>
+                                    <label class="form-label fw-bold">Estimate (h) *</label>
                                     <input type="number" min="0" class="form-control" t-model.number="state.nt.estimate_hours"/>
                                 </div>
                                 <div class="col-md-3">
@@ -454,7 +454,7 @@ export class KpiKraReport extends Component {
                                 </div>
 
                                 <div class="col-md-3">
-                                    <label class="form-label fw-bold">Time worked (h)</label>
+                                    <label class="form-label fw-bold">Time worked (h) *</label>
                                     <input type="number" min="0" class="form-control" t-model.number="state.nt.worked_hours"/>
                                 </div>
                                 <div class="col-md-3">
@@ -692,6 +692,19 @@ export class KpiKraReport extends Component {
             <!-- Filters moved on since these results were fetched. Downloads are
                  blocked rather than warned about: an export that disagrees with
                  the boxes above it reaches a client as a finished document. -->
+            <t t-if="state.createdHidden">
+                <div class="alert alert-success d-flex align-items-center gap-2">
+                    <i class="fa fa-check-circle"></i>
+                    <div class="flex-grow-1">
+                        <b t-esc="state.createdHidden.name"/> was saved and is on the KPI Action
+                        Board, but this report's filters exclude it — a new task starts as
+                        <i>Pre-Approval Approved</i>, so any State, Type or Employee filter hides it.
+                        <button type="button" class="btn btn-sm btn-link p-0 align-baseline"
+                                t-on-click="showCreatedTask">Clear those filters and show it</button>
+                    </div>
+                    <button type="button" class="btn-close" t-on-click="dismissCreatedHidden"/>
+                </div>
+            </t>
             <t t-if="isStale">
                 <div class="alert alert-warning d-flex align-items-center gap-2">
                     <i class="fa fa-exclamation-triangle"></i>
@@ -1031,6 +1044,8 @@ export class KpiKraReport extends Component {
             removedRowIds: [],
             appliedFilters: {},
             zipMenuOpen: false,
+            // Set when a just-created task cannot appear under the current filters.
+            createdHidden: null,
             // Signature of the filters that produced state.reportData, so we can
             // tell when the boxes have moved on since the last Generate.
             generatedSignature: '',
@@ -1337,6 +1352,17 @@ export class KpiKraReport extends Component {
         }
     }
 
+    /** Drop the filters that can hide a brand-new task, then re-run. */
+    async showCreatedTask() {
+        this.state.filters.task_states = [];
+        this.state.filters.task_types = [];
+        this.state.filters.employee_ids = [];
+        this.state.createdHidden = null;
+        await this.generateReport();
+    }
+
+    dismissCreatedHidden() { this.state.createdHidden = null; }
+
     restoreRows() {
         this.state.removedRowIds = [];
         this.persistState();
@@ -1589,10 +1615,18 @@ export class KpiKraReport extends Component {
         }
         const workedSeconds = (parseInt(t.worked_hours, 10) || 0) * 3600
             + (parseInt(t.worked_minutes, 10) || 0) * 60;
+        // A row added by hand exists to record work that already happened, and a
+        // client report full of 0h lines is the thing this feature was meant to
+        // stop — so the time is required, not optional.
+        if (workedSeconds <= 0) {
+            t.error = 'Time worked is required. Enter the hours and/or minutes already spent.';
+            return;
+        }
         // Time is logged against a person and feeds invoicing and the employee
-        // reports, so there has to be someone to attribute it to.
-        if (workedSeconds > 0 && !t.user_id) {
-            t.error = 'Pick an assignee before recording time worked.';
+        // reports, so there has to be someone to attribute it to. Required time
+        // therefore makes the assignee required too.
+        if (!t.user_id) {
+            t.error = 'Pick an assignee — time worked is recorded against a person.';
             return;
         }
         t.error = '';
@@ -1662,6 +1696,17 @@ export class KpiKraReport extends Component {
             // Re-run so the new task arrives as a real row with real data, rather
             // than a hand-built copy that would drift from it immediately.
             await this.generateReport();
+
+            // The task is saved and on the board, but this report may not be able
+            // to show it: a new task is always `pre_approval_approved`, so ANY
+            // State filter hides it, and a Type or KRA filter set to something
+            // else does the same. Silently vanishing reads as "it didn't save",
+            // so say what happened and offer the one click that reveals it.
+            if (kpiId && !this.state.reportData.some(r => r.id === kpiId)) {
+                this.state.createdHidden = { id: kpiId, name: t.name.trim() };
+            } else {
+                this.state.createdHidden = null;
+            }
         } catch (e) {
             t.error = (e && e.data && e.data.message) || (e && e.message) || 'Could not create the task.';
         } finally {
@@ -1758,6 +1803,14 @@ export class KpiKraReport extends Component {
     isRenamed(row) { return !!this.state.nameOverrides[row.employee_id]; }
 
     getFilteredData() {
+        // While a download is being built, every derived figure has to come from
+        // the rows the Download-options dialog chose — not the table's own set.
+        // Overriding the single source here rather than threading a `rows`
+        // argument through the builders means the summary, the totals and each
+        // section cannot disagree with the rows printed beneath them.
+        if (this._downloadRows) {
+            return this._downloadRows;
+        }
         const removed = this.state.removedRowIds;
         // Report-only rows first: they were added by hand, so they belong where
         // the person who added them can see them, not buried after 200 real rows.
@@ -2210,12 +2263,18 @@ export class KpiKraReport extends Component {
     async confirmDownload() {
         const d = this.state.dl;
         d.busy = true;
+        // The dialog's own filters — Who, the period, the sort, worked-only —
+        // used to reach the ZIP alone: pdf and excel were called with no rows and
+        // rebuilt straight from the table, so choosing "A month" still exported
+        // everything. Setting the source once covers all three.
+        this._downloadRows = this._rowsForDownload();
         try {
-            if (d.kind === 'zip') await this._runZip(d.include, this._rowsForDownload());
+            if (d.kind === 'zip') await this._runZip(d.include, this._downloadRows);
             else if (d.kind === 'pdf') await this.downloadPDF();
             else if (d.kind === 'excel') await this.downloadExcel();
             d.open = false;
         } finally {
+            this._downloadRows = null;
             d.busy = false;
         }
     }

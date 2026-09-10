@@ -1859,7 +1859,7 @@ export class KpiAction extends Component {
                                         style="width: auto; min-width: 140px; height: 32px; font-size: 0.85rem;"
                                         t-on-change="onStatusChange">
                                     <option value="">All Statuses</option>
-                                    <option value="self_pending" t-att-selected="state.filters.status === 'self_pending'">🆕 Pending Review</option>
+                                    <option value="self_pending" t-att-selected="state.filters.status === 'self_pending'">Pending Review</option>
                                     <option value="regular" t-att-selected="state.filters.status === 'regular'">📋 Regular</option>
                                     <option value="important" t-att-selected="state.filters.status === 'important'">⚠️ Important</option>
                                     <option value="urgent" t-att-selected="state.filters.status === 'urgent'">🚨 Urgent</option>
@@ -2051,7 +2051,8 @@ export class KpiAction extends Component {
                                         <t t-set="filteredTasks" t-value="getFilteredTasksByState(col.key)"/>
                                         <t t-if="filteredTasks.length">
                                             <t t-foreach="filteredTasks" t-as="task" t-key="task.id">
-                                                <div class="kpi-task">
+                                                <div class="kpi-task"
+                                                     t-att-class="{'kpi-task-fresh': isFreshTask(task, col.key)}">
                                                     <!-- Once it is with the client the developer
                                                          has nothing left to do on it, and the
                                                          detail pane is all edit affordances — so
@@ -2428,14 +2429,21 @@ export class KpiAction extends Component {
         }
         let out = cols;
         if (this.state.viewMode === 'list') out = cols.filter(c => counts.get(c.key) > 0);
-        if (!filtering) return out;
-        // Pipeline position is the tie-break, so equal-scoring lanes stay in an order
-        // the reader already knows rather than shuffling between renders.
+        // Lanes holding work come first, empty ones fall to the end — ALWAYS, not
+        // only under a search. The board used to keep its fixed pipeline order so
+        // the shape stayed learnable, but with eleven 265px lanes that meant
+        // scrolling past "Nothing here yet" columns to reach the work. Pipeline
+        // position survives as the tie-break below, so the familiar order still
+        // holds among lanes that have tasks.
         const order = new Map(out.map((c, i) => [c.key, i]));
         return [...out].sort((a, b) => {
             const ca = counts.get(a.key), cb = counts.get(b.key);
+            // Work before emptiness, always.
             if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1;
-            if (ca !== cb) return cb - ca;
+            // Most matches first belongs to SEARCHING only. Applying it unfiltered
+            // would reorder the lanes by how full they are, so the pipeline would
+            // rearrange itself every time a task moved.
+            if (filtering && ca !== cb) return cb - ca;
             return order.get(a.key) - order.get(b.key);
         });
     }
@@ -2975,8 +2983,8 @@ export class KpiAction extends Component {
             // scroll to would not have fixed that.
             //
             // Tasks here are ALSO in their status column; see the grouping loop.
-            { key: "today",        label: "🕒 Today" },
-            { key: "self_pending", label: "🆕 Pending Review" },
+            { key: "today",        label: "Today" },
+            { key: "self_pending", label: "Pending Review" },
             { key: "regular",     label: "Regular" },
             { key: "important",   label: "Important" },
             { key: "urgent",      label: "Urgent" },
@@ -5931,7 +5939,7 @@ export class KpiAction extends Component {
               <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content">
                   <div class="modal-header">
-                    <h5 class="modal-title">➕ New Task — Pending Review</h5>
+                    <h5 class="modal-title">New Task — Pending Review</h5>
                     <button type="button" class="btn-close" id="closeModalBtn"></button>
                   </div>
                   <div class="modal-body">
@@ -7436,8 +7444,30 @@ export class KpiAction extends Component {
     // =========================================================
     
     // Get filtered tasks for a specific column/state
+    /**
+     * Work that has landed on someone but has never been started.
+     *
+     * Only in the three priority lanes: those are the "yours to pick up" lanes,
+     * and a never-touched card there is the one thing on this board that needs
+     * to be noticed. Elsewhere zero time is normal — a queued or awaiting-client
+     * task has not been started BY DESIGN, and colouring those red would make
+     * the signal meaningless.
+     */
+    isFreshTask(task, columnKey) {
+        return ['regular', 'important', 'urgent'].includes(columnKey)
+            && !(task.timer_total_seconds > 0);
+    }
+
     getFilteredTasksByState(columnKey) {
         let tasks = this.state.tasksByState[columnKey] || [];
+        // Never-started work sits at the top of its lane: a card added to the
+        // bottom of a long Regular lane is a card nobody sees. Stable otherwise —
+        // the server's order is preserved within each group.
+        if (['regular', 'important', 'urgent'].includes(columnKey)) {
+            const fresh = [], rest = [];
+            for (const t of tasks) (this.isFreshTask(t, columnKey) ? fresh : rest).push(t);
+            tasks = fresh.concat(rest);
+        }
         
         // 1. Search Query Filter
         if (this.state.searchQuery && this.state.searchQuery.trim()) {
@@ -7593,7 +7623,7 @@ export class KpiAction extends Component {
      */
     filterStatusLabel(code) {
         return ({
-            self_pending: '🆕 Pending Review',
+            self_pending: 'Pending Review',
             regular: '📋 Regular',
             important: '⚠️ Important',
             urgent: '🚨 Urgent',
