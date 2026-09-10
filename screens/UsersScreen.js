@@ -132,7 +132,15 @@ export default function UsersScreen({ onBack }) {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Reset to 1111', style: 'destructive', onPress: async () => {
           setBusyReset(true);
-          try { await resetUserPassword(editing.id); setOkMsg('Password has been reset to 1111. The user sets a new one on next login.'); }
+          // Check the answer, exactly as doChangePassword below already does.
+          // The route REFUSES rather than raises when the caller is not an Odoo
+          // system administrator and the target is — so a bare await announced a
+          // reset that never happened, on the one account where that matters most.
+          try {
+            const r = await resetUserPassword(editing.id);
+            if (r && r.status === false) { Alert.alert('Could not reset', r.message || 'Not authorized.'); return; }
+            setOkMsg('Password has been reset to 1111. The user sets a new one on next login.');
+          }
           catch (e) { Alert.alert('Error', e?.message || 'Could not reset.'); }
           finally { setBusyReset(false); }
         } },

@@ -84,6 +84,13 @@ export default function LoginManagementScreen({ onBack }) {
   const [otpDefault, setOtpDefault] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
   const [savedFlash, setSavedFlash] = useState('');
+  // { key, message } — a change the server REFUSED. Same key space as savedFlash,
+  // so the row that was refused says so where its ✓ would have gone.
+  const [rowErr, setRowErr] = useState(null);
+  // A refused LIST is not an empty list. Without this the screen answered
+  // "No users in this role." to "Not authorized", which reads as a fact about
+  // the company rather than about the person asking.
+  const [loadError, setLoadError] = useState('');
   const [roleForUser, setRoleForUser] = useState(null); // user whose role is being picked
   const [resetForUser, setResetForUser] = useState(null); // user whose password reset is being confirmed
   const [disconnectOpen, setDisconnectOpen] = useState(false); // WhatsApp disconnect confirm
@@ -123,10 +130,40 @@ export default function LoginManagementScreen({ onBack }) {
     setTimeout(() => setSavedFlash((k) => (k === key ? '' : k)), 1400);
   }, []);
 
+  // Every write on this screen goes through here. These routes RETURN
+  // {status: false, message} for a caller without rights instead of raising
+  // (kra_api.py), so `await` alone cannot tell a refusal from a success — and
+  // this screen used to flash "Reset ✓" over a password the server never
+  // touched. `undo` puts optimistic state back where the change was refused.
+  const guard = useCallback(async (key, fn, undo) => {
+    try {
+      const res = await fn();
+      if (res && res.status === false) {
+        if (undo) undo();
+        setRowErr({ key, message: res.message || 'Not authorized — that change was not saved.' });
+        return false;
+      }
+      setRowErr(null);
+      flash(key);
+      return true;
+    } catch (e) {
+      if (undo) undo();
+      log.warn('save ' + key, e?.message);
+      setRowErr({ key, message: 'Could not reach the server — that change was not saved.' });
+      return false;
+    }
+  }, [flash]);
+
   const load = useCallback(async () => {
     try {
       const d = await getAccess();
       setIsMock(!!d.isMock);
+      if (d && d.status === false) {
+        setLoadError(d.message || 'Not authorized to view logins.');
+        setUsers([]);
+        return;
+      }
+      setLoadError('');
       setUsers((d.users || []).map((u) => ({ ...u, _mobile: u.mobile || '' })));
       setDial(String(d.dial || '91'));
       setMobileLen(Number(d.mobile_length) || 10);
@@ -204,26 +241,36 @@ export default function LoginManagementScreen({ onBack }) {
     } catch (e) { log.warn('setUserCountry', e?.message); }
   };
   const saveMobile = async (u) => {
-    try { await setMobile(u.id, u._mobile || ''); flash('mobile:' + u.id); }
-    catch (e) { log.warn('setMobile', e?.message); }
+    const before = u.mobile || '';
+    await guard('mobile:' + u.id, () => setMobile(u.id, u._mobile || ''),
+      () => setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, _mobile: before } : x))));
   };
   const onToggle = async (u) => {
     const next = !u.enabled;
     setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, enabled: next } : x)));
-    try { await toggleLogin(u.id, next); } catch (e) { log.warn('toggleLogin', e?.message); }
+    await guard('login:' + u.id, () => toggleLogin(u.id, next),
+      () => setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, enabled: !next } : x))));
   };
   const onReset = (u) => setResetForUser(u);
   const confirmReset = async () => {
     const u = resetForUser;
     setResetForUser(null);
     if (!u) return;
-    try { await resetPassword(u.id); flash('pw:' + u.id); } catch (e) { log.warn('resetPassword', e?.message); }
+    // Not gated on u.is_system, deliberately: the server refuses only when the
+    // CALLER is not an Odoo system administrator (kra_api.py), so hiding the
+    // button would take a real capability away from one who is. The web renders
+    // it for everyone too — it just tells the truth about the answer, which is
+    // the part the app was missing. "Reset ✓" over an untouched password meant
+    // everyone believed an admin's PIN had been reset when it had not.
+    await guard('pw:' + u.id, () => resetPassword(u.id));
   };
   const onPickRole = async (u, role) => {
     setRoleForUser(null);
     if (role === u.role) return;
+    const before = u.role;
     setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, role } : x)));
-    try { await setRole(u.id, role); flash('role:' + u.id); } catch (e) { log.warn('setRole', e?.message); }
+    await guard('role:' + u.id, () => setRole(u.id, role),
+      () => setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, role: before } : x))));
   };
 
   // ── WhatsApp ────────────────────────────────────────────────────────────────
@@ -302,7 +349,9 @@ export default function LoginManagementScreen({ onBack }) {
               })}
             </View>
 
-            {shownUsers.length === 0 ? (
+            {loadError ? (
+              <Text style={[s.hint, { marginTop: 12, color: '#B91C1C', fontWeight: '700' }]}>{loadError}</Text>
+            ) : shownUsers.length === 0 ? (
               <Text style={[s.hint, { marginTop: 12 }]}>No users in this role.</Text>
             ) : shownUsers.map((u) => (
               <View key={u.id} style={s.userRow}>
@@ -329,11 +378,15 @@ export default function LoginManagementScreen({ onBack }) {
                     <Text style={s.rolePillTxt}>{roleLabel(u.role)}</Text>
                     {!u.is_system && <Ionicons name="chevron-down" size={14} color={COLORS.muted} />}
                     {savedFlash === 'role:' + u.id && <Text style={s.tickSm}>✓</Text>}
+                    {rowErr?.key === 'role:' + u.id && <Text style={s.crossSm}>✕</Text>}
                   </TouchableOpacity>
                   <View style={{ flex: 1 }} />
                   <TouchableOpacity style={s.resetBtn} onPress={() => onReset(u)} activeOpacity={0.85}>
                     <Ionicons name="key-outline" size={14} color={COLORS.red} />
-                    <Text style={s.resetBtnTxt}>{savedFlash === 'pw:' + u.id ? 'Reset ✓' : 'Reset password'}</Text>
+                    <Text style={s.resetBtnTxt}>
+                      {rowErr?.key === 'pw:' + u.id ? 'Not reset ✕'
+                        : savedFlash === 'pw:' + u.id ? 'Reset ✓' : 'Reset password'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
 
@@ -350,7 +403,17 @@ export default function LoginManagementScreen({ onBack }) {
                     onEndEditing={() => saveMobile(u)}
                   />
                   {(savedFlash === 'mobile:' + u.id || savedFlash === 'country:' + u.id) && <Text style={s.tickInline}>✓</Text>}
+                  {rowErr?.key === 'mobile:' + u.id && <Text style={s.crossSm}>✕</Text>}
                 </View>
+
+                {/* Why the ✕ above it. Tap to dismiss. Sits on the row it belongs
+                    to rather than in a page banner, which a long user list
+                    scrolls straight past. */}
+                {(rowErr?.key || '').endsWith(':' + u.id) && (
+                  <TouchableOpacity onPress={() => setRowErr(null)} activeOpacity={0.8}>
+                    <Text style={s.rowErrTxt}>{rowErr.message}  ✕</Text>
+                  </TouchableOpacity>
+                )}
 
                 {(u.last_login || u.last_device) ? (
                   <Text style={s.userLast}>
@@ -612,6 +675,8 @@ const s = StyleSheet.create({
   rolePillLocked: { opacity: 0.65 },
   rolePillTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary },
   tickSm: { color: COLORS.green, fontSize: 13, fontWeight: '900', marginLeft: 2 },
+  crossSm: { color: '#B91C1C', fontSize: 13, fontWeight: '900', marginLeft: 4 },
+  rowErrTxt: { color: '#B91C1C', fontSize: 11.5, fontWeight: '700', marginTop: 6 },
   resetBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, height: 32, borderRadius: 10, backgroundColor: COLORS.redBg, borderWidth: 1, borderColor: '#F6C9C9' },
   resetBtnTxt: { fontSize: 12, fontWeight: '800', color: COLORS.red },
 

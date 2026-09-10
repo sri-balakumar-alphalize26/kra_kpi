@@ -91,6 +91,10 @@ export default function ConfigurationScreen({ onBack }) {
   // A failed load used to leave the defaults on screen looking like saved
   // settings. Say so instead — a wrong number here changes how the team works.
   const [loadError, setLoadError] = useState('');
+  // { key, message } — which field was refused, and why. Rendered in the field's
+  // own tick slot as well as in a banner, because a banner at the top of the
+  // screen is no use to somebody who just tapped a field at the bottom.
+  const [saveErr, setSaveErr] = useState(null);
   // WhatsApp group reporting. Destination is read-only here (web chooses it).
   const [waGroupJid, setWaGroupJid] = useState('');
   const [waGroupName, setWaGroupName] = useState('');
@@ -104,6 +108,30 @@ export default function ConfigurationScreen({ onBack }) {
     setSavedFlash(key);
     setTimeout(() => setSavedFlash((k) => (k === key ? '' : k)), 1400);
   }, []);
+
+  // ONE place that decides whether a save actually happened, so no saver can
+  // drift back to assuming it did. Every /kpi_config/set_* route RETURNS
+  // {status: false, message} for a caller without rights rather than raising
+  // (_is_kra_admin in kra_api.py), so the promise resolves and a bare `await`
+  // is indistinguishable from success. This screen used to flash its green tick
+  // on exactly that: a coordinator who had lost the admin group could change
+  // "Client approval window", see ✓, and have nothing saved.
+  const saveGuard = useCallback(async (key, fn) => {
+    try {
+      const res = await fn();
+      if (res && res.status === false) {
+        setSaveErr({ key, message: res.message || 'Not authorized — that change was not saved.' });
+        return false;
+      }
+      setSaveErr(null);
+      flash(key);
+      return true;
+    } catch (e) {
+      log.warn('save ' + key, e?.message);
+      setSaveErr({ key, message: 'Could not reach the server — that change was not saved.' });
+      return false;
+    }
+  }, [flash]);
 
   const load = useCallback(async () => {
     try {
@@ -159,20 +187,17 @@ export default function ConfigurationScreen({ onBack }) {
     const parsed = parseInt(adminAccept, 10);
     const v = Math.max(0, isNaN(parsed) ? 5 : parsed);
     setAdminAcceptVal(String(v));
-    try { await setAdminAccept(v); flash('adminAccept'); }
-    catch (e) { log.warn('saveAdminAccept', e?.message); }
+    await saveGuard('adminAccept', () => setAdminAccept(v));
   };
   const saveClientApproval = async () => {
     const v = Math.max(1, parseInt(clientApproval) || 5);
     setClientApprovalVal(String(v));
-    try { await setClientApproval(v); flash('clientApproval'); }
-    catch (e) { log.warn('saveClientApproval', e?.message); }
+    await saveGuard('clientApproval', () => setClientApproval(v));
   };
   const saveQueueNudge = async () => {
     const v = Math.max(1, parseInt(queueNudge) || 30);
     setQueueNudgeVal(String(v));
-    try { await setQueueNudge(v); flash('queueNudge'); }
-    catch (e) { log.warn('saveQueueNudge', e?.message); }
+    await saveGuard('queueNudge', () => setQueueNudge(v));
   };
   const saveStandardHours = async () => {
     // Hours, not minutes — and fractional (7.5) is a real workday, so parseFloat.
@@ -183,14 +208,12 @@ export default function ConfigurationScreen({ onBack }) {
     if (!isFinite(v) || v <= 0) v = 9;
     v = Math.max(0.5, Math.min(24, v));
     setStandardHoursVal(String(v));
-    try { await setStandardHours(v); flash('standardHours'); }
-    catch (e) { log.warn('saveStandardHours', e?.message); }
+    await saveGuard('standardHours', () => setStandardHours(v));
   };
   const saveUrgentNudge = async () => {
     const v = Math.max(1, parseInt(urgentNudge) || 5);
     setUrgentNudgeVal(String(v));
-    try { await setUrgentNudge(v); flash('urgentNudge'); }
-    catch (e) { log.warn('saveUrgentNudge', e?.message); }
+    await saveGuard('urgentNudge', () => setUrgentNudge(v));
   };
   // HH + MM inputs → the backend's float hour (10.5 = 10:30). Clamp to a real time.
   const timeToHour = (hh, mm) => {
@@ -203,15 +226,13 @@ export default function ConfigurationScreen({ onBack }) {
     const n = Math.max(0, parseInt(snapNum) || 0);
     const u = unitOverride || snapUnit;
     setSnapNum(String(n));
-    try { await setSnapshotRetention({ number: n, unit: u }); flash('snapRet'); }
-    catch (e) { log.warn('saveSnapRetention', e?.message); }
+    await saveGuard('snapRet', () => setSnapshotRetention({ number: n, unit: u }));
   };
   const saveRepRetention = async (unitOverride) => {
     const n = Math.max(0, parseInt(repNum) || 0);
     const u = unitOverride || repUnit;
     setRepNum(String(n));
-    try { await setReportRetention({ number: n, unit: u }); flash('repRet'); }
-    catch (e) { log.warn('saveRepRetention', e?.message); }
+    await saveGuard('repRet', () => setReportRetention({ number: n, unit: u }));
   };
   const saveDaily = async (over = {}) => {
     const enabled = over.enabled != null ? over.enabled : dailyEnabled;
@@ -220,8 +241,7 @@ export default function ConfigurationScreen({ onBack }) {
     const H = Math.floor(hour);
     setDailyHH(String(H));
     setDailyMM(String(Math.round((hour - H) * 60)).padStart(2, '0'));
-    try { await setDailyReport({ enabled, hour, coverage }); flash('daily'); }
-    catch (e) { log.warn('saveDaily', e?.message); }
+    await saveGuard('daily', () => setDailyReport({ enabled, hour, coverage }));
   };
   // Set ONE developer's country (dial + local length). Empty co (id false) clears
   // it back to the company default. The backend re-keys their stored WhatsApp
@@ -329,10 +349,32 @@ export default function ConfigurationScreen({ onBack }) {
     setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _wa: local, _invalid: invalid } : d)));
     try {
       const res = await setDevWa(dev.id, local);
+      // Roll a refused write back to what is actually stored, the way the
+      // multitask toggle does. Leaving the typed number in the box with a green
+      // tick beside it was the worst of both: nothing saved, and every reason to
+      // believe otherwise until the next reload.
+      if (res && res.status === false) {
+        setDevelopers((list) => list.map((d) => (d.id === dev.id
+          ? { ...d, _wa: toLocal(dev.wa_number, dd, dl), _invalid: false } : d)));
+        setWaMsg(res.message || 'Not allowed to change that.');
+        return;
+      }
       const stored = res?.wa_number != null ? res.wa_number : (local ? dd + local : '');
       setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, wa_number: stored, _saved: true } : d)));
       setTimeout(() => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _saved: false } : d))), 1400);
-    } catch (e) { log.warn('saveDevWa', e?.message); }
+    } catch (e) {
+      setDevelopers((list) => list.map((d) => (d.id === dev.id
+        ? { ...d, _wa: toLocal(dev.wa_number, dd, dl), _invalid: false } : d)));
+      log.warn('saveDevWa', e?.message);
+    }
+  };
+
+  // The tick, or the reason there is no tick — in the same slot, so the answer
+  // is where the eye already is. Never both: a refused save must not also flash ✓.
+  const SaveMark = ({ k }) => {
+    if (saveErr && saveErr.key === k) return <Text style={s.saveMarkErr}>✕ not saved</Text>;
+    if (savedFlash === k) return <Text style={s.savedTick}>✓</Text>;
+    return null;
   };
 
   // Country label for a developer's picker button (their own, or the default).
@@ -378,6 +420,15 @@ export default function ConfigurationScreen({ onBack }) {
             </View>
           )}
 
+          {/* The reason a save was refused. The ✕ in the field's own tick slot
+              says WHICH setting; this says why, in the server's own words. */}
+          {!!saveErr && (
+            <TouchableOpacity style={s.saveErrBar} onPress={() => setSaveErr(null)} activeOpacity={0.8}>
+              <Ionicons name="close-circle-outline" size={14} color="#B91C1C" />
+              <Text style={s.saveErrTxt}>{saveErr.message}  ✕</Text>
+            </TouchableOpacity>
+          )}
+
           <Card color="#0ea5e9" iconLib="mc" icon="clock-outline" title="Timers">
             <Text style={s.label}>Admin accept window (minutes)</Text>
             <View style={s.inlineRow}>
@@ -387,7 +438,7 @@ export default function ConfigurationScreen({ onBack }) {
                 onEndEditing={saveAdminAccept}
               />
               <Text style={s.unit}>min</Text>
-              {savedFlash === 'adminAccept' && <Text style={s.savedTick}>✓</Text>}
+              {<SaveMark k="adminAccept" />}
             </View>
             <Text style={s.hint}>How long an admin has to accept a submitted task before it is
               accepted automatically. <Text style={{ fontWeight: '800' }}>0 turns auto-accept off</Text> —
@@ -401,7 +452,7 @@ export default function ConfigurationScreen({ onBack }) {
                 onEndEditing={saveClientApproval}
               />
               <Text style={s.unit}>min</Text>
-              {savedFlash === 'clientApproval' && <Text style={s.savedTick}>✓</Text>}
+              {<SaveMark k="clientApproval" />}
             </View>
             <Text style={s.hint}>How long a client has to approve the developer assigned to their task.
               If they don't respond in time it is approved automatically.</Text>
@@ -414,7 +465,7 @@ export default function ConfigurationScreen({ onBack }) {
                 onEndEditing={saveQueueNudge}
               />
               <Text style={s.unit}>min</Text>
-              {savedFlash === 'queueNudge' && <Text style={s.savedTick}>✓</Text>}
+              {<SaveMark k="queueNudge" />}
             </View>
             <Text style={s.hint}>How often admins are re-notified about a client task still waiting for a
               developer. Stops once an admin opens the notification.</Text>
@@ -427,7 +478,7 @@ export default function ConfigurationScreen({ onBack }) {
                 onEndEditing={saveUrgentNudge}
               />
               <Text style={s.unit}>min</Text>
-              {savedFlash === 'urgentNudge' && <Text style={s.savedTick}>✓</Text>}
+              {<SaveMark k="urgentNudge" />}
             </View>
             <Text style={s.hint}>When a developer taps 🚨 Urgent while pausing, the owner and admins are
               notified in the app and reminded this often until one of them reads it.</Text>
@@ -440,7 +491,7 @@ export default function ConfigurationScreen({ onBack }) {
                 onEndEditing={saveStandardHours}
               />
               <Text style={s.unit}>h</Text>
-              {savedFlash === 'standardHours' && <Text style={s.savedTick}>✓</Text>}
+              {<SaveMark k="standardHours" />}
             </View>
             <Text style={s.hint}>A normal working day. The End Workday summary compares it against
               <Text style={{ fontWeight: '800' }}> Presence</Text> (login → logout): at or over reads
@@ -457,7 +508,7 @@ export default function ConfigurationScreen({ onBack }) {
                 onValueChange={() => { const n = !dailyEnabled; setDailyEnabled(n); saveDaily({ enabled: n }); }}
                 trackColor={{ true: COLORS.primary }}
               />
-              {savedFlash === 'daily' && <Text style={s.savedTick}>✓</Text>}
+              {<SaveMark k="daily" />}
             </View>
 
             {dailyEnabled && (
@@ -510,7 +561,7 @@ export default function ConfigurationScreen({ onBack }) {
                 <Text style={s.selectTxt}>{UNIT_OPTS.find((o) => o.value === snapUnit)?.label || snapUnit}</Text>
                 <Ionicons name="chevron-down" size={18} color={COLORS.muted} />
               </TouchableOpacity>
-              {savedFlash === 'snapRet' && <Text style={s.savedTick}>✓</Text>}
+              {<SaveMark k="snapRet" />}
             </View>
             <Text style={s.hint}>Old End-Workday summary images are cleared automatically (the day's stats
               are kept). <Text style={{ fontWeight: '800' }}>0 = keep forever.</Text></Text>
@@ -531,7 +582,7 @@ export default function ConfigurationScreen({ onBack }) {
                 <Text style={s.selectTxt}>{UNIT_OPTS.find((o) => o.value === repUnit)?.label || repUnit}</Text>
                 <Ionicons name="chevron-down" size={18} color={COLORS.muted} />
               </TouchableOpacity>
-              {savedFlash === 'repRet' && <Text style={s.savedTick}>✓</Text>}
+              {<SaveMark k="repRet" />}
             </View>
             <Text style={s.hint}>Reports stay viewable and downloadable until deleted.
               <Text style={{ fontWeight: '800' }}> 0 = keep forever.</Text></Text>
@@ -807,6 +858,13 @@ const s = StyleSheet.create({
   input: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 46, paddingHorizontal: 12, fontSize: 15, color: COLORS.ink, backgroundColor: '#fff' },
   unit: { fontSize: 14, color: COLORS.muted, fontWeight: '600' },
   savedTick: { color: COLORS.green, fontSize: 18, fontWeight: '900', marginLeft: 6 },
+  // Sits in the tick's slot, so it reads as the answer to the same question.
+  saveMarkErr: { color: '#B91C1C', fontSize: 11.5, fontWeight: '800', marginLeft: 6 },
+  saveErrBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FEE2E2',
+    borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 12,
+  },
+  saveErrTxt: { color: '#B91C1C', fontSize: 11.5, fontWeight: '700', flex: 1 },
 
   dialBadge: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 46, justifyContent: 'center', paddingHorizontal: 12, backgroundColor: '#F7F9FC' },
   dialBadgeTxt: { fontSize: 14.5, fontWeight: '800', color: COLORS.navy },
