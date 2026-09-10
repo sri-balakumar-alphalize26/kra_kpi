@@ -2,7 +2,7 @@ import re
 
 from odoo import api, models, fields
 from odoo.tools import float_round
-from datetime import datetime
+from datetime import datetime, timedelta
 from odoo.exceptions import ValidationError
 
 
@@ -985,6 +985,60 @@ class KpiMaster(models.Model):
         } for r in rows]
 
     @api.model
+    def log_manual_time(self, kpi_id, seconds, user_id=False, work_date=False):
+        """Back-fill work that happened off-system, from the report's New Task box.
+
+        Worked time lives in TWO places that are not derived from one another:
+        `timer_total_seconds` on the task (what the KRA Report's Time Worked
+        column and every total read) and `kpi.time.log` rows (what decides
+        whether the task matches a report's date range, and what the per-task
+        "who worked on this" breakdown is built from). Writing only one of them
+        gives a task that reads 0h, or one that is invisible to its own date
+        range — so both happen here, in one call.
+
+        `duration_seconds` and `work_date` on the log are computed+stored from
+        start/end, so this sets the times and lets them derive. Midday in the
+        user's timezone is used as the anchor so the computed work_date lands on
+        the intended day rather than slipping either side of midnight.
+        """
+        seconds = float(seconds or 0)
+        if not kpi_id or seconds <= 0:
+            return False
+
+        kpi = self.browse(int(kpi_id))
+        if not kpi.exists():
+            raise ValidationError("That task no longer exists.")
+
+        user = self.env['res.users'].browse(int(user_id)) if user_id else kpi.user_id
+        if not user:
+            # A time log is attributed to a person, and feeds invoicing and the
+            # employee reports. There is nobody to attribute this to.
+            raise ValidationError("Pick an assignee before recording time worked.")
+
+        import pytz
+        from datetime import time as _time
+        tz_name = user.tz or self.env.user.tz or 'Asia/Kolkata'
+        day = fields.Date.to_date(work_date) if work_date else fields.Date.context_today(self)
+        try:
+            anchor = pytz.timezone(tz_name).localize(datetime.combine(day, _time(12, 0)))
+            start = anchor.astimezone(pytz.UTC).replace(tzinfo=None)
+        except Exception:
+            # Never let a bad tz string stop the time being recorded.
+            start = datetime.combine(day, _time(12, 0))
+
+        self.env['kpi.time.log'].sudo().create({
+            'kpi_id': kpi.id,
+            'user_id': user.id,
+            'start_time': start,
+            'end_time': start + timedelta(seconds=int(seconds)),
+            'is_active': False,
+        })
+        kpi.sudo().write({
+            'timer_total_seconds': (kpi.timer_total_seconds or 0.0) + seconds,
+        })
+        return True
+
+    @api.model
     def create_kpi(self, vals):
         if isinstance(vals, (list, tuple)) and vals:
             vals = vals[0]
@@ -1040,6 +1094,27 @@ class KpiMaster(models.Model):
             'client_quoted_hours': vals.get('client_quoted_hours', 0),
             'client_quoted_minutes': vals.get('client_quoted_minutes', 0),
         }
+
+        # Type -> a real REQ / UPT / BUG ref, when the caller states one.
+        #
+        # Without this the task lands with no external_ref at all, which means no
+        # Type in the KRA Report AND — because the report matches types on that
+        # prefix — it is dropped by any Type filter. Self-created tasks stage as
+        # TASK-### and get their real ref on admin Accept; a caller that already
+        # knows the type (an admin adding from the report) is authoritative, so
+        # the ref is minted here. Imported lazily: models/__init__ loads kpi
+        # before kpi_workflow.
+        doc_type = vals.get('doc_type')
+        if doc_type:
+            from .kpi_workflow import REF_PREFIX_FOR_DOC_TYPE, NAME_PREFIX_FOR_DOC_TYPE
+            prefix = REF_PREFIX_FOR_DOC_TYPE.get(doc_type)
+            if prefix:
+                rec_vals['external_ref'] = '%s-%03d' % (
+                    prefix, self._next_ref_for_prefix(prefix))
+                rec_vals['name'] = (
+                    NAME_PREFIX_FOR_DOC_TYPE.get(doc_type, '') + (rec_vals['name'] or ''))
+                rec_vals['requested_doc_type'] = doc_type
+
         rec = self.create(rec_vals)
         return rec.id
 

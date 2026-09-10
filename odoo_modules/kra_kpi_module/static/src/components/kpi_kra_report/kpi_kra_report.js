@@ -30,6 +30,11 @@ function typeStyle(taskType) {
     return TYPE_STYLES[(taskType || '').toUpperCase()] || TYPE_STYLE_DEFAULT;
 }
 
+// The same doc_type -> ref prefix map the server uses (REF_PREFIX_FOR_DOC_TYPE
+// in models/kpi_workflow.py). Needed here only for report-only rows, which never
+// reach the server and so must label their own Type badge.
+const DOC_TYPE_TO_PREFIX = { requirement: 'REQ', update: 'UPT', bug: 'BUG' };
+
 // Spreadsheet palette, mirroring the PDF so the two documents read as the same
 // report: the detail table is slate-headed with grey stripes, the project
 // summary green-headed with faint green stripes.
@@ -241,14 +246,36 @@ export class KpiKraReport extends Component {
                             <select class="form-select mb-2" t-model="state.dl.period">
                                 <option value="range">The report's date range</option>
                                 <option value="day">A single day</option>
+                                <option value="week">A week</option>
                                 <option value="month">A month</option>
                             </select>
                             <t t-if="state.dl.period === 'day'">
                                 <input type="date" class="form-control mb-2" t-model="state.dl.day"/>
                             </t>
+                            <t t-if="state.dl.period === 'week'">
+                                <input type="week" class="form-control mb-2" t-model="state.dl.week"/>
+                            </t>
                             <t t-if="state.dl.period === 'month'">
                                 <input type="month" class="form-control mb-2" t-model="state.dl.month"/>
                             </t>
+
+                            <label class="form-label fw-bold mt-2">Sort by</label>
+                            <select class="form-select mb-2" t-model="state.dl.sort">
+                                <option value="">Same order as the table</option>
+                                <option value="name">Task name (A–Z)</option>
+                                <option value="kra">KRA path (A–Z)</option>
+                                <option value="employee">Employee (A–Z)</option>
+                                <option value="time">Time worked (most first)</option>
+                                <option value="deadline">Deadline (earliest first)</option>
+                            </select>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="dlWorked"
+                                       t-model="state.dl.workedOnly"/>
+                                <label class="form-check-label" for="dlWorked">
+                                    Only rows with time worked
+                                </label>
+                            </div>
 
                             <t t-if="state.dl.kind === 'zip'">
                                 <div class="alert alert-light border small mb-2">
@@ -406,6 +433,14 @@ export class KpiKraReport extends Component {
                                 </div>
 
                                 <div class="col-md-3">
+                                    <label class="form-label fw-bold">Type</label>
+                                    <select class="form-select" t-model="state.nt.doc_type">
+                                        <option value="requirement">Requirement → REQ</option>
+                                        <option value="update">Update → UPT</option>
+                                        <option value="bug">Bug → BUG</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
                                     <label class="form-label fw-bold">Estimate (h)</label>
                                     <input type="number" min="0" class="form-control" t-model.number="state.nt.estimate_hours"/>
                                 </div>
@@ -413,48 +448,29 @@ export class KpiKraReport extends Component {
                                     <label class="form-label fw-bold">Estimate (m)</label>
                                     <input type="number" min="0" max="59" class="form-control" t-model.number="state.nt.estimate_minutes"/>
                                 </div>
-                                <div class="col-md-6">
+                                <div class="col-md-3">
                                     <label class="form-label fw-bold">Deadline</label>
                                     <input type="date" class="form-control" t-model="state.nt.deadline"/>
                                 </div>
 
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">Remind after (days)</label>
-                                    <input type="number" min="0" class="form-control" t-model.number="state.nt.reminder_days"/>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Time worked (h)</label>
+                                    <input type="number" min="0" class="form-control" t-model.number="state.nt.worked_hours"/>
                                 </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">Hours</label>
-                                    <input type="number" min="0" class="form-control" t-model.number="state.nt.reminder_hours"/>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-bold">Time worked (m)</label>
+                                    <input type="number" min="0" max="59" class="form-control" t-model.number="state.nt.worked_minutes"/>
                                 </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">Minutes</label>
-                                    <input type="number" min="0" class="form-control" t-model.number="state.nt.reminder_minutes"/>
+                                <div class="col-md-6 d-flex align-items-end">
+                                    <div class="form-text">
+                                        Work already done, before the task existed. Leave at 0 if the
+                                        timer will track it.
+                                    </div>
                                 </div>
 
                                 <div class="col-12">
                                     <label class="form-label fw-bold">Description</label>
                                     <textarea class="form-control" rows="3" t-model="state.nt.description"/>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label fw-bold">Checklist</label>
-                                    <textarea class="form-control" rows="3" t-model="state.nt.checklist"/>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label fw-bold">Guidelines</label>
-                                    <textarea class="form-control" rows="3" t-model="state.nt.guidelines"/>
-                                </div>
-
-                                <div class="col-12">
-                                    <div class="d-flex flex-wrap gap-3 mt-1">
-                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntMand" t-model="state.nt.is_mandatory"/><label class="form-check-label" for="ntMand">Mandatory</label></div>
-                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntAuto" t-model="state.nt.auto_assign"/><label class="form-check-label" for="ntAuto">Auto-assign</label></div>
-                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntAutoEst" t-model="state.nt.auto_estimated"/><label class="form-check-label" for="ntAutoEst">Auto-estimated</label></div>
-                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntPerm" t-model="state.nt.is_permanent"/><label class="form-check-label" for="ntPerm">Permanent</label></div>
-                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntSvc" t-model="state.nt.service_kpi"/><label class="form-check-label" for="ntSvc">Service KPI</label></div>
-                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntMeet" t-model="state.nt.is_meeting"/><label class="form-check-label" for="ntMeet">Meeting</label></div>
-                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntMgr" t-model="state.nt.is_manager_review_needed"/><label class="form-check-label" for="ntMgr">Coordinator review</label></div>
-                                        <div class="form-check"><input class="form-check-input" type="checkbox" id="ntCust" t-model="state.nt.is_customer_review_needed"/><label class="form-check-label" for="ntCust">Customer review</label></div>
-                                    </div>
                                 </div>
                             </div>
                             <div t-if="state.nt.error" class="alert alert-danger py-2 mt-3 mb-0" t-esc="state.nt.error"/>
@@ -1036,7 +1052,7 @@ export class KpiKraReport extends Component {
             dl: {
                 open: false, kind: '', include: {},
                 scope: 'all', employeeIds: [],
-                period: 'range', day: '', month: '',
+                period: 'range', day: '', week: '', month: '', sort: '', workedOnly: false,
                 saveCopy: true, busy: false,
             },
 
@@ -1499,15 +1515,25 @@ export class KpiKraReport extends Component {
 
     // ---- Adding a task from this screen ---------------------------------- //
 
+    /**
+     * The same fields the board's New Task asks for, plus Type, a worked-time
+     * pair and Deadline.
+     *
+     * The reminder trio, Checklist, Guidelines and the eight flags used to be
+     * here and are gone: nothing in the module reads them. The flags appear only
+     * in a form view and one serialiser — they render as badges and gate nothing
+     * — and no cron or Python path fires the reminders. Asking for twenty-one
+     * values to store five was the complaint. Deadline stays although the board
+     * has none: the KRA Report matches its date range on it, so a row without
+     * one is hard to find again.
+     */
     _blankTask() {
         return {
-            name: '', kra_id: '', estimate_hours: 0, estimate_minutes: 0,
-            priority: 'regular', user_id: '', deadline: '',
-            reminder_days: 0, reminder_hours: 0, reminder_minutes: 0,
-            description: '', checklist: '', guidelines: '',
-            is_mandatory: false, auto_assign: false, auto_estimated: false,
-            is_permanent: false, service_kpi: false, is_meeting: false,
-            is_manager_review_needed: false, is_customer_review_needed: false,
+            name: '', kra_id: '', user_id: '',
+            doc_type: 'requirement',
+            estimate_hours: 0, estimate_minutes: 0,
+            worked_hours: 0, worked_minutes: 0,
+            priority: 'regular', deadline: '', description: '',
             error: '',
         };
     }
@@ -1547,11 +1573,28 @@ export class KpiKraReport extends Component {
     }
 
     /** `scope` is 'report' or 'everywhere'. */
+    /** `scope` is 'report' or 'everywhere'. */
     async submitNewTask(scope) {
         const t = this.state.nt;
         if (!t) return;
         if (!t.name.trim()) { t.error = 'Task name is required.'; return; }
         if (!t.kra_id) { t.error = 'Pick a project.'; return; }
+        // Same rule as the normal create screen, which refuses to submit without
+        // one. This modal used to be the only way round it.
+        const estSeconds = (parseInt(t.estimate_hours, 10) || 0) * 3600
+            + (parseInt(t.estimate_minutes, 10) || 0) * 60;
+        if (estSeconds <= 0) {
+            t.error = 'Estimate Time is required. Please enter hours and/or minutes.';
+            return;
+        }
+        const workedSeconds = (parseInt(t.worked_hours, 10) || 0) * 3600
+            + (parseInt(t.worked_minutes, 10) || 0) * 60;
+        // Time is logged against a person and feeds invoicing and the employee
+        // reports, so there has to be someone to attribute it to.
+        if (workedSeconds > 0 && !t.user_id) {
+            t.error = 'Pick an assignee before recording time worked.';
+            return;
+        }
         t.error = '';
 
         if (scope === 'report') {
@@ -1559,6 +1602,8 @@ export class KpiKraReport extends Component {
             // row's id in removedRowIds or in a t-key.
             const kra = (this.state.kras || []).find(k => String(k.id) === String(t.kra_id)) || {};
             const emp = (this.state.employees || []).find(e => String(e.id) === String(t.user_id)) || {};
+            const h = Math.floor(workedSeconds / 3600);
+            const m = Math.floor((workedSeconds % 3600) / 60);
             this.state.localRows.unshift({
                 id: -(Date.now()),
                 is_local: true,
@@ -1568,17 +1613,19 @@ export class KpiKraReport extends Component {
                 sub_kra: '-',
                 kpi_name: t.name.trim(),
                 external_ref: '',
-                task_type: '',
+                // From the Type selector, so the row shows a badge and is matched
+                // by the Type filter like any other row.
+                task_type: (DOC_TYPE_TO_PREFIX[t.doc_type] || ''),
                 task_state: 'assigned',
                 task_state_label: 'Report only',
                 priority: t.priority,
                 deadline: t.deadline || '',
                 employee_id: t.user_id ? parseInt(t.user_id, 10) : 0,
                 employee_name: emp.name || '—',
-                // Zero, and it stays zero: nothing is tracking this.
-                time_worked_seconds: 0,
-                time_worked_hours: 0,
-                time_worked_display: '0h 0m',
+                // Whatever was entered — this row is the only record of it.
+                time_worked_seconds: workedSeconds,
+                time_worked_hours: +(workedSeconds / 3600).toFixed(2),
+                time_worked_display: `${h}h ${m}m`,
                 user_breakdown: [],
             });
             this.state.nt = null;
@@ -1589,29 +1636,27 @@ export class KpiKraReport extends Component {
 
         this.state.ntBusy = true;
         try {
-            await this.orm.call('kra.kpi', 'create_kpi', [{
+            const kpiId = await this.orm.call('kra.kpi', 'create_kpi', [{
                 name: t.name.trim(),
                 kra_id: parseInt(t.kra_id, 10),
+                doc_type: t.doc_type,
                 estimate_hours: parseInt(t.estimate_hours, 10) || 0,
                 estimate_minutes: parseInt(t.estimate_minutes, 10) || 0,
                 priority: t.priority,
                 user_id: t.user_id ? parseInt(t.user_id, 10) : false,
                 deadline: t.deadline || false,
-                reminder_days: parseInt(t.reminder_days, 10) || 0,
-                reminder_hours: parseInt(t.reminder_hours, 10) || 0,
-                reminder_minutes: parseInt(t.reminder_minutes, 10) || 0,
                 description: t.description,
-                checklist: t.checklist,
-                guidelines: t.guidelines,
-                is_mandatory: t.is_mandatory,
-                auto_assign: t.auto_assign,
-                auto_estimated: t.auto_estimated,
-                is_permanent: t.is_permanent,
-                service_kpi: t.service_kpi,
-                is_meeting: t.is_meeting,
-                is_manager_review_needed: t.is_manager_review_needed,
-                is_customer_review_needed: t.is_customer_review_needed,
             }]);
+            // Work done before the task existed. Written server-side because it
+            // has to land in two places at once — see log_manual_time.
+            if (workedSeconds > 0 && kpiId) {
+                // Filed TODAY, not on the deadline. A deadline is a future due
+                // date, so filing already-done work against it would push the
+                // hours into a month that has not happened yet — and out of the
+                // report you are looking at.
+                await this.orm.call('kra.kpi', 'log_manual_time',
+                    [kpiId, workedSeconds, parseInt(t.user_id, 10), false]);
+            }
             this.state.nt = null;
             this.state.ntMatches = [];
             // Re-run so the new task arrives as a real row with real data, rather
@@ -2037,7 +2082,10 @@ export class KpiKraReport extends Component {
             employeeIds: [...(this.state.filters.employee_ids || [])],
             period: 'range',
             day: this.state.filters.from_date || '',
+            week: this._isoWeek(this.state.filters.from_date || ''),
             month: (this.state.filters.from_date || '').slice(0, 7),
+            sort: '',
+            workedOnly: false,
             saveCopy: this.state.isAdmin,
             busy: false,
         });
@@ -2053,10 +2101,50 @@ export class KpiKraReport extends Component {
         }
         if (d.period === 'day' && d.day) {
             rows = rows.filter(r => this._rowDate(r) === d.day);
+        } else if (d.period === 'week' && d.week) {
+            rows = rows.filter(r => this._isoWeek(this._rowDate(r)) === d.week);
         } else if (d.period === 'month' && d.month) {
             rows = rows.filter(r => this._rowDate(r).slice(0, 7) === d.month);
         }
+        if (d.workedOnly) {
+            rows = rows.filter(r => (r.time_worked_seconds || 0) > 0);
+        }
+        if (d.sort) {
+            // Copy first: getFilteredData hands back the live arrays, and sorting
+            // in place would reorder the table under the person downloading.
+            const by = {
+                name: (a, b) => (a.kpi_name || '').localeCompare(b.kpi_name || ''),
+                kra: (a, b) => (a.kra_path || '').localeCompare(b.kra_path || ''),
+                employee: (a, b) => (a.employee_name || '').localeCompare(b.employee_name || ''),
+                time: (a, b) => (b.time_worked_seconds || 0) - (a.time_worked_seconds || 0),
+                // Undated rows last rather than first, where they would push the
+                // real deadlines out of view.
+                deadline: (a, b) => (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31'),
+            }[d.sort];
+            if (by) rows = [...rows].sort(by);
+        }
         return rows;
+    }
+
+    /**
+     * `YYYY-Www`, matching what an <input type="week"> gives back.
+     *
+     * ISO weeks start on Monday and week 1 is the one containing the first
+     * Thursday, which is why the day-of-week is nudged to Thursday before the
+     * year is read — a 1 January can legitimately belong to the previous year's
+     * week 52 or 53.
+     */
+    _isoWeek(ymd) {
+        if (!ymd) return '';
+        const d = new Date(ymd + 'T00:00:00');
+        if (isNaN(d)) return '';
+        const day = (d.getDay() + 6) % 7;          // Monday = 0
+        d.setDate(d.getDate() - day + 3);          // the Thursday of this week
+        const firstThursday = new Date(d.getFullYear(), 0, 4);
+        const fDay = (firstThursday.getDay() + 6) % 7;
+        firstThursday.setDate(firstThursday.getDate() - fDay + 3);
+        const week = 1 + Math.round((d - firstThursday) / (7 * 24 * 3600 * 1000));
+        return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
     }
 
     /**
