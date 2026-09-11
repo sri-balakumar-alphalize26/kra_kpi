@@ -4,6 +4,15 @@
 // task (the notification carries data.kpi_id, which App.js's tap listener routes
 // through routeToTask). No backend, no native rebuild — expo-notifications is
 // already in the build and permission is granted at login.
+//
+// The server's OWN task reminder fields — reminder_days / reminder_hours /
+// reminder_minutes, which /kra_kpi/tasks/get sends on every task — are ignored
+// here BY CHOICE, not by oversight. They are a web-side setting that fires in the
+// browser; honouring them on the phone as well would ring a second time for a
+// reminder nobody set on this device, and the relative "ping me in N minutes"
+// above is what people actually reach for on a phone. Nothing in the app reads
+// those three fields — that is the decision, written down, so the next reader does
+// not "fix" it.
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { createLogger } from '../api/logger';

@@ -80,10 +80,15 @@ export async function fetchKraContext() {
 // only in the browser, so an admin on a phone could not see — let alone re-fetch
 // — a report a colleague had produced.
 //
-// A READ-ONLY mirror, deliberately. The app builds its own documents on the
-// device and does not post them back, so this lists what the web saved rather
-// than pretending to be a complete record of every download ever made. The
+// A mirror of what the WEB saved, deliberately — the app builds its own documents
+// on the device and never posts them back, so this lists the browser's copies
+// rather than pretending to be a complete record of every download ever made. The
 // screen says so rather than leaving someone to wonder why their own is missing.
+//
+// "Read-only" is the wrong word for it, and used to be the one written here: the
+// app never WRITES to this history, but it can delete from it — see
+// deleteStoredDownload below, which the sheet offers per row so a stored copy can
+// go before its retention window expires. One direction only, not no directions.
 export async function fetchDownloadHistory(limit = 50) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true, downloads: [] };
