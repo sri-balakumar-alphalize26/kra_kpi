@@ -85,6 +85,61 @@ class KpiNonTaskBlock(models.Model):
         help='"Meeting 2" — what the Workday Map and the board pill show.',
     )
 
+    # Who the meeting was with. Deliberately the same shape kpi.break.log uses for
+    # a meeting declared by PAUSING a task — same field names, same denormalised
+    # display string — because the two record the same human fact and only differ
+    # in whether a task happened to be running at the time. Without this a meeting
+    # declared with nothing running lost its attendees entirely, so "who was in it"
+    # depended on an accident of timing.
+    #
+    # NOT folded into `note`: that is capped at NOTE_MAX and a couple of names
+    # would eat the whole budget the note itself needs.
+    # Applies to reason == 'meeting'; empty for every other reason.
+    meeting_with_user_ids = fields.Many2many(
+        'res.users', 'kpi_nontask_block_meeting_user_rel', 'block_id', 'user_id',
+        string='Meeting With')
+    # Denormalised for display, for the same reason kpi.break.log does it: the
+    # Workday Map and the snapshot image each read one string rather than
+    # recomputing a name list and drifting apart.
+    meeting_with_display = fields.Char(
+        string='Meeting With (names)', compute='_compute_meeting_with_display', store=True)
+
+    @api.depends('meeting_with_user_ids')
+    def _compute_meeting_with_display(self):
+        for rec in self:
+            names = rec.meeting_with_user_ids.mapped('name')
+            rec.meeting_with_display = ', '.join(n for n in names if n) or False
+
+    @api.model
+    def clean_meeting_user_ids(self, reason, raw):
+        """Validate meeting participants for a NON-TASK block.
+
+        Lives on the model rather than in the controller because the task-pause
+        twin of this check (_clean_meeting_ids in controllers/kra_api.py) sits on
+        a different controller class that /kpi_workday/idle_reason cannot reach.
+        Copying it would have created two rules that drift; this is the one both
+        can call. The two MUST stay in step — they answer the same question.
+
+        Returns a list of user ids, None when the reason is not 'meeting' or
+        nobody was picked, and False when the payload is malformed. A bare empty
+        list is falsy, so callers must test `is False`, not truthiness.
+        """
+        if reason != 'meeting':
+            return None
+        try:
+            wanted = [int(i) for i in (raw or [])]
+        except (TypeError, ValueError):
+            return False
+        if not wanted:
+            return None
+        # Real, active, internal users only — a hand-rolled payload must not be
+        # able to attach arbitrary ids to a block.
+        return self.env['res.users'].sudo().search([
+            ('id', 'in', wanted),
+            ('active', '=', True),
+            ('share', '=', False),
+        ]).ids
+
     @api.depends('start_at', 'end_at')
     def _compute_seconds(self):
         for rec in self:

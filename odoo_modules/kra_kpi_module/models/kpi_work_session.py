@@ -309,6 +309,14 @@ class KpiWorkSession(models.Model):
         help='Optional free text for the OPEN block. Copied onto kpi.nontask.block '
              'when the block closes; shown under it on the Workday Map.',
     )
+    nontask_meeting_with_ids = fields.Many2many(
+        'res.users', 'kpi_work_session_nontask_meeting_rel', 'session_id', 'user_id',
+        string='Non-task Meeting With', copy=False,
+        help='Who the OPEN meeting block is with. Held here for exactly the same '
+             'reason as nontask_note: the kpi.nontask.block row does not exist '
+             'until the block CLOSES, so the open one lives on the session and is '
+             'copied across at that moment. Empty for every reason but meeting.',
+    )
     nontask_started_at = fields.Datetime(
         string='Non-task Started At', copy=False,
         help='Open block start. Closed when a task starts (at that same instant, so the '
@@ -2442,14 +2450,19 @@ class KpiWorkSession(models.Model):
             'note':       self.nontask_note or False,
             'start_at':   self.nontask_started_at,
             'end_at':     end,
+            # Carried across at exactly the moment the row comes into existence,
+            # like `note` above. Only meaningful for a meeting; the setter already
+            # clears it for every other reason, so no filter is needed here.
+            'meeting_with_user_ids': [(6, 0, self.nontask_meeting_with_ids.ids)],
         })
         _logger.info("non-task block closed: %s %s → %s (%s)",
                      self.user_id.login, self.nontask_started_at, end, self.nontask_reason)
         self.sudo().write({'nontask_started_at': False, 'nontask_reason': False,
-                           'nontask_note': False})
+                           'nontask_note': False,
+                           'nontask_meeting_with_ids': [(5, 0, 0)]})
         return True
 
-    def _set_nontask_reason(self, reason, note=''):
+    def _set_nontask_reason(self, reason, note='', meeting_with_ids=None):
         """Declare what the developer is doing while no task runs:
         meeting | break | no_tasks. Returns {switched_from, admins_notified}.
 
@@ -2488,6 +2501,13 @@ class KpiWorkSession(models.Model):
             open_reason = False
 
         vals = {'nontask_reason': reason, 'nontask_note': note or False}
+        # Attendees belong to a MEETING and nothing else, and they are rewritten on
+        # every call rather than merged: switching Meeting → Break → Meeting must
+        # not silently carry the first meeting's people into the second. Replacing
+        # with an empty list for a non-meeting reason is what clears them.
+        vals['nontask_meeting_with_ids'] = [
+            (6, 0, list(meeting_with_ids or []) if reason == 'meeting' else [])
+        ]
         if not open_reason:
             vals['nontask_started_at'] = now
 

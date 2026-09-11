@@ -3939,13 +3939,22 @@ class KpiReportsAPI(http.Controller):
             if reason not in NONTASK_REASON_CODES:
                 return {'status': False, 'message': 'Invalid reason.'}
             note = (params.get('note') or '').strip()[:NOTE_MAX]
+            # Who the meeting is with. Validated on the MODEL rather than here,
+            # because the task-pause twin of this check lives on a different
+            # controller class that this route cannot reach — see
+            # kpi.nontask.block.clean_meeting_user_ids. Returns False (not an
+            # empty list) for a malformed payload, hence the `is False` test.
+            meeting_with_ids = request.env['kpi.nontask.block'].sudo().clean_meeting_user_ids(
+                reason, params.get('meeting_with_ids'))
+            if meeting_with_ids is False:
+                return {'status': False, 'message': 'Invalid meeting participants.'}
             user = request.env.user
             sess = request.env['kpi.work.session'].sudo()._get_or_open_today(user=user)
 
             # All the switching/idempotency rules live on the model so they can be
             # probed from an Odoo shell — a controller-side copy could only be tested
             # by re-implementing it, which tests the copy and not the code.
-            res = sess._set_nontask_reason(reason, note=note)
+            res = sess._set_nontask_reason(reason, note=note, meeting_with_ids=meeting_with_ids)
 
             return {'status': True, 'reason': reason, 'note': note,
                     'admins_notified': res['admins_notified'],
