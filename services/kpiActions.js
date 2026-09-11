@@ -56,6 +56,64 @@ export async function fetchClientTree() {
   return clients;
 }
 
+// ── "Fresh" (red card) age rule ──────────────────────────────────────────────
+// How long a never-started card stays red before it drops back to its normal
+// colour. Named rather than inlined as 86400000 because the same number has to
+// hold in kpi_action.js on the web — the two boards agreeing is the whole point.
+export const FRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// Parse the server's 'YYYY-MM-DD HH:MM:SS' or ISO '...Z' (both UTC) into ms.
+// Built explicitly rather than via `new Date(str)`, which parses the space-
+// separated form inconsistently on RN/iOS — and, worse, treats it as LOCAL time
+// in most engines, which would shift every age by the timezone offset.
+// Same approach as parseServerTs in screens/ClientTasks.js.
+export function parseServerTs(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s || '');
+  if (!m) return null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+}
+
+// Is this task still inside its "new" window? Pure, so the board can stay a
+// one-line predicate and this can be tested without a clock.
+//
+// An unparseable or absent create_date counts as STILL FRESH, deliberately: an
+// older server sends no create_date at all, and treating that as "expired" would
+// silently turn every red card on the board its normal colour — a payload gap
+// must not look like a deliberate state change. Same reasoning as last_activity
+// sorting nulls last rather than first.
+export function isWithinFreshWindow(task, nowMs) {
+  const created = parseServerTs(task && task.create_date);
+  if (created == null) return true;
+  return (nowMs - created) < FRESH_MAX_AGE_MS;
+}
+
+// ── Board search ─────────────────────────────────────────────────────────────
+// Refs are stored with a hyphen — TASK-014, REQ-012, BUG-021 (see
+// _next_ref_for_prefix in models/kpi.py) — but nobody types the hyphen. Stripping
+// everything but letters and digits from BOTH sides means task014, TASK-014,
+// task-014, "TASK 014" and a bare 014 all find the same card.
+export function normalizeRef(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Does this task match what was typed in the board's search box?
+//
+// The ref is normalised; the name and assignee deliberately are NOT. Stripping
+// punctuation out of names too would quietly change long-standing behaviour —
+// "client-flow" would start matching "clientflow" — and that is a different
+// decision from making a task number findable.
+export function taskMatchesQuery(t, rawQuery) {
+  const q = String(rawQuery || '').trim().toLowerCase();
+  if (!q) return true;
+  if ((t.name || '').toLowerCase().includes(q)) return true;
+  if ((t.user_name || '').toLowerCase().includes(q)) return true;
+  // Guard the empty case: a query of "-" normalises to "" and would otherwise
+  // match every task that has a ref at all.
+  const nq = normalizeRef(q);
+  if (nq && normalizeRef(t.external_ref).includes(nq)) return true;
+  return false;
+}
+
 // ── Lane model — mirrors the Odoo board columns in the screenshot ────────────
 // A task lands in exactly one STATUS lane. Priority lanes (Regular/Important/
 // Urgent) only hold tasks that are still in a "to-do" state (assigned/queued/

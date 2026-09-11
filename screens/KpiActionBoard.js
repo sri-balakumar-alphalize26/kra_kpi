@@ -18,7 +18,7 @@ import KpiTaskDetail from './KpiTaskDetail';
 import AddTimeModal from '../components/AddTimeModal';
 import AppDialog from '../components/AppDialog';
 import {
-  LANES, groupIntoLanes, laneForTask, isTodayTask, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
+  LANES, groupIntoLanes, laneForTask, isTodayTask, isWithinFreshWindow, taskMatchesQuery, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, resumeTaskWithReason, completeTask, reassignTask, adminDeleteTask, createProgress,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists,
@@ -924,6 +924,14 @@ function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, f
             <View style={[s.pillDot, { backgroundColor: p.fg }]} />
             <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
           </View>
+          {/* The task's own reference, so a card can be quoted and searched for
+              by number. Shares the priority row rather than taking a line of its
+              own, and matches the ref badge the switch sheet already shows. */}
+          {!!task.external_ref && (
+            <View style={s.refPill}>
+              <Text style={s.refPillTxt} numberOfLines={1}>{task.external_ref}</Text>
+            </View>
+          )}
           {running && (
             <View style={s.livePill}>
               <PulseDot size={7} color={COLORS.green} />
@@ -1903,7 +1911,9 @@ export default function KpiActionBoard({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return raw.filter((t) => {
-      if (q && !((t.name || '').toLowerCase().includes(q) || (t.user_name || '').toLowerCase().includes(q))) return false;
+      // Name, assignee OR task ref — the ref matched however it is typed, so
+      // "task014" finds TASK-014. Same predicate the switch sheet already used.
+      if (!taskMatchesQuery(t, q)) return false;
       if (filterAssignee != null && t.user_id !== filterAssignee) return false;
       if (filterPriority && t.priority !== filterPriority) return false;
       // Today is not a status, so laneForTask never returns it — asking it would
@@ -1937,11 +1947,23 @@ export default function KpiActionBoard({
     });
   }, [lanes, filtering]);
 
-  // A to-do card nobody has started. Only in the three to-do lanes: zero time in
-  // Queued or Awaiting Client is normal, and marking it there would drown the
-  // signal. Matches isFreshTask in kpi_action.js.
+  // A to-do card nobody has started, and only for its first day. Only in the
+  // three to-do lanes: zero time in Queued or Awaiting Client is normal, and
+  // marking it there would drown the signal. Matches isFreshTask in kpi_action.js.
+  //
+  // The age term is the newest part. Without it the red never expired, so a task
+  // nobody had touched in a month looked exactly as urgent as one filed this
+  // morning — and a colour that is always on says nothing. Starting the task
+  // still clears the red immediately; age only puts a floor under how long the
+  // shout can last.
+  //
+  // serverNow(), not Date.now(): the offset is re-measured from every Odoo
+  // response's Date header, so a device with the wrong clock cannot decide that
+  // a card is a day old when it is not.
   const isFreshTask = useCallback((t, laneKey) => (
-    ['regular', 'important', 'urgent'].includes(laneKey) && !(t.timer_total_seconds > 0)
+    ['regular', 'important', 'urgent'].includes(laneKey)
+    && !(t.timer_total_seconds > 0)
+    && isWithinFreshWindow(t, serverNow())
   ), []);
 
   // Never-started work sits at the top of its lane: a card added to the bottom of
@@ -3070,7 +3092,7 @@ export default function KpiActionBoard({
         <Ionicons name="search" size={18} color={COLORS.faint} />
         <TextInput
           style={s.searchInput}
-          placeholder="Search tasks…"
+          placeholder="Search by ref, name or developer…"
           placeholderTextColor={COLORS.faint}
           value={search}
           onChangeText={setSearch}
@@ -5266,6 +5288,11 @@ const s = StyleSheet.create({
   pillDot: { width: 6, height: 6, borderRadius: 3 },
   pillTxt: { fontSize: 11, fontWeight: '800' },
   livePill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: COLORS.greenBg, borderRadius: 20, paddingHorizontal: 9, paddingVertical: 4 },
+  // Muted grey, not a priority colour: the ref identifies the card, it does not
+  // rank it, and a second coloured pill beside Urgent would compete with it.
+  // shrink:1 so a long ref gives way rather than pushing the Live pill off.
+  refPill: { flexShrink: 1, backgroundColor: '#EEF1F6', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 4 },
+  refPillTxt: { fontSize: 11, fontWeight: '800', color: COLORS.muted },
   liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: COLORS.green },
   liveTxt: { fontSize: 11, fontWeight: '800', color: COLORS.green },
 

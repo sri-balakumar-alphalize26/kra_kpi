@@ -630,6 +630,19 @@
     display: flex;
     flex-direction: column;
 
+    /* Children keep their natural height instead of being squeezed.
+       This is what actually stops the mid-card slicing, and the fade below only
+       works because of it. A fixed-height flex column gives every child the
+       default flex-shrink:1, so when the content needs ~509px and the box gives
+       292px the browser COMPRESSES each child box in place. The children that
+       carry their own overflow:hidden — the description's -webkit-line-clamp and
+       the .text-truncate lines — then slice their OWN text through the middle of
+       a glyph, which is why the cut appeared in the MIDDLE of the card with more
+       lines still painted underneath it, nowhere near the faded bottom edge.
+       With no shrink, overflow reaches the real bottom edge, where the mask
+       below is already waiting for it. */
+    > * { flex: 0 0 auto; }
+
     /* Whatever still overflows now fades out instead of being sliced, so the
        clip is legible as truncation. Hover (below) remains the way to see it
        all; this only changes how the boundary reads. */
@@ -1810,7 +1823,14 @@
     /* !important, and the two-class selector, are both needed: the base .kpi-task
        rule sets its border with !important too, and a plain override loses to it. */
     background: #ffb4b4 !important;
-    border: 2px solid #dc3545 !important;
+    /* Same 1.5px the base .kpi-task uses, with the extra weight painted as an
+       inset shadow instead of a wider border. Under border-box a 2px border ate
+       1px more of the card's 292px than a normal card loses, so the pink cards
+       were the first to push a line across the clip boundary — they were showing
+       the slice while the white ones next to them still fitted. An inset shadow
+       is drawn inside the box and costs no content height at all. */
+    border: 1.5px solid #dc3545 !important;
+    box-shadow: inset 0 0 0 1px #dc3545 !important;
 
     /* The card paints a translucent sheen over itself; left alone it washes the
        red back out to nearly white. */

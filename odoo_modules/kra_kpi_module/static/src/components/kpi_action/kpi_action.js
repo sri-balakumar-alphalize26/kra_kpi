@@ -7,6 +7,11 @@ import { useService } from "@web/core/utils/hooks";
 import { session } from "@web/session";
 import { uploadWithProgress } from "@kra_kpi_module/utils/upload_with_progress";
 
+// How long a never-started card stays red before dropping back to its lane
+// colour. Mirrors FRESH_MAX_AGE_MS in the app's services/kpiActions.js — the two
+// boards agreeing on this number is the whole point of naming it.
+const FRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 // Mirrors NOTE_MAX in models/kpi_nontask_block.py and IDLE_NOTE_MAX in the app's
 // services/kpiActions.js. A pause note is one line on the Workday Map, not a
 // paragraph. The route clamps it too — this is the courtesy, that is the rule.
@@ -1819,7 +1824,7 @@ export class KpiAction extends Component {
                                     <i class="fa fa-search" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #9ca3af; font-size: 0.8rem;"></i>
                                     <input type="text" 
                                            class="form-control form-control-sm" 
-                                           placeholder="Search..."
+                                           placeholder="Search by ref, name or developer..."
                                            style="padding-left: 30px; height: 32px; font-size: 0.85rem;"
                                            t-att-value="state.searchQuery"
                                            t-on-input="onSearchInput"/>
@@ -2070,6 +2075,16 @@ export class KpiAction extends Component {
                                                         <span t-att-class="'badge ' + priorityBadgeClass(task.priority)">
                                                             <t t-esc="priorityLabel(task.priority)"/>
                                                         </span>
+                                                        <!-- The task's own reference (TASK-014 / REQ-012 / BUG-021),
+                                                             so a card can be quoted and searched for by number. Shares
+                                                             the priority row rather than taking one of its own: the
+                                                             card is already taller than its box, and a new line here
+                                                             would be the next thing the clip ate. Same bg-secondary
+                                                             badge this ref wears everywhere else, so one task looks
+                                                             like one task across the whole UI. -->
+                                                        <span t-if="task.external_ref"
+                                                              class="badge bg-secondary ms-1"
+                                                              t-esc="task.external_ref"/>
                                                     </div>
                                                     <!-- Who the work is for. With several clients in flight the
                                                          lanes were a wall of titles with no way to tell them
@@ -2094,7 +2109,12 @@ export class KpiAction extends Component {
                                                              t-esc="task.description"/>
                                                     </t>
                                                     <t t-if="task.time_by_user and task.time_by_user.length">
-                                                        <div t-foreach="task.time_by_user" t-as="tu" t-key="tu.user_id" class="text-muted small">
+                                                        <!-- text-truncate like the client line above: this row has a
+                                                             name, a "(currently working)" tag and a duration on it, and
+                                                             without a cap it simply ran off the 265px lane and was cut
+                                                             mid-word at the right edge. -->
+                                                        <div t-foreach="task.time_by_user" t-as="tu" t-key="tu.user_id" class="text-muted small text-truncate"
+                                                             t-att-title="tu.user_name + ' — ' + tu.display">
                                                             <i class="fa fa-user me-1"/><t t-esc="tu.user_name"/><t t-if="tu.is_current"> <span class="text-success fw-semibold">(currently working)</span></t> — <span class="fw-semibold" t-esc="tu.display"/>
                                                         </div>
                                                     </t>
@@ -7280,6 +7300,14 @@ export class KpiAction extends Component {
             groups[c.key] = [];
         }
         if (payload?.status && Array.isArray(payload.tasks)) {
+            // Measure this browser's clock against the server's, so isFreshTask
+            // can age a card without trusting the PC's clock. Cheap: server_now
+            // is already in every payload for the countdown chips, and one
+            // subtraction per load is the whole cost.
+            const srvNow = this.parseServerTs(payload.server_now);
+            if (srvNow != null) {
+                this._clockSkewMs = Date.now() - srvNow;
+            }
             this.state.isAdmin = payload.is_admin || false;
             this.state.currentUserId = payload.current_user_id || null;  // 🆕 NEW: Store current user ID
             this.state.selfPendingCount = payload.self_pending_count || 0;  // 🆕 Pending Review lane count
@@ -7481,9 +7509,55 @@ export class KpiAction extends Component {
      * task has not been started BY DESIGN, and colouring those red would make
      * the signal meaningless.
      */
+    /**
+     * Parse the server's 'YYYY-MM-DD HH:MM:SS' or ISO '...Z' (both UTC) into ms.
+     * Built explicitly rather than via `new Date(str)`: the space-separated form
+     * is treated as LOCAL time by most engines, which would shift every age by
+     * this browser's timezone offset. Mirrors parseServerTs in
+     * services/kpiActions.js (app) and screens/ClientTasks.js.
+     */
+    parseServerTs(s) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s || '');
+        if (!m) return null;
+        return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    }
+
+    /**
+     * Strip to letters and digits so a task ref matches however it is typed.
+     * Mirrors normalizeRef in the app's services/kpiActions.js.
+     */
+    normalizeRef(s) {
+        return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
+    /** This browser's clock corrected onto the server's (see _loadTasks). */
+    serverNow() {
+        return Date.now() - (this._clockSkewMs || 0);
+    }
+
+    /**
+     * Is this task still inside its "new" window?
+     *
+     * An absent or unparseable create_date counts as STILL FRESH, deliberately:
+     * an older server sends no create_date at all, and treating that as expired
+     * would silently turn every red card on the board its normal colour — a
+     * payload gap must not look like a deliberate state change.
+     */
+    isWithinFreshWindow(task) {
+        const created = this.parseServerTs(task && task.create_date);
+        if (created == null) return true;
+        return (this.serverNow() - created) < FRESH_MAX_AGE_MS;
+    }
+
     isFreshTask(task, columnKey) {
+        // The age term is the newest part. Without it the red never expired, so
+        // a task nobody had touched in a month looked exactly as urgent as one
+        // filed this morning — and a colour that is always on says nothing.
+        // Starting the task still clears the red immediately; age only puts a
+        // floor under how long the shout can last.
         return ['regular', 'important', 'urgent'].includes(columnKey)
-            && !(task.timer_total_seconds > 0);
+            && !(task.timer_total_seconds > 0)
+            && this.isWithinFreshWindow(task);
     }
 
     getFilteredTasksByState(columnKey) {
@@ -7504,7 +7578,14 @@ export class KpiAction extends Component {
                 const nameMatch = (task.name || '').toLowerCase().includes(query);
                 const assigneeMatch = (task.user_name || '').toLowerCase().includes(query);
                 const priorityMatch = (task.priority || '').toLowerCase().includes(query);
-                return nameMatch || assigneeMatch || priorityMatch;
+                // Task ref, matched however it is typed. Refs carry a hyphen
+                // (TASK-014) and nobody types it, so both sides are stripped to
+                // letters and digits: task014, TASK-014, task-014 and a bare 014
+                // all find the same card. The guard matters — a query of "-"
+                // normalises to "" and would otherwise match every reffed task.
+                const nq = this.normalizeRef(query);
+                const refMatch = !!nq && this.normalizeRef(task.external_ref).includes(nq);
+                return nameMatch || assigneeMatch || priorityMatch || refMatch;
             });
         }
         

@@ -1201,6 +1201,12 @@ class KraKpiAPI(http.Controller):
                 # sort by activity instead of by id. False for a task that has
                 # never been worked on; those sort last.
                 'last_activity': last_activity_map.get(k.id) or False,
+                # When the task was created. The board turns a never-started card
+                # red, and this is what lets that red EXPIRE after a day instead
+                # of shouting forever. Raw UTC, so it can be compared against the
+                # server_now in this same response rather than the device clock —
+                # a phone or PC with a wrong clock must not decide a card's colour.
+                'create_date': k.create_date.isoformat() + 'Z' if k.create_date else False,
                 'timer_start_datetime': timer_start_iso,  # For real-time timer calculation
                 'paused_reason': k.paused_reason or "",
                 # Survives the resume (resume_task never clears it), which is what
@@ -1387,6 +1393,10 @@ class KraKpiAPI(http.Controller):
             'timer_total_seconds': k.timer_total_seconds or 0,
             'today_seconds': round(_today_secs, 2),
             'last_activity': _last_activity,
+            # Same create_date the board route emits. Without it a card refreshed
+            # through this path loses the age the red is judged by, so a new task
+            # would go blue the moment anyone touched it.
+            'create_date': k.create_date.isoformat() + 'Z' if k.create_date else False,
             'timer_start_datetime': timer_start_iso,
             'paused_reason': k.paused_reason or "",
             'pause_reason_code': k.pause_reason_code or "",

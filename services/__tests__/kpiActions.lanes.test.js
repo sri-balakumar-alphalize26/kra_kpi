@@ -191,3 +191,79 @@ describe('lane ordering by last activity', () => {
     expect(lanes.paused.map((t) => t.id)).toEqual([2, 1]);
   });
 });
+
+describe('the fresh (red card) age window', () => {
+  const { isWithinFreshWindow, FRESH_MAX_AGE_MS } = require('../kpiActions');
+  const NOW = Date.UTC(2026, 8, 11, 12, 0, 0);   // 2026-09-11 12:00 UTC
+
+  it('counts a task created this morning as fresh', () => {
+    expect(isWithinFreshWindow({ create_date: '2026-09-11T09:00:00Z' }, NOW)).toBe(true);
+  });
+
+  it('expires a task created more than a day ago', () => {
+    // The reported case: a card that has shouted red for far too long.
+    expect(isWithinFreshWindow({ create_date: '2026-09-09T09:00:00Z' }, NOW)).toBe(false);
+  });
+
+  it('holds right up to the boundary and drops immediately after', () => {
+    const justInside = new Date(NOW - FRESH_MAX_AGE_MS + 1000).toISOString();
+    const justOutside = new Date(NOW - FRESH_MAX_AGE_MS - 1000).toISOString();
+    expect(isWithinFreshWindow({ create_date: justInside }, NOW)).toBe(true);
+    expect(isWithinFreshWindow({ create_date: justOutside }, NOW)).toBe(false);
+  });
+
+  it('reads the space-separated server format as UTC, not local time', () => {
+    // `new Date('2026-09-11 09:00:00')` is LOCAL in most engines, which would
+    // shift the age by the device's offset — +5:30 here, enough to move a card
+    // across the boundary. Both spellings must agree.
+    const spaced = isWithinFreshWindow({ create_date: '2026-09-10 13:00:00' }, NOW);
+    const isoZ = isWithinFreshWindow({ create_date: '2026-09-10T13:00:00Z' }, NOW);
+    expect(spaced).toBe(isoZ);
+    expect(spaced).toBe(true);
+  });
+
+  it('treats a missing create_date as still fresh, so an older server changes nothing', () => {
+    expect(isWithinFreshWindow({}, NOW)).toBe(true);
+    expect(isWithinFreshWindow({ create_date: false }, NOW)).toBe(true);
+    expect(isWithinFreshWindow({ create_date: 'not a date' }, NOW)).toBe(true);
+  });
+});
+
+describe('board search', () => {
+  const { taskMatchesQuery } = require('../kpiActions');
+  const t = task({ name: 'R client reject', user_name: 'Adithyan', external_ref: 'TASK-014' });
+
+  it('finds a task by its ref however the hyphen is typed', () => {
+    for (const q of ['task014', 'TASK-014', 'task-014', 'TASK 014', '014', 'Task014']) {
+      expect(taskMatchesQuery(t, q)).toBe(true);
+    }
+  });
+
+  it('still matches name and assignee the way it always did', () => {
+    expect(taskMatchesQuery(t, 'client')).toBe(true);
+    expect(taskMatchesQuery(t, 'adithyan')).toBe(true);
+    expect(taskMatchesQuery(t, 'nothing here')).toBe(false);
+  });
+
+  it('does not let punctuation-only input match every reffed task', () => {
+    // '-' normalises to '', and ''.includes('') is true — so without the guard
+    // this would return the whole board.
+    expect(taskMatchesQuery(t, '-')).toBe(false);
+  });
+
+  it('does not match a ref against a task that has none', () => {
+    expect(taskMatchesQuery(task({ name: 'No ref here' }), 'task014')).toBe(false);
+  });
+
+  it('treats an empty query as matching everything', () => {
+    expect(taskMatchesQuery(t, '')).toBe(true);
+    expect(taskMatchesQuery(t, '   ')).toBe(true);
+  });
+
+  it('leaves hyphenated NAMES alone — only the ref is normalised', () => {
+    // Normalising names too would quietly change old behaviour.
+    const hy = task({ name: 'client-flow test', external_ref: '' });
+    expect(taskMatchesQuery(hy, 'client-flow')).toBe(true);
+    expect(taskMatchesQuery(hy, 'clientflow')).toBe(false);
+  });
+});
