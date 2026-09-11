@@ -3414,6 +3414,24 @@ export default function KpiActionBoard({
               </TouchableOpacity>
             </View>
 
+            {/* Scrolls, like every other modal body on this screen. Without it the
+                dialog was taller than the phone it was on: picking Meeting adds a
+                190px attendee list, a search box, a label, a note field and two
+                hint lines to a card capped at 92% of screen height with
+                overflow:'hidden', and RN children do not shrink — so the tail was
+                cut off, taking the Confirm button in the footer with it.
+
+                Reported as "the attendee list cannot be scrolled", which is why it
+                went unfixed: the list scrolls perfectly well. What could not move
+                was the dialog around it. It is fine on a tablet and broken on a
+                phone, which is the tell — the cap is a PERCENTAGE of screen height,
+                so a tall screen happens to fit the content.
+
+                The footer stays OUTSIDE this scroller on purpose; that is the whole
+                point. keyboardShouldPersistTaps because the note field below means
+                Confirm is often tapped with the keyboard still up, and without it
+                that first tap is eaten dismissing it. */}
+            <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
             <View style={s.modalPad}>
               <Text style={s.taskLabel}>Task: <Text style={s.taskName}>{pauseFor?.name}</Text></Text>
               <Text style={s.whyTitle}>Why are you pausing?</Text>
@@ -3520,8 +3538,10 @@ export default function KpiActionBoard({
 
               <Text style={s.pauseHelp}>Every pause reason is tracked as away-time in your day summary — never counted as productive.</Text>
             </View>
+            </ScrollView>
 
-            {/* Footer */}
+            {/* Footer — deliberately outside the scroller above, so Confirm is
+                always on screen no matter how long the body grows. */}
             <View style={s.modalFoot}>
               <TouchableOpacity style={s.footCancel} onPress={() => setPauseFor(null)}><Text style={s.footCancelTxt}>Cancel</Text></TouchableOpacity>
               <TouchableOpacity style={s.footConfirm} onPress={submitPause}><Text style={s.footConfirmTxt}>Confirm Pause</Text></TouchableOpacity>
@@ -3657,6 +3677,10 @@ export default function KpiActionBoard({
                 <Ionicons name="close" size={22} color="#7a5200" />
               </TouchableOpacity>
             </View>
+            {/* Same scroller, same reason as the single Pause dialog above — this
+                one is worse if anything, because the body also lists every running
+                task by name before the reason chips even start. */}
+            <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
             <View style={s.modalPad}>
               <Text style={s.pauseHelp}>One reason for all of them. Time logged so far is kept.</Text>
               {(live?.active_tasks || []).map((at) => (
@@ -3732,6 +3756,8 @@ export default function KpiActionBoard({
                 </>
               ) : null}
             </View>
+            </ScrollView>
+            {/* Outside the scroller, so Confirm stays reachable. */}
             <View style={s.modalFoot}>
               <TouchableOpacity style={s.footCancel} onPress={() => setPauseAllOpen(false)}>
                 <Text style={s.footCancelTxt}>Cancel</Text>
