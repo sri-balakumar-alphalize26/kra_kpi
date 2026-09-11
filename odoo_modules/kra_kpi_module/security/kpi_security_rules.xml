@@ -138,4 +138,35 @@
         <field name="perm_create" eval="True"/>
         <field name="perm_unlink" eval="True"/>
     </record>
+
+    <!-- Reminders: personal, so a user only ever sees their own. The access CSV
+         deliberately grants base.group_user full CRUD on the model — this rule is
+         what narrows it to the owner's own rows. Without it every employee would
+         read (and edit) everybody's reminders. -->
+    <record id="kpi_reminder_own_rule" model="ir.rule">
+        <field name="name">User: Own Reminders Only</field>
+        <field name="model_id" ref="model_kpi_reminder"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+
+    <!-- Reminder history: scoped by completed_by, NOT by reminder_id.user_id.
+         reminder_id is ondelete='set null' on purpose, so a completion outlives
+         the reminder it came from; a domain that walked through reminder_id
+         would hide exactly those orphaned rows — the history the snapshots exist
+         to preserve. -->
+    <record id="kpi_reminder_completion_own_rule" model="ir.rule">
+        <field name="name">User: Own Reminder History Only</field>
+        <field name="model_id" ref="model_kpi_reminder_completion"/>
+        <field name="domain_force">[('completed_by', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
 </odoo>

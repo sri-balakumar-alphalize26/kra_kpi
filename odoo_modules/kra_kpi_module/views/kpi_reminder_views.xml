@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- List. decoration-muted on a disabled reminder is the whole point of
+         calling the flag `enabled` rather than `active`: the row STAYS in the
+         list and reads as off. An `active` field would have removed it from the
+         list entirely, which is the opposite of what an alarm toggle means. -->
+    <record id="kpi_reminder_list_view" model="ir.ui.view">
+        <field name="name">kpi.reminder.list</field>
+        <field name="model">kpi.reminder</field>
+        <field name="arch" type="xml">
+            <list string="Reminders" decoration-muted="not enabled">
+                <field name="name"/>
+                <field name="remind_date"/>
+                <field name="remind_time" widget="float_time"/>
+                <field name="repeat"/>
+                <field name="next_trigger"/>
+                <field name="completion_count" string="Done"/>
+                <!-- The per-row toggle. widget="boolean_toggle" is the switch;
+                     it writes straight from the list, no form round-trip. -->
+                <field name="enabled" widget="boolean_toggle"/>
+                <button name="action_complete" type="object" string="Complete"
+                        icon="fa-check-circle" title="Mark done and log it"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="kpi_reminder_form_view" model="ir.ui.view">
+        <field name="name">kpi.reminder.form</field>
+        <field name="model">kpi.reminder</field>
+        <field name="arch" type="xml">
+            <form string="Reminder">
+                <header>
+                    <button name="action_complete" type="object" string="Complete"
+                            class="btn-primary" icon="fa-check-circle"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <!-- History lives HERE, inside the reminder, rather than
+                             on a second menu line. -->
+                        <button name="action_view_history" type="object"
+                                class="oe_stat_button" icon="fa-history">
+                            <field name="completion_count" widget="statinfo"
+                                   string="Completed"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="What is this reminder for?"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="remind_date"/>
+                            <field name="remind_time" widget="float_time"/>
+                            <field name="repeat"/>
+                        </group>
+                        <group>
+                            <field name="enabled" widget="boolean_toggle"/>
+                            <field name="next_trigger" readonly="1"/>
+                            <field name="user_id" groups="base.group_system"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="kpi_reminder_completion_list_view" model="ir.ui.view">
+        <field name="name">kpi.reminder.completion.list</field>
+        <field name="model">kpi.reminder.completion</field>
+        <field name="arch" type="xml">
+            <!-- name_snapshot, not reminder_id.name: reminder_id is set null on
+                 delete, so this column is what keeps the history readable after
+                 the reminder it came from is gone. -->
+            <list string="Reminder History" create="false">
+                <field name="name_snapshot" string="Reminder"/>
+                <field name="time_snapshot" string="Was Due"/>
+                <field name="completed_at"/>
+                <field name="completed_by"/>
+                <field name="reminder_id" string="Still Exists" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_kpi_reminders" model="ir.actions.act_window">
+        <field name="name">Reminders</field>
+        <field name="res_model">kpi.reminder</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Set a reminder</p>
+            <p>A reminder is not attached to a task — just a name, a date and a
+               time. Switching one off leaves it in this list, so you can turn it
+               back on later.</p>
+        </field>
+    </record>
+
+    <!-- Exactly ONE new menu line, as settled: history is reached from inside a
+         reminder (the stat button on the form), not from a second entry.
+         Sequence 20 sits between KPI Actions (10) and Task Related Documents
+         (40) under My Work. group_kra_developer, not an admin group — reminders
+         are for everyone. -->
+    <menuitem id="menu_kpi_reminders"
+              parent="menu_grp_my_work"
+              name="Reminders"
+              action="action_kpi_reminders"
+              sequence="20"
+              groups="kra_kpi_module.group_kra_developer"/>
+
+</odoo>

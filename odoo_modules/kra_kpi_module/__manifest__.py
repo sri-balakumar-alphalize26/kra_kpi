@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.4.8",
+    "version": "19.0.4.9",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -52,6 +52,8 @@
         # After menu.xml: it defines both its action and a menuitem under
         # menu_kra_root, so the parent must already exist.
         "views/kpi_workday_snapshot_views.xml",
+        # Same rule — its menuitem hangs off menu_grp_my_work.
+        "views/kpi_reminder_views.xml",
         "views/res_users_views.xml",
     ],
 

@@ -106,3 +106,5 @@ access_kpi_file_attachment_employee,kpi.file.attachment.employee,model_kpi_file_
 access_kpi_report_download_admin,kpi.report.download.admin,model_kpi_report_download,base.group_system,1,1,1,1
 access_kpi_report_download_manager,kpi.report.download.manager,model_kpi_report_download,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_report_download_owner,kpi.report.download.owner,model_kpi_report_download,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_reminder_user,kpi.reminder.user,model_kpi_reminder,base.group_user,1,1,1,1
+access_kpi_reminder_completion_user,kpi.reminder.completion.user,model_kpi_reminder_completion,base.group_user,1,1,1,1
