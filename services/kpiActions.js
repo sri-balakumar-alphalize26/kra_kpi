@@ -172,6 +172,35 @@ export function groupIntoLanes(tasks) {
     // not a new home for it: nothing moves, and the Paused count stays true.
     if (isTodayTask(t)) buckets.today.push(t);
   }
+  // Most recently worked first, in every STATUS lane. Without this the lanes
+  // read oldest-at-top: kra.kpi declares no _order, so the server falls back to
+  // id ASC and a task opened months ago but worked yesterday sits at the bottom
+  // of Paused — which is exactly what was reported.
+  //
+  // last_activity, not id: sorting by id descending is still CREATION order and
+  // leaves that same task near the bottom. Recency has to come from the work
+  // log, which is what the server's last_activity carries.
+  //
+  // Nulls last rather than first. A task nobody has ever started has no claim on
+  // the top of the lane, and an older app build talking to a newer server is the
+  // same case — every task reports null, the comparator is a no-op, and the lane
+  // keeps the server's order instead of scrambling it.
+  const byRecency = (a, b) => {
+    const A = a.last_activity || '';
+    const B = b.last_activity || '';
+    if (A === B) return 0;
+    if (!A) return 1;
+    if (!B) return -1;
+    return A < B ? 1 : -1;   // ISO8601 UTC, so a string compare is a time compare
+  };
+  for (const l of LANES) {
+    // Today is the exception and keeps its own order. It answers "what was I
+    // last deep in", which is a question about how MUCH was worked today, not
+    // about which task was touched most recently — a task given five minutes at
+    // 16:00 should not outrank the one that took the whole morning.
+    if (l.key === 'today') continue;
+    buckets[l.key].sort(byRecency);
+  }
   // Most time today first: someone coming back to the board is looking for what
   // they were last deep in, not whatever happens to sort first.
   buckets.today.sort((a, b) => (b.today_seconds || 0) - (a.today_seconds || 0));

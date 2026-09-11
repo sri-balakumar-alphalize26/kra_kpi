@@ -125,3 +125,69 @@ describe('hold and rework', () => {
     }
   });
 });
+
+describe('lane ordering by last activity', () => {
+  // The reported bug: "yesterday I used a task, so when today I go and search,
+  // in Paused it will be at last." kra.kpi declares no _order, so the server
+  // falls back to id ASC and every lane reads oldest-at-top.
+  it('puts the task worked yesterday above a newer one nobody has touched since', () => {
+    // id 1 is the OLD task — created long ago, worked yesterday. id 900 is newer
+    // by creation but was last touched a month back. This is the exact case that
+    // sorting by id (either direction) cannot fix: ascending buries id 1 at the
+    // bottom, descending buries it just as surely, because id is creation order
+    // and the complaint is about ACTIVITY.
+    const lanes = groupIntoLanes([
+      task({ id: 1, task_state: 'paused', last_activity: '2026-09-10T14:00:00Z' }),
+      task({ id: 900, task_state: 'paused', last_activity: '2026-08-11T09:00:00Z' }),
+    ]);
+    expect(lanes.paused.map((t) => t.id)).toEqual([1, 900]);
+  });
+
+  it('sorts a task never worked on last, not first', () => {
+    const lanes = groupIntoLanes([
+      task({ id: 1, task_state: 'paused', last_activity: false }),
+      task({ id: 2, task_state: 'paused', last_activity: '2026-09-01T09:00:00Z' }),
+      task({ id: 3, task_state: 'paused' }),                // field absent entirely
+      task({ id: 4, task_state: 'paused', last_activity: '2026-09-10T09:00:00Z' }),
+    ]);
+    expect(lanes.paused.map((t) => t.id)).toEqual([4, 2, 1, 3]);
+  });
+
+  it('leaves the board exactly as it was when the server sends no last_activity', () => {
+    // An older server talking to this build reports the field on nothing, so the
+    // comparator must be a no-op rather than a scramble — every lane keeps the
+    // order the server sent.
+    const tasks = [
+      task({ id: 5, task_state: 'paused' }),
+      task({ id: 2, task_state: 'paused' }),
+      task({ id: 9, task_state: 'paused' }),
+    ];
+    expect(groupIntoLanes(tasks).paused.map((t) => t.id)).toEqual([5, 2, 9]);
+  });
+
+  it('orders every status lane, not just one', () => {
+    const lanes = groupIntoLanes([
+      task({ id: 1, task_state: 'in_progress', last_activity: '2026-09-01T09:00:00Z' }),
+      task({ id: 2, task_state: 'in_progress', last_activity: '2026-09-10T09:00:00Z' }),
+      task({ id: 3, task_state: 'completed', last_activity: '2026-09-02T09:00:00Z' }),
+      task({ id: 4, task_state: 'completed', last_activity: '2026-09-09T09:00:00Z' }),
+    ]);
+    expect(lanes.in_progress.map((t) => t.id)).toEqual([2, 1]);
+    expect(lanes.completed.map((t) => t.id)).toEqual([4, 3]);
+  });
+
+  it('does NOT reorder Today, which sorts by time worked instead', () => {
+    // Today answers "what was I last deep in" — how MUCH was worked today. A
+    // task given five minutes at 16:00 must not outrank the one that took the
+    // whole morning, so recency deliberately does not apply to this lane.
+    const lanes = groupIntoLanes([
+      task({ id: 1, task_state: 'paused', today_seconds: 7200,
+             last_activity: '2026-09-11T09:30:00Z' }),   // all morning, touched earlier
+      task({ id: 2, task_state: 'paused', today_seconds: 300,
+             last_activity: '2026-09-11T16:00:00Z' }),   // five minutes, touched last
+    ]);
+    expect(lanes.today.map((t) => t.id)).toEqual([1, 2]);
+    // ...while the status lane the same two tasks live in DOES use recency.
+    expect(lanes.paused.map((t) => t.id)).toEqual([2, 1]);
+  });
+});

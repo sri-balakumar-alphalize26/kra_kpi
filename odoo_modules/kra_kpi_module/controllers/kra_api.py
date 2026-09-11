@@ -1063,6 +1063,55 @@ class KraKpiAPI(http.Controller):
                 today_map[a.kpi_id.id] = (today_map.get(a.kpi_id.id) or 0.0) \
                     + max(0.0, (now - a.start_time).total_seconds())
 
+        # When each listed task was last worked on, by ANYONE. This is the field
+        # the lanes sort by, and without it every lane reads oldest-at-top:
+        # kra.kpi declares no _order, so Odoo falls back to id ASC.
+        #
+        # Sorting by id DESC does NOT fix that, which is the trap here. id is
+        # still CREATION order, and the complaint is precisely a task created
+        # long ago and worked yesterday - it stays at the bottom either way.
+        # Only activity answers it, and nothing already in this payload carries
+        # activity: timer_start_datetime is cleared on pause, timer_total_seconds
+        # is a lifetime figure, and today_seconds is 0 for anything older than
+        # today, which is the reported case exactly.
+        #
+        # BOTH aggregates, and end_time is not optional. Worked A 09:00-17:00 and
+        # B 10:00-10:30: max(start_time) alone ranks A as older, when A is in
+        # fact the one touched last. An open segment has no end_time yet, so
+        # start_time is the fallback there and a running task sorts to the top.
+        #
+        # Deliberately NOT scoped the way today_map above is. That block filters
+        # to the caller and to today because "did I work on this today" is a
+        # personal question. "When was this task last touched" is a property of
+        # the task, so an admin's board orders by the whole team's activity.
+        def _as_dt(val):
+            # read_group's datetime aggregate comes back as a datetime on some
+            # versions and a formatted string on others; normalise both.
+            if not val:
+                return None
+            if isinstance(val, str):
+                try:
+                    return fields.Datetime.from_string(val)
+                except (ValueError, TypeError):
+                    return None
+            return val
+
+        last_activity_map = {}   # kpi_id -> ISO8601 'Z' of the last log touch
+        if kpis.ids:
+            for g in request.env['kpi.time.log'].sudo().read_group(
+                    [('kpi_id', 'in', kpis.ids)],
+                    ['start_time:max', 'end_time:max'], ['kpi_id'], lazy=False):
+                kid = g['kpi_id'][0] if g.get('kpi_id') else False
+                if not kid:
+                    continue
+                # max() on datetimes, not on the formatted strings: isoformat()
+                # drops microseconds when they are zero, so a lexicographic
+                # compare would rank '...:00Z' below '...:00.5Z'.
+                stamps = [d for d in (_as_dt(g.get('start_time')),
+                                      _as_dt(g.get('end_time'))) if d]
+                if stamps:
+                    last_activity_map[kid] = max(stamps).isoformat() + 'Z'
+
         # Which listed tasks have ANY time log — one query for the whole board,
         # fed to _may_admin_delete so the delete rule doesn't cost a COUNT per
         # row. Only needed for admins; nobody else is offered the button.
@@ -1148,6 +1197,10 @@ class KraKpiAPI(http.Controller):
                 # timer_total_seconds is a lifetime figure and
                 # timer_start_datetime is cleared the moment a task is paused.
                 'today_seconds': round(today_map.get(k.id) or 0.0, 2),
+                # When this task was last touched by anyone, so the lanes can
+                # sort by activity instead of by id. False for a task that has
+                # never been worked on; those sort last.
+                'last_activity': last_activity_map.get(k.id) or False,
                 'timer_start_datetime': timer_start_iso,  # For real-time timer calculation
                 'paused_reason': k.paused_reason or "",
                 # Survives the resume (resume_task never clears it), which is what
@@ -1280,6 +1333,29 @@ class KraKpiAPI(http.Controller):
                               ('is_active', '=', True)]):
             if _a.start_time:
                 _today_secs += max(0.0, (_now - _a.start_time).total_seconds())
+        # Same last_activity the board route emits, for one task, and for the
+        # same reason the today_seconds block above exists: a card refreshed
+        # through this path is dropped straight back into the board's list, so
+        # omitting the field would send the task it was just used on to the
+        # BOTTOM of its lane — the exact complaint this field was added to fix.
+        # Unscoped like the board route: last activity is a property of the
+        # task, not of the caller.
+        _last_activity = False
+        _stamps = []
+        for _g in _tl.read_group(
+                [('kpi_id', '=', k.id)],
+                ['start_time:max', 'end_time:max'], ['kpi_id'], lazy=False):
+            for _v in (_g.get('start_time'), _g.get('end_time')):
+                if not _v:
+                    continue
+                if isinstance(_v, str):
+                    try:
+                        _v = fields.Datetime.from_string(_v)
+                    except (ValueError, TypeError):
+                        continue
+                _stamps.append(_v)
+        if _stamps:
+            _last_activity = max(_stamps).isoformat() + 'Z'
         client_kra = k.client_kra_id or k.kra_id
         return {
             'id': k.id,
@@ -1310,6 +1386,7 @@ class KraKpiAPI(http.Controller):
             'estimate_extension_count': k.estimate_extension_count or 0,
             'timer_total_seconds': k.timer_total_seconds or 0,
             'today_seconds': round(_today_secs, 2),
+            'last_activity': _last_activity,
             'timer_start_datetime': timer_start_iso,
             'paused_reason': k.paused_reason or "",
             'pause_reason_code': k.pause_reason_code or "",

@@ -7345,6 +7345,34 @@ export class KpiAction extends Component {
                     groups.today.push(t);
                 }
             }
+            // Most recently worked first, in every STATUS column. Without this the
+            // columns read oldest-at-top: kra.kpi declares no _order, so the ORM
+            // falls back to id ASC and a task opened months ago but worked
+            // yesterday sits at the bottom of Paused.
+            //
+            // last_activity, not id: sorting by id descending is still CREATION
+            // order and leaves that same task near the bottom. Recency has to come
+            // from the work log, which is what the server's last_activity carries.
+            //
+            // Kept identical to the mobile app's comparator in
+            // services/kpiActions.js (groupIntoLanes), so the two boards order the
+            // same way — including nulls last, so a task nobody has started stays
+            // at the bottom rather than jumping the queue.
+            const byRecency = (a, b) => {
+                const A = a.last_activity || "";
+                const B = b.last_activity || "";
+                if (A === B) return 0;
+                if (!A) return 1;
+                if (!B) return -1;
+                return A < B ? 1 : -1;   // ISO8601 UTC: string compare IS time compare
+            };
+            for (const k of Object.keys(groups)) {
+                // Today is the exception and keeps its own order below. It answers
+                // "what was I last deep in", which is about how MUCH was worked
+                // today, not which task was touched most recently.
+                if (k === "today") continue;
+                groups[k].sort(byRecency);
+            }
             // Most time today first: someone coming back to the board is looking for
             // what they were last deep in, not whatever happens to sort first.
             groups.today.sort((a, b) => (b.today_seconds || 0) - (a.today_seconds || 0));
