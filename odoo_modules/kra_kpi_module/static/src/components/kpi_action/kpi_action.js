@@ -1612,7 +1612,16 @@ export class KpiAction extends Component {
                                         title="Start your workday + notify owner + coordinator"
                                         t-on-click="() => this.startWorkday()">
                                     <i class="fa fa-play-circle me-1"></i>
-                                    <t t-if="state.workdayClosed">Start New Workday Session</t>
+                                    <!-- workdayClosed is true for TWO different causes: the cron
+                                         closed the day at midnight, and an admin reopened a day
+                                         that was ended by hand. One label served both, so a
+                                         developer reading the "Workday reopened by X" banner
+                                         directly below was offered "Start New Workday Session",
+                                         which says nothing happened yet. reopenReason is the same
+                                         value that banner renders, so the two cannot drift.
+                                         Mirrors workdayButtonState() in the app. -->
+                                    <t t-if="state.workdayClosed and state.reopenReason">Reopen and Continue Workday</t>
+                                    <t t-elif="state.workdayClosed">Start New Workday Session</t>
                                     <t t-else="">Start Workday</t>
                                 </button>
                             </t>

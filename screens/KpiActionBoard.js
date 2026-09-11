@@ -2911,11 +2911,20 @@ export default function KpiActionBoard({
           </TouchableOpacity>
         )}
         {/* Label + action come from the shared decision helper so this button and
-            the Home read-only bar can never disagree: End / Continue / Start /
-            "Workday ended for today" (disabled). */}
+            the Home read-only bar can never disagree: End / "Reopen and Continue
+            Workday" / "Start New Workday Session" / Start / "Workday ended for
+            today" (disabled).
+
+            reopenInfo.reason is what separates the last two: an admin reopening
+            an ended day and the cron closing one both leave todayClosed true, so
+            without it the button tells a developer whose day was just reopened
+            that nothing has happened yet. It is the same value the banner below
+            renders, so the two cannot drift. */}
         {(() => {
           const showSpinner = !readOnly && (workdayBusy || workdayOpen === null);
-          const wd = workdayButtonState({ workdayOpen: workdayOpen === true, dayDone, todayClosed });
+          const wd = workdayButtonState({
+            workdayOpen: workdayOpen === true, dayDone, todayClosed, reopened: !!reopenInfo.reason,
+          });
           const icon = wd.action === 'end' ? 'stop-circle'
             : wd.action === 'none' ? 'checkmark-done-circle' : 'play-circle';
           return (

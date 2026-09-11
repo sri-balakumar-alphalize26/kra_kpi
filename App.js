@@ -131,6 +131,11 @@ function AppInner() {
   // still allowed; it only changes what the button is called, so a day the system
   // cut at midnight does not read as a day that never started.
   const [todayClosed, setTodayClosed] = useState(false);
+  // ...or an ADMIN reopened an ended day. Also leaves todayClosed true, which is
+  // exactly the problem: without telling the two apart, a developer whose day was
+  // just reopened is offered "Start New Workday Session", as though nothing had
+  // happened yet. Carried so the Home bar says the same thing as the board button.
+  const [workdayReopened, setWorkdayReopened] = useState(false);
   const [gateReady, setGateReady] = useState(false);  // role gate resolved → avoids a Home flash
   const [provisioned, setProvisioned] = useState(false); // device set up (server URL saved)
   const [forceSetup, setForceSetup] = useState(false);   // show Odoo device-setup over the app login
@@ -362,6 +367,7 @@ function AppInner() {
             wopen = !!st?.is_open;
             ddone = !!st?.day_done;
             setTodayClosed(!!st?.today_closed);
+            setWorkdayReopened(!!st?.reopened_reason);
           } catch (_) {
             // Unreachable → stay read-only rather than guessing "open". A wrongly
             // unlocked board offers buttons that will all fail server-side.
@@ -402,6 +408,7 @@ function AppInner() {
         setWorkdayOpen(!!st?.is_open);
         setDayDone(!!st?.day_done);
         setTodayClosed(!!st?.today_closed);
+        setWorkdayReopened(!!st?.reopened_reason);
       } catch (_) { /* keep polling */ }
     }, 5000);
     return () => clearInterval(id);
@@ -419,6 +426,7 @@ function AppInner() {
         setWorkdayOpen(!!st?.is_open);
         setDayDone(!!st?.day_done);
         setTodayClosed(!!st?.today_closed);
+        setWorkdayReopened(!!st?.reopened_reason);
       } catch (_) { /* offline → keep current state */ }
     });
     return () => sub.remove();
@@ -720,7 +728,7 @@ function AppInner() {
         // button. False for admins/clients — they're never locked.
         workdayLocked={workdayLocked}
         workdayOpen={workdayOpen}
-        dayDone={dayDone} todayClosed={todayClosed}
+        dayDone={dayDone} todayClosed={todayClosed} workdayReopened={workdayReopened}
         // Start Workday straight from the read-only bar — there is no PIN screen
         // to route to any more.
         onWorkdayStarted={onWorkdayStarted}

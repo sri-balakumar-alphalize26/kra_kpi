@@ -28,6 +28,29 @@ describe('workdayButtonState', () => {
       .toEqual({ label: 'Start New Workday Session', action: 'start', disabled: false });
   });
 
+  // An admin reopened an ended day. Same action again, but this is a DIFFERENT
+  // cause from the cron and needs different words: the developer is looking at a
+  // "Workday reopened by X" banner, so a button reading "Start New Workday
+  // Session" says nothing happened.
+  test('todayClosed + reopened → Reopen and Continue Workday', () => {
+    expect(workdayButtonState({ workdayOpen: false, dayDone: false, todayClosed: true, reopened: true }))
+      .toEqual({ label: 'Reopen and Continue Workday', action: 'start', disabled: false });
+  });
+
+  // reopened is only meaningful alongside todayClosed — on a fresh day it must
+  // not hijack the plain Start label.
+  test('reopened without todayClosed → still Start Workday', () => {
+    expect(workdayButtonState({ workdayOpen: false, dayDone: false, reopened: true }).label)
+      .toBe('Start Workday');
+  });
+
+  // dayDone is checked before both, so a day ended by hand stays ended even if a
+  // stale reopen flag is still hanging around.
+  test('dayDone beats reopened', () => {
+    expect(workdayButtonState({ workdayOpen: false, dayDone: true, todayClosed: true, reopened: true }).action)
+      .toBe('none');
+  });
+
   // dayDone is checked first, so an explicit End still wins over the cron flag —
   // both are true on a day that was ended by hand.
   test('dayDone beats todayClosed', () => {
