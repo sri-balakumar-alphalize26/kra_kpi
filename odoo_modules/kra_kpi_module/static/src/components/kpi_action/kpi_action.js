@@ -3247,7 +3247,13 @@ export class KpiAction extends Component {
             tested_successfully: false,
             docs_approved: false,
         };
-        
+
+        // Why the task was raised. Approving is where that decision is made, and
+        // this modal showed only the name, who finished it and two checklists —
+        // so the one thing saying what the work was FOR lived a screen away.
+        // Escaped the same way as the Accept modal, which is a rich-text field.
+        const safeDesc = (task.description || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
         const modalHTML = `
             <div class="modal-backdrop fade show"></div>
             <div class="modal d-block" tabindex="-1">
@@ -3262,7 +3268,12 @@ export class KpiAction extends Component {
                             <p><strong>Completed By:</strong> ${task.completed_by_name || 'Unknown'}</p>
                             <p><strong>Completion Date:</strong> ${this.formatDate(task.completion_date)}</p>
                             <p class="text-muted"><strong>Time Spent:</strong> ${this.formatTime(task.timer_total_seconds)}</p>
-                            
+                            ${safeDesc ? `
+                            <div class="border rounded p-2 mb-2 bg-light">
+                                <div class="text-muted small fw-bold mb-1"><i class="fa fa-file-text-o me-1"></i>Description</div>
+                                <div class="small" style="white-space:pre-wrap;max-height:140px;overflow:auto;">${safeDesc}</div>
+                            </div>` : ''}
+
                             <hr/>
                             
                             <!-- Employee Checklist Display -->

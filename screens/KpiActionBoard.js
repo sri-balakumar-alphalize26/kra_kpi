@@ -4408,6 +4408,19 @@ export default function KpiActionBoard({
             <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
               <View style={s.modalPad}>
                 <Text style={s.kv}>Task: <Text style={s.kvStrong}>{approveFor?.name}</Text></Text>
+                {/* Why the task was raised. Approving is the moment that decision is
+                    made, and this dialog showed only the name and two checklists —
+                    so the one thing that says what the work was FOR lived a screen
+                    away. Same block as the Accept dialog above, deliberately. */}
+                {plainText(approveFor?.description) ? (
+                  <View style={s.descBlock}>
+                    <View style={s.descHead}>
+                      <Ionicons name="document-text-outline" size={13} color={COLORS.muted} />
+                      <Text style={s.descLabel}>Description</Text>
+                    </View>
+                    <Text style={s.descTxt} numberOfLines={6}>{plainText(approveFor.description)}</Text>
+                  </View>
+                ) : null}
                 {empChecklist ? (
                   <>
                     <Text style={s.fieldLabel}>📝 Developer's checklist (what they submitted)</Text>

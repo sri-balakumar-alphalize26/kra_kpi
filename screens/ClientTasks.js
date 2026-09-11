@@ -208,6 +208,15 @@ function ApprovalCard({ t, busy, onApprove, onReject, onToggleHold, pulse, onLay
         <Text style={s.cardTitle} numberOfLines={2}>{t.name}</Text>
       </View>
       {t.project_name ? <Text style={s.sub} numberOfLines={1}>📁 {t.project_name}</Text> : null}
+      {/* What was actually asked for. The client is being asked to approve this
+          task, and the card gave them a title and a developer name to decide on.
+          Already sent by /kpi_client_portal/dashboard; stripped the same way as
+          the detail sheet below, because the field is rich text server-side. */}
+      {t.description ? (
+        <Text style={s.approveDesc} numberOfLines={3}>
+          {String(t.description).replace(/<[^>]+>/g, '').trim()}
+        </Text>
+      ) : null}
       {/* The developer IS the thing being approved — lead with it. */}
       <View style={s.devRow}>
         <Ionicons name="person-circle-outline" size={18} color={COLORS.primary} />
@@ -1018,6 +1027,7 @@ const s = StyleSheet.create({
 
   // ── Approval needed ──────────────────────────────────────────────────────
   cardApprove: { borderColor: COLORS.primary, borderWidth: 1.5, backgroundColor: '#F7FAFF' },
+  approveDesc: { fontSize: 12, color: COLORS.ink, lineHeight: 17, marginTop: 7 },
   devRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
   devTxt: { fontSize: 13, color: COLORS.ink },
   devName: { fontWeight: '900', color: COLORS.navy },
