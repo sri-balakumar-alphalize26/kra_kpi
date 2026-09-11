@@ -17,7 +17,15 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { getClientDashboard, getClientSignature, removeClientSignature, fetchCertificatePdf } from '../services/clientPortal';
-import * as FileSystem from 'expo-file-system';
+// /legacy: this screen uses StorageAccessFramework, EncodingType,
+// writeAsStringAsync and cacheDirectory, all of which SDK 54 moved off the bare
+// specifier. Getting it wrong did not throw where you would look for it — SAF came
+// back undefined, so the Android save branch below skipped itself without opening
+// a folder picker, and the fallback path built the literal string
+// "undefinedcertificate.pdf" before writeAsStringAsync finally threw. The catch
+// then blamed the SERVER ("Could not build the certificate"), which is where
+// anyone debugging this would have gone looking.
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { fetchPreApprovals, decidePreApproval, holdPreApproval, submitClientSignoff, submitClientRejection } from '../services/preApproval';
 import { REJECT_REASONS } from '../services/kpiActions';

@@ -14,7 +14,14 @@
 // No-ops on iOS and in Expo Go (there is no widget to feed in either case).
 
 import { Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+// /legacy, and it is load-bearing. SDK 54 split this module: the bare specifier
+// now exports only Paths/File/Directory, and every legacy name is left as a stub.
+// documentDirectory simply came back undefined here, so fileUri() returned null
+// and publishWidgetState bailed at its own `if (!uri) return` — silently, every
+// time, with no log and no throw. The widget's state file was never written, so
+// the widget could only ever render "No task running". Ten other files in this
+// app already import from /legacy; this one was the holdout.
+import * as FileSystem from 'expo-file-system/legacy';
 
 import { createLogger } from '../api/logger';
 
