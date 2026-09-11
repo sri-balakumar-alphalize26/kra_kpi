@@ -1188,7 +1188,7 @@ export default function KraReport({ onBack }) {
             ) : history?.error ? (
               <Text style={[s.clearBody, { color: '#B91C1C', fontWeight: '700' }]}>{history.error}</Text>
             ) : !(history?.rows || []).length ? (
-              <Text style={s.clearBody}>Nothing saved yet. Reports downloaded from the web appear here.</Text>
+              <Text style={s.clearBody}>Nothing saved yet. Reports you download — here or on the web — appear in this list.</Text>
             ) : (
               <FlatList
                 style={{ maxHeight: 380 }}
@@ -1221,9 +1221,14 @@ export default function KraReport({ onBack }) {
                 )}
               />
             )}
+            {/* Said the opposite of what the list above it shows, ever since
+                07a866a taught runExport to call download_save: a report built on
+                this phone IS recorded here now. The file itself still goes only
+                to the folder you picked — that part was always true — so say
+                that, and stop calling the whole list a web-only archive. */}
             <Text style={s.histFoot}>
-              These are the copies saved from the web. Reports built on this phone are written
-              straight to the folder you choose and are not stored on the server.
+              A copy of each report is kept here. The file itself is written only to the folder
+              you chose, so re-download it from this list to save it again.
             </Text>
           </View>
         </View>
