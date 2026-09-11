@@ -876,7 +876,15 @@ export default function KraReport({ onBack }) {
         <FilterButton label="State" value={summaryLabel(states, 'All States')} onPress={() => setPicker('state')} />
 
         <View style={s.actionRow}>
-          <TouchableOpacity style={s.genBtn} onPress={generate} disabled={generating} activeOpacity={0.9}>
+          {/* Wrapped, NOT onPress={generate}: RN hands onPress the press event as
+              its first argument, which lands in generate's `over` parameter and
+              gets spread into the request body. A SyntheticEvent points back at
+              its own target, so the payload became circular and every tap died
+              with "cyclical structure in JSON object" before leaving the device.
+              The button looked wired the whole time — generate() itself was fine,
+              and the two internal callers (restore, and the New Task banner) pass
+              no argument, so the screen still filled on load. */}
+          <TouchableOpacity style={s.genBtn} onPress={() => generate()} disabled={generating} activeOpacity={0.9}>
             {generating ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="refresh" size={16} color="#fff" />}
             <Text style={s.genTxt}>Generate</Text>
           </TouchableOpacity>
