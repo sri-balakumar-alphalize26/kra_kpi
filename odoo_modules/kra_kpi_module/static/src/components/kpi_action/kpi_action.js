@@ -1355,14 +1355,35 @@ export class KpiAction extends Component {
                                         </div>
                                         <t t-foreach="allReasons()" t-as="r" t-key="r.code">
                                             <button class="w-100 text-start mb-2 d-flex align-items-center gap-2"
-                                                    t-att-class="r.alert ? 'btn btn-outline-danger w-100 text-start mb-2 d-flex align-items-center gap-2' : 'btn btn-outline-secondary w-100 text-start mb-2 d-flex align-items-center gap-2'"
+                                                    t-att-class="r.alert ? 'btn btn-outline-danger w-100 text-start mb-2 d-flex align-items-center gap-2' : (r.code === 'meeting' &amp;&amp; state.idleMeetingPick ? 'btn btn-primary w-100 text-start mb-2 d-flex align-items-center gap-2' : 'btn btn-outline-secondary w-100 text-start mb-2 d-flex align-items-center gap-2')"
                                                     t-att-disabled="state.idleBusy"
-                                                    t-on-click="() => this.chooseIdleReason(r.code)">
+                                                    t-on-click="() => (r.code === 'meeting' ? this.openIdleMeeting() : this.chooseIdleReason(r.code))">
                                                 <span style="font-size:1.3rem;"><t t-esc="r.emoji"/></span>
                                                 <span>
                                                     <span class="fw-bold d-block"><t t-esc="r.text"/></span>
                                                     <small class="text-muted"><t t-esc="r.note"/></small>
                                                 </span>
+                                            </button>
+                                        </t>
+                                        <!-- Meeting asks WHO first, exactly as the pause dialog does.
+                                             Declaring a meeting with no task running used to drop its
+                                             attendees, so the same meeting was recorded two different
+                                             ways depending on whether a task happened to be running. -->
+                                        <t t-if="state.idleMeetingPick">
+                                            <div class="border rounded p-2 mb-2">
+                                                <div class="fw-bold small mb-1">Who is it with?</div>
+                                                <input type="text" id="idleMeetSearch" class="form-control form-control-sm mb-2"
+                                                       placeholder="Search people…"/>
+                                                <div id="idleMeetList" style="max-height:190px; overflow-y:auto;"/>
+                                                <div class="small text-muted mt-1" id="idleMeetCount"/>
+                                            </div>
+                                            <button class="btn btn-primary w-100 mb-2"
+                                                    t-att-disabled="state.idleBusy"
+                                                    t-on-click="() => this.chooseIdleReason('meeting')">
+                                                <!-- Starting with nobody picked is allowed: the meeting
+                                                     itself is the fact worth recording, and forcing a
+                                                     name would push people to click Break instead. -->
+                                                Start meeting
                                             </button>
                                         </t>
                                         <!-- Optional note. Capped because it is drawn
@@ -2967,6 +2988,8 @@ export class KpiAction extends Component {
             awayAfterMinutes: 5,    // company setting; drives the banner text
             // "Not on a task?" — Meeting / Break / No tasks.
             idleModalOpen: false,
+            // Whether the idle popup is showing the meeting attendee picker.
+            idleMeetingPick: false,
             idleBusy: '',           // the reason code in flight
             idleNote: '',           // optional, shows on the Workday Map
             nontaskBusy: false,
@@ -6788,6 +6811,21 @@ export class KpiAction extends Component {
 
     openIdleModal() { this.state.idleModalOpen = true; }
 
+    /**
+     * "In a meeting" reveals the attendee picker instead of filing the block
+     * straight away. The people list is fetched lazily on first open, the same
+     * way the pause dialogs do it, so the three reasons that never need it do
+     * not pay for it. _loadMeetPeople is deferred a tick because the list
+     * element only exists once OWL has rendered idleMeetingPick.
+     */
+    openIdleMeeting() {
+        if (this.state.idleBusy) return;
+        this._idleMeetWith = this._idleMeetWith || new Set();
+        this.state.idleMeetingPick = true;
+        setTimeout(() => this._loadMeetPeople(
+            'idleMeetList', 'idleMeetSearch', 'idleMeetCount', this._idleMeetWith), 0);
+    }
+
     // Closing WITHOUT answering buys a short grace, then it asks again. The modal
     // covers the board, so it must stay closable — otherwise reaching a task's
     // Start button, the very thing that answers it, would be impossible. A
@@ -6806,7 +6844,13 @@ export class KpiAction extends Component {
             // The server clamps the note too — a maxlength is a courtesy, not a
             // guarantee, and this text has to fit a Workday Map chip.
             const note = (this.state.idleNote || '').trim().slice(0, 60);
-            const res = await rpc('/kpi_workday/idle_reason', { reason: code, note });
+            const res = await rpc('/kpi_workday/idle_reason', {
+                reason: code,
+                note,
+                // Attendees only travel with a meeting; the server ignores them
+                // for every other reason anyway, but sending them would be a lie.
+                meeting_with_ids: code === 'meeting' ? Array.from(this._idleMeetWith || []) : [],
+            });
             if (res && res.status === false) {
                 this._toast((res && res.message) || "Couldn't save that.", 'danger');
                 return;
@@ -6814,6 +6858,10 @@ export class KpiAction extends Component {
             this.state.idleModalOpen = false;
             this.state.switchTo = null;
             this.state.idleNote = '';
+            // Reset the picker, or reopening shows the last meeting's people still
+            // ticked and a second meeting silently inherits them.
+            this.state.idleMeetingPick = false;
+            this._idleMeetWith = new Set();
             // No need to touch _idleAskedSeq — the answer drops idle_prompt
             // server-side and loadLiveStatus resets from that.
             await this.loadLiveStatus();

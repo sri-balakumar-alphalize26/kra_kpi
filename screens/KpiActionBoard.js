@@ -1810,11 +1810,29 @@ export default function KpiActionBoard({
     return () => { alive = false; clearInterval(id); };
   }, [workdayOpen, refreshLive, load]);
 
+  // "In a meeting" on the idle popup: reveal the attendee picker rather than
+  // filing the block straight away, and pull the people list in on first open —
+  // same lazy fetch the Pause dialog does, so the list is not loaded for the
+  // three reasons that never need it.
+  const [idleMeetingPick, setIdleMeetingPick] = useState(false);
+  const openIdleMeeting = () => {
+    H.tap();
+    setIdleMeetingPick(true);
+    if (!people.length && !peopleBusy) {
+      setPeopleBusy(true);
+      fetchPeople()
+        .then((list) => setPeople(list || []))
+        .catch((e) => log.warn('people load failed', e?.message))
+        .finally(() => setPeopleBusy(false));
+    }
+  };
+
   async function chooseIdleReason(code) {
     log.info('idle reason', { code, hasNote: !!idleNote.trim() });
     setIdleBusy(code);
     try {
-      const res = await setIdleReason(code, idleNote);
+      // Attendees only travel with a meeting; the service drops them otherwise.
+      const res = await setIdleReason(code, idleNote, code === 'meeting' ? meetingWith : []);
       if (res && res.status === false) {
         showError("Couldn't save that", res.message || 'Failed');
         return;
@@ -1822,6 +1840,11 @@ export default function KpiActionBoard({
       setIdlePopup(false);
       setSwitchTo(null);
       setIdleNote('');
+      // Reset the picker too, or reopening the popup shows the last meeting's
+      // people already ticked and a second meeting silently inherits them.
+      setIdleMeetingPick(false);
+      setMeetingWith([]);
+      setPeopleQuery('');
       // No need to touch idleAskedRef — the answer drops idle_prompt server-side
       // and applyLive resets from that.
       await refreshLive();
@@ -1856,14 +1879,25 @@ export default function KpiActionBoard({
   // between that nobody worked. switch_break closes one break and opens the next
   // at the same instant, so Presence and the away buckets stay whole.
   async function doSwitchBreak(code) {
-    log.info('switch break', { code });
+    log.info('switch break', { code, withCount: code === 'meeting' ? meetingWith.length : 0 });
     setBreakSwitchBusy(code);
     try {
-      const res = await switchBreak(code);
+      // A meeting carries who and what-about, exactly as pausing a task for one
+      // does. The route has always accepted both; only the app was dropping them.
+      const res = await switchBreak(
+        code,
+        code === 'meeting' ? idleNote : '',
+        code === 'meeting' ? meetingWith : [],
+      );
       if (res && res.status === false) {
         showError("Couldn't switch that", res.message || 'Failed');
         return;
       }
+      setSwitchTo(null);
+      setIdleMeetingPick(false);
+      setMeetingWith([]);
+      setPeopleQuery('');
+      setIdleNote('');
       await refreshLive();
     } catch (e) { showError('Something went wrong', e.message || 'Failed'); }
     finally { setBreakSwitchBusy(null); }
@@ -1926,6 +1960,36 @@ export default function KpiActionBoard({
   }, [raw, search, filterAssignee, filterPriority, filterStatus]);
 
   const lanes = useMemo(() => groupIntoLanes(filtered), [filtered]);
+
+  // Search that lands on ONE task opens it and beats once, instead of leaving a
+  // collapsed "Paused 1" heading to tap. Someone typing a ref already knows which
+  // task they want — making them tap twice more to see it is the search not
+  // finishing its job.
+  //
+  // ONLY on exactly one match, deliberately. Two results are a choice and the
+  // person should see both headings; sixty would expand half the board. And only
+  // while something is actually typed, so clearing the box does not leave a lane
+  // hanging open.
+  //
+  // Keyed on the found task's id, not on the search text: that way it fires once
+  // when the result settles, not on every keystroke that happens to still match,
+  // and re-collapsing the lane by hand is not undone by the next render.
+  const soloMatchId = (search.trim() && filtered.length === 1) ? filtered[0].id : null;
+  useEffect(() => {
+    if (!soloMatchId) return undefined;
+    const task = filtered[0];
+    const laneKey = laneForTask(task);
+    log.info('search: single match, opening it', { id: soloMatchId, ref: task.external_ref, laneKey });
+    setExpandedLanes((prev) => (prev.has(laneKey) ? prev : new Set([...prev, laneKey])));
+    // Same heartbeat the notification focus uses, and the same release window, so
+    // a found card behaves identically however you arrived at it.
+    const t = setTimeout(() => setPulseId(soloMatchId), 260);
+    const t2 = setTimeout(() => setPulseId(null), 3200);
+    return () => { clearTimeout(t); clearTimeout(t2); };
+    // filtered is intentionally not a dep — soloMatchId already captures the only
+    // thing that should retrigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soloMatchId]);
 
   // Whether anything is narrowing the board right now. "Most tasks first" is for
   // searching only — applied unfiltered it would reorder the lanes by how full
@@ -3003,7 +3067,9 @@ export default function KpiActionBoard({
                         <TouchableOpacity
                           key={r.code}
                           style={[s.nontaskSwitch, r.code === 'no_tasks' && s.nontaskSwitchAlert]}
-                          onPress={() => setSwitchTo(r)}
+                          // Switching to a meeting needs the people list loaded
+                          // before the confirm dialog renders its picker.
+                          onPress={() => { setSwitchTo(r); if (r.code === 'meeting') openIdleMeeting(); }}
                           disabled={!!idleBusy}
                           activeOpacity={0.85}
                         >
@@ -3067,7 +3133,11 @@ export default function KpiActionBoard({
                       <TouchableOpacity
                         key={r.code}
                         style={s.nontaskSwitch}
-                        onPress={() => doSwitchBreak(r.code)}
+                        // Confirm first, like the non-task row beside it — these
+                        // two look identical and used to behave differently, one
+                        // asking and one firing on the tap. `kind` tells the shared
+                        // dialog which switch it is confirming.
+                        onPress={() => { setSwitchTo({ ...r, kind: 'break' }); if (r.code === 'meeting') openIdleMeeting(); }}
                         disabled={!!breakSwitchBusy}
                         activeOpacity={0.85}
                       >
@@ -4449,8 +4519,14 @@ export default function KpiActionBoard({
               {IDLE_REASONS.map((r) => (
                 <TouchableOpacity
                   key={r.code}
-                  style={[s.idleOpt, r.code === 'no_tasks' && s.idleOptAlert]}
-                  onPress={() => chooseIdleReason(r.code)}
+                  style={[s.idleOpt, r.code === 'no_tasks' && s.idleOptAlert,
+                          r.code === 'meeting' && idleMeetingPick && s.idleOptOn]}
+                  // Meeting ASKS first; every other reason still files immediately.
+                  // Declaring a meeting with no task running used to lose its
+                  // attendees entirely, so whether a meeting remembered who was in
+                  // it depended on whether a task happened to be running — the
+                  // same meeting, recorded two different ways.
+                  onPress={() => (r.code === 'meeting' ? openIdleMeeting() : chooseIdleReason(r.code))}
                   disabled={!!idleBusy}
                   activeOpacity={0.85}
                 >
@@ -4464,6 +4540,34 @@ export default function KpiActionBoard({
                   {idleBusy === r.code ? <ActivityIndicator size="small" color={COLORS.primary} /> : null}
                 </TouchableOpacity>
               ))}
+
+              {/* Same picker the Pause dialog uses, so a meeting is recorded the
+                  same way whether or not a task was running when it started. */}
+              {idleMeetingPick ? (
+                <View style={s.idleMeetingBox}>
+                  <MeetingPicker
+                    people={people} busy={peopleBusy}
+                    query={peopleQuery} setQuery={setPeopleQuery}
+                    picked={meetingWith} setPicked={setMeetingWith}
+                  />
+                  <TouchableOpacity
+                    style={s.idleMeetingGo}
+                    onPress={() => chooseIdleReason('meeting')}
+                    disabled={!!idleBusy}
+                    activeOpacity={0.85}
+                  >
+                    {idleBusy === 'meeting'
+                      ? <ActivityIndicator size="small" color="#fff" />
+                      : <Ionicons name="people" size={16} color="#fff" />}
+                    {/* Starting without picking anyone is allowed on purpose: the
+                        meeting itself is the fact worth recording, and forcing a
+                        name would push people to tap Break instead. */}
+                    <Text style={s.idleMeetingGoTxt}>
+                      {meetingWith.length ? `Start meeting with ${meetingWith.length}` : 'Start meeting'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
 
               {/* Optional note. Capped because it is drawn inside a Workday Map
                   chip — and the Map is what gets frozen into the saved image. */}
@@ -4566,10 +4670,36 @@ export default function KpiActionBoard({
               <Text style={s.swWarn}>Your admins will be told straight away.</Text>
             ) : null}
 
+            {/* Switching INTO a meeting asks who, exactly as declaring one from
+                the popup does. Without this the same meeting would remember its
+                attendees or not depending on which of the two buttons happened to
+                be on screen when it started. */}
+            {switchTo?.code === 'meeting' ? (
+              <View style={s.idleMeetingBox}>
+                <MeetingPicker
+                  people={people} busy={peopleBusy}
+                  query={peopleQuery} setQuery={setPeopleQuery}
+                  picked={meetingWith} setPicked={setMeetingWith}
+                />
+                {/* Same "what is it about" the Pause dialog asks for a meeting, so
+                    a meeting reads identically wherever it was declared. */}
+                <TextInput
+                  style={s.idleNote}
+                  placeholder="What is it about? (optional)"
+                  placeholderTextColor={COLORS.faint}
+                  value={idleNote}
+                  onChangeText={setIdleNote}
+                  maxLength={IDLE_NOTE_MAX}
+                />
+              </View>
+            ) : null}
+
             <View style={s.confirmBtns}>
               <TouchableOpacity
                 style={[s.confirmBtn, s.confirmCancel]}
-                onPress={() => setSwitchTo(null)}
+                // Clear the picker as well, or cancelling a meeting switch leaves
+                // its people ticked and the next one silently inherits them.
+                onPress={() => { setSwitchTo(null); setIdleMeetingPick(false); setMeetingWith([]); setPeopleQuery(''); setIdleNote(''); }}
                 disabled={!!idleBusy}
                 activeOpacity={0.85}
               >
@@ -4577,11 +4707,19 @@ export default function KpiActionBoard({
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.confirmBtn, s.swDo]}
-                onPress={() => chooseIdleReason(switchTo.code)}
-                disabled={!!idleBusy}
+                // One dialog, two switches. `kind` is set by whichever strip row
+                // opened it: a break hanging off a paused TASK goes through
+                // switch_break (which keeps the task's badge in step), a non-task
+                // block goes through idle_reason.
+                onPress={() => (switchTo.kind === 'break'
+                  ? doSwitchBreak(switchTo.code)
+                  : chooseIdleReason(switchTo.code))}
+                disabled={!!idleBusy || !!breakSwitchBusy}
                 activeOpacity={0.85}
               >
-                {idleBusy
+                {/* Either busy flag — the two switches use different ones, and the
+                    button has to spin whichever is running or it looks dead. */}
+                {(idleBusy || breakSwitchBusy)
                   ? <ActivityIndicator color="#fff" size="small" />
                   : <Text style={s.confirmDoTxt}>Yes, switch</Text>}
               </TouchableOpacity>
@@ -5250,6 +5388,15 @@ const s = StyleSheet.create({
     paddingHorizontal: 13, paddingVertical: 12, marginBottom: 10,
   },
   idleOptAlert: { borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
+  // The chosen row stays highlighted while the picker below it is open, so it is
+  // obvious which reason the people list belongs to.
+  idleOptOn: { borderColor: COLORS.primary, backgroundColor: '#EAF2FF' },
+  idleMeetingBox: { marginTop: 10, gap: 10 },
+  idleMeetingGo: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 12,
+  },
+  idleMeetingGoTxt: { fontSize: 14.5, fontWeight: '800', color: '#fff' },
   idleOptEmoji: { fontSize: 20 },
   idleOptLabel: { fontSize: 14.5, fontWeight: '800', color: COLORS.ink },
   idleOptNote: { fontSize: 11.5, color: COLORS.muted, marginTop: 2, lineHeight: 15 },

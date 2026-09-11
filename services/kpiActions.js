@@ -812,8 +812,17 @@ export const BREAK_SWITCH_REASONS = [
 // No task id: the route scopes to the caller's own open break, so it cannot be
 // aimed at anyone else. Switching to the reason already in force is a no-op
 // server-side, not an error.
-export const switchBreak = (reasonCode) =>
-  action('/kra_kpi/break/switch', { reason_code: reasonCode });
+// `note` and `meetingWithIds` were always accepted by /kra_kpi/break/switch — the
+// app simply never sent them, so switching an existing break TO a meeting lost
+// both the attendees and the "what is it about" that pausing a task for a meeting
+// records. Same meeting, two different amounts of detail depending on how it
+// started.
+export const switchBreak = (reasonCode, note = '', meetingWithIds = []) =>
+  action('/kra_kpi/break/switch', {
+    reason_code: reasonCode,
+    reason: (note || '').trim().slice(0, IDLE_NOTE_MAX),
+    meeting_with_ids: reasonCode === 'meeting' ? (meetingWithIds || []) : [],
+  });
 
 // Why a client rejected the developer assigned to their task. Same shape as
 // PAUSE_REASONS above: `quick` renders as a one-tap button, so the common case
@@ -896,8 +905,16 @@ export const IDLE_REASONS = [
 // Workday image), so it has to stay short. The server clamps to the same number —
 // this cap is a courtesy, not the guarantee.
 export const IDLE_NOTE_MAX = 60;
-export const setIdleReason = (reason, note = '') =>
-  action('/kpi_workday/idle_reason', { reason, note: (note || '').trim().slice(0, IDLE_NOTE_MAX) });
+// meetingWithIds carries who a MEETING is with, the same fact /task/pause records
+// when a meeting is declared by pausing a task. Without it, whether a meeting kept
+// its attendees depended on the accident of whether a task happened to be running
+// — the server ignores the list for every other reason.
+export const setIdleReason = (reason, note = '', meetingWithIds = []) =>
+  action('/kpi_workday/idle_reason', {
+    reason,
+    note: (note || '').trim().slice(0, IDLE_NOTE_MAX),
+    meeting_with_ids: reason === 'meeting' ? (meetingWithIds || []) : [],
+  });
 // Ends the block. `ask_again` comes back true when nothing is running, so the
 // app re-opens the popup instead of making them wait for the next 10-min check.
 export const endNonTask = () => action('/kpi_workday/end_nontask', {});
