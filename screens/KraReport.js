@@ -29,7 +29,7 @@ import DateGridModal from '../components/DateGridModal';
 import { fmtYMD } from '../utils/dateGrid';
 import {
   fetchKraFilters, fetchKraReport, fetchKraFilterCounts, fetchKraContext, saveKraState,
-  fetchDownloadHistory, fetchStoredDownload, deleteStoredDownload,
+  fetchDownloadHistory, fetchStoredDownload, deleteStoredDownload, saveBuiltDownload,
 } from '../services/kraReport';
 import {
   typeStyle, totalTimeWorked, uniqueEmployeeCount, projectSummary,
@@ -544,12 +544,30 @@ export default function KraReport({ onBack }) {
     }
   }
 
-  async function runExport(kind, build) {
+  // `meta` carries what the download history needs to describe this export. It is
+  // recorded HERE and deliberately not inside save(): save() is also what
+  // refetchStored() uses to write a file pulled back OUT of the history, and
+  // recording there would add a fresh row every time someone re-downloaded an old
+  // report — the history would grow by re-reading it.
+  async function runExport(kind, build, meta) {
     if (exporting) return;
     H.tap();
     setExporting(kind);
     try {
-      await save(await build());
+      const doc = await build();
+      await save(doc);
+      // Only once the file is actually on the device. Not awaited and never
+      // allowed to throw: the export has already succeeded and said so, and this
+      // is a copy for the shared history, not part of the download.
+      saveBuiltDownload({
+        data_b64: doc.data_b64,
+        filename: doc.filename,
+        kind,
+        from_date: meta?.from_date,
+        to_date: meta?.to_date,
+        row_count: meta?.row_count,
+        filters_json: meta?.filters_json,
+      });
     } catch (e) {
       log.error(`${kind} export failed`, e?.message);
       flash('err', e?.message || `Could not build the ${kind.toUpperCase()}.`);
@@ -769,9 +787,18 @@ export default function KraReport({ onBack }) {
     const chosen = rowsForDownload(d);
     if (!chosen.length) { flash('err', 'Those options leave no rows to export.'); return; }
     const ctx = exportCtx(chosen);
-    if (d.kind === 'pdf') return runExport('pdf', async () => makeReportPdf(ctx));
-    if (d.kind === 'excel') return runExport('excel', () => makeReportExcel(ctx));
-    return runExport('zip', () => makeReportZip(ctx, d.include, (done, total) => setZipStep({ done, total })));
+    // What the history row should say about this export. row_count is the rows
+    // that actually went in, not what is on screen — the dialog's own filters
+    // narrow it further (rowsForDownload).
+    const meta = {
+      from_date: fromDate,
+      to_date: toDate,
+      row_count: chosen.length,
+      filters_json: JSON.stringify({ ...appliedFilters, search: search.trim(), include: d.include || null }),
+    };
+    if (d.kind === 'pdf') return runExport('pdf', async () => makeReportPdf(ctx), meta);
+    if (d.kind === 'excel') return runExport('excel', () => makeReportExcel(ctx), meta);
+    return runExport('zip', () => makeReportZip(ctx, d.include, (done, total) => setZipStep({ done, total })), meta);
   };
 
   const downloadPdf = () => openDownloadDialog('pdf');

@@ -85,10 +85,15 @@ export async function fetchKraContext() {
 // rather than pretending to be a complete record of every download ever made. The
 // screen says so rather than leaving someone to wonder why their own is missing.
 //
-// "Read-only" is the wrong word for it, and used to be the one written here: the
-// app never WRITES to this history, but it can delete from it — see
-// deleteStoredDownload below, which the sheet offers per row so a stored copy can
-// go before its retention window expires. One direction only, not no directions.
+// "Read-only" is the wrong word for it, and used to be the one written here. The
+// app now takes part in this history in all three directions: it records what it
+// builds (saveBuiltDownload), fetches copies back (fetchStoredDownload) and can
+// delete one before its retention window expires (deleteStoredDownload).
+//
+// The earlier wording said the app "never writes" to it, which described the code
+// accurately but presented it as the design. It was not — the save route simply
+// had never been wired up, so a report exported from the phone vanished while the
+// same one from the browser was kept.
 export async function fetchDownloadHistory(limit = 50) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true, downloads: [] };
@@ -108,6 +113,38 @@ export async function fetchStoredDownload(id) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: false, message: 'No server connection' };
   return jsonRpc(serverUrl, '/kpi_reports/kra/download_file', { id: Number(id) }, 60000);
+}
+
+// Keep a copy of a report this DEVICE just built, so it joins the same history.
+//
+// Until this existed the app read from and deleted from that history without ever
+// writing to it: a report exported from the browser was kept, the identical report
+// exported from the phone vanished the moment the file was saved. The documents are
+// built on the device (utils/kraExport.js) and never otherwise reach the server, so
+// this route is the only way the copy can exist at all.
+//
+// Best-effort, in the route's own words — "the user already has their download, so a
+// failure here must be reported without pretending the download itself failed". It
+// therefore swallows everything: the file is on the phone either way, and the route
+// is admin-gated, so a non-admin's perfectly good export must not raise a scary
+// "Not authorized" over the top of it.
+export async function saveBuiltDownload({ data_b64, filename, kind, from_date, to_date, row_count, filters_json }) {
+  try {
+    const { serverUrl } = await getConnection();
+    if (!serverUrl) return { status: false };
+    return await jsonRpc(serverUrl, '/kpi_reports/kra/download_save', {
+      data_b64: data_b64 || '',
+      filename: filename || 'report',
+      kind: kind || 'zip',
+      from_date: from_date || false,
+      to_date: to_date || false,
+      row_count: row_count || 0,
+      filters_json: filters_json || '',
+    }, 60000);
+  } catch (e) {
+    log.info('download_save skipped', e?.message);
+    return { status: false };
+  }
 }
 
 // Remove one before its retention window runs out.

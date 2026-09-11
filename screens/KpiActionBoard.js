@@ -21,7 +21,7 @@ import {
   LANES, groupIntoLanes, laneForTask, isTodayTask, isWithinFreshWindow, taskMatchesQuery, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, resumeTaskWithReason, completeTask, reassignTask, adminDeleteTask, createProgress,
   switchTask, pauseAllTasks, revertSignoff,
-  approveTask, rejectTask, getTaskChecklists,
+  approveTask, rejectTask, getTaskChecklists, markReviewStarted,
   CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
   getWorkdayStatus, startWorkday, endWorkday, pauseWorkday, resumeWorkday, sendHeartbeat,
   selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
@@ -2287,6 +2287,29 @@ export default function KpiActionBoard({
     finally { setNtBusy(false); }
   }
 
+  // Record that a coordinator has opened this task to review it. Fire-and-forget:
+  // never awaited, so the dialog opens at the same speed it always did, and a
+  // failure is invisible — the review matters, the timestamp is only metadata.
+  //
+  // Guarded on partially_completed because that is the only state the server will
+  // stamp; without the guard every approve/reject on any task would post a request
+  // the route exists to refuse.
+  //
+  // On a first stamp the task is patched in place rather than triggering a reload:
+  // the card already renders these two fields, so this is what makes
+  // "Review started: … by …" appear without costing a full board fetch.
+  function stampReviewStarted(task) {
+    if (!task?.id || task.task_state !== 'partially_completed') return;
+    if (task.coordinator_review_started_at) return;   // already stamped; nothing to do
+    markReviewStarted(task.id).then((res) => {
+      if (!res?.status || res.already_started || !res.started_at) return;
+      setRaw((prev) => prev.map((t) => (String(t.id) === String(task.id)
+        ? { ...t, coordinator_review_started_at: res.started_at,
+            coordinator_review_started_by_name: res.by || '' }
+        : t)));
+    });
+  }
+
   async function runAction(kind, task) {
     log.info('user action', kind, { id: task.id, name: task.name, state: task.task_state });
     if (kind === 'reminder') {
@@ -2416,6 +2439,7 @@ export default function KpiActionBoard({
       setApproveFor(task);
       setMgrChecklist({});
       setEmpChecklist(null);
+      stampReviewStarted(task);
       // Pull the developer's submitted checklist so the admin can see what was done.
       getTaskChecklists(task.id).then((r) => { if (r && r.employee_checklist) setEmpChecklist(r.employee_checklist); }).catch(() => {});
       return;
@@ -2423,6 +2447,10 @@ export default function KpiActionBoard({
     if (kind === 'rejectDone') {
       setRejectDoneFor(task);
       setRejectDoneNote('');
+      // Both paths stamp, exactly as the web does from openApproveModal AND
+      // openRejectModal: opening either is a coordinator starting a review, and
+      // sending work back is still having reviewed it.
+      stampReviewStarted(task);
       return;
     }
 

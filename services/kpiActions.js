@@ -564,6 +564,30 @@ export const rejectTask = (kpiId, reason) =>
 export const getTaskChecklists = (kpiId) =>
   action('/kra_kpi/task/checklists', { kpi_id: kpiId });
 
+// Stamp "a coordinator has started reviewing this", the first time one opens a
+// partially_completed card. The board has always RENDERED
+// coordinator_review_started_at — and never written it, so reviewing from the
+// phone left the field blank for good and only the web could ever fill it in.
+//
+// Swallows everything on purpose, which is why it does not go through action():
+// this is metadata attached to opening a dialog. A review must not fail, stall or
+// say anything because a timestamp did not save. The route is admin-gated, so a
+// developer opening the same card gets {status:false} — also nothing to report.
+//
+// The server is idempotent and state-gated as well (it only writes when the task
+// is partially_completed and the stamp is unset, behind a row lock), so a repeat
+// call is harmless; the caller's own state check just saves a round-trip.
+export async function markReviewStarted(kpiId) {
+  try {
+    const { serverUrl } = await getConnection();
+    if (!serverUrl) return { status: false };
+    return await jsonRpc(serverUrl, '/kpi_review/mark_started', { kpi_id: kpiId });
+  } catch (e) {
+    log.info('mark_started skipped', e?.message);
+    return { status: false };
+  }
+}
+
 // Submit a progress summary. The server REQUIRES one before complete/partial.
 export const createProgress = (kpiId, summary) =>
   action('/kpi/progress/create', { kpi_id: kpiId, summary: summary || '' });
