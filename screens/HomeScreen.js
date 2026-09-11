@@ -85,6 +85,11 @@ const QUICK = [
   // Everyone's own tasks and their attachments — the server scopes the list to
   // the tasks you are actually on, so this is not admin-only.
   { label: 'Task Documents',     lib: 'mc',  name: 'file-search-outline', dest: 'taskdocuments',   adminOnly: false, section: 'main',     bg: '#FFE4E6', fg: '#BE123C' },
+  // Personal reminders, not tied to a task. adminOnly:false and deliberately NOT
+  // in the client whitelist below — that matches the web, where the Reminders
+  // menu is gated to group_kra_developer and a client (which only implies
+  // base.group_user) never sees it.
+  { label: 'Reminders',          lib: 'mc',  name: 'bell-outline',     dest: 'reminders',          adminOnly: false, section: 'main',     bg: '#EEF2FF', fg: '#4F46E5' },
   { label: 'Upload Requirements', lib: 'mc', name: 'file-document',    dest: 'upload:requirement', adminOnly: true,  section: 'main',     bg: '#FEF3C7', fg: '#D97706' },
   { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true,  section: 'main',     bg: '#FFEDD5', fg: '#EA580C' },
   { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true,  section: 'main',     bg: '#FEE2E2', fg: '#DC2626' },

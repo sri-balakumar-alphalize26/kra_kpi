@@ -34,6 +34,7 @@ import GenerateClientFiles from './screens/GenerateClientFiles';
 import ReassignmentHistory from './screens/ReassignmentHistory';
 import ClientTaskQueue from './screens/ClientTaskQueue';
 import UserManual from './screens/UserManual';
+import Reminders from './screens/Reminders';
 
 import AppLoginScreen from './screens/AppLoginScreen';
 import AlarmScreen from './screens/AlarmScreen';
@@ -688,6 +689,11 @@ function AppInner() {
       // Every role: role-tagged PDF manuals (server-filtered). The screen
       // self-gates admin add/edit/delete via app_bundle.can_edit.
       return <UserManual onBack={home} />;
+    if (appScreen === 'reminders')
+      // Standalone reminders — the same kpi.reminder rows the web shows under
+      // My Work. No role gate here: the model's record rule scopes every row to
+      // its owner, so this screen can only ever show the caller's own.
+      return <Reminders onBack={home} />;
     // Upload screens share one component, differing only by docType.
     if (appScreen.startsWith('upload:'))
       return <UploadAmendments onBack={home} docType={appScreen.split(':')[1]} />;
