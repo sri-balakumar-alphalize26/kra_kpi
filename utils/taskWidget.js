@@ -24,6 +24,9 @@ import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { createLogger } from '../api/logger';
+// Guarded internally — no-ops in Expo Go and on any build made before the native
+// module existed, so importing it is always safe.
+import { refreshTaskWidget } from '../modules/expo-task-widget-bridge';
 
 const log = createLogger('taskWidget');
 
@@ -78,6 +81,15 @@ export async function publishWidgetState(live) {
     lastPayload = payload;
 
     await FileSystem.writeAsStringAsync(uri, payload);
+    // Then tell Android to repaint. Writing the file is only half the channel —
+    // without this the widget shows the new state whenever the OS next gets round
+    // to it, and its floor is 30 MINUTES, so a task switch left the old task's
+    // name on the home screen for up to half an hour.
+    //
+    // Only reached when the payload actually changed (the dedupe above returns
+    // early otherwise), so this costs one broadcast per real state change, not
+    // one per 15-second poll.
+    refreshTaskWidget();
     log.info('widget state published', { running: state.running, count: state.task_count });
   } catch (e) {
     log.warn('widget publish failed', e?.message);
@@ -95,6 +107,10 @@ export async function clearWidgetState() {
       uri,
       JSON.stringify({ running: false, task_name: '', task_count: 0, workday_open: false }),
     );
+    // Repaint here too, and arguably it matters more: ending the workday and
+    // still seeing a task "running" on the home screen half an hour later is the
+    // version of this bug people would actually report.
+    refreshTaskWidget();
   } catch (e) {
     log.warn('widget clear failed', e?.message);
   }

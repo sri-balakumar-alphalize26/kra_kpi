@@ -1,0 +1,11 @@
+// Deliberately tiny. expo-module-gradle-plugin supplies compileSdk, the Kotlin
+// setup and the expo-modules-core dependency, so nothing here needs restating —
+// and restating it is how a local module drifts from the app it ships inside.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+android {
+  namespace "expo.modules.taskwidgetbridge"
+}
