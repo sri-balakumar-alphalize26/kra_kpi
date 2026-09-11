@@ -517,12 +517,18 @@ export default function KraReport({ onBack }) {
   // The recipe the app already uses in six places: ask WHERE first on Android and
   // write nothing until a folder is chosen, otherwise cache it and offer the
   // share sheet, which is where "Save to Files" lives on iOS.
+  // Returns TRUE only if bytes actually reached the device. The caller uses that
+  // to decide whether to record the download in the shared history — and it has
+  // to be a return value rather than "did it throw", because cancelling the
+  // Android folder picker is a normal outcome, not an error: it flashes a message
+  // and returns. Before this, that normal return let runExport carry on and file
+  // a full history row, bytes and all, for a download the user had just declined.
   async function save({ filename, mimeType, data_b64 }) {
     const name = String(filename).split(/[\\/]/).pop();
     const SAF = FileSystem.StorageAccessFramework;
     if (Platform.OS === 'android' && SAF) {
       const perm = await SAF.requestDirectoryPermissionsAsync();
-      if (!perm.granted) { flash('err', 'Download cancelled — no folder chosen'); return; }
+      if (!perm.granted) { flash('err', 'Download cancelled — no folder chosen'); return false; }
       // SAF re-appends the extension from the mime type, so hand it the bare
       // name or the file lands as "X.zip.zip".
       const dot = name.lastIndexOf('.');
@@ -531,7 +537,7 @@ export default function KraReport({ onBack }) {
       await FileSystem.writeAsStringAsync(uri, data_b64, { encoding: FileSystem.EncodingType.Base64 });
       log.info('saved via SAF', { name });
       flash('ok', `Saved ${name}`);
-      return;
+      return true;
     }
     const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
     const uri = `${dir}${name}`;
@@ -539,9 +545,10 @@ export default function KraReport({ onBack }) {
     if (await Sharing.isAvailableAsync()) {
       await Sharing.shareAsync(uri, { mimeType, dialogTitle: `Save ${name}` });
       flash('ok', `${name} ready`);
-    } else {
-      flash('err', 'Saving is not available on this device.');
+      return true;
     }
+    flash('err', 'Saving is not available on this device.');
+    return false;
   }
 
   // `meta` carries what the download history needs to describe this export. It is
@@ -555,10 +562,17 @@ export default function KraReport({ onBack }) {
     setExporting(kind);
     try {
       const doc = await build();
-      await save(doc);
-      // Only once the file is actually on the device. Not awaited and never
-      // allowed to throw: the export has already succeeded and said so, and this
-      // is a copy for the shared history, not part of the download.
+      const saved = await save(doc);
+      // Only once the file is ACTUALLY on the device — which is what `saved`
+      // answers and what merely reaching this line does not. Cancelling the
+      // Android folder picker returns normally rather than throwing, so without
+      // this guard a declined download was still filed in the shared history,
+      // bytes included, as though it had happened.
+      //
+      // Not awaited and never allowed to throw: the export has already succeeded
+      // and said so, and this is a copy for the shared history, not part of the
+      // download.
+      if (!saved) return;
       saveBuiltDownload({
         data_b64: doc.data_b64,
         filename: doc.filename,

@@ -285,6 +285,22 @@ export default function Reminders({ onBack }) {
         </View>
       ) : null}
 
+      {/* Outside the list, and NOT gated on whether there are any reminders.
+          History outlives the reminders it came from — that is the entire point
+          of snapshotting the name and time and setting reminder_id to null on
+          delete — so tying this link to the list would hide the surviving history
+          at exactly the moment it is the only thing left. Deleting your last
+          reminder must not also delete your record of having done it.
+
+          It sits here rather than in ListHeaderComponent because the empty state
+          centres its children, which would leave this floating mid-screen. */}
+      {!loading ? (
+        <TouchableOpacity style={s.histLink} onPress={openHistory} activeOpacity={0.8}>
+          <Ionicons name="time-outline" size={14} color={COLORS.primary} />
+          <Text style={s.histLinkTxt}>History</Text>
+        </TouchableOpacity>
+      ) : null}
+
       {loading ? (
         <View style={s.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>
       ) : (
@@ -293,12 +309,6 @@ export default function Reminders({ onBack }) {
           keyExtractor={(it) => String(it.id)}
           contentContainerStyle={rows.length ? { padding: 14, paddingBottom: 40 } : s.emptyWrap}
           renderItem={renderRow}
-          ListHeaderComponent={rows.length ? (
-            <TouchableOpacity style={s.histLink} onPress={openHistory} activeOpacity={0.8}>
-              <Ionicons name="time-outline" size={14} color={COLORS.primary} />
-              <Text style={s.histLinkTxt}>History</Text>
-            </TouchableOpacity>
-          ) : null}
           ListEmptyComponent={(
             <View style={s.emptyBox}>
               <MaterialCommunityIcons
@@ -472,7 +482,7 @@ const s = StyleSheet.create({
   bannerOk: { backgroundColor: COLORS.greenBg }, bannerErr: { backgroundColor: COLORS.redBg },
   bannerTxt: { flex: 1, fontSize: 12.5, fontWeight: '600' },
 
-  histLink: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-end', marginBottom: 10, paddingVertical: 4 },
+  histLink: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-end', marginRight: 14, marginBottom: 4, paddingVertical: 4 },
   histLinkTxt: { fontSize: 12.5, fontWeight: '700', color: COLORS.primary },
 
   card: { backgroundColor: COLORS.card, borderRadius: 14, marginBottom: 12, padding: 12, ...SHADOW },
