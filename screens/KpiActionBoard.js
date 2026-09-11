@@ -4635,13 +4635,26 @@ export default function KpiActionBoard({
               <Ionicons name="swap-horizontal" size={26} color={COLORS.primary} />
             </View>
             <Text style={s.confirmTitle}>Switch to {switchTo?.label}?</Text>
+            {/* Everything that can GROW scrolls; the buttons below stay put. A
+                meeting switch adds a people list and a note to this card, and a
+                dialog that pushes its own Confirm off the screen is the bug this
+                same pattern already fixed on Pause. */}
+            <ScrollView style={{ width: '100%' }} keyboardShouldPersistTaps="handled">
 
             {/* from → to */}
             <View style={s.swFlow}>
               <View style={s.swRow}>
                 <Text style={s.swEmoji}>⏸</Text>
                 <View style={{ flex: 1 }}>
-                  <Text style={s.swName}>{live?.nontask?.reason_label}</Text>
+                  {/* Whichever kind opened this dialog. A task break lives on
+                      live.active_break, a non-task block on live.nontask — reading
+                      only the latter left this row and the message below blank
+                      whenever a break was what was being switched. */}
+                  <Text style={s.swName}>
+                    {switchTo?.kind === 'break'
+                      ? (live?.active_break?.type_label || 'Break')
+                      : live?.nontask?.reason_label}
+                  </Text>
                   <Text style={s.swMeta}>
                     started {live?.nontask?.start_display}
                     {live?.nontask?.start_raw ? ` · ${fmtHMS(secsSince(live.nontask.start_raw, nowMs))}` : ''}
@@ -4664,7 +4677,9 @@ export default function KpiActionBoard({
             {/* The whole reason this popup exists: ending a meeting SOUNDS
                 destructive. It isn't — say so plainly. */}
             <Text style={s.confirmMsg}>
-              {live?.nontask?.reason_label} is saved to your Workday Map. Nothing is lost.
+              {switchTo?.kind === 'break'
+                ? (live?.active_break?.type_label || 'Your break')
+                : live?.nontask?.reason_label} is saved to your Workday Map. Nothing is lost.
             </Text>
             {switchTo?.code === 'no_tasks' ? (
               <Text style={s.swWarn}>Your admins will be told straight away.</Text>
@@ -4694,6 +4709,7 @@ export default function KpiActionBoard({
               </View>
             ) : null}
 
+            </ScrollView>
             <View style={s.confirmBtns}>
               <TouchableOpacity
                 style={[s.confirmBtn, s.confirmCancel]}
@@ -5356,7 +5372,10 @@ const s = StyleSheet.create({
 
   // Switch confirm — same centered-card idiom as the other confirm popups.
   confirmWrap: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 26 },
-  confirmCard: { width: '100%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 22, alignItems: 'center', paddingTop: 22, paddingBottom: 18, paddingHorizontal: 22 },
+  // maxHeight, because this card now holds a people picker on a meeting switch
+  // and without a cap it simply grew past the screen and took its own buttons
+  // with it — the same way the Pause dialog did.
+  confirmCard: { width: '100%', maxWidth: 380, maxHeight: '90%', backgroundColor: '#fff', borderRadius: 22, alignItems: 'center', paddingTop: 22, paddingBottom: 18, paddingHorizontal: 22 },
   swIcon: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#E0E7FF', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   confirmTitle: { fontSize: 18.5, fontWeight: '900', color: COLORS.navy, textAlign: 'center' },
   swFlow: { width: '100%', backgroundColor: COLORS.bg, borderRadius: 14, padding: 12, marginTop: 14, alignItems: 'center', gap: 2 },
