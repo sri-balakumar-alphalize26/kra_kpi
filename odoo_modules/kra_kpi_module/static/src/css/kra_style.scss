@@ -667,6 +667,12 @@
         height: auto;
         min-height: 292px;
         z-index: 5;
+        /* The edge darkens on hover as well as the shadow deepening. A shadow alone
+           was too quiet to answer "which card am I on" on the untinted lanes, where
+           the card is white on a white lane and the shadow is the only thing
+           separating it from its neighbours. Not a colour — a colour here would
+           read as a state (running, fresh, selected) rather than as a pointer. */
+        border-color: rgba(15, 23, 42, 0.38) !important;
         box-shadow:
             0 10px 30px rgba(0, 0, 0, 0.18),
             0 3px 8px rgba(0, 0, 0, 0.10) !important;
@@ -686,8 +692,15 @@
        differs per lane, and a selector guessing at that would move the wrong row on the
        cards that have none. Uniform card size is the ask; the buttons land where the
        content puts them. */
-    border: 1.5px solid rgba(255, 255, 255, 0.3) !important;
-    box-shadow: 
+    /* A DARK edge, not a white one. This border used to be rgba(255,255,255,0.3) —
+       white at 30% — which reads as a soft sheen on the seven lanes that tint their
+       cards, and as absolutely nothing on the four that do not: Pending Review,
+       Pending Approvals, Awaiting Client Sign-off and Paid all render a white card,
+       so a white border on it left no way to tell where one card ended and the next
+       began. Every tinted lane overrides border-color itself (see .kpi-regular and
+       friends below), so this only changes the cards that had no edge at all. */
+    border: 1.5px solid rgba(15, 23, 42, 0.16) !important;
+    box-shadow:
         0 4px 15px rgba(0, 0, 0, 0.08),
         0 1px 3px rgba(0, 0, 0, 0.05),
         inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
