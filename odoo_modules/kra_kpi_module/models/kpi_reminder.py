@@ -85,6 +85,32 @@ class KpiReminder(models.Model):
         required=True,
     )
 
+    # OPTIONAL, and one field rather than two, because a client IS a KRA here:
+    # kra.master with is_client=True, sitting at the top of a tree of sub-KRAs.
+    # Offering "client" and "KRA" as separate pickers would be two dropdowns onto
+    # the same table, and would have to police the case where they disagree.
+    #
+    # ondelete='set null', not cascade: retiring a client must not silently delete
+    # somebody's reminder to call them.
+    kra_id = fields.Many2one(
+        'kra.master',
+        string="Client / KRA",
+        ondelete='set null',
+        index=True,
+        help="Optional. Tie this reminder to a client or to any KRA under one.",
+    )
+    # Which client the chosen KRA belongs to, derived rather than asked for.
+    # kra.master has no display path — a sub-KRA shows as a bare "User manual",
+    # which is ambiguous when three clients each have one — so the list needs this
+    # column to be readable. Same walk kra.kpi._compute_client_kra does.
+    client_kra_id = fields.Many2one(
+        'kra.master',
+        string="Client",
+        compute='_compute_client_kra',
+        store=True,
+        help="Nearest ancestor of the chosen KRA with is_client set.",
+    )
+
     # The one field the app will arm an alarm from: a real UTC instant.
     next_trigger = fields.Datetime(
         string="Next Ring (UTC)",
@@ -136,6 +162,27 @@ class KpiReminder(models.Model):
                 rec.next_trigger = naive
                 continue
             rec.next_trigger = local.astimezone(pytz.UTC).replace(tzinfo=None)
+
+    @api.depends('kra_id', 'kra_id.parent_id', 'kra_id.is_client')
+    def _compute_client_kra(self):
+        """Walk up the KRA hierarchy to the nearest is_client=True ancestor.
+
+        Deliberately the same walk as kra.kpi._compute_client_kra rather than a
+        second interpretation of what "the client" means — the two must agree, or
+        a reminder would file under a different client than the tasks beside it.
+        A KRA that is itself the client resolves to itself, which is why the test
+        is at the top of the loop.
+        """
+        Kra = self.env['kra.master']
+        for rec in self:
+            cur = rec.kra_id
+            found = Kra
+            while cur:
+                if cur.is_client:
+                    found = cur
+                    break
+                cur = cur.parent_id
+            rec.client_kra_id = found
 
     @api.depends('completion_ids')
     def _compute_completion_count(self):
