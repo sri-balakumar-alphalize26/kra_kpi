@@ -1,9 +1,31 @@
 // Deliberately tiny. expo-module-gradle-plugin supplies compileSdk, the Kotlin
 // setup and the expo-modules-core dependency, so nothing here needs restating —
 // and restating it is how a local module drifts from the app it ships inside.
+//
+// The ONE thing that does have to be said is that this module is never
+// published — see expoModule below.
 plugins {
   id 'com.android.library'
   id 'expo-module-gradle-plugin'
+}
+
+expoModule {
+  // Left at the plugin's default (true), applyPublishing() builds a maven
+  // publication in afterEvaluate and reads android.defaultConfig.versionName,
+  // which a module with nothing to publish has no reason to declare. The build
+  // then dies during CONFIGURATION with
+  //
+  //   A problem occurred configuring project ':expo-task-widget-bridge'.
+  //   > 'android.defaultConfig.versionName' is not defined
+  //
+  // and takes expo's own autolinking down with it — expo/android/build.gradle
+  // applies the autolinking plugin inside a try/catch, so the real cause is
+  // masked by a misleading "Autolinking is not set up in `settings.gradle`".
+  //
+  // This module is private (package.json: "private": true) and is consumed as a
+  // project dependency, never from a repository. node_modules/expo does exactly
+  // the same for exactly the same reason.
+  canBePublished false
 }
 
 android {
