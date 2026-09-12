@@ -262,3 +262,32 @@ export async function setAlarmSettings(partial) {
     await AsyncStorage.setItem(K_ALARM_SETTINGS, JSON.stringify({ ...cur, ...(partial || {}) }));
   } catch (_) {}
 }
+
+// --- Which running-task card Home was left on -------------------------------
+// Home shows one card per running task, swiped horizontally. Without this the
+// pager reset to the first task on every launch, so a developer who works from
+// the second of three tasks had to swipe back to it every time they reopened
+// the app. Stored per user and per device, exactly like the quick actions above.
+//
+// The TASK ID, not the index: positions shift as tasks start and finish, so a
+// stored index would quietly point at a different task. An id that is no longer
+// running simply fails to match and the pager falls back to the first card.
+const K_HOME_CARD = 'home_live_card_task';
+
+export async function getHomeCardTask(uid) {
+  try {
+    const raw = await AsyncStorage.getItem(`${K_HOME_CARD}:${uid ?? 'me'}`);
+    const id = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(id) ? id : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export async function saveHomeCardTask(uid, taskId) {
+  try {
+    const key = `${K_HOME_CARD}:${uid ?? 'me'}`;
+    if (!taskId) await AsyncStorage.removeItem(key);
+    else await AsyncStorage.setItem(key, String(taskId));
+  } catch (_) {}
+}

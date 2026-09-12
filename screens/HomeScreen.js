@@ -18,13 +18,28 @@ import CameraCaptureModal from '../components/CameraCaptureModal';
 import { createLogger } from '../api/logger';
 import * as H from '../utils/haptics';
 import { hapticsEnabled, setHapticsEnabled } from '../utils/haptics';
-import { getConnection, saveSession, getQuickActions, saveQuickActions, getMenuOrder, saveMenuOrder, getAvatar, saveAvatar, clearAvatar } from '../api/session';
+import { getConnection, saveSession, getQuickActions, saveQuickActions, getMenuOrder, saveMenuOrder, getAvatar, saveAvatar, clearAvatar, getHomeCardTask, saveHomeCardTask } from '../api/session';
 import ReorderableMenu from '../components/ReorderableMenu';
 import { jsonRpc } from '../api/odooApi';
 import { fetchUnreadCount } from '../services/notifications';
 import { startWorkday } from '../services/kpiActions';
 import { fetchTasks, groupIntoLanes } from '../services/kpiActions';
+// The running-task card. pauseAllTasks takes NO task id -- the server scopes it
+// to the caller's running tasks -- so Home can pause without knowing anything
+// about the board's state, and multitasking is handled for free.
+import { getLiveStatus, pauseTask, pauseAllTasks, resumeTask, PAUSE_REASONS } from '../services/kpiActions';
 import { workdayButtonState } from '../utils/workdayState';
+import { liveFromAnchor, secsSince, fmtClock } from '../utils/liveTime';
+import { serverNow } from '../api/odooApi';
+import PulseDot from '../components/PulseDot';
+// The same dialog the Action Board's Pause opens. Home asked with a row of
+// chips before, which could not offer Meeting at all -- a meeting needs a note
+// and who it was with, and a chip has nowhere to put either.
+import PauseReasonDialog from '../components/PauseReasonDialog';
+// Home polls live_status too, so it must keep the Android widget in step. The
+// board was the only publisher, which meant the widget froze the moment the
+// developer left that screen.
+import { publishWidgetState } from '../utils/taskWidget';
 // Clients aren't served by /kra_kpi/tasks/get (it returns nothing for them), so
 // their stats come from the same portal feed My Requests uses.
 import { getClientDashboard } from '../services/clientPortal';
@@ -329,6 +344,274 @@ function Greeting({ name }) {
   );
 }
 
+
+// Light backgrounds for the running-task cards, cycled by position.
+//
+// These are the SAME soft-bg / saturated-fg pairs the Quick Action tiles and
+// the Your Tasks stat cards use (see the tile table above and s.statCard), not
+// a new palette -- a plain white card was the thing that made this block read
+// as bolted on while everything around it was tinted.
+//
+// Cycling rather than fixing one colour does real work when several tasks are
+// running: the card changing colour is the clearest signal that a swipe landed
+// on a different task, which a name and a timer alone do not give you at a
+// glance. Red is deliberately absent -- it means urgent everywhere else here.
+// Each carries its own border, and the backgrounds are a step deeper than the
+// tiles' -- Home's page is #F7F9FC, and the lighter tints washed out against it
+// badly enough that the card's edges disappeared. A tint alone cannot define a
+// card on a near-white page; the border is what makes it a card.
+const CARD_TINTS = [
+  { bg: '#DBEAFE', bd: '#93C5FD', fg: '#1D4ED8' },   // blue
+  { bg: '#D1FAE5', bd: '#6EE7B7', fg: '#047857' },   // green
+  { bg: '#EDE9FE', bd: '#C4B5FD', fg: '#6D28D9' },   // violet
+  { bg: '#CFFAFE', bd: '#67E8F9', fg: '#0E7490' },   // cyan
+  { bg: '#FFEDD5', bd: '#FDBA74', fg: '#C2410C' },   // orange
+];
+
+// A clock that ticks on its OWN state.
+//
+// This was a `nowMs` value at the top of HomeTab, which meant the entire Home
+// page -- the stats grid, every AnimatedTile, the whole ScrollView subtree --
+// re-rendered once a second. That is the stutter you feel while scrolling, and
+// it was pure self-harm: only the clock text ever needed the new value. Keeping
+// the interval down here re-renders one <Text> and nothing else.
+//
+// serverNow(), never Date.now(): the timers are anchored to server timestamps,
+// so a device clock a few minutes out would show a task running since before it
+// started. `base` omitted = a plain elapsed-since counter (breaks); `base` given
+// = accrued total + live since the anchor (tasks, which carry earlier sittings).
+function LiveTimer({ startIso, base, style }) {
+  const [now, setNow] = useState(() => serverNow());
+  useEffect(() => {
+    const id = setInterval(() => setNow(serverNow()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = base === undefined
+    ? secsSince(startIso, now)
+    : liveFromAnchor(startIso, base, now);
+  return <Text style={style}>{fmtClock(secs)}</Text>;
+}
+
+// What is happening right now: the running task(s), or the open break and a way
+// back to work. Renders nothing unless the workday is open and something is
+// actually happening -- an empty "nothing running" card would be noise in every
+// other state, and the read-only bar already covers "day not started".
+//
+// Two rows at rest. The chips only appear when a scope button is tapped, which
+// is what keeps this short enough to leave Your Tasks on screen.
+function LiveTaskCard({ live, busy, startTaskId, onCardSeen, onAskPause, onOpenBoard, onResume }) {
+  // The pager is uncontrolled -- it is a native scroller, and driving its
+  // offset from React state would fight the user's finger. We only ever nudge
+  // it ONCE, to restore where they left off; after that it is theirs.
+  const pagerRef = useRef(null);
+  const restoredRef = useRef(false);
+  if (!live || !live.workday_open) return null;
+
+  const running = live.active_tasks?.length
+    ? live.active_tasks
+    : (live.active_task ? [live.active_task] : []);
+  const brk = live.active_break;
+  const nontask = live.nontask;
+
+  // ---- Working -------------------------------------------------------------
+  if (running.length) {
+    const many = running.length > 1;
+
+    // One card per running task, swiped horizontally.
+    //
+    // A paging ScrollView, NOT a PanResponder deck. The deck that lived here
+    // could not use the native driver (PanResponder feeds the value from JS) and
+    // it had to out-race the vertical ScrollView for the responder -- a fight
+    // this codebase has already lost once, see ReorderableMenu.js:163. A nested
+    // horizontal ScrollView is the platform's own answer to both: the scroll runs
+    // natively, and RN resolves the axis conflict without anyone claiming a
+    // responder. Each page is SW wide so pagingEnabled snaps exactly one card.
+    //
+    // The dots live INSIDE each card and light their own index, so there is no
+    // scroll listener, no offset arithmetic and no index state to drift out of
+    // step with what is actually on screen.
+    const card = (task, n) => {
+      const tint = CARD_TINTS[n % CARD_TINTS.length];
+      return (
+      <View key={task.id} style={{ width: SW }}>
+        {/* Tapping the card opens this task on the Action Board, arriving with
+            the same highlight wash and double heartbeat a notification tap gives
+            it -- App.open('actionboard', id) sets the very focusTaskId the
+            notification path uses, so there is no second animation to maintain.
+            The Pause buttons below are nested touchables and take their own taps
+            first, so this never fires from under them. */}
+        <TouchableOpacity
+          activeOpacity={0.92}
+          onPress={() => { H.tap(); onOpenBoard(task.id); }}
+          style={[s.liveCard, { backgroundColor: tint.bg, borderColor: tint.bd }]}
+        >
+          <View style={s.liveTopRow}>
+            <View style={[s.liveLiveDot, { backgroundColor: tint.fg }]} />
+            <Text style={s.liveTaskName} numberOfLines={1}>{task.name || 'Untitled task'}</Text>
+            <LiveTimer
+              startIso={task.timer_start}
+              base={task.timer_total_seconds || 0}
+              style={[s.liveTimer, { color: tint.fg }]}
+            />
+            <Ionicons name="chevron-forward" size={15} color={tint.fg} />
+          </View>
+
+          <View style={s.liveCtlRow}>
+            {many ? (
+              <View style={s.liveDots}>
+                {running.map((t, m) => (
+                  <View
+                    key={t.id}
+                    style={[s.liveDotSm, m === n && [s.liveDotSmOn, { backgroundColor: tint.fg }]]}
+                  />
+                ))}
+              </View>
+            ) : (
+              <View style={{ flex: 1 }} />
+            )}
+
+            {/* Both buttons open the SAME dialog, differing only in what they
+                pause. The dialog is where the reason is chosen, so Meeting --
+                which needs a note and an attendee list -- is answerable here. */}
+            {/* White on a tinted card, so the button reads as raised rather than
+                as another patch of the same colour. Its label takes the tint. */}
+            <TouchableOpacity
+              style={[s.livePauseBtn, busy && { opacity: 0.5 }]}
+              disabled={busy}
+              activeOpacity={0.85}
+              onPress={() => { H.tap(); onAskPause({ taskId: task.id, name: task.name }); }}
+            >
+              <Text style={[s.livePauseTxt, { color: tint.fg }]}>Pause</Text>
+            </TouchableOpacity>
+
+            {many ? (
+              <TouchableOpacity
+                style={[s.liveAllBtn, busy && { opacity: 0.5 }]}
+                disabled={busy}
+                activeOpacity={0.85}
+                onPress={() => { H.tap(); onAskPause({ taskId: null, count: running.length }); }}
+              >
+                <Text style={s.liveAllTxt}>Pause all {running.length}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </TouchableOpacity>
+      </View>
+      );
+    };
+
+    // One task: no pager at all. A horizontal scroller wrapping a single page is
+    // a gesture that does nothing, and it would still swallow horizontal drags.
+    if (!many) return card(running[0], 0);
+
+    // Where to open. Matching on the stored TASK ID, not a stored index: tasks
+    // start and finish, so position 2 is rarely the same task it was yesterday.
+    // An id that is no longer running finds nothing and we simply open at 0.
+    const startAt = startTaskId
+      ? Math.max(0, running.findIndex((t) => t.id === startTaskId))
+      : 0;
+
+    return (
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        // The cards carry their own marginHorizontal, so the pages sit flush and
+        // pagingEnabled can snap on a clean SW boundary.
+        contentContainerStyle={{ alignItems: 'flex-start' }}
+        // Restore the remembered card once the pages actually have a width.
+        // contentOffset alone is an iOS-only prop, and scrolling before layout
+        // silently does nothing on Android -- onContentSizeChange fires after
+        // layout on both, which is why the jump lives here. Guarded so it can
+        // only ever happen once: re-running it would yank the pager back under
+        // someone mid-swipe every time a poll changed the content size.
+        onContentSizeChange={() => {
+          if (restoredRef.current || !startAt) { restoredRef.current = true; return; }
+          restoredRef.current = true;
+          pagerRef.current?.scrollTo({ x: startAt * SW, animated: false });
+        }}
+        // Remember on settle, not on every frame of the scroll.
+        onMomentumScrollEnd={(e) => {
+          const n = Math.round(e.nativeEvent.contentOffset.x / SW);
+          const t = running[n];
+          if (t) onCardSeen(t.id);
+        }}
+      >
+        {running.map(card)}
+      </ScrollView>
+    );
+  }
+
+  // ---- On a break / lunch / meeting ---------------------------------------
+  // One branch for every break_type: the server hands us type_label, so Lunch
+  // reads "Lunch" and Away reads "Away (system)" with no special-casing here.
+  if (brk) {
+    const emoji = brk.type === 'lunch' ? '🍽' : brk.type === 'meeting' ? '👥' : '☕';
+    return (
+      <TouchableOpacity
+        style={s.liveCardIdle}
+        activeOpacity={0.85}
+        onPress={() => onOpenBoard(brk.source_task_id || null)}
+      >
+        <View style={{ flex: 1 }}>
+          <View style={s.liveTopRow}>
+            <Text style={s.liveIdleTitle} numberOfLines={1}>
+              {emoji} On {String(brk.type_label || 'break').toLowerCase()}
+            </Text>
+            <LiveTimer startIso={brk.start_raw} style={s.liveIdleTimer} />
+          </View>
+          {brk.source_task_name ? (
+            <Text style={s.liveIdleFrom} numberOfLines={1}>from {brk.source_task_name}</Text>
+          ) : null}
+        </View>
+        {/* Resume needs a task to go back to. A break taken with nothing running
+            has no source_task_id, so there is nothing to resume -- tapping the
+            card opens the board, where they can start something.
+            Named, not a bare "Resume": a break records ONE source_task_id, so
+            after pausing three tasks this restarts that one and leaves the other
+            two paused, which "Resume" alone would misrepresent. */}
+        {brk.source_task_id ? (
+          <TouchableOpacity
+            style={[s.liveResumeBtn, busy && { opacity: 0.5 }]}
+            disabled={busy}
+            activeOpacity={0.85}
+            onPress={() => onResume(brk.source_task_id)}
+          >
+            <Ionicons name="play" size={13} color="#fff" />
+            <Text style={s.liveResumeTxt} numberOfLines={1}>
+              {brk.source_task_name ? 'Resume ' + brk.source_task_name : 'Resume'}
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <Ionicons name="chevron-forward" size={18} color={COLORS.faint} />
+        )}
+      </TouchableOpacity>
+    );
+  }
+
+  // ---- Declared non-task time (no task was running to pause) ---------------
+  if (nontask && nontask.start_raw) {
+    // onPress={onOpenBoard} would hand the PRESS EVENT to onOpenBoard as its
+    // taskId, which then rides through App as focusTaskId — the board cannot
+    // match an event object against a task, so it falls through to
+    // fetchTaskById() and reports "Task not available". Call it explicitly.
+    return (
+      <TouchableOpacity style={s.liveCardIdle} activeOpacity={0.85} onPress={() => onOpenBoard(null)}>
+        <View style={[s.liveTopRow, { flex: 1 }]}>
+          <Text style={s.liveIdleTitle} numberOfLines={1}>
+            {nontask.reason_label || 'Not on a task'}
+          </Text>
+          <LiveTimer startIso={nontask.start_raw} style={s.liveIdleTimer} />
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={COLORS.faint} />
+      </TouchableOpacity>
+    );
+  }
+
+  return null;
+}
+
 function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted }) {
   // Starting the workday straight from the read-only bar. Previously this bar's
   // button only routed to the PIN screen; opening the day is now a plain call.
@@ -440,6 +723,100 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
     })();
     return () => { alive = false; };
   }, [role]);
+
+  // ---- Running-task card ---------------------------------------------------
+  // Home had no live polling at all: once the workday started it showed nothing
+  // about it, and pausing meant navigating to the Action Board to find the task.
+  const [live, setLive] = useState(null);
+  const [liveBusy, setLiveBusy] = useState(false);
+
+  // One place every live_status payload lands, so the widget publish can never be
+  // forgotten on one of the paths. Mirrors the board's applyLive.
+  const applyLive = useCallback((r) => {
+    setLive(r);
+    publishWidgetState(r);
+  }, []);
+
+  const refreshLive = useCallback(
+    () => getLiveStatus().then(applyLive).catch(() => {}),
+    [applyLive],
+  );
+
+  // 15s, matching the Action Board. The card is a glanceable summary, not the
+  // board -- a tighter poll would cost battery for no visible gain, because the
+  // clock inside LiveTimer ticks locally between polls.
+  useEffect(() => {
+    let alive = true;
+    const tick = () => getLiveStatus().then((r) => { if (alive) applyLive(r); }).catch(() => {});
+    tick();
+    const id = setInterval(tick, 15000);
+    return () => { alive = false; clearInterval(id); };
+  }, [applyLive]);
+
+  // Which card Home was left on, so closing and reopening the app comes back
+  // to the same task instead of snapping to the first one. undefined = not
+  // read from storage yet, which the pager waits for so it does not restore
+  // to 0 and then jump.
+  const [cardTaskId, setCardTaskId] = useState(undefined);
+  useEffect(() => {
+    let alive = true;
+    getHomeCardTask(uid).then((id) => { if (alive) setCardTaskId(id); });
+    return () => { alive = false; };
+  }, [uid]);
+
+  // Only the USER changing card writes this -- nothing else moves the pager,
+  // so a poll, a pause or a relaunch can never silently rewrite their place.
+  const rememberCard = useCallback((taskId) => {
+    setCardTaskId(taskId);
+    saveHomeCardTask(uid, taskId);
+  }, [uid]);
+
+  // What the dialog is being opened for: {taskId, name} for one task, or
+  // {taskId: null, count} for all of them. null = closed.
+  const [pauseAsk, setPauseAsk] = useState(null);
+
+  // One submit path for both scopes. pauseAllTasks takes no task id (the server
+  // scopes it to the caller's running tasks); pauseTask names one.
+  const submitPause = useCallback(async ({ reason, code, meetingWithIds }) => {
+    if (liveBusy || !pauseAsk) return;
+    H.tap();
+    setLiveBusy(true);
+    try {
+      const res = pauseAsk.taskId
+        ? await pauseTask(pauseAsk.taskId, reason, code, meetingWithIds)
+        : await pauseAllTasks(reason, code, meetingWithIds);
+      if (res && res.status === false) {
+        Alert.alert("Couldn't pause", res.message || 'Please try again from the Action Board.');
+        return;
+      }
+      setPauseAsk(null);
+      await refreshLive();          // don't make them wait up to 15s to see it
+    } catch (e) {
+      log.warn('home pause failed', e?.message);
+      Alert.alert("Couldn't pause", 'Please try again from the Action Board.');
+    } finally {
+      setLiveBusy(false);
+    }
+  }, [liveBusy, pauseAsk, refreshLive]);
+
+  const resumeFromCard = useCallback(async (taskId) => {
+    if (liveBusy || !taskId) return;
+    H.tap();
+    setLiveBusy(true);
+    try {
+      const res = await resumeTask(taskId);
+      if (res && res.status === false) {
+        Alert.alert("Couldn't resume", res.message || 'Please try again from the Action Board.');
+        return;
+      }
+      await refreshLive();
+    } catch (e) {
+      log.warn('home resume failed', e?.message);
+      Alert.alert("Couldn't resume", 'Please try again from the Action Board.');
+    } finally {
+      setLiveBusy(false);
+    }
+  }, [liveBusy, refreshLive]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMounted, setDrawerMounted] = useState(false); // keep Modal up during close anim
@@ -701,6 +1078,29 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
           );
         })() : null}
       </View>
+
+      {/* What is happening RIGHT NOW, above the counts — a developer opening the
+          app mid-task wants the timer and a pause, not a tally. Renders nothing
+          unless the workday is open and something is actually running. */}
+      <LiveTaskCard
+        live={live}
+        busy={liveBusy}
+        startTaskId={cardTaskId}
+        onCardSeen={rememberCard}
+        onAskPause={setPauseAsk}
+        onResume={resumeFromCard}
+        // The id (when there is one) rides along as App's focusTaskId, which is
+        // what makes the board scroll to the task and flash it on arrival.
+        onOpenBoard={(taskId) => onOpen('actionboard', taskId || null)}
+      />
+      <PauseReasonDialog
+        visible={!!pauseAsk}
+        title={pauseAsk?.taskId ? 'Pause Task' : `Pause all ${pauseAsk?.count || ''} tasks`.trim()}
+        subject={pauseAsk?.taskId ? pauseAsk?.name : null}
+        busy={liveBusy}
+        onCancel={() => setPauseAsk(null)}
+        onConfirm={submitPause}
+      />
 
       {/* Stats strip — role-aware live task-status counts. Tapping a card opens
           the Action Board focused on that status. */}
@@ -1559,6 +1959,83 @@ const s = StyleSheet.create({
 
   // Stats strip
   statGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: PAD, gap: 12, marginBottom: 4 },
+
+  // ---- Running-task card ----------------------------------------------------
+  // Built on statCard's shell (radius 18, pad 16, the same soft slate shadow) so
+  // it reads as part of Home rather than a panel from another app. Colours come
+  // from theme.js's existing pairs -- greenBg/green for live, amberBg/amber for
+  // a break -- which the tiles already use.
+  // marginTop 40 is not arbitrary: the gap BELOW the card is its own
+  // marginBottom (14) plus s.section's marginTop (26), and RN has no margin
+  // collapsing, so that space is 40. The greeting block above ends with no
+  // bottom spacing of its own, which left the card flush against "Track,
+  // Analyze & Improve your KPIs" while sitting a clear 40 off "Your Tasks".
+  // Matching the two makes the card sit evenly between them. Change one of the
+  // three numbers and this stops being true.
+  liveCard: {
+    marginHorizontal: PAD, marginTop: 40, marginBottom: 14, padding: 14,
+    borderRadius: 18, borderWidth: 1,
+    // Lifted further than the stat cards' 0.06/elevation 2. Those sit in a grid
+    // where the gaps between them do the separating; this one is a single tinted
+    // card on a near-white page, so the shadow is what gives it an edge to read
+    // against. Still short of the drawer's 0.18 — this is a card, not an overlay.
+    shadowColor: '#334155', shadowOpacity: 0.14, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 }, elevation: 5,
+  },
+  liveTopRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  liveLiveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.green },
+  liveTaskName: { flex: 1, fontSize: 14, fontWeight: '700', color: COLORS.ink },
+  liveTimer: {
+    fontSize: 16, fontWeight: '800', color: COLORS.green,
+    fontVariant: ['tabular-nums'],
+  },
+
+  liveCtlRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  liveDots: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  liveDotSm: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: 'rgba(255,255,255,0.85)' },
+  liveDotSmOn: { width: 14 },
+
+  livePauseBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 14, paddingVertical: 7,
+    backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 9,
+  },
+  livePauseTxt: { fontSize: 12.5, fontWeight: '800' },
+  liveAllBtn: {
+    paddingHorizontal: 12, paddingVertical: 7,
+    backgroundColor: 'rgba(255,255,255,0.55)', borderRadius: 9,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.9)',
+  },
+  liveAllTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.ink },
+
+
+  // Break / lunch / non-task: same shell, amber instead of green. Quieter than
+  // the working card on purpose -- nothing is being timed against a task.
+  // Same 40/14 as liveCard above — the break card replaces it in the same slot,
+  // so it has to sit in the same place or Home shifts when a task is paused.
+  liveCardIdle: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginHorizontal: PAD, marginTop: 40, marginBottom: 14, padding: 14,
+    backgroundColor: COLORS.amberBg, borderRadius: 18,
+    borderWidth: 1, borderColor: '#FCD34D',
+    // Matches the running card's lift — the break card replaces it in the same
+    // slot, and a flatter shadow would make Home look like it shifted.
+    shadowColor: '#334155', shadowOpacity: 0.14, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 }, elevation: 5,
+  },
+  liveIdleTitle: { flex: 1, fontSize: 13.5, fontWeight: '800', color: '#92400E' },
+  liveIdleTimer: {
+    fontSize: 15, fontWeight: '800', color: COLORS.amber,
+    fontVariant: ['tabular-nums'],
+  },
+  liveIdleFrom: { marginTop: 3, fontSize: 11, color: '#B45309' },
+  liveResumeBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: COLORS.green, borderRadius: 9,
+    paddingHorizontal: 11, paddingVertical: 8,
+  },
+  liveResumeTxt: { color: '#fff', fontSize: 12, fontWeight: '800', maxWidth: 120 },
+
   statCard: {
     width: STAT_W, minHeight: 108, borderRadius: 18, padding: 16,
     shadowColor: '#334155', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2,
