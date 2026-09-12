@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Three developer-only reminders in one sweep
+             (models/kpi_work_session.py _cron_check_long_breaks):
+
+             1. The break / lunch / meeting open RIGHT NOW has run past its
+                limit. Break repeats every break_alert_minutes, capped at
+                BREAK_ALERT_MAX (4) so a genuinely long break is never nagged
+                forever; lunch and meeting are sent ONCE.
+             2. Break + lunch TOTAL for the day has passed break_budget_minutes.
+                This is what catches six short breaks, none of which was ever
+                long enough to trip (1).
+             3. The workday is still open past standard_workday_hours of
+                presence — sent BEFORE _cron_close_overdue_workdays closes the
+                day for them and stamps auto_closed.
+
+             Every one of these goes to the DEVELOPER and to nobody else. The
+             rule is written on kpi.nontask.block.reason and it holds here:
+             telling an admin about someone's lunch is the false alarm that
+             makes the whole feed worth ignoring. Admins can already see a long
+             break live on /kpi_owner/live_tracking if they go looking.
+
+             Unlike the idle sweep, NOTHING arms these — no ..._at field to set
+             on the way in. Each check derives its own timing from the interval
+             or total it is about, which is why start_break / switch_break /
+             _set_nontask_reason / pause / pause_all / idle_reason all needed no
+             change: six call sites that would each have had to remember to arm
+             a timer, and any one of them could have been missed.
+
+             ONE MINUTE, not five. Here the interval IS close to the resolution
+             of the thing being measured: on a 5-minute sweep a "30 minute"
+             lunch reminder lands anywhere up to 35 minutes, and that is not a
+             30-minute reminder. The sweep itself is cheap — one search over
+             open sessions, of which there are as many as there are people
+             currently at work.
+
+             Every threshold lives on res.company and is editable in the app's
+             Configuration screen; 0 switches that one off. -->
+        <record id="ir_cron_kpi_break_alert" model="ir.cron">
+            <field name="name">KRA/KPI: Remind developers about long breaks and open workdays</field>
+            <field name="model_id" ref="model_kpi_work_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_check_long_breaks()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

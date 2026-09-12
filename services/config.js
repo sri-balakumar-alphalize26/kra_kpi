@@ -19,6 +19,10 @@ export async function fetchConfig() {
       client_approval_minutes: 5,
       queue_nudge_minutes: 30,
       urgent_nudge_minutes: 5,
+      break_alert_minutes: 15,
+      lunch_alert_minutes: 30,
+      meeting_alert_minutes: 30,
+      break_budget_minutes: 60,
       standard_workday_hours: 9,
       snapshot_retention_number: 3,
       snapshot_retention_unit: 'months',
@@ -54,6 +58,13 @@ export async function fetchConfig() {
     client_approval_minutes: cfg?.client_approval_minutes ?? 5,
     queue_nudge_minutes: cfg?.queue_nudge_minutes ?? 30,
     urgent_nudge_minutes: cfg?.urgent_nudge_minutes ?? 5,
+    // Break / lunch / meeting over-run reminders. `??` not `||` -- 0 means the
+    // reminder is switched OFF, and `||` would read that as unset and show the
+    // default instead, so the screen would lie about the current setting.
+    break_alert_minutes: cfg?.break_alert_minutes ?? 15,
+    lunch_alert_minutes: cfg?.lunch_alert_minutes ?? 30,
+    meeting_alert_minutes: cfg?.meeting_alert_minutes ?? 30,
+    break_budget_minutes: cfg?.break_budget_minutes ?? 60,
     standard_workday_hours: Number(cfg?.standard_workday_hours) || 9,
     // Daily task report schedule + snapshot/report retention (0 = keep forever).
     snapshot_retention_number: Number(cfg?.snapshot_retention_number ?? 3),
@@ -104,6 +115,16 @@ export async function setUrgentNudge(minutes) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: true };
   return jsonRpc(serverUrl, '/kpi_config/set_urgent_nudge', { minutes });
+}
+
+// Thresholds for the developer-only break / lunch / meeting over-run reminders.
+// Takes a partial object -- only the keys you pass are written, so editing one
+// field cannot reset the other three. 0 switches that reminder off, which is why
+// the server clamps with max(0, ...) rather than max(1, ...).
+export async function setBreakAlerts(values) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true };
+  return jsonRpc(serverUrl, '/kpi_config/set_break_alerts', values || {});
 }
 
 // A normal working day, in hours. The End Workday summary compares it against

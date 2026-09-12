@@ -2800,6 +2800,22 @@ class KraKpiAPI(http.Controller):
                 'queue_nudge_minutes': c.queue_nudge_minutes or 30,
                 'urgent_nudge_minutes': c.urgent_nudge_minutes or 5,
                 'standard_workday_hours': c.standard_workday_hours or 9.0,
+                # Break / lunch / meeting over-run reminders (developer only).
+                # 0 = OFF for each, so `or <default>` must NOT be used here:
+                # it would read a deliberate 0 as unset and switch the
+                # reminder back on behind the admin's back.
+                'break_alert_minutes': (c.break_alert_minutes
+                                        if c.break_alert_minutes not in (None, False, '')
+                                        else 15),
+                'lunch_alert_minutes': (c.lunch_alert_minutes
+                                        if c.lunch_alert_minutes not in (None, False, '')
+                                        else 30),
+                'meeting_alert_minutes': (c.meeting_alert_minutes
+                                          if c.meeting_alert_minutes not in (None, False, '')
+                                          else 30),
+                'break_budget_minutes': (c.break_budget_minutes
+                                         if c.break_budget_minutes not in (None, False, '')
+                                         else 60),
                 # Snapshot image retention + daily report schedule & retention.
                 'snapshot_retention_number': c.kpi_snapshot_retention_number or 0,
                 'snapshot_retention_unit': c.kpi_snapshot_retention_unit or 'months',
@@ -2919,6 +2935,33 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         request.env.company.sudo().urgent_nudge_minutes = max(1, int(params.get('minutes') or 5))
         return {'status': True}
+
+    @http.route('/kpi_config/set_break_alerts', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_break_alerts(self, **params):
+        """Thresholds for the developer-only break / lunch / meeting reminders.
+
+        Each is minutes, and 0 is a REAL value meaning "switch this one off" --
+        hence max(0, ...) rather than the max(1, ...) the nudge routes above use,
+        and hence only the keys actually sent are written. A screen that edits one
+        field must not reset the other three to their defaults just by omitting
+        them.
+        """
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        fields_map = ('break_alert_minutes', 'lunch_alert_minutes',
+                      'meeting_alert_minutes', 'break_budget_minutes')
+        vals = {}
+        for name in fields_map:
+            if name not in params or params.get(name) in (None, ''):
+                continue
+            try:
+                vals[name] = max(0, int(params.get(name)))
+            except (TypeError, ValueError):
+                continue
+        if vals:
+            request.env.company.sudo().write(vals)
+        return {'status': True, 'values': vals}
 
     @http.route('/kpi_config/set_snapshot_retention', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_set_snapshot_retention(self, **params):

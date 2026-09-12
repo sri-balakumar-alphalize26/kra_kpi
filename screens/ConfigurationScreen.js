@@ -24,7 +24,7 @@ import { renderWaTemplate, splitBold } from '../utils/waPreview';
 import { createLogger } from '../api/logger';
 import {
   fetchConfig, setUrgentNudge, setUserCountry, setMultitask, setDevWa,
-  setClientApproval, setQueueNudge, setStandardHours, setAdminAccept,
+  setClientApproval, setQueueNudge, setStandardHours, setAdminAccept, setBreakAlerts,
   setSnapshotRetention, setReportRetention, setDailyReport,
 } from '../services/config';
 import { fetchGroupEvents, setGroupEvent, testGroupEvent } from '../services/waGroup';
@@ -70,6 +70,11 @@ export default function ConfigurationScreen({ onBack }) {
   const [queueNudge, setQueueNudgeVal] = useState('30');
   const [standardHours, setStandardHoursVal] = useState('9');
   const [urgentNudge, setUrgentNudgeVal] = useState('5');
+  // Developer-only break / lunch / meeting over-run reminders. 0 = that one off.
+  const [breakAlert, setBreakAlertVal] = useState('15');
+  const [lunchAlert, setLunchAlertVal] = useState('30');
+  const [meetingAlert, setMeetingAlertVal] = useState('30');
+  const [breakBudget, setBreakBudgetVal] = useState('60');
   const [countryId, setCountryId] = useState(false);
   const [dial, setDial] = useState('91');
   const [mobileLength, setMobileLength] = useState(10);
@@ -141,6 +146,10 @@ export default function ConfigurationScreen({ onBack }) {
       setQueueNudgeVal(String(c.queue_nudge_minutes));
       setStandardHoursVal(String(c.standard_workday_hours ?? 9));
       setUrgentNudgeVal(String(c.urgent_nudge_minutes));
+      setBreakAlertVal(String(c.break_alert_minutes));
+      setLunchAlertVal(String(c.lunch_alert_minutes));
+      setMeetingAlertVal(String(c.meeting_alert_minutes));
+      setBreakBudgetVal(String(c.break_budget_minutes));
       setDial(c.country_dial_code);
       setMobileLength(c.mobile_length);
       setCountryId(c.country_id);
@@ -215,6 +224,24 @@ export default function ConfigurationScreen({ onBack }) {
     setUrgentNudgeVal(String(v));
     await saveGuard('urgentNudge', () => setUrgentNudge(v));
   };
+  // The four break reminders. Math.max(0, ...) not (1, ...): 0 is a real value
+  // here and means "switch this reminder off". `parseInt(x) || d` would turn a
+  // typed 0 back into the default, so the fallback is applied only when the field
+  // is genuinely not a number.
+  const saveBreakField = async (key, raw, setter, fallback) => {
+    const n = parseInt(raw);
+    const v = Math.max(0, isFinite(n) ? n : fallback);
+    setter(String(v));
+    await saveGuard(key, () => setBreakAlerts({ [key]: v }));
+  };
+  const saveBreakAlert = () =>
+    saveBreakField('break_alert_minutes', breakAlert, setBreakAlertVal, 15);
+  const saveLunchAlert = () =>
+    saveBreakField('lunch_alert_minutes', lunchAlert, setLunchAlertVal, 30);
+  const saveMeetingAlert = () =>
+    saveBreakField('meeting_alert_minutes', meetingAlert, setMeetingAlertVal, 30);
+  const saveBreakBudget = () =>
+    saveBreakField('break_budget_minutes', breakBudget, setBreakBudgetVal, 60);
   // HH + MM inputs → the backend's float hour (10.5 = 10:30). Clamp to a real time.
   const timeToHour = (hh, mm) => {
     let H = parseInt(hh); if (!isFinite(H)) H = 0; H = Math.max(0, Math.min(23, H));
@@ -488,6 +515,60 @@ export default function ConfigurationScreen({ onBack }) {
             </View>
             <Text style={s.hint}>When a developer taps 🚨 Urgent while pausing, the owner and admins are
               notified in the app and reminded this often until one of them reads it.</Text>
+
+            <Text style={[s.label, { marginTop: 22 }]}>Break reminder (minutes)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="number-pad"
+                value={breakAlert} onChangeText={setBreakAlertVal}
+                onEndEditing={saveBreakAlert}
+              />
+              <Text style={s.unit}>min</Text>
+              {<SaveMark k="break_alert_minutes" />}
+            </View>
+            <Text style={s.hint}>How long a break runs before the developer is reminded, and the gap
+              between repeats. Stops after 4 reminders. Only the developer is told — admins are not
+              notified. 0 turns it off.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Lunch reminder (minutes)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="number-pad"
+                value={lunchAlert} onChangeText={setLunchAlertVal}
+                onEndEditing={saveLunchAlert}
+              />
+              <Text style={s.unit}>min</Text>
+              {<SaveMark k="lunch_alert_minutes" />}
+            </View>
+            <Text style={s.hint}>How long lunch runs before the developer is reminded. Sent once, not
+              repeated. 0 turns it off.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Meeting reminder (minutes)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="number-pad"
+                value={meetingAlert} onChangeText={setMeetingAlertVal}
+                onEndEditing={saveMeetingAlert}
+              />
+              <Text style={s.unit}>min</Text>
+              {<SaveMark k="meeting_alert_minutes" />}
+            </View>
+            <Text style={s.hint}>How long a meeting runs before the developer is reminded it is still
+              counting. Sent once. 0 turns it off.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>Daily break budget (minutes)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { width: 90 }]} keyboardType="number-pad"
+                value={breakBudget} onChangeText={setBreakBudgetVal}
+                onEndEditing={saveBreakBudget}
+              />
+              <Text style={s.unit}>min</Text>
+              {<SaveMark k="break_budget_minutes" />}
+            </View>
+            <Text style={s.hint}>Break and lunch added together for the whole day. Catches several short
+              breaks that never individually hit the limit above. Meetings are not counted. Sent once a
+              day, to the developer only. 0 turns it off.</Text>
 
             <Text style={[s.label, { marginTop: 16 }]}>Standard workday (hours)</Text>
             <View style={s.inlineRow}>

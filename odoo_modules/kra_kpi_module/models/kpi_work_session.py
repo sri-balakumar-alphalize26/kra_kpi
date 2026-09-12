@@ -44,6 +44,37 @@ IDLE_CHECK_MAX = 3
 NO_TASK_NUDGE_MIN = 15
 NO_TASK_NUDGE_MAX = 5
 
+# How many times an over-running BREAK is mentioned before we stop. Same rule and
+# the same reason as IDLE_CHECK_MAX: a developer on a genuinely long break has
+# already been told, and a reminder that never stops is one people learn to
+# ignore — which costs us the reminders that DO matter. 4 x 15 min = pings at
+# 15/30/45/60, then silence.
+BREAK_ALERT_MAX = 4
+
+# Which open intervals get an over-run reminder, and whether it repeats.
+#   reason code -> (res.company threshold field, repeats?)
+# Anything NOT listed here is deliberately never alerted on:
+#   'away'  — the SYSTEM paused the task (Pause Workday / midnight close); the
+#             developer did not choose it, so a reminder would be nonsense.
+#   'leave' / 'urgent' / 'other' — exceptional states with their own handling.
+#   'no_tasks' — already has its own machinery (dev_no_task + the admin nudge in
+#             _cron_check_idle_developers). Alerting here too would double up.
+_BREAK_ALERT_RULES = {
+    'break':   ('break_alert_minutes',   True),
+    'lunch':   ('lunch_alert_minutes',   False),
+    'meeting': ('meeting_alert_minutes', False),
+}
+
+# Event name per reason code, for _cron_check_long_breaks. Separate events rather
+# than one with the kind in ctx so each gets its own push TITLE and feed icon —
+# "Lunch is running long" is the whole value of the notification, and a generic
+# title would throw it away.
+_BREAK_ALERT_EVENTS = {
+    'break':   'break_running_long',
+    'lunch':   'lunch_running_long',
+    'meeting': 'meeting_running_long',
+}
+
 
 # --------------------------------------------------------------------------- #
 # Interval arithmetic — the basis of every multi-task number                   #
@@ -342,6 +373,40 @@ class KpiWorkSession(models.Model):
     no_task_notif_ids = fields.Many2many(
         'kpi.notification', 'kpi_session_no_task_notif_rel', 'session_id', 'notif_id',
         string='No-task Notifications', copy=False,
+    )
+
+    # ── Break / lunch / meeting over-run reminders (developer only) ──────────
+    # De-duplication state ONLY. Unlike the idle nudges above there is no
+    # "..._at" due timestamp, because nothing arms these: _cron_check_long_breaks
+    # finds whatever interval is open and derives elapsed time from its own start
+    # every sweep. That is what keeps start_break / switch_break /
+    # _set_nontask_reason / pause / pause_all / idle_reason free of any change —
+    # six call sites that would each have had to remember to arm a timer, and any
+    # one of them could have been missed.
+    break_alert_key = fields.Char(
+        string='Break Alert Key', copy=False,
+        help="Which open interval the reminders below were sent for: 'blog:<id>' for "
+             "a kpi.break.log, 'blk:<session>:<start>' for an open non-task block. A "
+             "CHANGED key means a different interval, which resets the count — this is "
+             "what makes switching Break -> Meeting restart the clock at the meeting's "
+             "own threshold instead of carrying the break's elapsed time over.",
+    )
+    break_alert_count = fields.Integer(
+        string='Break Reminders Sent', default=0, copy=False,
+        help='How many reminders have gone out for the interval in break_alert_key. '
+             'Capped at BREAK_ALERT_MAX for repeating kinds; 1 is the cap for the '
+             'once-only kinds (lunch / meeting).',
+    )
+    break_budget_alerted = fields.Boolean(
+        string='Break Budget Alerted', default=False, copy=False,
+        help="The day's break + lunch total passed res.company.break_budget_minutes "
+             'and the developer has been told. Once per day, so it is a flag rather '
+             'than a counter.',
+    )
+    overtime_alerted = fields.Boolean(
+        string='Overtime Alerted', default=False, copy=False,
+        help='Presence passed res.company.standard_workday_hours and the developer has '
+             'been reminded their workday is still open. Once per session.',
     )
 
     # NOT stored: time-log changes don't propagate through @api.depends so a
@@ -1284,6 +1349,10 @@ class KpiWorkSession(models.Model):
         try:
             self._close_nontask_block(at=at)
             self._stop_idle_tracking('workday ended')
+            # Drop the over-run reminder state too. The day may be reverted later,
+            # which makes this same session live again — and it must not come back
+            # still holding "we already told them" from the first time round.
+            self._clear_break_alerts('workday ended')
         except Exception as exc:
             _logger.warning("finalize cleanup: nontask/idle failed for session %s: %s", self.id, exc)
         # There used to be an _unpair() here, to send the device back to the PIN
@@ -2619,3 +2688,301 @@ class KpiWorkSession(models.Model):
                 _logger.warning("no-task nudge failed for session %s: %s", s.id, exc)
 
         return {'asked': asked, 'nudged': nudged}
+
+    # ------------------------------------------------------------------ #
+    # Break / lunch / meeting over-run reminders                         #
+    # ------------------------------------------------------------------ #
+    # All of these go to the DEVELOPER and nobody else. The rule is stated on
+    # kpi.nontask.block.reason and it holds here: telling an admin about someone's
+    # lunch is the false alarm that makes the whole feed worth ignoring. Admins can
+    # already SEE a long break live on /kpi_owner/live_tracking if they look — what
+    # was missing is the person on the break being told while they can still act.
+
+    def _open_nonproductive(self):
+        """The one open break/lunch/meeting for this developer, or None.
+
+        Returns (key, kind, start_at). There are two places an open interval can
+        live and they are NOT interchangeable:
+
+          * kpi.break.log with is_active=True — paused FROM a running task.
+          * nontask_reason + nontask_started_at on this session — declared with no
+            task running. The kpi.nontask.block row does not exist until the block
+            CLOSES, so the open one is only ever readable here.
+
+        Checking the break log first matches _daily_summary_payload, which sums
+        both and treats a live break log as the more specific record.
+
+        The key identifies the interval so the caller can tell "still the same
+        break" from "a different one". switch_break SPLITS rather than relabels
+        (see kpi_break_log.switch_break), so Break -> Meeting yields a new row and
+        therefore a new key; start_break REUSES the open row, so re-entering the
+        same break keeps its key and its count.
+        """
+        self.ensure_one()
+        blog = self.env['kpi.break.log'].sudo().search([
+            ('user_id', '=', self.user_id.id),
+            ('is_active', '=', True),
+        ], limit=1)
+        if blog and blog.start_time:
+            return 'blog:%s' % blog.id, blog.break_type, blog.start_time
+        if self.nontask_started_at and self.nontask_reason:
+            # The block has no id of its own yet, so the start instant is what
+            # makes the key unique — _set_nontask_reason rewrites it when the
+            # reason changes, which is exactly the reset we want.
+            return ('blk:%s:%s' % (self.id, self.nontask_started_at),
+                    self.nontask_reason, self.nontask_started_at)
+        return None
+
+    def _break_budget_seconds(self):
+        """Break + lunch for the whole day, counting an OPEN one live.
+
+        MUST agree with the break_secs + lunch_secs lines in
+        _daily_summary_payload — if the developer is told they have used an hour,
+        the End Workday summary has to say the same thing or the reminder reads as
+        a bug. That method computes the identical two buckets through local
+        closures (_log / _blk / _blog_secs) which cannot be called from out here,
+        and it is a 200-line function that is not worth refactoring for this. So
+        this is a deliberate second implementation of the same sum: change one,
+        change the other.
+
+        Meetings are excluded on purpose. A meeting is work you were called into,
+        not break time, and counting it toward a break budget would punish people
+        for being invited to things.
+        """
+        self.ensure_one()
+        kinds = ('break', 'lunch')
+        now = fields.Datetime.now()
+        total = 0.0
+
+        # Breaks taken FROM a task, anywhere in this developer's day.
+        for b in self.env['kpi.break.log'].sudo().search([
+            ('user_id', '=', self.user_id.id),
+            ('work_date', '=', self.session_date),
+            ('break_type', 'in', kinds),
+        ]):
+            if b.is_active and b.start_time:
+                total += max(0.0, (now - b.start_time).total_seconds())
+            else:
+                total += b.duration_seconds or 0.0
+
+        # Blocks declared with no task running. Closed rows only — the open one
+        # lives on the session and is added after this.
+        for bk in self.env['kpi.nontask.block'].sudo().search([
+            ('user_id', '=', self.user_id.id),
+            ('session_id.session_date', '=', self.session_date),
+            ('reason', 'in', kinds),
+        ]):
+            total += bk.seconds or 0.0
+
+        # ...and the still-open block, which has no row yet.
+        if self.nontask_started_at and self.nontask_reason in kinds:
+            total += max(0.0, (now - self.nontask_started_at).total_seconds())
+
+        return total
+
+    def _break_ctx(self, **extra):
+        """Context for the over-run templates. Mirrors _idle_ctx."""
+        self.ensure_one()
+        u = self.user_id
+        ctx = {'dev': u.name or u.login or '-'}
+        ctx.update(extra)
+        return ctx
+
+    def _fire_break_alert(self, event, **ctx):
+        """Send one over-run reminder to the developer.
+
+        Same shape as _fire_idle_check, and for the same reason: extra_users, NOT
+        the role matrix. _notify lives on kra.kpi and the anchor may be a task that
+        belongs to somebody else entirely, so resolving 'developer' from it would
+        send this person's lunch reminder to a stranger.
+        """
+        self.ensure_one()
+        anchor = self._anchor_kpi()
+        if not anchor:
+            _logger.info("break alert %s: no kra.kpi to anchor _notify on", event)
+            return False
+        anchor._notify(event, extra_users=[self.user_id.id], **self._break_ctx(**ctx))
+        return True
+
+    def _clear_break_alerts(self, reason=''):
+        """Forget every over-run reminder for this session.
+
+        Called when the day ends or is reopened: a reverted day becomes live again
+        underneath the developer, and it must not still be holding "we already told
+        them" flags from the first time round.
+        """
+        self.ensure_one()
+        vals = {}
+        if self.break_alert_key:
+            vals['break_alert_key'] = False
+        if self.break_alert_count:
+            vals['break_alert_count'] = 0
+        if self.break_budget_alerted:
+            vals['break_budget_alerted'] = False
+        if self.overtime_alerted:
+            vals['overtime_alerted'] = False
+        if vals:
+            _logger.info("break alerts cleared for %s (%s)", self.user_id.login, reason)
+            self.sudo().write(vals)
+
+    def _company_minutes(self, field_name):
+        """A threshold in minutes off the company, 0 = OFF.
+
+        `or default` is deliberately NOT used anywhere near these: 0 is a real,
+        meaningful value here (the feature is switched off) and `or` would quietly
+        switch it back on. Same trap res.company.admin_accept_minutes documents.
+        """
+        self.ensure_one()
+        try:
+            company = self.user_id.company_id or self.env.company
+            return max(0, int(getattr(company, field_name, 0) or 0))
+        except Exception:
+            return 0
+
+    def _check_open_interval_alert(self, now):
+        """Reminder 1: the interval open RIGHT NOW has run long. True if sent."""
+        self.ensure_one()
+        open_interval = self._open_nonproductive()
+        if not open_interval:
+            # Nothing open -> drop the de-dup state so the next break starts clean.
+            if self.break_alert_key or self.break_alert_count:
+                self.sudo().write({'break_alert_key': False, 'break_alert_count': 0})
+            return False
+
+        key, kind, start_at = open_interval
+
+        # A different interval than the one we last pinged about -> start over.
+        # This is what makes Break -> Meeting restart at the meeting's threshold.
+        count = self.break_alert_count
+        if key != self.break_alert_key:
+            count = 0
+            self.sudo().write({'break_alert_key': key, 'break_alert_count': 0})
+
+        rule = _BREAK_ALERT_RULES.get(kind)
+        if not rule:
+            return False
+        field_name, repeats = rule
+        limit_min = self._company_minutes(field_name)
+        if not limit_min:
+            return False
+
+        # A multitasking developer can pause task A for a break while task B keeps
+        # running. They are plainly still working, and telling them to get back to
+        # work would be both wrong and annoying. Only applies to the break-log leg:
+        # a non-task block by definition has no task running.
+        if key.startswith('blog:') and self._has_running_task():
+            return False
+
+        elapsed = max(0.0, (now - start_at).total_seconds())
+        cap = BREAK_ALERT_MAX if repeats else 1
+        if count >= cap:
+            return False
+        # Repeating: due at limit, 2*limit, 3*limit... Once-only: due at limit.
+        # Derived from elapsed rather than a stored due-timestamp, so there is no
+        # second piece of state that can drift out of step with the interval.
+        due_at = (count + 1) * limit_min * 60 if repeats else limit_min * 60
+        if elapsed < due_at:
+            return False
+
+        event = _BREAK_ALERT_EVENTS.get(kind)
+        if not event:
+            return False
+        if not self._fire_break_alert(
+                event,
+                elapsed=_format_elapsed_seconds(elapsed),
+                limit=_format_elapsed_seconds(limit_min * 60)):
+            return False
+        self.sudo().write({'break_alert_key': key, 'break_alert_count': count + 1})
+        return True
+
+    def _check_break_budget_alert(self, now):
+        """Reminder 2: break + lunch for the DAY has added up. True if sent."""
+        self.ensure_one()
+        if self.break_budget_alerted:
+            return False
+        limit_min = self._company_minutes('break_budget_minutes')
+        if not limit_min:
+            return False
+        used = self._break_budget_seconds()
+        if used < limit_min * 60:
+            return False
+        if not self._fire_break_alert(
+                'break_budget_exceeded',
+                elapsed=_format_elapsed_seconds(used),
+                limit=_format_elapsed_seconds(limit_min * 60)):
+            return False
+        self.sudo().write({'break_budget_alerted': True})
+        return True
+
+    def _check_overtime_alert(self, now):
+        """Reminder 3: the workday is still open past a normal day. True if sent.
+
+        Not about breaks at all — it is here because the same sweep already has the
+        open sessions in hand. It exists because _cron_close_overdue_workdays will
+        eventually close the day FOR them and stamp auto_closed, silently rewriting
+        their hours. Being told first is what makes that recoverable.
+        """
+        self.ensure_one()
+        if self.overtime_alerted or self.is_paused:
+            return False
+        try:
+            company = self.user_id.company_id or self.env.company
+            hours = float(company.standard_workday_hours or 0.0)
+        except (TypeError, ValueError, AttributeError):
+            return False
+        if hours <= 0:
+            return False
+        # Cheap gate before the expensive one. presence_seconds is a NON-stored
+        # compute that runs a kpi.time.log search per session, and this sweep is
+        # every minute for everyone currently at work. Presence can never exceed
+        # the raw login->now clock (it only ever subtracts pauses), so if the raw
+        # clock is still short of a full day, presence certainly is — and for most
+        # of most days that is the answer, reached without touching the compute.
+        if not self.login_at:
+            return False
+        if (now - self.login_at).total_seconds() < hours * 3600:
+            return False
+        # presence_seconds already subtracts paused time (see _compute_totals) —
+        # recomputing the span here would count a frozen day as worked.
+        if (self.presence_seconds or 0.0) < hours * 3600:
+            return False
+        if not self._fire_break_alert(
+                'workday_overtime',
+                elapsed=_format_elapsed_seconds(self.presence_seconds or 0.0),
+                limit=_format_elapsed_seconds(hours * 3600)):
+            return False
+        self.sudo().write({'overtime_alerted': True})
+        return True
+
+    @api.model
+    def _cron_check_long_breaks(self):
+        """Three developer-only reminders, one sweep (data/kpi_break_alert_cron.xml).
+
+        1. The break / lunch / meeting open RIGHT NOW has run past its limit.
+        2. Break + lunch for the whole day has added up past the budget.
+        3. The workday is still open past a normal day's presence.
+
+        Nothing arms any of these: each check derives its own timing from the
+        interval or total it is about, so no other code path has to remember to
+        start a timer. The cron runs every MINUTE — unlike the idle sweep, the
+        interval here is close to the real resolution, because a "30 minute"
+        reminder that lands at 35 minutes is not a 30-minute reminder.
+
+        Shaped like _cron_check_idle_developers: one search, per-record try/except
+        so a single bad session cannot kill the run, counters returned.
+        """
+        now = fields.Datetime.now()
+        interval = budget = overtime = 0
+
+        for s in self.sudo().search([('state', '=', 'open')]):
+            try:
+                if s._check_open_interval_alert(now):
+                    interval += 1
+                if s._check_break_budget_alert(now):
+                    budget += 1
+                if s._check_overtime_alert(now):
+                    overtime += 1
+            except Exception as exc:
+                _logger.warning("break alert sweep failed for session %s: %s", s.id, exc)
+
+        return {'interval': interval, 'budget': budget, 'overtime': overtime}

@@ -83,6 +83,17 @@ const EVENT_ICON = {
   workday_reverted:    { lib: 'mc', name: 'calendar-refresh',    color: '#64748B' },
   dev_idle_check:      { lib: 'mc', name: 'account-clock-outline', color: '#64748B' },
   daily_summary:       { lib: 'mc', name: 'text-box-check',      color: '#4338CA' },
+
+  // Over-run reminders, sent to the developer about their OWN day.
+  // Amber, not red: red is reserved for someone being blocked right now, and
+  // these are a nudge to yourself, not an emergency. They are also absent from
+  // ACTION_EVENTS below on purpose -- that set drives the admin 'Action needed'
+  // badge, and a developer's lunch is nobody else's task.
+  break_running_long:    { lib: 'mc', name: 'coffee-outline',      color: '#D97706' },
+  lunch_running_long:    { lib: 'mc', name: 'food-outline',        color: '#D97706' },
+  meeting_running_long:  { lib: 'mc', name: 'account-group',       color: '#D97706' },
+  break_budget_exceeded: { lib: 'mc', name: 'timer-alert-outline', color: '#D97706' },
+  workday_overtime:      { lib: 'mc', name: 'clock-end',           color: '#D97706' },
 };
 
 // Events that mean "someone has to DO something" → the Action needed tab.

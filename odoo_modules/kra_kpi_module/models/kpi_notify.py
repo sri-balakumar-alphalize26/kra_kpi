@@ -75,6 +75,10 @@ _logger = logging.getLogger(__name__)
 _NON_TASK_EVENTS = {
     'workday_started', 'workday_reverted', 'workday_auto_closed',
     'dev_idle_check', 'dev_no_task',
+    # Over-run reminders. Anchored on an arbitrary kra.kpi because _notify
+    # lives there, so the anchor's name and client must not leak onto the row.
+    'break_running_long', 'lunch_running_long', 'meeting_running_long',
+    'break_budget_exceeded', 'workday_overtime',
     'daily_summary', 'daily_report',
     'invoice_ready', 'invoice_paid', 'invoice_client_paid',
 }
@@ -147,6 +151,17 @@ _PERSIST_EVENTS = {
     # ...and the one case that IS the admin's problem: they have no work assigned.
     # Re-nudged while unread (see _cron_check_idle_developers).
     'dev_no_task',
+    # ── Break / lunch / meeting over-run reminders (developer only) ──
+    # Break/lunch/meeting time was recorded in full but NOBODY was ever told a
+    # break had run long — the developer found out afterwards, when the
+    # auto-close had already rewritten their hours. These are the nudge that
+    # lets them fix it themselves. Sent to the person on the break and to no
+    # one else: see kpi.nontask.block.reason for why admins stay out of it.
+    'break_running_long',
+    'lunch_running_long',
+    'meeting_running_long',
+    'break_budget_exceeded',   # the DAY's break + lunch total, not one break
+    'workday_overtime',        # still clocked in past a normal day
     'internal_rejected',    # dev: your work was sent back → rework
     # dev: an admin pulled a finished task back off the client's desk. They
     # believed it was done, so this must reach them rather than the task
@@ -201,6 +216,11 @@ _NOTIF_TITLES = {
     'invoice_client_paid':  'Client marked invoice paid',
     'dev_idle_check':       'Not started a task yet?',
     'dev_no_task':          '📭 Developer has no tasks',
+    'break_running_long':    '☕ Still on your break?',
+    'lunch_running_long':    '🍽 Lunch is running long',
+    'meeting_running_long':  '👥 Meeting is running long',
+    'break_budget_exceeded': '⏱ Break time adds up',
+    'workday_overtime':      '🌙 Your workday is still open',
 }
 
 # App-shaped bodies for the in-app feed. The WhatsApp templates below are full of
@@ -372,6 +392,42 @@ _APP_TEMPLATES = {
         "📭 {dev} has no tasks to work on.\n"
         "🕘 Workday started {login_at}\n\n"
         "Assign them something from the board."
+    ),
+    # ── Over-run reminders. Tone is the whole point. ─────────────────────
+    # These go to ONE person about their OWN day, so they are written as a
+    # reminder from a colleague, not a warning from a system: no "exceeded", no
+    # "violation", no allowance language. The moment one of these reads as an
+    # accusation it stops being a nudge and becomes surveillance — and then
+    # people stop declaring their breaks honestly at all, which costs us the
+    # data the whole Workday Map is built on.
+    'break_running_long': (
+        "☕ You've been on a break for {elapsed}.\n"
+        "Just a nudge in case you lost track — breaks are usually around {limit}.\n\n"
+        "Open the app to resume your task when you're ready."
+    ),
+    'lunch_running_long': (
+        "🍽 Lunch has been running {elapsed}.\n"
+        "Usually that's about {limit} — no rush if you're still eating.\n\n"
+        "Open the app to pick your task back up."
+    ),
+    'meeting_running_long': (
+        "👥 Your meeting has been running {elapsed}.\n"
+        "It was logged as a meeting {limit} ago and is still counting.\n\n"
+        "If it ended a while back, open the app so the time lands in the right place."
+    ),
+    # The one that catches six short breaks, none of which was ever long enough
+    # to trip the per-break reminder above.
+    'break_budget_exceeded': (
+        "⏱ Breaks and lunch add up to {elapsed} so far today.\n"
+        "That's past the usual {limit} for a day.\n\n"
+        "Nothing to do — just so it isn't a surprise at the end of the day."
+    ),
+    # Sent BEFORE _cron_close_overdue_workdays closes the day for them and stamps
+    # auto_closed. Being told first is what makes that recoverable.
+    'workday_overtime': (
+        "🌙 You've been clocked in for {elapsed} today.\n"
+        "A normal day here is {limit}, and your workday is still open.\n\n"
+        "Tap End Workday when you're done, so your hours are recorded the way you worked them."
     ),
     # Stage 2 — the work is done and needs the client's final sign-off.
     'internal_approved': (
@@ -592,6 +648,17 @@ _EVENT_RECIPIENTS = {
     'dev_idle_check':            (),
     # The one case that IS the admin's to fix. Re-nudged every 15 min while unread.
     'dev_no_task':               ('owner', 'coordinator'),
+    # Over-run reminders go to the DEVELOPER via extra_users and to NOBODY via
+    # the role matrix — hence the empty tuples. This is the whole reason the
+    # feature is safe to ship: it is a person being reminded about their own
+    # day, not a report to their manager. kpi.nontask.block.reason says it
+    # plainly — telling admins about a meeting is the false alarm that makes
+    # the whole feed worth ignoring.
+    'break_running_long':        (),
+    'lunch_running_long':        (),
+    'meeting_running_long':      (),
+    'break_budget_exceeded':     (),
+    'workday_overtime':          (),
     # Workday auto-closed at midnight — tell the DEVELOPER (their phone).
     'workday_auto_closed':       ('developer',),
     # Pre-approval reminder — client only.
@@ -820,7 +887,12 @@ _PASSTHROUGH_EVENTS = ('daily_summary', 'daily_report',
                        # have no tasks — so the anchor is an unrelated record and
                        # {dev} built from it would name the WRONG person. Passthrough
                        # renders from ctx only, so the caller supplies the real dev.
-                       'dev_idle_check', 'dev_no_task')
+                       'dev_idle_check', 'dev_no_task',
+                       # Same reason again: these are about the developer, and
+                       # {dev} built from the anchor would name the wrong person.
+                       'break_running_long', 'lunch_running_long',
+                       'meeting_running_long', 'break_budget_exceeded',
+                       'workday_overtime')
 
 
 _DECISION_EMOJI = {

@@ -23,6 +23,7 @@
         "data/kpi_download_cleanup_cron.xml",
         "data/kpi_queue_nudge_cron.xml",
         "data/kpi_idle_check_cron.xml",
+        "data/kpi_break_alert_cron.xml",
         "data/kpi_urgent_nudge_cron.xml",
         "data/kpi_auto_away_cron.xml",
         "views/wa_approval_templates.xml",

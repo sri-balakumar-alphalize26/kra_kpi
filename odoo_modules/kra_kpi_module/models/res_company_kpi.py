@@ -54,6 +54,42 @@ class ResCompany(models.Model):
              "the 'Auto End forgotten workdays' cron to turn it back on. "
              "See _cron_close_idle_workdays.")
 
+    # ---- Break / lunch / meeting over-run reminders ----------------------- #
+    # Sent to the DEVELOPER only, never to an admin — the same rule
+    # kpi.nontask.block.reason already states: telling admins about a meeting is
+    # the false alarm that makes the whole feed worth ignoring. These exist so a
+    # developer who lost track of time is told while they can still fix it,
+    # instead of finding out afterwards when the cron has rewritten their day.
+    # All four read by kpi.work.session._cron_check_long_breaks.
+    break_alert_minutes = fields.Integer(
+        string='Break Reminder Every (minutes)',
+        default=15,
+        help="How long an open BREAK runs before the developer is reminded, and the "
+             "gap between repeats. Capped at BREAK_ALERT_MAX (4) pings so a genuinely "
+             "long break is never nagged forever. 0 = OFF.")
+
+    lunch_alert_minutes = fields.Integer(
+        string='Lunch Reminder After (minutes)',
+        default=30,
+        help="How long an open LUNCH runs before the developer is reminded. Sent "
+             "ONCE — lunch has a natural end and a repeat would just be nagging. "
+             "0 = OFF.")
+
+    meeting_alert_minutes = fields.Integer(
+        string='Meeting Reminder After (minutes)',
+        default=30,
+        help="How long an open MEETING runs before the developer is reminded. Sent "
+             "ONCE: an over-running meeting is usually not something they control, "
+             "so repeating it would be noise. 0 = OFF.")
+
+    break_budget_minutes = fields.Integer(
+        string='Daily Break Budget (minutes)',
+        default=60,
+        help="Break + lunch TOTAL for the day, after which the developer is told "
+             "once. This is what catches six short breaks that never individually "
+             "tripped the per-break reminder. Meetings are excluded — a meeting is "
+             "work, not a break. 0 = OFF.")
+
     # ---- Attendance (Admin Live Tracking) -------------------------------- #
     attendance_cutoff_hour = fields.Float(
         string='Attendance Cutoff (IST hour)',
