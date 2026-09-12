@@ -226,10 +226,20 @@ function AppInner() {
   const routeToAlarm = (notif) => {
     const data = notif?.data || {};
     if (String(data.alarm) !== '1') return;
-    log.info('alarm → full-screen', { notifId: notif?.id, kpiId: data.kpi_id });
+    // A reminder alarm carries reminder_id and no kpi_id -- see the payload in
+    // services/alarm.js. subject_kind is explicit rather than inferred, so an
+    // older notification still in the tray (kpi_id, no subject_kind) keeps
+    // behaving as a task.
+    const isReminder = data.subject_kind === 'reminder' || (!data.kpi_id && !!data.reminder_id);
+    const id = isReminder ? data.reminder_id : data.kpi_id;
+    log.info('alarm → full-screen', { notifId: notif?.id, kind: isReminder ? 'reminder' : 'task', id });
     // `reason` = the optional note typed when setting the reminder (shown on the
     // alarm screen; blank → plain screen).
-    setAlarmData({ task: { id: data.kpi_id, name: data.task_name || '' }, reason: data.reason || '', notifId: notif?.id });
+    setAlarmData({
+      task: { kind: isReminder ? 'reminder' : 'task', id, name: data.task_name || '' },
+      reason: data.reason || '',
+      notifId: notif?.id,
+    });
   };
 
   // STOP: cancel the notification (stops the loop), clear the stored reminder so
@@ -249,22 +259,39 @@ function AppInner() {
   // updating the stored reminder so the card bell shows the new time.
   const snoozeAlarm = async () => {
     const a = alarmData;
-    log.info('alarm: snooze pressed', { notifId: a?.notifId, taskId: a?.task?.id });
+    log.info('alarm: snooze pressed', { notifId: a?.notifId, kind: a?.task?.kind || 'task', id: a?.task?.id });
     setAlarmData(null);
     if (a?.notifId) await stopAlarm(a.notifId);
-    if (a?.task) {
+    if (a?.task?.id) {
       // Snooze length comes from the user's alarm settings (set in the picker).
       const { snoozeMins } = await session.getAlarmSettings();
       const mins = Math.max(1, snoozeMins || 5);
       const whenMs = Date.now() + mins * 60 * 1000;
       const reason = a.reason || '';
       const notifId = await scheduleTaskAlarm(a.task, whenMs, reason);
-      log.info('alarm: snoozed', { taskId: a.task.id, notifId, whenMs, snoozeMins: mins });
+      const isReminder = a.task.kind === 'reminder';
+      log.info('alarm: snoozed', { kind: a.task.kind || 'task', id: a.task.id, notifId, whenMs, snoozeMins: mins });
       try {
-        await session.setReminder(a.task.id, {
-          whenIso: new Date(whenMs).toISOString(), notifId, mode: 'alarm', reason,
-          snoozed: true,   // so the task shows a "Snoozed" state, not a plain reminder
-        });
+        if (isReminder) {
+          // Snooze is LOCAL and temporary, and must stay that way. A reminder's
+          // fire time is the server's next_trigger; writing 5-minutes-from-now
+          // back would turn "remind me shortly" into "this reminder is now at
+          // 15:05, every day" -- a silent edit to the schedule nobody asked for.
+          //
+          // Recording it also stops the 15s sync from killing it: syncReminderAlarms
+          // cancels anything whose armed time no longer matches next_trigger, which
+          // is exactly what a snooze looks like.
+          // uid, so the snooze is keyed the same way the armed-alarm map is --
+          // otherwise the sync reads one namespace and snooze writes another.
+          await session.setReminderSnooze(a.task.id, {
+            whenIso: new Date(whenMs).toISOString(), notifId, reason,
+          }, user?.uid);
+        } else {
+          await session.setReminder(a.task.id, {
+            whenIso: new Date(whenMs).toISOString(), notifId, mode: 'alarm', reason,
+            snoozed: true,   // so the task shows a "Snoozed" state, not a plain reminder
+          });
+        }
       } catch (_) {}
     }
   };

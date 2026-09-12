@@ -3,7 +3,8 @@
 // intent). Looks like a real alarm clock: a big live time + date, and the task it
 // is ringing about (the reason). It keeps ringing/looping in the OS until the user
 // taps STOP here, which cancels the notification (stopping the loop) and opens the
-// task. Snooze re-rings in 5 minutes. Android-only in practice.
+// task -- or a standalone reminder, which rings through this same screen and
+// differs only in wording. Snooze re-rings in 5 minutes. Android-only in practice.
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Pressable, StyleSheet, Animated, Easing } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -44,6 +45,10 @@ function useClock() {
 
 export default function AlarmScreen({ alarm, onStop, onSnooze }) {
   const task = alarm?.task || {};
+  // A reminder rings through this same screen. Only the wording differs --
+  // telling someone their 'set time for this task is up' when they set a
+  // reminder to call the bank is just wrong.
+  const isReminder = task?.kind === 'reminder';
   const reason = (alarm?.reason || '').trim();   // optional note typed when set
   const { time, ap, date } = useClock();
 
@@ -53,7 +58,7 @@ export default function AlarmScreen({ alarm, onStop, onSnooze }) {
   const onStopRef = useRef(onStop);
   useEffect(() => { onStopRef.current = onStop; }, [onStop]);
   useEffect(() => {
-    log.info('screen: shown', { taskId: alarm?.task?.id, notifId: alarm?.notifId });
+    log.info('screen: shown', { kind: alarm?.task?.kind || 'task', id: alarm?.task?.id, notifId: alarm?.notifId });
     let alive = true;
     getAlarmSettings().then((s) => { if (alive) { setSettings(s); log.info('screen: settings loaded', s); } }).catch(() => {});
     return () => { alive = false; };
@@ -102,7 +107,7 @@ export default function AlarmScreen({ alarm, onStop, onSnooze }) {
           </View>
           <Text style={styles.date}>{date}</Text>
 
-          <Text style={styles.title}>⏰ Time to wrap up</Text>
+          <Text style={styles.title}>{isReminder ? '⏰ Reminder' : '⏰ Time to wrap up'}</Text>
 
           {/* Reason typed → show it prominently (task name as a small sub). No reason
               → plain: just the task name line, no card. */}
@@ -115,7 +120,9 @@ export default function AlarmScreen({ alarm, onStop, onSnooze }) {
           ) : task?.name ? (
             <Text style={styles.taskPlain} numberOfLines={3}>{task.name}</Text>
           ) : null}
-          <Text style={styles.sub}>Your set time for this task is up.</Text>
+          <Text style={styles.sub}>
+            {isReminder ? 'This reminder is due now.' : 'Your set time for this task is up.'}
+          </Text>
         </View>
 
         <View style={styles.actions}>

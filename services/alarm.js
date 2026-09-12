@@ -155,11 +155,29 @@ async function ensureAlarmChannel(sound) {
   return channelId;
 }
 
+// What an alarm is ABOUT. Tasks were the only answer for a long time, so the
+// whole path -- payload, routing, snooze, the Stop screen -- reads `task`. A
+// standalone reminder rings the same way but is not a task and carries no
+// kpi_id: that absence is deliberate, it is what makes a reminder's tap open the
+// Reminders screen instead of somebody's task.
+//
+// Rather than thread a second parallel branch through four files, everything now
+// speaks `subject`: { kind: 'task' | 'reminder', id, name }. Callers that still
+// pass a bare task object keep working -- asSubject() normalises them.
+export function asSubject(x) {
+  if (!x) return { kind: 'task', id: '', name: '' };
+  if (x.kind === 'task' || x.kind === 'reminder') return x;
+  return { kind: 'task', id: x.id, name: x.name || '' };   // legacy: a task
+}
+
 // Schedule a ringing alarm for `whenMs` (epoch ms). Returns the notification id
 // (persist it so it can be cancelled), or null on failure / non-Android / no notifee.
-export async function scheduleTaskAlarm(task, whenMs, reason = '') {
+//
+// `subjectIn` is a subject as above, or a plain task for older callers.
+export async function scheduleTaskAlarm(subjectIn, whenMs, reason = '') {
+  const task = asSubject(subjectIn);
   if (Platform.OS !== 'android') { log.info('schedule skipped (not android)', { platform: Platform.OS }); return null; }
-  if (!notifee) { log.warn('schedule skipped — notifee unavailable (rebuild needed)', { task: task?.id }); return null; }
+  if (!notifee) { log.warn('schedule skipped — notifee unavailable (rebuild needed)', { subject: task?.id }); return null; }
   try {
     const note = (reason || '').trim();
     const secsFromNow = Math.round((whenMs - Date.now()) / 1000);
@@ -175,10 +193,21 @@ export async function scheduleTaskAlarm(task, whenMs, reason = '') {
     const channelId = await ensureAlarmChannel(sound);
     const notifId = await notifee.createTriggerNotification(
       {
-        title: '⏰ Time to wrap up',
-        // The typed reason leads when present, else the task name.
-        body: note || task?.name || 'Your task',
-        data: { kpi_id: String(task?.id ?? ''), alarm: '1', task_name: task?.name || '', reason: note },
+        title: task.kind === 'reminder' ? '⏰ Reminder' : '⏰ Time to wrap up',
+        // The typed reason leads when present, else the subject's own name.
+        body: note || task?.name || (task.kind === 'reminder' ? 'Your reminder' : 'Your task'),
+        // kpi_id ONLY for a task. A reminder carries reminder_id instead, so the
+        // tap lands on the Reminders screen -- App.js routes on whichever is
+        // present, and a stray kpi_id here would open an unrelated task.
+        data: {
+          ...(task.kind === 'reminder'
+            ? { reminder_id: String(task?.id ?? '') }
+            : { kpi_id: String(task?.id ?? '') }),
+          alarm: '1',
+          subject_kind: task.kind,
+          task_name: task?.name || '',
+          reason: note,
+        },
         android: {
           channelId,
           category: AndroidCategory.ALARM,

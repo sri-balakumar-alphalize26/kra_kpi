@@ -333,3 +333,54 @@ export async function saveReminderAlarms(uid, map) {
     await AsyncStorage.setItem(`${K_REMINDER_ALARMS}:${uid ?? 'me'}`, JSON.stringify(map || {}));
   } catch (_) {}
 }
+
+// --- A snoozed reminder ------------------------------------------------------
+// Snooze is deliberately LOCAL and temporary. A reminder's fire time belongs to
+// the server (kpi.reminder.next_trigger); writing "5 minutes from now" back to it
+// would turn "remind me shortly" into a permanent schedule change — the reminder
+// would move to 15:05 and, if it repeats, stay there. Nobody asks for that when
+// they press Snooze.
+//
+// Keeping it here also protects it from the sync: syncReminderAlarms cancels any
+// armed alarm whose time no longer matches next_trigger, and a snooze is exactly
+// that mismatch. Without this record the 15s sync would cancel the snooze almost
+// immediately.
+//
+// One entry per reminder, cleared once it has fired or the reminder changes.
+const K_REMINDER_SNOOZE = 'kpi_reminder_snooze';
+
+export async function getReminderSnoozes(uid) {
+  try {
+    const raw = await AsyncStorage.getItem(`${K_REMINDER_SNOOZE}:${uid ?? 'me'}`);
+    const o = raw ? JSON.parse(raw) : null;
+    return (o && typeof o === 'object') ? o : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+export async function setReminderSnooze(reminderId, entry, uid) {
+  try {
+    const all = await getReminderSnoozes(uid);
+    if (entry) all[String(reminderId)] = entry;
+    else delete all[String(reminderId)];
+    await AsyncStorage.setItem(`${K_REMINDER_SNOOZE}:${uid ?? 'me'}`, JSON.stringify(all));
+  } catch (_) {}
+}
+
+// Drop snoozes whose time has passed — they have already rung, so holding them
+// would keep the sync away from a reminder that is due again.
+export async function pruneReminderSnoozes(uid, nowMs) {
+  try {
+    const all = await getReminderSnoozes(uid);
+    let changed = false;
+    for (const [id, v] of Object.entries(all)) {
+      const t = v && v.whenIso ? Date.parse(v.whenIso) : 0;
+      if (!t || t <= nowMs) { delete all[id]; changed = true; }
+    }
+    if (changed) await AsyncStorage.setItem(`${K_REMINDER_SNOOZE}:${uid ?? 'me'}`, JSON.stringify(all));
+    return all;
+  } catch (_) {
+    return {};
+  }
+}

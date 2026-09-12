@@ -10,8 +10,14 @@
 // What this gives: a heads-up notification with sound on the shared 'reminders'
 // channel, at the right moment, tappable through to the Reminders screen.
 //
+// A reminder rings the same way a task alarm does WHEN notifee is present:
+// full-screen, looping, with Stop and Snooze. When it is not, the same reminder
+// still arrives as a heads-up banner with sound. That fallback is not a
+// nice-to-have -- services/alarm.js guards its own import and no-ops without the
+// native module, so without a fallback a reminder on such a build would fire
+// nothing at all, silently.
+//
 // What it does NOT give, and why:
-//   * No lock-screen takeover / looping ring — that is notifee, still dead.
 //   * Nothing re-arms after a reboot. RECEIVE_BOOT_COMPLETED is declared in
 //     app.json but there is no native code behind it.
 //   * A reminder created on the WEB arms only when this device next syncs. The
@@ -23,7 +29,8 @@
 import * as Notifications from 'expo-notifications';
 import { createLogger } from '../api/logger';
 import { ensureReminderChannel } from './reminders';
-import { getReminderAlarms, saveReminderAlarms } from '../api/session';
+import { getReminderAlarms, saveReminderAlarms, pruneReminderSnoozes } from '../api/session';
+import { alarmAvailable, scheduleTaskAlarm, stopAlarm } from './alarm';
 // The two decisions that can be silently wrong -- what the server's naive-UTC
 // string means, and which rows deserve an alarm -- live in utils/ as pure
 // functions so they unit-test without a device. This module only schedules.
@@ -44,6 +51,12 @@ export async function syncReminderAlarms(rows, uid) {
     const prev = await getReminderAlarms(uid);
     const next = {};
 
+    // A snoozed reminder is armed for a time the SERVER knows nothing about, so
+    // it looks exactly like a stale entry to the reconcile below -- which would
+    // cancel it, usually within one 15s sync. Snoozes are held separately and
+    // skipped here; pruning drops the ones whose time has already passed.
+    const snoozed = await pruneReminderSnoozes(uid, now);
+
     // What the OS actually still holds. The stored map can outlive the schedule
     // it describes -- a reinstall, cleared data, or a notification that already
     // fired -- and without this check we would believe an id that is long gone
@@ -62,17 +75,46 @@ export async function syncReminderAlarms(rows, uid) {
     let armed = 0;
     let cancelled = 0;
 
+    // Ring properly if we can. alarmAvailable() is a runtime answer, not a build
+    // assumption -- the codebase long claimed notifee was dead in every shipped
+    // build while the installed APK in fact carried it.
+    const canRing = alarmAvailable();
+
     for (const r of want) {
+      // Leave a snoozed reminder exactly as it is.
+      if (snoozed[r.id]) { next[r.id] = prev[r.id] || snoozed[r.id]; continue; }
+
       const was = prev[r.id];
       const whenIso = new Date(r.at).toISOString();
       // Already scheduled for this exact instant, and the OS agrees it exists.
-      if (was && was.whenIso === whenIso && was.notifId && live.has(was.notifId)) {
+      // Only meaningful for the banner path: a notifee alarm is not in expo's
+      // scheduled list, so `live` cannot vouch for it and `was.kind` is checked
+      // instead.
+      if (was && was.whenIso === whenIso && was.notifId
+          && (was.kind === 'alarm' || live.has(was.notifId))) {
         next[r.id] = was;
         continue;
       }
       if (was && was.notifId) {
-        try { await Notifications.cancelScheduledNotificationAsync(was.notifId); } catch (_) {}
+        try {
+          if (was.kind === 'alarm') await stopAlarm(was.notifId);
+          else await Notifications.cancelScheduledNotificationAsync(was.notifId);
+        } catch (_) {}
       }
+
+      if (canRing) {
+        const notifId = await scheduleTaskAlarm(
+          { kind: 'reminder', id: r.id, name: r.name }, r.at, '');
+        if (notifId) {
+          next[r.id] = { notifId, whenIso, kind: 'alarm' };
+          armed += 1;
+          continue;
+        }
+        // Fell through: scheduleTaskAlarm returns null on a refused permission or
+        // a non-Android platform. Better a banner than silence.
+        log.info('alarm refused, falling back to a banner', { id: r.id });
+      }
+
       try {
         const notifId = await Notifications.scheduleNotificationAsync({
           content: {
@@ -96,7 +138,7 @@ export async function syncReminderAlarms(rows, uid) {
             channelId,
           },
         });
-        next[r.id] = { notifId, whenIso };
+        next[r.id] = { notifId, whenIso, kind: 'banner' };
         armed += 1;
       } catch (e) {
         log.warn('arm failed', { id: r.id, error: e?.message });
@@ -108,12 +150,17 @@ export async function syncReminderAlarms(rows, uid) {
     for (const [id, v] of Object.entries(prev || {})) {
       if (next[id]) continue;
       if (v && v.notifId) {
-        try { await Notifications.cancelScheduledNotificationAsync(v.notifId); cancelled += 1; } catch (_) {}
+        try {
+          if (v.kind === 'alarm') await stopAlarm(v.notifId);
+          else await Notifications.cancelScheduledNotificationAsync(v.notifId);
+          cancelled += 1;
+        } catch (_) {}
       }
     }
 
     await saveReminderAlarms(uid, next);
-    log.info('sync', { wanted: want.length, armed, cancelled, kept: want.length - armed });
+    log.info('sync', { wanted: want.length, armed, cancelled, kept: want.length - armed,
+                      mode: canRing ? 'alarm' : 'banner', snoozed: Object.keys(snoozed).length });
     return { armed, cancelled, total: want.length };
   } catch (e) {
     log.warn('sync failed', e?.message);
@@ -128,7 +175,10 @@ export async function clearReminderAlarms(uid) {
     const prev = await getReminderAlarms(uid);
     for (const v of Object.values(prev || {})) {
       if (v && v.notifId) {
-        try { await Notifications.cancelScheduledNotificationAsync(v.notifId); } catch (_) {}
+        try {
+          if (v.kind === 'alarm') await stopAlarm(v.notifId);
+          else await Notifications.cancelScheduledNotificationAsync(v.notifId);
+        } catch (_) {}
       }
     }
     await saveReminderAlarms(uid, {});
