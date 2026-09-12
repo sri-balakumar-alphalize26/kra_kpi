@@ -272,22 +272,35 @@ export async function setAlarmSettings(partial) {
 // The TASK ID, not the index: positions shift as tasks start and finish, so a
 // stored index would quietly point at a different task. An id that is no longer
 // running simply fails to match and the pager falls back to the first card.
+//
+// Stored with the GROUP it belonged to ('in_progress' | 'today'), because the
+// same id means a different page depending on which group is showing.
 const K_HOME_CARD = 'home_live_card_task';
 
+// Returns { group, taskId }. group is 'in_progress' | 'today'.
 export async function getHomeCardTask(uid) {
   try {
     const raw = await AsyncStorage.getItem(`${K_HOME_CARD}:${uid ?? 'me'}`);
-    const id = raw ? parseInt(raw, 10) : NaN;
-    return Number.isFinite(id) ? id : null;
+    if (!raw) return null;
+    // Older builds stored a bare task id, before the card had groups. Read it as
+    // In Progress rather than discarding it — an upgrade should not throw away
+    // where someone was.
+    if (/^\d+$/.test(raw)) return { group: 'in_progress', taskId: parseInt(raw, 10) };
+    const v = JSON.parse(raw);
+    const taskId = Number.isFinite(v && v.t) ? v.t : null;
+    return { group: (v && v.g) === 'today' ? 'today' : 'in_progress', taskId };
   } catch (_) {
     return null;
   }
 }
 
-export async function saveHomeCardTask(uid, taskId) {
+export async function saveHomeCardTask(uid, group, taskId) {
   try {
     const key = `${K_HOME_CARD}:${uid ?? 'me'}`;
-    if (!taskId) await AsyncStorage.removeItem(key);
-    else await AsyncStorage.setItem(key, String(taskId));
+    if (!group && !taskId) { await AsyncStorage.removeItem(key); return; }
+    await AsyncStorage.setItem(key, JSON.stringify({
+      g: group === 'today' ? 'today' : 'in_progress',
+      t: taskId || null,
+    }));
   } catch (_) {}
 }
