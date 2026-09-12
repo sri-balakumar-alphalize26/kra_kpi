@@ -6,10 +6,23 @@
 // record rule scopes every row to its owner, so this screen cannot show, or be
 // made to show, anybody else's.
 //
-// It does NOT ring yet. The reminder is stored and the server derives the exact
-// UTC instant (next_trigger), but arming an on-device alarm from it needs the
-// notifee rebuild — the alarm path no-ops in every currently installed build. The
-// screen says so rather than leaving someone to wonder why nothing went off.
+// It rings. The server computes the exact UTC instant (next_trigger, in the
+// user's own timezone, DST included) and this screen arms a local notification
+// from it through services/reminderAlarm.js — a heads-up banner with sound on the
+// shared 'reminders' channel.
+//
+// It is NOT the looping full-screen alarm services/alarm.js does; that one is
+// notifee and stays dead until an APK ships with it. This was reachable without
+// any rebuild because expo-notifications is already in every installed build,
+// already doing exactly this for per-task reminders. The header used to say the
+// feature needed the notifee rebuild, which was only ever true of the ringing
+// kind.
+//
+// Three honest limits, all consequences of having no native scheduler: nothing
+// re-arms after a reboot, a reminder created on the WEB arms only when this
+// device next syncs (the server pushes nothing for reminders), and only the next
+// occurrence of a repeat is armed — the server advances remind_date when one is
+// completed, so until then there is no later instant to schedule.
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -23,6 +36,7 @@ import GradientBackground from '../components/GradientBackground';
 import DateGridModal from '../components/DateGridModal';
 import DurationTimePicker from '../components/DurationTimePicker';
 import { createLogger } from '../api/logger';
+import { syncReminderAlarms } from '../services/reminderAlarm';
 import FieldError from '../components/FieldError';
 import AppDialog from '../components/AppDialog';
 import * as H from '../utils/haptics';
@@ -76,7 +90,7 @@ function fmtDate(iso) {
   return `${d} ${MON[Number(m) - 1] || ''} ${y}`;
 }
 
-export default function Reminders({ onBack }) {
+export default function Reminders({ onBack, uid }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [unavailable, setUnavailable] = useState(false);
@@ -102,8 +116,17 @@ export default function Reminders({ onBack }) {
     try {
       const res = await fetchReminders();
       if (res?.status) {
-        setRows(res.reminders || []);
+        const list = res.reminders || [];
+        setRows(list);
         setUnavailable(false);
+        // Arm from the list we just received, not from `rows` in an effect: on
+        // the first render rows is still [], and syncing that would cancel every
+        // alarm on the device a moment before the real list arrived.
+        //
+        // Every mutation on this screen ends in load(), so this one call covers
+        // add, edit, complete and delete. The toggle is the exception -- it
+        // updates optimistically without reloading -- and syncs itself below.
+        syncReminderAlarms(list, uid);
       } else {
         setRows([]);
         setUnavailable(!!res?.notInstalled);
@@ -114,7 +137,7 @@ export default function Reminders({ onBack }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [uid]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -201,7 +224,13 @@ export default function Reminders({ onBack }) {
     if (!res?.status) {
       setRows((prev) => prev.map((r) => (r.id === item.id ? { ...r, enabled: !on } : r)));
       flash('err', res?.message || 'Could not change that.');
+      return;
     }
+    // This is the one change that does not reload, and `enabled` decides whether
+    // a reminder is armed at all -- the server's next_trigger does NOT depend on
+    // it, so switching one off leaves a perfectly good future instant behind.
+    // Without this the switch would say off and the phone would still ring.
+    setRows((prev) => { syncReminderAlarms(prev, uid); return prev; });
   };
 
   // The app's own dialog rather than Alert.alert. The OS alert is the one piece

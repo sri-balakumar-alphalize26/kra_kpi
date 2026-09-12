@@ -304,3 +304,32 @@ export async function saveHomeCardTask(uid, group, taskId) {
     }));
   } catch (_) {}
 }
+
+// --- Reminder alarms armed on THIS device ------------------------------------
+// { [reminderId]: { notifId, whenIso } } — what we have actually scheduled with
+// expo-notifications, so the next sync can tell "already armed for that instant"
+// from "needs re-arming" without cancelling and re-creating the lot every time.
+//
+// Same shape as K_REMINDERS above, but that one is display state for the board
+// and is never reconciled against anything. This one IS the reconciliation
+// record: lose it and the device keeps firing notifications nothing can cancel.
+//
+// Per user and per device, like the rest of this file. Local-only: a reinstall
+// clears it, which is correct — the OS drops the scheduled notifications too.
+const K_REMINDER_ALARMS = 'kpi_reminder_alarms';
+
+export async function getReminderAlarms(uid) {
+  try {
+    const raw = await AsyncStorage.getItem(`${K_REMINDER_ALARMS}:${uid ?? 'me'}`);
+    const o = raw ? JSON.parse(raw) : null;
+    return (o && typeof o === 'object') ? o : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+export async function saveReminderAlarms(uid, map) {
+  try {
+    await AsyncStorage.setItem(`${K_REMINDER_ALARMS}:${uid ?? 'me'}`, JSON.stringify(map || {}));
+  } catch (_) {}
+}

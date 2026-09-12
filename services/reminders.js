@@ -22,7 +22,7 @@ const log = createLogger('Reminders');
 // A dedicated high-importance channel so a fired reminder pops as a heads-up
 // banner WITH sound + vibration (on Android 8+, sound/heads-up come from the
 // channel, not content). Runtime call — no rebuild. Created once, idempotent.
-async function ensureReminderChannel() {
+export async function ensureReminderChannel() {
   if (Platform.OS !== 'android') return undefined;
   try {
     await Notifications.setNotificationChannelAsync('reminders', {

@@ -57,6 +57,8 @@ import { loadHaptics } from './utils/haptics';
 import { jsonRpc } from './api/odooApi';
 import { createLogger } from './api/logger';
 import { registerForPushAsync, unregisterPush } from './services/push';
+import { fetchReminders } from './services/reminderList';
+import { syncReminderAlarms, clearReminderAlarms } from './services/reminderAlarm';
 import { getWorkdayStatus } from './services/kpiActions';
 
 const log = createLogger('App');
@@ -162,6 +164,17 @@ function AppInner() {
   // tasks live in My Requests, so every client notification opens that instead.
   // If we aren't logged in yet (cold-start tap), queue it until the session
   // restore / login completes.
+  // A reminder tap has no kpi_id -- see services/reminderAlarm.js, which leaves
+  // it out deliberately. Without a branch of its own the tap fell through to
+  // routeToTask, which returns immediately on a falsy id, so tapping a reminder
+  // did precisely nothing.
+  const routeToReminders = () => {
+    if (userRef.current) setAppScreen('reminders');
+    // Not queued in pendingTapRef like a task: that ref holds a task id and is
+    // consumed by routeToTask on login. A reminder tap before login is rare
+    // enough that opening Home is a fine answer.
+  };
+
   const routeToTask = (kpiId) => {
     if (!kpiId) return;
     if (userRef.current) {
@@ -414,6 +427,29 @@ function AppInner() {
     return () => clearInterval(id);
   }, [user?.uid, devLocked]);
 
+  // Keep this device's reminder alarms in step with the server.
+  //
+  // A reminder is armed locally from next_trigger; nothing pushes when a row is
+  // created, so one added on the web — or on another phone — is invisible here
+  // until we ask. Syncing on login and on every foreground is what makes "set it
+  // on the web, it rings on the phone" actually true, instead of requiring the
+  // user to open the Reminders screen first.
+  //
+  // Deliberately NOT gated on devLocked like the workday effects around it:
+  // reminders belong to every role, not just developers.
+  useEffect(() => {
+    if (!user) return undefined;
+    const sync = async () => {
+      try {
+        const res = await fetchReminders();
+        if (res?.status) await syncReminderAlarms(res.reminders || [], user?.uid);
+      } catch (_) { /* offline → whatever is already armed stays armed */ }
+    };
+    sync();
+    const sub = AppState.addEventListener('change', (s) => { if (s === 'active') sync(); });
+    return () => sub.remove();
+  }, [user?.uid]);
+
   // On app FOREGROUND (open / resume): refresh the workday state. Never
   // force-navigates — switching apps and back must not move anyone off the screen
   // they were reading, which is what the old PIN redirect did.
@@ -438,12 +474,13 @@ function AppInner() {
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
       const data = resp?.notification?.request?.content?.data || {};
-      log.info('notification tapped', { kpiId: data.kpi_id, reportId: data.report_id, invoiceId: data.invoice_id });
+      log.info('notification tapped', { kpiId: data.kpi_id, reportId: data.report_id, invoiceId: data.invoice_id, reminderId: data.reminder_id });
       // Invoice / daily-report pushes carry an anchor kpi_id too — the specific
       // tap-target (invoice_id / report_id) wins so it opens the right screen,
       // not the unrelated anchor task.
       if (data.invoice_id) routeToInvoice(data.invoice_id);
       else if (data.report_id) routeToReport(data.report_id);
+      else if (data.reminder_id) routeToReminders();
       else routeToTask(data.kpi_id);
     });
     (async () => {
@@ -452,6 +489,7 @@ function AppInner() {
         const data = last?.notification?.request?.content?.data || {};
         if (data.invoice_id) { log.info('cold-start tap → invoice', { invoiceId: data.invoice_id }); routeToInvoice(data.invoice_id); }
         else if (data.report_id) { log.info('cold-start tap → report', { reportId: data.report_id }); routeToReport(data.report_id); }
+        else if (data.reminder_id) { log.info('cold-start tap \u2192 reminders', { reminderId: data.reminder_id }); routeToReminders(); }
         else if (data.kpi_id) { log.info('cold-start notification tap', { kpiId: data.kpi_id }); routeToTask(data.kpi_id); }
       } catch (_) {}
     })();
@@ -504,6 +542,10 @@ function AppInner() {
   const logout = async () => {
     // Best-effort: stop this device receiving the previous user's banners.
     if (pushTokenRef.current) { unregisterPush(pushTokenRef.current); pushTokenRef.current = null; }
+    // Reminder alarms are scheduled with the OS, not with the server, so signing
+    // out does not stop them. Without this the next person on this phone gets
+    // the previous user's reminders — by name.
+    clearReminderAlarms(user?.uid);
     await session.clearSession();
     setUser(null);
     setScreen('login');
@@ -687,7 +729,7 @@ function AppInner() {
       // Standalone reminders — the same kpi.reminder rows the web shows under
       // My Work. No role gate here: the model's record rule scopes every row to
       // its owner, so this screen can only ever show the caller's own.
-      return <Reminders onBack={home} />;
+      return <Reminders onBack={home} uid={user?.uid} />;
     // Upload screens share one component, differing only by docType.
     if (appScreen.startsWith('upload:'))
       return <UploadAmendments onBack={home} docType={appScreen.split(':')[1]} />;
