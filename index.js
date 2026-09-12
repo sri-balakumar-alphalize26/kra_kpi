@@ -21,7 +21,13 @@ try {
   });
 } catch (e) {
   // notifee native module not present yet (needs a rebuild) — skip registration.
-  console.log('[Alarm bg] notifee unavailable — skipped', e?.message);
+  //
+  // The stack matters. This catch was written for one cause ("the module is not
+  // in this build") and will happily swallow any other, reporting a crash as a
+  // missing dependency. The 1.3.0 build did exactly that with the sibling catch
+  // below: a RangeError was logged as "expo-task-manager unavailable".
+  console.log('[Alarm bg] notifee registration failed — skipped', e?.message);
+  if (e?.stack) console.log('[Alarm bg] stack', String(e.stack).slice(0, 2000));
 }
 
 // A data-only push arriving while the app is CLOSED. Registered at module scope
@@ -60,7 +66,12 @@ try {
     .then(() => console.log('[BG push] task registered'))
     .catch((err) => console.log('[BG push] register failed', err?.message));
 } catch (e) {
-  console.log('[BG push] expo-task-manager unavailable — skipped', e?.message);
+  // Same warning as the notifee catch above: do not describe the cause, report
+  // it. This exact line said "expo-task-manager unavailable" while the real
+  // error was 'Maximum call stack size exceeded', and that one wrong word is
+  // what made the 1.3.0 startup failure look like a missing native module.
+  console.log('[BG push] registration failed — skipped', e?.message);
+  if (e?.stack) console.log('[BG push] stack', String(e.stack).slice(0, 2000));
 }
 
 // registerRootComponent calls AppRegistry.registerComponent('main', () => App);
