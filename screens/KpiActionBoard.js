@@ -43,6 +43,10 @@ import { validateWorkdayNote, NOTE_MAX } from '../utils/workdayNote';
 // Why a blocked task is blocked, in the server's words. Pure + unit-tested
 // against real payloads (utils/__tests__/taskGate.test.js).
 import { gateLabel } from '../utils/taskGate';
+// Shared with HomeScreen's running-task card. Were local functions here until
+// Home needed the same three -- a second copy is how two screens start
+// disagreeing about what time it is.
+import { secsSince, liveFromAnchor, fmtHMS } from '../utils/liveTime';
 
 const log = createLogger('ActionBoard');
 
@@ -187,16 +191,6 @@ function liveSeconds(task, nowMs) {
   return base;
 }
 
-// Seconds elapsed since an ISO anchor (UTC "…Z"), for live counters.
-function secsSince(isoZ, nowMs) {
-  if (!isoZ) return 0;
-  const t = Date.parse(isoZ);
-  return Number.isNaN(t) ? 0 : Math.max(0, (nowMs - t) / 1000);
-}
-// Running task time = accrued base + live since timer_start.
-function liveFromAnchor(startIso, base, nowMs) {
-  return (base || 0) + secsSince(startIso, nowMs);
-}
 // The only two pause reasons that need words. Every other code IS its own
 // explanation, and asking for one taught people to type "break" into a box next
 // to a button already labelled Break. Urgent keeps it because that text becomes
@@ -291,13 +285,6 @@ const PRIORITY = {
 };
 
 // Format seconds as "Hh Mm Ss" like the web card's Time line.
-function fmtHMS(sec) {
-  const s = Math.max(0, Math.floor(sec || 0));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const r = s % 60;
-  return `${h}h ${m}m ${r}s`;
-}
 
 // A task's estimate in seconds (0 when unset) — used to offer an "at estimate" reminder.
 function estimateSecs(task) {
@@ -1175,7 +1162,7 @@ export default function KpiActionBoard({
   // ── Notification focus: scroll-to + heartbeat a specific task's card ──────
   const [pulseId, setPulseId] = useState(null);   // task id currently pulsing
   const boardRef = useRef(null);                   // horizontal lanes ScrollView
-  const laneRefs = useRef({});                     // laneKey → vertical ScrollView ref
+  const laneRefs = useRef({});                     // laneKey → lane FlatList ref (scrollToOffset, not scrollTo)
   const laneX = useRef({});                        // laneKey → x offset in the board
   const cardY = useRef({});                        // taskId → y offset within its lane
   const listScrollRef = useRef(null);              // list-view vertical ScrollView
@@ -2064,6 +2051,15 @@ export default function KpiActionBoard({
     return out;
   }, [orderedLanes, laneItems, expandedLanes]);
   const listKeyExtractor = useCallback((it) => it.key, []);
+  // Read by the focus effect's retry loop. It runs inside setTimeout, so it holds
+  // the listData from the render that scheduled it — and that render is the one
+  // BEFORE expandedLanes opened the group, i.e. the one where the row does not
+  // exist yet. Closing over the array would make the retry re-check the same
+  // stale copy forever and always give up; a ref always reads the current one.
+  const listDataRef = useRef(listData);
+  listDataRef.current = listData;
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
   const onLaneToggle = useCallback((key) => {
     animateNext();
     setExpandedLanes((prev) => {
@@ -2131,10 +2127,15 @@ export default function KpiActionBoard({
 
     const laneKey = laneForTask(task);
 
-    // Notification focus works best in the kanban board (reliable scroll-to-card +
-    // heartbeat), so switch to board view. Also pre-expand the list row in case the
-    // user toggles back to list.
-    setViewMode('board');
+    // Stay in whatever view the user is in. This used to force setViewMode('board')
+    // on the grounds that kanban gave a more reliable scroll-to-card — but viewMode
+    // defaults to 'list' and is never persisted, so in practice every tap yanked
+    // people out of the list they had chosen and into a grid they had not. The
+    // scroll it was buying was not even working: it called scrollTo on a lane that
+    // is a FlatList, which threw before it could scroll anything.
+    //
+    // Both views reveal the task the same way now: open its status group, expand
+    // its row, scroll it into view, then heartbeat.
     setExpandedLanes((prev) => new Set(prev).add(laneKey));
     // The copy in the task's own STATUS lane, which is the one expandedLanes just
     // opened — not the Today copy, which may not be open and is not where focus
@@ -2149,13 +2150,43 @@ export default function KpiActionBoard({
     let tries = 0;
     const tryScroll = () => {
       tries += 1;
+
+      // LIST view: the row lives in listData, so scroll the list to its index.
+      // Waits for expandedLanes to have opened the group — until it does the row
+      // is not in the data at all and there is no index to scroll to.
+      if (viewModeRef.current !== 'board') {
+        const key = rowKey(laneKey, focusTaskId);
+        const idx = listDataRef.current.findIndex((it) => it.key === key);
+        if (idx >= 0 && listScrollRef.current) {
+          // viewPosition 0.3 puts it just below the top rather than flush
+          // against it, so the status heading above stays visible for context.
+          listScrollRef.current.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
+          log.info('noti focus: scrolled list', { laneKey, idx, tries });
+          return;
+        }
+        if (tries < 10) { t1 = setTimeout(tryScroll, 160); }
+        else { log.info('noti focus: list scroll gave up (row not in data)', { laneKey, tries }); }
+        return;
+      }
+
       const x = laneX.current[laneKey];
       const y = cardY.current[focusTaskId];
       if (boardRef.current && typeof x === 'number') {
         boardRef.current.scrollTo({ x: Math.max(0, x - 8), animated: true });
+        // scrollToOffset, NOT scrollTo: the lane is a FlatList (see its ref
+        // assignment below), and FlatList has no scrollTo. This threw
+        // "laneRef.scrollTo is not a function" on every notification tap,
+        // which killed tryScroll before it could log success — so the card
+        // never scrolled into view and only the heartbeat on the next timer
+        // gave any sign the tap had worked. The lane was a ScrollView once;
+        // the call was left behind when it became a FlatList.
         const laneRef = laneRefs.current[laneKey];
         if (laneRef && typeof y === 'number') {
-          laneRef.scrollTo({ y: Math.max(0, y - 8), animated: true });
+          if (typeof laneRef.scrollToOffset === 'function') {
+            laneRef.scrollToOffset({ offset: Math.max(0, y - 8), animated: true });
+          } else if (typeof laneRef.scrollTo === 'function') {
+            laneRef.scrollTo({ y: Math.max(0, y - 8), animated: true });
+          }
         }
         log.info('noti focus: scrolled board', { laneKey, laneX: x, cardY: y, tries });
         return;
@@ -3375,6 +3406,21 @@ export default function KpiActionBoard({
           // people turn off.
           scrollEventThrottle={32}
           onScroll={(e) => H.scrollTick(e.nativeEvent.contentOffset.y)}
+          // Required whenever scrollToIndex can target a row that has not been
+          // rendered yet — without it RN throws "scrollToIndex should be used in
+          // conjunction with getItemLayout or onScrollToIndexFailed". Rows are
+          // variable height (an expanded row carries the whole detail body), so
+          // getItemLayout is not available to us: jump to an estimate, let the
+          // rows render, then land the real scroll.
+          onScrollToIndexFailed={(info) => {
+            const offset = Math.max(0, info.averageItemLength * info.index);
+            listScrollRef.current?.scrollToOffset({ offset, animated: false });
+            setTimeout(() => {
+              listScrollRef.current?.scrollToIndex({
+                index: info.index, animated: true, viewPosition: 0.3,
+              });
+            }, 80);
+          }}
           ListEmptyComponent={(
             <View style={s.center}>
               <MaterialCommunityIcons name="tray" size={40} color={COLORS.faint} />
