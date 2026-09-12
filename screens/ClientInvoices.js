@@ -7,7 +7,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ScrollView,
-  ActivityIndicator, Modal, Alert, Switch, Platform, StatusBar as RNStatusBar,
+  ActivityIndicator, Modal, Switch, Platform, StatusBar as RNStatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -17,6 +17,8 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import DateGridModal from '../components/DateGridModal';
 import { createLogger } from '../api/logger';
+import FieldError from '../components/FieldError';
+import useAppDialog from '../components/useAppDialog';
 import * as svc from '../services/clientInvoices';
 import { fmtYMD as fmt } from '../utils/dateGrid';
 import { makeInvoicePdf } from '../utils/invoicePdf';
@@ -166,6 +168,7 @@ const money = (amt, cur) => {
 const stripHtml = (h) => (h || '').replace(/<[^>]+>/g, '').trim();
 
 export default function ClientInvoices({ onBack, portal = false, focusInvoiceId, onFocusHandled }) {
+  const { dialog, confirm } = useAppDialog();
   const [mode, setMode] = useState('list');   // list | detail | create
   const chips = portal ? PORTAL_CHIPS : CHIPS;   // client sees a trimmed set
 
@@ -1166,31 +1169,58 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
           }}
         />
       ) : null}
+
+      {/* Last in the tree so it paints above the prompt and picker sheets. */}
+      {dialog}
     </View>
   );
 
   // ── helpers using closures ──
   function confirmRemoveLine(l) {
-    Alert.alert('Remove line', `Remove "${l.description}"?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: async () => { const r = await svc.removeInvoiceLine(l.id); if (r?.status) refreshDetail(); else Alert.alert('Invoice', r?.message || 'Could not remove.'); } },
-    ]);
+    confirm({
+      title: 'Remove line',
+      tone: 'danger',
+      destructive: true,
+      confirmLabel: 'Remove',
+      message: `Remove \u201c${l.description}\u201d?`,
+      // Returning the promise keeps the dialog up, showing "Working…", until the
+      // line is actually gone. The failure goes to the screen's banner rather
+      // than a second dialog: by then nothing is open for it to sit behind, and
+      // the screen already reports its other failures that way.
+      onConfirm: async () => {
+        const r = await svc.removeInvoiceLine(l.id);
+        if (r?.status) refreshDetail();
+        else flash('err', r?.message || 'Could not remove.');
+      },
+    });
   }
   function openAddAdjustment() {
     setPrompt({
-      title: 'Add adjustment', fields: [{ key: 'description', label: 'Description', val: '' }, { key: 'quoted_hours', label: 'Hours', val: '0', numeric: true }],
+      title: 'Add adjustment',
+      // Both rules moved onto the FIELDS. PromptModal enforces them before it
+      // closes, so a mistake keeps what was typed and says so under the box --
+      // the old checks ran in onOk, which fires AFTER onClose, so a blank
+      // description threw the whole prompt away and answered with a banner on
+      // the screen behind.
+      //
+      // Both were silently forgiving before that, and both go on the client's
+      // invoice. A blank description booked a line called "Adjustment", which
+      // says nothing to whoever reads it; "2h" typed in the hours box became 0
+      // through parseFloat's fallback, so the line was added and charged
+      // nothing, with no complaint. The web refuses each.
+      fields: [
+        { key: 'description', label: 'Description', val: '', required: true,
+          requiredMsg: 'Say what the adjustment is for \u2014 it appears on the client\u2019s invoice.' },
+        { key: 'quoted_hours', label: 'Hours', val: '0', numeric: true, required: true,
+          numericMsg: 'Enter the hours as a number, e.g. 2 or 1.5.' },
+      ],
       onOk: async (vals) => {
-        // Both were silently forgiving, and both go on the client's invoice.
-        // A blank description booked a line called "Adjustment", which says
-        // nothing to whoever reads the invoice; "2h" typed in the hours box
-        // became 0 through parseFloat's fallback, so the line was added and
-        // charged nothing, with no complaint. The web refuses each.
-        const desc = (vals.description || '').trim();
-        if (!desc) { Alert.alert('Description required', 'Say what the adjustment is for — it appears on the client’s invoice.'); return; }
-        const hours = parseFloat(vals.quoted_hours);
-        if (!isFinite(hours)) { Alert.alert('That is not a number', 'Enter the hours as a number, e.g. 2 or 1.5.'); return; }
-        const r = await svc.addAdjustment({ invoice_id: detail.id, description: desc, quoted_hours: hours });
-        if (r?.status) refreshDetail(); else Alert.alert('Invoice', r?.message || 'Could not add.');
+        const r = await svc.addAdjustment({
+          invoice_id: detail.id,
+          description: (vals.description || '').trim(),
+          quoted_hours: parseFloat(vals.quoted_hours),
+        });
+        if (r?.status) refreshDetail(); else flash('err', r?.message || 'Could not add.');
       },
     });
   }
@@ -1231,7 +1261,6 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
         // Checked here as well as server-side so the refusal is immediate, and
         // worded the way Revise already words it rather than inventing a second
         // sentence for the same rule.
-        if (!paid && !(vals.note || '').trim()) { flash('err', 'A reason is required.'); return; }
         await onDone(vals);
       },
     });
@@ -1298,9 +1327,9 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
   function openRevise(d) {
     setPrompt({
       title: `Revise ${d.name}?`,
-      fields: [{ key: 'reason', label: 'Why is it being revised? (required)', val: '' }],
+      fields: [{ key: 'reason', label: 'Why is it being revised?', val: '', required: true,
+                 requiredMsg: 'Say why it is being revised -- the client is told the figure changed.' }],
       onOk: async (vals) => {
-        if (!(vals.reason || '').trim()) { flash('err', 'A reason is required.'); return; }
         doAction('revise', () => svc.reviseInvoice(d.id, vals.reason));
       },
     });
@@ -1415,6 +1444,46 @@ function PromptModal({ prompt, onClose }) {
   const [vals, setVals] = useState(() => {
     const o = {}; (prompt.fields || []).forEach((fld) => { o[fld.key] = fld.val || ''; }); return o;
   });
+  // Required fields are checked HERE, not in each caller's onOk.
+  //
+  // The callers ran their check after OK had already closed the dialog (see the
+  // OK handler below: onClose() then fn(vals)), so an empty reason threw the
+  // prompt away -- along with everything typed into it -- and answered with a
+  // banner on the screen behind. The fix had to reopen the dialog and start
+  // again. Validating before closing keeps the work and puts the message under
+  // the field it is about.
+  //
+  // This component already knows which fields are required: it draws the red
+  // asterisk from the same flag. So every prompt gets this, not just the two
+  // that happened to remember to check.
+  const [errs, setErrs] = useState({});
+  const submit = () => {
+    const next = {};
+    (prompt.fields || []).forEach((fld) => {
+      // A numeric field that is not a number is as broken as an empty required
+      // one, and it fails more quietly: parseFloat('2h') is NaN, and the old
+      // code's fallback turned that into a zero-charge line nobody queried.
+      if (fld.numeric && String(vals[fld.key] || '').trim()
+          && !isFinite(parseFloat(vals[fld.key]))) {
+        next[fld.key] = fld.numericMsg || 'Enter a number.';
+        return;
+      }
+      if (fld.required && !String(vals[fld.key] || '').trim()) {
+        // A label that is already a question ("Why is it being revised?") cannot
+        // be glued to "is required" without reading like a mistake, so those get
+        // their own sentence. Callers can override with requiredMsg.
+        next[fld.key] = fld.requiredMsg
+          || (/\?\s*$/.test(fld.label || '')
+            ? 'Please answer this.'
+            : `${String(fld.label || 'This').replace(/\s*\(required\)\s*$/i, '')} is required.`);
+      }
+    });
+    setErrs(next);
+    if (Object.keys(next).length) return;
+    const fn = prompt.onOk;
+    onClose();
+    if (fn) fn(vals);
+  };
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={s.modalBackdrop}>
@@ -1453,11 +1522,16 @@ function PromptModal({ prompt, onClose }) {
                 </View>
               ) : (
                 <TextInput
-                  style={s.input} value={vals[fld.key]} keyboardType={fld.numeric ? 'decimal-pad' : 'default'}
+                  style={[s.input, errs[fld.key] && s.inputErrBorder]}
+                  value={vals[fld.key]} keyboardType={fld.numeric ? 'decimal-pad' : 'default'}
                   placeholder={fld.placeholder || ''} placeholderTextColor={COLORS.faint}
-                  onChangeText={(t) => setVals((p) => ({ ...p, [fld.key]: t }))}
+                  onChangeText={(t) => {
+                    setVals((p) => ({ ...p, [fld.key]: t }));
+                    setErrs((p) => (p[fld.key] ? { ...p, [fld.key]: null } : p));
+                  }}
                 />
               )}
+              <FieldError msg={errs[fld.key]} />
               {/* Says who reads it. "Internal only" and "the client is shown this"
                   are the whole difference between the paid note and the revert
                   reason, and it cannot be inferred from the label. */}
@@ -1468,7 +1542,7 @@ function PromptModal({ prompt, onClose }) {
             <TouchableOpacity onPress={onClose}><Text style={s.promptCancel}>Cancel</Text></TouchableOpacity>
             {/* Named after what it does, not "OK". A dialog that can archive tasks or
                 put an invoice back to Due should say so on the button. */}
-            <TouchableOpacity onPress={() => { const fn = prompt.onOk; onClose(); if (fn) fn(vals); }}>
+            <TouchableOpacity onPress={submit}>
               <Text style={s.promptOk}>{prompt.okLabel || 'OK'}</Text>
             </TouchableOpacity>
           </View>
@@ -1480,6 +1554,7 @@ function PromptModal({ prompt, onClose }) {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#EAF2FF' }, // solid fallback under the gradient (no black)
+  inputErrBorder: { borderColor: COLORS.red },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 52, paddingBottom: 12 },
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '900', color: COLORS.navy, marginHorizontal: 8 },
   iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', ...SHADOW },

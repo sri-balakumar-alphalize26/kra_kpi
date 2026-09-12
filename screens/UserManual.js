@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput,
-  ActivityIndicator, Modal, Alert, StatusBar as RNStatusBar, Platform,
+  ActivityIndicator, Modal, StatusBar as RNStatusBar, Platform,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -18,6 +18,9 @@ import * as DocumentPicker from 'expo-document-picker';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
+import FieldError from '../components/FieldError';
+import AppDialog from '../components/AppDialog';
+import * as H from '../utils/haptics';
 import { fetchManualBundle, fetchManualData, saveManual, deleteManual } from '../services/userManual';
 
 const log = createLogger('UserManual');
@@ -116,8 +119,14 @@ export default function UserManual({ onBack }) {
   };
 
   // ── Admin: add / edit ──
-  const startAdd = () => setEditor({ id: null, name: '', role: 'all', filename: '', base64: null });
-  const startEdit = (item) => setEditor({ id: item.id, name: item.name || '', role: item.role || 'all', filename: item.filename || '', base64: null });
+  // Editor errors keyed by field, plus `form` for a save that failed. They
+  // used to go through flash(), whose banner draws in the SCREEN's root view
+  // -- and this editor is a Modal, so every message rendered behind the
+  // backdrop and expired unseen. Save looked like it did nothing.
+  const [errs, setErrs] = useState({});
+  const clearErr = (k) => setErrs((p) => (p[k] ? { ...p, [k]: null } : p));
+  const startAdd = () => { setErrs({}); setEditor({ id: null, name: '', role: 'all', filename: '', base64: null }); };
+  const startEdit = (item) => { setErrs({}); setEditor({ id: item.id, name: item.name || '', role: item.role || 'all', filename: item.filename || '', base64: null }); };
 
   const pickPdf = async () => {
     try {
@@ -136,8 +145,13 @@ export default function UserManual({ onBack }) {
   const submitEditor = async () => {
     if (!editor) return;
     const name = (editor.name || '').trim();
-    if (!name) { flash('err', 'Give the manual a title.'); return; }
-    if (!editor.id && !editor.base64) { flash('err', 'Pick a PDF file first.'); return; }
+    // Both checked before returning, so a form with two things missing says so
+    // once rather than making the user press Save twice to find out.
+    const next = {};
+    if (!name) next.name = 'Give the manual a title.';
+    if (!editor.id && !editor.base64) next.file = 'Pick a PDF file first.';
+    setErrs(next);
+    if (next.name || next.file) return;
     setSaving(true);
     try {
       const res = await saveManual({
@@ -152,27 +166,42 @@ export default function UserManual({ onBack }) {
         flash('ok', editor.id ? 'Manual updated.' : 'Manual added.');
         load();
       } else {
-        flash('err', res?.message || 'Could not save the manual.');
+        // NOT flash(): the modal is still open, so a banner would draw behind
+        // it. Shown above Save instead -- a failed save belongs to the button
+        // that was pressed, not to a field.
+        setErrs({ form: res?.message || 'Could not save the manual.' });
       }
     } catch (e) {
-      flash('err', 'Could not save the manual.');
+      setErrs({ form: 'Could not save the manual.' });
     } finally {
       setSaving(false);
     }
   };
 
-  const confirmDelete = (item) => {
-    Alert.alert('Delete manual', `Delete "${item.name}"? This can't be undone.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete', style: 'destructive', onPress: async () => {
-          const res = await deleteManual(item.id);
-          if (res?.status) { flash('ok', 'Manual deleted.'); load(); }
-          else flash('err', res?.message || 'Could not delete.');
-        },
-      },
-    ]);
+  // The app's own dialog rather than Alert.alert -- the OS alert was the one
+  // piece of this screen that looked like a different app, and it cannot show a
+  // busy state: it dismissed the moment Delete was tapped and left the row there
+  // while the request was still going.
+  const [delItem, setDelItem] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const doDelete = async () => {
+    if (!delItem || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await deleteManual(delItem.id);
+      setDelItem(null);
+      if (res?.status) { flash('ok', 'Manual deleted.'); load(); }
+      else flash('err', res?.message || 'Could not delete.');
+    } catch (e) {
+      setDelItem(null);
+      flash('err', 'Could not delete.');
+    } finally {
+      setDeleting(false);
+    }
   };
+
+  const confirmDelete = (item) => { H.tap(); setDelItem(item); };
 
   // ═══════════════════════ RENDER ═══════════════════════
   const RoleBadge = ({ role }) => {
@@ -274,9 +303,11 @@ export default function UserManual({ onBack }) {
 
             <Text style={s.fLbl}>Title</Text>
             <TextInput
-              style={s.input} value={editor?.name} placeholder="e.g. Getting Started Guide" placeholderTextColor={COLORS.faint}
-              onChangeText={(t) => setEditor((p) => ({ ...p, name: t }))}
+              style={[s.input, errs.name && s.inputErr]} value={editor?.name}
+              placeholder="e.g. Getting Started Guide" placeholderTextColor={COLORS.faint}
+              onChangeText={(t) => { setEditor((p) => ({ ...p, name: t })); clearErr('name'); }}
             />
+            <FieldError msg={errs.name} />
 
             <Text style={[s.fLbl, { marginTop: 14 }]}>Visible to</Text>
             <View style={s.roleWrap}>
@@ -292,13 +323,22 @@ export default function UserManual({ onBack }) {
             </View>
 
             <Text style={[s.fLbl, { marginTop: 14 }]}>PDF file</Text>
-            <TouchableOpacity style={s.pickBtn} onPress={pickPdf} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={[s.pickBtn, errs.file && s.inputErr]}
+              onPress={() => { clearErr('file'); pickPdf(); }}
+              activeOpacity={0.85}
+            >
               <MaterialCommunityIcons name="file-upload-outline" size={18} color={COLORS.primary} />
               <Text style={s.pickTxt} numberOfLines={1}>
                 {editor?.filename ? editor.filename : (editor?.id ? 'Replace PDF (optional)' : 'Choose a PDF')}
               </Text>
             </TouchableOpacity>
             {editor?.id && !editor?.base64 ? <Text style={s.hint}>Leave empty to keep the current PDF.</Text> : null}
+
+            {/* Beside the button it belongs to. utils/workdayNote.js records the
+                opposite mistake: a refusal rendered far above the button, which
+                made the button itself read as broken. */}
+            <FieldError msg={errs.form} />
 
             <View style={s.modalActions}>
               <TouchableOpacity onPress={() => setEditor(null)}><Text style={s.cancelTxt}>Cancel</Text></TouchableOpacity>
@@ -310,6 +350,20 @@ export default function UserManual({ onBack }) {
           </View>
         </View>
       </Modal>
+
+      {/* Last in the tree so it paints above everything, including the
+          editor sheet. */}
+      <AppDialog
+        visible={!!delItem}
+        tone="danger"
+        destructive
+        busy={deleting}
+        title="Delete manual"
+        message={delItem ? `Delete \u201c${delItem.name}\u201d? This can\u2019t be undone.` : ''}
+        confirmLabel="Delete"
+        onConfirm={doDelete}
+        onClose={() => setDelItem(null)}
+      />
     </View>
   );
 }
@@ -351,6 +405,7 @@ const s = StyleSheet.create({
   modalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
   modalTitle: { fontSize: 18, fontWeight: '800', color: COLORS.navy },
   fLbl: { fontSize: 12.5, fontWeight: '700', color: COLORS.muted, marginBottom: 6 },
+  inputErr: { borderColor: COLORS.red },
   input: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14.5, color: COLORS.ink, backgroundColor: '#fff' },
   roleWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   roleChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: COLORS.line, backgroundColor: '#fff' },

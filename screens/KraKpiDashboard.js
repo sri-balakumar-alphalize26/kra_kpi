@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  ActivityIndicator, Alert, Modal, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Modal, KeyboardAvoidingView, Platform,
   StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -15,6 +15,8 @@ import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import { COLORS, SHADOW } from '../theme';
 import KraNode from '../components/KraNode';
 import { createLogger } from '../api/logger';
+import FieldError from '../components/FieldError';
+import useAppDialog from '../components/useAppDialog';
 import * as svc from '../services/kraKpi';
 
 const log = createLogger('KraKpiMaster');
@@ -73,6 +75,10 @@ export default function KraKpiDashboard({ onBack }) {
 
   // Modal: { type:'kra'|'kpi'|'editKra'|'editKpi', ... }
   const [modal, setModal] = useState(null);
+  // `confirm` is already this screen's delete-confirmation state, so the
+  // hook's is taken as askConfirm rather than shadowing it.
+  const { dialog, say, showError, confirm: askConfirm } = useAppDialog();
+  const [modalErrs, setModalErrs] = useState({});
 
   // Assign-clients dialog, kept separate from `modal` because it isn't a
   // name-and-submit form — it's a multi-select whose value is a list.
@@ -160,7 +166,9 @@ export default function KraKpiDashboard({ onBack }) {
       setClientUsers(users || []);
     } catch (e) {
       log.warn('client users load failed', e?.message);
-      Alert.alert('Error', e?.message || 'Could not load client logins');
+      // Stacks over AssignClientsModal, which is open showing its spinner.
+      // Safe: RN presents by mount order, so this paints above it.
+      showError('Error', e?.message || 'Could not load client logins');
     } finally {
       setAssign((a) => (a ? { ...a, loading: false } : a));
     }
@@ -184,11 +192,14 @@ export default function KraKpiDashboard({ onBack }) {
     // detaching a login here changes nothing a client can see, so warning about
     // it would be crying wolf on the one dialog that needs to be believed.
     if (picked.length === 0 && original.length > 0 && !inheritedFrom) {
-      Alert.alert(
-        'Remove all client access?',
-        `Nobody will be able to see “${kraName}” from the client portal until a login is assigned again.`,
-        [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove all', style: 'destructive', onPress: commit }],
-      );
+      askConfirm({
+        title: 'Remove all client access?',
+        tone: 'danger',
+        destructive: true,
+        confirmLabel: 'Remove all',
+        message: `Nobody will be able to see “${kraName}” from the client portal until a login is assigned again.`,
+        onConfirm: commit,
+      });
       return;
     }
     commit();
@@ -228,10 +239,10 @@ export default function KraKpiDashboard({ onBack }) {
     try {
       await fn();
       await reloadTree();
-      if (okMsg) Alert.alert('Done', okMsg);
+      if (okMsg) say('Done', okMsg, 'ok');
     } catch (e) {
       log.error('mutation failed', e?.message);
-      Alert.alert('Error', e?.message || 'Operation failed');
+      showError('Error', e?.message || 'Operation failed');
     } finally {
       setBusy(false);
     }
@@ -240,23 +251,35 @@ export default function KraKpiDashboard({ onBack }) {
   // ---- Modal submit handlers ---------------------------------------------
   async function submitModal() {
     if (!modal) return;
-    if (modal.type === 'kra') {
-      if (!modal.name.trim()) { Alert.alert('Required', 'Enter a KRA name'); return; }
-      setModal(null);
-      await runMutation(() => svc.createKra({ name: modal.name, parentId: modal.parentId }), 'KRA created');
-    } else if (modal.type === 'kpi') {
-      if (!modal.name.trim()) { Alert.alert('Required', 'Enter a KPI name'); return; }
-      if (!modal.kraId) { Alert.alert('Required', 'Select a KRA for this KPI'); return; }
+    // Every rule checked up front and reported per FIELD, not as a stack of
+    // "Required" alerts thrown over the form one at a time. Each of these has a
+    // visible box carrying a red asterisk a centimetre away; an OS alert put the
+    // complaint further from the fix than the mistake was, and answered only the
+    // first of four.
+    const e = {};
+    if (modal.type === 'kra' || modal.type === 'editKra' || modal.type === 'editKpi') {
+      if (!modal.name.trim()) e.name = 'Enter a name.';
+    }
+    if (modal.type === 'kpi') {
+      if (!modal.name.trim()) e.name = 'Enter a KPI name.';
+      if (!modal.kraId) e.kraId = 'Select a KRA for this KPI.';
       // Assignee and estimate are mandatory on the web (kpi_create.js) and the
       // server backstops neither — create_kpi checks only the name. So the phone
       // was the one way left to put an unassigned, un-estimated task on the
       // board, which then sits in no lane anyone owns and blows every estimate
       // comparison, since any time spent overruns an estimate of zero.
-      if (!modal.userId) { Alert.alert('Required', 'Choose who this KPI is for.'); return; }
+      if (!modal.userId) e.userId = 'Choose who this KPI is for.';
       if (!(parseInt(modal.hours, 10) > 0 || parseInt(modal.minutes, 10) > 0)) {
-        Alert.alert('Required', 'Enter an estimate — hours and/or minutes.');
-        return;
+        e.estimate = 'Enter an estimate \u2014 hours and/or minutes.';
       }
+    }
+    setModalErrs(e);
+    if (Object.keys(e).length) return;
+
+    if (modal.type === 'kra') {
+      setModal(null);
+      await runMutation(() => svc.createKra({ name: modal.name, parentId: modal.parentId }), 'KRA created');
+    } else if (modal.type === 'kpi') {
       setModal(null);
       await runMutation(() => svc.createKpi({
         name: modal.name, kraId: modal.kraId,
@@ -264,12 +287,10 @@ export default function KraKpiDashboard({ onBack }) {
         priority: modal.priority, userId: modal.userId,
       }), 'KPI created');
     } else if (modal.type === 'editKra') {
-      if (!modal.name.trim()) { Alert.alert('Required', 'Enter a name'); return; }
       const id = modal.id, name = modal.name;
       setModal(null);
       await runMutation(() => svc.updateKra({ kraId: id, name }), 'KRA renamed');
     } else if (modal.type === 'editKpi') {
-      if (!modal.name.trim()) { Alert.alert('Required', 'Enter a name'); return; }
       const id = modal.id, name = modal.name;
       setModal(null);
       await runMutation(() => svc.updateKpi({ kpiId: id, name }), 'KPI renamed');
@@ -376,6 +397,8 @@ export default function KraKpiDashboard({ onBack }) {
         parentKras={parentKras}
         users={users}
         onSubmit={submitModal}
+        errs={modalErrs}
+        clearErr={(k) => setModalErrs((p) => (p[k] ? { ...p, [k]: null } : p))}
       />
 
       {/* Assign client logins to a client KRA */}
@@ -388,6 +411,10 @@ export default function KraKpiDashboard({ onBack }) {
 
       {/* Delete confirmation */}
       <ConfirmDeleteModal confirm={confirm} setConfirm={setConfirm} />
+
+      {/* Last in the tree so it paints above the crud, assign and delete
+          sheets, any of which can raise one. */}
+      {dialog}
     </View>
   );
 }
@@ -580,7 +607,7 @@ function AssignClientsModal({ assign, setAssign, users, onSave }) {
 
 // ---- Create / edit bottom-sheet modal -------------------------------------
 
-function CrudModal({ modal, setModal, parentKras, users, onSubmit }) {
+function CrudModal({ modal, setModal, parentKras, users, onSubmit, errs = {}, clearErr }) {
   const [picker, setPicker] = useState(null); // 'parent' | 'kra' | 'user' | 'priority'
   if (!modal) return null;
 
@@ -626,9 +653,10 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit }) {
               {/* Name (all modes) */}
               <Text style={s.mLabel}>Name <Text style={s.req}>*</Text></Text>
               <TextInput
-                style={s.mInput} placeholder="Enter name" placeholderTextColor={COLORS.faint}
-                value={modal.name} onChangeText={(t) => set({ name: t })} autoFocus
+                style={[s.mInput, errs.name && s.mInputErr]} placeholder="Enter name" placeholderTextColor={COLORS.faint}
+                value={modal.name} onChangeText={(t) => { set({ name: t }); clearErr && clearErr('name'); }} autoFocus
               />
+              <FieldError msg={errs.name} />
 
               {/* KRA create → optional parent */}
               {isKra && (
@@ -642,7 +670,8 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit }) {
               {isKpi && (
                 <>
                   <Text style={s.mLabel}>KRA <Text style={s.req}>*</Text></Text>
-                  <Selector value={kraName} placeholder="Select a KRA" onPress={() => setPicker('kra')} />
+                  <Selector value={kraName} placeholder="Select a KRA" onPress={() => { clearErr && clearErr('kraId'); setPicker('kra'); }} />
+                  <FieldError msg={errs.kraId} />
 
                   <View style={s.row2}>
                     <View style={s.col}>
@@ -656,12 +685,14 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit }) {
                         onChangeText={(t) => { let m = parseInt(t.replace(/[^0-9]/g, ''), 10); if (isNaN(m)) m = 0; if (m > 59) m = 59; set({ minutes: String(m) }); }} />
                     </View>
                   </View>
+                  <FieldError msg={errs.estimate} />
 
                   <Text style={s.mLabel}>Priority</Text>
                   <Selector value={prioLabel} onPress={() => setPicker('priority')} />
 
                   <Text style={s.mLabel}>Assignee <Text style={s.req}>*</Text></Text>
-                  <Selector value={userName} placeholder="— None —" onPress={() => setPicker('user')} />
+                  <Selector value={userName} placeholder="— None —" onPress={() => { clearErr && clearErr('userId'); setPicker('user'); }} />
+                  <FieldError msg={errs.userId} />
                 </>
               )}
             </ScrollView>
@@ -768,6 +799,7 @@ const s = StyleSheet.create({
 
   mLabel: { fontSize: 13, fontWeight: '700', color: COLORS.muted, marginTop: 12, marginBottom: 6 },
   req: { color: COLORS.red, fontWeight: '900' },
+  mInputErr: { borderColor: COLORS.red },
   mInput: { backgroundColor: '#F5F8FD', borderWidth: 1.5, borderColor: '#E7ECF3', borderRadius: 12, paddingHorizontal: 14, height: 50, fontSize: 15.5, color: COLORS.ink },
   mNum: { backgroundColor: '#F5F8FD', borderWidth: 1.5, borderColor: '#E7ECF3', borderRadius: 12, paddingHorizontal: 14, height: 48, fontSize: 15, color: COLORS.ink },
   row2: { flexDirection: 'row', gap: 12 },

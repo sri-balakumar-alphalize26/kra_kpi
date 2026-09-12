@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Switch,
-  ActivityIndicator, Modal, RefreshControl, Alert, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Modal, RefreshControl, KeyboardAvoidingView, Platform,
   ScrollView, StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -16,6 +16,8 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
+import FieldError from '../components/FieldError';
+import useAppDialog from '../components/useAppDialog';
 import {
   fetchUsers, createUser, updateUser, setUserRole, setUserMobile, resetUserPassword, changePassword,
 } from '../services/users';
@@ -51,6 +53,13 @@ export default function UsersScreen({ onBack }) {
   const [busyReset, setBusyReset] = useState(false);
   const [newPw, setNewPw] = useState('');        // edit: Odoo-style Change Password
   const [newPw2, setNewPw2] = useState('');
+  // Failures and the reset confirm go through the app's own dialog, which
+  // stacks over the editor sheet (RN presents by mount order). The three
+  // "you left a box empty" cases do NOT -- those render under the field, so
+  // the complaint is not a second window away from the fix.
+  const { dialog, showError, confirm } = useAppDialog();
+  const [errs, setErrs] = useState({});
+  const clearErr = (k) => setErrs((p) => (p[k] ? { ...p, [k]: null } : p));
   const [busyChange, setBusyChange] = useState(false);
   const [showPw, setShowPw] = useState(false);   // eye toggle for the password fields
   const [okMsg, setOkMsg] = useState(null);      // styled success ("Done") popup
@@ -95,7 +104,13 @@ export default function UsersScreen({ onBack }) {
 
   const save = async () => {
     const name = form.name.trim(), login = form.login.trim();
-    if (!name || !login) { Alert.alert('Missing info', 'Name and Login are required.'); return; }
+    // Named separately rather than one "Name and Login are required": with a
+    // single message you cannot tell which of the two you missed.
+    const miss = {};
+    if (!name) miss.name = 'Name is required.';
+    if (!login) miss.login = 'Login is required.';
+    setErrs(miss);
+    if (miss.name || miss.login) return;
     setSaving(true);
     try {
       if (isCreate) {
@@ -104,13 +119,13 @@ export default function UsersScreen({ onBack }) {
           mobile: form.mobile.replace(/\D/g, ''), active: form.active,
           password: (form.password || '').trim(),
         });
-        if (!res?.status) { Alert.alert('Could not create', res?.message || 'Try again.'); return; }
+        if (!res?.status) { showError('Could not create', res?.message || 'Try again.'); return; }
       } else {
         const u = editing;
         const ru = await updateUser(u.id, {
           name, login, email: form.email.trim(), active: form.active,
         });
-        if (!ru?.status) { Alert.alert('Could not save', ru?.message || 'Try again.'); return; }
+        if (!ru?.status) { showError('Could not save', ru?.message || 'Try again.'); return; }
         if (!isSystem && form.role !== u.role) await setUserRole(u.id, form.role);
         if ((form.mobile || '').replace(/\D/g, '') !== (u.mobile || '')) {
           await setUserMobile(u.id, form.mobile.replace(/\D/g, ''));
@@ -120,7 +135,7 @@ export default function UsersScreen({ onBack }) {
       await load(true);
     } catch (e) {
       log.warn('save failed', e?.message);
-      Alert.alert('Error', e?.message || 'Could not save.');
+      showError('Error', e?.message || 'Could not save.');
     } finally {
       setSaving(false);
     }
@@ -128,39 +143,47 @@ export default function UsersScreen({ onBack }) {
 
   const doResetPw = () => {
     if (!editing?.id) return;
-    Alert.alert('Reset password?', `${editing.name}'s app password will be reset to 1111 and they'll set a new one on next login.`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Reset to 1111', style: 'destructive', onPress: async () => {
-          setBusyReset(true);
-          // Check the answer, exactly as doChangePassword below already does.
-          // The route REFUSES rather than raises when the caller is not an Odoo
-          // system administrator and the target is — so a bare await announced a
-          // reset that never happened, on the one account where that matters most.
-          try {
-            const r = await resetUserPassword(editing.id);
-            if (r && r.status === false) { Alert.alert('Could not reset', r.message || 'Not authorized.'); return; }
-            setOkMsg('Password has been reset to 1111. The user sets a new one on next login.');
-          }
-          catch (e) { Alert.alert('Error', e?.message || 'Could not reset.'); }
-          finally { setBusyReset(false); }
-        } },
-    ]);
+    confirm({
+      title: 'Reset password?',
+      tone: 'danger',
+      destructive: true,
+      confirmLabel: 'Reset to 1111',
+      message: `${editing.name}'s app password will be reset to 1111 and they'll set a new one on next login.`,
+      // Returning the promise holds the dialog open, showing "Working…", until
+      // the reset lands. The native alert dismissed on tap, so the one account
+      // where a refusal matters most reported nothing at all for a moment.
+      onConfirm: async () => {
+        setBusyReset(true);
+        // Check the answer, exactly as doChangePassword below already does.
+        // The route REFUSES rather than raises when the caller is not an Odoo
+        // system administrator and the target is — so a bare await announced a
+        // reset that never happened, on the one account where that matters most.
+        try {
+          const r = await resetUserPassword(editing.id);
+          if (r && r.status === false) { showError('Could not reset', r.message || 'Not authorized.'); return; }
+          setOkMsg('Password has been reset to 1111. The user sets a new one on next login.');
+        }
+        catch (e) { showError('Error', e?.message || 'Could not reset.'); }
+        finally { setBusyReset(false); }
+      },
+    });
   };
 
   // Odoo-style "Change Password" — set a specific new app PIN for an existing user.
   const doChangePassword = async () => {
     if (!editing?.id) return;
     const pw = (newPw || '').trim();
-    if (pw.length < 4) { Alert.alert('Too short', 'Password must be at least 4 characters.'); return; }
-    if (pw !== (newPw2 || '').trim()) { Alert.alert('Mismatch', 'The two passwords do not match.'); return; }
+    if (pw.length < 4) { setErrs({ pw: 'Password must be at least 4 characters.' }); return; }
+    if (pw !== (newPw2 || '').trim()) { setErrs({ pw2: 'The two passwords do not match.' }); return; }
+    setErrs({});
     setBusyChange(true);
     try {
       const r = await changePassword(editing.id, pw);
-      if (!r?.status) { Alert.alert('Could not change', r?.message || 'Try again.'); return; }
+      if (!r?.status) { showError('Could not change', r?.message || 'Try again.'); return; }
       setNewPw(''); setNewPw2('');
       setOkMsg(`${editing.name}'s password has been changed. They can log in with it right away.`);
     } catch (e) {
-      Alert.alert('Error', e?.message || 'Could not change password.');
+      showError('Error', e?.message || 'Could not change password.');
     } finally {
       setBusyChange(false);
     }
@@ -248,10 +271,12 @@ export default function UsersScreen({ onBack }) {
             </View>
             <ScrollView contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
               <Text style={s.label}>Name</Text>
-              <TextInput style={s.input} value={form.name} onChangeText={(t) => setForm((f) => ({ ...f, name: t }))} placeholder="Full name" placeholderTextColor={COLORS.faint} />
+              <TextInput style={[s.input, errs.name && s.inputErr]} value={form.name} onChangeText={(t) => { setForm((f) => ({ ...f, name: t })); clearErr('name'); }} placeholder="Full name" placeholderTextColor={COLORS.faint} />
+              <FieldError msg={errs.name} />
 
               <Text style={s.label}>Login</Text>
-              <TextInput style={s.input} value={form.login} onChangeText={(t) => setForm((f) => ({ ...f, login: t }))} placeholder="login / username" placeholderTextColor={COLORS.faint} autoCapitalize="none" />
+              <TextInput style={[s.input, errs.login && s.inputErr]} value={form.login} onChangeText={(t) => { setForm((f) => ({ ...f, login: t })); clearErr('login'); }} placeholder="login / username" placeholderTextColor={COLORS.faint} autoCapitalize="none" />
+              <FieldError msg={errs.login} />
 
               <Text style={s.label}>Email</Text>
               <TextInput style={s.input} value={form.email} onChangeText={(t) => setForm((f) => ({ ...f, email: t }))} placeholder="email (optional)" placeholderTextColor={COLORS.faint} autoCapitalize="none" keyboardType="email-address" />
@@ -326,7 +351,7 @@ export default function UsersScreen({ onBack }) {
                   <Text style={s.label}>New Password</Text>
                   <View style={s.pwWrap}>
                     <TextInput
-                      style={s.pwInput} value={newPw} onChangeText={setNewPw}
+                      style={s.pwInput} value={newPw} onChangeText={(t) => { setNewPw(t); clearErr('pw'); }}
                       placeholder="new app password" placeholderTextColor={COLORS.faint}
                       secureTextEntry={!showPw} autoCapitalize="none"
                     />
@@ -337,7 +362,7 @@ export default function UsersScreen({ onBack }) {
                   <Text style={s.label}>Confirm Password</Text>
                   <View style={s.pwWrap}>
                     <TextInput
-                      style={s.pwInput} value={newPw2} onChangeText={setNewPw2}
+                      style={s.pwInput} value={newPw2} onChangeText={(t) => { setNewPw2(t); clearErr('pw2'); }}
                       placeholder="re-type new password" placeholderTextColor={COLORS.faint}
                       secureTextEntry={!showPw} autoCapitalize="none"
                     />
@@ -373,6 +398,10 @@ export default function UsersScreen({ onBack }) {
           </View>
         </View>
       </Modal>
+
+      {/* Last in the tree so it paints above the editor sheet and the Done
+          popup, both of which can raise one. */}
+      {dialog}
     </View>
   );
 }
@@ -413,6 +442,7 @@ const s = StyleSheet.create({
   sheetTitle: { fontSize: 18, fontWeight: '900', color: COLORS.navy },
 
   label: { fontSize: 13, fontWeight: '700', color: COLORS.ink, marginBottom: 6, marginTop: 12 },
+  inputErr: { borderColor: COLORS.red },
   input: { borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 46, paddingHorizontal: 12, fontSize: 15, color: COLORS.ink, backgroundColor: '#fff' },
   pwWrap: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10, height: 46, backgroundColor: '#fff', paddingRight: 6 },
   pwInput: { flex: 1, height: '100%', paddingHorizontal: 12, fontSize: 15, color: COLORS.ink },

@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
-  ActivityIndicator, Image, StatusBar as RNStatusBar, Alert,
+  ActivityIndicator, Image, StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -17,6 +17,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
+import FieldError from '../components/FieldError';
+import useAppDialog from '../components/useAppDialog';
 import { fetchCompanyBranding, saveCompanyBranding } from '../services/companyBranding';
 
 const log = createLogger('CompanyBranding');
@@ -41,6 +43,11 @@ export default function CompanyBranding({ onBack }) {
   const [logoB64, setLogoB64] = useState('');   // '' = no logo
   const [dirty, setDirty] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
+  // Failures go through the app's own dialog; the missing-name case does NOT.
+  // It is field validation and the box is right there, so it renders under the
+  // field instead of throwing a second window over a one-field form.
+  const { dialog, showError } = useAppDialog();
+  const [nameErr, setNameErr] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -72,7 +79,7 @@ export default function CompanyBranding({ onBack }) {
       log.info('logo picked', { bytesB64: data.length });
     } catch (e) {
       log.warn('pick failed', e?.message);
-      Alert.alert('Logo', 'Could not read that image.');
+      showError('Logo', 'Could not read that image.');
     } finally { setPicking(false); }
   };
 
@@ -80,7 +87,8 @@ export default function CompanyBranding({ onBack }) {
 
   const onSave = async () => {
     const nm = name.trim();
-    if (!nm) { Alert.alert('Company Branding', 'Company name is required.'); return; }
+    if (!nm) { setNameErr('Company name is required.'); return; }
+    setNameErr('');
     setSaving(true);
     try {
       const res = await saveCompanyBranding({ name: nm, logo_b64: logoB64 });
@@ -89,11 +97,11 @@ export default function CompanyBranding({ onBack }) {
         setSavedMsg('Branding saved');
         setTimeout(() => setSavedMsg(''), 1800);
       } else {
-        Alert.alert('Company Branding', res?.message || 'Could not save.');
+        showError('Company Branding', res?.message || 'Could not save.');
       }
     } catch (e) {
       log.warn('save failed', e?.message);
-      Alert.alert('Company Branding', 'Could not save the branding.');
+      showError('Company Branding', 'Could not save the branding.');
     } finally { setSaving(false); }
   };
 
@@ -120,10 +128,11 @@ export default function CompanyBranding({ onBack }) {
           <View style={s.card}>
             <Text style={s.label}>Company Name</Text>
             <TextInput
-              style={s.input} value={name}
-              onChangeText={(t) => { setName(t); setDirty(true); }}
+              style={[s.input, nameErr && s.inputErr]} value={name}
+              onChangeText={(t) => { setName(t); setDirty(true); if (nameErr) setNameErr(''); }}
               placeholder="Company name" placeholderTextColor={COLORS.faint}
             />
+            <FieldError msg={nameErr} />
 
             <Text style={[s.label, { marginTop: 18 }]}>Company Logo</Text>
             <View style={s.logoBox}>
@@ -162,6 +171,7 @@ export default function CompanyBranding({ onBack }) {
               : <><Ionicons name="checkmark" size={18} color="#fff" /><Text style={s.saveTxt}>Save Branding</Text></>}
           </TouchableOpacity>
           {savedMsg ? <Text style={s.savedMsg}>✓ {savedMsg}</Text> : null}
+          {dialog}
         </ScrollView>
       )}
     </View>
@@ -207,5 +217,6 @@ const s = StyleSheet.create({
   },
   saveBtnOff: { opacity: 0.5 },
   saveTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  inputErr: { borderColor: COLORS.red },
   savedMsg: { textAlign: 'center', color: COLORS.green, fontWeight: '800', marginTop: 12 },
 });

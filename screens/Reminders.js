@@ -14,7 +14,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput,
-  ActivityIndicator, Modal, Alert, Switch, StatusBar as RNStatusBar,
+  ActivityIndicator, Modal, Switch, StatusBar as RNStatusBar,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
@@ -23,6 +23,8 @@ import GradientBackground from '../components/GradientBackground';
 import DateGridModal from '../components/DateGridModal';
 import DurationTimePicker from '../components/DurationTimePicker';
 import { createLogger } from '../api/logger';
+import FieldError from '../components/FieldError';
+import AppDialog from '../components/AppDialog';
 import * as H from '../utils/haptics';
 import {
   fetchReminders, saveReminder, completeReminder, deleteReminder, fetchReminderHistory,
@@ -81,6 +83,13 @@ export default function Reminders({ onBack }) {
   const [banner, setBanner] = useState(null);          // { kind, msg }
   const [editor, setEditor] = useState(null);          // null = modal closed
   const [saving, setSaving] = useState(false);
+  // Editor errors, keyed by the field they belong to, plus `form` for a save
+  // that failed. These used to go through flash(), which draws its banner in
+  // the SCREEN's root view -- and the editor is a Modal, so every one of them
+  // rendered behind the backdrop and expired unseen. Pressing Save simply
+  // looked like it did nothing.
+  const [errs, setErrs] = useState({});
+  const clearErr = (k) => setErrs((p) => (p[k] ? { ...p, [k]: null } : p));
   const [busyId, setBusyId] = useState(null);          // row mid-complete
   const [datePick, setDatePick] = useState(false);
   const [timePick, setTimePick] = useState(false);
@@ -111,10 +120,12 @@ export default function Reminders({ onBack }) {
 
   const startAdd = () => {
     H.tap();
+    setErrs({});
     setEditor({ id: null, name: '', remind_date: todayIso(), remind_time: 9, repeat: 'none', enabled: true });
   };
   const startEdit = (item) => {
     H.tap();
+    setErrs({});
     setEditor({
       id: item.id,
       name: item.name || '',
@@ -128,8 +139,13 @@ export default function Reminders({ onBack }) {
   const submitEditor = async () => {
     if (!editor) return;
     const name = (editor.name || '').trim();
-    if (!name) { flash('err', 'Give the reminder a name.'); return; }
-    if (!editor.remind_date) { flash('err', 'Pick a date.'); return; }
+    // Collected together rather than returning on the first miss, so a form with
+    // two things wrong says so once instead of making the user press Save twice.
+    const next = {};
+    if (!name) next.name = 'Give the reminder a name.';
+    if (!editor.remind_date) next.date = 'Pick a date.';
+    setErrs(next);
+    if (next.name || next.date) return;
     setSaving(true);
     try {
       const res = await saveReminder({
@@ -145,10 +161,13 @@ export default function Reminders({ onBack }) {
         flash('ok', editor.id ? 'Reminder updated.' : 'Reminder added.');
         load();
       } else {
-        flash('err', res?.message || 'Could not save the reminder.');
+        // NOT flash(): the modal is still open at this point, so a banner would
+        // be drawn behind it. Shown above the Save button instead -- a failed save
+        // belongs to the button that was pressed, not to any one field.
+        setErrs({ form: res?.message || 'Could not save the reminder.' });
       }
     } catch (e) {
-      flash('err', 'Could not save the reminder.');
+      setErrs({ form: 'Could not save the reminder.' });
     } finally {
       setSaving(false);
     }
@@ -185,20 +204,34 @@ export default function Reminders({ onBack }) {
     }
   };
 
-  const confirmDelete = (item) => {
-    Alert.alert('Delete reminder', `Delete "${item.name}"? This can't be undone.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete', style: 'destructive', onPress: async () => {
-          const res = await deleteReminder(item.id);
-          // Its completion history deliberately survives — the rows keep a copy of
-          // the name and time, so past ticks stay readable after the reminder goes.
-          if (res?.status) { flash('ok', 'Reminder deleted.'); load(); }
-          else flash('err', res?.message || 'Could not delete.');
-        },
-      },
-    ]);
+  // The app's own dialog rather than Alert.alert. The OS alert is the one piece
+  // of this screen that looked like a different app: no shared icon, tone or
+  // button styling, and on Android it cannot show the danger red the action
+  // deserves. AppDialog also gives us a `busy` state, which the OS alert has no
+  // way to express — it dismisses on tap and leaves the row sitting there while
+  // the request is still in flight.
+  const [delItem, setDelItem] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const doDelete = async () => {
+    if (!delItem || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await deleteReminder(delItem.id);
+      setDelItem(null);
+      // Its completion history deliberately survives — the rows keep a copy of
+      // the name and time, so past ticks stay readable after the reminder goes.
+      if (res?.status) { flash('ok', 'Reminder deleted.'); load(); }
+      else flash('err', res?.message || 'Could not delete.');
+    } catch (e) {
+      setDelItem(null);
+      flash('err', 'Could not delete.');
+    } finally {
+      setDeleting(false);
+    }
   };
+
+  const confirmDelete = (item) => { H.tap(); setDelItem(item); };
 
   const openHistory = async () => {
     H.tap();
@@ -340,20 +373,25 @@ export default function Reminders({ onBack }) {
 
             <Text style={s.fLbl}>Reminder</Text>
             <TextInput
-              style={s.input}
+              style={[s.input, errs.name && s.inputErr]}
               placeholder="What is it for?"
               placeholderTextColor={COLORS.faint}
               value={editor?.name || ''}
-              onChangeText={(t) => setEditor((p) => ({ ...p, name: t }))}
+              onChangeText={(t) => { setEditor((p) => ({ ...p, name: t })); clearErr('name'); }}
             />
+            <FieldError msg={errs.name} />
 
             <View style={s.twoCol}>
               <View style={{ flex: 1 }}>
                 <Text style={[s.fLbl, { marginTop: 14 }]}>Date</Text>
-                <TouchableOpacity style={s.pickBtn} onPress={() => setDatePick(true)}>
+                <TouchableOpacity
+                  style={[s.pickBtn, errs.date && s.inputErr]}
+                  onPress={() => { clearErr('date'); setDatePick(true); }}
+                >
                   <Ionicons name="calendar-outline" size={16} color={COLORS.primary} />
                   <Text style={s.pickTxt} numberOfLines={1}>{fmtDate(editor?.remind_date) || 'Pick'}</Text>
                 </TouchableOpacity>
+                <FieldError msg={errs.date} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[s.fLbl, { marginTop: 14 }]}>Time</Text>
@@ -391,6 +429,11 @@ export default function Reminders({ onBack }) {
                 trackColor={{ true: COLORS.primary }}
               />
             </View>
+
+            {/* Beside the button it belongs to. utils/workdayNote.js records the
+                opposite mistake: a refusal rendered far above the button, which
+                made the button itself read as broken. */}
+            <FieldError msg={errs.form} />
 
             <View style={s.modalActions}>
               <TouchableOpacity onPress={() => setEditor(null)}>
@@ -464,6 +507,20 @@ export default function Reminders({ onBack }) {
           </View>
         </View>
       </Modal>
+
+      {/* Last in the tree so it paints above everything, including the
+          editor sheet. */}
+      <AppDialog
+        visible={!!delItem}
+        tone="danger"
+        destructive
+        busy={deleting}
+        title="Delete reminder"
+        message={delItem ? `Delete \u201c${delItem.name}\u201d? This can\u2019t be undone.` : ''}
+        confirmLabel="Delete"
+        onConfirm={doDelete}
+        onClose={() => setDelItem(null)}
+      />
     </View>
   );
 }
@@ -513,6 +570,7 @@ const s = StyleSheet.create({
   modalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
   modalTitle: { fontSize: 18, fontWeight: '800', color: COLORS.navy },
   fLbl: { fontSize: 12.5, fontWeight: '700', color: COLORS.muted, marginBottom: 6 },
+  inputErr: { borderColor: COLORS.red },
   input: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14.5, color: COLORS.ink, backgroundColor: '#fff' },
   twoCol: { flexDirection: 'row', gap: 12 },
   pickBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: COLORS.primary, borderStyle: 'dashed', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12 },

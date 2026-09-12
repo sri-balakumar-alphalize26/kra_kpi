@@ -1,7 +1,7 @@
 // KRA/KPI app shell: spinning KPI-wheel Splash → Welcome → Login (Odoo connect)
 // → Home. A remembered Odoo session boots straight to Home after the splash.
 import React, { useState, useEffect, useRef } from 'react';
-import { BackHandler, View, ActivityIndicator, AppState, Alert } from 'react-native';
+import { BackHandler, View, ActivityIndicator, AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -522,20 +522,6 @@ function AppInner() {
     resetWorkdayCache();
   };
 
-  // Confirm before logging out. A mis-tap on the log-out icon shouldn't end the
-  // session — and, per the one-start-one-end-per-day rule, logging out then back
-  // in must not become a backdoor to a second workday, so we warn about that too.
-  // Non-developers (never locked) get a plain confirm without the workday line.
-  const confirmLogout = () => {
-    const warn = devLocked
-      ? "You'll be signed out. If you've ended your workday, logging back in won't let you start another one today."
-      : "You'll be signed out of the app.";
-    Alert.alert('Log out?', warn, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: () => { logout(); } },
-    ]);
-  };
-
   // Splash keeps showing until both the animation and the session read finish.
   if (!ready || restoring) return <SplashScreen onDone={() => setReady(true)} />;
 
@@ -721,7 +707,7 @@ function AppInner() {
         user={user}
         // Home & Profile have their OWN logout confirmation modals (which now
         // carry the one-per-day warning), so pass the raw logout — wrapping it in
-        // confirmLogout's Alert too would double-confirm.
+        // another confirmation here too would double-confirm.
         onLogout={logout}
         onOpen={open}
         // Drives the red "read-only" line under the name + its Start/Ended

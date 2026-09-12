@@ -5,13 +5,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  ActivityIndicator, Alert, Modal, StatusBar as RNStatusBar,
+  ActivityIndicator, Modal, StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
+import useAppDialog from '../components/useAppDialog';
 import * as svc from '../services/ownerDashboard';
 
 const log = createLogger('OwnerDashboard');
@@ -57,6 +58,8 @@ export default function OwnerDashboard({ onBack }) {
 
   const toggleProjects = (id) => setExpanded((p) => ({ ...p, [id]: !p[id] }));
 
+  const { dialog, say, showError, confirm } = useAppDialog();
+
   // ---- View Certified Tasks ----------------------------------------------
   async function openDrill(client) {
     const cid = client.client_id;
@@ -67,7 +70,9 @@ export default function OwnerDashboard({ onBack }) {
       setDrill((d) => (d && d.clientId === cid ? { ...d, tasks, loading: false } : d));
     } catch (e) {
       setDrill((d) => (d && d.clientId === cid ? { ...d, loading: false } : d));
-      Alert.alert('Error', e?.message || 'Could not load certified tasks');
+      // Stacks over DrillModal, which is still open showing its loader. Safe:
+      // RN presents by mount order, so a dialog raised now paints above it.
+      showError('Error', e?.message || 'Could not load certified tasks');
     }
   }
 
@@ -80,32 +85,38 @@ export default function OwnerDashboard({ onBack }) {
   function confirmInvoice(client, project) {
     const label = project ? `project "${project.project_name}"` : `client "${client.client_name}"`;
     const n = (project ? project.completed_count : client.completed_count) || 0;
-    Alert.alert(
-      'Create invoice?',
-      `This creates a real draft invoice for ${label}`
-      + (n ? `, covering its ${n} completed task${n === 1 ? '' : 's'}` : ', covering every certified time log')
-      + '.\n\nIt appears immediately in Client Invoices. Removing it again means deleting it there.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Create', onPress: async () => {
-            setBusyInvoice(client.client_id);
-            try {
-              const res = await svc.createInvoice({
-                clientKraId: client.client_id,
-                subKraIds: project ? [project.project_id] : [],
-              });
-              Alert.alert('Invoice created', `Draft invoice #${res.invoice_id} created${res.isMock ? ' (offline mock)' : ''}.`);
-              load();
-            } catch (e) {
-              Alert.alert('Error', e?.message || 'Could not create invoice');
-            } finally {
-              setBusyInvoice(null);
-            }
-          },
-        },
-      ]
-    );
+    // Three sentences and a paragraph break -- AppDialog scrolls its message
+    // body, where the OS alert simply squeezed it.
+    confirm({
+      title: 'Create invoice?',
+      tone: 'warn',
+      confirmLabel: 'Create',
+      message: `This creates a real draft invoice for ${label}`
+        + (n ? `, covering its ${n} completed task${n === 1 ? '' : 's'}` : ', covering every certified time log')
+        + '.\n\nIt appears immediately in Client Invoices. Removing it again means deleting it there.',
+      // Returning the promise lets the hook show "Working…" and hold the dialog
+      // open until the invoice actually exists -- the native alert dismissed on
+      // tap and left the card spinning with nothing on screen explaining why.
+      onConfirm: async () => {
+        setBusyInvoice(client.client_id);
+        try {
+          const res = await svc.createInvoice({
+            clientKraId: client.client_id,
+            subKraIds: project ? [project.project_id] : [],
+          });
+          // Queued behind the confirm's own close: both are setState on one slot,
+          // and the later one wins, so this replaces it rather than racing it.
+          say('Invoice created',
+              `Draft invoice #${res.invoice_id} created${res.isMock ? ' (offline mock)' : ''}.`,
+              'ok');
+          load();
+        } catch (e) {
+          showError('Error', e?.message || 'Could not create invoice');
+        } finally {
+          setBusyInvoice(null);
+        }
+      },
+    });
   }
 
   return (
@@ -199,6 +210,9 @@ export default function OwnerDashboard({ onBack }) {
         const c = clients.find((x) => x.client_id === drill?.clientId);
         if (c) { setDrill(null); confirmInvoice(c, null); }
       }} />
+
+      {/* Last in the tree so it paints above the drill-down sheet. */}
+      {dialog}
     </View>
   );
 }
