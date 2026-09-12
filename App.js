@@ -1,12 +1,13 @@
 // KRA/KPI app shell: spinning KPI-wheel Splash → Welcome → Login (Odoo connect)
 // → Home. A remembered Odoo session boots straight to Home after the splash.
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { BackHandler, View, ActivityIndicator, AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import SplashScreen from './screens/SplashScreen';
+import ErrorBoundary from './components/ErrorBoundary';
 import LoginScreen from './screens/LoginScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -97,7 +98,12 @@ export default function App() {
       {/* One app-wide status bar: dark icons on the transparent (edge-to-edge)
           bar, so every screen's light background shows through — no black strip. */}
       <StatusBar style="dark" />
-      <AppInner />
+      {/* Last line of defence. Anything AppInner throws that its own boundaries
+          did not catch lands here as a readable screen with a Try again, rather
+          than as an app that never draws and never says why. */}
+      <ErrorBoundary name="root">
+        <AppInner />
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }
@@ -105,6 +111,11 @@ export default function App() {
 function AppInner() {
   const [ready, setReady] = useState(false);       // splash finished
   const [restoring, setRestoring] = useState(true); // reading saved session
+  // Stable identity, deliberately. An inline arrow here is a new prop on every
+  // render of this component, and SplashScreen's intro effect keyed off it —
+  // so each re-render restarted the animation and leaked the previous one's
+  // endless loop. The splash only ever needs to say "done" once.
+  const finishSplash = useCallback(() => setReady(true), []);
   const [screen, setScreen] = useState('login');    // login (welcome) | connect
   const [user, setUser] = useState(null);
   const [appScreen, setAppScreen] = useState('home'); // post-login: home | dashboard | actionboard
@@ -592,7 +603,20 @@ function AppInner() {
   };
 
   // Splash keeps showing until both the animation and the session read finish.
-  if (!ready || restoring) return <SplashScreen onDone={() => setReady(true)} />;
+  //
+  // Wrapped, because an intro animation is the least important thing in the app
+  // and in a release build it was the most dangerous: when SplashScreen threw,
+  // React unmounted everything, the root view never drew a frame, and
+  // expo-splash-screen held the NATIVE splash forever — an app that looked hung
+  // with no way in. Now a failure here costs the animation and nothing else:
+  // onError marks the splash done and the app carries on to login.
+  if (!ready || restoring) {
+    return (
+      <ErrorBoundary name="splash" fallback={null} onError={finishSplash}>
+        <SplashScreen onDone={finishSplash} />
+      </ErrorBoundary>
+    );
+  }
 
   // A ringing task alarm takes over EVERYTHING (even before login) so Stop is
   // always reachable to silence it. Wins over Home, the PIN gate, and login.

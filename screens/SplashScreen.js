@@ -49,21 +49,51 @@ export default function SplashScreen({ onDone }) {
   const up = useRef(new Animated.Value(0)).current;     // labels/heading rise-in
   const float = useRef(new Animated.Value(0)).current;  // cards gentle float
 
+  // onDone is read through a ref so it can change without restarting the intro.
+  // It used to be a DEPENDENCY, and the caller passes an inline arrow — a new
+  // identity on every render of AppInner — so the effect below re-ran on each
+  // one. The cleanup only cleared the timeout, so each re-run left its four
+  // animations running and stacked ANOTHER endless Animated.loop on `float`.
+  // During boot AppInner re-renders several times (session restore, listeners,
+  // alarm state), so the splash accumulated loops for as long as it was on
+  // screen — all of them driving one value, on the very first frames the app
+  // ever draws.
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
   useEffect(() => {
-    Animated.timing(fade, { toValue: 1, duration: 500, useNativeDriver: true }).start();
-    Animated.timing(spin, { toValue: 1, duration: 2600, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
-    Animated.timing(up, { toValue: 1, delay: 900, duration: 800, useNativeDriver: true }).start();
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(float, { toValue: 1, duration: 1600, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-        Animated.timing(float, { toValue: 0, duration: 1600, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      ])
-    ).start();
+    const anims = [
+      Animated.timing(fade, { toValue: 1, duration: 500, useNativeDriver: true }),
+      Animated.timing(spin, { toValue: 1, duration: 2600, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(up, { toValue: 1, delay: 900, duration: 800, useNativeDriver: true }),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(float, { toValue: 1, duration: 1600, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+          Animated.timing(float, { toValue: 0, duration: 1600, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        ])
+      ),
+    ];
+    anims.forEach((a) => a.start());
+
+    // Held so the fade-out can be stopped too: it is created later, and an
+    // animation still running after unmount is what this whole block is about.
+    let out = null;
     const t = setTimeout(() => {
-      Animated.timing(fade, { toValue: 0, duration: 500, useNativeDriver: true }).start(() => onDone && onDone());
+      out = Animated.timing(fade, { toValue: 0, duration: 500, useNativeDriver: true });
+      // Fires whether or not the fade completed. Gating on `finished` would add
+      // a new way to be stuck on the splash forever, which is the one outcome
+      // this file must not risk; the parent guards against a repeat call.
+      out.start(() => { onDoneRef.current && onDoneRef.current(); });
     }, 4600);
-    return () => clearTimeout(t);
-  }, [onDone]);
+
+    return () => {
+      clearTimeout(t);
+      anims.forEach((a) => a.stop());
+      if (out) out.stop();
+    };
+    // Runs exactly once. Everything it needs that can change is in a ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '1080deg'] });
   const rise = up.interpolate({ inputRange: [0, 1], outputRange: [16, 0] });
