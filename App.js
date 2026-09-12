@@ -8,6 +8,7 @@ import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import SplashScreen from './screens/SplashScreen';
 import ErrorBoundary from './components/ErrorBoundary';
+import { boot, bootTick } from './utils/bootTrace';
 import LoginScreen from './screens/LoginScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -93,6 +94,7 @@ Notifications.setNotificationHandler({
 // SafeAreaProvider supplies the real system-bar insets (used by TabBar to sit
 // above the phone's nav/gesture bar).
 export default function App() {
+  bootTick('App render');
   return (
     <SafeAreaProvider>
       {/* One app-wide status bar: dark icons on the transparent (edge-to-edge)
@@ -109,6 +111,7 @@ export default function App() {
 }
 
 function AppInner() {
+  bootTick('AppInner render');
   const [ready, setReady] = useState(false);       // splash finished
   const [restoring, setRestoring] = useState(true); // reading saved session
   // Stable identity, deliberately. An inline arrow here is a new prop on every
@@ -611,6 +614,7 @@ function AppInner() {
   // with no way in. Now a failure here costs the animation and nothing else:
   // onError marks the splash done and the app carries on to login.
   if (!ready || restoring) {
+    bootTick('AppInner -> splash');
     return (
       <ErrorBoundary name="splash" fallback={null} onError={finishSplash}>
         <SplashScreen onDone={finishSplash} />

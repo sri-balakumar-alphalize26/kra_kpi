@@ -7,6 +7,7 @@ import { View, Text, Image, Animated, Easing, StyleSheet, Dimensions, StatusBar 
 import { StatusBar } from 'expo-status-bar';
 import Svg, { Path } from 'react-native-svg';
 import { COLORS } from '../theme';
+import { boot, bootTick } from '../utils/bootTrace';
 
 const { width: SW } = Dimensions.get('window');
 const TOP = (RNStatusBar.currentHeight || 0);
@@ -44,6 +45,7 @@ const CARDS = [
 ];
 
 export default function SplashScreen({ onDone }) {
+  bootTick('SplashScreen render');
   const spin = useRef(new Animated.Value(0)).current;
   const fade = useRef(new Animated.Value(0)).current;
   const up = useRef(new Animated.Value(0)).current;     // labels/heading rise-in
@@ -73,6 +75,7 @@ export default function SplashScreen({ onDone }) {
         ])
       ),
     ];
+    boot('SplashScreen: effect ran');
     anims.forEach((a) => a.start());
 
     // Held so the fade-out can be stopped too: it is created later, and an

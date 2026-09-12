@@ -1,10 +1,15 @@
 // FIRST, before anything else: installs the Buffer/process globals that ExcelJS
 // and JSZip read at module scope. See shims.js and metro.config.js.
 import './shims';
+import { boot } from './utils/bootTrace';
+
+boot('index: shims loaded');
 
 import { registerRootComponent } from 'expo';
 
 import App from './App';
+
+boot('index: App module imported');
 
 // Notifee REQUIRES a background event handler registered at the JS entry (module
 // scope) or it drops alarm events when the app is backgrounded/killed. But notifee
@@ -77,4 +82,6 @@ try {
 // registerRootComponent calls AppRegistry.registerComponent('main', () => App);
 // It also ensures that whether you load the app in Expo Go or in a native build,
 // the environment is set up appropriately
+boot('index: calling registerRootComponent');
 registerRootComponent(App);
+boot('index: registerRootComponent returned');
