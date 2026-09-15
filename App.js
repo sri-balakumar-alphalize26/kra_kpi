@@ -5,7 +5,9 @@ import { BackHandler, View, ActivityIndicator, AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
-import * as Notifications from 'expo-notifications';
+// Lazy. Importing expo-notifications at module scope starts a promise chain in
+// its own module body that hung the standalone build -- see services/lazyNotifications.js.
+import Notifications from './services/lazyNotifications';
 import SplashScreen from './screens/SplashScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import { boot, bootTick } from './utils/bootTrace';
@@ -43,16 +45,29 @@ import AlarmScreen from './screens/AlarmScreen';
 import ScreenTransition from './components/ScreenTransition';
 import { scheduleTaskAlarm, stopAlarm } from './services/alarm';
 
-// notifee is a native module, present only after the one-time rebuild. Load it
-// DEFENSIVELY — a static import would throw at launch in a build without the native
-// side and crash the app. Until it's available the alarm event wiring below no-ops;
-// the app runs normally and the notification reminder still works.
-let notifee = null, EventType = {};
-try {
-  const nf = require('@notifee/react-native');
-  notifee = nf.default;
-  EventType = nf.EventType;
-} catch (_) { /* notifee native module absent (pre-rebuild) — alarm inert */ }
+// notifee is a native module, present only in a build that bundles its native
+// side. Resolved on FIRST USE, not at import — same rule as expo-notifications
+// above. Two reasons, and the second is the one that bit:
+//   * a static import throws at launch where the native side is absent;
+//   * a module-scope require runs native work during module evaluation, which is
+//     what kept the standalone build on its splash forever.
+// Every use below is inside an effect, so deferring costs nothing. Until it is
+// available the alarm wiring no-ops and the notification reminder still works.
+let _nf = null, _nfTried = false;
+function getNotifee() {
+  if (!_nfTried) {
+    _nfTried = true;
+    try {
+      // eslint-disable-next-line global-require
+      _nf = require('@notifee/react-native');
+    } catch (_) { _nf = null; /* absent (Expo Go, pre-rebuild) — alarm inert */ }
+  }
+  return _nf?.default || null;
+}
+function getEventType() {
+  getNotifee();
+  return _nf?.EventType || {};
+}
 import * as session from './api/session';
 import { getConnection, getRoleState, saveRoleState } from './api/session';
 import { loadHaptics } from './utils/haptics';
@@ -73,23 +88,9 @@ log.info('runtime env', {
   isExpoGo: Constants.executionEnvironment === 'storeClient',
 });
 
-// Show a banner + add to the tray even when the app is foregrounded.
-Notifications.setNotificationHandler({
-  handleNotification: async (notification) => {
-    // Diagnostic: proves a (local or push) notification actually FIRED while the
-    // app is foregrounded — the reminder alarm should log here when its timer hits.
-    log.info('notification received (foreground)', {
-      title: notification?.request?.content?.title,
-      data: notification?.request?.content?.data,
-    });
-    return {
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    };
-  },
-});
+// The foreground notification handler used to be set here, at module scope.
+// It now runs from services/nativeWiring.js on the root mount effect, so that
+// expo-notifications is not loaded before the app has drawn a frame.
 
 // SafeAreaProvider supplies the real system-bar insets (used by TabBar to sit
 // above the phone's nav/gesture bar).
@@ -553,8 +554,10 @@ function AppInner() {
   // full-screen intent LAUNCHED the app. Both funnel through routeToAlarm, which
   // shows the full-screen Stop UI. Registered once.
   useEffect(() => {
-    if (!notifee) return;   // native module absent (pre-rebuild) — no alarm events
-    const unsub = notifee.onForegroundEvent(({ type, detail }) => {
+    const nf = getNotifee();
+    if (!nf) return;   // native module absent (pre-rebuild) — no alarm events
+    const EventType = getEventType();
+    const unsub = nf.onForegroundEvent(({ type, detail }) => {
       const notif = detail?.notification;
       if (!notif || String(notif?.data?.alarm) !== '1') return;
       if (type === EventType.DELIVERED || type === EventType.PRESS) {
@@ -564,7 +567,7 @@ function AppInner() {
     });
     (async () => {
       try {
-        const initial = await notifee.getInitialNotification();
+        const initial = await nf.getInitialNotification();
         if (String(initial?.notification?.data?.alarm) === '1') {
           log.info('cold-start alarm', { notifId: initial.notification.id });
           routeToAlarm(initial.notification);
@@ -578,11 +581,12 @@ function AppInner() {
   // killed) app forward, getInitialNotification won't fire — so on every resume,
   // check the displayed notifications for a live alarm and show the Stop screen.
   useEffect(() => {
-    if (!notifee) return;
+    const nf2 = getNotifee();
+    if (!nf2) return;
     const sub = AppState.addEventListener('change', async (state) => {
       if (state !== 'active') return;
       try {
-        const displayed = await notifee.getDisplayedNotifications();
+        const displayed = await nf2.getDisplayedNotifications();
         const hit = (displayed || []).find((d) => String(d?.notification?.data?.alarm) === '1');
         if (hit) { log.info('alarm resume-check → full-screen', { notifId: hit.notification?.id }); routeToAlarm(hit.notification); }
       } catch (_) {}

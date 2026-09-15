@@ -14,7 +14,7 @@
 // those three fields — that is the decision, written down, so the next reader does
 // not "fix" it.
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import Notifications from './lazyNotifications';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('Reminders');

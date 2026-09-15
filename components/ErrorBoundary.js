@@ -27,7 +27,7 @@ const log = createLogger('ErrorBoundary');
 export default class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { error: null, info: null };
+    this.state = { error: null, info: null, catches: 0 };
   }
 
   static getDerivedStateFromError(error) {
@@ -35,12 +35,20 @@ export default class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    // Everything, on one line per field, because logcat truncation eats long
-    // multi-line payloads and the stack is the whole point of being here.
-    log.error(`caught in <${this.props.name || 'unnamed'}>`, error?.message || String(error));
-    if (error?.stack) log.error('stack:', String(error.stack).slice(0, 4000));
-    if (info?.componentStack) log.error('componentStack:', String(info.componentStack).slice(0, 4000));
-    this.setState({ info });
+    const n = (this.state.catches || 0) + 1;
+    // Log the first two and then stop. On a blown stack this fires ~10 times a
+    // second, and three multi-line payloads per catch bury every other line in
+    // logcat -- which is exactly what happened on the 1.3.0 build.
+    if (n <= 2) {
+      // One line per field: logcat truncation eats long multi-line payloads and
+      // the stack is the whole point of being here.
+      log.error(`caught in <${this.props.name || 'unnamed'}>`, error?.message || String(error));
+      if (error?.stack) log.error('stack:', String(error.stack).slice(0, 4000));
+      if (info?.componentStack) log.error('componentStack:', String(info.componentStack).slice(0, 4000));
+    } else if (n === 3) {
+      log.error(`caught in <${this.props.name || 'unnamed'}> repeatedly — silencing, showing the minimal fallback`);
+    }
+    this.setState({ info, catches: n });
     // Let the parent decide to carry on without this subtree (the splash does
     // exactly that — see App.js). Called AFTER logging so a throwing handler
     // cannot cost us the diagnosis.
@@ -50,13 +58,37 @@ export default class ErrorBoundary extends React.Component {
   reset = () => this.setState({ error: null, info: null });
 
   render() {
-    const { error } = this.state;
+    const { error, catches } = this.state;
     if (!error) return this.props.children;
 
     // `fallback` may be an element, a function of (error, reset), or null to
     // render nothing — null is what a non-essential subtree wants.
     const { fallback } = this.props;
     if (fallback === null) return null;
+
+    // Caught more than twice: render the plainest thing React can draw.
+    //
+    // This is the lesson from the 1.3.0 build. A RangeError left the JS stack
+    // exhausted; the boundary caught it and rendered the fallback below —
+    // ScrollView, TouchableOpacity, StyleSheet lookups — whose render promptly
+    // overflowed the same stack, which the boundary caught, and so on about ten
+    // times a second, forever. `App render` climbed past 5,500 and the app never
+    // drew. The fallback's own TouchableOpacity was sitting in the component
+    // stack of the error it was supposedly reporting.
+    //
+    // So past the second catch: two elements, an inline style object, no
+    // handlers, no custom components, nothing that can throw. A boundary is
+    // worthless if recovering from a failure needs a working stack.
+    if (catches > 2) {
+      return (
+        <View style={{ flex: 1, backgroundColor: '#EBF1FC', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <Text style={{ fontSize: 15, color: '#B42318', textAlign: 'center' }}>
+            {'Something went wrong.\nPlease close and reopen the app.'}
+          </Text>
+        </View>
+      );
+    }
+
     if (typeof fallback === 'function') return fallback(error, this.reset);
     if (fallback !== undefined) return fallback;
 

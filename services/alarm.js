@@ -10,12 +10,16 @@ import { Platform } from 'react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 // The alarm CHANNEL is created through expo-notifications, not notifee — see
 // ensureAlarmChannel below for why. notifee still posts the notification.
-import * as Notifications from 'expo-notifications';
-import {
-  AndroidAudioUsage,
-  AndroidImportance as ExpoImportance,
-  AndroidNotificationVisibility as ExpoVisibility,
-} from 'expo-notifications';
+// Lazy: importing expo-notifications at module scope starts a promise chain in
+// its own module body, which hung the standalone build. See services/lazyNotifications.js.
+import Notifications from './lazyNotifications';
+
+// The enums come off the same lazy module. They were named imports, which would
+// have loaded it at import time and defeated the point; all three are only ever
+// read inside ensureAlarmChannel(), so a getter is enough.
+const ExpoImportance = { get MAX() { return Notifications.AndroidImportance.MAX; } };
+const ExpoVisibility = { get PUBLIC() { return Notifications.AndroidNotificationVisibility.PUBLIC; } };
+const AndroidAudioUsage = { get ALARM() { return Notifications.AndroidAudioUsage.ALARM; } };
 import { createLogger } from '../api/logger';
 import { getAlarmSound, getAlarmSettings } from '../api/session';
 

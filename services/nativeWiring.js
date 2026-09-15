@@ -10,8 +10,43 @@
 // Expo Go has none of these native modules, so every step here is a no-op there
 // -- which is exactly why the same JS ran fine in Expo Go while the APK hung.
 import { boot } from '../utils/bootTrace';
+import Notifications from './lazyNotifications';
+import { createLogger } from '../api/logger';
+
+const log = createLogger('App');
 
 let wired = false;
+
+// Show a banner + add to the tray even when the app is foregrounded.
+//
+// This lived at App.js's module scope, which meant expo-notifications loaded
+// during module evaluation — the thing that hung the standalone build. Setting
+// the handler one frame later is harmless: it only matters once a notification
+// arrives, which cannot happen before the app has drawn.
+function setForegroundNotificationHandler() {
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async (notification) => {
+        // Diagnostic: proves a (local or push) notification actually FIRED while
+        // the app is foregrounded — the reminder alarm should log here when its
+        // timer hits.
+        log.info('notification received (foreground)', {
+          title: notification?.request?.content?.title,
+          data: notification?.request?.content?.data,
+        });
+        return {
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        };
+      },
+    });
+    boot('native: notification handler set');
+  } catch (e) {
+    console.log('[Notif] setNotificationHandler failed', e?.message);
+  }
+}
 
 // Notifee REQUIRES a background event handler or it drops alarm events when the
 // app is backgrounded/killed. Its docs want this at the JS entry; registering it
@@ -40,6 +75,7 @@ export function wireNativeIntegrations() {
   if (wired) return;
   wired = true;
   boot('native: wiring started');
+  setForegroundNotificationHandler();
   registerNotifeeBackgroundHandler();
   boot('native: wiring done');
 }

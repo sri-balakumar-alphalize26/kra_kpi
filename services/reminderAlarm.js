@@ -26,7 +26,7 @@
 //   * Only the next occurrence of a repeat is armed. The server advances
 //     remind_date in action_complete, so until one is completed there is no later
 //     instant to schedule.
-import * as Notifications from 'expo-notifications';
+import Notifications from './lazyNotifications';
 import { createLogger } from '../api/logger';
 import { ensureReminderChannel } from './reminders';
 import { getReminderAlarms, saveReminderAlarms, pruneReminderSnoozes } from '../api/session';

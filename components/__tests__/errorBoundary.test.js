@@ -4,7 +4,7 @@
 // letting the parent carry on without the broken subtree.
 import React from 'react';
 import { Text } from 'react-native';
-import { render } from '@testing-library/react-native';
+import { render, fireEvent } from '@testing-library/react-native';
 import ErrorBoundary from '../ErrorBoundary';
 
 function Boom() {
@@ -63,4 +63,30 @@ test('logs the message and the component stack', () => {
   const logged = spy.mock.calls.map((c) => c.join(' ')).join('\n');
   expect(logged).toContain('kaboom');
   expect(logged).toContain('componentStack');
+});
+
+test('degrades to a fallback that cannot itself throw, after repeated catches', () => {
+  // The 1.3.0 build died on exactly this. A RangeError left the JS stack
+  // exhausted; the boundary caught it and rendered a fallback containing
+  // ScrollView + TouchableOpacity, whose render overflowed the same stack, which
+  // it caught again -- about ten times a second, forever. Past the second catch
+  // the fallback must be two elements and an inline style, nothing more.
+  const r = render(<ErrorBoundary name="t"><Boom /></ErrorBoundary>);
+  expect(r.getByText('Something went wrong')).toBeTruthy();   // catch 1, rich fallback
+
+  fireEvent.press(r.getByText('Try again'));                  // catch 2, still rich
+  expect(r.getByText('Try again')).toBeTruthy();
+
+  fireEvent.press(r.getByText('Try again'));                  // catch 3 -> minimal
+  expect(r.queryByText('Try again')).toBeNull();
+  expect(r.getByText(/Please close and reopen the app/)).toBeTruthy();
+});
+
+test('stops logging once it is looping', () => {
+  const r = render(<ErrorBoundary name="t"><Boom /></ErrorBoundary>);
+  fireEvent.press(r.getByText('Try again'));
+  const before = spy.mock.calls.length;
+  fireEvent.press(r.getByText('Try again'));   // 3rd catch: one line, not three
+  const added = spy.mock.calls.length - before;
+  expect(added).toBeLessThanOrEqual(2);
 });
