@@ -1,0 +1,66 @@
+# What NOT to upload to EAS Build.
+#
+# WHY THIS FILE EXISTS: the project tarball reached 149 MB and an upload died
+# mid-transfer with ECONNRESET, after 44 s of compressing, on every attempt.
+# Only ~39 MB of this repo is app source; the rest is screenshots, .docx manuals,
+# the Odoo server addon and a git worktree — none of it referenced by app.json,
+# the config plugins or the bundle. Excluding it takes the archive to single-digit
+# MB, which compresses in seconds and survives a flaky connection.
+#
+# THE TRAP: once this file exists, EAS uses it INSTEAD OF .gitignore, not in
+# addition to it. Everything that must stay out has to be named here — above all
+# node_modules/, which is 521 MB. Forget that one line and the upload gets
+# thirteen times worse, not better. Same for the secrets at the bottom: they are
+# covered by .gitignore today and would otherwise start being uploaded.
+#
+# Syntax is .gitignore's, which means a `#` only starts a comment at the START of
+# a line. A trailing comment becomes part of the pattern and the rule silently
+# matches nothing — so every note here is on its own line.
+
+# ---- Dependencies and generated native projects: EAS makes these itself ----
+node_modules/
+# 186 MB, and the build has no use for history. EAS is understood to skip it
+# anyway; named explicitly because it is the single largest thing here and
+# "understood to" is not worth 186 MB.
+.git/
+/android
+/ios
+.expo/
+dist/
+web-build/
+
+# ---- Not part of building the Android app ----
+# 51 MB of device captures from test sessions
+screenshots/
+# 15 MB of .docx manuals and their screenshots
+documents/
+# the Odoo server addon — backend, not the app
+odoo_modules/
+# agent state, and worktrees: a second full copy of the app
+.claude/
+ui-artifacts/
+coverage/
+.maestro/
+SESSION_*.md
+__pycache__/
+*.pyc
+*.zip
+
+# ---- Secrets. Restated because .gitignore no longer applies. ----
+credentials.json
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*-firebase-adminsdk-*.json
+GoogleService-Info.plist
+.env*.local
+
+# ---- Deliberately NOT excluded, each for a reason ----
+# google-services.json  ships inside the APK; excluding it breaks the build
+#                       (see the note in .gitignore)
+# assets/               icons, splash and fonts referenced from app.json
+# modules/              the local expo-task-widget-bridge module, autolinked
+# plugins/              the four config plugins app.json names — withNotifeeRepo
+#                       among them, without which app.notifee:core will not resolve
