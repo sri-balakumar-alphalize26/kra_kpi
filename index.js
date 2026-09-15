@@ -25,7 +25,24 @@ try {
         console.log('[FATAL] ' + (isFatal ? 'fatal' : 'non-fatal') + ': ' + (err && err.message));
         if (err && err.stack) console.log('[FATAL] stack ' + String(err.stack).slice(0, 3000));
       } catch (_) {}
-      if (prev) { try { prev(err, isFatal); } catch (_) {} }
+
+      // In a release build the buck stops here: do NOT pass this on.
+      //
+      // RN's default handler reports the error through ExceptionsManager, which
+      // kills the process -- `FATAL EXCEPTION: mqt_native_modules`. That is how
+      // a failed background push registration, which the user never asked for
+      // and cannot see, took the whole app down. It also died a second way on
+      // the way out: OutOfMemoryError inside JSStackTrace.format, because the
+      // stack it was formatting was a promise chain dozens of frames deep.
+      //
+      // An app that survives a background error is strictly better than one that
+      // dies showing nothing. Render errors are unaffected -- ErrorBoundary owns
+      // those and is the right mechanism for them.
+      //
+      // In DEV, still pass it on: the red box is how a developer finds these at
+      // all, and losing it would trade one silence for another.
+      const isDev = typeof __DEV__ !== 'undefined' && __DEV__;
+      if (isDev && prev) { try { prev(err, isFatal); } catch (_) {} }
     });
   }
 } catch (_) {}

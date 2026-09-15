@@ -70,12 +70,53 @@ function registerNotifeeBackgroundHandler() {
   }
 }
 
-/** Idempotent: the root can remount (an ErrorBoundary reset) without re-registering. */
+// Stop expo-notifications registering the device token with EXPO'S servers.
+//
+// THIS IS THE 70-SECOND STALL. DevicePushTokenAutoRegistration runs when
+// expo-notifications is imported: it posts the device's FCM token to
+// exp.host/--/api/v2/push/updateDeviceToken and, on failure, retries with
+// backoff until the budget runs out -- measured at 70.2s and 69.4s on the
+// tablet, near identical across runs because it is a fixed budget, not a random
+// spin. It then throws `TypeError: Object is not a constructor` out of a promise
+// chain dozens deep, which React Native escalates to a native FATAL EXCEPTION
+// and the app dies. Startup went from seconds to 140 seconds and a crash.
+//
+// It fails because the EAS project changed on 9 Sep (71d2cf0: projectId
+// bd95e45c -> 1c193ac9, owner donav -> vavinix) while google-services.json still
+// points at Firebase project kra-kpi-3efd5, so Expo's servers reject the
+// registration.
+//
+// But the honest point is that the app never needed it. Push tokens are
+// registered with ODOO, by services/push.js on login, through /kpi_push/register
+// -- Expo's own device-token bookkeeping is redundant here and always was. This
+// is expo-notifications' own supported switch for turning it off, and it
+// persists, so it stays off on later launches too.
+async function disableExpoServerAutoRegistration() {
+  try {
+    await Notifications.setAutoServerRegistrationEnabledAsync(false);
+    boot('native: expo auto-registration disabled');
+  } catch (e) {
+    // Not fatal: if this fails the app still runs, it just pays the retry again.
+    console.log('[Notif] could not disable auto server registration', e?.message);
+  }
+}
+
+/**
+ * Idempotent: the root can remount (an ErrorBoundary reset) without re-wiring.
+ *
+ * Each step is isolated and none may block the others. They run after the first
+ * frame, but "after" is not enough on its own -- a single slow native call here
+ * held up everything behind it, which is how one failing registration delayed
+ * the whole app.
+ */
 export function wireNativeIntegrations() {
   if (wired) return;
   wired = true;
   boot('native: wiring started');
   setForegroundNotificationHandler();
   registerNotifeeBackgroundHandler();
+  // Deliberately not awaited: it talks to the network and nothing below or after
+  // depends on it.
+  disableExpoServerAutoRegistration();
   boot('native: wiring done');
 }
