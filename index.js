@@ -5,6 +5,32 @@ import { boot } from './utils/bootTrace';
 
 boot('index: shims loaded');
 
+// Print what the runtime would otherwise swallow.
+//
+// Metro's guardedLoadModule wraps every module factory: if one throws, the
+// error goes to ErrorUtils.reportFatalError and the require RETURNS NORMALLY.
+// In a release build that is close to invisible -- no crash, no red box, and
+// the app simply never registers its root component, so React never mounts and
+// expo-splash-screen keeps the native splash up forever. Exactly the symptom
+// the 1.3.0 build shows, and exactly why logcat had nothing to say.
+//
+// Installed FIRST, before anything that can throw, and it chains to whatever
+// handler was already there so normal reporting is unchanged.
+try {
+  const EU = global.ErrorUtils;
+  if (EU && typeof EU.setGlobalHandler === 'function') {
+    const prev = typeof EU.getGlobalHandler === 'function' ? EU.getGlobalHandler() : null;
+    EU.setGlobalHandler((err, isFatal) => {
+      try {
+        console.log('[FATAL] ' + (isFatal ? 'fatal' : 'non-fatal') + ': ' + (err && err.message));
+        if (err && err.stack) console.log('[FATAL] stack ' + String(err.stack).slice(0, 3000));
+      } catch (_) {}
+      if (prev) { try { prev(err, isFatal); } catch (_) {} }
+    });
+  }
+} catch (_) {}
+
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';
@@ -83,5 +109,13 @@ try {
 // It also ensures that whether you load the app in Expo Go or in a native build,
 // the environment is set up appropriately
 boot('index: calling registerRootComponent');
-registerRootComponent(App);
-boot('index: registerRootComponent returned');
+try {
+  registerRootComponent(App);
+  boot('index: registerRootComponent returned');
+} catch (e) {
+  // Under inline requires this call is where ./App and its whole screen graph
+  // actually load, so a module-scope throw anywhere in the app surfaces HERE.
+  console.log('[FATAL] registerRootComponent threw: ' + (e && e.message));
+  if (e && e.stack) console.log('[FATAL] stack ' + String(e.stack).slice(0, 3000));
+  throw e;
+}
