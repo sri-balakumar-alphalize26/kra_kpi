@@ -19,13 +19,13 @@
 // will not take as binary input, and `URL` has no blob-URL support. Base64 is the
 // one currency every step here and every save path in the app already speaks.
 //
-// Node globals (Buffer, process) come from shims.js via metro.config.js. Without
-// them this module bundles fine and then throws on the first workbook write.
+// The four libraries, and the Node globals (Buffer, process) they read at their
+// own module scope, are loaded on first use by utils/reportLibs.js — not at
+// import. That is the difference between an app that starts in seconds and one
+// that spends three minutes evaluating a PDF engine before its first frame.
+// Each builder below asks for what it needs on entry; nothing else changes.
 
-import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';           // patches the jsPDF prototype; no export of its own
-import JSZip from 'jszip';
-import ExcelJS from 'exceljs';
+import { loadReportLibs } from './reportLibs';
 
 // ── Palette ────────────────────────────────────────────────────────────────
 // One palette for the Requirement / Update / Bug badge so the table, the PDF and
@@ -296,6 +296,7 @@ function docToB64(doc) {
 // Returns the DOC, not bytes, so the ZIP embeds exactly the document the
 // standalone button produces rather than a second one that can drift.
 export function buildFullReportPdf(ctx) {
+  const { jsPDF } = loadReportLibs();
   const rows = ctx.rows || [];
   const doc = new jsPDF('l', 'mm', 'a4');   // landscape: eight columns
 
@@ -426,6 +427,7 @@ export function buildFullReportPdf(ctx) {
 
 // ── One project's summary PDF ──────────────────────────────────────────────
 export function buildProjectSummaryPdfB64(ctx, projectKey, projectRows) {
+  const { jsPDF } = loadReportLibs();
   const doc = new jsPDF('p', 'mm', 'a4');
 
   doc.setFillColor(33, 136, 56);
@@ -500,6 +502,7 @@ export function buildProjectSummaryPdfB64(ctx, projectKey, projectRows) {
 
 // ── One task's detail PDF ──────────────────────────────────────────────────
 export function buildTaskDetailPdfB64(row) {
+  const { jsPDF } = loadReportLibs();
   const doc = new jsPDF('p', 'mm', 'a4');
 
   doc.setFillColor(52, 58, 64);
@@ -629,6 +632,7 @@ function writeTaskDetailsSheet(sheet, rows, scopeLine) {
 // TWO sheets, not one stacked sheet: the summary table has 7 columns and the
 // detail table 9, and a worksheet carries a single set of column widths.
 export function buildWorkbook(ctx) {
+  const { ExcelJS } = loadReportLibs();
   const rows = ctx.rows || [];
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'KRA / KPI Management System';
@@ -681,6 +685,7 @@ export function buildWorkbook(ctx) {
 }
 
 export function buildProjectWorkbook(ctx, projectName, projectRows) {
+  const { ExcelJS } = loadReportLibs();
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'KRA / KPI Management System';
   workbook.created = new Date();
@@ -717,6 +722,7 @@ export async function makeReportExcel(ctx) {
 // `onStep(done, total)` reports progress — a few hundred per-task PDFs takes far
 // longer on a phone than in a browser, and a frozen screen reads as a crash.
 export async function makeReportZip(ctx, include = {}, onStep) {
+  const { JSZip } = loadReportLibs();
   const rows = ctx.rows || [];
   if (!rows.length) throw new Error('No tasks to export.');
 

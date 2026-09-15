@@ -1,6 +1,7 @@
-// FIRST, before anything else: installs the Buffer/process globals that ExcelJS
-// and JSZip read at module scope. See shims.js and metro.config.js.
-import './shims';
+// The Buffer/process globals for ExcelJS and JSZip used to be installed here, as
+// the very first import. They are now installed by utils/reportLibs.js at the
+// moment a report is generated, right before those libraries are required. See
+// shims.js for why that move mattered to startup.
 import { boot } from './utils/bootTrace';
 
 boot('index: shims loaded');

@@ -19,8 +19,10 @@
 // As everywhere else, only the last step differs from the web: doc.save(name)
 // becomes base64 and the caller writes the file.
 
-import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';           // patches the jsPDF prototype; no export of its own
+// jsPDF and jspdf-autotable are loaded on first use, not at import — see
+// utils/reportLibs.js for why that is the difference between an app that starts
+// in seconds and one that does not.
+import { loadReportLibs } from './reportLibs';
 
 function docToB64(doc) {
   const uri = doc.output('datauristring');
@@ -31,6 +33,7 @@ function docToB64(doc) {
 // screen already holds it: tasks, clients, total_tasks, total_hours_display,
 // from_date, to_date, company_name, company_logo_b64, group_by.
 export function buildWorkReportPdf(res, showHours = true) {
+  const { jsPDF } = loadReportLibs();
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   doc.setFont('times', 'normal');
   const pageW = doc.internal.pageSize.getWidth();

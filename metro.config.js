@@ -5,9 +5,11 @@
 // Three of those are Node-shaped. They `require('buffer')`, `require('stream')`
 // and `require('process')`, none of which React Native ships, and Metro fails the
 // bundle rather than guessing — so the bare names are pointed at the browser
-// shims here. The matching GLOBALS are installed in shims.js, which index.js
-// imports first: mapping the module names is not enough on its own, because these
-// libraries read `Buffer` and `process` off the global at module scope.
+// shims here. The matching GLOBALS are installed by shims.js's installNodeShims(),
+// which utils/reportLibs.js calls immediately before requiring the libraries —
+// mapping the module names is not enough on its own, because these libraries
+// read `Buffer` and `process` off the global at module scope. (It used to run
+// from index.js at startup; see shims.js for why it moved.)
 const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);

@@ -25,8 +25,10 @@
 //
 // Keep this in step with the web builder. If you change one, change both.
 
-import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';           // patches the jsPDF prototype; no export of its own
+// jsPDF and jspdf-autotable are loaded on first use, not at import — see
+// utils/reportLibs.js for why that is the difference between an app that starts
+// in seconds and one that does not.
+import { loadReportLibs } from './reportLibs';
 
 // jsPDF hands back "data:application/pdf;filename=…;base64,XXXX"; everything
 // downstream wants only the payload.
@@ -49,6 +51,7 @@ function isAsciiSafe(str) {
 // `showAmounts` false = the cost-free delivery sheet, which the app has offered
 // as a switch for a while with nothing behind it.
 export function buildInvoicePdf(pdf, showAmounts = true) {
+  const { jsPDF } = loadReportLibs();
   const inv = pdf.invoice || {};
   // Already-billed (locked) lines are excluded from the total, so drop them from
   // the printed line items too — otherwise the rows would not sum to the stated
