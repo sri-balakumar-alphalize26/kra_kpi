@@ -37,33 +37,34 @@ import App from './App';
 
 boot('index: App module imported');
 
-// Notifee REQUIRES a background event handler registered at the JS entry (module
-// scope) or it drops alarm events when the app is backgrounded/killed. But notifee
-// is a NATIVE module: before the one-time rebuild, even importing it throws and
-// would crash the app at launch. So load it DEFENSIVELY — once the native side is
-// present (post-rebuild) this registers the handler; until then it's a harmless
-// no-op. Routing to the full-screen Stop UI is done in App.js.
-try {
-  const notifee = require('@notifee/react-native').default;
-  notifee.onBackgroundEvent(async ({ type, detail }) => {
-    // Trace only (visible via `adb logcat`) — the full-screen intent launches the
-    // app and App.js reads getInitialNotification() to show the alarm screen.
-    console.log('[Alarm bg] event', type, detail?.notification?.id);
-  });
-} catch (e) {
-  // notifee native module not present yet (needs a rebuild) — skip registration.
-  //
-  // The stack matters. This catch was written for one cause ("the module is not
-  // in this build") and will happily swallow any other, reporting a crash as a
-  // missing dependency. The 1.3.0 build did exactly that with the sibling catch
-  // below: a RangeError was logged as "expo-task-manager unavailable".
-  console.log('[Alarm bg] notifee registration failed — skipped', e?.message);
-  if (e?.stack) console.log('[Alarm bg] stack', String(e.stack).slice(0, 2000));
+// Notifee REQUIRES a background event handler registered at the JS entry or it
+// drops alarm events when the app is backgrounded/killed. But it is a NATIVE
+// module, and it must not be touched while modules are still being evaluated --
+// see the deferred wiring at the bottom of this file for why that distinction
+// decides whether this build starts at all.
+function registerNotifeeBackgroundHandler() {
+  try {
+    const notifee = require('@notifee/react-native').default;
+    notifee.onBackgroundEvent(async ({ type, detail }) => {
+      // Trace only (visible via `adb logcat`) -- the full-screen intent launches
+      // the app and App.js reads getInitialNotification() to show the alarm screen.
+      console.log('[Alarm bg] event', type, detail?.notification?.id);
+    });
+    boot('native: notifee background handler registered');
+  } catch (e) {
+    // The stack matters. This catch was written for one cause ("the module is not
+    // in this build") and will happily swallow any other, reporting a crash as a
+    // missing dependency. The 1.3.0 build did exactly that with its sibling: a
+    // RangeError was logged as "expo-task-manager unavailable".
+    console.log('[Alarm bg] notifee registration failed — skipped', e?.message);
+    if (e?.stack) console.log('[Alarm bg] stack', String(e.stack).slice(0, 2000));
+  }
 }
 
-// A data-only push arriving while the app is CLOSED. Registered at module scope
-// for the same reason as the notifee handler above: the task has to exist before
-// the runtime looks for it, and there is no component mounted to do it later.
+// A data-only push arriving while the app is CLOSED. The task has to exist
+// before the runtime looks for it, so it is registered from the entry file
+// rather than from a component -- but on a later tick, not during module
+// evaluation.
 //
 // Why this is needed at all. Until now the app could only react to a notification
 // when somebody TAPPED it (addNotificationResponseReceivedListener in App.js) —
@@ -76,33 +77,34 @@ try {
 // Defensive like everything else here: expo-task-manager is native, so this is
 // inert in Expo Go and on any build predating it.
 export const BG_NOTIFICATION_TASK = 'kra-kpi-bg-notification';
-try {
-  const TaskManager = require('expo-task-manager');
-  const Notifications = require('expo-notifications');
 
-  TaskManager.defineTask(BG_NOTIFICATION_TASK, ({ data, error }) => {
-    if (error) {
-      console.log('[BG push] task error', error?.message);
-      return;
-    }
-    // Trace only for now. Arming a reminder alarm from here is deliberately a
-    // separate change: it needs a discriminator threaded through the alarm
-    // payload and its routing, and none of that can be tested until a build with
-    // notifee in it actually exists. Landing the receiving end first means the
-    // next step has somewhere to land.
-    console.log('[BG push] received', JSON.stringify(data || {}));
-  });
+function registerBackgroundPushTask() {
+  try {
+    const TaskManager = require('expo-task-manager');
+    const Notifications = require('expo-notifications');
 
-  Notifications.registerTaskAsync(BG_NOTIFICATION_TASK)
-    .then(() => console.log('[BG push] task registered'))
-    .catch((err) => console.log('[BG push] register failed', err?.message));
-} catch (e) {
-  // Same warning as the notifee catch above: do not describe the cause, report
-  // it. This exact line said "expo-task-manager unavailable" while the real
-  // error was 'Maximum call stack size exceeded', and that one wrong word is
-  // what made the 1.3.0 startup failure look like a missing native module.
-  console.log('[BG push] registration failed — skipped', e?.message);
-  if (e?.stack) console.log('[BG push] stack', String(e.stack).slice(0, 2000));
+    TaskManager.defineTask(BG_NOTIFICATION_TASK, ({ data, error }) => {
+      if (error) {
+        console.log('[BG push] task error', error?.message);
+        return;
+      }
+      // Trace only for now. Arming a reminder alarm from here is deliberately a
+      // separate change: it needs a discriminator threaded through the alarm
+      // payload and its routing.
+      console.log('[BG push] received', JSON.stringify(data || {}));
+    });
+
+    Notifications.registerTaskAsync(BG_NOTIFICATION_TASK)
+      .then(() => console.log('[BG push] task registered'))
+      .catch((err) => console.log('[BG push] register failed', err?.message));
+    boot('native: background push task registered');
+  } catch (e) {
+    // Same warning as the notifee catch above: do not describe the cause, report
+    // it. This exact line said "expo-task-manager unavailable" while the real
+    // error was 'Maximum call stack size exceeded'.
+    console.log('[BG push] registration failed — skipped', e?.message);
+    if (e?.stack) console.log('[BG push] stack', String(e.stack).slice(0, 2000));
+  }
 }
 
 // registerRootComponent calls AppRegistry.registerComponent('main', () => App);
@@ -113,9 +115,35 @@ try {
   registerRootComponent(App);
   boot('index: registerRootComponent returned');
 } catch (e) {
-  // Under inline requires this call is where ./App and its whole screen graph
-  // actually load, so a module-scope throw anywhere in the app surfaces HERE.
+  // This call is where the app's root is handed to AppRegistry. Nothing may
+  // come before it that can hang, which is the whole point of the deferral
+  // below.
   console.log('[FATAL] registerRootComponent threw: ' + (e && e.message));
   if (e && e.stack) console.log('[FATAL] stack ' + String(e.stack).slice(0, 3000));
   throw e;
 }
+
+// Native wiring happens AFTER the root is registered, on a later tick.
+//
+// WHY, and it is the reason this build exists: with these two registrations at
+// module scope the standalone APK never drew a frame. The JS thread pinned at
+// 106% CPU, React never mounted, and expo-splash-screen -- which lifts the
+// native splash only on the first frame -- left the splash up forever. The same
+// JS runs fine in Expo Go under `expo start --no-dev --minify`, because there
+// these native modules are ABSENT and both blocks are skipped. So the fault was
+// never the JavaScript; it was native work running during module evaluation.
+//
+// setTimeout(0) rather than a microtask: it yields to the event loop, so
+// AppRegistry can run the application and get a frame up first. Both callees
+// swallow their own errors, and neither is on the path to drawing anything.
+//
+// The cost of deferring: a notifee background event or a data-only push
+// arriving in the first moments of a cold start could be missed. That is a far
+// better trade than an app that does not start, and the background push task is
+// trace-only today in any case.
+setTimeout(() => {
+  boot('native: wiring started');
+  registerNotifeeBackgroundHandler();
+  registerBackgroundPushTask();
+  boot('native: wiring done');
+}, 0);

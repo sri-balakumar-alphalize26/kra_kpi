@@ -31,16 +31,37 @@ let notifee = null;
 // AndroidVisibility is gone from this list on purpose: lockscreen visibility now
 // travels with the channel, which expo-notifications creates (ExpoVisibility).
 let AndroidImportance = {}, AndroidCategory = {}, TriggerType = {}, AuthorizationStatus = {};
-try {
-  const nf = require('@notifee/react-native');
-  notifee = nf.default;
-  AndroidImportance = nf.AndroidImportance;
-  AndroidCategory = nf.AndroidCategory;
-  TriggerType = nf.TriggerType;
-  AuthorizationStatus = nf.AuthorizationStatus;
-  log.info('notifee loaded (native module present)');
-} catch (e) {
-  log.warn('notifee unavailable — alarm disabled until the app is rebuilt', e?.message);
+
+// Loaded on FIRST USE, not at import.
+//
+// The require used to sit at module scope. That is fine in Expo Go, where it
+// throws and is skipped, but in a standalone build it actually pulls in and
+// initialises a native module WHILE MODULES ARE STILL BEING EVALUATED — before
+// React has mounted anything and before a single frame has been drawn. That
+// asymmetry is exactly the difference between the build that starts and the one
+// that hangs on the splash, so no native work happens here at import any more.
+//
+// Every entry point below already gates on notifee being present, so they call
+// this first and nothing else changes. The constants are filled in at the same
+// time; they are only ever read inside those same functions.
+let notifeeTried = false;
+function loadNotifee() {
+  if (notifeeTried) return notifee;
+  notifeeTried = true;
+  try {
+    // eslint-disable-next-line global-require
+    const nf = require('@notifee/react-native');
+    notifee = nf.default;
+    AndroidImportance = nf.AndroidImportance;
+    AndroidCategory = nf.AndroidCategory;
+    TriggerType = nf.TriggerType;
+    AuthorizationStatus = nf.AuthorizationStatus;
+    log.info('notifee loaded (native module present)');
+  } catch (e) {
+    notifee = null;
+    log.warn('notifee unavailable — alarm disabled until the app is rebuilt', e?.message);
+  }
+  return notifee;
 }
 
 // Bumped from 'task-alarm' when the channel moved to the ALARM audio stream.
@@ -88,13 +109,13 @@ export function titleFromUri(uri) {
 // True only once notifee's native module is present (after the rebuild). Callers
 // use this to fall back to the plain notification reminder in the meantime.
 export function alarmAvailable() {
-  return !!notifee;
+  return !!loadNotifee();
 }
 
 // Ask for notification permission (Android 13+) and, on Android, prompt to allow
 // full-screen intents / exact alarms if the OS is withholding them.
 export async function ensureAlarmPermission() {
-  if (!notifee) return false;
+  if (!loadNotifee()) return false;
   try {
     const settings = await notifee.requestPermission();
     const granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
@@ -123,7 +144,7 @@ export async function ensureAlarmPermission() {
 // created; it only needs the id back. The notification-mode reminder
 // (services/reminders.js) is unaffected and keeps the normal notification sound.
 async function ensureAlarmChannel(sound) {
-  if (!notifee) return undefined;
+  if (!loadNotifee()) return undefined;
   const channelId = `${CHANNEL_ID}::${soundKey(sound)}`;
   const soundVal = sound?.uri || DEFAULT_ALARM_URI;   // chosen content:// URI, or the default ALARM tone
   await Notifications.setNotificationChannelAsync(channelId, {
@@ -177,7 +198,7 @@ export function asSubject(x) {
 export async function scheduleTaskAlarm(subjectIn, whenMs, reason = '') {
   const task = asSubject(subjectIn);
   if (Platform.OS !== 'android') { log.info('schedule skipped (not android)', { platform: Platform.OS }); return null; }
-  if (!notifee) { log.warn('schedule skipped — notifee unavailable (rebuild needed)', { subject: task?.id }); return null; }
+  if (!loadNotifee()) { log.warn('schedule skipped — notifee unavailable (rebuild needed)', { subject: task?.id }); return null; }
   try {
     const note = (reason || '').trim();
     const secsFromNow = Math.round((whenMs - Date.now()) / 1000);
@@ -281,7 +302,7 @@ export async function pickAlarmSound(current) {
 // Stop a ringing/scheduled alarm — cancels the notification, which stops the loop.
 export async function stopAlarm(notifId) {
   if (Platform.OS !== 'android' || !notifId) return;
-  if (!notifee) { log.warn('stop skipped — notifee unavailable', { notifId }); return; }
+  if (!loadNotifee()) { log.warn('stop skipped — notifee unavailable', { notifId }); return; }
   log.info('stop: requested', { notifId });
   try {
     await notifee.cancelNotification(notifId);
