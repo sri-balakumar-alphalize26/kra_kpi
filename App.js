@@ -95,6 +95,16 @@ Notifications.setNotificationHandler({
 // above the phone's nav/gesture bar).
 export default function App() {
   bootTick('App render');
+  // Native wiring (notifee's background handler) runs from HERE, after the first
+  // commit -- never during module evaluation, and not from a setTimeout(0) in
+  // index.js either, which can fire before React has drawn anything on a slow
+  // device. The standalone build hung on the splash while native work ran ahead
+  // of the first frame; a mount effect is the only hook guaranteed to follow it.
+  // The require sits inside the effect for the same reason.
+  useEffect(() => {
+    // eslint-disable-next-line global-require
+    require('./services/nativeWiring').wireNativeIntegrations();
+  }, []);
   return (
     <SafeAreaProvider>
       {/* One app-wide status bar: dark icons on the transparent (edge-to-edge)
