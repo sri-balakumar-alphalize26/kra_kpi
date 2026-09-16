@@ -17,6 +17,7 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import PulseDot from '../components/PulseDot';
 import { fetchLiveTracking, revertWorkday } from '../services/liveTracking';
+import { publishLiveTrackingState } from '../utils/liveTrackingWidget';
 import * as H from '../utils/haptics';
 import { createLogger } from '../api/logger';
 
@@ -232,6 +233,11 @@ export default function LiveTracking({ onBack }) {
         return;
       }
       setData(res);
+      // Free: this is the same payload the widget needs and we already have it,
+      // so having the screen open keeps the home screen fresh at 15s rather than
+      // the 60s HomeScreen polls at. Not awaited — the widget must never delay
+      // the board it is riding on.
+      publishLiveTrackingState(res);
       setIsMock(!!res.isMock);
       fetchedAtRef.current = Date.now();
       setNowMs(Date.now());

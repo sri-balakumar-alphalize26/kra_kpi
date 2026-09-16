@@ -44,6 +44,9 @@ import useAppDialog from '../components/useAppDialog';
 // board was the only publisher, which meant the widget froze the moment the
 // developer left that screen.
 import { publishWidgetState } from '../utils/taskWidget';
+import { publishLiveTrackingState } from '../utils/liveTrackingWidget';
+import { liveTrackingWidgetPlaced, setLiveTrackingWidgetEnabled } from '../modules/expo-task-widget-bridge';
+import { fetchLiveTracking } from '../services/liveTracking';
 // Clients aren't served by /kra_kpi/tasks/get (it returns nothing for them), so
 // their stats come from the same portal feed My Requests uses.
 import { getClientDashboard } from '../services/clientPortal';
@@ -886,6 +889,42 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
       }
     })();
   }, []);
+
+  // ---- Live Tracking widget (admin only) -----------------------------------
+  // Two separate jobs, both keyed off the role above.
+  //
+  // 1. SHOW OR HIDE IT IN THE WIDGET PICKER. Android's picker is the OS's and
+  //    knows nothing about who is signed in, while /kpi_owner/live_tracking is
+  //    gated server-side to Owner/Coordinator/System. The receiver therefore
+  //    ships disabled, and is switched on only once the role resolves to admin —
+  //    otherwise a developer would find it on long-press, add it, and get a
+  //    permanently empty box that reads as a broken app rather than "not yours".
+  //
+  // 2. FEED IT. A different route from the 15s live_status poll, so it needs its
+  //    own timer — but only when somebody will actually see it.
+  useEffect(() => {
+    if (isAdmin === null) return;          // role still resolving; decide nothing
+    setLiveTrackingWidgetEnabled(isAdmin);
+    if (!isAdmin) return;
+
+    let alive = true;
+    const tick = async () => {
+      // Costs nothing when the admin never added the widget, which most will not.
+      // Checked every tick rather than once, so adding it takes effect without a
+      // restart.
+      if (!liveTrackingWidgetPlaced()) return;
+      try {
+        const res = await fetchLiveTracking();
+        if (alive) await publishLiveTrackingState(res);
+      } catch (_) { /* best-effort; the widget keeps its last good state */ }
+    };
+    tick();
+    // 60s, not the 15s the running-task widget rides. Attendance and who-is-on-
+    // what do not change second to second, and this is an EXTRA request on top of
+    // the existing poll.
+    const id = setInterval(tick, 60000);
+    return () => { alive = false; clearInterval(id); };
+  }, [isAdmin]);
 
   // Unread notification count for the bell badge. Refetched every time Home
   // mounts (it re-mounts on return from a sub-screen), so opening the feed and

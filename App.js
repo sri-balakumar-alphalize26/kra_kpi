@@ -1,7 +1,7 @@
 // KRA/KPI app shell: spinning KPI-wheel Splash → Welcome → Login (Odoo connect)
 // → Home. A remembered Odoo session boots straight to Home after the splash.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { BackHandler, View, ActivityIndicator, AppState } from 'react-native';
+import { BackHandler, View, ActivityIndicator, AppState, Linking } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -172,6 +172,7 @@ function AppInner() {
   const pushTokenRef = useRef(null);       // this device's Expo token (for logout unregister)
   const pendingTapRef = useRef(null);      // kpi_id from a tap that arrived before login/restore
   const pendingReportRef = useRef(null);   // report_id from a "daily report ready" tap before login
+  const pendingScreenRef = useRef(null);   // destination from a widget tap before login
   const pendingInvoiceRef = useRef(null);  // invoice_id from an invoice notification tap before login
   const devLockedRef = useRef(false);      // latest devLocked for listeners/back-handler
   useEffect(() => { devLockedRef.current = devLocked; }, [devLocked]);
@@ -198,6 +199,30 @@ function AppInner() {
     // Not queued in pendingTapRef like a task: that ref holds a task id and is
     // consumed by routeToTask on login. A reminder tap before login is rare
     // enough that opening Home is a fine answer.
+  };
+
+  // A home-screen widget was tapped. The widget shows a thing, so it opens that
+  // thing — landing on Home and making the user navigate is the version people
+  // stop tapping.
+  //
+  // Only the two destinations the widgets actually offer are honoured. The URL
+  // comes from outside the JS, so treating it as a free-form screen name would
+  // let any app holding the scheme open arbitrary screens.
+  const WIDGET_SCREENS = { actionboard: 'actionboard', livetracking: 'livetracking' };
+  const routeToWidgetScreen = (dest) => {
+    const screenName = WIDGET_SCREENS[dest];
+    if (!screenName) return;
+    if (userRef.current) {
+      // Clear the focus slots, like the other routers: a stale id would make an
+      // unrelated row flash on arrival.
+      setFocusTaskId(null);
+      setFocusReportId(null);
+      setAppScreen(screenName);
+    } else {
+      // Queued like a task tap — a widget tap from a cold start arrives long
+      // before login resolves, and dropping it means the tap did nothing.
+      pendingScreenRef.current = dest;
+    }
   };
 
   const routeToTask = (kpiId) => {
@@ -365,6 +390,28 @@ function AppInner() {
     })();
   }, [user?.uid]);
 
+  // A widget tap arrives as a krakpi:// URL (the scheme is declared in app.json,
+  // and the PendingIntent is built in plugins/withTaskWidget.js and
+  // plugins/withLiveTrackingWidget.js).
+  //
+  // Both halves are needed: getInitialURL covers a COLD start, where the tap is
+  // what launched the process, and the listener covers a WARM one, where the app
+  // was already in memory and no initial URL is ever produced. Handling only the
+  // first makes the widget work exactly once per boot.
+  useEffect(() => {
+    const handle = (url) => {
+      if (!url) return;
+      // krakpi://widget/<dest> — take the last segment, ignoring any query.
+      const m = /^krakpi:\/\/widget\/([a-z]+)/i.exec(String(url).split('?')[0]);
+      if (!m) return;
+      log.info('widget tap', { url, dest: m[1] });
+      routeToWidgetScreen(m[1].toLowerCase());
+    };
+    Linking.getInitialURL().then(handle).catch(() => {});
+    const sub = Linking.addEventListener('url', (e) => handle(e?.url));
+    return () => { try { sub.remove(); } catch (_) {} };
+  }, []);
+
   // Flush a queued cold-start tap only ONCE THE ROLE IS KNOWN (`gateReady`):
   // routeToTask picks the destination by role, and the gate resolves async —
   // flushing on login alone would still read isClient=false and send a client
@@ -383,6 +430,13 @@ function AppInner() {
       pendingInvoiceRef.current = null;
       log.info('cold-start tap flushed → invoice', { invoiceId });
       routeToInvoice(invoiceId);
+      return;
+    }
+    if (pendingScreenRef.current) {
+      const dest = pendingScreenRef.current;
+      pendingScreenRef.current = null;
+      log.info('cold-start tap flushed → widget screen', { dest });
+      routeToWidgetScreen(dest);
       return;
     }
     if (!pendingTapRef.current) return;
