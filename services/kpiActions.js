@@ -217,6 +217,33 @@ export function laneForTask(t) {
   return 'regular';
 }
 
+// Most recently worked first. kra.kpi declares no _order, so the server falls
+// back to id ASC and a task opened months ago but worked yesterday sits at the
+// bottom.
+//
+// last_activity, not id: sorting by id descending is still CREATION order and
+// leaves that same task near the bottom. Recency has to come from the work log,
+// which is what the server's last_activity carries.
+//
+// NULLS LAST. A task nobody has ever started has no claim on the top, and an
+// older app against a newer server is the same case — every task reports null,
+// the comparator is a no-op, and the server's order is left alone rather than
+// scrambled.
+//
+// Module scope and exported, not a local const, because BOTH the board lanes and
+// the switch picker sort by it. It lived inside groupIntoLanes and the picker
+// could not reach it, which is why the picker was still ordering alphabetically
+// by ref long after the lanes were fixed. Kept identical to the web module's
+// comparator in kpi_action.js so the two order the same way.
+export function byRecency(a, b) {
+  const A = a.last_activity || '';
+  const B = b.last_activity || '';
+  if (A === B) return 0;
+  if (!A) return 1;
+  if (!B) return -1;
+  return A < B ? 1 : -1;   // ISO8601 UTC, so a string compare is a time compare
+}
+
 export function groupIntoLanes(tasks) {
   const buckets = {};
   for (const l of LANES) buckets[l.key] = [];
@@ -235,22 +262,9 @@ export function groupIntoLanes(tasks) {
   // id ASC and a task opened months ago but worked yesterday sits at the bottom
   // of Paused — which is exactly what was reported.
   //
-  // last_activity, not id: sorting by id descending is still CREATION order and
-  // leaves that same task near the bottom. Recency has to come from the work
-  // log, which is what the server's last_activity carries.
-  //
-  // Nulls last rather than first. A task nobody has ever started has no claim on
-  // the top of the lane, and an older app build talking to a newer server is the
-  // same case — every task reports null, the comparator is a no-op, and the lane
-  // keeps the server's order instead of scrambling it.
-  const byRecency = (a, b) => {
-    const A = a.last_activity || '';
-    const B = b.last_activity || '';
-    if (A === B) return 0;
-    if (!A) return 1;
-    if (!B) return -1;
-    return A < B ? 1 : -1;   // ISO8601 UTC, so a string compare is a time compare
-  };
+  // byRecency is defined at module scope now — the switch picker needs the same
+  // rule, and a second copy here is how the two would start disagreeing about
+  // what "most recent" means.
   for (const l of LANES) {
     // Today is the exception and keeps its own order. It answers "what was I
     // last deep in", which is a question about how MUCH was worked today, not

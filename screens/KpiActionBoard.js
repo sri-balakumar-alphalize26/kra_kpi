@@ -18,7 +18,7 @@ import KpiTaskDetail from './KpiTaskDetail';
 import AddTimeModal from '../components/AddTimeModal';
 import AppDialog from '../components/AppDialog';
 import {
-  LANES, groupIntoLanes, laneForTask, isTodayTask, isWithinFreshWindow, taskMatchesQuery, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
+  LANES, groupIntoLanes, byRecency, laneForTask, isTodayTask, isWithinFreshWindow, taskMatchesQuery, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, resumeTaskWithReason, completeTask, reassignTask, adminDeleteTask, createProgress,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists, markReviewStarted,
@@ -3748,9 +3748,20 @@ export default function KpiActionBoard({
                 // can_start stays in the filter: it is the server's _start_block
                 // answer, and a PAUSED task can still be blocked by a paused
                 // workday or an unapproved client.
+                // Last worked first. Sorting by reference is creation order in
+                // practice, so the task you were just on — the one you are almost
+                // always coming back to — sat buried under every task nobody has
+                // touched. Same comparator the lanes use, and the same one the web
+                // module's picker uses.
+                //
+                // The ref stays as a TIE-BREAK: two never-started tasks compare
+                // equal under byRecency, and without a second key they would fall
+                // back to the server's order rather than the predictable
+                // alphabetical one this picker has always had.
                 const avail = (raw || [])
                   .filter((t) => !runningIds.has(t.id) && t.can_start !== false && matches(t))
-                  .sort((a, b) => String(a.external_ref || '').localeCompare(String(b.external_ref || '')));
+                  .sort((a, b) => byRecency(a, b)
+                    || String(a.external_ref || '').localeCompare(String(b.external_ref || '')));
                 // Work already begun comes first — switching is nearly always
                 // "back to the thing I paused", and that used to be buried among
                 // every never-started task in the list.

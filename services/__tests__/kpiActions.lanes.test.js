@@ -267,3 +267,64 @@ describe('board search', () => {
     expect(taskMatchesQuery(hy, 'clientflow')).toBe(false);
   });
 });
+
+// byRecency was a local const inside groupIntoLanes, so the switch picker could
+// not reach it and went on sorting alphabetically by reference — creation order
+// in practice — long after the lanes were fixed. It is exported now, which means
+// two callers depend on its exact behaviour, so pin it directly rather than only
+// through the lanes.
+describe('byRecency, now that the lanes and the switch picker share it', () => {
+  const { byRecency } = require('../kpiActions');
+  const at = (last_activity) => ({ last_activity });
+
+  it('puts the most recently worked task first', () => {
+    const older = at('2026-09-10T09:00:00Z');
+    const newer = at('2026-09-16T09:00:00Z');
+    expect(byRecency(newer, older)).toBeLessThan(0);
+    expect(byRecency(older, newer)).toBeGreaterThan(0);
+  });
+
+  it('sorts a real list newest to oldest', () => {
+    const rows = [
+      at('2026-08-11T09:00:00Z'),
+      at('2026-09-16T09:00:00Z'),
+      at('2026-09-10T14:00:00Z'),
+    ];
+    expect([...rows].sort(byRecency).map((r) => r.last_activity)).toEqual([
+      '2026-09-16T09:00:00Z',
+      '2026-09-10T14:00:00Z',
+      '2026-08-11T09:00:00Z',
+    ]);
+  });
+
+  it('sends never-started tasks to the BOTTOM, not the top', () => {
+    // A task nobody has ever touched has no claim on the top of the list — and
+    // `false` is what the server actually sends, not null or undefined.
+    const never = at(false);
+    const worked = at('2026-09-16T09:00:00Z');
+    expect(byRecency(never, worked)).toBeGreaterThan(0);
+    expect(byRecency(worked, never)).toBeLessThan(0);
+  });
+
+  it('is a no-op when NOTHING reports activity', () => {
+    // An older app against a newer server, or the reverse. Returning 0 leaves the
+    // server's order alone instead of scrambling it into something arbitrary.
+    expect(byRecency(at(false), at(false))).toBe(0);
+    expect(byRecency(at(undefined), at(null))).toBe(0);
+  });
+
+  it('reports a tie so a caller can add its own second key', () => {
+    // The switch picker relies on this: equal recency falls through to the
+    // reference, which is the predictable order it has always had.
+    const same = '2026-09-16T09:00:00Z';
+    expect(byRecency(at(same), at(same))).toBe(0);
+
+    const tie = [
+      { last_activity: false, external_ref: 'REQ-116' },
+      { last_activity: false, external_ref: 'REQ-068' },
+    ];
+    const sorted = [...tie].sort((a, b) => byRecency(a, b)
+      || String(a.external_ref).localeCompare(String(b.external_ref)));
+    expect(sorted.map((t) => t.external_ref)).toEqual(['REQ-068', 'REQ-116']);
+  });
+});

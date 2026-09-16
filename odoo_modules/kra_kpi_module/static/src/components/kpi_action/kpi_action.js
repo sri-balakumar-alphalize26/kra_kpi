@@ -29,6 +29,32 @@ const PAUSE_NOTE_CODES = ['other', 'urgent', 'meeting'];
 // canResume triple, so "shows Resume" and "counts as paused" stay one idea.
 const PAUSED_STATES = ['paused', 'hold', 'rework'];
 
+// Most recently worked first. kra.kpi declares no _order, so the ORM falls back
+// to id ASC and a task opened months ago but worked yesterday sits at the bottom.
+//
+// last_activity, not id: sorting by id descending is still CREATION order and
+// leaves that same task near the bottom. Recency has to come from the work log,
+// which is what the server's last_activity carries.
+//
+// NULLS LAST. A task nobody has ever started has no claim on the top, and an
+// older client against a newer server is the same case -- every task reports
+// null, the comparator is a no-op, and the existing order is left alone instead
+// of being scrambled.
+//
+// Module scope, not a local const, because BOTH the board columns and the switch
+// picker sort by it. It lived inside the column grouping and the picker could not
+// reach it, which is why the picker was still ordering alphabetically by ref long
+// after the columns were fixed. Kept identical to the mobile app's comparator in
+// services/kpiActions.js, so the two order the same way.
+const byRecency = (a, b) => {
+    const A = a.last_activity || "";
+    const B = b.last_activity || "";
+    if (A === B) return 0;
+    if (!A) return 1;
+    if (!B) return -1;
+    return A < B ? 1 : -1;   // ISO8601 UTC: string compare IS time compare
+};
+
 // ONE colour per away/non-task type, used by BOTH the Workday Map chips and the
 // Away-time list. They used to be defined twice and disagreed — the Map drew
 // "away" slate while the list drew it Bootstrap bg-dark (black).
@@ -6305,9 +6331,18 @@ export class KpiAction extends Component {
     // whatever I'm on" and is only offered when a single task is running.
     openSwitchTask(fromTask) {
         const running = new Set(this.getActiveTasks().map((t) => t.id));
+        // Last worked first. Switching is nearly always "back to the thing I was
+        // just on", and sorting by reference -- which is creation order in
+        // practice -- buried exactly that task under every one nobody has touched.
+        //
+        // The ref stays as a TIE-BREAK: two never-started tasks compare equal
+        // under byRecency, and without a second key they would fall back to the
+        // ORM's order rather than the predictable alphabetical one this picker
+        // has always had.
         const options = (this.state.allTasks || [])
             .filter((t) => !running.has(t.id) && t.can_start !== false)
-            .sort((a, b) => (a.external_ref || '').localeCompare(b.external_ref || ''));
+            .sort((a, b) => byRecency(a, b)
+                || (a.external_ref || '').localeCompare(b.external_ref || ''));
 
         const esc = (x) => (x == null ? '' : String(x))
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -7446,22 +7481,9 @@ export class KpiAction extends Component {
             // falls back to id ASC and a task opened months ago but worked
             // yesterday sits at the bottom of Paused.
             //
-            // last_activity, not id: sorting by id descending is still CREATION
-            // order and leaves that same task near the bottom. Recency has to come
-            // from the work log, which is what the server's last_activity carries.
-            //
-            // Kept identical to the mobile app's comparator in
-            // services/kpiActions.js (groupIntoLanes), so the two boards order the
-            // same way — including nulls last, so a task nobody has started stays
-            // at the bottom rather than jumping the queue.
-            const byRecency = (a, b) => {
-                const A = a.last_activity || "";
-                const B = b.last_activity || "";
-                if (A === B) return 0;
-                if (!A) return 1;
-                if (!B) return -1;
-                return A < B ? 1 : -1;   // ISO8601 UTC: string compare IS time compare
-            };
+            // byRecency is defined at module scope now — the switch picker needs
+            // the same rule, and a second copy here is how the two would start
+            // disagreeing about what "most recent" means.
             for (const k of Object.keys(groups)) {
                 // Today is the exception and keeps its own order below. It answers
                 // "what was I last deep in", which is about how MUCH was worked
