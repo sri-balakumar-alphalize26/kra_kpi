@@ -6,8 +6,7 @@
 // is regenerated from app.json on every EAS build. Files dropped into android/
 // would be deleted before they were ever compiled. Everything the widget needs
 // therefore has to be WRITTEN at prebuild time, which is what withDangerousMod
-// below does. This is the first plugin in this repo to write files rather than
-// only patch the manifest (the other two just set attributes).
+// below does.
 //
 // WHY A Chronometer AND NOT A TICKING UPDATE: a widget process cannot call into
 // the React Native bundle, and AppWidgetProvider updates are rate-limited to once
@@ -23,12 +22,11 @@
 // Android, and a widget cannot open it. Deliberately not a native module either
 // — a file needs no bridge, no autolinking, and no new dependency.
 //
-// KNOWN LIMIT: the app cannot ask Android to redraw the widget without a native
-// module to send the APPWIDGET_UPDATE broadcast. The TIMER is unaffected (the
-// Chronometer runs on its own and is always correct), but the task NAME can lag
-// by up to updatePeriodMillis (30 min, the OS floor) after a switch. Refreshing
-// on tap covers the common case. Closing the gap properly means adding a small
-// Expo module — worth doing only if the lag actually bothers anyone.
+// HOW IT STAYS FRESH: modules/expo-task-widget-bridge broadcasts APPWIDGET_UPDATE
+// as soon as the state file changes, so a task switch shows within seconds.
+// Without it the only refresh is android:updatePeriodMillis, whose floor is 30
+// MINUTES — which is what the widget used to be stuck with, and why this file
+// once documented a lag it no longer has.
 //
 // Applied at prebuild/EAS-build time; needs a rebuild to take effect and CANNOT
 // work in Expo Go.
@@ -38,13 +36,16 @@ const {
   withDangerousMod,
   AndroidConfig,
 } = require('@expo/config-plugins');
-const fs = require('fs');
 const path = require('path');
+const { previewVector, write, writeSharedWidgetRes } = require('./widgetShared');
 
 const WIDGET_CLASS = 'TaskWidgetProvider';
 // Must match WIDGET_FILE in utils/taskWidget.js. Lives in the app's filesDir,
 // which both sides can reach.
 const STATE_FILE = 'task_widget.json';
+// Tapping the widget opens the board rather than dumping the user on Home. Read
+// by App.js through Linking; the scheme is declared in app.json.
+const DEEP_LINK = 'krakpi://widget/actionboard';
 
 // ---------------------------------------------------------------- Kotlin ----
 const providerKt = (pkg) => `package ${pkg}
@@ -61,6 +62,7 @@ import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.SystemClock
 import android.view.View
 import android.widget.RemoteViews
@@ -107,6 +109,7 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
             views.setTextViewText(R.id.widget_task, taskName)
             views.setViewVisibility(R.id.widget_timer, View.VISIBLE)
             views.setViewVisibility(R.id.widget_idle, View.GONE)
+            views.setViewVisibility(R.id.widget_dot, View.VISIBLE)
 
             // Chronometer counts from a base expressed in elapsedRealtime, not in
             // wall-clock. Convert: how long ago did it start, in elapsedRealtime
@@ -123,6 +126,7 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
         } else {
             views.setViewVisibility(R.id.widget_timer, View.GONE)
             views.setViewVisibility(R.id.widget_idle, View.VISIBLE)
+            views.setViewVisibility(R.id.widget_dot, View.GONE)
             views.setTextViewText(R.id.widget_task, "No task running")
             views.setTextViewText(
                 R.id.widget_sub,
@@ -130,14 +134,17 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
             )
         }
 
-        // Tapping anywhere opens the app.
-        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
-        if (launch != null) {
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            val pi = PendingIntent.getActivity(context, 0, launch, flags)
-            views.setOnClickPendingIntent(R.id.widget_root, pi)
+        // Tapping opens the BOARD, not just the app. A widget that shows a task
+        // and then drops you on Home to navigate yourself is the version people
+        // stop tapping. ACTION_VIEW on the app's own scheme, which App.js reads
+        // through Linking; setPackage keeps it inside this app.
+        val launch = Intent(Intent.ACTION_VIEW, Uri.parse("${DEEP_LINK}")).apply {
+            setPackage(context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pi = PendingIntent.getActivity(context, 0, launch, flags)
+        views.setOnClickPendingIntent(R.id.widget_root, pi)
 
         mgr.updateAppWidget(widgetId, views)
     }
@@ -145,6 +152,10 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
 `;
 
 // ------------------------------------------------------------------ XML ----
+// minWidth/minHeight are the ONLY sizing that applies below API 31, which is where
+// this actually runs today (the test tablet is Android 11). targetCellWidth/Height
+// and previewLayout are API 31+ and are simply ignored there — which is why
+// previewImage below is not optional.
 const widgetInfoXml = `<?xml version="1.0" encoding="utf-8"?>
 <!-- GENERATED by plugins/withTaskWidget.js -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
@@ -153,6 +164,7 @@ const widgetInfoXml = `<?xml version="1.0" encoding="utf-8"?>
     android:targetCellWidth="3"
     android:targetCellHeight="1"
     android:description="@string/task_widget_description"
+    android:previewImage="@drawable/task_widget_preview"
     android:previewLayout="@layout/task_widget"
     android:resizeMode="horizontal"
     android:widgetCategory="home_screen"
@@ -160,92 +172,111 @@ const widgetInfoXml = `<?xml version="1.0" encoding="utf-8"?>
     android:updatePeriodMillis="1800000" />
 `;
 
-// updatePeriodMillis is the OS floor (30 min) and, for the task NAME, it is the
-// ONLY refresh there is — not a safety net.
-//
-// This comment used to claim "the app pushes an update whenever the running task
-// changes". It does not, and cannot: updateAppWidget below is reachable only from
-// onUpdate(), which Android alone invokes, and nothing in JS can send the
-// APPWIDGET_UPDATE broadcast without a native module. The app writes the state
-// file faithfully (utils/taskWidget.js, on every live_status payload) and then has
-// no way to ask for a redraw. See the KNOWN LIMIT in this file's header, which was
-// right all along while this line contradicted it.
-//
-// The TIMER is unaffected — the Chronometer ticks on its own and is always correct.
-// Only the name can lag. Tapping the widget does not fix it either: the
-// PendingIntent below opens the app, it does not re-render the widget.
+// updatePeriodMillis is the OS floor (30 min) and is only a backstop: the app
+// pushes an update through modules/expo-task-widget-bridge whenever the state
+// file actually changes, so a task switch appears within seconds.
 const widgetLayoutXml = `<?xml version="1.0" encoding="utf-8"?>
 <!-- GENERATED by plugins/withTaskWidget.js -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="12dp"
-    android:background="@drawable/task_widget_bg">
+    android:orientation="horizontal"
+    android:padding="14dp"
+    android:background="@drawable/widget_card_bg">
 
-    <TextView
-        android:id="@+id/widget_task"
+    <View
+        android:layout_width="4dp"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_accent_bar" />
+
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:maxLines="1"
-        android:ellipsize="end"
-        android:textSize="14sp"
-        android:textStyle="bold"
-        android:textColor="#0F172A"
-        android:text="No task running" />
+        android:orientation="vertical"
+        android:layout_gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:paddingLeft="12dp">
 
-    <Chronometer
-        android:id="@+id/widget_timer"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:textSize="22sp"
-        android:textStyle="bold"
-        android:textColor="#1E40AF"
-        android:visibility="gone" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
-    <TextView
-        android:id="@+id/widget_idle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:textSize="22sp"
-        android:textStyle="bold"
-        android:textColor="#94A3B8"
-        android:text="--:--"
-        android:visibility="gone" />
+            <View
+                android:id="@+id/widget_dot"
+                android:layout_width="7dp"
+                android:layout_height="7dp"
+                android:layout_marginEnd="6dp"
+                android:layout_marginRight="6dp"
+                android:background="@drawable/widget_dot" />
 
-    <TextView
-        android:id="@+id/widget_sub"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:maxLines="1"
-        android:ellipsize="end"
-        android:textSize="11sp"
-        android:textColor="#64748B"
-        android:text="" />
+            <TextView
+                android:id="@+id/widget_task"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="@color/widget_text"
+                android:text="No task running" />
+        </LinearLayout>
+
+        <Chronometer
+            android:id="@+id/widget_timer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:textColor="@color/widget_accent"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/widget_idle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:textColor="@color/widget_muted"
+            android:text="--:--"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/widget_sub"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textSize="11sp"
+            android:textColor="@color/widget_muted"
+            android:text="" />
+    </LinearLayout>
 </LinearLayout>
 `;
 
-const widgetBgXml = `<?xml version="1.0" encoding="utf-8"?>
-<!-- GENERATED by plugins/withTaskWidget.js -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="#FFFFFF" />
-    <corners android:radius="18dp" />
-</shape>
-`;
+// What the WIDGETS TAB shows on long-press. Required, not decorative: below API 31
+// previewLayout is ignored, and with no previewImage the picker falls back to the
+// launcher icon — a generic tile that says nothing about what the widget does, and
+// is identical for every widget the app ships.
+const previewXml = previewVector({ w: 180, h: 72 }, [
+  { x: 14, y: 14, w: 3, h: 44, r: 1.5, color: '@color/widget_accent' },  // accent bar
+  { x: 25, y: 17, w: 6, h: 6, color: '@color/widget_accent' },           // running dot
+  { x: 36, y: 18, w: 76, h: 5, color: '@color/widget_text' },            // task name
+  { x: 25, y: 30, w: 62, h: 13, r: 3, color: '@color/widget_accent' },   // the timer
+  { x: 25, y: 49, w: 44, h: 4, color: '@color/widget_muted' },           // sub-line
+]);
 
 const widgetStringsXml = `<?xml version="1.0" encoding="utf-8"?>
 <!-- GENERATED by plugins/withTaskWidget.js -->
 <resources>
     <string name="task_widget_description">Your running KRA/KPI task and its live timer.</string>
+    <string name="task_widget_label">Running task</string>
 </resources>
 `;
-
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents, 'utf8');
-}
 
 // --------------------------------------------------------------- plugin ----
 module.exports = function withTaskWidget(config) {
@@ -260,13 +291,17 @@ module.exports = function withTaskWidget(config) {
       const root = cfg.modRequest.platformProjectRoot; // .../android
       const main = path.join(root, 'app', 'src', 'main');
 
+      // Colours + card background, shared with the Live Tracking widget. Both
+      // plugins write these; identical bytes, so order does not matter.
+      writeSharedWidgetRes(main);
+
       write(
         path.join(main, 'java', ...pkg.split('.'), `${WIDGET_CLASS}.kt`),
         providerKt(pkg),
       );
       write(path.join(main, 'res', 'xml', 'task_widget_info.xml'), widgetInfoXml);
       write(path.join(main, 'res', 'layout', 'task_widget.xml'), widgetLayoutXml);
-      write(path.join(main, 'res', 'drawable', 'task_widget_bg.xml'), widgetBgXml);
+      write(path.join(main, 'res', 'drawable', 'task_widget_preview.xml'), previewXml);
       write(path.join(main, 'res', 'values', 'task_widget_strings.xml'), widgetStringsXml);
 
       return cfg;
@@ -289,6 +324,10 @@ module.exports = function withTaskWidget(config) {
           // Not exported: nothing outside the app should be able to poke it. The
           // OS delivers APPWIDGET_UPDATE regardless of this flag.
           'android:exported': 'false',
+          // The name under the preview in the widgets tab. Below API 31 the
+          // picker shows THIS, not android:description — unset, both of the
+          // app's widgets would read "KRA KPI" and be indistinguishable.
+          'android:label': '@string/task_widget_label',
         },
         'intent-filter': [
           { action: [{ $: { 'android:name': 'android.appwidget.action.APPWIDGET_UPDATE' } }] },

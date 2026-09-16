@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -32,29 +33,40 @@ class TaskWidgetBridgeModule : Module() {
   private val context: Context
     get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
 
+  // Default kept so every existing caller — refreshTaskWidget() — keeps working
+  // unchanged. There is more than one provider now (the running task and admin
+  // Live Tracking), so the name is a parameter rather than a constant.
+  private fun providerFor(name: String?): ComponentName {
+    // Addressed by NAME, not by class. The providers are emitted by the config
+    // plugins into the APP's package, so referencing the class here would make
+    // this module depend on app sources it cannot see.
+    val simple = if (name.isNullOrBlank()) "TaskWidgetProvider" else name
+    return ComponentName(context.packageName, "${context.packageName}.$simple")
+  }
+
+  // The ids the launcher currently holds for that provider, or an empty array if
+  // the provider is absent (an older build, or the plugin did not run). A widget
+  // that cannot be found is never a reason to fail the caller.
+  private fun idsFor(provider: ComponentName): IntArray =
+    try {
+      AppWidgetManager.getInstance(context).getAppWidgetIds(provider) ?: IntArray(0)
+    } catch (e: Exception) {
+      IntArray(0)
+    }
+
   override fun definition() = ModuleDefinition {
-    // Must match requireNativeModule('TaskWidgetBridge') in index.js.
+    // Must match requireNativeModule('TaskWidgetBridge') in index.js. Deliberately
+    // NOT renamed now that it serves two widgets — a rename buys nothing and has
+    // to be matched on the JS side.
     Name("TaskWidgetBridge")
 
     // Returns true when at least one widget was asked to redraw, false when the
     // user has none on their home screen. Not an error either way — most people
     // never add the widget, and a caller must not treat that as a failure.
-    Function("refreshWidget") {
-      val mgr = AppWidgetManager.getInstance(context)
-
-      // Addressed by NAME, not by class. TaskWidgetProvider is emitted by
-      // plugins/withTaskWidget.js into the APP's package, so referencing the
-      // class here would make this module depend on app sources it cannot see.
-      val provider = ComponentName(context.packageName, "${context.packageName}.TaskWidgetProvider")
-
-      val ids = try {
-        mgr.getAppWidgetIds(provider)
-      } catch (e: Exception) {
-        // The provider is absent (older build, or the plugin did not run). A
-        // widget that cannot be found is not a reason to fail a task switch.
-        return@Function false
-      }
-      if (ids == null || ids.isEmpty()) return@Function false
+    Function("refreshWidget") { providerName: String? ->
+      val provider = providerFor(providerName)
+      val ids = idsFor(provider)
+      if (ids.isEmpty()) return@Function false
 
       // Targeted with the ComponentName already built above rather than
       // Intent(context, SomeClass::class.java): that form needs the class
@@ -67,6 +79,47 @@ class TaskWidgetBridgeModule : Module() {
         .putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
       context.sendBroadcast(intent)
       true
+    }
+
+    // Is this widget actually on somebody's home screen?
+    //
+    // Exists so the app can skip work nobody will see. The Live Tracking widget
+    // is fed by its own extra RPC to an admin-only route; without this every
+    // admin would pay for that poll forever, when most will never add the widget.
+    // Cheap: one AppWidgetManager lookup, no broadcast.
+    Function("widgetPlaced") { providerName: String? ->
+      idsFor(providerFor(providerName)).isNotEmpty()
+    }
+
+    // Show or hide a widget in Android's WIDGET PICKER.
+    //
+    // WHY THIS IS NEEDED. The picker is the OS's, and it knows nothing about who
+    // is signed in. Live Tracking is admin-only — the route behind it is gated
+    // server-side to Owner/Coordinator/System — so without this a developer would
+    // see it when they long-press the home screen, add it, and get a permanently
+    // empty box. An empty widget reads as a broken app, not as "not for you".
+    //
+    // Disabling the RECEIVER COMPONENT is the only way to take an entry out of
+    // that picker; there is no per-user filter. The Live Tracking receiver is
+    // therefore declared android:enabled="false" in the manifest and switched on
+    // only once a role resolves to admin, so the default state is the safe one.
+    //
+    // DONT_KILL_APP because the alternative is Android restarting the process
+    // mid-session to apply a cosmetic change.
+    //
+    // Returns false rather than throwing when the component is absent (an older
+    // build): a widget that cannot be found must never break signing in.
+    Function("setWidgetEnabled") { providerName: String?, enabled: Boolean ->
+      try {
+        val state = if (enabled) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                    else PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        context.packageManager.setComponentEnabledSetting(
+          providerFor(providerName), state, PackageManager.DONT_KILL_APP,
+        )
+        true
+      } catch (e: Exception) {
+        false
+      }
     }
   }
 }

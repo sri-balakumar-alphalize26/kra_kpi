@@ -35,27 +35,75 @@ function getNative() {
   return native;
 }
 
+// The two providers the config plugins emit into the app's package. Simple class
+// names — the native side prefixes the package itself.
+const TASK = 'TaskWidgetProvider';
+const LIVE_TRACKING = 'LiveTrackingWidgetProvider';
+
 /** True when the native side is present, i.e. this build can redraw the widget. */
 export function widgetBridgeAvailable() {
   return !!getNative();
 }
 
-/**
- * Ask Android to redraw the task widget now.
- *
- * Returns true only if a widget was actually asked to repaint. False covers both
- * "this build has no bridge" and "the user has no widget on their home screen" —
- * neither is an error, and neither should ever interrupt what the caller was
- * doing. Swallows everything for the same reason.
- */
-export function refreshTaskWidget() {
+// Every call below swallows everything and answers false on any doubt. A widget
+// is an extra: "no bridge in this build", "no widget on the home screen" and "the
+// provider does not exist" are all ordinary outcomes, not errors, and none of them
+// may interrupt a task switch or a sign-in.
+function call(fn, ...args) {
   const mod = getNative();
-  if (!mod) return false;
+  if (!mod || typeof mod[fn] !== 'function') return false;
   try {
-    return !!mod.refreshWidget();
+    return !!mod[fn](...args);
   } catch (_) {
     return false;
   }
 }
 
-export default { widgetBridgeAvailable, refreshTaskWidget };
+/**
+ * Ask Android to redraw a widget now.
+ *
+ * Returns true only if a widget was actually asked to repaint. False covers both
+ * "this build has no bridge" and "the user has no widget on their home screen".
+ */
+export function refreshTaskWidget() {
+  return call('refreshWidget', TASK);
+}
+
+export function refreshLiveTrackingWidget() {
+  return call('refreshWidget', LIVE_TRACKING);
+}
+
+/**
+ * Is this widget actually on a home screen?
+ *
+ * Used to skip work nobody will see — the Live Tracking widget costs an extra
+ * admin-only RPC to feed, and most admins will never add it.
+ */
+export function taskWidgetPlaced() {
+  return call('widgetPlaced', TASK);
+}
+
+export function liveTrackingWidgetPlaced() {
+  return call('widgetPlaced', LIVE_TRACKING);
+}
+
+/**
+ * Show or hide the Live Tracking widget in Android's widget picker.
+ *
+ * Android's picker knows nothing about who is signed in, and the route behind
+ * this widget is admin-only — so without this a developer would find it on
+ * long-press, add it, and get a permanently empty box that reads as a broken app.
+ * The receiver ships disabled and is switched on only for an admin.
+ */
+export function setLiveTrackingWidgetEnabled(enabled) {
+  return call('setWidgetEnabled', LIVE_TRACKING, !!enabled);
+}
+
+export default {
+  widgetBridgeAvailable,
+  refreshTaskWidget,
+  refreshLiveTrackingWidget,
+  taskWidgetPlaced,
+  liveTrackingWidgetPlaced,
+  setLiveTrackingWidgetEnabled,
+};
