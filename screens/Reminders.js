@@ -24,9 +24,9 @@
 // occurrence of a repeat is armed — the server advances remind_date when one is
 // completed, so until then there is no later instant to schedule.
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput,
+  View, Text, StyleSheet, FlatList, SectionList, TouchableOpacity, TextInput,
   ActivityIndicator, Modal, Switch, StatusBar as RNStatusBar,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -39,7 +39,9 @@ import { createLogger } from '../api/logger';
 import { syncReminderAlarms } from '../services/reminderAlarm';
 import FieldError from '../components/FieldError';
 import AppDialog from '../components/AppDialog';
+import AlarmModePicker from '../components/AlarmModePicker';
 import * as H from '../utils/haptics';
+import { getReminderModes, setReminderMode } from '../api/session';
 import {
   fetchReminders, saveReminder, completeReminder, deleteReminder, fetchReminderHistory,
 } from '../services/reminderList';
@@ -108,12 +110,18 @@ export default function Reminders({ onBack, uid }) {
   const [datePick, setDatePick] = useState(false);
   const [timePick, setTimePick] = useState(false);
   const [history, setHistory] = useState(null);        // null = sheet closed
+  // { [reminderId]: 'notify' | 'alarm' } — device-local, so it is read here rather
+  // than arriving with the server rows. Absent means 'alarm' (see api/session.js).
+  const [modes, setModes] = useState({});
 
   const flash = (kind, msg) => { setBanner({ kind, msg }); setTimeout(() => setBanner(null), 3200); };
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // Read the local modes alongside the rows: syncReminderAlarms below reads
+      // the same map, and the list rows need it to show the right bell icon.
+      setModes(await getReminderModes(uid));
       const res = await fetchReminders();
       if (res?.status) {
         const list = res.reminders || [];
@@ -144,7 +152,8 @@ export default function Reminders({ onBack, uid }) {
   const startAdd = () => {
     H.tap();
     setErrs({});
-    setEditor({ id: null, name: '', remind_date: todayIso(), remind_time: 9, repeat: 'none', enabled: true });
+    setEditor({ id: null, name: '', remind_date: todayIso(), remind_time: 9, repeat: 'none',
+      enabled: true, mode: 'alarm' });
   };
   const startEdit = (item) => {
     H.tap();
@@ -156,6 +165,7 @@ export default function Reminders({ onBack, uid }) {
       remind_time: Number(item.remind_time) || 0,
       repeat: item.repeat || 'none',
       enabled: item.enabled !== false,
+      mode: modes[String(item.id)] === 'notify' ? 'notify' : 'alarm',
     });
   };
 
@@ -180,6 +190,10 @@ export default function Reminders({ onBack, uid }) {
         enabled: editor.enabled,
       });
       if (res?.status) {
+        // Before load(): load() re-reads the mode map and then calls
+        // syncReminderAlarms, so writing after it would arm the OLD mode and leave
+        // the new one waiting for the next sync.
+        if (res.id) await setReminderMode(res.id, editor.mode, uid);
         setEditor(null);
         flash('ok', editor.id ? 'Reminder updated.' : 'Reminder added.');
         load();
@@ -250,7 +264,14 @@ export default function Reminders({ onBack, uid }) {
       setDelItem(null);
       // Its completion history deliberately survives — the rows keep a copy of
       // the name and time, so past ticks stay readable after the reminder goes.
-      if (res?.status) { flash('ok', 'Reminder deleted.'); load(); }
+      // Its MODE does not: that is device-local bookkeeping keyed by an id the
+      // server will reuse for somebody else's reminder, so it is dropped here
+      // rather than left to accumulate.
+      if (res?.status) {
+        await setReminderMode(delItem.id, null, uid);
+        flash('ok', 'Reminder deleted.');
+        load();
+      }
       else flash('err', res?.message || 'Could not delete.');
     } catch (e) {
       setDelItem(null);
@@ -269,16 +290,42 @@ export default function Reminders({ onBack, uid }) {
     setHistory({ loading: false, rows: res?.rows || [] });
   };
 
+  // Split the list by how each reminder will actually fire. A reminder that rings
+  // full-screen and one that posts a quiet banner are very different things to be
+  // expecting, and in a flat list the only difference was a small icon.
+  //
+  // Order is Alarm first: those are the ones that will interrupt you, so they are
+  // what someone scanning this screen is checking on. An empty section is dropped
+  // rather than shown — a "Notify (0)" header is noise.
+  const sections = useMemo(() => {
+    const alarm = [];
+    const notify = [];
+    for (const r of rows) {
+      (modes[String(r.id)] === 'notify' ? notify : alarm).push(r);
+    }
+    return [
+      { title: `Alarm · ${alarm.length}`, mode: 'alarm', data: alarm },
+      { title: `Notify · ${notify.length}`, mode: 'notify', data: notify },
+    ].filter((sec) => sec.data.length);
+  }, [rows, modes]);
+
   const renderRow = ({ item }) => {
     const off = item.enabled === false;
     const client = Array.isArray(item.client_kra_id) ? item.client_kra_id[1] : '';
     const kra = Array.isArray(item.kra_id) ? item.kra_id[1] : '';
     const repeatLabel = (REPEAT_OPTIONS.find((r) => r.value === item.repeat) || REPEAT_OPTIONS[0]).label;
+    // A ringing alarm and a quiet notification are very different things to be
+    // expecting, so the row says which without having to open the editor.
+    const isAlarm = modes[String(item.id)] !== 'notify';
     return (
       <View style={[s.card, off && s.cardOff]}>
         <View style={s.cardMain}>
           <View style={s.bell}>
-            <MaterialCommunityIcons name="bell-outline" size={22} color={off ? COLORS.faint : COLORS.primary} />
+            <MaterialCommunityIcons
+              name={isAlarm ? 'alarm' : 'bell-outline'}
+              size={22}
+              color={off ? COLORS.faint : COLORS.primary}
+            />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[s.remName, off && s.dim]} numberOfLines={2}>{item.name}</Text>
@@ -366,11 +413,29 @@ export default function Reminders({ onBack, uid }) {
       {loading ? (
         <View style={s.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>
       ) : (
-        <FlatList
-          data={rows}
+        <SectionList
+          sections={sections}
           keyExtractor={(it) => String(it.id)}
           contentContainerStyle={rows.length ? { padding: 14, paddingBottom: 40 } : s.emptyWrap}
           renderItem={renderRow}
+          stickySectionHeadersEnabled={false}
+          // Only drawn when there is something to separate. With every reminder on
+          // the same setting a lone header is noise, and on a screen most people
+          // use for two or three reminders that is the common case.
+          renderSectionHeader={({ section }) => (
+            sections.length > 1
+              ? (
+                <View style={s.sectionHead}>
+                  <MaterialCommunityIcons
+                    name={section.mode === 'alarm' ? 'alarm' : 'bell-outline'}
+                    size={14}
+                    color={COLORS.muted}
+                  />
+                  <Text style={s.sectionTxt}>{section.title}</Text>
+                </View>
+              )
+              : null
+          )}
           ListEmptyComponent={(
             <View style={s.emptyBox}>
               <MaterialCommunityIcons
@@ -446,6 +511,15 @@ export default function Reminders({ onBack, uid }) {
                 );
               })}
             </View>
+
+            {/* How it fires. Until this existed services/reminderAlarm.js decided
+                by capability, so a build with notifee turned every reminder into a
+                full-screen alarm whether or not that was wanted. */}
+            <Text style={[s.fLbl, { marginTop: 14 }]}>How it reminds you</Text>
+            <AlarmModePicker
+              mode={editor?.mode === 'notify' ? 'notify' : 'alarm'}
+              onModeChange={(m) => { H.select(); setEditor((p) => ({ ...p, mode: m })); }}
+            />
 
             <View style={s.enabledRow}>
               <View style={{ flex: 1 }}>
@@ -589,6 +663,8 @@ const s = StyleSheet.create({
   rowBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, backgroundColor: COLORS.bg },
   rowBtnTxt: { fontSize: 12.5, fontWeight: '700', color: COLORS.primary },
 
+  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 10, paddingBottom: 6, paddingHorizontal: 2 },
+  sectionTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.muted, letterSpacing: 0.4, textTransform: 'uppercase' },
   emptyWrap: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 30 },
   emptyBox: { alignItems: 'center', gap: 8 },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: COLORS.muted, marginTop: 6 },

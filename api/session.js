@@ -384,3 +384,49 @@ export async function pruneReminderSnoozes(uid, nowMs) {
     return {};
   }
 }
+
+// --- How each reminder should fire: 'alarm' or 'notify' ----------------------
+// Until this existed, services/reminderAlarm.js decided by CAPABILITY rather than
+// by choice: `canRing = alarmAvailable()`, and every reminder on a build with
+// notifee became a full-screen looping alarm. That was invisible while notifee was
+// inert; the moment a build shipped with it, a reminder people wanted as a quiet
+// nudge started taking over the screen. The task Remind-me dialog has offered this
+// choice all along — reminders simply never got it.
+//
+// Device-local on purpose: kpi.reminder has no field for it, and adding one is a
+// module change. The cost is that the choice does not follow you to another device
+// or show on the web; the benefit is that it works today, against the live server,
+// with no upgrade.
+//
+// Keyed by uid like the snooze and armed maps above, and for the same reason: the
+// sync reads one namespace, so a write into another is silently lost.
+//
+// ABSENT MEANS 'alarm'. Every existing reminder rings today, and a default of
+// 'notify' would silence all of them on upgrade — nobody asked for that.
+const K_REMINDER_MODE = 'kpi_reminder_mode';
+
+export async function getReminderModes(uid) {
+  try {
+    const raw = await AsyncStorage.getItem(`${K_REMINDER_MODE}:${uid ?? 'me'}`);
+    const o = raw ? JSON.parse(raw) : null;
+    return (o && typeof o === 'object') ? o : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+/** Read one reminder's mode, applying the 'alarm' default. */
+export async function getReminderMode(reminderId, uid) {
+  const all = await getReminderModes(uid);
+  return all[String(reminderId)] === 'notify' ? 'notify' : 'alarm';
+}
+
+// Pass mode = null to forget a reminder (deleted), so the map cannot grow forever.
+export async function setReminderMode(reminderId, mode, uid) {
+  try {
+    const all = await getReminderModes(uid);
+    if (mode === 'notify' || mode === 'alarm') all[String(reminderId)] = mode;
+    else delete all[String(reminderId)];
+    await AsyncStorage.setItem(`${K_REMINDER_MODE}:${uid ?? 'me'}`, JSON.stringify(all));
+  } catch (_) {}
+}

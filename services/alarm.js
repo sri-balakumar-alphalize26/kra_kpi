@@ -48,13 +48,28 @@ let AndroidImportance = {}, AndroidCategory = {}, TriggerType = {}, Authorizatio
 // Every entry point below already gates on notifee being present, so they call
 // this first and nothing else changes. The constants are filled in at the same
 // time; they are only ever read inside those same functions.
-let notifeeTried = false;
+// SUCCESS is memoised; failure is NOT. That asymmetry is the whole point.
+//
+// This used to set a `notifeeTried` flag before the require and never retry. One
+// early call that threw — and moving native loading off the startup path made an
+// early call much more likely — latched `notifee` to null for the REST OF THE APP
+// SESSION. alarmAvailable() then answered false forever on a build carrying a
+// perfectly healthy notifee, so every alarm the user asked for quietly became a
+// notification. Nothing said so: KpiActionBoard reports a failed SCHEDULE but
+// simply takes the other branch on a failed CAPABILITY CHECK.
+//
+// Retrying is nearly free — require() is cached by Metro, so a second call is a
+// map lookup, and by the time anyone opens a reminder dialog the native side is
+// long since ready. A one-way latch should never be set by a transient failure.
 function loadNotifee() {
-  if (notifeeTried) return notifee;
-  notifeeTried = true;
+  if (notifee) return notifee;
   try {
     // eslint-disable-next-line global-require
     const nf = require('@notifee/react-native');
+    // Only commit once the module actually produced something. A require that
+    // resolves to an empty object would otherwise latch a useless `notifee` in
+    // place of null and take the unavailable branch away.
+    if (!nf || !nf.default) return null;
     notifee = nf.default;
     AndroidImportance = nf.AndroidImportance;
     AndroidCategory = nf.AndroidCategory;
@@ -63,7 +78,9 @@ function loadNotifee() {
     log.info('notifee loaded (native module present)');
   } catch (e) {
     notifee = null;
-    log.warn('notifee unavailable — alarm disabled until the app is rebuilt', e?.message);
+    // warn, not info: info is stripped from release builds, and this is the line
+    // that explains why somebody's alarm arrived as a banner.
+    log.warn('notifee unavailable — will retry on next use', e?.message);
   }
   return notifee;
 }

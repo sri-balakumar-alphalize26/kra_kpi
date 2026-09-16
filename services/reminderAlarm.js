@@ -29,7 +29,8 @@
 import Notifications from './lazyNotifications';
 import { createLogger } from '../api/logger';
 import { ensureReminderChannel } from './reminders';
-import { getReminderAlarms, saveReminderAlarms, pruneReminderSnoozes } from '../api/session';
+import { getReminderAlarms, saveReminderAlarms, pruneReminderSnoozes,
+         getReminderModes } from '../api/session';
 import { alarmAvailable, scheduleTaskAlarm, stopAlarm } from './alarm';
 // The two decisions that can be silently wrong -- what the server's naive-UTC
 // string means, and which rows deserve an alarm -- live in utils/ as pure
@@ -78,7 +79,13 @@ export async function syncReminderAlarms(rows, uid) {
     // Ring properly if we can. alarmAvailable() is a runtime answer, not a build
     // assumption -- the codebase long claimed notifee was dead in every shipped
     // build while the installed APK in fact carried it.
+    //
+    // This is now only the CAPABILITY. Which of the two a given reminder actually
+    // gets is the owner's choice (getReminderModes), because once a build ships
+    // with notifee, "can ring" would otherwise mean "always rings" and a reminder
+    // wanted as a quiet nudge takes over the screen.
     const canRing = alarmAvailable();
+    const modes = await getReminderModes(uid);
 
     for (const r of want) {
       // Leave a snoozed reminder exactly as it is.
@@ -86,11 +93,20 @@ export async function syncReminderAlarms(rows, uid) {
 
       const was = prev[r.id];
       const whenIso = new Date(r.at).toISOString();
+      // What this reminder SHOULD be, given its owner's choice and what this
+      // build can do. 'alarm' asked for on a build without notifee still degrades
+      // to a banner -- better a banner than silence.
+      const wantKind = (modes[r.id] === 'notify') ? 'banner' : (canRing ? 'alarm' : 'banner');
       // Already scheduled for this exact instant, and the OS agrees it exists.
       // Only meaningful for the banner path: a notifee alarm is not in expo's
       // scheduled list, so `live` cannot vouch for it and `was.kind` is checked
       // instead.
-      if (was && was.whenIso === whenIso && was.notifId
+      //
+      // `was.kind === wantKind` is load-bearing. Switching a reminder between
+      // Notify and Alarm does NOT change its time, so without this the row reads
+      // as unchanged, the old scheduling survives, and the reminder keeps firing
+      // the way it used to -- or fires twice, once from each mechanism.
+      if (was && was.whenIso === whenIso && was.notifId && was.kind === wantKind
           && (was.kind === 'alarm' || live.has(was.notifId))) {
         next[r.id] = was;
         continue;
@@ -102,7 +118,7 @@ export async function syncReminderAlarms(rows, uid) {
         } catch (_) {}
       }
 
-      if (canRing) {
+      if (wantKind === 'alarm') {
         const notifId = await scheduleTaskAlarm(
           { kind: 'reminder', id: r.id, name: r.name }, r.at, '');
         if (notifId) {
@@ -159,8 +175,11 @@ export async function syncReminderAlarms(rows, uid) {
     }
 
     await saveReminderAlarms(uid, next);
+    // `canRing` is the capability, not the outcome: each reminder now picks its
+    // own kind, so report how many chose Notify rather than one mode for the lot.
     log.info('sync', { wanted: want.length, armed, cancelled, kept: want.length - armed,
-                      mode: canRing ? 'alarm' : 'banner', snoozed: Object.keys(snoozed).length });
+                      canRing, notify: Object.values(modes).filter((m) => m === 'notify').length,
+                      snoozed: Object.keys(snoozed).length });
     return { armed, cancelled, total: want.length };
   } catch (e) {
     log.warn('sync failed', e?.message);

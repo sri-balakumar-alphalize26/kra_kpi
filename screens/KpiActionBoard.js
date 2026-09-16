@@ -32,9 +32,10 @@ import {
 import { createLogger } from '../api/logger';
 import { serverNow } from '../api/odooApi';
 import { scheduleTaskReminder, cancelTaskReminder } from '../services/reminders';
-import { scheduleTaskAlarm, stopAlarm, alarmAvailable, pickAlarmSound, titleFromUri } from '../services/alarm';
-import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets, getAlarmSound, setAlarmSound, getAlarmSettings, setAlarmSettings } from '../api/session';
+import { scheduleTaskAlarm, stopAlarm, alarmAvailable } from '../services/alarm';
+import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets } from '../api/session';
 import DurationTimePicker from '../components/DurationTimePicker';
+import AlarmModePicker from '../components/AlarmModePicker';
 import PulseDot from '../components/PulseDot';
 import * as H from '../utils/haptics';
 import { publishWidgetState, clearWidgetState } from '../utils/taskWidget';
@@ -1442,56 +1443,28 @@ export default function KpiActionBoard({
   const [presetMins, setPresetMins] = useState(DEFAULT_PRESET_MINS);
   const [presetMgrOpen, setPresetMgrOpen] = useState(false);
   const [newPresetMins, setNewPresetMins] = useState('');
-  // Chosen system alarm sound { uri, title } (null = device default). Applies to
-  // alarm mode only; shared globally (one setting, like the presets).
-  const [alarmSound, setAlarmSoundState] = useState(null);
-  // Global alarm behaviour { ringMins, snoozeMins }, and the open wheel-picker
-  // request { field, mode, initial, title } (null = closed).
-  const [alarmSettings, setAlarmSettingsState] = useState({ ringMins: 5, snoozeMins: 5 });
+  // The chosen alarm sound and the global { ringMins, snoozeMins } now belong to
+  // components/AlarmModePicker, which loads and saves them itself — this screen no
+  // longer needs to hold them just to draw three rows.
+  //
+  // The open wheel-picker request { field, mode, initial, title } (null = closed).
+  // Only 'customTime' reaches it now; ring and snooze are the picker's own.
   const [durPicker, setDurPicker] = useState(null);
   useEffect(() => {
     getReminders().then((m) => { setReminders(m || {}); log.info('reminders restored', { count: Object.keys(m || {}).length }); }).catch(() => {});
     // null = never customised (keep defaults); an array (even empty) = the user's
     // saved list, honoured as-is so deletions stick across relaunches.
     getReminderPresets().then((arr) => { if (Array.isArray(arr)) { setPresetMins(arr); log.info('reminder presets restored', { count: arr.length }); } }).catch(() => {});
-    getAlarmSound().then((snd) => {
-      if (snd) {
-        // Always re-derive the name from the URI so old/generic saves self-heal.
-        const fixed = { ...snd, title: titleFromUri(snd.uri) || snd.title };
-        setAlarmSoundState(fixed);
-        log.info('alarm sound restored', { title: fixed.title, uri: fixed.uri });
-      }
-    }).catch(() => {});
-    getAlarmSettings().then((s) => { setAlarmSettingsState(s); log.info('alarm settings restored', s); }).catch(() => {});
   }, []);
 
-  // Open the phone's ringtone picker and save the chosen system alarm sound.
-  const chooseAlarmSound = async () => {
-    log.info('alarm sound: open picker', { current: alarmSound?.uri || 'default' });
-    const snd = await pickAlarmSound(alarmSound);
-    if (!snd) { log.info('alarm sound: unchanged'); return; }
-    setAlarmSoundState(snd);
-    await setAlarmSound(snd);
-    log.info('alarm sound: saved', { title: snd.title, uri: snd.uri });
-  };
-
-  // Wheel-picker confirm → route the value: ring/snooze settings, or a wall-clock
-  // time turned into "remind me in N seconds".
+  // Wheel-picker confirm → a wall-clock time turned into "remind me in N seconds".
+  // Ring and snooze used to be routed here too; they now belong to
+  // components/AlarmModePicker, which owns its own picker.
   const onDurConfirm = async (result) => {
     const dp = durPicker;
     setDurPicker(null);
     if (!dp) return;
-    if (dp.field === 'ring') {
-      const ringMins = Math.max(0, result.minutes);
-      setAlarmSettingsState((s) => ({ ...s, ringMins }));
-      await setAlarmSettings({ ringMins });
-      log.info('alarm setting: saved', { field: 'ringMins', value: ringMins });
-    } else if (dp.field === 'snooze') {
-      const snoozeMins = Math.max(1, result.minutes);
-      setAlarmSettingsState((s) => ({ ...s, snoozeMins }));
-      await setAlarmSettings({ snoozeMins });
-      log.info('alarm setting: saved', { field: 'snoozeMins', value: snoozeMins });
-    } else if (dp.field === 'customTime') {
+    if (dp.field === 'customTime') {
       const t = new Date(); t.setHours(result.hour24, result.minute, 0, 0);
       if (t.getTime() <= Date.now()) t.setDate(t.getDate() + 1);   // already passed → tomorrow
       const secs = Math.max(1, Math.round((t.getTime() - Date.now()) / 1000));
@@ -1513,8 +1486,20 @@ export default function KpiActionBoard({
     if (!task) return;
     // Alarm needs notifee's native module (post-rebuild). If it's not there yet,
     // fall back to the plain notification so the reminder still gets set.
-    const wantAlarm = reminderMode === 'alarm' && Platform.OS === 'android' && alarmAvailable();
-    log.info('reminder: apply', { id: task.id, mins: Math.round((secs / 60) * 10) / 10, mode: wantAlarm ? 'alarm' : 'notify', alarmAvail: alarmAvailable() });
+    const canRing = alarmAvailable();
+    const wantAlarm = reminderMode === 'alarm' && Platform.OS === 'android' && canRing;
+    // The user asked for an alarm and is not getting one. Worth saying out loud:
+    // a failed SCHEDULE already reports itself below, but a failed CAPABILITY
+    // check used to just take the other branch — so the dialog said Alarm, the
+    // user picked Alarm, and a quiet notification arrived with nothing anywhere
+    // explaining why. warn(), not info(), because info is stripped from release
+    // builds and this is exactly the line worth having when it happens.
+    const degraded = reminderMode === 'alarm' && !wantAlarm;
+    if (degraded) {
+      log.warn('reminder: alarm downgraded to a notification',
+        { id: task.id, platform: Platform.OS, alarmAvail: canRing });
+    }
+    log.info('reminder: apply', { id: task.id, mins: Math.round((secs / 60) * 10) / 10, mode: wantAlarm ? 'alarm' : 'notify', alarmAvail: canRing });
     const prev = reminders[String(task.id)];
     await cancelReminderEntry(prev);
     const reason = (reminderReason || '').trim();
@@ -1538,6 +1523,14 @@ export default function KpiActionBoard({
     await setReminder(task.id, r);
     setReminders((m) => ({ ...m, [String(task.id)]: r }));
     log.info('reminder: set', { id: task.id, whenIso: r.whenIso, mode: r.mode });
+    // Told AFTER the reminder is safely set, so the message reports what happened
+    // rather than reading like a failure to set one.
+    if (degraded) {
+      showError('Reminder set, but it will not ring',
+        Platform.OS !== 'android'
+          ? 'Full-screen alarms are Android only. This was set as a notification instead.'
+          : 'The alarm engine is not available right now, so this was set as a notification instead. Reopen the app and set it again if you need it to ring.');
+    }
   };
   const clearReminderFor = async (task) => {
     if (!task) return;
@@ -4864,66 +4857,26 @@ export default function KpiActionBoard({
               <>
             <Text style={rStyles.title}>Remind me about this task</Text>
             <Text style={rStyles.taskName} numberOfLines={2}>{reminderFor?.name}</Text>
-            <View style={rStyles.modeRow}>
-              <TouchableOpacity style={[rStyles.modeBtn, reminderMode === 'notify' && rStyles.modeBtnActive]}
-                activeOpacity={0.85} onPress={() => setReminderMode('notify')}>
-                <Text style={[rStyles.modeTxt, reminderMode === 'notify' && rStyles.modeTxtActive]}>🔔 Notify</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[rStyles.modeBtn, reminderMode === 'alarm' && rStyles.modeBtnActive]}
-                activeOpacity={0.85} onPress={() => setReminderMode('alarm')}>
-                <Text style={[rStyles.modeTxt, reminderMode === 'alarm' && rStyles.modeTxtActive]}>⏰ Alarm</Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={rStyles.modeHint}>
-              {reminderMode === 'alarm'
-                ? (alarmAvailable()
-                    ? 'Rings full-screen and loops until you tap Stop.'
-                    : 'Rings full-screen on a dev build; here it falls back to a notification.')
-                : 'A single notification with sound.'}
-            </Text>
-            {/* Optional note — shown on the alarm/notification when it fires. Blank = plain. */}
-            <TextInput
-              style={rStyles.reasonInput}
-              placeholder="Reason (optional) — shows when it rings"
-              placeholderTextColor={COLORS.faint}
-              value={reminderReason}
-              onChangeText={setReminderReason}
-              maxLength={80}
-              returnKeyType="done"
-            />
-            {reminderReason.trim() ? (
-              <Text style={rStyles.reasonHint}>Shows as: “{reminderReason.trim()}”</Text>
-            ) : null}
-            {/* Pick the alarm's sound from the phone's ringtone picker. Alarm mode +
-                Android. Shown even without the alarm engine (Expo Go) so you can
-                configure it now; the choice takes effect once you're on a dev build. */}
-            {reminderMode === 'alarm' && Platform.OS === 'android' ? (
-              <>
-                <TouchableOpacity style={rStyles.soundRow} activeOpacity={0.8} onPress={chooseAlarmSound}>
-                  <Ionicons name="musical-notes-outline" size={18} color={COLORS.primary} />
-                  <Text style={rStyles.soundLabel} numberOfLines={1}>
-                    Alarm sound: <Text style={rStyles.soundValue}>{alarmSound?.title || 'Default alarm'}</Text>
-                  </Text>
-                  <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
-                </TouchableOpacity>
-                <TouchableOpacity style={rStyles.soundRow} activeOpacity={0.8}
-                  onPress={() => setDurPicker({ field: 'ring', mode: 'duration', initial: alarmSettings.ringMins, title: 'Rings for', infiniteLabel: 'Ring until I stop it' })}>
-                  <Ionicons name="timer-outline" size={18} color={COLORS.primary} />
-                  <Text style={rStyles.soundLabel} numberOfLines={1}>
-                    Rings for: <Text style={rStyles.soundValue}>{alarmSettings.ringMins > 0 ? fmtPresetLabel(alarmSettings.ringMins) : 'Until I stop it'}</Text>
-                  </Text>
-                  <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
-                </TouchableOpacity>
-                <TouchableOpacity style={rStyles.soundRow} activeOpacity={0.8}
-                  onPress={() => setDurPicker({ field: 'snooze', mode: 'duration', initial: alarmSettings.snoozeMins, title: 'Snooze for' })}>
-                  <Ionicons name="bed-outline" size={18} color={COLORS.primary} />
-                  <Text style={rStyles.soundLabel} numberOfLines={1}>
-                    Snooze: <Text style={rStyles.soundValue}>{fmtPresetLabel(alarmSettings.snoozeMins)}</Text>
-                  </Text>
-                  <Ionicons name="chevron-forward" size={18} color={COLORS.muted} />
-                </TouchableOpacity>
-              </>
-            ) : null}
+            {/* Mode, hint and the alarm's sound/ring/snooze rows all live in the
+                shared picker now, so this dialog and the Reminders screen cannot
+                drift. The reason field goes through `children` because it has
+                always sat between the hint and the sound rows — adopting the
+                component must not quietly reorder a working screen. */}
+            <AlarmModePicker mode={reminderMode} onModeChange={setReminderMode}>
+              {/* Optional note — shown on the alarm/notification when it fires. Blank = plain. */}
+              <TextInput
+                style={rStyles.reasonInput}
+                placeholder="Reason (optional) — shows when it rings"
+                placeholderTextColor={COLORS.faint}
+                value={reminderReason}
+                onChangeText={setReminderReason}
+                maxLength={80}
+                returnKeyType="done"
+              />
+              {reminderReason.trim() ? (
+                <Text style={rStyles.reasonHint}>Shows as: “{reminderReason.trim()}”</Text>
+              ) : null}
+            </AlarmModePicker>
             <View style={rStyles.chips}>
               {presetMins.map((m) => (
                 <TouchableOpacity key={m} style={rStyles.chip} activeOpacity={0.85}
