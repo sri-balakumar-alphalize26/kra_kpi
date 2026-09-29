@@ -18,11 +18,12 @@
 // feature needed the notifee rebuild, which was only ever true of the ringing
 // kind.
 //
-// Three honest limits, all consequences of having no native scheduler: nothing
-// re-arms after a reboot, a reminder created on the WEB arms only when this
-// device next syncs (the server pushes nothing for reminders), and only the next
-// occurrence of a repeat is armed — the server advances remind_date when one is
-// completed, so until then there is no later instant to schedule.
+// Two honest limits, both consequences of having no native scheduler: a ringing
+// alarm re-arms only when the app next opens after a reboot (banners come back
+// on their own), and a reminder created on the WEB arms only when this device
+// next syncs (the server pushes nothing for reminders). A daily or weekly
+// reminder that was not completed rolls forward to its next occurrence on the
+// device (utils/reminderSchedule.js), so it keeps ringing until it is done.
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
@@ -45,6 +46,8 @@ import { getReminderModes, setReminderMode } from '../api/session';
 import {
   fetchReminders, saveReminder, completeReminder, deleteReminder, fetchReminderHistory,
 } from '../services/reminderList';
+// The client → project tree, for the optional "about" picker in the editor.
+import { fetchClientTree } from '../services/kpiActions';
 
 const log = createLogger('Reminders');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -153,7 +156,7 @@ export default function Reminders({ onBack, uid }) {
     H.tap();
     setErrs({});
     setEditor({ id: null, name: '', remind_date: todayIso(), remind_time: 9, repeat: 'none',
-      enabled: true, mode: 'alarm' });
+      enabled: true, mode: 'alarm', kra_id: null, kra_label: '' });
   };
   const startEdit = (item) => {
     H.tap();
@@ -166,7 +169,28 @@ export default function Reminders({ onBack, uid }) {
       repeat: item.repeat || 'none',
       enabled: item.enabled !== false,
       mode: modes[String(item.id)] === 'notify' ? 'notify' : 'alarm',
+      // kra_id arrives as [id, name] from the server; the rows already show it.
+      kra_id: Array.isArray(item.kra_id) ? item.kra_id[0] : null,
+      kra_label: Array.isArray(item.kra_id) ? item.kra_id[1] : '',
     });
+  };
+
+  // The optional client / project a reminder is ABOUT. saveReminder has always
+  // accepted kra_id and the rows have always shown it; only the editor could
+  // not set it. The tree is fetched the first time the picker opens.
+  const [kraPick, setKraPick] = useState(false);
+  const [clientTree, setClientTree] = useState(null);   // null = not fetched yet
+  const openKraPick = async () => {
+    H.tap();
+    setKraPick(true);
+    if (clientTree !== null) return;
+    try { setClientTree(await fetchClientTree()); }
+    catch (e) { log.warn('client tree failed', e?.message); setClientTree([]); }
+  };
+  const chooseKra = (id, label) => {
+    H.select();
+    setKraPick(false);
+    setEditor((p) => ({ ...p, kra_id: id, kra_label: label }));
   };
 
   const submitEditor = async () => {
@@ -188,6 +212,7 @@ export default function Reminders({ onBack, uid }) {
         remind_time: editor.remind_time,
         repeat: editor.repeat,
         enabled: editor.enabled,
+        kra_id: editor.kra_id || false,
       });
       if (res?.status) {
         // Before load(): load() re-reads the mode map and then calls
@@ -512,6 +537,12 @@ export default function Reminders({ onBack, uid }) {
               })}
             </View>
 
+            <Text style={[s.fLbl, { marginTop: 14 }]}>About (optional)</Text>
+            <TouchableOpacity style={s.pickBtn} onPress={openKraPick}>
+              <Ionicons name="briefcase-outline" size={16} color={COLORS.primary} />
+              <Text style={s.pickTxt} numberOfLines={1}>{editor?.kra_label || 'No client or project'}</Text>
+            </TouchableOpacity>
+
             {/* How it fires. Until this existed services/reminderAlarm.js decided
                 by capability, so a build with notifee turned every reminder into a
                 full-screen alarm whether or not that was wanted. */}
@@ -572,6 +603,46 @@ export default function Reminders({ onBack, uid }) {
             setEditor((p) => ({ ...p, remind_time: hmToFloat(hour24, minute) }));
           }}
         />
+      ) : null}
+
+      {/* ---- Client / project picker (editor's "About") ---- */}
+      {kraPick ? (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setKraPick(false)}>
+          <View style={s.modalBackdrop}>
+            <View style={s.modalCard}>
+              <View style={s.modalHead}>
+                <Text style={s.modalTitle}>About</Text>
+                <TouchableOpacity onPress={() => setKraPick(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="close" size={22} color={COLORS.muted} />
+                </TouchableOpacity>
+              </View>
+              {clientTree === null ? (
+                <ActivityIndicator size="large" color={COLORS.primary} style={{ marginVertical: 24 }} />
+              ) : (
+                <FlatList
+                  style={{ maxHeight: 380 }}
+                  data={[{ key: 'none' }, ...clientTree.flatMap((c) => [
+                    { key: `c${c.id}`, header: c.name },
+                    ...c.projects.map((p) => ({ key: `p${p.id}`, id: p.id, label: p.display, client: c.name })),
+                  ])]}
+                  keyExtractor={(it) => it.key}
+                  renderItem={({ item }) => item.key === 'none' ? (
+                    <TouchableOpacity style={s.histRow} onPress={() => chooseKra(null, '')}>
+                      <Text style={[s.pickTxt, { color: COLORS.muted }]}>No client or project</Text>
+                    </TouchableOpacity>
+                  ) : item.header ? (
+                    <Text style={[s.fLbl, { marginTop: 10 }]}>{item.header}</Text>
+                  ) : (
+                    <TouchableOpacity style={s.histRow} onPress={() => chooseKra(item.id, item.label)}>
+                      <Text style={s.pickTxt} numberOfLines={2}>{item.label}</Text>
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={<Text style={s.hint}>No clients to choose from.</Text>}
+                />
+              )}
+            </View>
+          </View>
+        </Modal>
       ) : null}
 
       {/* ---- History ---- */}

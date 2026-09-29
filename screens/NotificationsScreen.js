@@ -246,10 +246,19 @@ export default function NotificationsScreen({ onBack, onOpen, isClient = false }
   const [isMock, setIsMock] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false); // server-resolved; gates the who-line
   const [tab, setTab] = useState('all'); // 'all' | 'unread' | 'action'
+  // Paging. The first load takes the newest PAGE rows; the list used to stop
+  // there while the badge counted everything, so the oldest unread ones could
+  // never be reached. "Load more" appends the next page (offset = rows held).
+  const PAGE = 100;
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  // How many rows actually need someone to act — drives the tab badge.
+  // How many rows actually need someone to act — drives the tab badge. UNREAD
+  // ones only: a row that has been opened has been seen, and counting it kept
+  // the badge lit for things already dealt with. The tab itself still lists
+  // every action row, so nothing is hidden.
   const actionCount = useMemo(
-    () => items.filter((n) => ACTION_EVENTS.has(n.event)).length,
+    () => items.filter((n) => ACTION_EVENTS.has(n.event) && !n.is_read).length,
     [items],
   );
 
@@ -271,8 +280,10 @@ export default function NotificationsScreen({ onBack, onOpen, isClient = false }
 
   const load = useCallback(async () => {
     try {
-      const res = await fetchNotifications({ limit: 100 });
-      setItems(res.items || []);
+      const res = await fetchNotifications({ limit: PAGE });
+      const rows = res.items || [];
+      setItems(rows);
+      setHasMore(rows.length >= PAGE);
       setUnread(res.unreadCount || 0);
       setIsMock(!!res.isMock);
       setIsAdmin(!!res.isAdmin);
@@ -280,6 +291,24 @@ export default function NotificationsScreen({ onBack, onOpen, isClient = false }
       log.warn('load failed', e?.message);
     }
   }, []);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetchNotifications({ limit: PAGE, offset: items.length });
+      const rows = res.items || [];
+      setItems((prev) => {
+        const seen = new Set(prev.map((n) => String(n.id)));
+        return [...prev, ...rows.filter((n) => !seen.has(String(n.id)))];
+      });
+      setHasMore(rows.length >= PAGE);
+    } catch (e) {
+      log.warn('load more failed', e?.message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [items.length, hasMore, loadingMore]);
 
   useEffect(() => {
     (async () => {
@@ -437,6 +466,18 @@ export default function NotificationsScreen({ onBack, onOpen, isClient = false }
             <Text style={s.sectionHeaderTxt}>{section.title.toUpperCase()}</Text>
           )}
           stickySectionHeadersEnabled={false}
+          ListFooterComponent={hasMore && tab === 'all' ? (
+            <TouchableOpacity
+              onPress={loadMore}
+              disabled={loadingMore}
+              activeOpacity={0.85}
+              style={{ alignSelf: 'center', paddingVertical: 12, paddingHorizontal: 20, marginVertical: 14 }}
+            >
+              {loadingMore
+                ? <ActivityIndicator size="small" color={COLORS.primary} />
+                : <Text style={{ color: COLORS.primary, fontWeight: '800', fontSize: 14 }}>Load older notifications</Text>}
+            </TouchableOpacity>
+          ) : null}
           contentContainerStyle={sections.length ? { padding: 14, paddingBottom: 40 } : s.emptyWrap}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
           ListEmptyComponent={

@@ -51,6 +51,9 @@ export default function ClientTaskQueue({ onBack }) {
   const [busyId, setBusyId] = useState(null);    // save/publish in flight
   const [picker, setPicker] = useState(null);    // {kind:'req'|'prio'|'dev', id}
   const [discardFor, setDiscardFor] = useState(null);
+  // Why it is being discarded. The route has always taken a reason and tells
+  // the client in those words; the screen simply never asked for one.
+  const [discardReason, setDiscardReason] = useState('');
   const [popup, setPopup] = useState(null);      // { ok, title, message }
   const [banner, setBanner] = useState(null);    // { type, text }
 
@@ -179,7 +182,8 @@ export default function ClientTaskQueue({ onBack }) {
     if (!row) return;
     setBusyId(row.id);
     try {
-      await discardQueueTask(row.id);
+      await discardQueueTask(row.id, discardReason.trim());
+      setDiscardReason('');
       flash('ok', 'Task discarded');
       setOpenTask(null);
       await load();
@@ -330,7 +334,7 @@ export default function ClientTaskQueue({ onBack }) {
                               <TaskForm
                                 r={t} users={users} busy={busyId === t.id}
                                 patch={patch} setPicker={setPicker}
-                                onSave={onSave} onPublish={onPublish} onDiscard={setDiscardFor}
+                                onSave={onSave} onPublish={onPublish} onDiscard={(r) => { setDiscardReason(''); setDiscardFor(r); }}
                               />
                             )}
                           </View>
@@ -360,6 +364,15 @@ export default function ClientTaskQueue({ onBack }) {
             <Text style={s.mTitle}>Discard this task?</Text>
             <Text style={s.mMsg} numberOfLines={3}>{discardFor?.name}</Text>
             <Text style={s.mWarn}>This permanently deletes it — it cannot be undone.</Text>
+            <TextInput
+              style={[s.input, { marginTop: 12, minHeight: 64, textAlignVertical: 'top' }]}
+              placeholder="Reason (optional) — the client is told in these words"
+              placeholderTextColor={COLORS.faint}
+              value={discardReason}
+              onChangeText={setDiscardReason}
+              multiline
+              maxLength={300}
+            />
             <View style={s.mBtns}>
               <TouchableOpacity style={[s.mBtn, s.mCancel]} onPress={() => setDiscardFor(null)} activeOpacity={0.85}>
                 <Text style={s.mCancelTxt}>Cancel</Text>

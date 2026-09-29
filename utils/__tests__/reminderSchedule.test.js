@@ -37,10 +37,28 @@ describe('armableReminders', () => {
     expect(armableReminders([{ id: 7, name: 'x', enabled: false, next_trigger: at(2) }], NOW)).toEqual([]);
   });
 
-  // A repeat nobody completed keeps its old trigger; arming it would fire the
+  // A one-off nobody completed keeps its old trigger; arming it would fire the
   // instant the app opened.
-  test('a past-due reminder is not armed', () => {
+  test('a past-due one-off reminder is not armed', () => {
     expect(armableReminders([{ id: 7, name: 'x', enabled: true, next_trigger: at(-1) }], NOW)).toEqual([]);
+    expect(armableReminders([{ id: 7, name: 'x', enabled: true, repeat: 'none', next_trigger: at(-1) }], NOW)).toEqual([]);
+  });
+
+  // The server advances a repeat only when it is completed, so an uncompleted
+  // daily reminder used to ring once and never again.
+  test('a past-due DAILY reminder is armed for the next occurrence after now', () => {
+    const out = armableReminders([{ id: 7, name: 'x', enabled: true, repeat: 'daily', next_trigger: at(-1) }], NOW);
+    expect(out).toEqual([{ id: '7', at: NOW + 23 * 3600 * 1000, name: 'x' }]);
+  });
+
+  test('a repeat several periods behind rolls all the way forward, keeping the time of day', () => {
+    const out = armableReminders([{ id: 7, name: 'x', enabled: true, repeat: 'weekly', next_trigger: at(-24 * 10) }], NOW);
+    expect(out[0].at).toBe(NOW + 4 * 24 * 3600 * 1000);
+  });
+
+  test('a future repeat is armed as it stands', () => {
+    const out = armableReminders([{ id: 7, name: 'x', enabled: true, repeat: 'daily', next_trigger: at(2) }], NOW);
+    expect(out[0].at).toBe(NOW + 2 * 3600 * 1000);
   });
 
   test('one due within the skew window is not armed', () => {
