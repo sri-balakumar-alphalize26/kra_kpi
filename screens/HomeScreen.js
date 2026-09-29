@@ -834,7 +834,7 @@ function LiveTaskCard({
   return null;
 }
 
-function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted }) {
+function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted, widgetAction, onWidgetActionHandled }) {
   const { dialog, say, showError } = useAppDialog();
   // Starting the workday straight from the read-only bar. Previously this bar's
   // button only routed to the PIN screen; opening the day is now a plain call.
@@ -861,6 +861,11 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
   // Default to admin=true optimistically until the role resolves, then correct —
   // but hold tile render until we know, to avoid a flash of admin tiles.
   const [isAdmin, setIsAdmin] = useState(null); // null = still resolving
+  // Whether that answer came from the SERVER. On a failed lookup the screen falls
+  // back to non-admin so it can draw, but that fallback must never reach the
+  // widget picker: disabling the Live Tracking receiver makes Android delete every
+  // placed copy of it, and an offline launch was taking an admin's widget away.
+  const roleFromServer = useRef(false);
   // Coarse role for the stats-strip card set: 'admin' | 'client' | 'developer'.
   const [role, setRole] = useState(null); // null = still resolving
 
@@ -880,10 +885,12 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
           ? (kpiRole === 'admin' ? 'admin' : kpiRole === 'client' ? 'client' : 'developer')
           : (admin ? 'admin' : (info && info.is_client ? 'client' : 'developer'));
         log.info('home role', { kpi_role: kpiRole, admin, role: r, login: info?.login });
+        roleFromServer.current = true;
         setIsAdmin(admin);
         setRole(r);
       } catch (e) {
         log.warn('role check failed, defaulting to non-admin', e?.message);
+        roleFromServer.current = false;
         setIsAdmin(false);
         setRole('developer');
       }
@@ -904,7 +911,8 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
   //    own timer — but only when somebody will actually see it.
   useEffect(() => {
     if (isAdmin === null) return;          // role still resolving; decide nothing
-    setLiveTrackingWidgetEnabled(isAdmin);
+    // Only a real answer moves the picker; a failed lookup leaves it as it was.
+    if (roleFromServer.current) setLiveTrackingWidgetEnabled(isAdmin);
     if (!isAdmin) return;
 
     let alive = true;
@@ -1123,6 +1131,34 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
       setLiveBusy(false);
     }
   }, [liveBusy, refreshLive]);
+
+  // A Pause / Resume tap on the home-screen widget (plugins/withTaskWidget.js →
+  // krakpi://widget/home?action=…, routed by App.js). A widget cannot call the
+  // server — it has no session — so it opens the app here with the action, and
+  // Home does exactly what its own card would: Pause opens the pause dialog for
+  // that task; Resume resumes it. Acted on ONCE per tap (the nonce is consumed
+  // first), and only against the live state: a Pause aimed at a task that has
+  // since stopped does nothing rather than pausing whatever runs now.
+  useEffect(() => {
+    if (!widgetAction || live === null) return;   // wait for the first live_status
+    const { kind, taskId } = widgetAction;
+    if (onWidgetActionHandled) onWidgetActionHandled();
+    if (workdayLocked) return;                    // read-only: the bar already says why
+    const running = live?.active_tasks?.length
+      ? live.active_tasks
+      : (live?.active_task ? [live.active_task] : []);
+    if (kind === 'pause') {
+      const t = running.find((x) => String(x.id) === String(taskId));
+      if (!t) { log.info('widget pause ignored: task not running', { taskId }); return; }
+      log.info('widget pause → dialog', { taskId });
+      setPauseAsk({ taskId: t.id, name: t.name });
+    } else if (kind === 'resume') {
+      if (running.length) { log.info('widget resume ignored: a task is running', { taskId }); return; }
+      log.info('widget resume', { taskId });
+      resumeFromCard(taskId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [widgetAction?.nonce, live]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMounted, setDrawerMounted] = useState(false); // keep Modal up during close anim
@@ -2156,7 +2192,7 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
   );
 }
 
-export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted }) {
+export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted, widgetAction, onWidgetActionHandled }) {
   const [tab, setTab] = useState('home');
   const [logoutOpen, setLogoutOpen] = useState(false);
   const name = (user && user.name) ? user.name.split(' ')[0] : 'Sonia';
@@ -2183,6 +2219,7 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, work
           <HomeTab
             name={name} onOpen={onOpen} uid={user?.uid}
             workdayLocked={workdayLocked} workdayOpen={workdayOpen} dayDone={dayDone} todayClosed={todayClosed} workdayReopened={workdayReopened} onWorkdayStarted={onWorkdayStarted}
+            widgetAction={widgetAction} onWidgetActionHandled={onWidgetActionHandled}
           />
         )}
         {tab === 'profile' && <ProfileTab user={user} onLogout={onLogout} dayDone={dayDone} avatar={avatar} setAvatar={setAvatar} />}

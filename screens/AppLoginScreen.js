@@ -13,6 +13,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path, Circle, Ellipse } from 'react-native-svg';
 import LoginArt from '../components/LoginArt';
+import AnimatedArt, { animatedArtAvailable } from '../components/AnimatedArt';
+import { LOGIN_SVG } from '../assets/art/loginArt';
+import { SECURE_LOGIN_SVG } from '../assets/art/secureLoginArt';
+import { FORGOT_PASSWORD_SVG } from '../assets/art/forgotPasswordArt';
 import { COLORS } from '../theme';
 import { saveSession } from '../api/session';
 import { loginCheck, appLogin, setAppPassword, requestOtp, verifyOtp, getMobileConfig } from '../services/appAuth';
@@ -29,6 +33,21 @@ const APP_VERSION = Constants.expoConfig?.version || '';
 
 const log = createLogger('AppLogin');
 const { width: SW } = Dimensions.get('window');
+
+// The hero picture, per step: a "login" scene while the number and password are
+// being entered, a "forgot password" scene for the WhatsApp-code and new-password
+// steps. Animated Storyset exports, played by components/AnimatedArt.js.
+const ART_BY_STEP = {
+  mobile: LOGIN_SVG,
+  password: SECURE_LOGIN_SVG,
+  otp: FORGOT_PASSWORD_SVG,
+  setpw: FORGOT_PASSWORD_SVG,
+};
+// The hero used to be a 300x220 drawing at 62% of the screen width. The animated
+// pictures are square, so they take that drawing's HEIGHT: the sheet, the wave
+// and the form all sit exactly where they did.
+const HERO_H = SW * 0.62 * (220 / 300);
+const HERO_BG = '#F5F9FD';   // s.heroWrap's background — the WebView paints the same
 
 // Alphalize blue — buttons / links.
 const WATER = '#1F6FE5';
@@ -254,9 +273,21 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
     >
       <StatusBar style="dark" />
 
-      {/* Illustration up top */}
+      {/* Illustration up top — one animated picture per step. The hand-drawn
+          LoginArt stays as the fallback for a build without the WebView (or Expo
+          Go), so nothing is lost there; it is simply what this screen showed
+          before. */}
       <View style={[s.heroWrap, { paddingTop: insets.top + 10 }]}>
-        <LoginArt width={SW * 0.62} height={SW * 0.62 * (220 / 300)} />
+        {animatedArtAvailable() ? (
+          <AnimatedArt
+            svg={ART_BY_STEP[step] || LOGIN_SVG}
+            size={HERO_H}
+            background={HERO_BG}
+            style={{ marginBottom: 0 }}
+          />
+        ) : (
+          <LoginArt width={SW * 0.62} height={HERO_H} />
+        )}
       </View>
 
       {/* White wave sheet holding the form — the water flow ends here, at the form */}

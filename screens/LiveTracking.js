@@ -94,7 +94,7 @@ function Attendance({ row }) {
 }
 
 // One employee card.
-function Row({ row, nowMs, fetchedAt, frozen = false, onReopen }) {
+function Row({ row, nowMs, fetchedAt, frozen = false, onReopen, highlight = false }) {
   const kind = row.activity_kind || 'offline';
   const meta = ACT[kind] || ACT.offline;
   // Seconds to add to the server's figure. Zero once the board is stale: the
@@ -123,7 +123,9 @@ function Row({ row, nowMs, fetchedAt, frozen = false, onReopen }) {
   else text = 'Not started';
 
   return (
-    <View style={s.card}>
+    // highlight: this is the person a home-screen widget tap asked for. A border
+    // for a couple of seconds, so the eye lands on them in a list of many.
+    <View style={[s.card, highlight && s.cardFlash]}>
       <View style={s.cardTop}>
         <Text style={s.name} numberOfLines={1}>{row.name}</Text>
         <Attendance row={row} />
@@ -189,8 +191,14 @@ function Row({ row, nowMs, fetchedAt, frozen = false, onReopen }) {
   );
 }
 
-export default function LiveTracking({ onBack }) {
+export default function LiveTracking({ onBack, focusUserId, onFocusHandled }) {
   const [loading, setLoading] = useState(true);
+  // A tap on one person's row of the home-screen widget: which card to flash,
+  // and the list to scroll them into view. See the effect below the loaders.
+  const listRef = useRef(null);
+  const [flashUserId, setFlashUserId] = useState(null);
+  const flashTimer = useRef(null);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);      // full payload
@@ -308,6 +316,24 @@ export default function LiveTracking({ onBack }) {
   const rows = data?.rows || [];
   hasRowsRef.current = rows.length > 0;
 
+  // Bring the person a widget tap asked for into view and flash their card, once
+  // the list has loaded. Handled once — the id is cleared upstream first — so a
+  // later poll does not scroll again. The timer is NOT this effect's cleanup:
+  // clearing the id re-runs the effect, and a cleanup would cancel the flash it
+  // had just started.
+  useEffect(() => {
+    if (!focusUserId || !rows.length) return;
+    const index = rows.findIndex((r) => String(r.user_id) === String(focusUserId));
+    if (onFocusHandled) onFocusHandled();
+    if (index < 0) { log.info('widget focus: person not in the list', { focusUserId }); return; }
+    log.info('widget focus → row', { focusUserId, index });
+    try { listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.15 }); } catch (_) {}
+    setFlashUserId(rows[index].user_id);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashUserId(null), 2200);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusUserId, rows.length]);
+
   return (
     <View style={s.root}>
       <GradientBackground />
@@ -381,11 +407,22 @@ export default function LiveTracking({ onBack }) {
         </View>
       ) : (
         <FlatList
+          ref={listRef}
           data={rows}
           keyExtractor={(r) => String(r.user_id)}
           renderItem={({ item }) => (
-            <Row row={item} nowMs={nowMs} fetchedAt={fetchedAtRef.current} frozen={stale} onReopen={openReopen} />
+            <Row
+              row={item} nowMs={nowMs} fetchedAt={fetchedAtRef.current} frozen={stale} onReopen={openReopen}
+              highlight={flashUserId != null && String(item.user_id) === String(flashUserId)}
+            />
           )}
+          // scrollToIndex has no item layout to go on (cards vary in height), so
+          // a miss scrolls by the average and the next attempt lands on the row.
+          onScrollToIndexFailed={(info) => {
+            try {
+              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
+            } catch (_) {}
+          }}
           contentContainerStyle={{ padding: 14, paddingBottom: 40 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         />
@@ -468,6 +505,8 @@ const s = StyleSheet.create({
   empty: { color: COLORS.muted, marginTop: 6 },
 
   card: { backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 10, ...SHADOW },
+  // The card a widget tap asked for, for a couple of seconds.
+  cardFlash: { borderWidth: 2, borderColor: COLORS.navy },
   cardTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   name: { flex: 1, fontSize: 15, fontWeight: '800', color: COLORS.ink },
   badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },

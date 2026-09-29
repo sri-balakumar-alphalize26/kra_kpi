@@ -21,6 +21,10 @@ jest.mock('@expo/vector-icons', () => {
   };
 });
 
+// The animated login illustrations play in a WebView (components/AnimatedArt.js).
+// There is no browser in Node; render nothing, like the other decoration.
+jest.mock('react-native-webview', () => ({ WebView: () => null }));
+
 // SVG primitives → inert views, so components that draw art don't need native SVG.
 jest.mock('react-native-svg', () => {
   const React = require('react');
@@ -31,5 +35,6 @@ jest.mock('react-native-svg', () => {
     __esModule: true, default: Passthrough, Svg: Passthrough, G: Passthrough,
     Path: Empty, Defs: Empty, LinearGradient: Empty, Stop: Empty, Rect: Empty,
     Circle: Empty, ClipPath: Empty, Use: Empty, Text: Empty, Polygon: Empty,
+    Ellipse: Empty, Line: Empty, Polyline: Empty, RadialGradient: Empty, Mask: Empty,
   };
 });

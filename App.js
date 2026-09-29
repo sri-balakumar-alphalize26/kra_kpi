@@ -72,6 +72,9 @@ import * as session from './api/session';
 import { getConnection, getRoleState, saveRoleState } from './api/session';
 import { loadHaptics } from './utils/haptics';
 import { jsonRpc } from './api/odooApi';
+import { parseWidgetLink } from './utils/widgetLink';
+import { clearWidgetState } from './utils/taskWidget';
+import { clearLiveTrackingState } from './utils/liveTrackingWidget';
 import { createLogger } from './api/logger';
 import { registerForPushAsync, unregisterPush } from './services/push';
 import { fetchReminders } from './services/reminderList';
@@ -169,6 +172,13 @@ function AppInner() {
 
   const [isClient, setIsClient] = useState(false);     // client-only user → no Action Board
 
+  // A Pause / Resume tap on the task widget, for Home to act on once. The nonce
+  // makes two taps on the same button two actions (screens/HomeScreen.js).
+  const [widgetAction, setWidgetAction] = useState(null);   // { kind, taskId, nonce }
+  // A tap on one person's row of the Live Tracking widget: the screen scrolls to
+  // and flashes them, then clears this.
+  const [focusUserId, setFocusUserId] = useState(null);
+
   const pushTokenRef = useRef(null);       // this device's Expo token (for logout unregister)
   const pendingTapRef = useRef(null);      // kpi_id from a tap that arrived before login/restore
   const pendingReportRef = useRef(null);   // report_id from a "daily report ready" tap before login
@@ -205,23 +215,31 @@ function AppInner() {
   // thing — landing on Home and making the user navigate is the version people
   // stop tapping.
   //
-  // Only the two destinations the widgets actually offer are honoured. The URL
-  // comes from outside the JS, so treating it as a free-form screen name would
-  // let any app holding the scheme open arbitrary screens.
-  const WIDGET_SCREENS = { actionboard: 'actionboard', livetracking: 'livetracking' };
-  const routeToWidgetScreen = (dest) => {
-    const screenName = WIDGET_SCREENS[dest];
+  // `link` is utils/widgetLink.parseWidgetLink's output, so only the destinations
+  // the widgets actually offer get here. The URL comes from outside the JS, and
+  // treating it as a free-form screen name would let any app holding the scheme
+  // open arbitrary screens.
+  const WIDGET_SCREENS = { actionboard: 'actionboard', livetracking: 'livetracking', home: 'home' };
+  const routeToWidgetScreen = (link) => {
+    const screenName = link && WIDGET_SCREENS[link.dest];
     if (!screenName) return;
     if (userRef.current) {
       // Clear the focus slots, like the other routers: a stale id would make an
       // unrelated row flash on arrival.
       setFocusTaskId(null);
       setFocusReportId(null);
+      // The widget's Pause / Resume button lands on Home, which owns the pause
+      // dialog and the resume call and acts on this once (screens/HomeScreen.js).
+      if (link.dest === 'home' && link.action && link.kpiId) {
+        setWidgetAction({ kind: link.action, taskId: link.kpiId, nonce: Date.now() });
+      }
+      // A person's row on the Live Tracking widget opens the screen ON them.
+      setFocusUserId(link.dest === 'livetracking' && link.userId ? link.userId : null);
       setAppScreen(screenName);
     } else {
       // Queued like a task tap — a widget tap from a cold start arrives long
       // before login resolves, and dropping it means the tap did nothing.
-      pendingScreenRef.current = dest;
+      pendingScreenRef.current = link;
     }
   };
 
@@ -400,12 +418,12 @@ function AppInner() {
   // first makes the widget work exactly once per boot.
   useEffect(() => {
     const handle = (url) => {
-      if (!url) return;
-      // krakpi://widget/<dest> — take the last segment, ignoring any query.
-      const m = /^krakpi:\/\/widget\/([a-z]+)/i.exec(String(url).split('?')[0]);
-      if (!m) return;
-      log.info('widget tap', { url, dest: m[1] });
-      routeToWidgetScreen(m[1].toLowerCase());
+      // krakpi://widget/<dest>?action=…&kpi=…&user=… — parsed and bounded by
+      // utils/widgetLink.js; anything it does not recognise is dropped here.
+      const link = parseWidgetLink(url);
+      if (!link) return;
+      log.info('widget tap', { url, ...link });
+      routeToWidgetScreen(link);
     };
     Linking.getInitialURL().then(handle).catch(() => {});
     const sub = Linking.addEventListener('url', (e) => handle(e?.url));
@@ -433,10 +451,10 @@ function AppInner() {
       return;
     }
     if (pendingScreenRef.current) {
-      const dest = pendingScreenRef.current;
+      const link = pendingScreenRef.current;
       pendingScreenRef.current = null;
-      log.info('cold-start tap flushed → widget screen', { dest });
-      routeToWidgetScreen(dest);
+      log.info('cold-start tap flushed → widget screen', { dest: link.dest, action: link.action });
+      routeToWidgetScreen(link);
       return;
     }
     if (!pendingTapRef.current) return;
@@ -655,6 +673,14 @@ function AppInner() {
     // out does not stop them. Without this the next person on this phone gets
     // the previous user's reminders — by name.
     clearReminderAlarms(user?.uid);
+    // The home-screen widgets keep showing whatever was last written — the
+    // previous user's running task and, for an admin, the whole team's day — on
+    // a device nobody is signed in to. Both writers swallow their own errors.
+    // The Live Tracking receiver is deliberately NOT disabled here: disabling a
+    // provider makes Android delete every placed copy of it, so an admin would
+    // lose the widget on each sign-out. Home's role gate decides that at login.
+    clearWidgetState();
+    clearLiveTrackingState();
     await session.clearSession();
     setUser(null);
     setScreen('login');
@@ -662,10 +688,19 @@ function AppInner() {
     setFocusTaskId(null);
     setFocusReportId(null);
     setFocusInvoiceId(null);
+    setWidgetAction(null);
+    setFocusUserId(null);
     setDevLocked(false);
-    setDevPaired(false);
-    setPairMode('start');
+    // setDevPaired / setPairMode used to be called here. Neither existed any
+    // more, so logout threw a ReferenceError at this point — after setUser(null)
+    // had already sent the UI to the login screen, so nobody saw it, and before
+    // every reset below, so none of them ran: the next account inherited the
+    // previous one's workday cache, dayDone and role gate.
+    setIsClient(false);
+    setWorkdayOpen(false);
     setDayDone(false);
+    setTodayClosed(false);
+    setWorkdayReopened(false);
     setGateReady(false);
     // The board's workday cache is module scope, so it survives this sign-out —
     // the JS context doesn't reload. Clearing these state hooks without clearing
@@ -776,7 +811,13 @@ function AppInner() {
       return <OwnerDashboard onBack={home} />;
     if (appScreen === 'livetracking')
       // Admin: live "who's doing what now" + attendance. Route is admin-gated server-side.
-      return <LiveTracking onBack={home} />;
+      return (
+        <LiveTracking
+          onBack={home}
+          // From a tap on one person's row of the home-screen widget.
+          focusUserId={focusUserId} onFocusHandled={() => setFocusUserId(null)}
+        />
+      );
     if (appScreen === 'notifications')
       // isClient → a tapped notification opens My Requests, not the Action Board.
       // workdayLocked → READ MODE ONLY: rows still mark themselves read, but a null
@@ -883,6 +924,8 @@ function AppInner() {
         // Start Workday straight from the read-only bar — there is no PIN screen
         // to route to any more.
         onWorkdayStarted={onWorkdayStarted}
+        // The task widget's Pause / Resume button, acted on once by Home.
+        widgetAction={widgetAction} onWidgetActionHandled={() => setWidgetAction(null)}
       />
     );
     };  // end renderScreen
