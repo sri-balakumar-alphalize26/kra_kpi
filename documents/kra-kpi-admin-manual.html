@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>KRA / KPI — Admin Guide</title>
+<style>
+@page { size: A4; margin: 2cm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; font-size: 10.5pt; color: #1F2937; line-height: 1.45; }
+h1 { color: #16306B; font-size: 21pt; margin: 0 0 3pt 0; }
+p.sub { color: #6B7280; font-size: 11pt; margin: 0 0 16pt 0; }
+h2 { color: #FFFFFF; background: #1E40AF; font-size: 13pt; margin: 22pt 0 10pt 0; padding: 7pt 10pt; }
+h3 { color: #1E40AF; font-size: 11.5pt; margin: 15pt 0 4pt 0; }
+p { margin: 6pt 0; }
+ul { margin: 6pt 0; }
+li { margin: 3pt 0; }
+table.t { border-collapse: collapse; width: 100%; margin: 10pt 0; font-size: 9.5pt; }
+table.t th { background: #1E40AF; color: #FFFFFF; border: 1px solid #1E40AF; padding: 5pt 7pt; text-align: left; }
+table.t td { border: 1px solid #E5E9F0; padding: 5pt 7pt; vertical-align: top; }
+table.n { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+table.n td { background: #FEF3C7; border-left: 4pt solid #D97706; padding: 7pt 10pt; font-size: 9.5pt; }
+table.b { border-collapse: collapse; width: 100%; margin: 12pt 0; }
+table.b td { background: #E0ECFF; padding: 8pt 10pt; color: #16306B; font-size: 10.5pt; font-weight: bold; }
+table.img { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+table.img td { background: #F7F9FC; border: 1px solid #E5E9F0; text-align: center; vertical-align: middle; padding: 10pt; }
+p.imgn { color: #1E40AF; font-size: 10pt; font-weight: bold; margin: 0 0 3pt 0; text-align: center; }
+p.imgc { color: #6B7280; font-size: 9pt; margin: 0; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>KRA / KPI &mdash; Admin Guide</h1>
+<p class="sub">Set up your team and clients, triage the work, watch the day live, and invoice it.</p>
+
+<h3>About the Admin Role</h3>
+<p>As an Admin you run the system. You create the structure the work hangs off, you decide which tasks are real, you watch the day as it happens, and you turn finished work into invoices.</p>
+<p>The app shows three roles: <b>Admin</b>, <b>Client</b> and <b>User</b>. Anyone with coordinator, owner or system-administrator rights shows as <b>Admin</b> &mdash; there is one badge, not three.</p>
+
+<table class="n"><tr><td><b>TIP</b> &nbsp;Admins are never locked out by the workday gate. A User must tap <b>Start Workday</b> before they can touch anything; you can act at any time, on any task.</td></tr></table>
+
+<h3>Your Day at a Glance</h3>
+<ul>
+<li><b>Morning</b> &mdash; clear <b>Pending Review</b>: accept or send back the tasks people raised themselves</li>
+<li><b>Through the day</b> &mdash; keep <b>Live Tracking</b> open to see who is working and who has stalled</li>
+<li><b>As work lands</b> &mdash; approve or reject finished tasks so they move on to the client</li>
+<li><b>End of day</b> &mdash; check <b>Daily Reports</b> and <b>Workday Snapshots</b></li>
+<li><b>Weekly or monthly</b> &mdash; use <b>Owner Dashboard</b> and <b>Client Invoices</b> to bill signed-off work</li>
+</ul>
+
+<h2>PART 1 &nbsp; FIRST-TIME SETUP</h2>
+
+<h3>Step 1 &nbsp; Connect the Device to Your Server</h3>
+<p>On a brand-new install you first point the app at your Odoo server. Enter your <b>Server URL</b>, wait for the database list to load, pick your database from <b>Select a database</b>, then enter your Odoo <b>Username or Email</b> and <b>Password</b>, and tap Login.</p>
+<p>This sets the device up &mdash; it does not log a person in. Users still sign in with their own mobile number afterwards.</p>
+
+<table class="n"><tr><td><b>TIP</b> &nbsp;To reach this screen again later, <b>tap the 369 logo seven times</b> on the sign-in screen. It is deliberately hidden so ordinary users cannot repoint the app by accident.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/01-connect.png" width="250" height="378">
+<p class="imgc">The Connect screen &mdash; Server URL, database picker, username and password</p>
+</td></tr></table>
+
+<h3>Step 2 &nbsp; Log In and Reach Home</h3>
+<p>Sign in with your own mobile number and password, exactly as everyone else does. Your Home screen carries every tile, grouped under <b>KRA / KPI</b>, <b>Reports</b> and <b>Settings</b>.</p>
+<p>New tiles: <b>Reminders</b> (personal reminders, see the User Guide), and under Reports, <b>KRA Report</b> and <b>Employee Tracker</b> (both in Part 6).</p>
+<p>When you have a task running, a live card at the top of Home shows it with its timer and a <b>Pause</b> button. Tap the card to open the task on the board, or use the arrows in its header to switch between <b>IN PROGRESS</b> and <b>TODAY</b>.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/02-admin-home.png" width="250" height="378">
+<p class="imgc">Admin Home screen &mdash; the In Progress card with Pause, and the Your Tasks counters</p>
+</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/25-admin-home-tiles.png" width="250" height="378">
+<p class="imgc">The Quick Actions grid &mdash; including the new Reminders, Employee Tracker and KRA Report tiles</p>
+</td></tr></table>
+
+<h3>Step 3 &nbsp; Set Your Company Branding</h3>
+<p>Open <b>Company Branding</b>. Set your <b>Company Name</b>, then use <b>Choose Image</b> to upload your <b>Company Logo</b> (or <b>Remove</b> to clear it). Tap <b>Save Branding</b>.</p>
+<p>This is what appears on the PDFs your clients receive &mdash; invoices and reports &mdash; so do it before you send anything out.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/03-company-branding.png" width="250" height="378">
+<p class="imgc">Company Branding &mdash; name, logo and Save Branding</p>
+</td></tr></table>
+
+<h3>Step 4 &nbsp; Work Through Configuration</h3>
+<p>Open <b>Configuration</b>. Every setting saves itself as you change it &mdash; a tick flashes to confirm. There is no Save button. If the server refuses a change, you see <b>&#10005; not saved</b> with the server&rsquo;s reason instead of the tick &mdash; the same goes for <b>Users</b> and <b>Login Management</b> (for example <b>Not reset &#10005;</b>).</p>
+
+<p><b>Card 1 &mdash; Timers</b></p>
+<table class="t">
+<tr><th style="width:42%">Setting</th><th>What it controls</th></tr>
+<tr><td><b>Client approval window (minutes)</b></td><td>How long a client has to approve an assigned developer before it releases on its own.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Queue re-nudge gap (minutes)</b></td><td>How often a client is reminded about a task sitting unread in their queue.</td></tr>
+<tr><td><b>Urgent re-nudge gap (minutes)</b></td><td>How often an unread urgent pause is chased.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Break reminder (minutes)</b></td><td>Default 15. How long a break runs before the developer is reminded, and the gap between repeats (up to 4 reminders).</td></tr>
+<tr><td><b>Lunch reminder (minutes)</b></td><td>Default 30. How long lunch runs before the developer is reminded. Sent once.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Meeting reminder (minutes)</b></td><td>Default 30. How long a meeting runs before the developer is reminded it is still counting. Sent once.</td></tr>
+<tr><td><b>Daily break budget (minutes)</b></td><td>Default 60. Break and lunch added up for the whole day &mdash; catches many short breaks that never hit the limits above. Meetings are not counted. Sent once a day.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Standard workday (hours)</b></td><td>The working day length everything is measured against.</td></tr>
+</table>
+
+<table class="n"><tr><td><b>NOTE</b> &nbsp;The four break reminders go to the <b>developer only</b> &mdash; admins are not notified. Set any of them to <b>0</b> to turn it off.</td></tr></table>
+
+<p><b>Card 2 &mdash; Daily Task Report &amp; Retention</b></p>
+<table class="t">
+<tr><th style="width:42%">Setting</th><th>What it controls</th></tr>
+<tr><td><b>Send daily employee task report (PDF)</b></td><td>Turns the automatic daily report on or off.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Send time (IST)</b></td><td>What time of day it goes out.</td></tr>
+<tr><td><b>Report covers</b></td><td>Whether it reports the <b>Previous day</b> or the <b>Same day</b>.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Keep workday snapshot images for</b></td><td>How long end-of-day snapshot images are kept. Set <b>0</b> to keep them forever.</td></tr>
+<tr><td><b>Keep generated report PDFs for</b></td><td>How long generated PDFs are kept before being purged.</td></tr>
+</table>
+
+<p><b>Card 3 &mdash; Developers &mdash; Multi-task &amp; WhatsApp</b></p>
+<p>One row per person. For each you can:</p>
+<ul>
+<li>Turn <b>Multi-task</b> on, letting them run more than one task at a time.</li>
+<li>Set their WhatsApp number &mdash; this is where their login codes go.</li>
+<li>Tap the dial-code badge to set their country, which sets the dial code and expected number length for their login.</li>
+</ul>
+
+<p><b>Card 4 &mdash; Attendance</b> <i>(only when the HR attendance bridge is installed on your server)</i></p>
+<table class="t">
+<tr><th style="width:42%">Setting</th><th>What it controls</th></tr>
+<tr><td><b>Show attendance in the app</b></td><td>Off by default. Turn it on and every user and admin gets a round floating <b>Attendance</b> button at the bottom-right of Home. Users see their own HR attendance &mdash; today, this week, the month&rsquo;s counts and a day-by-day history. Admins and HR also get a <b>Team</b> tab showing everyone for a day. Clients never see the button. Turn it off and the button disappears on the next Home load.</td></tr>
+</table>
+<table class="n"><tr><td><b>NOTE</b> &nbsp;The screen is read-only. Check-in and check-out still come from <b>Start Workday</b> and <b>End Workday</b>; the bridge writes them into HR attendance, and the grading (Present / Late / Half day / Absent) is done by the attendance app&rsquo;s Office Hours rules. A person whose login is not linked to an HR employee sees <i>&ldquo;Not linked to HR yet&rdquo;</i> and appears under <b>Not in HR</b> on the Team tab.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/04-configuration-timers.png" width="250" height="378">
+<p class="imgc">Configuration &mdash; the Timers card and the Daily Task Report &amp; Retention card</p>
+</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/05-configuration-developers.png" width="250" height="378">
+<p class="imgc">Configuration &mdash; the Developers card with the Multi-task toggles</p>
+</td></tr></table>
+
+<h3>Step 5 &nbsp; Add Your People in Users</h3>
+<p>Open <b>Users</b>. Each person shows their Name, Login, Email, <b>KRA / KPI Role</b>, Mobile and whether they are Active. Use the <b>Active</b> and <b>Archived</b> tabs to switch between current and former staff.</p>
+<p>The <b>KRA / KPI Role</b> is the important field. It decides everything the person can see and do:</p>
+
+<table class="t">
+<tr><th style="width:22%">Role</th><th>Who it is for</th></tr>
+<tr><td><b>Admin</b></td><td>You and your coordinators. Full access.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Client</b></td><td>External customers. They see only their own work.</td></tr>
+<tr><td><b>User</b></td><td>Your team members who do the work. Board, workday and their own records.</td></tr>
+</table>
+
+<p>You can also <b>Change Password</b> for someone, or <b>Reset password to 1111</b> if they are locked out.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/06-users.png" width="250" height="378">
+<p class="imgc">The Users screen &mdash; the list with the KRA / KPI Role column and the Active / Archived tabs</p>
+</td></tr></table>
+
+<h3>Step 6 &nbsp; Set Up Logins and WhatsApp</h3>
+<p>Open <b>Login Management</b>. It has three parts:</p>
+<ul>
+<li><b>Team Members</b> &mdash; each person's role and mobile, a switch to allow or block their login, and <b>Reset to 1111</b>.</li>
+<li><b>WhatsApp sender</b> &mdash; scan the QR code to connect the number that sends your login codes. Its status is shown here, and <b>Disconnect</b> unlinks it.</li>
+<li><b>Message template</b> &mdash; the wording of the login code message, with a <b>Preview</b>.</li>
+</ul>
+
+<table class="n"><tr><td><b>IMPORTANT</b> &nbsp;Login codes are delivered over WhatsApp. If the sender is not connected here, <b>nobody can reset their password</b>. Check this screen first whenever someone reports they cannot get a code.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/07-login-management.png" width="250" height="378">
+<p class="imgc">Login Management &mdash; team members, the WhatsApp QR panel and the message template</p>
+</td></tr></table>
+
+<h2>PART 2 &nbsp; BUILDING THE KRA / KPI STRUCTURE</h2>
+
+<h3>Step 7 &nbsp; Understand the Three Levels</h3>
+<p>Open <b>KRA / KPI Master</b>. Everything is a tree with three levels:</p>
+
+<table class="t">
+<tr><th style="width:26%">Level</th><th>What it is</th><th>Example</th></tr>
+<tr><td><b>KRA</b> (top)</td><td>Your client.</td><td>Alphalize</td></tr>
+<tr style="background:#F7F9FC"><td><b>Sub-KRA</b></td><td>A project or phase for that client.</td><td>Phase 2</td></tr>
+<tr><td><b>KPI</b></td><td>The actual task someone works on.</td><td>Build the login screen</td></tr>
+</table>
+
+<h3>Step 8 &nbsp; Create and Edit</h3>
+<ul>
+<li>Tap <b>KRA +</b> to add a client or a project under one.</li>
+<li>Tap <b>KPI +</b> to add a task under a project. <b>Assignee</b> and the <b>Hours / Minutes</b> estimate are required; anything missing is shown under its field.</li>
+<li>Tap the <b>pencil</b> to rename anything.</li>
+<li>Tap the <b>trash</b> to delete. You will be warned that this also deletes everything beneath it and <b>cannot be undone</b>.</li>
+</ul>
+
+<table class="n"><tr><td><b>IMPORTANT</b> &nbsp;Deleting a KRA deletes every project and task under it. There is no undo. If you only want it out of the way, rename it rather than delete it.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/08-kra-kpi-master.png" width="250" height="378">
+<p class="imgc">KRA / KPI Master &mdash; the tree with the KRA + and KPI + buttons</p>
+</td></tr></table>
+
+<h3>Step 9 &nbsp; Give the Client Access</h3>
+<p>Open a KRA and use <b>Assign clients</b> to say which client logins can see it. If you have not made any yet, the sheet tells you: <i>&ldquo;No client logins exist yet. Create one in Login Management.&rdquo;</i> You can create the client login from here.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/09-assign-clients.png" width="250" height="378">
+<p class="imgc">The Assign clients sheet</p>
+</td></tr></table>
+
+<h2>PART 3 &nbsp; GETTING WORK INTO THE SYSTEM</h2>
+
+<h3>Step 10 &nbsp; Work the Client Task Queue</h3>
+<p>Open <b>Client Task Queue</b>. This is where work your clients have sent in waits to be turned into proper, assigned tasks. Drill down: <b>Date</b> &rarr; <b>Client</b> &rarr; <b>Task</b>.</p>
+<p>Open a task and fill in the details:</p>
+
+<table class="t">
+<tr><th style="width:32%">Field</th><th>What to put in it</th></tr>
+<tr><td><b>Ref ID</b></td><td>Filled in for you. Override only if you must.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Task Name</b></td><td>Rewrite the client's wording into one clear job if needed.</td></tr>
+<tr><td><b>Description</b></td><td>The detail the developer needs.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Estimate Hours / Minutes</b></td><td>How long it should take. This drives reporting and per-hour billing.</td></tr>
+<tr><td><b>Priority</b></td><td>Regular, Important or Urgent &mdash; this decides which lane it lands in.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Linked Req</b></td><td>For updates and bugs, the requirement they relate to.</td></tr>
+<tr><td><b>Assign Developer</b></td><td>Who is going to do it.</td></tr>
+</table>
+
+<p>Then choose:</p>
+<ul>
+<li><b>Save</b> &mdash; keep your work without releasing it yet.</li>
+<li><b>Save &amp; Publish</b> &mdash; release it. The client is asked to approve the developer, and the work can begin.</li>
+<li><b>Discard</b> &mdash; throw the changes away.</li>
+</ul>
+
+<table class="n"><tr><td><b>IMPORTANT</b> &nbsp;If you see the banner <i>&ldquo;Client rejected the assignment &mdash; needs a new developer,&rdquo;</i> the client turned down the person you picked. Assign someone else and publish again. Their reason is on the task.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/10-client-task-queue.png" width="250" height="378">
+<p class="imgc">Client Task Queue &mdash; the task form with Assign Developer, Save and Save &amp; Publish</p>
+</td></tr></table>
+
+<h3>Step 11 &nbsp; Bulk-Upload Work Yourself</h3>
+<p><b>Upload Requirements</b>, <b>Upload Updates</b> and <b>Upload Bug Reports</b> let you raise many tasks at once. All three work the same way and differ only in the reference they generate:</p>
+
+<table class="t">
+<tr><th style="width:36%">Screen</th><th style="width:14%">Ref</th><th>For</th></tr>
+<tr><td><b>Upload Requirements</b></td><td><b>REQ</b></td><td>New work.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Upload Updates</b></td><td><b>UPT</b></td><td>Changes and amendments.</td></tr>
+<tr><td><b>Upload Bug Reports</b></td><td><b>BUG</b></td><td>Defects.</td></tr>
+</table>
+
+<p>The screen has four sections:</p>
+<ul>
+<li><b>1 Destination</b> &mdash; Client (Root KRA) &rarr; Project / Sub-KRA &rarr; Version.</li>
+<li><b>2 Source &amp; Bulk Import</b> &mdash; paste text, import an XLSX/CSV/TXT file, or <b>Download Blank Template</b>. Duplicate rows are removed by their reference first, so two different references with the same wording both survive.</li>
+<li><b>3</b> the task rows &mdash; editable, with <b>Add Row</b> and attachments.</li>
+<li><b>4 Defaults for new rows</b> &mdash; the hours, minutes, priority and developer every new row starts with.</li>
+</ul>
+<p>Tap <b>Create All Tasks</b> when ready. Anything that fails gets a <b>Retry failed</b> button.</p>
+
+<table class="n"><tr><td><b>TIP</b> &nbsp;Set <b>Defaults for new rows</b> before you import. It saves setting the same developer and priority on thirty rows one at a time.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/11-upload-requirements.png" width="250" height="378">
+<p class="imgc">Upload Requirements &mdash; the four numbered sections</p>
+</td></tr></table>
+
+<h3>Step 12 &nbsp; Generate Client Files</h3>
+<p>Open <b>Generate Client Files</b>, pick a <b>Client</b>, a <b>Project</b> and a <b>Version</b>, and choose whether to include existing tasks as data. You get a ZIP containing three spreadsheets &mdash; Requirements, Updates and Bug Reports &mdash; ready to send to the client to fill in.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/12-generate-client-files.png" width="250" height="378">
+<p class="imgc">Generate Client Files &mdash; client, project and version pickers</p>
+</td></tr></table>
+
+<h2>PART 4 &nbsp; RUNNING THE DAY</h2>
+
+<h3>Step 13 &nbsp; Watch Live Tracking</h3>
+<p>Open <b>Live Tracking</b> to see who is working on what, right now. It refreshes itself every 15 seconds.</p>
+
+<table class="t">
+<tr><th style="width:30%">What you see</th><th>What it means</th></tr>
+<tr><td><b>Present</b></td><td>Started their workday on time and is here.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Late came 10:24</b></td><td>Here, but started after the cut-off. The time shown is when they started.</td></tr>
+<tr><td><b>Absent</b></td><td>Has not started their workday and the cut-off has passed.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Yet to start</b></td><td>Has not started yet, but it is still early.</td></tr>
+<tr><td><b>Idle &mdash; no task running</b></td><td>Their day is running but no task is active. Worth a nudge.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Not started</b></td><td>No workday session at all today.</td></tr>
+</table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/13-live-tracking.png" width="250" height="378">
+<p class="imgc">Live Tracking &mdash; the team list with attendance states and current tasks</p>
+</td></tr></table>
+
+<p>People working on the phone app now stay shown as active: the app checks in every 30 seconds, so nobody greys out just because they have not touched the screen. If the header reads <i>&ldquo;Not updating &mdash; last good reading HH:MM&rdquo;</i>, the screen could not refresh; the timers stop at that reading instead of running on, so what you see is the last figure you can trust.</p>
+
+<table class="n"><tr><td><b>TIP</b> &nbsp;On Android you can keep Live Tracking on your phone&rsquo;s home screen. Long-press the home screen, choose <b>Widgets</b>, and add <b>Live Tracking</b> from KRA KPI &mdash; <i>&ldquo;Who is present and what your team is working on right now.&rdquo;</i> It shows up to three people depending on its size, and tapping it opens Live Tracking. Only admins see this widget.</td></tr></table>
+
+<h3>Step 13a &nbsp; Reopen a Workday</h3>
+<p>End Workday is one-way for the developer &mdash; one start and one end per day &mdash; so if somebody ends their day by accident, only an admin can give it back. From <b>Live Tracking</b>, reopen their day and type a reason.</p>
+<p>The reason is <b>sent to them word for word</b> and shown on their board, because it is the only thing that explains why their day suddenly reopened. Their summary has already gone to the owner and coordinator by that point, so say plainly what changed.</p>
+
+<h3>Step 14 &nbsp; Use the Board as an Admin</h3>
+<p>Open <b>KPI Action Board</b>. A badge tells you whose tasks you are looking at &mdash; <b>Coordinator &middot; All</b> for everyone's, or <b>My Tasks</b> for your own. Tap it to switch.</p>
+<p>As an Admin your task cards carry extra buttons that Users never see: <b>Accept</b>, <b>Reject</b>, <b>Approve</b>, <b>Revert</b>, <b>Reassign</b> and <b>Delete</b>.</p>
+<p>The first lane is <b>&#128340; Today</b>, in indigo &mdash; what has been worked on today, most time first. It is not a stage work moves through, so a task shows up there <b>as well as</b> in its own status lane; seeing the same card twice is correct. The lane’s tasks are deliberately left out of the board’s totals, so the counts still add up, and it empties itself at midnight.</p>
+<p>Lanes with tasks come first and empty lanes drop to the bottom; inside a lane the most recently worked task is on top. A <b>red card</b> is a new task nobody has started yet &mdash; it stays at the top of Regular, Important or Urgent until someone starts it, or for 24 hours. Tasks on Hold or sent back for Rework sit in their priority lane.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/14-action-board.png" width="250" height="378">
+<p class="imgc">The Action Board as an admin &mdash; the &ldquo;Coordinator &middot; All&rdquo; badge, the LIVE strip with a lunch break, and the lanes</p>
+</td></tr></table>
+
+<h3>Step 14a &nbsp; Edit a Task</h3>
+<p>Open a task and tap <b>Edit</b> to open <b>Edit task</b>. You can change:</p>
+<ul>
+<li><b>Task name</b>.</li>
+<li><b>Type</b> &mdash; Requirement, Update or Bug. Changing it rewrites the name prefix and the reference too (REQ / UPT / BUG), so the task is filed and billed as the right kind.</li>
+<li><b>KRA / Project</b> &mdash; moving a task to a project under a <b>different client</b> asks first, <b>Move to another client?</b>, and needs <b>Move it</b> to confirm.</li>
+</ul>
+<p>Only admins see Edit. Every change is recorded in the task&rsquo;s <b>Activity</b> under <b>Heading changes</b>.</p>
+
+<h2>PART 5 &nbsp; TRIAGE AND APPROVALS</h2>
+
+<p>Work passes two gates before it can be billed. You control the first; the client controls the second.</p>
+
+<h3>Step 15 &nbsp; Accept or Reject New Tasks</h3>
+<p>When a team member raises their own task it lands in <b>Pending Review</b>. They can work on it straight away, but it does not count as billable until you accept it.</p>
+<p>Tap <b>Accept</b> and set two things:</p>
+<ul>
+<li><b>Task type</b> &mdash; <b>Requirement</b> (REQ), <b>Update</b> (UPT) or <b>Bug</b> (BUG). This decides how it is billed.</li>
+<li><b>Priority</b> &mdash; which lane it belongs in.</li>
+</ul>
+<p>What the developer asked for is shown next to your choice, for example <i>&ldquo;Developer asked for Urgent&rdquo;</i>, so you can see where you are overriding them.</p>
+<p>Tap <b>Reject</b> to send it back with a note explaining what to change &mdash; for example <i>&ldquo;Wrong project &mdash; move it under Alphalize &gt; Phase 2.&rdquo;</i> The note is required &mdash; it is the only thing the developer gets. When they resume the task, they must answer it (<b>What did you change?</b>) before it runs again, and your acceptance clock restarts.</p>
+
+<table class="n"><tr><td><b>TIP</b> &nbsp;If nobody triages a task, it accepts itself after the time set in Configuration. The developer's card shows the deadline: <i>&ldquo;Waiting on admin &mdash; accepts automatically at 14:35.&rdquo;</i> Clear Pending Review each morning so the defaults are never what decides your billing.</td></tr></table>
+
+<h3>Step 16 &nbsp; Approve or Reject Finished Work</h3>
+<p>When a developer taps Complete, the task moves to <b>Pending Approvals</b> and waits for you. Open it and tap <b>Approve</b>. A quality checklist appears &mdash; work through it:</p>
+<ul>
+<li>Task reviewed</li>
+<li>GitHub verified</li>
+<li>Testing completed</li>
+<li>Tested successfully</li>
+<li>User manual reviewed</li>
+<li>Documentation approved</li>
+</ul>
+<p>Approving sends the task to <b>Awaiting Client</b> for sign-off. Tapping <b>Reject</b> instead sends it back to the same developer with your reason. The reason must be at least 10 characters &mdash; if it is shorter, the app asks you to <i>&ldquo;Say a little more&rdquo;</i>.</p>
+<p>The Approve and Reject boxes now show the task&rsquo;s <b>Description</b>, so you can see what the work was for without leaving the dialog. Opening either one records <i>&ldquo;Review started&rdquo;</i> with your name and the time on the task.</p>
+
+<h3>Step 17 &nbsp; Revert, Reassign and Delete</h3>
+
+<table class="t">
+<tr><th style="width:22%">Button</th><th>What it does</th></tr>
+<tr><td><b>Revert</b></td><td>Pulls a task back off the client's desk from <b>Awaiting Client</b>. Use it when you approved something too early. It will not work on a task the client has already signed off &mdash; that is a billing decision, not a workflow one.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Reassign</b></td><td>Moves a task to a different developer. Every reassignment is logged with its reason in <b>Reassignment History</b>.</td></tr>
+<tr><td><b>Delete</b></td><td>Removes a task entirely. It only appears on tasks nobody has worked on &mdash; once time is logged against a task, the button is gone. You must say <b>Why is it being deleted? (required)</b>, and that reason is sent to the developer and the client.</td></tr>
+</table>
+<p><b>Reassign</b> is not offered on completed tasks, and <b>Add time</b> is not offered on someone else&rsquo;s overrunning task.</p>
+
+<h3>Step 18 &nbsp; Read the Task States</h3>
+<p>What a task calls itself on screen is not always what you would guess. This table maps the ones that catch people out:</p>
+
+<table class="t">
+<tr><th style="width:34%">On screen</th><th>What it actually means</th></tr>
+<tr><td><b>Pending Review</b></td><td>Someone raised this themselves and you have not accepted it yet.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Verification Pending</b></td><td>A <b>Partial Finish</b>. The developer did what they could; you need to check it. There is no lane called &ldquo;Partial&rdquo;.</td></tr>
+<tr><td><b>Pending Approvals</b></td><td>Finished by the developer, waiting on <b>you</b>.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Awaiting Client</b></td><td>You approved it; waiting on the <b>client's</b> sign-off.</td></tr>
+<tr><td><b>Paused</b></td><td>Covers paused, on hold and sent-back-for-rework.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Completed</b></td><td>Client-signed-off. This is the only state that can be invoiced.</td></tr>
+</table>
+
+<h2>PART 6 &nbsp; REPORTS</h2>
+
+<h3>Daily Reports</h3>
+<p>The system builds a daily task report PDF per person, on the schedule you set in Configuration. Open <b>Daily Reports</b> to <b>View</b>, <b>Download</b> or <b>Share</b> any of them.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/17-daily-reports.png" width="250" height="378">
+<p class="imgc">Daily Reports &mdash; the list with View / Download / Share</p>
+</td></tr></table>
+
+<h3>Work Report</h3>
+<p>Open <b>Work Report</b> to build a report over any period. Choose <b>Today</b>, <b>This Week</b>, <b>This Month</b>, <b>Last Month</b> or <b>Custom</b>; switch between <b>Task-wise</b> and <b>Client-wise</b>; optionally narrow to one client or leave it on <b>All clients</b>. Tap <b>Generate</b>, then <b>PDF</b> or <b>Share</b>. The PDF is built on the phone from the results on screen, and leaves the hours out when the <b>Hours</b> switch is off.</p>
+
+<table class="n"><tr><td><b>TIP</b> &nbsp;Client-wise over Last Month is the report to run before invoicing &mdash; it shows exactly what each client consumed.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/18-work-report.png" width="250" height="378">
+<p class="imgc">Work Report &mdash; period presets, Task-wise / Client-wise switch and Generate</p>
+</td></tr></table>
+
+<h3>KRA Report</h3>
+<p>Open <b>KRA Report</b> for a task-by-task report of any set of KRAs, people and dates, which you can trim, add to and download as PDF, Excel or a ZIP.</p>
+
+<table class="t">
+<tr><th style="width:30%">Filter</th><th>What it does</th></tr>
+<tr><td><b>Period</b></td><td><b>Today</b>, <b>This Week</b>, <b>This Month</b>, <b>Last Month</b> or <b>Custom</b> (From / To).</td></tr>
+<tr style="background:#F7F9FC"><td><b>KRA</b></td><td>Pick one or more KRAs. You can also <b>exclude</b> a KRA, so &ldquo;everything except Internal&rdquo; is one step.</td></tr>
+<tr><td><b>Employee</b>, <b>Type</b>, <b>State</b></td><td>Pick several at once. Each option shows how many tasks it covers.</td></tr>
+</table>
+
+<p>Tap <b>Generate</b>. You get the task, time and employee totals, a <b>KRA summary</b> you can hide, and the rows. Then:</p>
+<ul>
+<li><b>Filter these rows&hellip;</b> narrows the table on screen.</li>
+<li>Tap the &#8855; on a row to leave it out of this report. The tasks themselves are untouched; <b>Restore all</b> brings them back.</li>
+<li>Tap <b>+</b> (top right) to add a <b>New Task</b> you noticed was missing &mdash; Task name, Project (KRA), Assignee, Type, Estimate and Time worked are required. Save it as <b>This report only</b> (a row in this report and nowhere else) or <b>Everywhere</b> (a real task). If the name matches an existing task, you get a heads-up but can still save.</li>
+<li><b>PDF</b>, <b>Excel</b> or <b>ZIP</b> to download. The ZIP offers a <b>PDF pack</b>, an <b>Excel pack</b> or <b>Both packs</b>, with per-task PDFs filed by month, week and person.</li>
+<li><b>Download history</b> lists every report you downloaded, here or on the web, to open again.</li>
+<li><b>Clear this report</b> starts fresh. It warns you first how many trimmed rows, renames and report-only tasks it will discard.</li>
+</ul>
+
+<table class="n"><tr><td><b>IMPORTANT</b> &nbsp;If you change a filter after generating, you see <i>&ldquo;Filters changed &mdash; Generate again before downloading.&rdquo;</i> and the download buttons wait until you do. This stops you downloading a report that no longer matches the filters on screen.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/26-kra-report.png" width="250" height="378">
+<p class="imgc">KRA Report &mdash; the filters, Generate, the summary, and the PDF / Excel / ZIP buttons above the rows</p>
+</td></tr></table>
+
+<p>Every download first asks what to include in <b>Download options</b>: <b>Who</b> (Everyone or Pick people), <b>Period</b> (The whole range, A day, A week or A month), <b>Sort by</b>, and <b>Only rows with time worked</b>. It tells you how many rows will be exported before it builds the file.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/27-kra-report-download.png" width="250" height="378">
+<p class="imgc">Download options &mdash; Who, Period, Sort by, and the count of rows that will be exported</p>
+</td></tr></table>
+
+<h3>Employee Tracker</h3>
+<p>Open <b>Employee Tracker</b> for the whole team&rsquo;s days &mdash; the admin&rsquo;s version of My Workday. Choose <b>Daily</b>, <b>Weekly</b> or <b>Monthly</b>, and use the person picker (<b>Everyone</b> by default) to look at one person.</p>
+<p>Each row shows <b>Productive</b>, <b>Present</b> and, where there was one, <b>Paused</b> time. Tap a row to see the time per task and the <b>Sessions</b>; a session the system closed at midnight is tagged <b>auto</b>.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/28-employee-tracker.png" width="250" height="378">
+<p class="imgc">Employee Tracker &mdash; Daily / Weekly / Monthly, the person picker, and Productive / Present / Paused per day</p>
+</td></tr></table>
+
+<h3>Workday Snapshots</h3>
+<p>A saved image of every person's end-of-day summary. Drill down by date, then by developer, then open the image to <b>View full size</b>, <b>Download</b> or <b>Share</b>. How long these are kept is set in Configuration.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/19-workday-snapshots.png" width="250" height="378">
+<p class="imgc">Workday Snapshots &mdash; date and developer drill-down</p>
+</td></tr></table>
+
+<h3>Reassignment History</h3>
+<p>A read-only record of every task that changed hands. Tap any entry for the reason and any pause information attached to it.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/20-reassignment-history.png" width="250" height="378">
+<p class="imgc">Reassignment History &mdash; the list and an opened entry</p>
+</td></tr></table>
+
+<h2>PART 7 &nbsp; INVOICING</h2>
+
+<h3>Step 19 &nbsp; Find What Is Ready to Bill</h3>
+<p>Open <b>Owner Dashboard</b>. It shows certified tasks ready to invoice, grouped per client. Use <b>Filter by Client</b> or leave it on <b>All clients</b>, then <b>View Certified Tasks</b> to check the detail before you bill.</p>
+<p>When you are happy, tap <b>Generate Invoice</b>. The app asks <b>Create invoice?</b> and explains that this creates a real draft invoice for that client; confirm to create it. The button is greyed out when a client has nothing certified to bill.</p>
+
+<table class="n"><tr><td><b>IMPORTANT</b> &nbsp;Only tasks the <b>client has signed off</b> appear here. A task the client auto-approved at the start is not billable &mdash; auto-release is permission to work, never permission to bill.</td></tr></table>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/21-owner-dashboard.png" width="250" height="378">
+<p class="imgc">Owner Dashboard &mdash; per-client cards of certified tasks ready to invoice</p>
+</td></tr></table>
+
+<h3>Step 20 &nbsp; Create the Invoice</h3>
+<p>In <b>Client Invoices</b>, tap <b>+</b> to create one and set:</p>
+
+<table class="t">
+<tr><th style="width:32%">Field</th><th>What to set</th></tr>
+<tr><td><b>Client</b></td><td>Who you are billing.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Billing method</b></td><td><b>Per Hour</b> (time actually worked) or <b>Per Task</b> (a fixed price per task type).</td></tr>
+<tr><td><b>Hourly Rate</b></td><td>Your rate, when billing per hour.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Currency</b></td><td>The currency to bill in.</td></tr>
+<tr><td><b>Period</b></td><td>The date range to pull tasks from.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Include Task Types</b></td><td>Tick any of <b>Requirements</b>, <b>Updates / Amendments</b>, <b>Bug Fixes</b>. At least one is required. Ticking all three also picks up tasks whose reference has no REQ / UPT / BUG prefix, so nothing is left out.</td></tr>
+</table>
+
+<p>You can add an <b>ADJUSTMENT</b> line for a discount or an agreed correction with <b>Add Adjustment</b>. It needs a description and the <b>Hours</b> as a number (for example 2 or 1.5) &mdash; &ldquo;2h&rdquo; is refused rather than quietly read as zero.</p>
+<p>The invoice PDF is built on the phone and matches the one from the web: lines already billed on another invoice are left out, amounts are hidden when <b>Show amounts</b> is off, and your <b>Overall Notes</b> are printed on it.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/22-create-invoice.png" width="250" height="378">
+<p class="imgc">The Create Invoice form &mdash; billing method, rate, currency and task types</p>
+</td></tr></table>
+
+<h3>Step 21 &nbsp; Move It Through Its States</h3>
+
+<table class="t">
+<tr><th style="width:24%">State</th><th>What it means</th></tr>
+<tr><td><b>Draft</b></td><td>Yours to edit. The client cannot see it.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Finalized</b></td><td>Locked. Its tasks are now committed to this invoice.</td></tr>
+<tr><td><b>Sent</b></td><td>Issued to the client. They can see it in their Invoices screen.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Payment Due</b></td><td>Issued and awaiting payment.</td></tr>
+<tr><td><b>Paid</b></td><td>Settled. Use <b>Mark Paid</b> on the invoice row and record how it was paid.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Claimed</b></td><td>The client has raised a claim against it. It is its own filter on the Invoices screen, and it is not counted as due &mdash; while a claim is open the invoice cannot be revised or reset to draft.</td></tr>
+</table>
+
+<p><b>Revert</b> undoes a payment marked in error. It <b>requires a reason</b>, and unlike the private payment notes that reason is <b>published</b> &mdash; it shows in red on the invoice row and as a banner on the invoice itself, on your side and the client’s. Write it for them to read.</p>
+
+<p>Revising an invoice asks <b>Why is it being revised?</b> &mdash; the reason is required.</p>
+
+<p>Use <b>PDF</b> and <b>Share</b> to send a copy outside the app.</p>
+
+<table class="n"><tr><td><b>IMPORTANT</b> &nbsp;Once a task is on a finalized or sent invoice it is <b>locked</b> and cannot appear on another one. This is what stops a client being billed twice for the same work. Check a draft carefully before you finalize it.</td></tr></table>
+
+<h2>PART 8 &nbsp; PUBLISHING THE MANUALS</h2>
+
+<h3>Step 22 &nbsp; Upload a Manual</h3>
+<p>Open <b>User Manual</b> and tap <b>+ Add</b>. Set:</p>
+<ul>
+<li><b>Title</b> &mdash; what people see in the list.</li>
+<li><b>Visible to</b> &mdash; <b>Everyone</b>, <b>Developer</b>, <b>Admin</b> or <b>Client</b>.</li>
+<li><b>PDF file</b> &mdash; pick the file from your device.</li>
+</ul>
+<p>This is how these three guides get into the app. Upload each one against its own role:</p>
+
+<table class="t">
+<tr><th style="width:52%">File</th><th>Visible to</th></tr>
+<tr><td>kra-kpi-admin-manual.pdf</td><td><b>Admin</b></td></tr>
+<tr style="background:#F7F9FC"><td>kra-kpi-client-manual.pdf</td><td><b>Client</b></td></tr>
+<tr><td>kra-kpi-user-manual.pdf</td><td><b>Developer</b></td></tr>
+</table>
+
+<p>Role filtering is enforced on the server, so a client can never open the admin guide even if they know it exists. Only admins see <b>+ Add</b>, <b>Edit</b> and <b>Delete</b>.</p>
+
+<table class="img"><tr><td>
+<img src="screenshots/admin/24-user-manual-add.png" width="250" height="378">
+<p class="imgc">User Manual &mdash; the + Add form with Title, Visible to and PDF file</p>
+</td></tr></table>
+
+<h2>PART 9 &nbsp; WHAT THE APP TELLS PEOPLE</h2>
+
+<h3>The Four Channels</h3>
+
+<table class="t">
+<tr><th style="width:26%">Channel</th><th>Used for</th></tr>
+<tr><td><b>In-app notifications</b></td><td>The bell on Home. Everything is recorded here, sorted into All / Unread / Action needed. Cleared automatically after 30 days.</td></tr>
+<tr style="background:#F7F9FC"><td><b>Push notifications</b></td><td>Alerts on the phone even when the app is shut. Tapping one opens the exact task, report or invoice.</td></tr>
+<tr><td><b>Task alarms</b></td><td>Full-screen, ring-out-loud reminders that team members set on their own tasks. You do not set these for them.</td></tr>
+<tr style="background:#F7F9FC"><td><b>WhatsApp</b></td><td>Login codes, and the client approval links.</td></tr>
+</table>
+
+<h3>What You Get Told About</h3>
+<ul>
+<li>A team member raised their own task and it needs triage</li>
+<li>Someone finished a task and it needs your approval</li>
+<li>A client approved, rejected or held an assignment</li>
+<li>A client signed off finished work</li>
+<li>Someone paused a task as <b>Urgent</b> &mdash; these carry a red <b>URGENT</b> badge and are chased until read</li>
+<li>Someone reported they have no tasks</li>
+<li>A workday was closed automatically at midnight</li>
+<li>The daily report is ready, and invoices are issued or paid</li>
+</ul>
+
+<table class="n"><tr><td><b>TIP</b> &nbsp;The <b>Action needed</b> tab on the notifications screen is the shortest useful list in the app &mdash; it is only the things that will not move without you. Check it first each morning. It now also includes completed tasks, a team member with no tasks, a client saying they have paid, and a client rejecting work.</td></tr></table>
+
+<p>Break, lunch and meeting over-run reminders (set in Configuration) go to the developer only &mdash; they do not appear in your notifications.</p>
+
+<h2>QUICK REFERENCE</h2>
+
+<h3>Who Can Do What</h3>
+
+<table class="t">
+<tr><th style="width:40%">Action</th><th style="width:20%">Admin</th><th style="width:20%">Client</th><th>User</th></tr>
+<tr><td>Start / end a workday</td><td>Not required</td><td>Not required</td><td><b>Required</b></td></tr>
+<tr style="background:#F7F9FC"><td>Work on tasks</td><td>Yes</td><td>No</td><td>Yes</td></tr>
+<tr><td>Create a task</td><td>Yes</td><td>Via upload</td><td>Yes (New Task)</td></tr>
+<tr style="background:#F7F9FC"><td>Accept / reject new tasks</td><td><b>Yes</b></td><td>No</td><td>No</td></tr>
+<tr><td>Approve finished work</td><td><b>Yes</b></td><td>No</td><td>No</td></tr>
+<tr style="background:#F7F9FC"><td>Approve the assigned developer</td><td>No</td><td><b>Yes</b></td><td>No</td></tr>
+<tr><td>Sign off delivered work</td><td>No</td><td><b>Yes</b></td><td>No</td></tr>
+<tr style="background:#F7F9FC"><td>Reassign / delete a task</td><td><b>Yes</b></td><td>No</td><td>No</td></tr>
+<tr><td>See everyone's tasks</td><td><b>Yes</b></td><td>Own only</td><td>Own only</td></tr>
+<tr style="background:#F7F9FC"><td>Create invoices</td><td><b>Yes</b></td><td>View only</td><td>No</td></tr>
+<tr><td>Change configuration</td><td><b>Yes</b></td><td>No</td><td>No</td></tr>
+<tr style="background:#F7F9FC"><td>Upload manuals</td><td><b>Yes</b></td><td>No</td><td>No</td></tr>
+<tr><td>Edit a task (name, type, project)</td><td><b>Yes</b></td><td>No</td><td>No</td></tr>
+<tr style="background:#F7F9FC"><td>KRA Report / Employee Tracker</td><td><b>Yes</b></td><td>No</td><td>No</td></tr>
+<tr><td>Own reminders</td><td>Yes</td><td>No</td><td>Yes</td></tr>
+</table>
+
+<h3>Things to Remember</h3>
+<ul>
+<li>Clear <b>Pending Review</b> every morning. Anything you leave accepts itself on the timer, and then the default has decided your billing.</li>
+<li><b>Only client-signed-off work is billable.</b> Auto-release lets work start; it never authorises an invoice.</li>
+<li>Deleting a KRA deletes everything under it, with no undo.</li>
+<li>A task on a finalized invoice is locked and can never be billed again.</li>
+<li>If people cannot get login codes, check the WhatsApp sender in <b>Login Management</b> first.</li>
+<li><b>Verification Pending</b> on the board means a Partial Finish, not a completed task.</li>
+<li>Configuration saves as you type &mdash; there is no Save button, just the tick.</li>
+<li>Set <b>Company Branding</b> before sending your first invoice; it is what the client sees.</li>
+<li>If a screen looks stale, pull down to refresh, or return to Home and open it again.</li>
+</ul>
+
+<table class="b"><tr><td>Triage in the morning, watch the day, approve as it lands, and bill what the client has signed. That is the whole rhythm.</td></tr></table>
+
+<p style="text-align:center;color:#6B7280;font-size:9pt;margin-top:18pt;">&mdash; End of Guide &mdash;<br>Alphalize &nbsp;|&nbsp; KRA / KPI Admin Guide</p>
+
+</body>
+</html>
