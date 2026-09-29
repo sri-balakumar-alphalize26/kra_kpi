@@ -46,9 +46,26 @@ fixes keep the current screens, buttons, defaults and navigation; features are a
       `kpi_app_otp.py`, `res_users_signature.py`, `kpi_notify.py`) — all compile.
 - [x] Kotlin compile of the generated providers: `cd android && ./gradlew :app:compileDebugKotlin`
       — finished clean.
-- [ ] Upgrade the Odoo module, then with a developer session confirm via JSON-RPC that
-      `/kpi_owner/certified_by_client`, `/kpi_pending_queue/list` and `/kra_kpi/task/reassign` on
-      someone else's task are refused; six wrong OTP codes burn the code; `as_of` is `HH:MM`.
+- [x] Server fixes verified on the LOCAL Odoo 19 (`369application`, 28 Sep): the new columns
+      exist; a developer's pause / start / reassign on someone else's task is refused; the owner
+      billing routes, `/kra_kpi/ai_digest`, `/kpi_pending_queue/list` and Live Tracking refuse a
+      developer; the placeholder digest key is refused; `as_of` is local `HH:MM`; five wrong PINs
+      lock the number and the right PIN is refused until the lock clears; five wrong codes burn a
+      live code (marked used, 5 attempts); the fourth code request in 15 min issues none;
+      `set_mobile` refuses a number another account has. Run with a throwaway developer
+      (`qa.sweep.test`, now deactivated).
+      **How the local server was updated** (the addons path is the core folder, so the module is a
+      COPY): copy the five edited files into
+      `C:\Program Files\Odoo 19.0.20260119\server\odoo\addons\kra_kpi_module\`, run
+      `odoo-bin -c odoo.conf -d 369application -u kra_kpi_module --stop-after-init --no-http`, and
+      restart the `odoo-server-19.0` service. The RPC `button_immediate_upgrade` alone does NOT
+      load edited Python on Windows (single process). Four files in that installed copy differ from
+      the repo for reasons unrelated to this work (`data/kpi_download_cleanup_cron.xml`,
+      `models/kpi_report_download.py`, two web components); they were left as they were.
+      **Caveat seen while testing**: on a multi-database Odoo 19, the app's `/kpi_app/login` with
+      the `X-Odoo-Database` header answers success but sets no session cookie (Odoo runs such
+      requests sessionless). Pre-existing; irrelevant on a single-database server.
+      Production still needs the module upgrade and the digest API key.
 - [ ] New APK (`eas build --profile preview` or `gradlew assembleRelease`), then on device: login
       pictures animate per step; widgets render, resize to 4x2, Pause/Resume works, stale marker
       appears after the app is closed (set the threshold to 1 min to test), logout clears them,
@@ -59,94 +76,121 @@ fixes keep the current screens, buttons, defaults and navigation; features are a
 ## Remaining
 
 ### Phase 3 — app correctness bugs
-- [ ] **Alarm Stop treats a reminder as a task** — `App.js` `stopAlarmAndClose` (~line 297):
-      branch on `a.task.kind === 'reminder'` → `setReminderSnooze(id, null, uid)` + `routeToReminders()`;
-      today it calls `session.removeReminder(id)` and `routeToTask(id)` with a reminder id.
-- [ ] **Today refresh never starts** — `screens/HomeScreen.js` (~line 1030): the effect lists
-      `cardGroup` as a dependency but the state is declared after it; move the `cardTaskId` /
-      `cardGroup` `useState` lines above the effect.
-- [ ] **Per-task reminders are per device and survive logout** — `api/session.js` `K_REMINDERS`
-      keyed by uid (migrate the old key on first read); in `logout()` cancel every task alarm and
-      every snooze; `services/reminderAlarm.js` `clearReminderAlarms` must also cancel
-      `snoozes[id].notifId`, and cancel a snooze whenever its id leaves the wanted set.
-- [ ] **Role gate treats a server error as "unlocked"** — `App.js` (~line 468-503): treat
-      `info.status === false` from `/kpi_user/info` as a failure; do not cache the role.
-- [ ] **Push for a non-task event opened a random task** — server side done; app side
-      `App.js` (~line 587): check `snapshot_id` (→ snapshots) before `routeToTask`.
-- [ ] **Home break-card Resume skips the send-back check** — `screens/HomeScreen.js`
-      `resumeFromCard`: if the task has `self_needs_resume_reason`, open the board instead.
-- [ ] **Stale responses overwrite newer ones** — request-sequence ref in
-      `KpiActionBoard.js` `load` (~line 1615), `ClientInvoices.js` (202-210, 502),
-      `EmployeeTracker.js` (46-65), `LiveTracking.js` `load` (226-253). `GenerateClientFiles`
-      already does this with `subReq` — copy that pattern.
-- [ ] **Concurrent reminder syncs arm duplicate alarms** — `services/reminderAlarm.js`:
-      serialise syncs through a module promise chain; fixed notifee ids `rem-<uid>-<id>`; store the
-      `wanted` kind separately from the kind that fired (fixes the churn from commit dac9c11).
-- [ ] **Whole app shows over the lock screen** — `plugins/withAlarmLockScreen.js` sets
-      `showWhenLocked` / `turnScreenOn` on `MainActivity`. Remove them; add
-      `Function("setLockScreenVisible")` to `modules/expo-task-widget-bridge/.../TaskWidgetBridgeModule.kt`
-      (`currentActivity.setShowWhenLocked / setTurnScreenOn`, API 27+); `AlarmScreen` sets true on
-      mount, false on unmount. Alarm behaviour stays exactly as now.
-- [ ] **Alarm channel never gets the chosen sound** — `services/alarm.js` (~170-176) passes a
-      `content://` URI where expo-notifications expects a bundled file name. Create the channel with
-      `notifee.createChannel({ sound })`; keep the read-back check.
-- [ ] **Removing a task row re-targets its attachments** — `screens/UploadAmendments.js`
-      (234, 407, 536-538): attachments reference `rowIndex`; give rows stable ids.
-- [ ] **Large file → base64 with no size guard** — `UploadAmendments.js` (276-285) and
-      `UserManual.js` (131-138): check the picker's `size` first, as `KpiTaskDetail.onPickManual` does.
-- [ ] **Invoice open failure spins forever** — `screens/ClientInvoices.js` (214-222, 637):
-      on failure return to the list or show an error state with Retry.
-- [ ] **Reset flow traps or half-logs-in** — `screens/AppLoginScreen.js` (~195-206): message
-      when `sent:false`; `services/appAuth.js` (79-90): `logged_in:false` → back to the password
-      step, never saved as a session.
+- [x] **Alarm Stop treats a reminder as a task** — `App.js` `stopAlarmAndClose`: a reminder now
+      clears its snooze and opens Reminders; a task path is unchanged.
+- [x] **Today refresh never starts** — `screens/HomeScreen.js`: the `cardGroup` state now sits
+      above the effect that depends on it.
+- [x] **Per-task reminders are per device and survive logout** — `api/session.js` keys
+      `kpi_reminders` by the signed-in user (`setReminderOwner`, old key migrated on first read);
+      `logout()` cancels every task alarm (`clearTaskReminders`) and every snooze
+      (`clearReminderAlarms`); the sync cancels a snooze whose reminder was deleted.
+- [x] **Role gate treats a server error as "unlocked"** — `/kpi_user/info` answering
+      `status:false` is now a failure and the role is not cached.
+- [x] **Push for a non-task event opened a random task** — server drops `kpi_id`; the app
+      routes `snapshot_id` to the snapshots screen (warm and cold start).
+- [x] **Home break-card Resume skips the send-back check** — `resumeFromCard` looks the task
+      up in the lanes and sends a sent-back self-created task to the board.
+- [x] **Stale responses overwrite newer ones** — request-sequence guards in
+      `KpiActionBoard.js` `load`, `ClientInvoices.js` `loadList`, `EmployeeTracker.js` `load`,
+      `LiveTracking.js` `load`.
+- [x] **Concurrent reminder syncs arm duplicate alarms** — syncs are queued one after another;
+      the armed entry stores the `wanted` kind so a refused alarm no longer churns every sync.
+      (Fixed notifee ids were not added: `scheduleTaskAlarm` generates its own and the queue
+      already prevents the duplicate.)
+- [x] **Whole app shows over the lock screen** — the manifest flags stay (a cold-start alarm
+      still rings over the keyguard); the bridge module gained `setLockScreenVisible`, App.js
+      turns it off at start and `AlarmScreen` turns it on while it shows. **Verify on a locked
+      phone**: alarm still shows; Login Management does not.
+- [ ] **Alarm channel never gets the chosen sound** — DEFERRED. `services/alarm.js` builds the
+      channel through expo-notifications on purpose (notifee's channel has no `audioAttributes`,
+      and usage ALARM is what keeps the ring on the alarm stream). Check on a device whether the
+      chosen `content://` sound actually plays; if not, the fix needs a native channel helper
+      that sets both the URI and the audio attributes, not a switch to notifee.
+- [x] **Removing a task row re-targets its attachments** — rows carry a stable `rowId`;
+      attachments point at it; deleting a row drops its attachments.
+- [x] **Large file → base64 with no size guard** — 25 MB caps in `UploadAmendments.js`
+      (Source Document) and `UserManual.js` (PDF), checked before the read.
+- [x] **Invoice open failure spins forever** — `ClientInvoices.js` returns to the list with
+      the error banner.
+- [x] **Reset flow traps or half-logs-in** — `startOtp` says when the code could not be sent;
+      `verifyOtp` reports `loggedIn:false` and the screen returns to the password step instead
+      of saving a session with no uid.
 
 ### Phase 4 — low-impact fixes
-- [ ] **Expired Odoo session never detected** — `api/odooApi.js` `jsonRpc` (~208-211): keep
-      `code` / `data.name` on errors; on code 100 / `SessionExpiredException` call a registered
-      `onSessionExpired` hook (App.js clears the session and shows login with "Your session expired"),
-      guarded to fire once.
-- [ ] **Logout never destroys the server session** — POST `/web/session/destroy` after
-      `unregisterPush`, before `clearSession`.
-- [ ] `screens/KpiTaskDetail.js` (136-145): RN's `URL` never throws and appends `/`; validate
-      with a regex, store the trimmed original.
-- [ ] `screens/KpiActionBoard.js` (~642): reminder bell compares device time with `serverNow()`;
-      compare with `Date.now()` consistently.
-- [ ] `services/kpiActions.js` `fetchTaskById` (345-355): let network errors throw; the board
-      shows "couldn't reach the server" with retry instead of "task removed".
-- [ ] `LoginManagementScreen.js` (301-307, 212-247) and `UsersScreen.js` (129-132): honour
-      `status === false` (the new duplicate-number refusal from `set_mobile` needs this) and revert
-      optimistic changes. Delete the unused `ForgotPasswordScreen.js` stub.
+- [x] **Expired Odoo session never detected** — `jsonRpc` keeps Odoo's `code` / name on the
+      error and fires a once-per-expiry handler; App.js clears local state and shows the login
+      screen with "Your session has expired. Please sign in again."
+- [x] **Logout never destroys the server session** — `logout()` POSTs `/web/session/destroy`
+      (skipped when the server itself reported the session gone).
+- [x] `KpiTaskDetail.js` link validation by pattern; the trimmed original is stored.
+- [x] `KpiActionBoard.js` reminder bell compares on the device clock.
+- [x] `fetchTaskById` throws on network failure; the board says "Couldn't reach the server" and
+      lets the same notification be tried again.
+- [x] `LoginManagementScreen.js` template save/reset go through `guard()`; a refused country
+      change reverts the row; `UsersScreen.js` reads the role and mobile results (the new
+      duplicate-number refusal shows as an error). `ForgotPasswordScreen.js` removed.
 
 ### Phase 5 — new features (all additive)
 Session & login
-- [ ] "Sign in again" prompt on an expired session (uses the Phase 4 hook).
-- [ ] Logout modals in `HomeScreen.js`: when tasks are running, show "N task(s) still running"
-      with **Pause all & log out** (opens the existing PauseReasonDialog with `{ taskId: null, count }`
-      and a `thenLogout` flag).
+- [x] "Sign in again" on an expired session: the login screen opens with "Your session has
+      expired. Please sign in again."
+- [x] Logout dialogs (Home tab bar and Profile) say "N task(s) still running" and offer
+      **Pause all & log out**, which pauses everything with the note "Logged out of the app"
+      and then signs out. Plain Log Out is unchanged.
 
 Reminders & alarms
-- [ ] Verify boot restore: notifee and expo-notifications ship boot receivers — confirm in their
-      manifests under `node_modules`; if either does not restore, document that the foreground sync
-      in App.js re-arms on next launch.
-- [ ] Repeats: on notifee `DELIVERED` for a repeating reminder (background handler in
-      `services/nativeWiring.js`), schedule the next occurrence via `reminderAlarm`.
-- [ ] `AlarmScreen` **Done** button → `completeReminder(id)` then `stopAlarm`.
-- [ ] Reminders editor: KRA/client picker (tree from `fetchClientTree`) writing `kra_id` to `saveReminder`.
+- [x] Boot restore checked: expo-notifications restores banners on boot (its manifest has the
+      boot receiver); notifee alarms are re-armed by the app's next foreground sync. Documented in
+      `services/reminderAlarm.js` and `screens/Reminders.js`.
+- [x] Repeats: an uncompleted daily / weekly reminder now rolls forward to its next occurrence on
+      the device (`utils/reminderSchedule.js` `rollForward`, tested), so it keeps ringing until Done.
+- [x] `AlarmScreen` **Done** button for reminders → marks it complete on the server (advances a
+      repeat), silences it, clears the snooze, opens Reminders.
+- [x] Reminders editor: "About (optional)" picker of client → project, saved as `kra_id`.
 
 Notifications & board
-- [ ] `HomeScreen.js` (~933-944): `addNotificationReceivedListener` → refetch the bell count while Home is mounted.
-- [ ] `NotificationsScreen.js`: "Action needed" counts only unread + unhandled; "Load more" paging
-      (server `offset` if `/kpi_notify/list` supports it, else client-side windowing).
-- [ ] `KpiActionBoard.js`: persist view mode + filters per uid (`board_prefs:<uid>` in `api/session.js`), restore on mount.
-- [ ] `ClientTaskQueue.js`: discard dialog takes a reason → `discardQueueTask(kpiId, reason)`.
+- [x] Home bell badge re-counts when a push arrives while Home is open.
+- [x] Notifications: "Action needed" badge counts unread action rows only; "Load older
+      notifications" pages past the first 100 (server `offset`).
+- [x] Action Board remembers the view (board / list) and the All / My toggle per user.
+- [x] Client Task Queue: the discard dialog takes an optional reason, sent to the client.
 
 ### Build hygiene (behaviour-neutral)
-- [ ] Monochrome notification icon in the `expo-notifications` plugin config (`assets/android-icon-monochrome.png` exists).
-- [ ] `android.blockedPermissions` for `SYSTEM_ALERT_WINDOW` and external storage; `allowBackup=false`;
-      `SCHEDULE_EXACT_ALARM` with `maxSdkVersion=32` beside `USE_EXACT_ALARM`.
-- [ ] `ensureAlarmPermission`: check `canUseFullScreenIntent` / exact-alarm status on Android 14+ and deep-link to the setting.
-- [ ] `.gitignore` `modules/**/android/build/` and `git rm --cached` the tracked build output.
+- [x] Monochrome notification icon (`assets/android-icon-monochrome.png`, colour #1E40AF) in the
+      `expo-notifications` plugin config — status-bar icon is no longer a white blob.
+- [x] `android.blockedPermissions` (`SYSTEM_ALERT_WINDOW`, external storage), `allowBackup=false`,
+      `SCHEDULE_EXACT_ALARM` capped at API 32 (`plugins/withAlarmLockScreen.js`). Verified in the
+      generated manifest.
+- [x] `ensureAlarmPermission` checks notifee's exact-alarm setting on Android 14+ and opens the
+      system switch when it is off. (`canUseFullScreenIntent` has no notifee API; not added.)
+- [x] `.gitignore` covers `modules/**/android/build/`; the tracked build output is removed from
+      the index.
 - [ ] Deferred on purpose (would change the connect flow): `https://` default and a restrictive `network_security_config`.
+
+### Attendance (feature from the 369Attendance work, app side committed here)
+- [x] App side: `screens/AttendanceScreen.js`, `services/attendance.js`, the Home bubble and the
+      Configuration card are committed (commit "Show HR attendance in the app…"); unit and render
+      tests pass.
+- [x] Server side deployed LOCALLY (28 Sep): `kra_kpi_attendance_bridge` 19.0.3.0.0 from
+      `C:\Projects\APK's\369Attendance\odoo_modules` copied into the Odoo addons folder, upgraded
+      from the command line, service restarted. `/kpi_config/get` now returns
+      `attendance_available` / `attendance_in_app`; `/kpi_attendance/status`, `/mine`, `/team`
+      answer; the company switch toggles and was put back to OFF.
+      Never leave a `.bak` folder inside the addons directory — Odoo 19 treats every folder there
+      as a module and refuses to load with "Invalid module name".
+- [ ] Production: upgrade `hr_attendance_369` + `kra_kpi_attendance_bridge` there too, then turn
+      the switch on in Configuration → Attendance.
+- [ ] On a device: the bubble appears for a user with an hr.employee record once the switch is
+      on; Me and Team views load; `/kpi_attendance/team` refuses users without team rights (admin
+      without an employee record got "Not authorized" locally — the bridge's rule, check it is
+      the intended one).
+
+### Still to verify on a device (needs the new APK)
+- [ ] Locked phone: the alarm still rings over the lock screen; Login Management does not show.
+- [ ] Logout with a running task → the dialog offers Pause all & log out; both paths work.
+- [ ] Reminder alarm → Done marks it complete; a daily reminder rings again the next day without
+      being completed.
+- [ ] Notification status-bar icon is the monochrome logo; Load older notifications appends.
 
 ---
 

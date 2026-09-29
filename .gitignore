@@ -68,3 +68,7 @@ scripts/deploy-upgrade.mjs
 .maestro/_url-fix.yaml
 .maestro/30-touch-nav.yaml
 .maestro/31-client-login.yaml
+
+# Gradle output of the local Expo module (compiled jars, R files, merged manifests)
+modules/**/android/build/
+modules/**/android/.cxx/

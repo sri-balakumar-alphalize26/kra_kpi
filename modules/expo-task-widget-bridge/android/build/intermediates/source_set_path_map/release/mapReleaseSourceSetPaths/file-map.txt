@@ -1,7 +1,0 @@
-expo.modules.taskwidgetbridge.expo-task-widget-bridge-pngs-0 C:\Projects\KRA_KPI\modules\expo-task-widget-bridge\android\build\generated\res\pngs\release
-expo.modules.taskwidgetbridge.expo-task-widget-bridge-resValues-1 C:\Projects\KRA_KPI\modules\expo-task-widget-bridge\android\build\generated\res\resValues\release
-expo.modules.taskwidgetbridge.expo-task-widget-bridge-mergeReleaseResources-2 C:\Projects\KRA_KPI\modules\expo-task-widget-bridge\android\build\intermediates\incremental\release\mergeReleaseResources\merged.dir
-expo.modules.taskwidgetbridge.expo-task-widget-bridge-mergeReleaseResources-3 C:\Projects\KRA_KPI\modules\expo-task-widget-bridge\android\build\intermediates\incremental\release\mergeReleaseResources\stripped.dir
-expo.modules.taskwidgetbridge.expo-task-widget-bridge-release-4 C:\Projects\KRA_KPI\modules\expo-task-widget-bridge\android\build\intermediates\merged_res\release\mergeReleaseResources
-expo.modules.taskwidgetbridge.expo-task-widget-bridge-main-5 C:\Projects\KRA_KPI\modules\expo-task-widget-bridge\android\src\main\res
-expo.modules.taskwidgetbridge.expo-task-widget-bridge-release-6 C:\Projects\KRA_KPI\modules\expo-task-widget-bridge\android\src\release\res

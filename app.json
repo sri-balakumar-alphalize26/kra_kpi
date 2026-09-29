@@ -25,7 +25,13 @@
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/adaptive-icon-foreground.png"
-      }
+      },
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "allowBackup": false
     },
     "ios": {
       "supportsTablet": true,
@@ -41,7 +47,13 @@
       "./plugins/withLiveTrackingWidget",
       "./plugins/withNotifeeRepo",
       "expo-web-browser",
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#1E40AF"
+        }
+      ],
       [
         "expo-image-picker",
         {
