@@ -81,7 +81,21 @@ export async function fetchConfig() {
     developers: (devs?.developers) || [],
     wa_group_jid: cfg?.wa_group_jid || '',
     wa_group_name: cfg?.wa_group_name || '',
+    // Attendance in the app. Both keys come from kra_kpi_attendance_bridge, not
+    // kra_kpi_module: a server without the bridge never sends them, so
+    // `=== true` reads "missing" as "not available" and the Configuration
+    // screen leaves the card out entirely.
+    attendance_available: cfg?.attendance_available === true,
+    attendance_in_app: cfg?.attendance_in_app === true,
   };
+}
+
+// The floating Attendance button on Home, company-wide. Served by the
+// attendance bridge; returns { status:false } on a server without it.
+export async function setAttendanceInApp(enabled) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, attendance_in_app: !!enabled };
+  return jsonRpc(serverUrl, '/kpi_config/set_attendance_in_app', { enabled: !!enabled });
 }
 
 // Minutes an admin has to accept a submitted task before it auto-accepts.

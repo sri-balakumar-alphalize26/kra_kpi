@@ -25,7 +25,7 @@ import { createLogger } from '../api/logger';
 import {
   fetchConfig, setUrgentNudge, setUserCountry, setMultitask, setDevWa,
   setClientApproval, setQueueNudge, setStandardHours, setAdminAccept, setBreakAlerts,
-  setSnapshotRetention, setReportRetention, setDailyReport,
+  setSnapshotRetention, setReportRetention, setDailyReport, setAttendanceInApp,
 } from '../services/config';
 import { fetchGroupEvents, setGroupEvent, testGroupEvent } from '../services/waGroup';
 
@@ -93,6 +93,11 @@ export default function ConfigurationScreen({ onBack }) {
   const [dailyCoverage, setDailyCoverage] = useState('yesterday');
   const [optPicker, setOptPicker] = useState(null);   // { title, options, current, onPick }
   const [adminAccept, setAdminAcceptVal] = useState('5');
+  // Attendance in the app. `available` is whether the server has the
+  // attendance bridge at all — without it the card is not rendered, so a
+  // database that never installed HR looks exactly as it did before.
+  const [attAvailable, setAttAvailable] = useState(false);
+  const [attEnabled, setAttEnabled] = useState(false);
   // A failed load used to leave the defaults on screen looking like saved
   // settings. Say so instead — a wrong number here changes how the team works.
   const [loadError, setLoadError] = useState('');
@@ -168,6 +173,8 @@ export default function ConfigurationScreen({ onBack }) {
       setAdminAcceptVal(String(c.admin_accept_minutes ?? 5));
       setWaGroupJid(c.wa_group_jid || '');
       setWaGroupName(c.wa_group_name || '');
+      setAttAvailable(!!c.attendance_available);
+      setAttEnabled(!!c.attendance_in_app);
       setLoadError('');
       // Which updates get posted. Pure configuration — no gateway involved — so
       // it must load even with the phone's WhatsApp offline. Its own try/catch:
@@ -400,6 +407,19 @@ export default function ConfigurationScreen({ onBack }) {
         ? { ...d, _wa: toLocal(dev.wa_number, dd, dl), _invalid: false } : d)));
       log.warn('saveDevWa', e?.message);
     }
+  };
+
+  // The new value is passed in, not read from state: RN state has not flushed
+  // when a Switch fires (same reason as saveDaily). The server echoes what it
+  // saved, and that echo wins over what was tapped.
+  const saveAttendance = async (next) => {
+    setAttEnabled(next);
+    const ok = await saveGuard('attendance', async () => {
+      const res = await setAttendanceInApp(next);
+      if (res && res.status !== false && typeof res.attendance_in_app === 'boolean') setAttEnabled(res.attendance_in_app);
+      return res;
+    });
+    if (!ok) setAttEnabled(!next);
   };
 
   // The tick, or the reason there is no tick — in the same slot, so the answer
@@ -732,6 +752,27 @@ export default function ConfigurationScreen({ onBack }) {
               words. The destination group is NOT chosen here: picking the wrong
               one posts to it, and doing that safely needs the group list, naming
               and confirmation that only the web screen has. */}
+          {/* 3b. Attendance — only when the attendance bridge is on the server.
+              One company-wide switch: it puts the floating Attendance button
+              on everyone's Home (developers and admins; never clients). */}
+          {attAvailable && (
+            <Card color="#0D9488" iconLib="mc" icon="calendar-check" title="Attendance">
+              <View style={s.switchRow}>
+                <Text style={[s.label, { marginBottom: 0, flex: 1 }]}>Show attendance in the app</Text>
+                <Switch
+                  value={attEnabled}
+                  onValueChange={() => saveAttendance(!attEnabled)}
+                  trackColor={{ true: COLORS.primary }}
+                />
+                {<SaveMark k="attendance" />}
+              </View>
+              <Text style={s.hint}>Users see their HR attendance — today, this week, the month and a
+                day-by-day history — behind a floating button on Home; admins also see the whole
+                team for a day. Check-in and check-out still come from Start / End Workday.
+                Clients never see it.</Text>
+            </Card>
+          )}
+
           <Card color="#25D366" iconLib="mc" icon="whatsapp" title="WhatsApp Group Reports">
             {waGroupJid ? (
               <View style={s.waDest}>

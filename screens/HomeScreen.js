@@ -47,6 +47,11 @@ import { publishWidgetState } from '../utils/taskWidget';
 import { publishLiveTrackingState } from '../utils/liveTrackingWidget';
 import { liveTrackingWidgetPlaced, setLiveTrackingWidgetEnabled } from '../modules/expo-task-widget-bridge';
 import { fetchLiveTracking } from '../services/liveTracking';
+// The floating Attendance bubble. Exists only while the admin's company-wide
+// switch is on (kra_kpi_attendance_bridge); a server without the bridge
+// answers notInstalled and the bubble is simply never drawn.
+import AttendanceBubble from '../components/AttendanceBubble';
+import { fetchAttendanceStatus, statusStyle } from '../services/attendance';
 // Clients aren't served by /kra_kpi/tasks/get (it returns nothing for them), so
 // their stats come from the same portal feed My Requests uses.
 import { getClientDashboard } from '../services/clientPortal';
@@ -2211,6 +2216,26 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, work
   }, [user?.uid]);
   const setAvatar = (v) => { AVATAR_CACHE[user?.uid ?? 'me'] = v; setAvatarState(v); };
 
+  // Attendance bubble: asked once per Home mount and again whenever the
+  // workday opens or ends, so the dot follows the day (grey → amber/green →
+  // stays). `enabled` already folds in the admin switch AND "not a client",
+  // so there is no role juggling here.
+  const [att, setAtt] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetchAttendanceStatus();
+        if (alive) setAtt(res && res.enabled ? res : null);
+      } catch (e) {
+        log.info('attendance status', e?.message);
+        if (alive) setAtt(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, [workdayOpen, dayDone]);
+  const attDot = statusStyle(att?.today?.status).dot;
+
   return (
     <View style={s.root}>
       <StatusBar style="dark" />
@@ -2225,6 +2250,16 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, work
         {tab === 'profile' && <ProfileTab user={user} onLogout={onLogout} dayDone={dayDone} avatar={avatar} setAvatar={setAvatar} />}
       </View>
       <TabBar active={tab} onChange={(t) => { log.info('tab switch', { from: tab, to: t }); setTab(t); }} onLogout={() => setLogoutOpen(true)} />
+
+      {/* Floating Attendance button — Home tab only, above the tab bar. Pulses
+          while the day is open (there is a check-in and no check-out yet). */}
+      {tab === 'home' && att?.enabled ? (
+        <AttendanceBubble
+          dotColor={attDot}
+          pulsing={!!att?.today?.open}
+          onPress={() => { log.info('open attendance'); onOpen('attendance'); }}
+        />
+      ) : null}
 
       {/* Logout confirm — blurred background */}
       <Modal visible={logoutOpen} transparent animationType="fade" onRequestClose={() => setLogoutOpen(false)}>

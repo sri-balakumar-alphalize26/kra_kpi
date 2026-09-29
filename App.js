@@ -39,6 +39,7 @@ import ReassignmentHistory from './screens/ReassignmentHistory';
 import ClientTaskQueue from './screens/ClientTaskQueue';
 import UserManual from './screens/UserManual';
 import Reminders from './screens/Reminders';
+import AttendanceScreen from './screens/AttendanceScreen';
 
 import AppLoginScreen from './screens/AppLoginScreen';
 import AlarmScreen from './screens/AlarmScreen';
@@ -894,6 +895,12 @@ function AppInner() {
       // My Work. No role gate here: the model's record rule scopes every row to
       // its owner, so this screen can only ever show the caller's own.
       return <Reminders onBack={home} uid={user?.uid} />;
+    if (appScreen === 'attendance')
+      // Behind the floating bubble on Home. Exists only while the admin's
+      // "Show attendance in the app" switch is on; the screen asks the server
+      // itself whether this person may see the team (admin / HR), so no role
+      // prop is needed here. /kpi_attendance/mine is self-scoped server-side.
+      return <AttendanceScreen onBack={home} />;
     // Upload screens share one component, differing only by docType.
     if (appScreen.startsWith('upload:'))
       return <UploadAmendments onBack={home} docType={appScreen.split(':')[1]} />;
