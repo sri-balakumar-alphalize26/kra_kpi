@@ -45,6 +45,7 @@ import AppLoginScreen from './screens/AppLoginScreen';
 import AlarmScreen from './screens/AlarmScreen';
 import ScreenTransition from './components/ScreenTransition';
 import { scheduleTaskAlarm, stopAlarm } from './services/alarm';
+import { completeReminder } from './services/reminderList';
 
 // notifee is a native module, present only in a build that bundles its native
 // side. Resolved on FIRST USE, not at import — same rule as expo-notifications
@@ -72,14 +73,15 @@ function getEventType() {
 import * as session from './api/session';
 import { getConnection, getRoleState, saveRoleState } from './api/session';
 import { loadHaptics } from './utils/haptics';
-import { jsonRpc } from './api/odooApi';
+import { jsonRpc, setSessionExpiredHandler } from './api/odooApi';
 import { parseWidgetLink } from './utils/widgetLink';
 import { clearWidgetState } from './utils/taskWidget';
 import { clearLiveTrackingState } from './utils/liveTrackingWidget';
+import { setLockScreenVisible } from './modules/expo-task-widget-bridge';
 import { createLogger } from './api/logger';
 import { registerForPushAsync, unregisterPush } from './services/push';
 import { fetchReminders } from './services/reminderList';
-import { syncReminderAlarms, clearReminderAlarms } from './services/reminderAlarm';
+import { syncReminderAlarms, clearReminderAlarms, clearTaskReminders } from './services/reminderAlarm';
 import { getWorkdayStatus } from './services/kpiActions';
 
 const log = createLogger('App');
@@ -109,6 +111,11 @@ export default function App() {
   useEffect(() => {
     // eslint-disable-next-line global-require
     require('./services/nativeWiring').wireNativeIntegrations();
+    // Behind the lock screen like any other app. The manifest's showWhenLocked
+    // exists for the alarm's cold start; AlarmScreen switches it on while it
+    // rings and off after (screens/AlarmScreen.js). Without this first "off",
+    // every screen stayed visible and usable on a locked phone.
+    setLockScreenVisible(false);
   }, []);
   return (
     <SafeAreaProvider>
@@ -185,6 +192,7 @@ function AppInner() {
   const pendingReportRef = useRef(null);   // report_id from a "daily report ready" tap before login
   const pendingScreenRef = useRef(null);   // destination from a widget tap before login
   const pendingInvoiceRef = useRef(null);  // invoice_id from an invoice notification tap before login
+  const pendingSnapshotRef = useRef(null); // snapshot_id from a "workday ended" tap before login
   const devLockedRef = useRef(false);      // latest devLocked for listeners/back-handler
   useEffect(() => { devLockedRef.current = devLocked; }, [devLocked]);
   // routeToTask is called from notification listeners registered once at mount,
@@ -286,6 +294,22 @@ function AppInner() {
     }
   };
 
+  // Route a "workday ended" / snapshot push to that day's snapshot. The push
+  // carries snapshot_id (kpi_notify._send_push) and, on an older server, an
+  // anchor kpi_id that is NOT the tap target — without this branch the tap
+  // opened whichever task that happened to be.
+  const routeToSnapshot = (snapshotId) => {
+    if (!snapshotId) return;
+    if (userRef.current) {
+      setFocusSnapshotId(snapshotId);
+      setFocusTaskId(null);
+      setFocusReportId(null);
+      setAppScreen('snapshots');
+    } else {
+      pendingSnapshotRef.current = snapshotId;
+    }
+  };
+
   // Keep a ref to `user` so listeners (registered once) see the latest value.
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
@@ -318,10 +342,39 @@ function AppInner() {
     log.info('alarm: stop pressed', { notifId: a?.notifId, taskId: a?.task?.id });
     setAlarmData(null);
     if (a?.notifId) await stopAlarm(a.notifId);
-    if (a?.task?.id) {
-      try { await session.removeReminder(a.task.id); } catch (_) {}
-      if (userRef.current) routeToTask(a.task.id);
+    if (!a?.task?.id) return;
+    // A REMINDER's id is not a task id. This branch used to be missing, so
+    // Stop on a reminder cleared the bell of whichever task shared that number
+    // and opened that unrelated task. A reminder's local state is its snooze
+    // (the schedule itself is the server's), and Stop opens Reminders — where
+    // tapping its notification already goes.
+    if (a.task.kind === 'reminder') {
+      try { await session.setReminderSnooze(a.task.id, null, user?.uid); } catch (_) {}
+      routeToReminders();
+      return;
     }
+    try { await session.removeReminder(a.task.id); } catch (_) {}
+    if (userRef.current) routeToTask(a.task.id);
+  };
+
+  // DONE (reminders only): silence it AND mark the reminder complete, which is
+  // what advances a daily / weekly one to its next date on the server. Stop
+  // alone left the reminder due, so it showed as overdue in the list until
+  // somebody opened it and pressed Done there.
+  const doneAlarmReminder = async () => {
+    const a = alarmData;
+    if (a?.task?.kind !== 'reminder') return stopAlarmAndClose();
+    log.info('alarm: done pressed', { notifId: a?.notifId, reminderId: a?.task?.id });
+    setAlarmData(null);
+    if (a?.notifId) await stopAlarm(a.notifId);
+    if (a?.task?.id) {
+      try { await session.setReminderSnooze(a.task.id, null, user?.uid); } catch (_) {}
+      try {
+        const res = await completeReminder(a.task.id);
+        if (res && res.status === false) log.warn('alarm: complete refused', res.message);
+      } catch (e) { log.warn('alarm: complete failed', e?.message); }
+    }
+    routeToReminders();
   };
 
   // SNOOZE: stop the current ring and re-schedule the same alarm 5 minutes out,
@@ -451,6 +504,13 @@ function AppInner() {
       routeToInvoice(invoiceId);
       return;
     }
+    if (pendingSnapshotRef.current) {
+      const snapshotId = pendingSnapshotRef.current;
+      pendingSnapshotRef.current = null;
+      log.info('cold-start tap flushed → snapshot', { snapshotId });
+      routeToSnapshot(snapshotId);
+      return;
+    }
     if (pendingScreenRef.current) {
       const link = pendingScreenRef.current;
       pendingScreenRef.current = null;
@@ -471,6 +531,9 @@ function AppInner() {
   // computer to work, and reading isn't work. Admins/clients are never gated.
   useEffect(() => {
     if (!user) return;
+    // Task reminders (the board's bell) are stored per user from here on. Set
+    // before anything renders, so the board reads THIS user's map on mount.
+    session.setReminderOwner(user.uid);
     let alive = true;
     setGateReady(false);   // role unknown until /kpi_user/info resolves → show a loader, never Home
     (async () => {
@@ -485,6 +548,11 @@ function AppInner() {
         const { serverUrl } = await getConnection();
         if (!serverUrl) { if (alive) { setDevLocked(false); } return; } // offline demo → Home
         const info = await jsonRpc(serverUrl, '/kpi_user/info', {});
+        // The route answers {status:false} when it hits an exception. That is a
+        // failure, not a role: read as one, kpiRole came back '' → "not a
+        // developer" → the board unlocked, and the empty role was cached for
+        // every offline launch after. Throw into the catch below instead.
+        if (info && info.status === false) throw new Error(info.message || '/kpi_user/info failed');
         const isAdmin = !!(info && (info.is_system || info.is_owner || info.is_admin));
         const isDev = !!(info && info.is_developer);
         if (!alive) return;
@@ -605,6 +673,7 @@ function AppInner() {
       // not the unrelated anchor task.
       if (data.invoice_id) routeToInvoice(data.invoice_id);
       else if (data.report_id) routeToReport(data.report_id);
+      else if (data.snapshot_id) routeToSnapshot(data.snapshot_id);
       else if (data.reminder_id) routeToReminders();
       else routeToTask(data.kpi_id);
     });
@@ -614,6 +683,7 @@ function AppInner() {
         const data = last?.notification?.request?.content?.data || {};
         if (data.invoice_id) { log.info('cold-start tap → invoice', { invoiceId: data.invoice_id }); routeToInvoice(data.invoice_id); }
         else if (data.report_id) { log.info('cold-start tap → report', { reportId: data.report_id }); routeToReport(data.report_id); }
+        else if (data.snapshot_id) { log.info('cold-start tap → snapshot', { snapshotId: data.snapshot_id }); routeToSnapshot(data.snapshot_id); }
         else if (data.reminder_id) { log.info('cold-start tap \u2192 reminders', { reminderId: data.reminder_id }); routeToReminders(); }
         else if (data.kpi_id) { log.info('cold-start notification tap', { kpiId: data.kpi_id }); routeToTask(data.kpi_id); }
       } catch (_) {}
@@ -667,13 +737,29 @@ function AppInner() {
     return () => sub.remove();
   }, []);
 
-  const logout = async () => {
+  const logout = async ({ skipServer = false } = {}) => {
     // Best-effort: stop this device receiving the previous user's banners.
     if (pushTokenRef.current) { unregisterPush(pushTokenRef.current); pushTokenRef.current = null; }
+    // End the session on the SERVER too. Only the stored copy was ever
+    // removed, so the cookie in the native jar stayed valid until Odoo expired
+    // it, and calls still in flight finished as the old user. Skipped when the
+    // server itself said the session is gone — there is nothing to destroy.
+    if (!skipServer) {
+      try {
+        const { serverUrl } = await getConnection();
+        if (serverUrl) await jsonRpc(serverUrl, '/web/session/destroy', {}, 8000);
+      } catch (e) { log.info('session destroy skipped', e?.message); }
+    }
     // Reminder alarms are scheduled with the OS, not with the server, so signing
     // out does not stop them. Without this the next person on this phone gets
     // the previous user's reminders — by name.
     clearReminderAlarms(user?.uid);
+    // Per-task reminders too ("remind me in 60 min" on a card): OS alarms and
+    // banners scheduled with this user's task names, which nothing cancelled, so
+    // the next person on the phone got a full-screen alarm for somebody else's
+    // task. Awaited, so the map is read before the owner below is cleared.
+    await clearTaskReminders();
+    session.setReminderOwner(null);
     // The home-screen widgets keep showing whatever was last written — the
     // previous user's running task and, for an admin, the whole team's day — on
     // a device nobody is signed in to. Both writers swallow their own errors.
@@ -708,6 +794,23 @@ function AppInner() {
     // it left the next account inheriting the previous one's workday.
     resetWorkdayCache();
   };
+  const logoutRef = useRef(logout);
+  logoutRef.current = logout;
+
+  // The server said the session is gone (api/odooApi.js). Until this existed a
+  // restarted server left the app on Home with every screen failing and no way
+  // back to login. Local state is cleared like a sign-out — nothing to destroy
+  // server-side — and the login screen says why.
+  const [sessionNotice, setSessionNotice] = useState('');
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      if (!userRef.current) return;
+      log.warn('session expired → login');
+      setSessionNotice('Your session has expired. Please sign in again.');
+      logoutRef.current({ skipServer: true });
+    });
+    return () => setSessionExpiredHandler(null);
+  }, []);
 
   // Splash keeps showing until both the animation and the session read finish.
   //
@@ -729,7 +832,7 @@ function AppInner() {
   // A ringing task alarm takes over EVERYTHING (even before login) so Stop is
   // always reachable to silence it. Wins over Home, the PIN gate, and login.
   if (alarmData) {
-    return <AlarmScreen alarm={alarmData} onStop={stopAlarmAndClose} onSnooze={snoozeAlarm} />;
+    return <AlarmScreen alarm={alarmData} onStop={stopAlarmAndClose} onSnooze={snoozeAlarm} onDone={doneAlarmReminder} />;
   }
 
   if (user) {
@@ -951,8 +1054,9 @@ function AppInner() {
   if (provisioned && !forceSetup) {
     return (
       <AppLoginScreen
-        onLogin={(u) => { setForceSetup(false); setUser(u); }}
+        onLogin={(u) => { setSessionNotice(''); setForceSetup(false); setUser(u); }}
         onNeedSetup={() => { setForceSetup(true); setScreen('connect'); }}
+        notice={sessionNotice}
       />
     );
   }

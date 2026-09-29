@@ -206,12 +206,51 @@ export async function jsonRpc(baseUrl, path, params = {}, timeout = TIMEOUT_MS, 
   }
   learnSkew(res);
   if (res.data?.error) {
-    const message = res.data.error.data?.message || 'Request failed';
+    const err = res.data.error;
+    const message = err.data?.message || 'Request failed';
     log.warn('jsonRpc ✗ odoo error', path, message);
-    throw new Error(message);
+    // Keep what Odoo said, not just its words: callers used to get a bare
+    // Error(message) and could not tell a dead session from anything else.
+    const e = new Error(message);
+    e.code = err.code;
+    e.odooName = err.data?.name || '';
+    if (isSessionExpired(err)) {
+      log.warn('jsonRpc ✗ session expired', path);
+      e.sessionExpired = true;
+      fireSessionExpired();
+    }
+    throw e;
   }
   log.info('jsonRpc ←', path, 'ok');
   return res.data?.result;
+}
+
+// ── Expired sessions ──────────────────────────────────────────────────────
+// Odoo reports a session that no longer exists as a JSON-RPC error: code 100,
+// data.name odoo.http.SessionExpiredException. Nothing looked for it, so after
+// a server restart the remembered session still booted to Home and every
+// screen showed "Request failed" with no way back to login. App.js registers
+// the handler; it fires ONCE per expiry, not once per failing poll.
+function isSessionExpired(err) {
+  return err?.code === 100 || /SessionExpired/i.test(err?.data?.name || '');
+}
+
+let sessionExpiredHandler = null;
+let sessionExpiredFiring = false;
+
+/** App.js: what to do when the server says the session is gone. */
+export function setSessionExpiredHandler(fn) {
+  sessionExpiredHandler = typeof fn === 'function' ? fn : null;
+  sessionExpiredFiring = false;
+}
+
+function fireSessionExpired() {
+  if (!sessionExpiredHandler || sessionExpiredFiring) return;
+  sessionExpiredFiring = true;
+  try { sessionExpiredHandler(); } catch (_) {}
+  // Polls already in flight will fail the same way in the next second or two;
+  // one notice is enough. A later expiry (after a new sign-in) fires again.
+  setTimeout(() => { sessionExpiredFiring = false; }, 10000);
 }
 
 // POST multipart/form-data to an @http.route(type='http') endpoint — the way the

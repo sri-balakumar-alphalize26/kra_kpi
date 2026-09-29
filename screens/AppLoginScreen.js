@@ -66,7 +66,9 @@ const WAVE_ACCENT =
   `C ${SW * 0.76},38 ${SW * 0.88},66 ${SW},50 ` +
   `L ${SW},${WAVE_H} Z`;
 
-export default function AppLoginScreen({ onLogin, onNeedSetup }) {
+// `notice`: a line to show on arrival, e.g. why the app is back at login
+// ("Your session has expired…"). Shown where errors show; cleared by typing on.
+export default function AppLoginScreen({ onLogin, onNeedSetup, notice = '' }) {
   const insets = useSafeAreaInsets();            // clear the phone's nav/gesture bar
   const [step, setStep] = useState('mobile');   // mobile | password | setpw | otp
   const [mobile, setMobile] = useState('');
@@ -76,7 +78,7 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
   const [newPw2, setNewPw2] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(notice || '');
   const [pendingUser, setPendingUser] = useState(null);
   const [needsSetup, setNeedsSetup] = useState(false);  // password still the default 1111 (not changed yet)
   const [resendIn, setResendIn] = useState(0);   // seconds left before "Resend" is allowed
@@ -217,7 +219,12 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
     log.info('request OTP', m);
     setBusy(true); setError('');
     try {
-      await requestOtp(m);              // generic — always proceeds
+      const r = await requestOtp(m);
+      // The route answers the same way for an unknown number and for a code it
+      // could not send, so `sent` is only ever false HERE for the latter: the
+      // number was confirmed by the login check a step ago. Waiting on a code
+      // that is not coming, with no message, was the one dead end on this screen.
+      if (!r.sent) return fail("Couldn't send the code right now. Try again in a few minutes, or contact your admin.");
       setCode(''); setNewPw(''); setNewPw2('');
       setResendIn(10);                  // 10s before a resend is allowed
       setStep('otp'); setBusy(false);
@@ -233,6 +240,15 @@ export default function AppLoginScreen({ onLogin, onNeedSetup }) {
     try {
       const res = await verifyOtp(mobile.replace(/[^\d]/g, ''), code.replace(/[^\d]/g, ''), newPw);
       if (!res.ok) return fail(res.error || 'Incorrect or expired code.');
+      if (!res.loggedIn) {
+        // The password is set but the server could not open a session. Back to
+        // the password step to sign in with it — not into the app with no uid.
+        log.info('OTP verified, password set, no session → password step');
+        setPw(''); setError(''); setNeedsSetup(false);
+        setStep('password'); setBusy(false);
+        setError('Your new password is set. Sign in with it to continue.');
+        return;
+      }
       log.info('OTP verified → entering app');
       await saveSession(res.user);
       onLogin(res.user);

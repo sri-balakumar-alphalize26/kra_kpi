@@ -11,6 +11,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import GradientBackground from '../components/GradientBackground';
 import { getAlarmSettings } from '../api/session';
 import { createLogger } from '../api/logger';
+// Guarded internally — a no-op on a build without the bridge.
+import { setLockScreenVisible } from '../modules/expo-task-widget-bridge';
 
 const log = createLogger('AlarmScreen');
 
@@ -43,7 +45,9 @@ function useClock() {
   };
 }
 
-export default function AlarmScreen({ alarm, onStop, onSnooze }) {
+// onDone: reminders only — mark the reminder complete (the server advances a
+// repeat to its next date) as well as silencing it. Absent → no Done button.
+export default function AlarmScreen({ alarm, onStop, onSnooze, onDone }) {
   const task = alarm?.task || {};
   // A reminder rings through this same screen. Only the wording differs --
   // telling someone their 'set time for this task is up' when they set a
@@ -57,6 +61,16 @@ export default function AlarmScreen({ alarm, onStop, onSnooze }) {
   const [settings, setSettings] = useState({ ringMins: 5, snoozeMins: 5 });
   const onStopRef = useRef(onStop);
   useEffect(() => { onStopRef.current = onStop; }, [onStop]);
+  // Over the lock screen ONLY while this is showing. The manifest lets the
+  // activity draw over the keyguard so a cold-start alarm can ring there; that
+  // used to apply to every screen, so a locked phone still showed — and let
+  // anyone use — whatever was open. App.js turns it off at start; this turns
+  // it on for the ring and off again when the alarm is dismissed.
+  useEffect(() => {
+    setLockScreenVisible(true);
+    return () => { setLockScreenVisible(false); };
+  }, []);
+
   useEffect(() => {
     log.info('screen: shown', { kind: alarm?.task?.kind || 'task', id: alarm?.task?.id, notifId: alarm?.notifId });
     let alive = true;
@@ -133,6 +147,15 @@ export default function AlarmScreen({ alarm, onStop, onSnooze }) {
           >
             <Text style={styles.stopTxt}>■  STOP</Text>
           </Pressable>
+          {isReminder && onDone ? (
+            <Pressable
+              onPress={onDone}
+              style={({ pressed }) => [styles.doneBtn, pressed && styles.pressed]}
+              android_ripple={{ color: '#ffffff33', borderless: false }}
+            >
+              <Text style={styles.doneTxt}>✓  Done</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             onPress={onSnooze}
             style={({ pressed }) => [styles.snoozeBtn, pressed && styles.pressed]}
@@ -182,5 +205,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: '#C7DDF7',
   },
   snoozeTxt: { color: '#1E40AF', fontSize: 15, fontWeight: '700' },
+  // Done (reminders): the same weight as Stop, in the app's blue.
+  doneBtn: {
+    backgroundColor: '#1E40AF', paddingVertical: 14, borderRadius: 16, alignItems: 'center',
+  },
+  doneTxt: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
   pressed: { opacity: 0.85 },
 });

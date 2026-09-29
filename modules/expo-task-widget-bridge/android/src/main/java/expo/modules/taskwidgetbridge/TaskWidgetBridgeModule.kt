@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -116,6 +117,30 @@ class TaskWidgetBridgeModule : Module() {
         context.packageManager.setComponentEnabledSetting(
           providerFor(providerName), state, PackageManager.DONT_KILL_APP,
         )
+        true
+      } catch (e: Exception) {
+        false
+      }
+    }
+
+    // Let the activity draw over the lock screen — or stop it doing so.
+    //
+    // The manifest gives MainActivity showWhenLocked / turnScreenOn so the
+    // alarm's full-screen intent can ring over the keyguard on a cold start.
+    // But MainActivity is the ONLY activity, so those flags applied to every
+    // screen: lock the phone on Login Management and anybody pressing power
+    // saw it, and could use it, without unlocking. The alarm screen turns this
+    // on while it is showing and off when it goes, so the rest of the app is
+    // behind the keyguard like any other app. API 27+; older Android keeps the
+    // manifest behaviour.
+    Function("setLockScreenVisible") { visible: Boolean ->
+      val activity = appContext.currentActivity ?: return@Function false
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) return@Function false
+      try {
+        activity.runOnUiThread {
+          activity.setShowWhenLocked(visible)
+          activity.setTurnScreenOn(visible)
+        }
         true
       } catch (e: Exception) {
         false

@@ -14,8 +14,23 @@ module.exports = function withAlarmLockScreen(config) {
         return name === '.MainActivity' || name.endsWith('.MainActivity');
       });
       if (main && main.$) {
+        // These apply to the WHOLE activity (it is the app's only one), so
+        // App.js switches them off at start through the bridge module and
+        // AlarmScreen switches them on only while it rings — otherwise every
+        // screen was visible, and usable, on a locked phone. The manifest
+        // flags stay so a cold start FROM the alarm still draws over the keyguard.
         main.$['android:showWhenLocked'] = 'true';   // draw over the lock screen
         main.$['android:turnScreenOn'] = 'true';      // wake the screen when launched
+      }
+    }
+    // SCHEDULE_EXACT_ALARM is the pre-Android-13 way to ask for exact alarms;
+    // USE_EXACT_ALARM (also declared in app.json) is the 13+ one. Declaring
+    // both without a ceiling makes Android 13+ show a "may schedule alarms"
+    // permission the app never uses. Cap the old one at API 32.
+    const perms = cfg.modResults.manifest['uses-permission'] || [];
+    for (const p of perms) {
+      if (p.$ && p.$['android:name'] === 'android.permission.SCHEDULE_EXACT_ALARM') {
+        p.$['android:maxSdkVersion'] = '32';
       }
     }
     return cfg;

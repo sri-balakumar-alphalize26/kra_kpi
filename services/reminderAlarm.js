@@ -18,8 +18,11 @@
 // nothing at all, silently.
 //
 // What it does NOT give, and why:
-//   * Nothing re-arms after a reboot. RECEIVE_BOOT_COMPLETED is declared in
-//     app.json but there is no native code behind it.
+//   * After a reboot, BANNERS come back on their own: expo-notifications ships a
+//     boot receiver (its AndroidManifest asks for RECEIVE_BOOT_COMPLETED and
+//     re-schedules its triggers). Notifee ALARMS are re-armed by the next sync,
+//     which App.js runs on every foreground — so an alarm due before the app is
+//     next opened after a reboot arrives as nothing. Known; no native code here.
 //   * A reminder created on the WEB arms only when this device next syncs. The
 //     server never pushes for reminders — kpi_reminder.py's own docstring calls
 //     that "deliberately not built yet".
@@ -28,9 +31,10 @@
 //     instant to schedule.
 import Notifications from './lazyNotifications';
 import { createLogger } from '../api/logger';
-import { ensureReminderChannel } from './reminders';
+import { ensureReminderChannel, cancelTaskReminder } from './reminders';
 import { getReminderAlarms, saveReminderAlarms, pruneReminderSnoozes,
-         getReminderModes } from '../api/session';
+         getReminderModes, getReminderSnoozes, setReminderSnooze,
+         getReminders, clearReminders } from '../api/session';
 import { alarmAvailable, scheduleTaskAlarm, stopAlarm } from './alarm';
 // The two decisions that can be silently wrong -- what the server's naive-UTC
 // string means, and which rows deserve an alarm -- live in utils/ as pure
@@ -45,7 +49,20 @@ const log = createLogger('ReminderAlarm');
  * Cheap to call often: an unchanged reminder is left alone rather than cancelled
  * and re-created, so repeated syncs do not churn the OS's timer list.
  */
-export async function syncReminderAlarms(rows, uid) {
+// One sync at a time. The foreground handler in App.js and the Reminders
+// screen's load both call this, and a notification tap fires both at once:
+// each read the saved map, saw no alarm, scheduled one, and whichever wrote
+// last won — the other alarm was orphaned, rang as a duplicate, and Stop could
+// only silence one. Queued, the second run sees the first run's map.
+let syncChain = Promise.resolve();
+
+export function syncReminderAlarms(rows, uid) {
+  const run = syncChain.then(() => syncReminderAlarmsNow(rows, uid));
+  syncChain = run.catch(() => {});
+  return run;
+}
+
+async function syncReminderAlarmsNow(rows, uid) {
   try {
     const now = Date.now();
     const want = armableReminders(rows, now);
@@ -102,11 +119,16 @@ export async function syncReminderAlarms(rows, uid) {
       // scheduled list, so `live` cannot vouch for it and `was.kind` is checked
       // instead.
       //
-      // `was.kind === wantKind` is load-bearing. Switching a reminder between
+      // `wanted === wantKind` is load-bearing. Switching a reminder between
       // Notify and Alarm does NOT change its time, so without this the row reads
       // as unchanged, the old scheduling survives, and the reminder keeps firing
       // the way it used to -- or fires twice, once from each mechanism.
-      if (was && was.whenIso === whenIso && was.notifId && was.kind === wantKind
+      //
+      // Compared against what was ASKED for, not what was armed: an alarm that
+      // degraded to a banner (permission refused) is stored as kind 'banner',
+      // and comparing that with a wanted 'alarm' tore the banner down and
+      // re-armed it on every sync — plus a permission prompt each time.
+      if (was && was.whenIso === whenIso && was.notifId && (was.wanted || was.kind) === wantKind
           && (was.kind === 'alarm' || live.has(was.notifId))) {
         next[r.id] = was;
         continue;
@@ -122,7 +144,7 @@ export async function syncReminderAlarms(rows, uid) {
         const notifId = await scheduleTaskAlarm(
           { kind: 'reminder', id: r.id, name: r.name }, r.at, '');
         if (notifId) {
-          next[r.id] = { notifId, whenIso, kind: 'alarm' };
+          next[r.id] = { notifId, whenIso, kind: 'alarm', wanted: 'alarm' };
           armed += 1;
           continue;
         }
@@ -154,7 +176,7 @@ export async function syncReminderAlarms(rows, uid) {
             channelId,
           },
         });
-        next[r.id] = { notifId, whenIso, kind: 'banner' };
+        next[r.id] = { notifId, whenIso, kind: 'banner', wanted: wantKind };
         armed += 1;
       } catch (e) {
         log.warn('arm failed', { id: r.id, error: e?.message });
@@ -172,6 +194,17 @@ export async function syncReminderAlarms(rows, uid) {
           cancelled += 1;
         } catch (_) {}
       }
+    }
+    // A SNOOZED reminder that is no longer wanted (deleted or switched off while
+    // snoozed). Its snooze alarm has an id of its own, held only in the snooze
+    // map, so cancelling the original above left the snooze to ring anyway.
+    for (const [id, v] of Object.entries(snoozed || {})) {
+      if (next[id]) continue;
+      try {
+        if (v && v.notifId) await stopAlarm(v.notifId);
+        await setReminderSnooze(id, null, uid);
+        cancelled += 1;
+      } catch (_) {}
     }
 
     await saveReminderAlarms(uid, next);
@@ -201,8 +234,39 @@ export async function clearReminderAlarms(uid) {
       }
     }
     await saveReminderAlarms(uid, {});
+    // Snoozes too: each holds its own alarm id, and a snoozed reminder used to
+    // outlive the sign-out and ring for the next person, with this user's text.
+    const snoozes = await getReminderSnoozes(uid);
+    for (const [id, v] of Object.entries(snoozes || {})) {
+      try {
+        if (v && v.notifId) await stopAlarm(v.notifId);
+        await setReminderSnooze(id, null, uid);
+      } catch (_) {}
+    }
     log.info('cleared');
   } catch (e) {
     log.warn('clear failed', e?.message);
+  }
+}
+
+// Drop every PER-TASK reminder (the board's bell: "remind me in 60 min"). For
+// logout, like clearReminderAlarms: these are OS alarms and banners scheduled
+// with this user's task names, and nothing used to cancel them, so the next
+// person on the phone got a full-screen alarm for somebody else's task and a
+// Stop button that opened it.
+export async function clearTaskReminders() {
+  try {
+    const map = await getReminders();
+    for (const rem of Object.values(map || {})) {
+      if (!rem || !rem.notifId) continue;
+      try {
+        if (rem.mode === 'alarm') await stopAlarm(rem.notifId);
+        else await cancelTaskReminder(rem.notifId);
+      } catch (_) {}
+    }
+    await clearReminders();
+    log.info('task reminders cleared', { count: Object.keys(map || {}).length });
+  } catch (e) {
+    log.warn('task reminder clear failed', e?.message);
   }
 }

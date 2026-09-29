@@ -99,6 +99,18 @@ export function setLiveTrackingWidgetEnabled(enabled) {
   return call('setWidgetEnabled', LIVE_TRACKING, !!enabled);
 }
 
+/**
+ * Let the app draw over the lock screen (true) or sit behind it (false).
+ *
+ * The manifest allows it for the whole app, so the alarm can ring over the
+ * keyguard on a cold start; that made every screen visible and usable on a
+ * locked phone. AlarmScreen turns it on while it shows and off when it goes;
+ * App.js turns it off once at start. No-op where the bridge is absent.
+ */
+export function setLockScreenVisible(visible) {
+  return call('setLockScreenVisible', !!visible);
+}
+
 export default {
   widgetBridgeAvailable,
   refreshTaskWidget,
@@ -106,4 +118,5 @@ export default {
   taskWidgetPlaced,
   liveTrackingWidgetPlaced,
   setLiveTrackingWidgetEnabled,
+  setLockScreenVisible,
 };

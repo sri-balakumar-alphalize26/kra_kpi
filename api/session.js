@@ -168,9 +168,34 @@ export async function clearAvatar(uid) {
 
 const K_REMINDERS = 'kpi_reminders';
 
+// PER USER. The map used to live under one key for the whole device, so the
+// next person to sign in on a shared tablet inherited the previous one's task
+// bells — and their OS alarms, which rang with the previous person's task name.
+// The owner is set by App.js whenever the signed-in user changes; the callers
+// (the board, the alarm screen) need not know. The first read for a user adopts
+// whatever the old shared key held, so nobody loses a reminder in the change.
+let reminderOwner = null;
+
+export function setReminderOwner(uid) {
+  reminderOwner = uid ?? null;
+}
+
+function remindersKey() {
+  return reminderOwner == null ? K_REMINDERS : `${K_REMINDERS}:${reminderOwner}`;
+}
+
 export async function getReminders() {
   try {
-    const raw = await AsyncStorage.getItem(K_REMINDERS);
+    const key = remindersKey();
+    let raw = await AsyncStorage.getItem(key);
+    if (raw == null && key !== K_REMINDERS) {
+      // One-time migration from the shared key.
+      raw = await AsyncStorage.getItem(K_REMINDERS);
+      if (raw != null) {
+        await AsyncStorage.setItem(key, raw);
+        await AsyncStorage.removeItem(K_REMINDERS);
+      }
+    }
     return raw ? (JSON.parse(raw) || {}) : {};
   } catch (_) {
     return {};
@@ -181,7 +206,7 @@ export async function setReminder(taskId, entry) {
   try {
     const map = await getReminders();
     map[String(taskId)] = entry;   // { notifId, whenIso }
-    await AsyncStorage.setItem(K_REMINDERS, JSON.stringify(map));
+    await AsyncStorage.setItem(remindersKey(), JSON.stringify(map));
   } catch (_) {}
 }
 
@@ -190,8 +215,16 @@ export async function removeReminder(taskId) {
     const map = await getReminders();
     if (map[String(taskId)] !== undefined) {
       delete map[String(taskId)];
-      await AsyncStorage.setItem(K_REMINDERS, JSON.stringify(map));
+      await AsyncStorage.setItem(remindersKey(), JSON.stringify(map));
     }
+  } catch (_) {}
+}
+
+/** Forget every task reminder of the current owner (the OS side is cancelled
+ *  by services/reminderAlarm.clearTaskReminders, which calls this last). */
+export async function clearReminders() {
+  try {
+    await AsyncStorage.removeItem(remindersKey());
   } catch (_) {}
 }
 
@@ -403,6 +436,28 @@ export async function pruneReminderSnoozes(uid, nowMs) {
 //
 // ABSENT MEANS 'alarm'. Every existing reminder rings today, and a default of
 // 'notify' would silence all of them on upgrade — nobody asked for that.
+// ── Action Board preferences (per user, this device) ─────────────────────
+// The view (board / list) and the All / My toggle, so the board opens the way
+// it was left rather than snapping back to the defaults on every visit.
+const K_BOARD_PREFS = 'board_prefs';
+
+export async function getBoardPrefs(uid) {
+  try {
+    const raw = await AsyncStorage.getItem(`${K_BOARD_PREFS}:${uid ?? 'me'}`);
+    const o = raw ? JSON.parse(raw) : null;
+    return (o && typeof o === 'object') ? o : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+export async function saveBoardPrefs(uid, prefs) {
+  try {
+    const cur = await getBoardPrefs(uid);
+    await AsyncStorage.setItem(`${K_BOARD_PREFS}:${uid ?? 'me'}`, JSON.stringify({ ...cur, ...(prefs || {}) }));
+  } catch (_) {}
+}
+
 const K_REMINDER_MODE = 'kpi_reminder_mode';
 
 export async function getReminderModes(uid) {

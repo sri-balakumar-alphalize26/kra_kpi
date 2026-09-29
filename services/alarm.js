@@ -35,6 +35,7 @@ let notifee = null;
 // AndroidVisibility is gone from this list on purpose: lockscreen visibility now
 // travels with the channel, which expo-notifications creates (ExpoVisibility).
 let AndroidImportance = {}, AndroidCategory = {}, TriggerType = {}, AuthorizationStatus = {};
+let AndroidNotificationSetting = {};
 
 // Loaded on FIRST USE, not at import.
 //
@@ -75,6 +76,7 @@ function loadNotifee() {
     AndroidCategory = nf.AndroidCategory;
     TriggerType = nf.TriggerType;
     AuthorizationStatus = nf.AuthorizationStatus;
+    AndroidNotificationSetting = nf.AndroidNotificationSetting || {};
     log.info('notifee loaded (native module present)');
   } catch (e) {
     notifee = null;
@@ -143,6 +145,21 @@ export async function ensureAlarmPermission() {
     // authorizationStatus: 0=denied, 1=authorized, 2=provisional. If not granted,
     // the OS will suppress the alarm — this log is the first place to look.
     log.info('permission', { authorizationStatus: settings?.authorizationStatus, granted });
+    // Android 14 can revoke EXACT alarms per app (Settings → Alarms & reminders),
+    // and this function's own comment claimed to check that while it never did.
+    // Without exact alarms a trigger fires late or not at all, so when notifee
+    // reports them off, open the switch instead of ringing late. Best-effort.
+    try {
+      if (Platform.OS === 'android' && AndroidNotificationSetting.DISABLED != null) {
+        const s = await notifee.getNotificationSettings();
+        if (s?.android?.alarm === AndroidNotificationSetting.DISABLED) {
+          log.warn('exact alarms are off for this app — opening the setting');
+          await notifee.openAlarmPermissionSettings();
+        }
+      }
+    } catch (e) {
+      log.info('exact-alarm check skipped', e?.message);
+    }
     return granted;
   } catch (e) {
     log.warn('permission failed', e?.message);

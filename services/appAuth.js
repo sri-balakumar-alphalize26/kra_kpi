@@ -83,8 +83,14 @@ export async function verifyOtp(mobile, code, newPassword) {
     mobile, code, new_password: newPassword, device: deviceName(),
   }, undefined, db);
   if (!res?.status) return { ok: false, error: res?.error || 'Could not verify.' };
+  // The server sets the password first and logs the caller in second. When
+  // the second step fails it answers {status:true, logged_in:false} with no
+  // uid — the password IS changed, but there is no session. This used to be
+  // reported as a login, and the app saved a user with no uid and walked in.
+  if (res.logged_in === false || !res.uid) return { ok: true, loggedIn: false };
   return {
     ok: true,
+    loggedIn: true,
     user: { name: res.name, username: res.login, uid: res.uid, db, serverUrl, mobile: await formatLoginMobile(mobile) },
   };
 }
