@@ -9,18 +9,47 @@
 
 const MAX_ROWS = 3;
 
+// "A timer is running" is activity_kind === 'task' (or the older on_task flag).
+// NOT `active`: on this route `active` means "heartbeat is fresh" — at the desk —
+// and someone whose laptop slept through a meeting is still on their task.
+function onTask(r) {
+  return r.activity_kind === 'task' || !!r.on_task;
+}
+
+// Away from the desk but working today: a declared break, lunch or meeting.
+function away(r) {
+  return r.activity_kind === 'break' || r.activity_kind === 'meeting' || r.activity_kind === 'lunch';
+}
+
 // Who an admin most wants to see first. Someone actively on a task is the point
 // of the screen; someone absent is the least urgent thing to spend a row on.
 // Ranked rather than filtered, so a quiet day still fills the widget instead of
 // showing an empty card that reads as broken.
 function rank(r) {
-  if (r.active) return 0;                        // a timer is running
-  if (r.activity_kind === 'break'
-      || r.activity_kind === 'meeting'
-      || r.activity_kind === 'lunch') return 1;  // away, but working today
+  if (onTask(r)) return 0;                       // a timer is running
+  if (away(r)) return 1;                         // away, but working today
   if (r.day_done) return 2;                      // finished
   if (r.started) return 3;                       // present, nothing running
   return 4;                                      // absent / offline
+}
+
+// The header's "as of" clock, as HH:MM in the device's time zone.
+//
+// The route sends this as a bare UTC datetime ("2026-09-27 05:10:00"): shown as
+// it arrives, an IST admin read "as of 05:10" at 10:40, and the widget header had
+// a full date and time pushing the title out. Accepts the fixed server (HH:MM)
+// and the old one alike, so the widget is right whichever the phone talks to.
+function asOfClock(v) {
+  if (!v) return '';
+  const s = String(v).trim();
+  if (/^\d{1,2}:\d{2}$/.test(s)) return s;
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::\d{2})?(?:\.\d+)?(Z)?$/.exec(s);
+  if (!m) return s;
+  const t = Date.parse(`${m[1]}T${m[2]}:00Z`);   // bare = UTC, exactly as Odoo stores it
+  if (Number.isNaN(t)) return s;
+  const d = new Date(t);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // One line of "what are they doing". activity_label is the server's own wording
@@ -52,7 +81,7 @@ function shapeLiveTracking(res) {
   const total = Number.isFinite(res.total) ? res.total : all.length;
 
   if (!all.length) {
-    return { ok: false, message: 'Nobody on the team yet', as_of: res.as_of || '', rows: [], more: 0 };
+    return { ok: false, message: 'Nobody on the team yet', as_of: asOfClock(res.as_of), rows: [], more: 0 };
   }
 
   // Stable within a rank: the server's order is already meaningful, and
@@ -64,13 +93,14 @@ function shapeLiveTracking(res) {
     .map((x) => x.r);
 
   const rows = ordered.slice(0, MAX_ROWS).map((r) => ({
+    // So a tap on the row can open that person (plugins/withLiveTrackingWidget.js
+    // → krakpi://widget/livetracking?user=<id>). 0 when the server sent none.
+    user_id: Number(r.user_id) || 0,
     name: r.name || '—',
     what: whatFor(r),
     // Blank rather than '0s' when nothing is running: a time next to "Absent"
     // invites the reader to believe it means something.
-    time: r.active || r.activity_kind === 'break' || r.activity_kind === 'meeting'
-      ? (r.elapsed_display || '')
-      : '',
+    time: onTask(r) || away(r) ? (r.elapsed_display || '') : '',
   }));
 
   const present = Number.isFinite(res.present_count) ? res.present_count : null;
@@ -84,7 +114,7 @@ function shapeLiveTracking(res) {
 
   return {
     ok: true,
-    as_of: res.as_of || '',
+    as_of: asOfClock(res.as_of),
     summary: bits.join(' · ') || `${total} on the team`,
     rows,
     more: Math.max(0, ordered.length - rows.length),
@@ -96,4 +126,4 @@ function signedOutState() {
   return { ok: false, message: 'Sign in to see Live Tracking', as_of: '', rows: [], more: 0 };
 }
 
-module.exports = { shapeLiveTracking, signedOutState, MAX_ROWS };
+module.exports = { shapeLiveTracking, signedOutState, asOfClock, MAX_ROWS };

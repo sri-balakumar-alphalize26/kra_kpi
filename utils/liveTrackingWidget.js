@@ -36,7 +36,15 @@ const WIDGET_FILE = 'live_tracking_widget.json';
 
 // Skip writes that would not change anything. Called on every poll, and rewriting
 // an identical file is pure IO for nothing.
+//
+// EXCEPT every TOUCH_MS. The file carries `published_at`, which the widget reads
+// to tell "the app is open and the team has not moved" from "the app was closed
+// an hour ago" (plugins/withLiveTrackingWidget.js marks the latter stale). An
+// unchanged payload is therefore re-stamped now and then, or a quiet hour would be
+// flagged stale with the app in the foreground. Same rule as utils/taskWidget.js.
+const TOUCH_MS = 5 * 60 * 1000;
 let lastPayload = '';
+let lastWriteAt = 0;
 
 function fileUri() {
   const dir = FileSystem.documentDirectory;
@@ -49,10 +57,12 @@ async function put(state) {
   if (!uri) return;
   try {
     const payload = JSON.stringify(state);
-    if (payload === lastPayload) return;
+    const now = Date.now();
+    if (payload === lastPayload && now - lastWriteAt < TOUCH_MS) return;
     lastPayload = payload;
+    lastWriteAt = now;
 
-    await FileSystem.writeAsStringAsync(uri, payload);
+    await FileSystem.writeAsStringAsync(uri, JSON.stringify({ ...state, published_at: now }));
     // Then tell Android to repaint. Writing the file is only half the channel —
     // without this the widget shows the new state whenever the OS next gets round
     // to it, and its floor is 30 MINUTES.

@@ -25,7 +25,7 @@
 //
 // WHY NOT A RemoteViewsService. A real adapter-backed list means a separate
 // service process and a factory, for three rows on a home screen. The rows are
-// three fixed Views toggled with setViewVisibility instead.
+// three fixed LinearLayouts toggled with setViewVisibility instead.
 //
 // Applied at prebuild/EAS-build time; needs a rebuild and CANNOT work in Expo Go.
 
@@ -62,6 +62,14 @@ import org.json.JSONObject
 import java.io.File
 
 class ${WIDGET_CLASS} : AppWidgetProvider() {
+
+    companion object {
+        // Older than this and the app has not touched the file for a while: it is
+        // closed, and the team's day on screen is history. utils/liveTrackingWidget.js
+        // re-stamps an unchanged file every 5 min while the app is open.
+        private const val STALE_MS = 20L * 60L * 1000L
+        private const val STALE_TEXT = "Open the app to refresh"
+    }
 
     override fun onUpdate(
         context: Context,
@@ -118,6 +126,8 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
 
         val ok = state.optBoolean("ok", false)
         views.setTextViewText(R.id.lt_as_of, state.optString("as_of", ""))
+        val publishedAt = state.optLong("published_at", 0L)
+        val stale = publishedAt > 0L && System.currentTimeMillis() - publishedAt > STALE_MS
 
         val rowIds = intArrayOf(R.id.lt_row_0, R.id.lt_row_1, R.id.lt_row_2)
         val nameIds = intArrayOf(R.id.lt_name_0, R.id.lt_name_1, R.id.lt_name_2)
@@ -151,6 +161,12 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
                 views.setTextViewText(whatIds[i], r?.optString("what", "") ?: "")
                 views.setTextViewText(timeIds[i], r?.optString("time", "") ?: "")
                 views.setViewVisibility(rowIds[i], View.VISIBLE)
+                // A tap on the row opens THAT person, not the whole list. Request
+                // codes 10.. keep the three rows' intents distinct from each other
+                // and from the card's. No id → the row behaves like the card.
+                val uid = r?.optLong("user_id", 0L) ?: 0L
+                val link = if (uid > 0L) "${DEEP_LINK}?user=" + uid else "${DEEP_LINK}"
+                views.setOnClickPendingIntent(rowIds[i], pendingLink(context, 10 + i, link))
             } else {
                 views.setViewVisibility(rowIds[i], View.GONE)
             }
@@ -158,9 +174,13 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
 
         // Count everyone the widget could not show, including people hidden purely
         // because it was resized smaller — otherwise shrinking it silently loses
-        // people with no sign that anything is missing.
+        // people with no sign that anything is missing. A stale card says so in
+        // the same line instead: the count is history too.
         val hidden = (rows?.length() ?: 0) - shown + state.optInt("more", 0)
-        if (hidden > 0 && shown > 0) {
+        if (stale) {
+            views.setTextViewText(R.id.lt_more, STALE_TEXT)
+            views.setViewVisibility(R.id.lt_more, View.VISIBLE)
+        } else if (hidden > 0 && shown > 0) {
             views.setTextViewText(R.id.lt_more, "+" + hidden + " more")
             views.setViewVisibility(R.id.lt_more, View.VISIBLE)
         } else {
@@ -171,17 +191,20 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
         mgr.updateAppWidget(widgetId, views)
     }
 
-    /** Opens Live Tracking itself, not just the app. */
-    private fun bindTap(context: Context, views: RemoteViews) {
-        val launch = Intent(Intent.ACTION_VIEW, Uri.parse("${DEEP_LINK}")).apply {
+    /** A tap that opens the app on one of its own links (ACTION_VIEW on the app's
+     *  scheme; setPackage keeps it inside this app). App.js routes the rest. */
+    private fun pendingLink(context: Context, requestCode: Int, url: String): PendingIntent {
+        val launch = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             setPackage(context.packageName)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        views.setOnClickPendingIntent(
-            R.id.lt_root,
-            PendingIntent.getActivity(context, 1, launch, flags),
-        )
+        return PendingIntent.getActivity(context, requestCode, launch, flags)
+    }
+
+    /** Opens Live Tracking itself, not just the app. */
+    private fun bindTap(context: Context, views: RemoteViews) {
+        views.setOnClickPendingIntent(R.id.lt_root, pendingLink(context, 1, "${DEEP_LINK}"))
     }
 }
 `;
@@ -256,6 +279,14 @@ const rowXml = (i) => `
         </LinearLayout>
 `;
 
+//
+// RemoteViews inflates ONLY classes annotated @RemoteViews.RemoteView, and plain
+// android.view.View is not one of them. A bare <View> here makes the launcher
+// throw "Class not allowed to be inflated android.view.View" and draw its error
+// tile in place of the widget — which is exactly what happened when the accent
+// bar and dot were first added as <View>s. Decorative shapes are ImageViews with
+// a background instead; they draw identically. plugins/__tests__/
+// widgetLayouts.test.js checks every tag against the RemoteViews allow-list.
 const widgetLayoutXml = `<?xml version="1.0" encoding="utf-8"?>
 <!-- GENERATED by plugins/withLiveTrackingWidget.js -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -272,11 +303,12 @@ const widgetLayoutXml = `<?xml version="1.0" encoding="utf-8"?>
         android:orientation="horizontal"
         android:gravity="center_vertical">
 
-        <View
+        <ImageView
             android:layout_width="3dp"
             android:layout_height="13dp"
             android:layout_marginEnd="7dp"
             android:layout_marginRight="7dp"
+            android:importantForAccessibility="no"
             android:background="@drawable/widget_accent_bar" />
 
         <TextView
@@ -309,12 +341,13 @@ const widgetLayoutXml = `<?xml version="1.0" encoding="utf-8"?>
         android:textStyle="bold"
         android:textColor="@color/widget_accent" />
 
-    <View
+    <ImageView
         android:id="@+id/lt_divider"
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_marginTop="8dp"
         android:layout_marginBottom="4dp"
+        android:importantForAccessibility="no"
         android:background="@color/widget_divider" />
 ${[0, 1, 2].map(rowXml).join('')}
     <TextView
@@ -422,3 +455,8 @@ module.exports = function withLiveTrackingWidget(config) {
 
   return config;
 };
+
+// The templates on their own, for plugins/__tests__/widgetLayouts.test.js. Expo
+// reads only the function above, so this changes nothing about how the plugin runs.
+module.exports.widgetLayoutXml = widgetLayoutXml;
+module.exports.providerKt = providerKt;

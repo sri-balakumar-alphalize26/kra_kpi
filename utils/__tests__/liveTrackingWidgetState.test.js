@@ -4,7 +4,7 @@
 // loses the counts, the result is a blank-looking card on an admin's home screen
 // and nothing, anywhere, says why — so the decisions are pinned here.
 
-const { shapeLiveTracking, signedOutState } = require('../liveTrackingWidgetState');
+const { shapeLiveTracking, signedOutState, asOfClock } = require('../liveTrackingWidgetState');
 
 // One row in the shape /kpi_owner/live_tracking sends.
 const person = (over = {}) => ({
@@ -59,6 +59,27 @@ describe('who gets the three rows', () => {
     expect(s.rows[0].name).toBe('OnBreak');
   });
 
+  it('ranks by being ON A TASK, not by a fresh heartbeat', () => {
+    // `active` on this route means "heartbeat fresh". A laptop that slept
+    // through a meeting still belongs above someone idle at their desk.
+    const s = shapeLiveTracking(payload({
+      rows: [
+        person({ name: 'IdleButAtDesk', active: true, activity_kind: 'idle' }),
+        person({ name: 'OnTaskAsleep', active: false, activity_kind: 'task',
+          activity_label: 'Fix login bug', elapsed_display: '1h 2min' }),
+      ],
+    }));
+    expect(s.rows.map((r) => r.name)).toEqual(['OnTaskAsleep', 'IdleButAtDesk']);
+    expect(s.rows[0].time).toBe('1h 2min');
+    expect(s.rows[1].time).toBe('');
+  });
+
+  it('carries each person\'s id so a tap on the row can open them', () => {
+    const s = shapeLiveTracking(payload({ rows: [person({ user_id: 17 }), person({ user_id: undefined, name: 'NoId' })] }));
+    expect(s.rows[0].user_id).toBe(17);
+    expect(s.rows[1].user_id).toBe(0);
+  });
+
   it('keeps the server order among equals, so it does not reshuffle between refreshes', () => {
     const rows = ['A', 'B', 'C'].map((n) => person({ name: n }));
     expect(shapeLiveTracking(payload({ rows })).rows.map((r) => r.name))
@@ -106,6 +127,33 @@ describe('what each row says', () => {
         elapsed_display: '3h 4min' })],
     }));
     expect(s.rows[0].time).toBe('');
+  });
+});
+
+describe('the "as of" clock', () => {
+  it('keeps HH:MM as it is', () => {
+    expect(asOfClock('09:41')).toBe('09:41');
+    expect(asOfClock('9:05')).toBe('9:05');
+  });
+
+  it('turns the bare UTC datetime the old route sends into local HH:MM', () => {
+    // Whatever zone the test runs in, the answer is that zone's wall clock.
+    const d = new Date(Date.parse('2026-09-27T05:10:00Z'));
+    const pad = (n) => String(n).padStart(2, '0');
+    const local = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    expect(asOfClock('2026-09-27 05:10:00')).toBe(local);
+    expect(asOfClock('2026-09-27T05:10:00Z')).toBe(local);
+  });
+
+  it('passes anything else through untouched, and blanks nothing', () => {
+    expect(asOfClock('')).toBe('');
+    expect(asOfClock(null)).toBe('');
+    expect(asOfClock('later')).toBe('later');
+  });
+
+  it('is what the widget header gets', () => {
+    expect(shapeLiveTracking(payload({ as_of: '2026-09-27 05:10:00', rows: [person()] })).as_of)
+      .toMatch(/^\d{2}:\d{2}$/);
   });
 });
 

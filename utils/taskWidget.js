@@ -24,22 +24,63 @@ import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { createLogger } from '../api/logger';
+// The measured device-minus-server clock offset. The widget ticks on the device
+// clock, so every server anchor is shifted by it — the app's own timers correct
+// for the same offset through serverNow(), and the two must agree.
+import { clockSkewMs } from '../api/odooApi';
 // Guarded internally — no-ops in Expo Go and on any build made before the native
 // module existed, so importing it is always safe.
 import { refreshTaskWidget } from '../modules/expo-task-widget-bridge';
+// The decisions that can be silently wrong — which task, which anchors, what the
+// button does — are pure and unit-tested. This file only writes the file.
+import { shapeTaskWidget, emptyTaskWidgetState } from './taskWidgetState';
 
 const log = createLogger('taskWidget');
 
 // Must match STATE_FILE in plugins/withTaskWidget.js.
 const WIDGET_FILE = 'task_widget.json';
 
-// Skip writes that would not change anything. This is called on every live-status
+// Skip writes that would not change anything: this is called on every live-status
 // poll (15s), and rewriting an identical file that often is pure IO for nothing.
+//
+// EXCEPT every TOUCH_MS. The file carries `published_at`, and the widget reads it
+// to tell "the app is open and nothing has changed" from "the app was closed an
+// hour ago and this is stale" (plugins/withTaskWidget.js marks the latter). An
+// unchanged payload therefore still has to be re-stamped now and then, or a quiet
+// afternoon on one task would be flagged stale with the app in the foreground.
+// 5 min against the widget's 20-min threshold leaves plenty of room.
+const TOUCH_MS = 5 * 60 * 1000;
 let lastPayload = '';
+let lastWriteAt = 0;
 
 function fileUri() {
   const dir = FileSystem.documentDirectory;
   return dir ? dir + WIDGET_FILE : null;
+}
+
+// Write the state (stamped) and ask Android to repaint. Returns true when a
+// write happened. Never throws: callers log and move on.
+async function put(state) {
+  if (Platform.OS !== 'android') return false;
+  const uri = fileUri();
+  if (!uri) return false;
+
+  const payload = JSON.stringify(state);
+  const now = Date.now();
+  if (payload === lastPayload && now - lastWriteAt < TOUCH_MS) return false;
+  lastPayload = payload;
+  lastWriteAt = now;
+
+  await FileSystem.writeAsStringAsync(uri, JSON.stringify({ ...state, published_at: now }));
+  // Then tell Android to repaint. Writing the file is only half the channel —
+  // without this the widget shows the new state whenever the OS next gets round
+  // to it, and its floor is 30 MINUTES, so a task switch left the old task's
+  // name on the home screen for up to half an hour.
+  //
+  // Reached on a real change, or once per TOUCH_MS otherwise, so this costs one
+  // broadcast per state change plus a handful an hour — not one per 15 s poll.
+  refreshTaskWidget();
+  return true;
 }
 
 /**
@@ -48,49 +89,11 @@ function fileUri() {
  * @param {object}  live  the live_status payload (services/kpiActions.liveStatus)
  */
 export async function publishWidgetState(live) {
-  if (Platform.OS !== 'android') return;
-  const uri = fileUri();
-  if (!uri) return;
-
   try {
-    // active_tasks is the full list when multitasking; active_task is the first
-    // of them and only exists for older servers. The widget shows the first task
-    // by name and the count, because a home-screen widget has room for one line.
-    const running = live?.active_tasks?.length
-      ? live.active_tasks
-      : (live?.active_task ? [live.active_task] : []);
-    const first = running[0];
-
-    // timer_start is an ISO-with-Z string; the widget needs epoch ms so it can
-    // convert into SystemClock.elapsedRealtime terms for the Chronometer.
-    const startedAtMs = first?.timer_start ? Date.parse(first.timer_start) : 0;
-
-    const state = {
-      running: !!(first && startedAtMs),
-      task_name: first?.name || '',
-      task_count: running.length,
-      started_at_ms: Number.isNaN(startedAtMs) ? 0 : startedAtMs,
-      // Time already banked on this task before the current run, so the widget
-      // shows the task's total rather than only this sitting.
-      base_seconds: Math.max(0, Math.round(first?.timer_total_seconds || 0)),
-      workday_open: !!live?.workday_open,
-    };
-
-    const payload = JSON.stringify(state);
-    if (payload === lastPayload) return;
-    lastPayload = payload;
-
-    await FileSystem.writeAsStringAsync(uri, payload);
-    // Then tell Android to repaint. Writing the file is only half the channel —
-    // without this the widget shows the new state whenever the OS next gets round
-    // to it, and its floor is 30 MINUTES, so a task switch left the old task's
-    // name on the home screen for up to half an hour.
-    //
-    // Only reached when the payload actually changed (the dedupe above returns
-    // early otherwise), so this costs one broadcast per real state change, not
-    // one per 15-second poll.
-    refreshTaskWidget();
-    log.info('widget state published', { running: state.running, count: state.task_count });
+    const state = shapeTaskWidget(live, { skewMs: clockSkewMs() });
+    if (await put(state)) {
+      log.info('widget state published', { running: state.running, count: state.task_count });
+    }
   } catch (e) {
     log.warn('widget publish failed', e?.message);
   }
@@ -98,19 +101,14 @@ export async function publishWidgetState(live) {
 
 /** Clear the widget — on logout, or when the workday ends. */
 export async function clearWidgetState() {
-  if (Platform.OS !== 'android') return;
-  const uri = fileUri();
-  if (!uri) return;
   try {
+    // Force the write: the last payload may already be the empty state from an
+    // earlier day, and the stamp still has to move so the widget is not stale.
     lastPayload = '';
-    await FileSystem.writeAsStringAsync(
-      uri,
-      JSON.stringify({ running: false, task_name: '', task_count: 0, workday_open: false }),
-    );
     // Repaint here too, and arguably it matters more: ending the workday and
     // still seeing a task "running" on the home screen half an hour later is the
     // version of this bug people would actually report.
-    refreshTaskWidget();
+    await put(emptyTaskWidgetState());
   } catch (e) {
     log.warn('widget clear failed', e?.message);
   }

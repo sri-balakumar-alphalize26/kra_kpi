@@ -42,3 +42,44 @@ export function fmtClock(sec) {
   const pad = (n) => String(n).padStart(2, '0');
   return h ? `${h}:${pad(m)}:${pad(r)}` : `${m}:${pad(r)}`;
 }
+
+// The two day-level counters, from a live_status payload. They lived in
+// KpiActionBoard.js; the home-screen widget (utils/taskWidgetState.js) needs the
+// same definitions, and a second copy is how the board and the widget would start
+// disagreeing about the same day. The board re-exports them unchanged.
+
+// Productive = finished-log base + every RUNNING task's live seconds.
+//
+// This used to add only `active_task`, which is just the first of them, so a
+// developer multitasking two timers watched Productive tick at half the rate the
+// two task clocks above it were ticking — the same numbers on the same screen
+// disagreeing. The server counts every active log, so summing them all is what
+// makes the live figure converge on the one it will be replaced by.
+export function productiveLive(live, nowMs) {
+  const base = live?.productive_base || 0;
+  const running = live?.active_tasks?.length
+    ? live.active_tasks
+    : (live?.active_task ? [live.active_task] : []);
+  return running.reduce(
+    (sum, at) => sum + (at?.timer_start ? secsSince(at.timer_start, nowMs) : 0),
+    base,
+  );
+}
+
+// Live Presence — TIME AT WORK: the clock since login MINUS whatever the
+// workday has been paused for. Matches the server's presence_seconds exactly
+// (kpi.work.session._compute_totals), which takes off the same two pieces.
+//
+// BOTH halves of the pause are needed. paused_base holds the COMPLETED pauses;
+// paused_since is the one currently open, which the server deliberately never
+// folds into paused_seconds. Read only the base and this clock would run straight
+// through the freeze — the exact thing pausing exists to stop.
+//
+// The `· paused` marker beside this is what says why it has stopped, so a
+// deliberately frozen clock cannot read as a stuck display.
+export function presenceLive(live, nowMs) {
+  if (!live?.login_raw) return 0;
+  const paused = (live.paused_base || 0)
+    + (live.paused_since ? secsSince(live.paused_since, nowMs) : 0);
+  return Math.max(0, secsSince(live.login_raw, nowMs) - paused);
+}
