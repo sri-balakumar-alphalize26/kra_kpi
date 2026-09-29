@@ -24,6 +24,10 @@ import * as H from '../utils/haptics';
 import { fetchManualBundle, fetchManualData, saveManual, deleteManual } from '../services/userManual';
 
 const log = createLogger('UserManual');
+
+// Largest PDF the editor accepts. The picked file becomes one base64 string on
+// the JS thread, so the cap has to sit well below what that can hold.
+const MAX_MANUAL_BYTES = 25 * 1024 * 1024;
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
 
 // Role tag → who can see the manual. Order matches the backend Selection.
@@ -134,6 +138,13 @@ export default function UserManual({ onBack }) {
       if (res.canceled) return;
       const file = res.assets?.[0];
       if (!file) { flash('err', 'No file was chosen.'); return; }
+      // Checked BEFORE the read: the whole file becomes one base64 string on
+      // the JS thread, and a big PDF froze the app and killed it before any
+      // error could show.
+      if (file.size && file.size > MAX_MANUAL_BYTES) {
+        flash('err', `That file is ${Math.round(file.size / (1024 * 1024))} MB; the limit is ${MAX_MANUAL_BYTES / (1024 * 1024)} MB.`);
+        return;
+      }
       const data = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
       setEditor((p) => ({ ...p, base64: data, filename: file.name || 'manual.pdf' }));
     } catch (e) {

@@ -213,8 +213,16 @@ export default function LoginManagementScreen({ onBack }) {
     setPickCountryForUser(null);
     const cid = co && co.id ? co.id : false;
     setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, country_id: cid } : x)));
+    // Put the row back as it was if the server refuses or cannot be reached:
+    // the optimistic change above used to stay on screen either way.
+    const revert = () => setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, country_id: u.country_id } : x)));
     try {
       const res = await setUserCountry(u.id, cid);
+      if (res && res.status === false) {
+        revert();
+        setRowErr({ key: 'country:' + u.id, message: res.message || 'Not authorized — that change was not saved.' });
+        return;
+      }
       if (res?.status) {
         const nd = String(res.dial || dial || '91');
         const nl = Number(res.mobile_length) || mobileLen || 10;
@@ -244,7 +252,11 @@ export default function LoginManagementScreen({ onBack }) {
         log.info('country popup →', info);
         setTimeout(() => setClearedInfo(info), 400);
       }
-    } catch (e) { log.warn('setUserCountry', e?.message); }
+    } catch (e) {
+      log.warn('setUserCountry', e?.message);
+      revert();
+      setRowErr({ key: 'country:' + u.id, message: 'Could not reach the server — the country was not changed.' });
+    }
   };
   const saveMobile = async (u) => {
     const before = u.mobile || '';
@@ -298,12 +310,15 @@ export default function LoginManagementScreen({ onBack }) {
   };
 
   // ── Reset message template ──────────────────────────────────────────────────
+  // Through guard(): both used to flash the ✓ whether or not the server took
+  // the change, so a refused save looked saved.
   const saveTemplate = async () => {
-    try { await setOtpMessage(otpTemplate); flash('tpl'); } catch (e) { log.warn('setOtpMessage', e?.message); }
+    await guard('tpl', () => setOtpMessage(otpTemplate));
   };
   const resetTemplate = async () => {
+    const before = otpTemplate;
     setOtpTemplate(otpDefault);
-    try { await setOtpMessage(''); flash('tpl'); } catch (e) { log.warn('resetOtp', e?.message); }
+    await guard('tpl', () => setOtpMessage(''), () => setOtpTemplate(before));
   };
 
   const shownUsers = useMemo(

@@ -199,14 +199,20 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
 
   const flash = (kind, msg) => { setBanner({ kind, msg }); setTimeout(() => setBanner(null), 3500); };
 
+  // The newest list request wins. Tapping Draft then Paid fired two requests,
+  // and when the slower Draft answer landed second the Paid chip showed draft
+  // invoices. Anything older than the latest request is dropped on arrival.
+  const listSeq = useRef(0);
   const loadList = useCallback(async (sf = statusFilter) => {
+    const seq = ++listSeq.current;
     setLoadingList(true);
     try {
       const res = await svc.fetchInvoiceList(sf, false);
+      if (seq !== listSeq.current) return;
       if (res?.status) { setInvoices(res.invoices || []); setCounts(res.counts || {}); }
       else setInvoices([]);
     } catch (e) { log.warn('list failed', e?.message); }
-    finally { setLoadingList(false); }
+    finally { if (seq === listSeq.current) setLoadingList(false); }
   }, [statusFilter]);
 
   useEffect(() => { loadList('all'); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -216,9 +222,12 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
     try {
       const res = await svc.fetchInvoice(id);
       if (res?.status) setDetail(res.data);
-      else flash('err', res?.message || 'Could not open invoice.');
-    } catch (e) { flash('err', 'Could not open invoice.'); }
+      else { flash('err', res?.message || 'Could not open invoice.'); setMode('list'); }
+    } catch (e) { flash('err', 'Could not open invoice.'); setMode('list'); }
     finally { setLoadingDetail(false); }
+    // Back to the list on failure: the detail view shows a spinner while it
+    // has no invoice, so a deleted or unreachable one used to spin forever
+    // with only the Back button as a way out.
   };
 
   // Arriving from an invoice notification tap → open that invoice, then clear the

@@ -53,7 +53,21 @@ const MODES = {
 const capFirst = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 const pad3 = (n) => String(n).padStart(3, '0');
+
+// Largest Source Document the picker accepts. Photos and videos have their own
+// caps (MAX_*_BYTES); this one had none, and the whole file becomes one base64
+// string on the JS thread, so a big PDF froze the app before any error showed.
+const MAX_DOC_BYTES = 25 * 1024 * 1024;
+
+// Every row carries an id that never changes while the screen is open, so an
+// attachment can point at ITS task rather than at a position in the list.
+// Attachments used to store the row's index: delete row 1 and the video on
+// row 3 silently moved to whatever slid into that slot.
+let rowSeq = 0;
+const nextRowId = () => ++rowSeq;
+
 const emptyRow = (defaults) => ({
+  rowId: nextRowId(),
   name: '', external_ref: '', related_req_ref: '',
   estimate_hours: defaults.hours, estimate_minutes: defaults.minutes,
   priority: defaults.priority, primary_user_id: defaults.userId,
@@ -231,7 +245,12 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
 
   // ---- Tasks table --------------------------------------------------------
   const addRow = () => setTasks((t) => [...t, emptyRow(defaults)]);
-  const removeRow = (i) => setTasks((t) => t.filter((_, idx) => idx !== i));
+  const removeRow = (i) => {
+    const gone = tasks[i]?.rowId;
+    setTasks((t) => t.filter((_, idx) => idx !== i));
+    // Its attachments go with it, rather than re-attaching to the next row.
+    if (gone != null) setAttachments((list) => list.filter((a) => a.rowId !== gone));
+  };
   const updateRow = (i, patch) => setTasks((t) => t.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
   // Merge suggested/imported rows, skipping duplicates.
@@ -279,6 +298,9 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     const file = res.assets?.[0];
     if (!file) { log.warn('file pick returned no asset'); return null; }
     log.info('file picked', { name: file.name, size: file.size, mimeType: file.mimeType });
+    if (file.size && file.size > MAX_DOC_BYTES) {
+      throw new Error(`That file is ${Math.round(file.size / (1024 * 1024))} MB; the limit is ${MAX_DOC_BYTES / (1024 * 1024)} MB.`);
+    }
     const data = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
     log.info('file read as base64', { name: file.name, bytesB64: data.length });
     return { data, name: file.name || 'file' };
@@ -404,7 +426,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   function addAttachment() {
     if (!mediaReady) return;
     setAttachments((list) => [...list, {
-      rowIndex: mediaRow,
+      // The row's id, not its index: rows can be deleted above it later.
+      rowId: tasks[mediaRow]?.rowId ?? null,
       kind: mediaPicked.kind,
       data: mediaPicked.data,
       name: mediaPicked.name,
@@ -534,7 +557,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         // Stamp each attachment with the task it now belongs to. Retry needs this
         // AFTER the form is cleared — without it a retry would have no kpi_id.
         const withIds = attachments.map((a) => {
-          const sentIdx = namedIdx.get(a.rowIndex);
+          const rowIdx = tasks.findIndex((r) => r.rowId === a.rowId);
+          const sentIdx = rowIdx >= 0 ? namedIdx.get(rowIdx) : undefined;
           return { ...a, kpiId: sentIdx != null ? ids[sentIdx] || null : null };
         });
         setAttachments(withIds);
@@ -1002,7 +1026,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                       <View style={{ flex: 1 }}>
                         <Text style={s.attName} numberOfLines={1}>
                           {a.name} · {svc.humanSize(a.size)}
-                          {tasks[a.rowIndex]?.name ? `  →  ${tasks[a.rowIndex].name}` : ''}
+                          {(() => { const row = tasks.find((r) => r.rowId === a.rowId); return row?.name ? `  →  ${row.name}` : ''; })()}
                         </Text>
                         <Text style={s.attReason} numberOfLines={1}>{a.reason}</Text>
                         {a.status === 'uploading' && (

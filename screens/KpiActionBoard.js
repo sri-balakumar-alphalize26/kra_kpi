@@ -33,7 +33,7 @@ import { createLogger } from '../api/logger';
 import { serverNow } from '../api/odooApi';
 import { scheduleTaskReminder, cancelTaskReminder } from '../services/reminders';
 import { scheduleTaskAlarm, stopAlarm, alarmAvailable } from '../services/alarm';
-import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets } from '../api/session';
+import { getReminders, setReminder, removeReminder, getReminderPresets, setReminderPresets, getBoardPrefs, saveBoardPrefs } from '../api/session';
 import DurationTimePicker from '../components/DurationTimePicker';
 import AlarmModePicker from '../components/AlarmModePicker';
 import PulseDot from '../components/PulseDot';
@@ -609,7 +609,11 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, currentUserId,
               {!isAdmin ? (() => {
                 // Show the target time only while the reminder is still in the
                 // FUTURE; once it fires (time passed) the button resets to "Remind me".
-                const active = reminder && Date.parse(reminder.whenIso) > (nowMs || Date.now());
+                // Date.now(), not nowMs: whenIso was written from the DEVICE
+                // clock when the reminder was set, so it is compared on the
+                // device clock. nowMs is server time, and on a device 5 minutes
+                // behind the server a 3-minute reminder read as already fired.
+                const active = reminder && Date.parse(reminder.whenIso) > Date.now();
                 // A snoozed alarm reads "Snoozed <time>" (with a 😴) so it's clear
                 // the alarm was pushed back, not freshly set. Snooze only exists on
                 // the alarm path, so this never shows for a plain 🔔 reminder.
@@ -1291,6 +1295,25 @@ export default function KpiActionBoard({
   //                   Opened by the row's arrow; tapping the row itself opens the
   //                   task details instead, so both are reachable.
   const [viewMode, setViewMode] = useState('list');
+
+  // Remembered per user, on this device (api/session.js): the view and the
+  // All / My toggle come back the way they were left, instead of snapping to
+  // the defaults on every visit. Restored once the server has said who is
+  // looking (currentUserId), saved on every change after that.
+  const prefsRestoredFor = useRef(null);
+  useEffect(() => {
+    if (!currentUserId || prefsRestoredFor.current === currentUserId) return;
+    prefsRestoredFor.current = currentUserId;
+    getBoardPrefs(currentUserId).then((p) => {
+      if (p.viewMode === 'board' || p.viewMode === 'list') setViewMode(p.viewMode);
+      if (typeof p.myOnly === 'boolean') setMyOnly(p.myOnly);
+    }).catch(() => {});
+  }, [currentUserId]);
+  useEffect(() => {
+    if (!currentUserId || prefsRestoredFor.current !== currentUserId) return;
+    saveBoardPrefs(currentUserId, { viewMode, myOnly });
+  }, [currentUserId, viewMode, myOnly]);
+
   // When opened focused on a status (from a Home stat card), that lane's heading
   // starts expanded so its tasks show immediately.
   const [expandedLanes, setExpandedLanes] = useState(() => (focusStatus ? new Set([focusStatus]) : new Set()));
@@ -1582,12 +1605,18 @@ export default function KpiActionBoard({
   const [ntUser, setNtUser] = useState(null);
   const [ntUserOpen, setNtUserOpen] = useState(false);
 
+  // The newest load wins. The 20s silent poll and an All ↔ My toggle overlap,
+  // and on a large board the slower "All" answer landed after "My" and
+  // overwrote it: the toggle read My while every task was on screen.
+  const loadSeq = useRef(0);
   const load = useCallback(async (opts = {}) => {
+    const seq = ++loadSeq.current;
     if (!opts.silent) setLoading(true);
     setError(null);
     try {
       log.info(opts.silent ? 'poll refresh' : 'load board', { myOnly });
       const res = await fetchTasks({ myTasksOnly: myOnly });
+      if (seq !== loadSeq.current) return;   // an older answer; a newer one is coming
       setRaw(res.tasks);
       setIsAdmin(res.isAdmin);
       // Already in the payload and, until now, thrown away. Add time needs it:
@@ -1597,11 +1626,12 @@ export default function KpiActionBoard({
       setCurrentUserId(res.currentUserId);
       setIsMock(res.isMock);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       log.error('load failed', e?.message);
       // Don't clobber a working board on a silent poll failure.
       if (!opts.silent) setError(e.message || 'Failed to load tasks');
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [myOnly]);
 
@@ -2072,6 +2102,15 @@ export default function KpiActionBoard({
             showError('Task not available', "This task couldn't be opened — it may have been removed.");
             onFocusHandled && onFocusHandled();
           }
+        }).catch((e) => {
+          // Offline, or the server did not answer. Not "removed": say so, and
+          // let the same notification be tried again once there is signal —
+          // the fetch guard is released so the next tap fetches afresh.
+          log.warn('noti focus: fetch-by-id failed', { focusTaskId, error: e?.message });
+          fetchedFocusRef.current = null;
+          handledFocusRef.current = focusTaskId;
+          showError("Couldn't reach the server", 'Check your connection and open the notification again.');
+          onFocusHandled && onFocusHandled();
         });
       }
       return;

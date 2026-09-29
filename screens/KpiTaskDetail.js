@@ -133,15 +133,20 @@ function parseLinks(raw) {
 // http(s). What KIND it is (Google Drive / Repository / …) is decided by the
 // server's own classifier from the url itself, never claimed here — so a Drive
 // link can only ever show as Drive, and a GitHub link as Repository.
+//
+// Checked with a pattern, not React Native's URL: that polyfill never throws
+// on junk ("foo bar.com" passed), and it appends "/" to any link with no
+// query or fragment, so "https://host/spec.pdf" was saved as ".../spec.pdf/"
+// and direct file links broke. The trimmed original is stored as typed.
 function normalizeUrl(raw) {
   const s = (raw || '').trim();
-  if (!s) return null;
+  if (!s || /\s/.test(s)) return null;
   const withScheme = /^https?:\/\//i.test(s) ? s : `https://${s}`;
-  try {
-    const u = new URL(withScheme);
-    if (!u.hostname || !u.hostname.includes('.')) return null;
-    return u.toString();
-  } catch { return null; }
+  const m = /^https?:\/\/([^/?#]+)(?:[/?#]\S*)?$/i.exec(withScheme);
+  if (!m) return null;
+  const host = m[1].replace(/^[^@]*@/, '').replace(/:\d+$/, '');
+  if (!host.includes('.') || /^\.|\.$/.test(host) || !/^[a-z0-9.-]+$/i.test(host)) return null;
+  return withScheme;
 }
 
 const isImageName = (n = '') => /\.(png|jpe?g|gif|webp|bmp)$/i.test(n);

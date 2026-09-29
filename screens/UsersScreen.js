@@ -126,9 +126,16 @@ export default function UsersScreen({ onBack }) {
           name, login, email: form.email.trim(), active: form.active,
         });
         if (!ru?.status) { showError('Could not save', ru?.message || 'Try again.'); return; }
-        if (!isSystem && form.role !== u.role) await setUserRole(u.id, form.role);
+        // Read the answers. Both used to be fire-and-forget, so a refused role
+        // change or a mobile number another account already has closed the
+        // form looking saved.
+        if (!isSystem && form.role !== u.role) {
+          const rr = await setUserRole(u.id, form.role);
+          if (rr && rr.status === false) { showError('Could not change the role', rr.message || 'Try again.'); return; }
+        }
         if ((form.mobile || '').replace(/\D/g, '') !== (u.mobile || '')) {
-          await setUserMobile(u.id, form.mobile.replace(/\D/g, ''));
+          const rm = await setUserMobile(u.id, form.mobile.replace(/\D/g, ''));
+          if (rm && rm.status === false) { showError('Could not save the mobile number', rm.message || 'Try again.'); return; }
         }
       }
       close();

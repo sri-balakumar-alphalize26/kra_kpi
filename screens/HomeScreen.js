@@ -22,6 +22,9 @@ import { getConnection, saveSession, getQuickActions, saveQuickActions, getMenuO
 import ReorderableMenu from '../components/ReorderableMenu';
 import { jsonRpc } from '../api/odooApi';
 import { fetchUnreadCount } from '../services/notifications';
+// Lazy, like App.js: a module-scope import of expo-notifications hung the
+// standalone build. Only used to hear a push arrive while Home is open.
+import Notifications from '../services/lazyNotifications';
 import { startWorkday } from '../services/kpiActions';
 import { fetchTasks, groupIntoLanes } from '../services/kpiActions';
 // The running-task card. pauseAllTasks takes NO task id -- the server scopes it
@@ -839,7 +842,7 @@ function LiveTaskCard({
   return null;
 }
 
-function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted, widgetAction, onWidgetActionHandled }) {
+function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted, widgetAction, onWidgetActionHandled, onRunningChange }) {
   const { dialog, say, showError } = useAppDialog();
   // Starting the workday straight from the read-only bar. Previously this bar's
   // button only routed to the PIN screen; opening the day is now a plain call.
@@ -945,15 +948,21 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
   const [unread, setUnread] = useState(0);
   useEffect(() => {
     let alive = true;
-    (async () => {
+    const refresh = async () => {
       try {
         const n = await fetchUnreadCount();
         if (alive) setUnread(n || 0);
       } catch (e) {
         log.warn('unread count failed', e?.message);
       }
-    })();
-    return () => { alive = false; };
+    };
+    refresh();
+    // A push that arrives while Home is open used to leave the badge as it was
+    // until the next visit. Re-count on arrival; no-op where there is no
+    // notifications module (Expo Go).
+    let sub = null;
+    try { sub = Notifications.addNotificationReceivedListener(() => refresh()); } catch (_) {}
+    return () => { alive = false; try { sub?.remove(); } catch (_) {} };
   }, []);
 
   // Live task-status counts for the stats strip.
@@ -1011,6 +1020,14 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
     publishWidgetState(r);
   }, []);
 
+  // How many timers are running, for the logout dialogs up in HomeScreen — they
+  // warn, and offer to pause everything, before signing out on a running task.
+  useEffect(() => {
+    if (!onRunningChange) return;
+    const n = live?.active_tasks?.length ? live.active_tasks.length : (live?.active_task ? 1 : 0);
+    onRunningChange(n);
+  }, [live, onRunningChange]);
+
   const refreshLive = useCallback(
     () => getLiveStatus().then(applyLive).catch(() => {}),
     [applyLive],
@@ -1027,6 +1044,19 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
     return () => { alive = false; clearInterval(id); };
   }, [applyLive]);
 
+  // Which card Home was left on, so closing and reopening the app comes back
+  // to the same task instead of snapping to the first one. undefined = not
+  // read from storage yet, which the pager waits for so it does not restore
+  // to 0 and then jump.
+  const [cardTaskId, setCardTaskId] = useState(undefined);
+  // Which group the card is showing. Restored alongside the task below.
+  //
+  // Declared ABOVE the Today refresh effect, which lists it as a dependency.
+  // It used to sit below, and the preset compiles `const` to `var` without a
+  // temporal-dead-zone check, so the dependency array quietly read `undefined`
+  // on every render: switching to Today never started the refresh.
+  const [cardGroup, setCardGroup] = useState('in_progress');
+
   // Today is served from `lanes`, which the poll above does not touch. Refresh it
   // on the same cadence but ONLY while Today is the visible group, and once
   // immediately on switching to it — so someone who never leaves In Progress
@@ -1038,13 +1068,6 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
     return () => clearInterval(id);
   }, [cardGroup, reloadLanes]);
 
-  // Which card Home was left on, so closing and reopening the app comes back
-  // to the same task instead of snapping to the first one. undefined = not
-  // read from storage yet, which the pager waits for so it does not restore
-  // to 0 and then jump.
-  const [cardTaskId, setCardTaskId] = useState(undefined);
-  // Which group the card is showing. Restored alongside the task below.
-  const [cardGroup, setCardGroup] = useState('in_progress');
   useEffect(() => {
     let alive = true;
     getHomeCardTask(uid).then((v) => {
@@ -1118,9 +1141,20 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
     }
   }, [liveBusy, refreshLive, reloadLanes]);
 
-  const resumeFromCard = useCallback(async (taskId) => {
+  const resumeFromCard = useCallback(async (taskId, task) => {
     if (liveBusy || !taskId) return;
     H.tap();
+    // A self-created task that was SENT BACK must resume with a note, and Home
+    // has no dialog to collect one. The Today card already sends those to the
+    // board; the break card and the widget's Resume button reach this with only
+    // an id, so the task is looked up in the lanes here. Resuming it plainly
+    // left self_needs_resume_reason set and the admin-accept clock un-armed.
+    const t = task || Object.values(lanes || {}).flat().find((x) => x && String(x.id) === String(taskId));
+    if (t && t.is_self_created && t.self_needs_resume_reason) {
+      log.info('resume needs a note → board', { taskId });
+      onOpen('actionboard', taskId);
+      return;
+    }
     setLiveBusy(true);
     try {
       const res = await resumeTask(taskId);
@@ -1135,7 +1169,7 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
     } finally {
       setLiveBusy(false);
     }
-  }, [liveBusy, refreshLive]);
+  }, [liveBusy, refreshLive, lanes, onOpen]);
 
   // A Pause / Resume tap on the home-screen widget (plugins/withTaskWidget.js →
   // krakpi://widget/home?action=…, routed by App.js). A widget cannot call the
@@ -1635,7 +1669,7 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
 }
 
 // PROFILE — user + Odoo connection details (like a rental-app account page) + logout.
-function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
+function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar, runningCount = 0, onPauseAllAndLogout }) {
   const { dialog, say, showError } = useAppDialog();
   const rows = [
     { icon: 'person-outline',   label: 'Name',     value: user?.name || '—' },
@@ -2089,7 +2123,14 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar }) {
           <Text style={s.logoutMsg}>
             You'll need to sign in again with your username and password.
             {dayDone ? " You've ended your workday — logging out won't let you start another one today." : ''}
+            {runningCount > 0 ? ` ${runningCount} task${runningCount > 1 ? 's are' : ' is'} still running — the timer keeps counting after you log out.` : ''}
           </Text>
+          {runningCount > 0 && onPauseAllAndLogout ? (
+            <TouchableOpacity style={[s.logoutBtn, s.logoutPauseAll]} onPress={() => { setLogoutOpen(false); onPauseAllAndLogout(); }} activeOpacity={0.85}>
+              <Ionicons name="pause" size={18} color="#fff" />
+              <Text style={s.logoutConfirmTxt}>Pause all & log out</Text>
+            </TouchableOpacity>
+          ) : null}
           <View style={s.logoutBtns}>
             <TouchableOpacity style={[s.logoutBtn, s.logoutCancel]} onPress={() => setLogoutOpen(false)} activeOpacity={0.85}>
               <Text style={s.logoutCancelTxt}>Cancel</Text>
@@ -2202,6 +2243,20 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, work
   const [logoutOpen, setLogoutOpen] = useState(false);
   const name = (user && user.name) ? user.name.split(' ')[0] : 'Sonia';
 
+  // Timers still running, reported up by HomeTab's live poll. The logout
+  // dialogs say so and offer to pause everything first: signing out used to
+  // leave a task counting with nobody at the desk, and nothing said so.
+  const [runningCount, setRunningCount] = useState(0);
+  const pauseAllAndLogout = useCallback(async () => {
+    try {
+      const res = await pauseAllTasks('Logged out of the app', 'other', []);
+      if (res && res.status === false) log.warn('pause-all before logout refused', res.message);
+    } catch (e) {
+      log.warn('pause-all before logout failed', e?.message);
+    }
+    onLogout();
+  }, [onLogout]);
+
   // Avatar lives HERE (not in ProfileTab) so switching Home⇄Profile never flashes
   // the initials before the photo loads — ProfileTab remounts on every tab switch,
   // but HomeScreen doesn't. Seed synchronously from a module cache for instant show.
@@ -2245,9 +2300,15 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, work
             name={name} onOpen={onOpen} uid={user?.uid}
             workdayLocked={workdayLocked} workdayOpen={workdayOpen} dayDone={dayDone} todayClosed={todayClosed} workdayReopened={workdayReopened} onWorkdayStarted={onWorkdayStarted}
             widgetAction={widgetAction} onWidgetActionHandled={onWidgetActionHandled}
+            onRunningChange={setRunningCount}
           />
         )}
-        {tab === 'profile' && <ProfileTab user={user} onLogout={onLogout} dayDone={dayDone} avatar={avatar} setAvatar={setAvatar} />}
+        {tab === 'profile' && (
+          <ProfileTab
+            user={user} onLogout={onLogout} dayDone={dayDone} avatar={avatar} setAvatar={setAvatar}
+            runningCount={runningCount} onPauseAllAndLogout={pauseAllAndLogout}
+          />
+        )}
       </View>
       <TabBar active={tab} onChange={(t) => { log.info('tab switch', { from: tab, to: t }); setTab(t); }} onLogout={() => setLogoutOpen(true)} />
 
@@ -2272,7 +2333,14 @@ export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, work
             <Text style={s.logoutMsg}>
               You'll need to sign in again with your username and password.
               {dayDone ? " You've ended your workday — logging out won't let you start another one today." : ''}
+              {runningCount > 0 ? ` ${runningCount} task${runningCount > 1 ? 's are' : ' is'} still running — the timer keeps counting after you log out.` : ''}
             </Text>
+            {runningCount > 0 ? (
+              <TouchableOpacity style={[s.logoutBtn, s.logoutPauseAll]} onPress={() => { setLogoutOpen(false); pauseAllAndLogout(); }} activeOpacity={0.85}>
+                <Ionicons name="pause" size={18} color="#fff" />
+                <Text style={s.logoutConfirmTxt}>Pause all & log out</Text>
+              </TouchableOpacity>
+            ) : null}
             <View style={s.logoutBtns}>
               <TouchableOpacity style={[s.logoutBtn, s.logoutCancel]} onPress={() => setLogoutOpen(false)} activeOpacity={0.85}>
                 <Text style={s.logoutCancelTxt}>Cancel</Text>
@@ -2622,5 +2690,7 @@ const s = StyleSheet.create({
   logoutCancel: { backgroundColor: '#EEF2F8' },
   logoutCancelTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 15 },
   logoutConfirm: { backgroundColor: COLORS.red },
+  // "Pause all & log out": full width above the Cancel / Log Out pair.
+  logoutPauseAll: { backgroundColor: COLORS.primary, marginTop: 18, width: '100%' },
   logoutConfirmTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
 });

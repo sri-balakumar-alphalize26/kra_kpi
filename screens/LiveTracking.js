@@ -231,10 +231,16 @@ export default function LiveTracking({ onBack, focusUserId, onFocusHandled }) {
   // Now a silent failure only sets `stale`. The rows stay, and the header says
   // the numbers have stopped moving. `error` is reserved for the case where
   // there is genuinely nothing to show.
+  // The newest request wins. The 15s poll and a Reopen-day reload overlap, and
+  // a poll started BEFORE the reopen could land after it and bring back the
+  // ended day, Reopen button and all, until the next poll.
+  const loadSeq = useRef(0);
   const load = useCallback(async (silent) => {
+    const seq = ++loadSeq.current;
     if (!silent) setError(null);
     try {
       const res = await fetchLiveTracking();
+      if (seq !== loadSeq.current) return;
       if (res && res.status === false) {
         if (silent) { setStale(true); return; }
         setError(res.message || 'Could not load live tracking.');
@@ -252,6 +258,7 @@ export default function LiveTracking({ onBack, focusUserId, onFocusHandled }) {
       setStale(false);
       setError(null);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       log.warn('load failed', e?.message);
       // Keep whatever is on screen if we have anything at all — even a
       // non-silent retry that fails should not wipe a board we already drew.

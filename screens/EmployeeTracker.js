@@ -13,7 +13,7 @@
 // would be a second opinion that drifts from the web's, which is exactly the
 // class of bug this catch-up has spent its time removing.
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
   RefreshControl, ScrollView, Modal, StatusBar as RNStatusBar,
@@ -43,10 +43,16 @@ export default function EmployeeTracker({ onBack }) {
   const [employees, setEmployees] = useState([]);
   const [pickUser, setPickUser] = useState(false);
 
+  // The newest request wins: switching the time frame or the person twice in
+  // quick succession fired two requests, and the slower one landed last and
+  // showed the wrong period under the chip that was tapped.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setError(null);
     try {
       const res = await fetchDeveloperSummary({ timeFrame, userId });
+      if (seq !== loadSeq.current) return;
       if (res && res.status === false) {
         // The route answers "Not authorized." below Coordinator rather than
         // raising, so it must be READ, not assumed to be an empty team.
@@ -56,6 +62,7 @@ export default function EmployeeTracker({ onBack }) {
       }
       setPeriods(res?.periods || []);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       log.warn('load failed', e?.message);
       setError(e?.message || 'Could not load the report.');
       setPeriods([]);

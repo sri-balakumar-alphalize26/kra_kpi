@@ -341,17 +341,15 @@ export async function fetchTasks({ myTasksOnly = false } = {}) {
 }
 
 // Fetch ONE task by id — for opening a notification whose task isn't in the
-// board's scoped list (reassigned away / completed). Returns the task or null.
+// board's scoped list (reassigned away / completed). Returns the task, or null
+// when the SERVER says there is no such task. A network failure THROWS: it
+// used to be swallowed into the same null, so tapping a notification offline
+// said the task "may have been removed" and never retried.
 export async function fetchTaskById(kpiId) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return null;
-  try {
-    const res = await jsonRpc(serverUrl, '/kra_kpi/task/get', { kpi_id: kpiId });
-    return res?.status ? (res.task || null) : null;
-  } catch (e) {
-    log.warn('fetchTaskById failed', e?.message);
-    return null;
-  }
+  const res = await jsonRpc(serverUrl, '/kra_kpi/task/get', { kpi_id: kpiId });
+  return res?.status ? (res.task || null) : null;
 }
 
 // Everything the KPI Details screen renders, in ONE round-trip (the web pane
