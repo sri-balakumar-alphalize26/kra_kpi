@@ -1344,7 +1344,15 @@ class KpiNotify(models.Model):
             # Tap-target id rides in the context for non-task events (the same way
             # the in-app feed stamps snapshot_id / report_id): a "daily report ready"
             # push should open the report, not the anchor task.
-            _push_data = {'kpi_id': self.id, 'event': event}
+            #
+            # And for those events NO kpi_id at all. The record this runs on is an
+            # arbitrary anchor for "workday started", "idle check" and the like —
+            # the in-app feed already blanks it (kra_api: _NON_TASK_EVENTS) but the
+            # push kept sending it, so tapping such a banner opened some unrelated
+            # task, possibly another client's.
+            _push_data = {'event': event}
+            if event not in _NON_TASK_EVENTS:
+                _push_data['kpi_id'] = self.id
             _rep_id = self.env.context.get('kpi_daily_report_id')
             if _rep_id:
                 _push_data['report_id'] = _rep_id

@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 from odoo import api, fields, models
 from odoo.exceptions import AccessDenied
@@ -76,6 +77,11 @@ class ResUsers(models.Model):
         help="Force the user to set their own password on next login.")
     kpi_last_app_login = fields.Datetime(string='Last App Login', copy=False)
     kpi_last_device = fields.Char(string='Last Device', copy=False)
+    # Wrong app-password attempts since the last good login, and the moment a
+    # lock from too many of them expires. Maintained by /kpi_app/login through
+    # the three _app_login_* methods below.
+    kpi_app_failed_logins = fields.Integer(string='Failed App Logins', default=0, copy=False)
+    kpi_app_locked_until = fields.Datetime(string='App Login Locked Until', copy=False)
 
     # ---- Per-person mobile country (overrides the company default) -------- #
     # A client/developer in another country (e.g. Oman +968, 8 digits) can have
@@ -211,6 +217,38 @@ class ResUsers(models.Model):
         if not self.kpi_app_password_hash or self.kpi_app_must_change_password:
             return 'needs_setup'
         return 'ready'
+
+    # ---- Login lockout --------------------------------------------------- #
+    # /kpi_app/login is a public route and the app password can be four
+    # characters: without a cap it is a few thousand requests from being found.
+    # Five wrong tries lock the number for a quarter hour; a right one clears the
+    # count. Nothing about a correct login changes.
+    _APP_LOGIN_MAX_FAILURES = 5
+    _APP_LOGIN_LOCK_MINUTES = 15
+
+    def _app_login_locked(self):
+        """True while a lock from too many wrong passwords is still running."""
+        self.ensure_one()
+        until = self.kpi_app_locked_until
+        return bool(until and until > fields.Datetime.now())
+
+    def _app_login_failed(self):
+        """One more wrong password; the fifth starts the lock."""
+        self.ensure_one()
+        n = (self.kpi_app_failed_logins or 0) + 1
+        vals = {'kpi_app_failed_logins': n}
+        if n >= self._APP_LOGIN_MAX_FAILURES:
+            vals['kpi_app_failed_logins'] = 0
+            vals['kpi_app_locked_until'] = fields.Datetime.now() + timedelta(minutes=self._APP_LOGIN_LOCK_MINUTES)
+            _logger.warning("app login: user %s locked for %d min after %d wrong passwords",
+                            self.id, self._APP_LOGIN_LOCK_MINUTES, n)
+        self.sudo().write(vals)
+
+    def _app_login_succeeded(self):
+        """A right password clears the count and any expired lock."""
+        self.ensure_one()
+        if self.kpi_app_failed_logins or self.kpi_app_locked_until:
+            self.sudo().write({'kpi_app_failed_logins': 0, 'kpi_app_locked_until': False})
 
     def _seed_default_app_password(self):
         """Give the user the default app PIN + force-change flag (admin onboard/reset).

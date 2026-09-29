@@ -11,7 +11,7 @@ import re
 
 # Idle-check timings live with the model that owns them (kpi.work.session) so the
 # cron and these routes can never drift apart on the numbers.
-from ..models.kpi_work_session import IDLE_CHECK_MIN, NO_TASK_NUDGE_MIN, _fmt_hms
+from ..models.kpi_work_session import IDLE_CHECK_MIN, NO_TASK_NUDGE_MIN, _fmt_hms, _to_user_tz_str
 from ..models.kpi_nontask_block import NOTE_MAX, NONTASK_REASON_CODES
 from ..models.kpi_client_invoice import PAYMENT_METHODS
 
@@ -77,6 +77,20 @@ def _parse_task_array(text):
 
 
 class KpiReportsAPI(http.Controller):
+
+    def _is_owner_admin(self):
+        """Owner / Coordinator / System — the people the admin screens are for.
+
+        One definition for every route that reads the whole team under sudo():
+        Live Tracking always checked this inline; the Owner Dashboard's billing
+        routes and the Client Task Queue list checked nothing, and the app only
+        hid their tiles — so any signed-in client could call them by hand.
+        """
+        user = request.env.user
+        return (
+            user.has_group('kra_kpi_module.group_kra_admin')
+            or user.has_group('kra_kpi_module.group_kra_owner')
+            or user.has_group('base.group_system'))
     
     @http.route('/kpi_reports/unit/generate', type='json', auth='user', methods=['POST'], csrf=False)
     def generate_unit_report(self, **params):
@@ -2427,6 +2441,11 @@ class KpiReportsAPI(http.Controller):
         Client-only by design: coordinator/owner submissions also carry published=False
         but are not part of this queue (see kra.kpi.client_submitted).
         """
+        # Every client's unpublished submissions, read under sudo(). The
+        # update / publish / delete routes of this queue check the role; this
+        # one did not, so any signed-in client could read the others' queue.
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
         try:
             kpis = request.env['kra.kpi'].sudo().search(
                 [('published', '=', False), ('active', '=', True),
@@ -3246,6 +3265,10 @@ class KpiReportsAPI(http.Controller):
     def owner_certified_by_client(self, **params):
         """Return per-client summary of signed-off (completed) tasks: count + hours + last
         invoice. Used by the Owner Dashboard to decide what to invoice next."""
+        # Every client's name, hours and last invoice: the Owner Dashboard's
+        # view, so the owner's route. The app only HID the tile from others.
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
         try:
             Kra = request.env['kra.master'].sudo()
             Kpi = request.env['kra.kpi'].sudo()
@@ -3348,6 +3371,8 @@ class KpiReportsAPI(http.Controller):
     @http.route('/kpi_owner/client_certified_tasks', type='json', auth='user', methods=['POST'], csrf=False)
     def owner_client_certified_tasks(self, **params):
         """List the actual signed-off tasks for one client (drill-down from the dashboard)."""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
         try:
             client_id = int(params['client_kra_id'])
             Kra = request.env['kra.master'].sudo()
@@ -4562,11 +4587,7 @@ class KpiReportsAPI(http.Controller):
         import pytz
         from datetime import datetime as _dt, time as _time, timedelta as _td
         user = request.env.user
-        allowed = (
-            user.has_group('kra_kpi_module.group_kra_admin')
-            or user.has_group('kra_kpi_module.group_kra_owner')
-            or user.has_group('base.group_system'))
-        if not allowed:
+        if not self._is_owner_admin():
             return {'status': False, 'message': 'Not authorized.'}
         try:
             Session = request.env['kpi.work.session'].sudo()
@@ -4727,7 +4748,12 @@ class KpiReportsAPI(http.Controller):
 
             return {
                 'status': True,
-                'as_of': fields.Datetime.to_string(now),
+                # Local wall clock, like cutoff_display. This was the bare UTC
+                # datetime, which the screen and the widget showed as it came:
+                # an IST admin read "as of 05:10" at 10:40, and the widget header
+                # carried a full date and time. The raw value stays beside it.
+                'as_of': _to_user_tz_str(now, user, '%H:%M'),
+                'as_of_raw': fields.Datetime.to_string(now),
                 'cutoff_display': cutoff_local.strftime('%H:%M'),
                 'total': len(rows),
                 'present_count': sum(1 for r in rows if r['attendance'] in ('present', 'late')),

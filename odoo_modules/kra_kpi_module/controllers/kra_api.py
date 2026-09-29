@@ -17,6 +17,7 @@ from odoo.addons.kra_kpi_module.models.kpi_work_session import _local_day_end_ut
 import json
 import logging
 import base64
+import hmac
 import mimetypes
 import os
 import pytz
@@ -215,6 +216,9 @@ class KraKpiAPI(http.Controller):
 
         if not rec.exists():
             return {'status': False, 'message': 'Task not found'}
+        refused = self._task_actor_or_refuse(rec)
+        if refused:
+            return refused
 
         # Call the updated reassign_task method with reason
         rec.reassign_task(user_id, reason)
@@ -441,6 +445,9 @@ class KraKpiAPI(http.Controller):
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
         if not rec.exists():
             return {'status': False, 'message': 'Task not found'}
+        refused = self._task_actor_or_refuse(rec)
+        if refused:
+            return refused
         try:
             rec.start_task()
         except (ValidationError, UserError) as exc:
@@ -565,6 +572,9 @@ class KraKpiAPI(http.Controller):
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
         if not rec.exists():
             return {'status': False, 'message': 'Task not found'}
+        refused = self._task_actor_or_refuse(rec)
+        if refused:
+            return refused
         rec.pause_task(reason, reason_code=reason_code, meeting_with_ids=meeting_with_ids)
         return {'status': True, 'message': 'Task paused', 'id': rec.id}
 
@@ -768,6 +778,9 @@ class KraKpiAPI(http.Controller):
         rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
         if not rec.exists():
             return {'status': False, 'message': 'Task not found'}
+        refused = self._task_actor_or_refuse(rec)
+        if refused:
+            return refused
 
         # 🆕 Part B guard — a task can only be completed after a Progress Summary
         # has been recorded. Keeps both "Complete" and "Partial Finish" honest and
@@ -1798,16 +1811,41 @@ class KraKpiAPI(http.Controller):
     # ================================================================== #
     # Mobile-app login (mobile# + app password) — "Login Management"       #
     # ================================================================== #
+    @staticmethod
+    def _mobile_key(number):
+        """The digits a mobile number is compared by: its LOCAL part (the last
+        10 digits, or all of them when shorter — an Oman number has 8). A stored
+        country code therefore never matters, and neither does one the user typed."""
+        digits = re.sub(r'\D', '', number or '')
+        return digits[-10:] if len(digits) >= 10 else digits
+
+    @classmethod
+    def _mobile_same(cls, a, b):
+        """Do two numbers denote the same phone? Equal local parts, or one a tail
+        of the other where both are at least a full short number long."""
+        ka, kb = cls._mobile_key(a), cls._mobile_key(b)
+        if not ka or not kb:
+            return False
+        return ka == kb or (len(ka) >= 8 and len(kb) >= 8 and (ka.endswith(kb) or kb.endswith(ka)))
+
     def _find_app_user(self, mobile):
-        """Find a res.users by their app login mobile number (digits-compared)."""
+        """Find a res.users by their app login mobile number (digits-compared).
+
+        Compared on the whole local part the app collected, not — as before —
+        on the last 8 digits, which two Indian numbers can share. And when two
+        accounts still match, NEITHER is returned: signing one person into the
+        other's account on search order is the worse outcome by far, and the
+        admin is told in the log which digits collide."""
         digits = re.sub(r'\D', '', mobile or '')
         if not digits or len(digits) < 4:
             return request.env['res.users'].sudo().browse()
-        # Match on the last 8+ digits to tolerate country-code differences.
         users = request.env['res.users'].sudo().search([('kpi_mobile_number', '!=', False)])
-        for u in users:
-            if re.sub(r'\D', '', u.kpi_mobile_number or '').endswith(digits[-8:]):
-                return u
+        hits = [u for u in users if self._mobile_same(u.kpi_mobile_number, digits)]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            _logger.warning("app login: %d users share the mobile ending ...%s — refusing until fixed in Login Management",
+                            len(hits), digits[-4:])
         return request.env['res.users'].sudo().browse()
 
     def _device_lock_owner(self, user, params):
@@ -1880,8 +1918,15 @@ class KraKpiAPI(http.Controller):
                     'error': f"This device is set up for {locked_to}. Contact your admin."}
         if not user.kpi_app_login_enabled:
             return {'status': False, 'error': "Your login is disabled. Contact your admin."}
+        # Five wrong passwords lock the number for a quarter hour (res.users).
+        # This route is public and the passwords are short; without a cap they
+        # are a few thousand requests from being found.
+        if user._app_login_locked():
+            return {'status': False, 'error': "Too many wrong attempts. Please try again in a few minutes."}
         if not user._check_app_password(pw):
+            user._app_login_failed()
             return {'status': False, 'error': "Username & password don't match this number. Contact your admin."}
+        user._app_login_succeeded()
         # Trusted login: finalize the session as this user (mirrors Odoo's own
         # /web/session/authenticate finalize step, minus the password check we
         # already did ourselves).
@@ -1961,6 +2006,12 @@ class KraKpiAPI(http.Controller):
         if user and user.kpi_app_login_enabled:
             try:
                 code = request.env['kpi.app.otp'].sudo().issue(user)
+                if not code:
+                    # Over the request throttle (kpi.app.otp). The same generic
+                    # answer, so the route still reveals nothing — but no message
+                    # goes out and no fresh code exists to be guessed.
+                    _logger.warning("otp/request throttled user=%s(%s)", user.login, user.id)
+                    return {'status': True, 'sent': False}
                 sent = self._send_wa_otp(user, code)
                 _logger.info("otp/request user=%s(%s) sent=%s", user.login, user.id, sent)
                 return {'status': True, 'sent': bool(sent)}
@@ -1975,6 +2026,11 @@ class KraKpiAPI(http.Controller):
         user = self._find_app_user(params.get('mobile'))
         new = (params.get('new_password') or '').strip()
         if not user or not user.kpi_app_login_enabled:
+            return {'status': False, 'error': 'Invalid request.'}
+        # The device is locked to the account that set it up, exactly as for
+        # /kpi_app/login. A reset was the one door that did not check, so a
+        # locked device could still be signed into another account through it.
+        if self._device_lock_owner(user, params):
             return {'status': False, 'error': 'Invalid request.'}
         if len(new) < 4:
             return {'status': False, 'error': 'Password must be at least 4 characters.'}
@@ -2084,6 +2140,16 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         uid = int(params.get('user_id'))
         mobile = re.sub(r'\D', '', params.get('mobile') or '') or False
+        if mobile:
+            # One number, one account. A duplicate is how a login on search
+            # order signs one person into another's account (_find_app_user now
+            # refuses a collision; this stops it being created).
+            others = request.env['res.users'].sudo().search([
+                ('kpi_mobile_number', '!=', False), ('id', '!=', uid)])
+            clash = next((u for u in others if self._mobile_same(u.kpi_mobile_number, mobile)), None)
+            if clash:
+                return {'status': False,
+                        'message': f"That number is already the app login of {clash.name or clash.login}."}
         request.env['res.users'].sudo().browse(uid).kpi_mobile_number = mobile
         return {'status': True, 'mobile': mobile or ''}
 
@@ -2457,6 +2523,21 @@ class KraKpiAPI(http.Controller):
         counts as an admin.
         """
         return request.env['kra.kpi'].sudo()._user_is_kpi_admin(user)
+
+    def _task_actor_or_refuse(self, rec):
+        """None when the caller may act on this task — its assignee, or an admin
+        — else the refusal payload to return.
+
+        The task action routes (start / pause / complete / reassign) ran under
+        sudo() with no check at all, so any signed-in user could pause, complete
+        or hand over anybody's task by id and corrupt their time logs with it.
+        Same rule as resume_with_reason, which always had the check. An
+        unassigned task stays open to anyone, as before.
+        """
+        user = request.env.user
+        if rec.user_id and rec.user_id.id != user.id and not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Only the assigned developer can do this.'}
+        return None
 
     @http.route('/kra_kpi/task/self_create', type='json', auth='user', methods=['POST'], csrf=False)
     def self_create_task(self, **params):
@@ -5411,9 +5492,14 @@ class KraKpiAPI(http.Controller):
         Optional params:
         - period: 'today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month' (default: 'today')
         """
+        # Every employee's tasks, hours and pause reasons, read under sudo(): an
+        # admin's view, so an admin's route. It had no check, so any signed-in
+        # client could pull the whole team's day.
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
         try:
             from datetime import timedelta
-            
+
             period = params.get('period', 'today')
             today = fields.Date.today()
             now = fields.Datetime.now()
@@ -5713,10 +5799,17 @@ class KraKpiAPI(http.Controller):
         Usage: GET /kra_kpi/ai_digest_public?api_key=YOUR_KEY&period=today
         """
         try:
-            api_key = params.get('api_key', '')
-            valid_api_key = request.env['ir.config_parameter'].sudo().get_param('kra_kpi.ai_digest_api_key', 'your-secret-api-key-here')
-            
-            if api_key != valid_api_key:
+            api_key = str(params.get('api_key', '') or '')
+            valid_api_key = request.env['ir.config_parameter'].sudo().get_param('kra_kpi.ai_digest_api_key') or ''
+
+            # Refused outright until an admin SETS kra_kpi.ai_digest_api_key in
+            # System Parameters. The old fallback was a placeholder that shipped
+            # in this source, so anyone who had read it could pull every
+            # employee's tasks, hours and pause reasons with no login at all.
+            # compare_digest: a plain != leaks, byte by byte, how much matched.
+            key_ok = bool(valid_api_key) and valid_api_key != 'your-secret-api-key-here' and \
+                hmac.compare_digest(api_key.encode('utf-8'), valid_api_key.encode('utf-8'))
+            if not key_ok:
                 return request.make_response(
                     json.dumps({'status': False, 'message': 'Invalid API key'}),
                     headers=[('Content-Type', 'application/json')]
