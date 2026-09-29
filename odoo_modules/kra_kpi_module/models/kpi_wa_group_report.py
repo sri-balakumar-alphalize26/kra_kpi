@@ -1,4 +1,7 @@
-"""Post workday start / end to a WhatsApp group.
+"""Post workday end (and task events) to a WhatsApp group.
+
+The start of the day is no longer posted from here: hr_attendance_369_whatsapp
+posts "@Name present 9:30" when the attendance check-in is created.
 
 A group report is a SIDE EFFECT of starting or ending a day, never a condition of
 it: every failure here is swallowed and logged. Ending a workday is one-way, and
@@ -93,16 +96,9 @@ class KpiWaGroupReport(models.AbstractModel):
             return ''
         return Event.render(row.effective_template(), values)
 
-    def post_workday_start(self, user, when_label):
-        if not self._group_jid():
-            return False
-        time_s, date_s = self._clock()
-        text = self._render_event('workday_start', {
-            'dev': self._mention(user),
-            'time': time_s,
-            'date': date_s,
-        })
-        return self._post(text) if text else False
+    # There is no post_workday_start: the start of the day is posted by
+    # hr_attendance_369_whatsapp as "@Name present 9:30" when the attendance
+    # check-in is created.
 
     def post_workday_end(self, user, when_label, worked_seconds,
                          tasks_touched=0, tasks_completed=None, note=''):

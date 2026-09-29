@@ -677,8 +677,8 @@ class KpiWorkSession(models.Model):
             # it; if not, the DEVELOPER gets asked why (never the admin first).
             'idle_check_at': fields.Datetime.now() + timedelta(minutes=IDLE_CHECK_MIN),
         })
-        # Announce the start — to the owner/coordinator feed AND to the WhatsApp
-        # group — but ONLY on the first start of the day. Multiple sessions per day
+        # Announce the start to the owner/coordinator feed, but ONLY on the first
+        # start of the day. Multiple sessions per day
         # are allowed (restart after an accidental End Workday), and re-announcing
         # attendance each time is noise: it says nothing new, and a feed that
         # repeats itself is a feed that stops being read. Counts closed sessions
@@ -694,16 +694,10 @@ class KpiWorkSession(models.Model):
                 "re-notifying admins or the WhatsApp group",
                 new_sess.id, prior_today + 1, user.login)
         else:
-            # Report the start to the WhatsApp group, if one is configured. Wrapped
-            # because this is a side effect: a group being unreachable must never
-            # stop someone starting their day. One shared number posts for everyone,
-            # so a duplicate here lands in the same list the whole team reads.
-            try:
-                self.env['kpi.wa.group.report'].post_workday_start(
-                    user, fields.Datetime.context_timestamp(
-                        self, fields.Datetime.now()).strftime('%I:%M %p · %a %d %b'))
-            except Exception as exc:
-                _logger.warning("wa group start report failed for %s: %s", user.id, exc)
+            # No WhatsApp group post here any more: the "@Name present 9:30"
+            # line is posted by hr_attendance_369_whatsapp when the bridge
+            # creates the day's attendance, so every check-in path reports the
+            # same way and nothing posts twice.
             try:
                 new_sess._fire_workday_started()
             except Exception as exc:

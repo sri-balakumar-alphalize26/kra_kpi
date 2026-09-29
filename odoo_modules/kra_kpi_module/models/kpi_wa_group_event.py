@@ -30,19 +30,14 @@ _logger = logging.getLogger(__name__)
 # Order here is the order shown on the settings screen.
 #
 # `wa_event` is the key kpi_notify._notify() dispatches on, when there is one.
-# The two workday entries have none: they are posted from kpi_work_session via
+# The workday entry has none: it is posted from kpi_work_session via
 # kpi.wa.group.report, not through the task notification pipeline.
+#
+# There is no workday_start entry: the start of the day is posted by
+# hr_attendance_369_whatsapp ("@Name present 9:30") when the check-in is
+# created. An old workday_start row left in the database is never listed,
+# because _rows() walks this list, and _row() refuses the unknown key.
 WA_GROUP_EVENTS = [
-    {
-        'key': 'workday_start',
-        'label': 'Workday started',
-        'help': 'When a developer presses Start Workday.',
-        'default_enabled': True,
-        'tokens': ['dev', 'time', 'date'],
-        # Byte-identical to what was hardcoded before this screen existed, so
-        # upgrading changes nothing anyone can see.
-        'default': "🟢 *Workday started*\n{dev}\n{time} · {date}",
-    },
     {
         'key': 'workday_end',
         'label': 'Workday ended',
@@ -96,11 +91,10 @@ WA_GROUP_EVENTS = [
 
 WA_GROUP_EVENTS_BY_KEY = {e['key']: e for e in WA_GROUP_EVENTS}
 
-# The two posted from the workday hooks rather than from _notify(). The task
-# pipeline must NOT also post these: workday_start already has its own call from
-# kpi_work_session._get_or_open_today, and hooking it in both places is a
-# double post.
-WORKDAY_EVENT_KEYS = ('workday_start', 'workday_end')
+# Posted from the workday hook rather than from _notify(). The task pipeline
+# must NOT also post it: workday_end already has its own call from
+# kpi_work_session, and hooking it in both places is a double post.
+WORKDAY_EVENT_KEYS = ('workday_end',)
 
 # Sample values for the settings-screen preview. Deliberately obvious fakes —
 # a preview that looks like real data invites someone to read it as real data.

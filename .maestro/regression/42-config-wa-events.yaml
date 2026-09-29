@@ -46,11 +46,12 @@ appId: host.exp.exponent
     speed: 80
     visibilityPercentage: 20
 
-# ── 4102a6c — all SEVEN events must be listed ────────────────────────────────
+# ── 4102a6c — all SIX events must be listed ──────────────────────────────────
 # The bug this covers: the offline demo used to expose only two events, making the
 # feature look smaller than it is. The list must match the server registry in
-# odoo_modules/kra_kpi_module/models/kpi_wa_group_event.py.
-- assertVisible: "Workday started"
+# odoo_modules/kra_kpi_module/models/kpi_wa_group_event.py. "Workday started" is
+# gone on purpose: the attendance module posts the start of the day now.
+- assertNotVisible: "Workday started"
 - assertVisible: "Workday ended"
 - assertVisible: "Task completed"
 - assertVisible: "Task signed off"
@@ -59,14 +60,15 @@ appId: host.exp.exponent
 - assertVisible: "Task resumed"
 
 # ── 514f818 — the editor belongs to the ENABLED event only ───────────────────
-# Only workday_start is enabled on this database, so exactly one editor should be
-# rendered: preview, token chips and reset all live behind the switch
-# (ConfigurationScreen.js:638). The six disabled rows show their label and help text
-# and nothing else — asserting a single "Insert:" proves that.
+# Needs workday_end enabled on the test database (it was workday_start before that
+# event moved to the attendance module), so exactly one editor should be rendered:
+# preview, token chips and reset all live behind the switch
+# (ConfigurationScreen.js:638). The five disabled rows show their label and help
+# text and nothing else — asserting a single "Insert:" proves that.
 - assertVisible: "Preview — what the group sees"
 - assertVisible: "Insert:"
 - assertVisible: "↺ Reset to default"
-- assertVisible: "When a developer presses Start Workday."
+- assertVisible: "When a developer presses End Workday."
 - assertVisible: "When a developer resumes a paused task."
 
 # ── Send test must be inert while no group is set ────────────────────────────

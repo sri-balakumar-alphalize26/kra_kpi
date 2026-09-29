@@ -22,14 +22,9 @@ const MOCK_SAMPLES = {
   elapsed: '2h 15m', pause_reason: 'Waiting on client', now: '09:02 AM',
 };
 
+// No 'workday_start': the start of the day is posted by the attendance module
+// ("@Name present 9:30") when the check-in is created, not from KRA.
 const MOCK_EVENTS = [
-  {
-    event: 'workday_start', label: 'Workday started',
-    help: 'When a developer presses Start Workday.', enabled: true,
-    template: '🟢 *Workday started*\n{dev}\n{time} · {date}',
-    default: '🟢 *Workday started*\n{dev}\n{time} · {date}',
-    tokens: ['dev', 'time', 'date'],
-  },
   {
     event: 'workday_end', label: 'Workday ended',
     help: 'When a developer presses End Workday.', enabled: true,
