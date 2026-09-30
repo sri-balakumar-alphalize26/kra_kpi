@@ -58,7 +58,7 @@ export default function CameraCaptureModal({ visible, onCapture, onClose }) {
   // Permission still resolving.
   if (!permission) {
     return (
-      <Modal visible transparent statusBarTranslucent>
+      <Modal visible transparent statusBarTranslucent onRequestClose={close}>
         <View style={s.center}><ActivityIndicator color="#fff" /></View>
       </Modal>
     );

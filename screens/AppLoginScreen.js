@@ -22,6 +22,7 @@ import { saveSession } from '../api/session';
 import { loginCheck, appLogin, setAppPassword, requestOtp, verifyOtp, getMobileConfig } from '../services/appAuth';
 import { createLogger } from '../api/logger';
 import * as H from '../utils/haptics';
+import useBackHandler from '../components/useBackHandler';
 
 // The version in the footer below, taken from the app config instead of typed
 // in. It was hardcoded `v1.0` here and in the other screen's footer, so it was
@@ -71,6 +72,15 @@ const WAVE_ACCENT =
 export default function AppLoginScreen({ onLogin, onNeedSetup, notice = '' }) {
   const insets = useSafeAreaInsets();            // clear the phone's nav/gesture bar
   const [step, setStep] = useState('mobile');   // mobile | password | setpw | otp
+  // Back walks the login steps the way their on-screen links do; on the mobile
+  // step it falls through to App ("press back again to exit").
+  useBackHandler(() => {
+    if (step === 'password' || step === 'setpw') {
+      setStep('mobile'); setPw(''); setError(''); setNeedsSetup(false); return true;
+    }
+    if (step === 'otp') { setStep('password'); setError(''); return true; }
+    return false;
+  });
   const [mobile, setMobile] = useState('');
   const [pw, setPw] = useState('');
   const [code, setCode] = useState('');

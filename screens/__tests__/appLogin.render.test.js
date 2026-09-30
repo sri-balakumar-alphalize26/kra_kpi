@@ -26,4 +26,39 @@ describe('AppLoginScreen', () => {
     const { getMobileConfig } = require('../../services/appAuth');
     await waitFor(() => expect(getMobileConfig).toHaveBeenCalled());
   });
+
+  // Back walks the steps like the on-screen links, and on the first step lets
+  // the press through to App ("press back again to exit"). Android asks the
+  // newest listener first; jest runs the iOS BackHandler, so the list is kept here.
+  it('goes back from the password step to the number step', async () => {
+    const { BackHandler } = require('react-native');
+    let listeners = [];
+    const spy = jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_e, fn) => {
+      listeners.push(fn);
+      return { remove: () => { listeners = listeners.filter((l) => l !== fn); } };
+    });
+    const pressBack = () => {
+      for (let i = listeners.length - 1; i >= 0; i -= 1) if (listeners[i]()) return true;
+      return false;
+    };
+    const { loginCheck } = require('../../services/appAuth');
+    loginCheck.mockResolvedValue({ state: 'ready' });
+    const { fireEvent, act } = require('@testing-library/react-native');
+    const AppLoginScreen = require('../AppLoginScreen').default;
+    const { getByText, getByPlaceholderText, queryByPlaceholderText } = render(
+      React.createElement(AppLoginScreen, { onLogin: () => {}, onNeedSetup: () => {} }),
+    );
+    fireEvent.changeText(getByPlaceholderText('Mobile number'), '9876543210');
+    fireEvent.press(getByText('Continue'));
+    await waitFor(() => expect(getByPlaceholderText('Password')).toBeTruthy());
+
+    let handled;
+    act(() => { handled = pressBack(); });
+    expect(handled).toBe(true);
+    await waitFor(() => expect(getByPlaceholderText('Mobile number')).toBeTruthy());
+    expect(queryByPlaceholderText('Password')).toBeNull();
+    // First step: not handled here, so App's exit warning gets it.
+    expect(pressBack()).toBe(false);
+    spy.mockRestore();
+  });
 });

@@ -1,7 +1,7 @@
 // KRA/KPI app shell: spinning KPI-wheel Splash → Welcome → Login (Odoo connect)
 // → Home. A remembered Odoo session boots straight to Home after the splash.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { BackHandler, View, ActivityIndicator, AppState, Linking } from 'react-native';
+import { BackHandler, View, ActivityIndicator, AppState, Linking, ToastAndroid, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -11,6 +11,7 @@ import Notifications from './services/lazyNotifications';
 import SplashScreen from './screens/SplashScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import { boot, bootTick } from './utils/bootTrace';
+import { pushHistory, popHistory, isSecondBackPress } from './utils/navHistory';
 import LoginScreen from './screens/LoginScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -144,6 +145,13 @@ function AppInner() {
   const [screen, setScreen] = useState('login');    // login (welcome) | connect
   const [user, setUser] = useState(null);
   const [appScreen, setAppScreen] = useState('home'); // post-login: home | dashboard | actionboard
+  // The screens behind the current one (utils/navHistory.js), so back returns to
+  // where you came from instead of always to Home. Refs, not state: the back
+  // listener is registered once and reads them when pressed.
+  const historyRef = useRef([]);
+  const appScreenRef = useRef('home');
+  appScreenRef.current = appScreen;
+  const lastBackRef = useRef(0);    // when back was last pressed on Home / login
   const [focusTaskId, setFocusTaskId] = useState(null); // task to scroll-to + pulse on the board
   // Snapshot to auto-expand + flash on the Workday Snapshots screen, set when an
   // admin taps an "ended their workday" notification. Null on every other route.
@@ -213,8 +221,30 @@ function AppInner() {
   // it out deliberately. Without a branch of its own the tap fell through to
   // routeToTask, which returns immediately on a falsy id, so tapping a reminder
   // did precisely nothing.
+  // Every screen change goes through navigate (so it is remembered) and every
+  // back through goBack. goBack clears the focus slots exactly as Home does, so
+  // a task that pulsed on the way in does not pulse again on the way back.
+  const navigate = (dest) => {
+    historyRef.current = pushHistory(historyRef.current, appScreenRef.current, dest);
+    appScreenRef.current = dest;
+    setAppScreen(dest);
+  };
+  const goBack = () => {
+    const { dest, stack } = popHistory(historyRef.current);
+    historyRef.current = stack;
+    setFocusTaskId(null);
+    setFocusSnapshotId(null);
+    setFocusReportId(null);
+    setFocusInvoiceId(null);
+    setFocusUserId(null);
+    appScreenRef.current = dest;
+    setAppScreen(dest);
+  };
+  const goBackRef = useRef(goBack);
+  goBackRef.current = goBack;
+
   const routeToReminders = () => {
-    if (userRef.current) setAppScreen('reminders');
+    if (userRef.current) navigate('reminders');
     // Not queued in pendingTapRef like a task: that ref holds a task id and is
     // consumed by routeToTask on login. A reminder tap before login is rare
     // enough that opening Home is a fine answer.
@@ -244,7 +274,7 @@ function AppInner() {
       }
       // A person's row on the Live Tracking widget opens the screen ON them.
       setFocusUserId(link.dest === 'livetracking' && link.userId ? link.userId : null);
-      setAppScreen(screenName);
+      navigate(screenName);
     } else {
       // Queued like a task tap — a widget tap from a cold start arrives long
       // before login resolves, and dropping it means the tap did nothing.
@@ -256,7 +286,7 @@ function AppInner() {
     if (!kpiId) return;
     if (userRef.current) {
       setFocusTaskId(kpiId);
-      setAppScreen(isClientRef.current ? 'mytasks' : 'actionboard');
+      navigate(isClientRef.current ? 'mytasks' : 'actionboard');
     } else {
       pendingTapRef.current = kpiId;
     }
@@ -272,7 +302,7 @@ function AppInner() {
       setFocusReportId(reportId);
       setFocusTaskId(null);
       setFocusSnapshotId(null);
-      setAppScreen('dailyreports');
+      navigate('dailyreports');
     } else {
       pendingReportRef.current = reportId;
     }
@@ -288,7 +318,7 @@ function AppInner() {
       setFocusTaskId(null);
       setFocusSnapshotId(null);
       setFocusReportId(null);
-      setAppScreen(isClientRef.current ? 'myinvoices' : 'clientinvoices');
+      navigate(isClientRef.current ? 'myinvoices' : 'clientinvoices');
     } else {
       pendingInvoiceRef.current = invoiceId;
     }
@@ -304,7 +334,7 @@ function AppInner() {
       setFocusSnapshotId(snapshotId);
       setFocusTaskId(null);
       setFocusReportId(null);
-      setAppScreen('snapshots');
+      navigate('snapshots');
     } else {
       pendingSnapshotRef.current = snapshotId;
     }
@@ -435,22 +465,43 @@ function AppInner() {
 
   // Android hardware back: go one screen back instead of exiting the app.
   // Returning true from the handler tells Android we handled the event.
+  //
+  // Registered ONCE. It used to re-register on every screen change, which made it
+  // the newest listener every time — and React Native asks the newest first, so
+  // no screen could ever handle back itself (close a task detail, switch the
+  // Profile tab back). Screens now do that through components/useBackHandler,
+  // and this is only asked when none of them wanted the press.
+  const backStateRef = useRef({});
+  backStateRef.current = { user, appScreen, screen, forceSetup, alarmData };
   useEffect(() => {
+    const toast = (msg) => {
+      if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.SHORT);
+    };
     const onBack = () => {
+      const st = backStateRef.current;
+      // A ringing alarm covers everything. Back must neither close the app nor
+      // quietly change the screen hidden underneath it.
+      if (st.alarmData) { toast('Tap Stop or Snooze to close the alarm'); return true; }
       // (The old rule swallowed back for an unpaired developer to trap them on
       // the PIN screen. The PIN now gates only task ACTIONS, so back behaves
       // normally — the PIN screen is a place they chose to visit, not a cage.)
-      // Everyone else: a non-home screen goes back to Home.
-      if (user && appScreen !== 'home') { setAppScreen('home'); return true; }
+      // Any other screen goes back to the one it was opened from.
+      if (st.user && st.appScreen !== 'home') { goBackRef.current(); return true; }
       // Odoo sheet open → close it, revealing the welcome ("Tap to Enter") screen.
-      if (!user && screen === 'connect') { setScreen('login'); return true; }
+      if (!st.user && st.screen === 'connect') { setScreen('login'); return true; }
       // On the welcome screen during admin setup → back to the mobile login page.
-      if (!user && forceSetup) { setForceSetup(false); return true; }
-      return false; // at home / login — let the OS handle it (exit)
+      if (!st.user && st.forceSetup) { setForceSetup(false); return true; }
+      // Home / login: one press used to close the app, so a stray tap threw
+      // people out. Warn first; a second press within the window exits.
+      const now = Date.now();
+      if (isSecondBackPress(lastBackRef.current, now)) { lastBackRef.current = 0; return false; }
+      lastBackRef.current = now;
+      toast('Press back again to exit');
+      return true;
     };
     const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
     return () => sub.remove();
-  }, [user, appScreen, screen, devLocked, workdayOpen, forceSetup]);
+  }, []);
 
   // Register this device for push once logged in (needs the session cookie so
   // the token binds to the right user server-side).
@@ -771,6 +822,8 @@ function AppInner() {
     await session.clearSession();
     setUser(null);
     setScreen('login');
+    historyRef.current = [];
+    appScreenRef.current = 'home';
     setAppScreen('home');
     setFocusTaskId(null);
     setFocusReportId(null);
@@ -837,8 +890,6 @@ function AppInner() {
 
   if (user) {
     log.info('render post-login screen', { appScreen, devLocked, workdayOpen, gateReady });
-    // Returning home clears any pending task-focus so it can't re-pulse later.
-    const home = () => { setAppScreen('home'); setFocusTaskId(null); };
     // open(dest, param): param is an optional payload (e.g. a task id to focus).
     // `param` means different things per destination: a task id for the board /
     // My Requests, a snapshot id for Workday Snapshots. Route it into the right
@@ -854,7 +905,7 @@ function AppInner() {
       setFocusReportId(isReport ? (param ?? null) : null);
       setFocusInvoiceId(isInvoice ? (param ?? null) : null);
       setFocusTaskId(isSnap || isReport || isInvoice ? null : (param ?? null));
-      setAppScreen(dest);
+      navigate(dest);
     };
 
     // A developer whose workday is not open → task ACTIONS are off everywhere
@@ -899,25 +950,25 @@ function AppInner() {
     // can play the same open animation for all of them — every option, every role.
     const renderScreen = () => {
     if (appScreen === 'dashboard')
-      return <KraKpiDashboard onBack={home} />;
+      return <KraKpiDashboard onBack={goBack} />;
     if (appScreen === 'actionboard')
-      // Back always returns to Home. The board is reachable whether or not the
-      // workday is open — read-only until it is.
+      // Back returns to wherever it was opened from. The board is reachable
+      // whether or not the workday is open — read-only until it is.
       return (
         <KpiActionBoard
-          onBack={home} focusTaskId={focusTaskId} onFocusHandled={() => setFocusTaskId(null)}
+          onBack={goBack} focusTaskId={focusTaskId} onFocusHandled={() => setFocusTaskId(null)}
           workdayLocked={workdayLocked} dayDone={dayDone} todayClosed={todayClosed}
           onWorkdayStarted={onWorkdayStarted}
           onWorkdayEnded={onWorkdayEnded}
         />
       );
     if (appScreen === 'owner')
-      return <OwnerDashboard onBack={home} />;
+      return <OwnerDashboard onBack={goBack} />;
     if (appScreen === 'livetracking')
       // Admin: live "who's doing what now" + attendance. Route is admin-gated server-side.
       return (
         <LiveTracking
-          onBack={home}
+          onBack={goBack}
           // From a tap on one person's row of the home-screen widget.
           focusUserId={focusUserId} onFocusHandled={() => setFocusUserId(null)}
         />
@@ -928,91 +979,91 @@ function AppInner() {
       // onOpen means tapping never navigates to the task (onRowPress guards on it).
       return (
         <NotificationsScreen
-          onBack={home} isClient={isClient}
+          onBack={goBack} isClient={isClient}
           onOpen={workdayLocked ? null : open}
         />
       );
     if (appScreen === 'config')
-      return <ConfigurationScreen onBack={home} />;
+      return <ConfigurationScreen onBack={goBack} />;
     if (appScreen === 'loginmgmt')
-      return <LoginManagementScreen onBack={home} />;
+      return <LoginManagementScreen onBack={goBack} />;
     if (appScreen === 'users')
       // Admin: create/edit users with a KRA/KPI role only. Route is admin-gated server-side.
-      return <UsersScreen onBack={home} />;
+      return <UsersScreen onBack={goBack} />;
     if (appScreen === 'snapshots')
       // focusSnapshotId: set when an admin taps the "ended their workday"
       // notification → that day + developer auto-expand and the image flashes.
-      return <WorkdaySnapshots onBack={home} focusSnapshotId={focusSnapshotId} />;
+      return <WorkdaySnapshots onBack={goBack} focusSnapshotId={focusSnapshotId} />;
     if (appScreen === 'mysnapshots')
       // Self-scoped: every user sees ONLY their own workday snapshot images
       // (server route is hard-scoped to request.env.user).
-      return <WorkdaySnapshots onBack={home} mine />;
+      return <WorkdaySnapshots onBack={goBack} mine />;
     if (appScreen === 'paidwork')
       // Admin: what has been billed and settled. Paying an invoice archives its
       // tasks, so this is the only place they still exist. Route is role-gated
       // server-side; the tile is admin-only as well.
-      return <PaidWork onBack={home} />;
+      return <PaidWork onBack={goBack} />;
     if (appScreen === 'dailyreports')
       // focusReportId: set when an admin taps a "Daily report ready" notification
       // → the Daily Reports screen opens that report's PDF.
-      return <DailyReports onBack={home} focusReportId={focusReportId} />;
+      return <DailyReports onBack={goBack} focusReportId={focusReportId} />;
     if (appScreen === 'companybranding')
-      return <CompanyBranding onBack={home} />;
+      return <CompanyBranding onBack={goBack} />;
     if (appScreen === 'workreport')
-      return <WorkReport onBack={home} />;
+      return <WorkReport onBack={goBack} />;
     if (appScreen === 'krareport')
-      return <KraReport onBack={home} />;
+      return <KraReport onBack={goBack} />;
     if (appScreen === 'clientinvoices')
-      return <ClientInvoices onBack={home} focusInvoiceId={focusInvoiceId} onFocusHandled={() => setFocusInvoiceId(null)} />;
+      return <ClientInvoices onBack={goBack} focusInvoiceId={focusInvoiceId} onFocusHandled={() => setFocusInvoiceId(null)} />;
     if (appScreen === 'myinvoices')
       // Client-facing read-only invoices (server record rule scopes to their own finalized/sent).
-      return <ClientInvoices onBack={home} portal focusInvoiceId={focusInvoiceId} onFocusHandled={() => setFocusInvoiceId(null)} />;
+      return <ClientInvoices onBack={goBack} portal focusInvoiceId={focusInvoiceId} onFocusHandled={() => setFocusInvoiceId(null)} />;
     if (appScreen === 'myworkday')
       // Every user's OWN daily workday report (self-scoped server-side).
-      return <MyWorkday onBack={home} />;
+      return <MyWorkday onBack={goBack} />;
     if (appScreen === 'employeetracker')
       // The team-wide counterpart. /kpi_reports/developer_summary refuses anyone
       // below Coordinator itself, so the tile's adminOnly is convenience rather
       // than the boundary.
-      return <EmployeeTracker onBack={home} />;
+      return <EmployeeTracker onBack={goBack} />;
     if (appScreen === 'taskdocuments')
       // Documents across every task you are on. /task_documents/list scopes to
       // your own tasks server-side, so this needs no role gate here.
-      return <TaskDocuments onBack={home} />;
+      return <TaskDocuments onBack={goBack} />;
     if (appScreen === 'mytasks')
       // focusTaskId: set when a client taps a notification → the row scrolls into
       // view and flashes, mirroring the board's behaviour for developers.
-      return <ClientTasks onBack={home} focusTaskId={focusTaskId} />;
+      return <ClientTasks onBack={goBack} focusTaskId={focusTaskId} />;
     if (appScreen === 'clientfiles')
-      return <GenerateClientFiles onBack={home} />;
+      return <GenerateClientFiles onBack={goBack} />;
     if (appScreen === 'reassignhistory')
-      return <ReassignmentHistory onBack={home} />;
+      return <ReassignmentHistory onBack={goBack} />;
     if (appScreen === 'taskqueue')
-      return <ClientTaskQueue onBack={home} />;
+      return <ClientTaskQueue onBack={goBack} />;
     if (appScreen === 'usermanual')
       // Every role: role-tagged PDF manuals (server-filtered). The screen
       // self-gates admin add/edit/delete via app_bundle.can_edit.
-      return <UserManual onBack={home} />;
+      return <UserManual onBack={goBack} />;
     if (appScreen === 'reminders')
       // Standalone reminders — the same kpi.reminder rows the web shows under
       // My Work. No role gate here: the model's record rule scopes every row to
       // its owner, so this screen can only ever show the caller's own.
-      return <Reminders onBack={home} uid={user?.uid} />;
+      return <Reminders onBack={goBack} uid={user?.uid} />;
     if (appScreen === 'attendance')
       // Behind the floating bubble on Home. Exists only while the admin's
       // "Show attendance in the app" switch is on; the screen asks the server
       // itself whether this person may see the team (admin / HR), so no role
       // prop is needed here. /kpi_attendance/mine is self-scoped server-side.
-      return <AttendanceScreen onBack={home} />;
+      return <AttendanceScreen onBack={goBack} />;
     // Upload screens share one component, differing only by docType.
     if (appScreen.startsWith('upload:'))
-      return <UploadAmendments onBack={home} docType={appScreen.split(':')[1]} />;
+      return <UploadAmendments onBack={goBack} docType={appScreen.split(':')[1]} />;
     // Status shortcut (from Home stat cards) → the Action Board focused on one
     // status: list view auto-expands that heading; board view scrolls to its lane.
     if (appScreen.startsWith('status:'))
       return (
         <KpiActionBoard
-          onBack={home} focusStatus={appScreen.split(':')[1]}
+          onBack={goBack} focusStatus={appScreen.split(':')[1]}
           workdayLocked={workdayLocked} dayDone={dayDone} todayClosed={todayClosed}
           onWorkdayStarted={onWorkdayStarted}
           onWorkdayEnded={onWorkdayEnded}

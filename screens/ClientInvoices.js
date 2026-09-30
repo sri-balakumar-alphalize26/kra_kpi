@@ -22,6 +22,7 @@ import useAppDialog from '../components/useAppDialog';
 import * as svc from '../services/clientInvoices';
 import { fmtYMD as fmt } from '../utils/dateGrid';
 import { makeInvoicePdf } from '../utils/invoicePdf';
+import useBackHandler from '../components/useBackHandler';
 
 const log = createLogger('ClientInvoices');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -493,6 +494,14 @@ export default function ClientInvoices({ onBack, portal = false, focusInvoiceId,
   ));
 
   // ---- LIST ----
+  // Back from an invoice or the New Invoice form returns to the list, the same
+  // as the header arrow — it used to leave the screen and lose the form.
+  useBackHandler(() => {
+    if (mode === 'detail') { setMode('list'); loadList(statusFilter); return true; }
+    if (mode === 'create') { setMode('list'); return true; }
+    return false;
+  });
+
   if (mode === 'list') {
     return (
       <View style={s.root}>
