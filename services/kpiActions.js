@@ -487,6 +487,10 @@ export const fetchPaidTasks = () => action('/kra_kpi/tasks/paid', {});
 
 export const startTask   = (kpiId) => action('/kra_kpi/task/start', { kpi_id: kpiId });
 export const resumeTask  = (kpiId) => action('/kra_kpi/task/resume', { kpi_id: kpiId });
+// Take back a Start made by mistake: the task returns to how it was before
+// today's first Start / Resume and today's time on it is removed. Offered only
+// where the task carries can_undo_start; the server re-checks every rule.
+export const undoTaskStart = (kpiId) => action('/kra_kpi/task/undo_start', { kpi_id: kpiId });
 // Extend a task's estimate. ADDS to it rather than replacing it, and the reason
 // is required because it is shown on the card next to the overrun — an estimate
 // that grew for no stated reason is worse than one that was simply wrong.
@@ -957,7 +961,8 @@ export async function getTodaySummary() {
 // ── Self-create a task ("New Task") ──────────────────────────────────────────
 // userId is ADMIN-ONLY — the route validates it and forces a non-admin caller to
 // themselves, so sending it from a developer changes nothing.
-export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, priority, description, userId }) =>
+// deliverableType is Module / App / EXE ('module' | 'app' | 'exe').
+export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, priority, description, userId, deliverableType }) =>
   action('/kra_kpi/task/self_create', {
     name: name || '',
     kra_id: kraId,
@@ -966,4 +971,5 @@ export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, pr
     priority: priority || 'regular',
     description: description || '',
     user_id: userId || 0,
+    deliverable_type: deliverableType || '',
   });

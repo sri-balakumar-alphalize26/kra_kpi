@@ -43,6 +43,8 @@ import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '..
 import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
 import { resolveGithubLink } from '../utils/githubLink';
 import { createLogger } from '../api/logger';
+import useBackHandler from '../components/useBackHandler';
+import { deliverableLabel } from '../utils/deliverableType';
 
 const log = createLogger('KpiDetail');
 
@@ -620,6 +622,16 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const [selMode, setSelMode] = useState(false);
   const [selIds, setSelIds] = useState([]);
 
+  // Back closes this detail and returns to the list it was opened from — the
+  // board and Task Documents both show it as a view inside themselves, so App's
+  // back would have left the whole screen. Selecting updates cancels first,
+  // the same as its Cancel link.
+  useBackHandler(() => {
+    if (selMode) { setSelMode(false); setSelIds([]); return true; }
+    if (onBack) { onBack(); return true; }
+    return false;
+  });
+
   async function doDelete() {
     if (!confirmDel) return;
     const { kind, id } = confirmDel;
@@ -945,6 +957,13 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
               <View style={s.tagRow}>
                 {!!meta.external_ref && <View style={s.refBadge}><Text style={s.refTxt}>{meta.external_ref}</Text></View>}
                 <View style={[s.pill, { backgroundColor: kind.bg }]}><Text style={[s.pillTxt, { color: kind.fg }]}>{kind.label}</Text></View>
+                {/* Module / App / EXE — what the task builds. Older tasks have
+                    none, so the badge only appears once one is set. */}
+                {!!deliverableLabel(t.deliverable_type) && (
+                  <View style={[s.pill, { backgroundColor: '#EEF3FF' }]}>
+                    <Text style={[s.pillTxt, { color: COLORS.primary }]}>{deliverableLabel(t.deliverable_type)}</Text>
+                  </View>
+                )}
                 <View style={[s.pill, { backgroundColor: pr.bg }]}><Text style={[s.pillTxt, { color: pr.fg }]}>{pr.label}</Text></View>
               </View>
               <Row label="KRA / Project" value={meta.kra} />

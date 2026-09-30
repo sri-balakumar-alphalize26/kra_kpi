@@ -30,7 +30,8 @@ import { fetchTasks, groupIntoLanes } from '../services/kpiActions';
 // The running-task card. pauseAllTasks takes NO task id -- the server scopes it
 // to the caller's running tasks -- so Home can pause without knowing anything
 // about the board's state, and multitasking is handled for free.
-import { getLiveStatus, pauseTask, pauseAllTasks, resumeTask, startTask, PAUSE_REASONS } from '../services/kpiActions';
+import { getLiveStatus, pauseTask, pauseAllTasks, resumeTask, startTask, undoTaskStart, PAUSE_REASONS } from '../services/kpiActions';
+import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
 import { workdayButtonState } from '../utils/workdayState';
 import { liveFromAnchor, secsSince, fmtClock, fmtHMS } from '../utils/liveTime';
 // The server's own answer on why a task cannot be started, rendered rather
@@ -62,6 +63,7 @@ import { requestOtp, verifyOtp } from '../services/appAuth';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import useBackHandler from '../components/useBackHandler';
 
 // The version in the footer below, taken from the app config instead of typed
 // in. It was hardcoded `v1.0` here and in the other screen's footer, so it was
@@ -454,7 +456,7 @@ const PAUSED_STATES = ['paused', 'hold', 'rework'];
 
 function LiveTaskCard({
   live, lanes, busy, group, onGroupChange, startTaskId, onCardSeen,
-  onAskPause, onOpenBoard, onResume, onStart, onNotice,
+  onAskPause, onOpenBoard, onResume, onStart, onNotice, onUndoStart,
 }) {
   // The pager is uncontrolled -- it is a native scroller, and driving its offset
   // from React state would fight the user's finger. We only ever nudge it ONCE,
@@ -626,6 +628,18 @@ function LiveTaskCard({
                   }}
                 >
                   <Text style={[s.livePauseTxt, { color: TODAY_TINT.fg }]}>{action.label}</Text>
+                </TouchableOpacity>
+              ) : null}
+              {/* Started this by mistake? The server says when that can be
+                  taken back (can_undo_start); the tap asks before anything goes. */}
+              {onUndoStart && canOfferUndoStart(task) ? (
+                <TouchableOpacity
+                  style={[s.livePauseBtn, s.liveUndoBtn, busy && { opacity: 0.5 }]}
+                  disabled={busy}
+                  activeOpacity={0.85}
+                  onPress={() => { H.tap(); onUndoStart(task); }}
+                >
+                  <Text style={[s.livePauseTxt, { color: COLORS.red }]}>Undo</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -843,7 +857,7 @@ function LiveTaskCard({
 }
 
 function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted, widgetAction, onWidgetActionHandled, onRunningChange }) {
-  const { dialog, say, showError } = useAppDialog();
+  const { dialog, say, showError, confirm } = useAppDialog();
   // Starting the workday straight from the read-only bar. Previously this bar's
   // button only routed to the PIN screen; opening the day is now a plain call.
   const [roBusy, setRoBusy] = useState(false);
@@ -1140,6 +1154,38 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
       setLiveBusy(false);
     }
   }, [liveBusy, refreshLive, reloadLanes]);
+
+  // Undo a Start made by mistake, from the Today card. The dialog closes as soon
+  // as it is confirmed and the call runs after, so a refusal can be shown — a
+  // pending onConfirm would close whatever dialog replaced it when it settled.
+  const undoStartFromCard = useCallback((task) => {
+    if (liveBusy || !task) return;
+    confirm({
+      tone: 'danger',
+      destructive: true,
+      ...undoStartConfirm(task, fmtHMS),
+      onConfirm: () => {
+        (async () => {
+          setLiveBusy(true);
+          try {
+            const res = await undoTaskStart(task.id);
+            if (res && res.status === false) {
+              showError("Couldn't undo", res.message || 'Please try again from the Action Board.');
+              return;
+            }
+            H.warn();
+            await refreshLive();
+            reloadLanes();
+          } catch (e) {
+            log.warn('home undo start failed', e?.message);
+            showError('Something went wrong', 'Please try again from the Action Board.');
+          } finally {
+            setLiveBusy(false);
+          }
+        })();
+      },
+    });
+  }, [liveBusy, confirm, showError, refreshLive, reloadLanes]);
 
   const resumeFromCard = useCallback(async (taskId, task) => {
     if (liveBusy || !taskId) return;
@@ -1473,6 +1519,7 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
         onCardSeen={rememberCard}
         onAskPause={setPauseAsk}
         onStart={(id) => runTaskAction('start', id)}
+        onUndoStart={undoStartFromCard}
         onNotice={say}
         onResume={resumeFromCard}
         // The id (when there is one) rides along as App's focusTaskId, which is
@@ -2240,6 +2287,12 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar, runningCount =
 
 export default function HomeScreen({ user, onLogout, onOpen, workdayLocked, workdayOpen, dayDone, todayClosed, workdayReopened, onWorkdayStarted, widgetAction, onWidgetActionHandled }) {
   const [tab, setTab] = useState('home');
+  // Back on the Profile tab returns to the Home tab. Both tabs are the same
+  // App screen, so without this back skipped straight to "exit the app".
+  useBackHandler(() => {
+    if (tab !== 'home') { setTab('home'); return true; }
+    return false;
+  });
   const [logoutOpen, setLogoutOpen] = useState(false);
   const name = (user && user.name) ? user.name.split(' ')[0] : 'Sonia';
 
@@ -2475,6 +2528,7 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 9,
   },
   livePauseTxt: { fontSize: 12.5, fontWeight: '800' },
+  liveUndoBtn: { marginLeft: 6, backgroundColor: '#FEF2F2' },
   liveAllBtn: {
     paddingHorizontal: 12, paddingVertical: 7,
     backgroundColor: 'rgba(255,255,255,0.55)', borderRadius: 9,

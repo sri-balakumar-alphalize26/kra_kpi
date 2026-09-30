@@ -57,6 +57,9 @@ export async function saveQueueTask(t) {
     estimate_hours: Number(t.estimate_hours) || 0,
     estimate_minutes: Number(t.estimate_minutes) || 0,
     user_id: t.user_id ? Number(t.user_id) : false,
+    // Module / App / EXE. Blank clears it — the admin fills it in here for tasks
+    // a client submitted without one.
+    deliverable_type: t.deliverable_type || '',
   };
   log.info('saveQueueTask → /kpi_pending_queue/update', { kpi_id: payload.kpi_id, user_id: payload.user_id });
   const res = await jsonRpc(base, '/kpi_pending_queue/update', payload, LONG);

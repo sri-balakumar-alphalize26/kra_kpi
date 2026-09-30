@@ -26,6 +26,7 @@ import { createLogger } from '../api/logger';
 import { fetchQueue, saveQueueTask, publishQueueTask, discardQueueTask } from '../services/pendingQueue';
 // Reuse: same route the web picker uses, and the same priority triple.
 import { getUsers, getUserInfo, PRIORITIES } from '../services/uploadAmendments';
+import { DELIVERABLE_TYPES, deliverableLabel } from '../utils/deliverableType';
 
 const log = createLogger('ClientTaskQueue');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -49,7 +50,7 @@ export default function ClientTaskQueue({ onBack }) {
   const [rows, setRows] = useState([]);          // local, editable copies
   const [users, setUsers] = useState([]);
   const [busyId, setBusyId] = useState(null);    // save/publish in flight
-  const [picker, setPicker] = useState(null);    // {kind:'req'|'prio'|'dev', id}
+  const [picker, setPicker] = useState(null);    // {kind:'req'|'prio'|'type'|'dev', id}
   const [discardFor, setDiscardFor] = useState(null);
   // Why it is being discarded. The route has always taken a reason and tells
   // the client in those words; the screen simply never asked for one.
@@ -349,7 +350,7 @@ export default function ClientTaskQueue({ onBack }) {
         </ScrollView>
       )}
 
-      {/* Linked Req / Priority / Developer picker */}
+      {/* Linked Req / Priority / Type / Developer picker */}
       <PickerSheet
         picker={picker} row={pickerRow} users={users}
         onClose={() => setPicker(null)}
@@ -512,16 +513,25 @@ function TaskForm({ r, users, busy, patch, setPicker, onSave, onPublish, onDisca
           <Selector value={prioLabel(r.priority)} onPress={() => setPicker({ kind: 'prio', id: r.id })} />
         </View>
         <View style={s.half}>
-          {/* Required to publish — the client is asked to approve WHO got it. */}
-          <Text style={s.lbl}>Assign Developer <Text style={s.req}>*</Text></Text>
+          {/* Module / App / EXE. Clients may leave it blank; the admin fills it
+              in here. Not required to publish, so no red outline. */}
+          <Text style={s.lbl}>Type</Text>
           <Selector
-            value={(users.find((u) => u.id === r.user_id) || {}).name || ''}
-            placeholder="-- None --"
-            error={!r.user_id}
-            onPress={() => setPicker({ kind: 'dev', id: r.id })}
+            value={deliverableLabel(r.deliverable_type)}
+            placeholder="— choose —"
+            onPress={() => setPicker({ kind: 'type', id: r.id })}
           />
         </View>
       </View>
+
+      {/* Required to publish — the client is asked to approve WHO got it. */}
+      <Text style={s.lbl}>Assign Developer <Text style={s.req}>*</Text></Text>
+      <Selector
+        value={(users.find((u) => u.id === r.user_id) || {}).name || ''}
+        placeholder="-- None --"
+        error={!r.user_id}
+        onPress={() => setPicker({ kind: 'dev', id: r.id })}
+      />
 
       <View style={s.actions}>
         <TouchableOpacity style={s.discardBtn} onPress={() => onDiscard(r)} disabled={busy} activeOpacity={0.85}>
@@ -595,6 +605,15 @@ function PickerSheet({ picker, row, users, onClose, onPick }) {
       key: p.value, label: p.label, selected: p.value === row.priority,
       onPress: () => onPick({ priority: p.value }),
     }));
+  } else if (picker.kind === 'type') {
+    title = 'Type';
+    items = [
+      { key: 'none', label: '— none —', selected: !row.deliverable_type, onPress: () => onPick({ deliverable_type: '' }) },
+      ...DELIVERABLE_TYPES.map((d) => ({
+        key: d.code, label: d.label, selected: d.code === row.deliverable_type,
+        onPress: () => onPick({ deliverable_type: d.code }),
+      })),
+    ];
   } else {
     title = 'Assign Developer';
     items = [

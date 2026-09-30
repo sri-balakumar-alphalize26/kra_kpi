@@ -18,6 +18,7 @@ import { createLogger } from '../api/logger';
 import FieldError from '../components/FieldError';
 import useAppDialog from '../components/useAppDialog';
 import * as svc from '../services/kraKpi';
+import { DELIVERABLE_TYPES, deliverableLabel, DELIVERABLE_REQUIRED_MSG } from '../utils/deliverableType';
 
 const log = createLogger('KraKpiMaster');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -139,7 +140,7 @@ export default function KraKpiDashboard({ onBack }) {
   }
   function openCreateKpi() {
     ensureFormData();
-    setModal({ type: 'kpi', name: '', kraId: '', hours: '0', minutes: '0', priority: 'regular', userId: '' });
+    setModal({ type: 'kpi', name: '', kraId: '', hours: '0', minutes: '0', priority: 'regular', userId: '', deliverableType: '' });
   }
 
   // ---- Edit (rename) ------------------------------------------------------
@@ -272,6 +273,8 @@ export default function KraKpiDashboard({ onBack }) {
       if (!(parseInt(modal.hours, 10) > 0 || parseInt(modal.minutes, 10) > 0)) {
         e.estimate = 'Enter an estimate \u2014 hours and/or minutes.';
       }
+      // Module / App / EXE starts blank \u2014 unlike priority there is no default.
+      if (!modal.deliverableType) e.deliverableType = DELIVERABLE_REQUIRED_MSG;
     }
     setModalErrs(e);
     if (Object.keys(e).length) return;
@@ -285,6 +288,7 @@ export default function KraKpiDashboard({ onBack }) {
         name: modal.name, kraId: modal.kraId,
         estimateHours: modal.hours, estimateMinutes: modal.minutes,
         priority: modal.priority, userId: modal.userId,
+        deliverableType: modal.deliverableType,
       }), 'KPI created');
     } else if (modal.type === 'editKra') {
       const id = modal.id, name = modal.name;
@@ -608,7 +612,7 @@ function AssignClientsModal({ assign, setAssign, users, onSave }) {
 // ---- Create / edit bottom-sheet modal -------------------------------------
 
 function CrudModal({ modal, setModal, parentKras, users, onSubmit, errs = {}, clearErr }) {
-  const [picker, setPicker] = useState(null); // 'parent' | 'kra' | 'user' | 'priority'
+  const [picker, setPicker] = useState(null); // 'parent' | 'kra' | 'user' | 'priority' | 'deliverable'
   if (!modal) return null;
 
   const set = (patch) => setModal((m) => ({ ...m, ...patch }));
@@ -631,6 +635,7 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit, errs = {}, cl
     if (picker === 'kra') return parentKras;
     if (picker === 'user') return [{ id: '', name: '— None —' }, ...users];
     if (picker === 'priority') return svc.PRIORITIES.map((p) => ({ id: p.value, name: p.label }));
+    if (picker === 'deliverable') return DELIVERABLE_TYPES.map((d) => ({ id: d.code, name: d.label }));
     return [];
   };
   const onPick = (item) => {
@@ -638,6 +643,7 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit, errs = {}, cl
     else if (picker === 'kra') set({ kraId: item.id });
     else if (picker === 'user') set({ userId: item.id });
     else if (picker === 'priority') set({ priority: item.id });
+    else if (picker === 'deliverable') set({ deliverableType: item.id });
     setPicker(null);
   };
 
@@ -689,6 +695,11 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit, errs = {}, cl
 
                   <Text style={s.mLabel}>Priority</Text>
                   <Selector value={prioLabel} onPress={() => setPicker('priority')} />
+
+                  {/* What the task builds — separate from REQ/UPT/BUG. */}
+                  <Text style={s.mLabel}>Type (Module / App / EXE) <Text style={s.req}>*</Text></Text>
+                  <Selector value={deliverableLabel(modal.deliverableType)} placeholder="— choose —" onPress={() => { clearErr && clearErr('deliverableType'); setPicker('deliverable'); }} />
+                  <FieldError msg={errs.deliverableType} />
 
                   <Text style={s.mLabel}>Assignee <Text style={s.req}>*</Text></Text>
                   <Selector value={userName} placeholder="— None —" onPress={() => { clearErr && clearErr('userId'); setPicker('user'); }} />

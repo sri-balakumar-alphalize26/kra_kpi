@@ -2,8 +2,8 @@
 // kpi_requirements_upload (docType='update'). Four sections:
 //   1. Destination  — Client (Root KRA) → Project/Sub-KRA → Version
 //   2. Source & Bulk Import — Source Document, Import XLSX/CSV, Paste Doc Text
-//   3. Tasks — editable rows (name / hours / min / priority / developer), AI suggest
-//   4. Defaults for new rows — hours / minutes / priority / developer
+//   3. Tasks — editable rows (name / hours / min / priority / type / developer), AI suggest
+//   4. Defaults for new rows — hours / minutes / priority / type / developer
 // plus Download Blank Template, Reset, Create All Tasks.
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
@@ -35,6 +35,7 @@ import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/uploadAmendments';
 import { getClientProjects } from '../services/clientPortal';
+import { DELIVERABLE_TYPES, deliverableLabel } from '../utils/deliverableType';
 
 const log = createLogger('UploadAmendments');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -71,6 +72,8 @@ const emptyRow = (defaults) => ({
   name: '', external_ref: '', related_req_ref: '',
   estimate_hours: defaults.hours, estimate_minutes: defaults.minutes,
   priority: defaults.priority, primary_user_id: defaults.userId,
+  // Module / App / EXE. Blank unless a default is set — Create asks for it.
+  deliverable_type: defaults.deliverableType || '',
 });
 
 export default function UploadAmendments({ onBack, docType = 'update' }) {
@@ -106,6 +109,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   const [defMinutes, setDefMinutes] = useState('0');
   const [defPriority, setDefPriority] = useState('regular');
   const [defUserId, setDefUserId] = useState('');
+  const [defDeliverable, setDefDeliverable] = useState('');   // '' | 'module' | 'app' | 'exe'
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -120,7 +124,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   const [touched, setTouched] = useState(false); // show red outlines after a failed submit
 
   // Which dropdown modal is open: 'client' | 'project' | 'defPriority' |
-  // 'defUser' | `rowPriority:<i>` | `rowUser:<i>` | null
+  // 'defUser' | 'defDeliverable' | `rowPriority:<i>` | `rowUser:<i>` |
+  // `rowDeliverable:<i>` | null
   const [picker, setPicker] = useState(null);
   // Missing mandatory fields → styled popup (replaces the native Alert).
   const [missingPopup, setMissingPopup] = useState(null); // string[] | null
@@ -144,7 +149,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     minutes: Number(defMinutes) || 0,
     priority: defPriority,
     userId: defUserId,
-  }), [defHours, defMinutes, defPriority, defUserId]);
+    deliverableType: defDeliverable,
+  }), [defHours, defMinutes, defPriority, defUserId, defDeliverable]);
 
   const flash = (type, text) => { setBanner({ type, text }); setTimeout(() => setBanner(null), 4000); };
 
@@ -516,6 +522,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     if (!subKraId) missing.push(isClientOnly ? 'Project' : 'Project / Sub-KRA');
     const named = tasks.filter((r) => r.name.trim());
     if (!named.length) missing.push('At least one task with a name');
+    // Unlike priority there is no sensible default, so a row can reach here blank.
+    if (named.some((r) => !r.deliverable_type)) missing.push('Type on every task');
 
     if (missing.length) {
       setTouched(true);
@@ -609,7 +617,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     log.info('reset form');
     setClientId(''); setSubKraId(''); setSubKras([]); setVersion('');
     setSourceDoc(null); setPasteText(''); setTasks([]);
-    setDefHours('0'); setDefMinutes('0'); setDefPriority('regular'); setDefUserId('');
+    setDefHours('0'); setDefMinutes('0'); setDefPriority('regular'); setDefUserId(''); setDefDeliverable('');
     setSuggestionBadge(''); setImportStatus(''); setBanner(null); setTouched(false);
   }
 
@@ -890,13 +898,27 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                     <Text style={s.miniLabel}>Priority</Text>
                     <Selector small value={prioLabel(row.priority)} onPress={() => setPicker(`rowPriority:${i}`)} />
                   </View>
-                  {isClientOnly ? <View style={s.half} /> : (
+                  {/* Shown to clients too — what the work builds is part of
+                      describing it, not an assignment. */}
+                  <View style={s.half}>
+                    <Text style={s.miniLabel}>Type *</Text>
+                    <Selector
+                      small placeholder="Module / App / EXE"
+                      value={deliverableLabel(row.deliverable_type)}
+                      onPress={() => setPicker(`rowDeliverable:${i}`)}
+                      error={touched && !!row.name.trim() && !row.deliverable_type}
+                    />
+                  </View>
+                </View>
+                {isClientOnly ? null : (
+                  <View style={s.rowSplit}>
                     <View style={s.half}>
                       <Text style={s.miniLabel}>Developer</Text>
                       <Selector small placeholder="None" value={userName(row.primary_user_id)} onPress={() => setPicker(`rowUser:${i}`)} />
                     </View>
-                  )}
-                </View>
+                    <View style={s.half} />
+                  </View>
+                )}
               </View>
             ))
           )}
@@ -1073,13 +1095,20 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
               <Label>Default Priority</Label>
               <Selector small value={prioLabel(defPriority)} onPress={() => setPicker('defPriority')} />
             </View>
-            {isClientOnly ? <View style={s.half} /> : (
+            <View style={s.half}>
+              <Label>Default Type</Label>
+              <Selector small placeholder="None" value={deliverableLabel(defDeliverable)} onPress={() => setPicker('defDeliverable')} />
+            </View>
+          </View>
+          {isClientOnly ? null : (
+            <View style={s.rowSplit}>
               <View style={s.half}>
                 <Label>Default Developer</Label>
                 <Selector small placeholder="None" value={userName(defUserId)} onPress={() => setPicker('defUser')} />
               </View>
-            )}
-          </View>
+              <View style={s.half} />
+            </View>
+          )}
         </Section>
       </ScrollView>
 
@@ -1190,6 +1219,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         onSelectDefUser={(id) => { setDefUserId(id ? String(id) : ''); setPicker(null); }}
         onSelectRowPriority={(i, v) => { updateRow(i, { priority: v }); setPicker(null); }}
         onSelectRowUser={(i, id) => { updateRow(i, { primary_user_id: id ? String(id) : '' }); setPicker(null); }}
+        onSelectDefDeliverable={(v) => { setDefDeliverable(v); setPicker(null); }}
+        onSelectRowDeliverable={(i, v) => { updateRow(i, { deliverable_type: v }); setPicker(null); }}
       />
     </KeyboardAvoidingView>
   );
@@ -1251,7 +1282,7 @@ function FileButton({ icon, label, active, loading, onPress, onClear }) {
 function PickerModal({
   picker, onClose, clients, subKras, users, priorities,
   onSelectClient, onSelectSubKra, onSelectDefPriority, onSelectDefUser,
-  onSelectRowPriority, onSelectRowUser,
+  onSelectRowPriority, onSelectRowUser, onSelectDefDeliverable, onSelectRowDeliverable,
 }) {
   if (!picker) return null;
   let title = 'Select';
@@ -1278,6 +1309,18 @@ function PickerModal({
     const i = Number(picker.split(':')[1]);
     title = 'Developer';
     items = [{ ...noneUser, onPress: () => onSelectRowUser(i, '') }, ...users.map((u) => ({ key: String(u.id), label: u.name, onPress: () => onSelectRowUser(i, u.id) }))];
+  } else if (picker === 'defDeliverable') {
+    // "None" is allowed for the default only — rows then start blank and
+    // Create asks for each one.
+    title = 'Default Type';
+    items = [
+      { key: 'none', label: '-- None --', onPress: () => onSelectDefDeliverable('') },
+      ...DELIVERABLE_TYPES.map((d) => ({ key: d.code, label: d.label, onPress: () => onSelectDefDeliverable(d.code) })),
+    ];
+  } else if (picker.startsWith('rowDeliverable:')) {
+    const i = Number(picker.split(':')[1]);
+    title = 'Type';
+    items = DELIVERABLE_TYPES.map((d) => ({ key: d.code, label: d.label, onPress: () => onSelectRowDeliverable(i, d.code) }));
   }
 
   return (

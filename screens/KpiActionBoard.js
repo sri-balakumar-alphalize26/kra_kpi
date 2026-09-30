@@ -20,6 +20,7 @@ import AppDialog from '../components/AppDialog';
 import {
   LANES, groupIntoLanes, byRecency, laneForTask, isTodayTask, isWithinFreshWindow, taskMatchesQuery, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, resumeTaskWithReason, completeTask, reassignTask, adminDeleteTask, createProgress,
+  undoTaskStart,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists, markReviewStarted,
   CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
@@ -44,6 +45,11 @@ import { validateWorkdayNote, NOTE_MAX } from '../utils/workdayNote';
 // Why a blocked task is blocked, in the server's words. Pure + unit-tested
 // against real payloads (utils/__tests__/taskGate.test.js).
 import { gateLabel } from '../utils/taskGate';
+import MeetingPicker from '../components/MeetingPicker';
+import { DELIVERABLE_TYPES, deliverableLabel } from '../utils/deliverableType';
+import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
+import { noteRequired, pauseReasonText, meetingIds, idleMeetingNote } from '../utils/meetingPick';
+import useBackHandler from '../components/useBackHandler';
 // Shared with HomeScreen's running-task card. Were local functions here until
 // Home needed the same three -- a second copy is how two screens start
 // disagreeing about what time it is.
@@ -566,6 +572,13 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, currentUserId,
                   what you moved to. Per-card on purpose — with multitask running
                   only this task pauses and the others carry on ticking. */}
               {canPause && <Btn label="Switch" icon="swap-horizontal" kind="ghost" onPress={() => onAction('switch', task)} />}
+              {/* Started the wrong task? can_undo_start is the SERVER's answer
+                  (your own start today, or any start today for an admin;
+                  running or paused); the route
+                  re-checks it, and the tap asks before anything changes. */}
+              {canOfferUndoStart(task) && (
+                <Btn label="Undo start" icon="arrow-undo-outline" kind="ghostRed" onPress={() => onAction('undoStart', task)} />
+              )}
               {/* Extend the estimate from the card, the way the web does. It only
                   appears once the work is near or past the number it was given —
                   in_progress or paused, and 80% of the estimate spent — because
@@ -639,68 +652,6 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, currentUserId,
 }
 
 // One row of the list view: an "Odoo attendance"-style accordion — task name +
-// Who a meeting is with. Multi-select, because a meeting rarely has exactly one
-// other person, and the list includes CLIENTS — which is why it is fed by its own
-// endpoint rather than the assignee list. Checkbox rows with an array toggle,
-// matching AssignClientsModal in KraKpiDashboard rather than inventing a third
-// control. Shared by the single Pause and Pause-all dialogs so the two cannot
-// drift into behaving differently.
-function MeetingPicker({ people, busy, query, setQuery, picked, setPicked }) {
-  const q = query.trim().toLowerCase();
-  const shown = q ? people.filter((u) => String(u.name || '').toLowerCase().includes(q)) : people;
-  return (
-    <>
-      <Text style={s.fieldLabel}>Who is it with?</Text>
-      {busy && !people.length ? (
-        <View style={{ paddingVertical: 14 }}><ActivityIndicator color={COLORS.primary} /></View>
-      ) : (
-        <>
-          <View style={s.peopleSearch}>
-            <Ionicons name="search" size={15} color={COLORS.muted} />
-            <TextInput
-              style={s.peopleSearchInput}
-              placeholder="Search people…"
-              placeholderTextColor={COLORS.faint}
-              value={query}
-              onChangeText={setQuery}
-              autoCorrect={false}
-            />
-          </View>
-          <ScrollView style={s.peopleList} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-            {shown.map((u) => {
-              const on = picked.includes(u.id);
-              return (
-                <TouchableOpacity
-                  key={u.id} style={s.personRow} activeOpacity={0.7}
-                  onPress={() => {
-                    H.select();
-                    setPicked((prev) => (prev.includes(u.id)
-                      ? prev.filter((x) => x !== u.id)
-                      : [...prev, u.id]));
-                  }}
-                >
-                  <Ionicons name={on ? 'checkbox' : 'square-outline'} size={20}
-                    color={on ? COLORS.primary : COLORS.faint} />
-                  <Text style={s.personName} numberOfLines={1}>{u.name}</Text>
-                  <Text style={s.personRole}>{String(u.role || '').toUpperCase()}</Text>
-                </TouchableOpacity>
-              );
-            })}
-            {!shown.length ? (
-              <Text style={s.idleNoteHint}>
-                {people.length ? 'No one matches.' : 'No one else to pick from.'}
-              </Text>
-            ) : null}
-          </ScrollView>
-          <Text style={s.idleNoteHint}>
-            {picked.length ? `${picked.length} selected` : 'Optional — pick anyone who is in it.'}
-          </Text>
-        </>
-      )}
-    </>
-  );
-}
-
 // Two ways in, and they are deliberately different targets: tapping the ROW
 // opens the task; tapping the ARROW expands the actions in place. Splitting them
 // by area is what makes both reachable — the old version put the accordion on
@@ -801,9 +752,16 @@ function TaskListRowBase({ task, expanded, rowKey: myRowKey, onToggle, onAction,
               dropdown, because "what IS this task" is the reason the cut name
               sent you here. */}
           <Text style={s.listFullName}>{task.name}</Text>
-          <View style={[s.pill, s.listPill, { backgroundColor: p.bg }]}>
-            <View style={[s.pillDot, { backgroundColor: p.fg }]} />
-            <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
+          <View style={s.chipRow}>
+            <View style={[s.pill, s.listPill, { backgroundColor: p.bg }]}>
+              <View style={[s.pillDot, { backgroundColor: p.fg }]} />
+              <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
+            </View>
+            {!!deliverableLabel(task.deliverable_type) && (
+              <View style={[s.refPill, s.listPill]}>
+                <Text style={s.refPillTxt} numberOfLines={1}>{deliverableLabel(task.deliverable_type)}</Text>
+              </View>
+            )}
           </View>
           <TaskDetailBody task={task} onAction={onAction} busyId={busyId} nowMs={nowMs} isAdmin={isAdmin} currentUserId={currentUserId} reminder={reminder} readOnly={readOnly} />
         </View>
@@ -892,6 +850,12 @@ function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, f
           {!!task.external_ref && (
             <View style={s.refPill}>
               <Text style={s.refPillTxt} numberOfLines={1}>{task.external_ref}</Text>
+            </View>
+          )}
+          {/* Module / App / EXE — what is being built. */}
+          {!!deliverableLabel(task.deliverable_type) && (
+            <View style={s.refPill}>
+              <Text style={s.refPillTxt} numberOfLines={1}>{deliverableLabel(task.deliverable_type)}</Text>
             </View>
           )}
           {running && (
@@ -1163,6 +1127,9 @@ export default function KpiActionBoard({
   const [people, setPeople] = useState([]);
   const [peopleBusy, setPeopleBusy] = useState(false);
   const [meetingWith, setMeetingWith] = useState([]);   // array of user ids
+  // "Team meeting" instead of naming people: no note needed, no attendees sent.
+  // Shared by all four meeting dialogs, like meetingWith, and reset with it.
+  const [teamMeeting, setTeamMeeting] = useState(false);
   const [peopleQuery, setPeopleQuery] = useState('');
   // Validation shown inside the pause dialogs rather than as an OS alert.
   const [pauseErr, setPauseErr] = useState('');
@@ -1182,7 +1149,7 @@ export default function KpiActionBoard({
       setPauseCode(code);
       if (!noteRequiredFor(code)) setPauseNote('');
     }
-    if (code !== 'meeting') { setMeetingWith([]); setPeopleQuery(''); }
+    if (code !== 'meeting') { setMeetingWith([]); setTeamMeeting(false); setPeopleQuery(''); }
     else if (!people.length && !peopleBusy) {
       setPeopleBusy(true);
       fetchPeople()
@@ -1323,6 +1290,14 @@ export default function KpiActionBoard({
   // replaces its list. Its own component owns the loading/writes; the board just
   // says which task and takes it back on Back.
   const [detailTask, setDetailTask] = useState(null);
+  // Back closes an open filter list (not a Modal, so Android would otherwise
+  // leave the board), then the task detail. KpiTaskDetail normally takes the
+  // press first; this is the fallback.
+  useBackHandler(() => {
+    if (openFilter) { setOpenFilter(null); return true; }
+    if (detailTask) { setDetailTask(null); return true; }
+    return false;
+  });
   const openDetail = useCallback((task) => setDetailTask(task), []);
   // The task whose estimate is being extended, from the card's Add time button.
   // Null closes the dialog; the board stays exactly where it was.
@@ -1591,6 +1566,7 @@ export default function KpiActionBoard({
   const [ntHours, setNtHours] = useState('1');
   const [ntMinutes, setNtMinutes] = useState('0');
   const [ntPriority, setNtPriority] = useState('regular');
+  const [ntDeliverable, setNtDeliverable] = useState('');   // Module / App / EXE, required
   const [ntDesc, setNtDesc] = useState('');
   const [projects, setProjects] = useState([]);
   const [ntProjectOpen, setNtProjectOpen] = useState(false);
@@ -1812,7 +1788,11 @@ export default function KpiActionBoard({
     setIdleBusy(code);
     try {
       // Attendees only travel with a meeting; the service drops them otherwise.
-      const res = await setIdleReason(code, idleNote, code === 'meeting' ? meetingWith : []);
+      const res = await setIdleReason(
+        code,
+        code === 'meeting' ? idleMeetingNote(idleNote, teamMeeting) : idleNote,
+        meetingIds(code, teamMeeting, meetingWith),
+      );
       if (res && res.status === false) {
         showError("Couldn't save that", res.message || 'Failed');
         return;
@@ -1823,7 +1803,7 @@ export default function KpiActionBoard({
       // Reset the picker too, or reopening the popup shows the last meeting's
       // people already ticked and a second meeting silently inherits them.
       setIdleMeetingPick(false);
-      setMeetingWith([]);
+      setMeetingWith([]); setTeamMeeting(false);
       setPeopleQuery('');
       // No need to touch idleAskedRef — the answer drops idle_prompt server-side
       // and applyLive resets from that.
@@ -1866,8 +1846,8 @@ export default function KpiActionBoard({
       // does. The route has always accepted both; only the app was dropping them.
       const res = await switchBreak(
         code,
-        code === 'meeting' ? idleNote : '',
-        code === 'meeting' ? meetingWith : [],
+        code === 'meeting' ? idleMeetingNote(idleNote, teamMeeting) : '',
+        meetingIds(code, teamMeeting, meetingWith),
       );
       if (res && res.status === false) {
         showError("Couldn't switch that", res.message || 'Failed');
@@ -1875,7 +1855,7 @@ export default function KpiActionBoard({
       }
       setSwitchTo(null);
       setIdleMeetingPick(false);
-      setMeetingWith([]);
+      setMeetingWith([]); setTeamMeeting(false);
       setPeopleQuery('');
       setIdleNote('');
       await refreshLive();
@@ -2234,7 +2214,7 @@ export default function KpiActionBoard({
   // dropped, but the button is disabled={!ntValid}, so a blank estimate left
   // Create Task permanently dead with nothing on screen saying why. Half a rule
   // removed is worse than the whole rule — at least the Alert explained itself.
-  const ntValid = !!ntName.trim() && !!ntProject;
+  const ntValid = !!ntName.trim() && !!ntProject && !!ntDeliverable;
 
   // Distinct assignees present in the data, for the Assignee filter.
   const assigneeOptions = useMemo(() => {
@@ -2344,6 +2324,7 @@ export default function KpiActionBoard({
   function openNewTask() {
     setNewTaskOpen(true);
     setNtName(''); setNtProject(null); setNtHours('1'); setNtMinutes('0'); setNtPriority('regular'); setNtDesc('');
+    setNtDeliverable('');
     setNtProjectOpen(false); setNtClient(null); setNtClientOpen(false);
     if (clientTree.length === 0) fetchClientTree().then(setClientTree).catch(() => {});
     // Admins file work for other people, so they pick who it is for; a developer
@@ -2360,6 +2341,7 @@ export default function KpiActionBoard({
   async function submitNewTask() {
     if (!ntName.trim()) return say('Task name required', 'Enter a task name.', 'warn');
     if (!ntProject) return say('Project required', 'Choose a project (KRA).', 'warn');
+    if (!ntDeliverable) return say('Type required', 'Choose Module, App or EXE.', 'warn');
     const h = parseInt(ntHours, 10) || 0;
     const m = parseInt(ntMinutes, 10) || 0;
     // Estimate is OPTIONAL, matching the server and the web board. A developer
@@ -2371,7 +2353,7 @@ export default function KpiActionBoard({
     try {
       const res = await selfCreateTask({
         name: ntName.trim(), kraId: ntProject.id, estimateHours: h, estimateMinutes: m,
-        priority: ntPriority, description: ntDesc.trim(),
+        priority: ntPriority, description: ntDesc.trim(), deliverableType: ntDeliverable,
         // Admin-only; the route ignores it from anyone else and falls back to
         // the caller, so a developer's task can never be filed against someone.
         userId: isAdmin ? (ntUser?.id || 0) : 0,
@@ -2433,6 +2415,35 @@ export default function KpiActionBoard({
       if (users.length === 0) fetchUsers().then(setUsers).catch(() => {});
       return;
     }
+    if (kind === 'undoStart') {
+      // Deletes today's time on the task, which cannot be put back — so it asks,
+      // and says what goes and where the task lands.
+      confirm({
+        tone: 'danger',
+        destructive: true,
+        ...undoStartConfirm(task, fmtHMS),
+        onConfirm: async () => {
+          setDlg((d) => (d ? { ...d, busy: true } : d));
+          setBusyId(task.id);
+          try {
+            const res = await undoTaskStart(task.id);
+            setDlg(null);
+            if (res && res.status === false) {
+              say("Can't undo", res.message || 'Failed', 'warn');
+              return;
+            }
+            H.warn();
+            setDetailTask(null);
+            await load({ silent: true });
+            await refreshLive();
+          } catch (e) {
+            setDlg(null);
+            say('Something went wrong', e.message || 'Failed', 'warn');
+          } finally { setBusyId(null); }
+        },
+      });
+      return;
+    }
     if (kind === 'adminDelete') {
       // Permanent and irreversible, so it asks — and it names what it is about to
       // remove rather than saying "this task".
@@ -2488,7 +2499,7 @@ export default function KpiActionBoard({
       setPauseDropdown(false);
       // Never carry a previous meeting's attendees — or a stale error — into a
       // new pause.
-      setMeetingWith([]);
+      setMeetingWith([]); setTeamMeeting(false);
       setPeopleQuery('');
       setPauseErr('');
       return;
@@ -2619,7 +2630,7 @@ export default function KpiActionBoard({
   // Pause all: one reason for every running timer. Same note rule as the single
   // Pause, so the two can't disagree about when a reason needs explaining.
   async function submitPauseAll() {
-    if (noteRequiredFor(pauseAllCode) && !pauseAllNote.trim()) {
+    if (noteRequired(pauseAllCode, teamMeeting) && !pauseAllNote.trim()) {
       H.err();
       return setPauseAllErr(pauseAllCode === 'meeting'
         ? '"Meeting" on its own does not explain the time — say what it is about.'
@@ -2627,8 +2638,8 @@ export default function KpiActionBoard({
     }
     setPauseAllErr('');
     const label = (PAUSE_REASONS.find((r) => r.code === pauseAllCode) || {}).label || 'Paused';
-    const reason = pauseAllNote.trim().slice(0, IDLE_NOTE_MAX) || label;
-    const withIds = pauseAllCode === 'meeting' ? meetingWith : [];
+    const reason = pauseReasonText(pauseAllNote, pauseAllCode, teamMeeting, label, IDLE_NOTE_MAX);
+    const withIds = meetingIds(pauseAllCode, teamMeeting, meetingWith);
     setPauseAllBusy(true);
     try {
       const res = await pauseAllTasks(reason, pauseAllCode, withIds);
@@ -2679,7 +2690,7 @@ export default function KpiActionBoard({
     const task = pauseFor;
     // Inline, inside the dialog — the box it complains about is right there, so
     // an OS alert thrown over the top put the complaint further away than the fix.
-    if (noteRequiredFor(pauseCode) && !pauseNote.trim()) {
+    if (noteRequired(pauseCode, teamMeeting) && !pauseNote.trim()) {
       H.err();
       return setPauseErr(
         pauseCode === 'urgent'
@@ -2692,8 +2703,8 @@ export default function KpiActionBoard({
     const label = (PAUSE_REASONS.find((r) => r.code === pauseCode) || {}).label || 'Paused';
     // Clamped here as well as by maxLength: the cap is what keeps this readable
     // inside a Workday Map chip, and a paste can outrun the input's own limit.
-    const reason = pauseNote.trim().slice(0, IDLE_NOTE_MAX) || label;
-    const withIds = pauseCode === 'meeting' ? meetingWith : [];
+    const reason = pauseReasonText(pauseNote, pauseCode, teamMeeting, label, IDLE_NOTE_MAX);
+    const withIds = meetingIds(pauseCode, teamMeeting, meetingWith);
     setPauseFor(null);
     setBusyId(task.id);
     try {
@@ -3054,7 +3065,7 @@ export default function KpiActionBoard({
                       style={s.pauseAllBtn}
                       onPress={() => {
                         setPauseAllCode('priority_task'); setPauseAllNote(''); setPauseAllErr('');
-                        setMeetingWith([]); setPeopleQuery('');
+                        setMeetingWith([]); setTeamMeeting(false); setPeopleQuery('');
                         setPauseAllOpen(true);
                       }}
                       activeOpacity={0.85}
@@ -3647,11 +3658,13 @@ export default function KpiActionBoard({
                     people={people} busy={peopleBusy}
                     query={peopleQuery} setQuery={setPeopleQuery}
                     picked={meetingWith} setPicked={setMeetingWith}
+                    team={teamMeeting}
+                    setTeam={(v) => { setTeamMeeting(v); if (v) setPauseErr(''); }}
                   />
-                  <Text style={s.fieldLabel}>What is it about?</Text>
+                  <Text style={s.fieldLabel}>What is it about?{teamMeeting ? ' (optional)' : ''}</Text>
                   <TextInput
                     style={s.pauseNote}
-                    placeholder="Short — e.g. sprint planning"
+                    placeholder={teamMeeting ? 'Optional — saved as “Team meeting”' : 'Short — e.g. sprint planning'}
                     placeholderTextColor={COLORS.faint}
                     value={pauseNote}
                     onChangeText={(t) => { setPauseNote(t); if (pauseErr) setPauseErr(''); }}
@@ -3895,20 +3908,22 @@ export default function KpiActionBoard({
                   people={people} busy={peopleBusy}
                   query={peopleQuery} setQuery={setPeopleQuery}
                   picked={meetingWith} setPicked={setMeetingWith}
+                  team={teamMeeting}
+                  setTeam={(v) => { setTeamMeeting(v); if (v) setPauseAllErr(''); }}
                 />
               ) : null}
               {/* Same rule as the single Pause — Other, Urgent and Meeting ask. */}
               {noteRequiredFor(pauseAllCode) ? (
                 <>
                   {pauseAllCode === 'meeting' ? (
-                    <Text style={s.fieldLabel}>What is it about?</Text>
+                    <Text style={s.fieldLabel}>What is it about?{teamMeeting ? ' (optional)' : ''}</Text>
                   ) : null}
                   <TextInput
                     style={s.pauseNote}
                     placeholder={pauseAllCode === 'urgent'
                       ? 'What is urgent? This is sent to the owner now…'
                       : pauseAllCode === 'meeting'
-                        ? 'Short — e.g. sprint planning'
+                        ? (teamMeeting ? 'Optional — saved as “Team meeting”' : 'Short — e.g. sprint planning')
                         : 'Why? (required)'}
                     placeholderTextColor={COLORS.faint}
                     value={pauseAllNote}
@@ -4166,6 +4181,19 @@ export default function KpiActionBoard({
                     <TextInput style={s.textInput} keyboardType="number-pad" selectTextOnFocus value={ntMinutes} onChangeText={setNtMinutes} />
                   </View>
                 </View>
+
+                <Text style={s.fieldLabel}>Type (Module / App / EXE) *</Text>
+                <View style={s.segFull}>
+                  {DELIVERABLE_TYPES.map((d) => {
+                    const on = ntDeliverable === d.code;
+                    return (
+                      <TouchableOpacity key={d.code} style={[s.segFullItem, on && s.segFullItemOn]} onPress={() => setNtDeliverable(d.code)}>
+                        <Text style={[s.segFullTxt, on && { color: '#fff' }]}>{d.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {!ntDeliverable ? <Text style={s.fieldHint}>Required — what is being built.</Text> : null}
 
                 <Text style={s.fieldLabel}>Priority</Text>
                 <View style={s.segFull}>
@@ -4630,6 +4658,7 @@ export default function KpiActionBoard({
                     people={people} busy={peopleBusy}
                     query={peopleQuery} setQuery={setPeopleQuery}
                     picked={meetingWith} setPicked={setMeetingWith}
+                    team={teamMeeting} setTeam={setTeamMeeting}
                   />
                   <TouchableOpacity
                     style={s.idleMeetingGo}
@@ -4644,7 +4673,8 @@ export default function KpiActionBoard({
                         meeting itself is the fact worth recording, and forcing a
                         name would push people to tap Break instead. */}
                     <Text style={s.idleMeetingGoTxt}>
-                      {meetingWith.length ? `Start meeting with ${meetingWith.length}` : 'Start meeting'}
+                      {teamMeeting ? 'Start team meeting'
+                        : meetingWith.length ? `Start meeting with ${meetingWith.length}` : 'Start meeting'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -4776,6 +4806,7 @@ export default function KpiActionBoard({
                   people={people} busy={peopleBusy}
                   query={peopleQuery} setQuery={setPeopleQuery}
                   picked={meetingWith} setPicked={setMeetingWith}
+                  team={teamMeeting} setTeam={setTeamMeeting}
                 />
                 {/* Same "what is it about" the Pause dialog asks for a meeting, so
                     a meeting reads identically wherever it was declared. */}
@@ -4796,7 +4827,7 @@ export default function KpiActionBoard({
                 style={[s.confirmBtn, s.confirmCancel]}
                 // Clear the picker as well, or cancelling a meeting switch leaves
                 // its people ticked and the next one silently inherits them.
-                onPress={() => { setSwitchTo(null); setIdleMeetingPick(false); setMeetingWith([]); setPeopleQuery(''); setIdleNote(''); }}
+                onPress={() => { setSwitchTo(null); setIdleMeetingPick(false); setMeetingWith([]); setTeamMeeting(false); setPeopleQuery(''); setIdleNote(''); }}
                 disabled={!!idleBusy}
                 activeOpacity={0.85}
               >
@@ -5652,20 +5683,7 @@ const s = StyleSheet.create({
   switchMeta: { fontSize: 11.5, color: COLORS.muted },
   switchPaused: { fontSize: 11.5, color: COLORS.amber, fontWeight: '700', marginTop: 4 },
 
-  // Meeting participants picker.
-  peopleSearch: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    borderWidth: 1, borderColor: COLORS.line, borderRadius: 10,
-    paddingHorizontal: 10, paddingVertical: 7, marginBottom: 6, backgroundColor: '#fff',
-  },
-  peopleSearchInput: { flex: 1, fontSize: 13.5, color: COLORS.ink, padding: 0 },
-  peopleList: {
-    maxHeight: 190, borderWidth: 1, borderColor: COLORS.line,
-    borderRadius: 10, paddingHorizontal: 8, backgroundColor: '#FBFCFE',
-  },
-  personRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 8 },
-  personName: { flex: 1, fontSize: 13.5, color: COLORS.ink, fontWeight: '600' },
-  personRole: { fontSize: 9.5, fontWeight: '900', color: COLORS.muted, letterSpacing: 0.4 },
+  // Meeting participants picker: components/MeetingPicker owns its styles.
   switchGroup: {
     fontSize: 11.5, fontWeight: '900', color: COLORS.muted,
     textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4, marginBottom: 6,

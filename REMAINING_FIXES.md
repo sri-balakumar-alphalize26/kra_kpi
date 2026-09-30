@@ -194,6 +194,66 @@ Notifications & board
 
 ---
 
+## Round 2 — back button, Team meeting, task Type, undo start (29 Sep 2026)
+
+Widgets: confirmed already fixed — no work.
+
+### Module side (Odoo `kra_kpi_module` 19.0.5.2 — needs a module upgrade)
+- [x] `kra.kpi.deliverable_type` (Module / App / EXE), `clean_deliverable_type()` in `models/kpi.py`;
+      optional on the server, unknown values refused.
+- [x] Type accepted on every create route: `create_kpi`, `/kra_kpi/create_kpi`,
+      `/kra_kpi/task/self_create`, `/kra_kpi/task/admin_accept` (admin may correct it),
+      `/kpi_requirements/create_bulk_tasks` (all rows checked before any is created),
+      `/kpi_client_portal/add_task`, `/kpi_completion_cert/create_task_from_doc`,
+      `/kpi_pending_queue/list` + `/update`. Sent in `tasks/get`, `_serialize_task`, `/kpi_action/details`.
+- [x] Backend form + list views show the Type.
+- [x] Undo start: snapshot at the first Start / Resume of the day (`undo_*` fields,
+      `_snapshot_before_start`), `undo_today_start()` (same day, running or paused, the starter's
+      workday open, nobody else logged time since; deletes the STARTER's time rows from today, restores
+      state / pause reason / send-back flag, audit row `start_undone` naming who undid it), route
+      `/kra_kpi/task/undo_start`, `can_undo_start` + `undo_start_by` in the task payload.
+      **Who:** a developer — only their own task, only a start they made today. **An admin — any task
+      started today, by anyone** (full control). A developer cannot undo an admin's start.
+      Only starts made AFTER the upgrade can be undone (the snapshot did not exist before).
+- [x] Web: Type on the Action Board New Task, Create KPI, KRA Report, Requirements Upload (per row +
+      default), Client Dashboard, Completion Certificate, Pending Queue; card badge; **Undo start**
+      button with a confirmation on the web board.
+- [x] Verified on the LOCAL Odoo (29 Sep): upgraded, restarted; shell test (rolled back) — Type
+      stored/lowercased/refused, undo on an older task and a new task, refusals (other user, admin,
+      completed, second undo). Web files pass `node --check`; board template parses.
+- [x] Web Team meeting: the same radio above "Who is it with?" in the web's three meeting dialogs
+      (Pause, Pause all, the idle popup) — no note needed, no attendees sent, saved as "Team meeting".
+      Picker logic clicked through in headless Chromium (radio clears people, ticking a person clears
+      the radio, second click unselects). Copied to the local Odoo.
+- [x] Local Odoo re-upgraded (29 Sep): `kra_kpi_module` installed at 19.0.5.2, `deliverable_type` and
+      the seven `undo_*` columns present, service restarted and answering.
+- [x] Packaged for production: `kra_kpi_module_19.0.5.2.zip` (repo root, same 154 files / layout as
+      19.0.5.1, no `__pycache__`).
+- [ ] Production: upgrade the module (run `-u` BEFORE restarting — new columns).
+- [ ] Browser check of the web forms (none of the web screens were opened in a browser).
+
+### App side
+- [x] Back button: register-once handler in `App.js`, history trail (`utils/navHistory.js`), header
+      back = hardware back, "Press back again to exit" on Home / login, alarm swallows back.
+      `components/useBackHandler.js` on Home (Profile tab → Home tab), task detail, board filters,
+      invoice detail / create, login steps; camera spinner closes on back.
+- [x] Team meeting: shared `components/MeetingPicker.js` with a **Team meeting radio** (people stay
+      checkboxes); no note needed; saved as "Team meeting"; in all five meeting dialogs
+      (`utils/meetingPick.js`).
+- [x] Type (Module / App / EXE) on the board's New Task (required), card + list chips; services send it.
+- [x] Undo start: button on board cards / list / detail and an **Undo** link on Home's Today card,
+      both behind a confirmation popup.
+- [x] Type on KRA Report (required, last rule in `utils/newTaskValidation.js`), Upload Requirements
+      (default + per row, required), KRA dashboard Add KPI (required), Client Task Queue (optional —
+      the admin fills it for client submissions); badge in task detail.
+- [x] Full jest run (29 Sep): 342 / 343 pass. The one failure is `attendance.render` timing out under
+      full load — it passes alone (5 / 5), as noted above.
+- [ ] Device (new APK): back from every screen returns where you came from; Notifications → task →
+      back → Notifications; Profile → Home tab; Home shows "Press back again to exit"; Team meeting
+      needs no note; Type on every create form; Undo start → confirm → task leaves Today.
+
+---
+
 ## How to verify each phase
 1. `npx jest --testPathIgnorePatterns worktrees` — all suites green (the `attendance.render` test is
    timing-sensitive under full load; it passes alone).

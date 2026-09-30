@@ -10,17 +10,18 @@
 //
 // Self-contained on purpose: it owns its reason/note/attendee state and its own
 // styles, copied from KpiActionBoard's modal so the two are visually identical.
-// The Board still renders its own inline copy; if that is ever migrated to this
-// component, delete the copy there rather than letting the two drift.
+// The attendee list is the shared components/MeetingPicker.
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, Modal, ScrollView, TouchableOpacity, TextInput,
-  StyleSheet, ActivityIndicator, Dimensions,
+  StyleSheet, Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../theme';
 import * as H from '../utils/haptics';
 import { PAUSE_REASONS, fetchPeople, IDLE_NOTE_MAX } from '../services/kpiActions';
+import MeetingPicker from './MeetingPicker';
+import { noteRequired, pauseReasonText, meetingIds } from '../utils/meetingPick';
 
 const SH = Dimensions.get('window').height;
 // The body scrolls and the footer sits outside it, so Confirm is reachable no
@@ -30,64 +31,9 @@ const MODAL_BODY_MAX_H = Math.max(240, Math.round(SH * 0.78) - 230);
 
 // Reasons that need words typed. Mirrors KpiActionBoard's noteRequiredFor and
 // the web's needsNote: 'meeting' is included because "Meeting" alone says
-// nothing about what it cost the day.
+// nothing about what it cost the day. A TEAM meeting does, so it is let off —
+// see utils/meetingPick.noteRequired.
 const noteRequiredFor = (code) => code === 'other' || code === 'urgent' || code === 'meeting';
-
-function MeetingPicker({ people, busy, query, setQuery, picked, setPicked }) {
-  const q = query.trim().toLowerCase();
-  const shown = q ? people.filter((u) => String(u.name || '').toLowerCase().includes(q)) : people;
-  return (
-    <>
-      <Text style={s.fieldLabel}>Who is it with?</Text>
-      {busy && !people.length ? (
-        <View style={{ paddingVertical: 14 }}><ActivityIndicator color={COLORS.primary} /></View>
-      ) : (
-        <>
-          <View style={s.peopleSearch}>
-            <Ionicons name="search" size={15} color={COLORS.muted} />
-            <TextInput
-              style={s.peopleSearchInput}
-              placeholder="Search people…"
-              placeholderTextColor={COLORS.faint}
-              value={query}
-              onChangeText={setQuery}
-              autoCorrect={false}
-            />
-          </View>
-          <ScrollView style={s.peopleList} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-            {shown.map((u) => {
-              const on = picked.includes(u.id);
-              return (
-                <TouchableOpacity
-                  key={u.id} style={s.personRow} activeOpacity={0.7}
-                  onPress={() => {
-                    H.select();
-                    setPicked((prev) => (prev.includes(u.id)
-                      ? prev.filter((x) => x !== u.id)
-                      : [...prev, u.id]));
-                  }}
-                >
-                  <Ionicons name={on ? 'checkbox' : 'square-outline'} size={20}
-                    color={on ? COLORS.primary : COLORS.faint} />
-                  <Text style={s.personName} numberOfLines={1}>{u.name}</Text>
-                  <Text style={s.personRole}>{String(u.role || '').toUpperCase()}</Text>
-                </TouchableOpacity>
-              );
-            })}
-            {!shown.length ? (
-              <Text style={s.idleNoteHint}>
-                {people.length ? 'No one matches.' : 'No one else to pick from.'}
-              </Text>
-            ) : null}
-          </ScrollView>
-          <Text style={s.idleNoteHint}>
-            {picked.length ? `${picked.length} selected` : 'Optional — pick anyone who is in it.'}
-          </Text>
-        </>
-      )}
-    </>
-  );
-}
 
 /**
  * visible  — show/hide
@@ -112,6 +58,7 @@ export default function PauseReasonDialog({
   const [peopleBusy, setPeopleBusy] = useState(false);
   const [peopleQuery, setPeopleQuery] = useState('');
   const [meetingWith, setMeetingWith] = useState([]);
+  const [teamMeeting, setTeamMeeting] = useState(false);
 
   // Fresh every time it opens: a dialog that reopened still holding the last
   // reason and note would silently attach them to a different pause.
@@ -122,6 +69,7 @@ export default function PauseReasonDialog({
     setDropdown(false);
     setErr('');
     setMeetingWith([]);
+    setTeamMeeting(false);
     setPeopleQuery('');
   }, [visible]);
 
@@ -133,6 +81,7 @@ export default function PauseReasonDialog({
     if (!noteRequiredFor(next)) setNote('');
     if (next !== 'meeting') {
       setMeetingWith([]);
+      setTeamMeeting(false);
       setPeopleQuery('');
     } else if (!people.length && !peopleBusy) {
       setPeopleBusy(true);
@@ -145,7 +94,7 @@ export default function PauseReasonDialog({
 
   const confirm = () => {
     const text = note.trim();
-    if (noteRequiredFor(code) && !text) {
+    if (noteRequired(code, teamMeeting) && !text) {
       setErr(code === 'meeting'
         ? 'Say what the meeting is about.'
         : 'Please say why — this shows on your Workday Map.');
@@ -153,9 +102,9 @@ export default function PauseReasonDialog({
     }
     const label = (PAUSE_REASONS.find((r) => r.code === code) || {}).label || code;
     onConfirm({
-      reason: text.slice(0, IDLE_NOTE_MAX) || label,
+      reason: pauseReasonText(text, code, teamMeeting, label, IDLE_NOTE_MAX),
       code,
-      meetingWithIds: code === 'meeting' ? meetingWith : [],
+      meetingWithIds: meetingIds(code, teamMeeting, meetingWith),
     });
   };
 
@@ -244,11 +193,13 @@ export default function PauseReasonDialog({
                     people={people} busy={peopleBusy}
                     query={peopleQuery} setQuery={setPeopleQuery}
                     picked={meetingWith} setPicked={setMeetingWith}
+                    team={teamMeeting}
+                    setTeam={(v) => { setTeamMeeting(v); if (v) setErr(''); }}
                   />
-                  <Text style={s.fieldLabel}>What is it about?</Text>
+                  <Text style={s.fieldLabel}>What is it about?{teamMeeting ? ' (optional)' : ''}</Text>
                   <TextInput
                     style={s.pauseNote}
-                    placeholder="Short — e.g. sprint planning"
+                    placeholder={teamMeeting ? 'Optional — saved as “Team meeting”' : 'Short — e.g. sprint planning'}
                     placeholderTextColor={COLORS.faint}
                     value={note}
                     onChangeText={(t) => { setNote(t); if (err) setErr(''); }}
@@ -346,17 +297,4 @@ const s = StyleSheet.create({
   footCancelTxt: { color: COLORS.muted, fontWeight: '800', fontSize: 14.5 },
   footConfirm: { flexShrink: 1, paddingHorizontal: 20, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F5A623' },
   footConfirmTxt: { color: '#fff', fontWeight: '900', fontSize: 14.5 },
-  peopleSearch: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    borderWidth: 1, borderColor: COLORS.line, borderRadius: 10,
-    paddingHorizontal: 10, paddingVertical: 7, marginBottom: 6, backgroundColor: '#fff',
-  },
-  peopleSearchInput: { flex: 1, fontSize: 13.5, color: COLORS.ink, padding: 0 },
-  peopleList: {
-    maxHeight: 190, borderWidth: 1, borderColor: COLORS.line,
-    borderRadius: 10, paddingHorizontal: 8, backgroundColor: '#FBFCFE',
-  },
-  personRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 8 },
-  personName: { flex: 1, fontSize: 13.5, color: COLORS.ink, fontWeight: '600' },
-  personRole: { fontSize: 9.5, fontWeight: '900', color: COLORS.muted, letterSpacing: 0.4 },
 });

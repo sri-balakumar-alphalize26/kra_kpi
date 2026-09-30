@@ -39,6 +39,7 @@ import { createKpi, logManualTime, findNameMatches } from '../services/kraKpi';
 import {
   validateNewTask, toSeconds, DOC_TYPES, prefixForDocType,
 } from '../utils/newTaskValidation';
+import { DELIVERABLE_TYPES } from '../utils/deliverableType';
 import * as H from '../utils/haptics';
 import { createLogger } from '../api/logger';
 
@@ -638,6 +639,9 @@ export default function KraReport({ onBack }) {
     setNt({
       name: '', kra_id: kraIds.length === 1 ? kraIds[0] : '', user_id: '',
       doc_type: 'requirement', priority: 'regular',
+      // Module / App / EXE. Starts blank on purpose — unlike doc_type and
+      // priority there is no sensible default, so validateNewTask asks for it.
+      deliverable_type: '',
       estimate_hours: '', estimate_minutes: '', worked_hours: '', worked_minutes: '',
       deadline: '', description: '', error: '',
     });
@@ -709,6 +713,7 @@ export default function KraReport({ onBack }) {
           name,
           kraId: nt.kra_id,
           docType: nt.doc_type,
+          deliverableType: nt.deliverable_type,
           estimateHours: nt.estimate_hours,
           estimateMinutes: nt.estimate_minutes,
           priority: nt.priority,
@@ -1290,6 +1295,24 @@ export default function KraReport({ onBack }) {
                   </Text>
                   <Ionicons name="chevron-down" size={16} color={COLORS.muted} />
                 </TouchableOpacity>
+
+                {/* What the task builds — a second axis, separate from the
+                    REQ/UPT/BUG Type below. */}
+                <Text style={s.ntLabel}>Type (Module / App / EXE) <Text style={s.ntReq}>*</Text></Text>
+                <View style={s.dlRow}>
+                  {DELIVERABLE_TYPES.map((d) => (
+                    <TouchableOpacity
+                      key={d.code}
+                      style={[s.dlChip, nt?.deliverable_type === d.code && s.dlChipOn]}
+                      onPress={() => { H.select(); setNt((p) => ({ ...p, deliverable_type: d.code, error: '' })); }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[s.dlChipTxt, nt?.deliverable_type === d.code && s.dlChipTxtOn]}>
+                        {d.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
 
                 {/* Type mints the REQ/UPT/BUG reference, which is what this
                     report's own Type filter matches on. */}

@@ -11,7 +11,7 @@ const {
 const OK = {
   name: 'Login screen', kra_id: 12, user_id: 3, doc_type: 'requirement',
   estimate_hours: 2, estimate_minutes: 0, worked_hours: 1, worked_minutes: 30,
-  priority: 'regular',
+  priority: 'regular', deliverable_type: 'app',
 };
 
 describe('validateNewTask', () => {
@@ -43,6 +43,14 @@ describe('validateNewTask', () => {
   test('minutes alone satisfy a time pair — neither half is required on its own', () => {
     expect(validateNewTask({ ...OK, estimate_hours: 0, estimate_minutes: 30 })).toBe('');
     expect(validateNewTask({ ...OK, worked_hours: 0, worked_minutes: 15 })).toBe('');
+  });
+
+  test('Module / App / EXE is required, and checked last', () => {
+    expect(validateNewTask({ ...OK, deliverable_type: '' })).toBe('Pick a type — Module, App or EXE.');
+    // Everything blank still complains about the name first.
+    expect(validateNewTask({})).toBe('Task name is required.');
+    expect(validateNewTask({ ...OK, user_id: '', deliverable_type: '' }))
+      .toBe('Pick an assignee — time worked is recorded against a person.');
   });
 
   test('Priority and Type are never validated', () => {

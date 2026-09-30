@@ -178,7 +178,8 @@ export async function createKra({ name, parentId }) {
 // Without it a task lands with no reference at all — and the KRA Report's Type
 // filter matches on exactly that prefix, so the task is invisible to the filter
 // meant to find it.
-export async function createKpi({ name, kraId, estimateHours, estimateMinutes, priority, userId, description, deadline, docType }) {
+// `deliverableType` (Module / App / EXE) is omitted when blank, like docType.
+export async function createKpi({ name, kraId, estimateHours, estimateMinutes, priority, userId, description, deadline, docType, deliverableType }) {
   const base = await server();
   const payload = {
     name: (name || '').trim(),
@@ -191,6 +192,7 @@ export async function createKpi({ name, kraId, estimateHours, estimateMinutes, p
     deadline: deadline || false,
   };
   if (docType) payload.doc_type = docType;
+  if (deliverableType) payload.deliverable_type = deliverableType;
   if (!base) { log.info('createKpi (mock)', payload); await delay(300); return { isMock: true, id: Math.floor(Math.random() * 1e6) }; }
   log.info('createKpi → kra.kpi.create_kpi', payload);
   const id = await callKw(base, 'kra.kpi', 'create_kpi', [payload]);

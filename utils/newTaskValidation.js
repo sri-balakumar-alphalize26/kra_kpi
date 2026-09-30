@@ -12,9 +12,14 @@
 // and blows every comparison, and without an assignee log_manual_time has nobody
 // to file the hours against and refuses AFTER the task already exists.
 //
-// Deliberately NOT validated: Priority and Type. Both carry an asterisk on the
-// web and neither is ever checked — they always hold a value, so the star is
-// decorative. Do not add validation the web does not have.
+// Deliberately NOT validated: Priority and Type (REQ / UPT / BUG). Both carry an
+// asterisk on the web and neither is ever checked — they always hold a value, so
+// the star is decorative. Do not add validation the web does not have.
+//
+// The Module / App / EXE type IS checked, last, on both: it starts blank, so the
+// star is not decorative there.
+
+import { DELIVERABLE_REQUIRED_MSG } from './deliverableType';
 
 // hours + minutes as one figure, forgiving of '' and of text the way parseInt is.
 export function toSeconds(hours, minutes) {
@@ -34,6 +39,7 @@ export function validateNewTask(t = {}) {
     return 'Time worked is required. Enter the hours and/or minutes already spent.';
   }
   if (!t.user_id) return 'Pick an assignee — time worked is recorded against a person.';
+  if (!t.deliverable_type) return DELIVERABLE_REQUIRED_MSG;
   return '';
 }
 
