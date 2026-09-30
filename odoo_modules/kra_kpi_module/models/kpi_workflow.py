@@ -1223,6 +1223,205 @@ class KpiWorkflow(models.Model):
                 'message': 'Reverted — sent back to %s.' % (self.user_id.name or 'the developer'),
                 'new_state': self.task_state}
 
+    # ------------------------------------------------------------------ #
+    # Undo a mistaken Start (same day: the assignee's own, or any, admin) #
+    # ------------------------------------------------------------------ #
+    # States Undo works from. Anything further along (verification, client
+    # sign-off, completed) has had more happen to it than a mis-tap, and hold /
+    # rework were put there by someone else.
+    _UNDO_START_STATES = ('in_progress', 'paused')
+
+    def _snapshot_before_start(self):
+        """Remember the task as it is before the FIRST Start / Resume of the day.
+
+        Later starts the same day by the same person keep the first snapshot, so
+        Undo goes back to how the day began however many times it was paused and
+        resumed. Called after the gates (a refused start leaves nothing behind)
+        and before super() (which clears paused_reason). Never raises: a failed
+        snapshot only means Undo is not offered, and must not stop the start.
+        """
+        user = self.env.user
+        today = fields.Date.context_today(user)
+        now = fields.Datetime.now()
+        for rec in self:
+            if rec.task_state in ('completed', 'partially_completed', 'awaiting_client'):
+                continue
+            if rec.undo_start_date == today and rec.undo_start_user_id == user:
+                continue
+            try:
+                rec.sudo().write({
+                    'undo_start_date': today,
+                    'undo_start_at': now,
+                    'undo_start_user_id': user.id,
+                    'undo_prev_state': rec.task_state or False,
+                    'undo_prev_paused_reason': rec.paused_reason or False,
+                    'undo_prev_pause_code': rec.pause_reason_code or False,
+                    'undo_prev_needs_reason': bool(rec.self_needs_resume_reason),
+                })
+            except Exception as exc:
+                _logger.warning("undo snapshot failed for %s: %s", rec.id, exc)
+
+    def _can_undo_start_cheap(self, user, today, is_admin=False):
+        """The board flag: no queries, so it is safe per row. The route re-checks
+        everything (_undo_start_block) before touching anything.
+
+        A developer: their own task, a start THEY made today. An admin: any
+        task started today, by anyone — they have full control."""
+        self.ensure_one()
+        if not (self.task_state in self._UNDO_START_STATES
+                and self.undo_start_user_id and self.undo_start_at
+                and self.undo_start_date == today):
+            return False
+        if is_admin:
+            return True
+        return bool(self.user_id == user and self.undo_start_user_id == user)
+
+    def _undo_start_block(self, user):
+        """'' when the caller may undo today's start of this task, else why not.
+
+        Whose time goes is always the STARTER's (undo_start_user_id) — the one
+        who pressed Start — whether they are undoing it themselves or an admin
+        is doing it for them."""
+        self.ensure_one()
+        if self.task_state not in self._UNDO_START_STATES:
+            return "Only a task that is running or paused can have its start undone."
+        starter = self.undo_start_user_id
+        if not self._user_is_kpi_admin(user):
+            # A developer takes back only their own start on their own task.
+            if self.user_id != user:
+                return "Only the assigned developer or an admin can undo starting this task."
+            if starter != user:
+                return "This task was not started by you today, so there is nothing to undo."
+        if not (starter and self.undo_start_at
+                and self.undo_start_date == fields.Date.context_today(starter)):
+            return "This task was not started today, so there is nothing to undo."
+        today = self.undo_start_date
+        # An ended day is frozen into the End Workday snapshot image; taking time
+        # out of it afterwards would make the picture lie.
+        if self.env['kpi.work.session'].sudo()._day_done(starter):
+            return ("Your workday has ended, so today's time can no longer be changed."
+                    if starter == user else
+                    "%s's workday has ended, so today's time can no longer be changed." % starter.name)
+        Log = self.env['kpi.time.log'].sudo()
+        if Log.search_count([('kpi_id', '=', self.id), ('user_id', '!=', starter.id),
+                             ('start_time', '>=', self.undo_start_at)]):
+            return "Someone else has logged time on this task since it was started."
+        if not Log.search_count([('kpi_id', '=', self.id), ('user_id', '=', starter.id),
+                                 ('work_date', '=', today),
+                                 ('start_time', '>=', self.undo_start_at)]):
+            return "No time was logged on this task today, so there is nothing to undo."
+        return ''
+
+    def undo_today_start(self):
+        """Put the task back as it was before today's first Start / Resume, and
+        remove the time logged on it since.
+
+        The time rows are DELETED, not flagged: kpi.time.log is summed in dozens
+        of places (productive time, the Workday Map, reports, invoices) and a
+        "voided" flag missed by any one of them would quietly count the time
+        anyway. Each deleted interval is kept in the audit row instead.
+
+        Breaks and non-task blocks that the start closed are left closed; they
+        record where the person was, not the task. Returns a dict so a refusal
+        renders as a message, not a traceback.
+        """
+        self.ensure_one()
+        # The rules are about who is ASKING (env.user); the reads are not. A caller
+        # without read access to this task must get the refusal below, not an
+        # access error — so read through sudo, which keeps env.user.
+        user = self.env.user
+        self = self.sudo()
+        # A double tap must not subtract the same time twice.
+        self.env.cr.execute('SELECT id FROM kra_kpi WHERE id = %s FOR UPDATE', (self.id,))
+        self.invalidate_recordset()
+        msg = self._undo_start_block(user)
+        if msg:
+            return {'status': False, 'message': msg}
+
+        from odoo.tools import float_round
+        from .kpi_work_session import IDLE_CHECK_MIN, _fmt_hms
+
+        # The STARTER's time goes, whoever is asking (an admin may undo a
+        # developer's start). The caller is recorded as the actor below.
+        starter = self.undo_start_user_id
+        today = self.undo_start_date
+        Log = self.env['kpi.time.log'].sudo()
+        logs = Log.search([('kpi_id', '=', self.id), ('user_id', '=', starter.id),
+                           ('work_date', '=', today),
+                           ('start_time', '>=', self.undo_start_at)])
+        # Only CLOSED rows were ever added to the total. The running segment is
+        # banked on pause, and it is being thrown away, not banked.
+        banked = sum(l.duration_seconds or 0.0 for l in logs if not l.is_active)
+        running_secs = 0.0
+        if self.timer_start_datetime:
+            running_secs = max(0.0, (fields.Datetime.now() - self.timer_start_datetime).total_seconds())
+        removed = banked + running_secs
+        audit = [{'id': l.id, 'start': str(l.start_time or ''), 'end': str(l.end_time or ''),
+                  'seconds': l.duration_seconds or 0.0, 'active': bool(l.is_active)}
+                 for l in logs]
+        new_total = max(0.0, float_round((self.timer_total_seconds or 0.0) - banked,
+                                         precision_digits=2))
+        valid = dict(self._fields['task_state'].selection)
+        prev = self.undo_prev_state if self.undo_prev_state in valid else (
+            'paused' if new_total > 0 else 'assigned')
+        # Undo lands on a stopped state; never "restore" into running.
+        if prev == 'in_progress':
+            prev = 'paused'
+        code = self.undo_prev_pause_code
+        if code and code not in dict(self._fields['pause_reason_code'].selection):
+            code = False
+
+        logs.unlink()
+        self.sudo().write({
+            'task_state': prev,
+            'timer_start_datetime': False,
+            'timer_total_seconds': new_total,
+            'paused_reason': self.undo_prev_paused_reason or False,
+            'pause_reason_code': code or False,
+            'self_needs_resume_reason': bool(self.undo_prev_needs_reason),
+            'undo_start_date': False,
+            'undo_start_at': False,
+            'undo_start_user_id': False,
+            'undo_prev_state': False,
+            'undo_prev_paused_reason': False,
+            'undo_prev_pause_code': False,
+            'undo_prev_needs_reason': False,
+        })
+
+        # start_task dropped the idle check. With nothing else running, re-arm it
+        # so the "what are you doing?" prompt still comes.
+        try:
+            if not Log.search_count([('user_id', '=', starter.id), ('is_active', '=', True)]):
+                sess = self.env['kpi.work.session'].sudo().search(
+                    [('user_id', '=', starter.id), ('state', '=', 'open')], limit=1)
+                if sess and not sess.idle_check_at:
+                    sess.write({'idle_check_at': fields.Datetime.now() + timedelta(minutes=IDLE_CHECK_MIN),
+                                'idle_check_count': 0})
+        except Exception as exc:
+            _logger.warning("undo start: idle re-arm failed for %s: %s", self.id, exc)
+
+        # Accepted by an admin WHILE it ran: the accept route skips the client
+        # pre-approval for a running task, so going back to a fresh state without
+        # asking now would leave it waiting on nobody.
+        if (prev in ('assigned', 'urgent', 'important', 'regular', 'queue_waiting')
+                and self.is_self_created and self.admin_accepted and not self.approval_token):
+            try:
+                self.request_client_pre_approval()
+            except Exception as exc:
+                _logger.warning("undo start: pre-approval failed for %s: %s", self.id, exc)
+
+        try:
+            self._log_action('start_undone', source='web', actor_user_id=user.id,
+                             payload={'restored_state': prev,
+                                      'started_by': starter.id,
+                                      'removed_seconds': removed,
+                                      'day': str(today), 'logs': audit})
+        except Exception:
+            pass
+        return {'status': True, 'id': self.id, 'new_state': self.task_state,
+                'removed_seconds': removed,
+                'message': 'Start undone: %s removed.' % _fmt_hms(removed)}
+
     def switch_to_task(self, from_kpi_id=None, note=''):
         """Swap ONE running task for this one. Anything else keeps running.
 
@@ -1292,6 +1491,8 @@ class KpiWorkflow(models.Model):
         # let developers work on tasks the client had never approved.
         self._assert_startable()
         prev = {rec.id: rec.task_state for rec in self}
+        # After the gates, before anything moves: what Undo would put back.
+        self._snapshot_before_start()
         result = super().start_task()
         # Starting work closes any open break/lunch — the same rule resume_task and
         # complete_task already applied. start_task did not, so pausing one task
@@ -1413,6 +1614,7 @@ class KpiWorkflow(models.Model):
         # Resuming a genuinely-underway task is allowed; resuming something the
         # client never approved is not (see _assert_startable).
         self._assert_startable()
+        self._snapshot_before_start()
         result = super().resume_task()
         # Returning from a pause closes any open break/lunch for this user.
         self.env['kpi.break.log'].stop_break(self.env.user.id)

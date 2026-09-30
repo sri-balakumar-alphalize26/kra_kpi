@@ -6,6 +6,28 @@ from datetime import datetime, timedelta
 from odoo.exceptions import ValidationError
 
 
+# What the task builds: an Odoo Module, a mobile App or a desktop EXE. A second
+# axis next to REQ / UPT / BUG (which says what KIND of work it is, and lives in
+# external_ref), so it is its own field rather than a fourth doc type. Every
+# create path runs its input through clean_deliverable_type so a bad value is a
+# readable refusal instead of a Selection write error.
+DELIVERABLE_TYPES = [('module', 'Module'), ('app', 'App'), ('exe', 'EXE')]
+DELIVERABLE_TYPE_CODES = tuple(c for c, _ in DELIVERABLE_TYPES)
+
+
+def clean_deliverable_type(raw):
+    """(value | False, error | None). Blank is (False, None) — the field is
+    optional on the server so older app builds and imports keep working; the
+    screens are what make it required on a new task. Case-insensitive, so an
+    'EXE' typed into a spreadsheet lands as 'exe'."""
+    v = raw.strip().lower() if isinstance(raw, str) else ''
+    if not v:
+        return False, None
+    if v not in DELIVERABLE_TYPE_CODES:
+        return False, 'Type must be Module, App or EXE.'
+    return v, None
+
+
 class KpiMaster(models.Model):
     _name = "kra.kpi"
     _description = "KPI Master"
@@ -121,6 +143,13 @@ class KpiMaster(models.Model):
         help="What the developer said this task is when they created it. Shown to "
              "the admin on Accept and used to pre-select the type; the admin's "
              "choice is what is actually applied.")
+
+    # Module / App / EXE — see DELIVERABLE_TYPES. Not required: existing tasks,
+    # the WhatsApp inbound path and backup restores have no value for it.
+    deliverable_type = fields.Selection(
+        DELIVERABLE_TYPES, string='Deliverable Type', index=True,
+        help="What is being built: an Odoo Module, a mobile App or a desktop EXE. "
+             "Separate from the Requirement / Update / Bug classification.")
 
     user_group_id = fields.Many2one('res.groups', string='User Group')
     user_id = fields.Many2one('res.users', string='Assignee')
@@ -463,6 +492,21 @@ class KpiMaster(models.Model):
     timer_total_seconds = fields.Float(string='Total Time (seconds)', default=0.0)
     timer_start_datetime = fields.Datetime(string='Timer Start')
     paused_reason = fields.Text(string='Paused Reason')
+
+    # ---- Undo a mistaken Start (same day) -------------------------------- #
+    # A snapshot of the task taken at the FIRST Start / Resume of the day by the
+    # person pressing it (kpi_workflow._snapshot_before_start). Undo puts the task
+    # back exactly as this says and removes that day's time. Kept on the task
+    # because kpi.action.log never recorded the state a start came from.
+    undo_start_date = fields.Date(readonly=True, copy=False)
+    undo_start_at = fields.Datetime(readonly=True, copy=False)
+    undo_start_user_id = fields.Many2one('res.users', readonly=True, copy=False,
+                                         ondelete='set null')
+    # Char, not a copy of task_state's Selection, so the two lists cannot drift.
+    undo_prev_state = fields.Char(readonly=True, copy=False)
+    undo_prev_paused_reason = fields.Text(readonly=True, copy=False)
+    undo_prev_pause_code = fields.Char(readonly=True, copy=False)
+    undo_prev_needs_reason = fields.Boolean(readonly=True, copy=False)
 
     # Advanced Workflow MVP — pause classification + client pre-approval flow.
     pause_reason_code = fields.Selection([
@@ -1114,6 +1158,12 @@ class KpiMaster(models.Model):
                 rec_vals['name'] = (
                     NAME_PREFIX_FOR_DOC_TYPE.get(doc_type, '') + (rec_vals['name'] or ''))
                 rec_vals['requested_doc_type'] = doc_type
+
+        dt, err = clean_deliverable_type(vals.get('deliverable_type'))
+        if err:
+            raise ValidationError(err)
+        if dt:
+            rec_vals['deliverable_type'] = dt
 
         rec = self.create(rec_vals)
         return rec.id

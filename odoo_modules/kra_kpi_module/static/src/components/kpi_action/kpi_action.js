@@ -24,6 +24,11 @@ const PAUSE_NOTE_MAX = 60;
 // it cost the day. Mirrors noteRequiredFor in the app's KpiActionBoard, and is
 // shared by BOTH pause dialogs here so single-pause and pause-all cannot drift.
 const PAUSE_NOTE_CODES = ['other', 'urgent', 'meeting'];
+// "Team meeting": the whole team, no one to name and nothing to explain. Chosen
+// instead of ticking people, it needs no note and sends no attendees; with no
+// note typed this is what the Workday Map shows. Same rule as the app
+// (utils/meetingPick.js).
+const TEAM_MEETING_LABEL = 'Team meeting';
 
 // Work already started and stopped. Mirrors the app's PAUSED_STATES and the
 // canResume triple, so "shows Resume" and "counts as paused" stay one idea.
@@ -1398,6 +1403,9 @@ export class KpiAction extends Component {
                                         <t t-if="state.idleMeetingPick">
                                             <div class="border rounded p-2 mb-2">
                                                 <div class="fw-bold small mb-1">Who is it with?</div>
+                                                <div id="idleMeetListTeam" role="radio" aria-checked="false" tabindex="0"
+                                                     class="d-flex align-items-center border rounded px-2 py-2 mb-2"
+                                                     style="cursor:pointer; background:#fff;"/>
                                                 <input type="text" id="idleMeetSearch" class="form-control form-control-sm mb-2"
                                                        placeholder="Search people…"/>
                                                 <div id="idleMeetList" style="max-height:190px; overflow-y:auto;"/>
@@ -2141,6 +2149,10 @@ export class KpiAction extends Component {
                                                         <span t-if="task.external_ref"
                                                               class="badge bg-secondary ms-1"
                                                               t-esc="task.external_ref"/>
+                                                        <!-- Module / App / EXE — what is being built. -->
+                                                        <span t-if="task.deliverable_type"
+                                                              class="badge bg-light text-dark border ms-1"
+                                                              t-esc="deliverableLabel(task.deliverable_type)"/>
                                                     </div>
                                                     <!-- Who the work is for. With several clients in flight the
                                                          lanes were a wall of titles with no way to tell them
@@ -2356,6 +2368,15 @@ export class KpiAction extends Component {
                                                                 t-att-disabled="btns.resumeDisabled"
                                                                 t-att-title="btns.resumeTitle"
                                                                 t-on-click="() => openResumeModal(task)">Resume</button>
+                                                        <!-- Started the wrong task? can_undo_start is the SERVER's
+                                                             answer (your own start today, or any start today for an admin; running or paused);
+                                                             the route re-checks it before anything changes. -->
+                                                        <button class="btn btn-sm btn-outline-danger"
+                                                                t-if="task.can_undo_start"
+                                                                title="Remove today's time and put this task back where it was"
+                                                                t-on-click="() => this.undoStartTask(task)">
+                                                            <i class="fa fa-undo me-1"/>Undo start
+                                                        </button>
                                                         <button class="btn btn-sm btn-danger"
                                                                 t-if="btns.complete"
                                                                 t-on-click="() => openCompleteFromCard(task)">
@@ -3893,6 +3914,9 @@ export class KpiAction extends Component {
                                      box, which Meeting also shows — "who" then "what about". -->
                                 <div id="pauseMeetWrap" style="display:none;">
                                     <label class="form-label fw-bold mt-2 mb-1">Who is it with?</label>
+                                    <div id="pauseMeetListTeam" role="radio" aria-checked="false" tabindex="0"
+                                     class="d-flex align-items-center border rounded px-2 py-2 mb-2"
+                                     style="cursor:pointer; background:#fff;"></div>
                                     <input type="text" id="pauseMeetSearch" class="form-control form-control-sm mb-1"
                                            placeholder="Search people…" autocomplete="off"/>
                                     <div id="pauseMeetList" class="border rounded p-2"
@@ -3931,6 +3955,7 @@ export class KpiAction extends Component {
         // Meeting participants, held here rather than in component state because
         // this whole dialog is imperative DOM.
         this._pauseMeetWith = new Set();
+        this._meetSetTeam('pauseMeetList', false);
         const applyPauseCode = (code, focus) => {
             const wrap = document.getElementById('pauseNoteWrap');
             const noteEl = document.getElementById('pauseReason');
@@ -3949,7 +3974,7 @@ export class KpiAction extends Component {
             // Drop anything typed under a reason that no longer asks for it, so a
             // note written for Other cannot be filed against Lunch.
             if (!needsNote && noteEl) noteEl.value = '';
-            if (!isMeeting) this._pauseMeetWith = new Set();
+            if (!isMeeting) { this._pauseMeetWith = new Set(); this._meetSetTeam('pauseMeetList', false); }
             if (isMeeting) this._loadPauseMeetPeople();
             if (needsNote && focus && noteEl) noteEl.focus();
         };
@@ -4684,7 +4709,12 @@ export class KpiAction extends Component {
     /** Fetch (once per session) and render meeting-participant checkboxes into
      *  the given container. Shared by the single Pause and Pause-all dialogs —
      *  the ids and the selection Set differ, nothing else does. */
-    async _loadMeetPeople(listId, searchId, countId, picked) {
+    /** Is the Team meeting radio on for this picker? */
+    _meetIsTeam(listId) { return !!(this._meetTeam && this._meetTeam[listId]); }
+    _meetSetTeam(listId, on) { this._meetTeam = this._meetTeam || {}; this._meetTeam[listId] = !!on; }
+
+    // `onTeam(on)` lets the dialog relabel its note box when Team meeting flips.
+    async _loadMeetPeople(listId, searchId, countId, picked, onTeam) {
         const list = document.getElementById(listId);
         if (!list) return;
         if (!this._peopleCache) {
@@ -4700,6 +4730,28 @@ export class KpiAction extends Component {
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const search = document.getElementById(searchId);
         const countEl = document.getElementById(countId);
+        // The Team meeting radio, when the dialog has a slot for it. A radio,
+        // not another checkbox: it is INSTEAD of naming people. Choosing it clears
+        // anyone ticked; ticking someone turns it off; clicking it again unselects.
+        const teamEl = document.getElementById(listId + 'Team');
+        const setCount = () => {
+            if (!countEl) return;
+            countEl.textContent = this._meetIsTeam(listId)
+                ? 'Team meeting — no need to pick people or add a note.'
+                : picked.size ? `${picked.size} selected` : 'Optional — pick anyone who is in it.';
+        };
+        const drawTeam = () => {
+            if (!teamEl) return;
+            const on = this._meetIsTeam(listId);
+            teamEl.innerHTML = `
+                <i class="fa ${on ? 'fa-dot-circle-o text-primary' : 'fa-circle-o text-muted'} me-2"></i>
+                <span class="fw-semibold flex-grow-1 ${on ? 'text-primary' : ''}">${TEAM_MEETING_LABEL}</span>
+                <span class="badge bg-light text-muted border">NO NOTE NEEDED</span>`;
+            teamEl.setAttribute('aria-checked', on ? 'true' : 'false');
+            teamEl.style.borderColor = on ? '#0d6efd' : '';
+            teamEl.style.background = on ? '#eaf1fe' : '#fff';
+            list.style.opacity = on ? '0.55' : '';
+        };
 
         const draw = () => {
             const q = (search && search.value || '').trim().toLowerCase();
@@ -4722,22 +4774,46 @@ export class KpiAction extends Component {
                 box.addEventListener('change', () => {
                     const id = parseInt(box.value, 10);
                     if (box.checked) picked.add(id); else picked.delete(id);
-                    if (countEl) {
-                        countEl.textContent = picked.size
-                            ? `${picked.size} selected`
-                            : 'Optional — pick anyone who is in it.';
+                    if (box.checked && this._meetIsTeam(listId)) {
+                        this._meetSetTeam(listId, false);
+                        drawTeam();
+                        if (onTeam) onTeam(false);
                     }
+                    setCount();
                 });
             });
         };
         draw();
+        drawTeam();
+        setCount();
         if (search && !search._wired) { search._wired = true; search.addEventListener('input', draw); }
+        if (teamEl && !teamEl._wired) {
+            teamEl._wired = true;
+            const toggle = () => {
+                const on = !this._meetIsTeam(listId);
+                this._meetSetTeam(listId, on);
+                if (on) picked.clear();
+                draw();
+                drawTeam();
+                setCount();
+                if (onTeam) onTeam(on);
+            };
+            teamEl.addEventListener('click', toggle);
+            teamEl.addEventListener('keydown', (e) => {
+                if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(); }
+            });
+        }
     }
 
     /** Single-Pause dialog wrapper — kept so its call site reads plainly. */
     async _loadPauseMeetPeople() {
         return this._loadMeetPeople('pauseMeetList', 'pauseMeetSearch', 'pauseMeetCount',
-                                    this._pauseMeetWith);
+                                    this._pauseMeetWith, (on) => {
+            const label = document.getElementById('pauseNoteLabel');
+            const noteEl = document.getElementById('pauseReason');
+            if (label) label.textContent = on ? 'What is it about? (optional)' : 'What is it about?';
+            if (noteEl) noteEl.placeholder = on ? 'Optional — saved as “Team meeting”' : 'Short — e.g. sprint planning';
+        });
     }
 
 
@@ -4775,8 +4851,10 @@ export class KpiAction extends Component {
         // and stores its own label. This used to demand a note for Day End,
         // Leave, Technical Issue and the rest, which is why people typed the
         // reason they had just picked from the list.
-        const needsNote = PAUSE_NOTE_CODES.includes(reason_code);
-        const reason = reasonRaw || (needsNote ? '' : (codeEl?.selectedOptions?.[0]?.text || reason_code));
+        const team = reason_code === 'meeting' && this._meetIsTeam('pauseMeetList');
+        const needsNote = PAUSE_NOTE_CODES.includes(reason_code) && !team;
+        const reason = reasonRaw || (team ? TEAM_MEETING_LABEL
+            : needsNote ? '' : (codeEl?.selectedOptions?.[0]?.text || reason_code));
         if (needsNote && !reason) {
             const msg = reason_code === 'urgent'
                 ? "Please describe the issue — this note is sent to the owner / configured recipients."
@@ -4797,7 +4875,7 @@ export class KpiAction extends Component {
         try {
             await rpc("/kra_kpi/task/pause", {
                 kpi_id: kpi_id, reason: reason, reason_code: reason_code,
-                meeting_with_ids: reason_code === 'meeting'
+                meeting_with_ids: reason_code === 'meeting' && !team
                     ? Array.from(this._pauseMeetWith || []) : [],
             });
             await this.refresh();
@@ -6052,6 +6130,15 @@ export class KpiAction extends Component {
                       </div>
                     </div>
                     <div class="mb-2">
+                      <label class="form-label fw-bold">Type (Module / App / EXE) *</label>
+                      <select id="ntDeliverable" class="form-select">
+                        <option value="">— choose —</option>
+                        <option value="module">Module</option>
+                        <option value="app">App</option>
+                        <option value="exe">EXE</option>
+                      </select>
+                    </div>
+                    <div class="mb-2">
                       <label class="form-label fw-bold">Priority</label>
                       <select id="ntPriority" class="form-select">
                         <option value="regular">Regular</option>
@@ -6099,12 +6186,14 @@ export class KpiAction extends Component {
         const estimate_minutes = parseInt((g('ntMinutes') && g('ntMinutes').value) || '0', 10) || 0;
         const priority = (g('ntPriority') && g('ntPriority').value) || 'regular';
         const doc_type = (g('ntDocType') && g('ntDocType').value) || 'requirement';
+        const deliverable_type = (g('ntDeliverable') && g('ntDeliverable').value) || '';
         const description = (g('ntDesc') && g('ntDesc').value) || '';
         // Only present for admins; the route falls back to the caller when it is
         // absent, and refuses it outright from a non-admin.
         const user_id = parseInt((g('ntUser') && g('ntUser').value) || '0', 10) || 0;
         if (!name) { this._toast('Please enter a task name.', 'warning'); return; }
         if (!kra_id) { this._toast('Please choose a project (KRA).', 'warning'); return; }
+        if (!deliverable_type) { this._toast('Please choose a type — Module, App or EXE.', 'warning'); return; }
         if (this.state.isAdmin && !user_id) { this._toast('Please choose a developer.', 'warning'); return; }
         // Estimate deliberately NOT required — same as the requirements upload.
         // The admin fills it in when accepting.
@@ -6112,7 +6201,7 @@ export class KpiAction extends Component {
             const res = await rpc('/kra_kpi/task/self_create', {
                 name, kra_id: parseInt(kra_id, 10),
                 estimate_hours, estimate_minutes, priority, doc_type, description,
-                user_id,
+                user_id, deliverable_type,
             });
             if (res && res.status) {
                 this.closeModal();
@@ -6262,6 +6351,36 @@ export class KpiAction extends Component {
                 this._toast('Reject failed: ' + ((e && e.message) || e), 'danger');
             }
         });
+    }
+
+    // Undo a Start made by mistake. Asked first: it deletes today's time on the
+    // task, and that cannot be put back.
+    async undoStartTask(task) {
+        const label = (task.external_ref ? task.external_ref + ' ' : '') + (task.name || '');
+        // today_seconds is the viewer's own time — an admin undoing a developer's
+        // start has none, so the figure is only quoted when there is one.
+        const secs = Math.round(task.today_seconds || 0);
+        const time = secs > 0 ? `the ${this.formatTime(secs)} logged on it today` : 'the time logged on it today';
+        const by = task.undo_start_by ? ` (started by ${task.undo_start_by})` : '';
+        const back = task.undo_start_prev_state_label || 'where it was';
+        const ok = await this._confirm(
+            'Undo starting this task?',
+            `"${label}"${by} goes back to ${back}, and ${time} is removed. ` +
+            'It leaves your Today list, and that time may show as idle on your Workday Map. ' +
+            'This cannot be undone.',
+            'Undo start', 'btn-danger');
+        if (!ok) return;
+        try {
+            const res = await rpc('/kra_kpi/task/undo_start', { kpi_id: task.id });
+            if (res && res.status) {
+                this._toast(res.message || 'Start undone.', 'success');
+                await this.refresh();
+            } else {
+                this._toast((res && res.message) || "Couldn't undo that start.", 'danger');
+            }
+        } catch (e) {
+            this._toast("Couldn't undo that start: " + ((e && e.message) || e), 'danger');
+        }
     }
 
     // Admin: permanently remove a task nobody has worked on. Deliberately
@@ -6517,6 +6636,9 @@ export class KpiAction extends Component {
                          names are recorded once however many timers are stopping. -->
                     <div id="paMeetWrap" style="display:none;">
                         <label class="form-label fw-bold mt-1 mb-1">Who is it with?</label>
+                        <div id="paMeetListTeam" role="radio" aria-checked="false" tabindex="0"
+                                     class="d-flex align-items-center border rounded px-2 py-2 mb-2"
+                                     style="cursor:pointer; background:#fff;"></div>
                         <input type="text" id="paMeetSearch" class="form-control form-control-sm mb-1"
                                placeholder="Search people…" autocomplete="off"/>
                         <div id="paMeetList" class="border rounded p-2"
@@ -6560,6 +6682,7 @@ export class KpiAction extends Component {
         const paWrap = document.getElementById('paNoteWrap');
         // Participants for a Pause-all meeting. Same shape as the single dialog.
         this._paMeetWith = new Set();
+        this._meetSetTeam('paMeetList', false);
         const paErr = document.getElementById('paErr');
         const showPaErr = (msg) => {
             if (!paErr) { return; }
@@ -6577,8 +6700,12 @@ export class KpiAction extends Component {
             document.getElementById('paNote').placeholder = isMeeting
                 ? 'Short — e.g. sprint planning' : 'Why? (required)';
             if (!needs) document.getElementById('paNote').value = '';
-            if (!isMeeting) this._paMeetWith = new Set();
-            if (isMeeting) this._loadMeetPeople('paMeetList', 'paMeetSearch', 'paMeetCount', this._paMeetWith);
+            if (!isMeeting) { this._paMeetWith = new Set(); this._meetSetTeam('paMeetList', false); }
+            if (isMeeting) this._loadMeetPeople('paMeetList', 'paMeetSearch', 'paMeetCount', this._paMeetWith, (on) => {
+                document.getElementById('paNoteLabel').textContent = on ? 'What is it about? (optional)' : 'What is it about?';
+                document.getElementById('paNote').placeholder = on ? 'Optional — saved as “Team meeting”' : 'Short — e.g. sprint planning';
+                if (on) showPaErr('');
+            });
             showPaErr('');
         };
         paCodeEl.addEventListener('change', paSync);
@@ -6586,7 +6713,8 @@ export class KpiAction extends Component {
         document.getElementById('paConfirm').addEventListener('click', async () => {
             const code = paCodeEl.value;
             const note = (document.getElementById('paNote').value || '').trim().slice(0, PAUSE_NOTE_MAX);
-            if (PAUSE_NOTE_CODES.includes(code) && !note) {
+            const team = code === 'meeting' && this._meetIsTeam('paMeetList');
+            if (PAUSE_NOTE_CODES.includes(code) && !team && !note) {
                 showPaErr(code === 'meeting'
                     ? '"Meeting" on its own does not explain the time — say what it is about.'
                     : "Please say what you're pausing for.");
@@ -6596,8 +6724,8 @@ export class KpiAction extends Component {
             close();
             try {
                 const res = await rpc('/kra_kpi/task/pause_all', {
-                    reason_code: code, reason: note,
-                    meeting_with_ids: code === 'meeting' ? Array.from(this._paMeetWith) : [],
+                    reason_code: code, reason: note || (team ? TEAM_MEETING_LABEL : ''),
+                    meeting_with_ids: code === 'meeting' && !team ? Array.from(this._paMeetWith) : [],
                 });
                 if (res && res.status) {
                     await this.refresh();
@@ -6686,6 +6814,10 @@ export class KpiAction extends Component {
     /** Human label for a REQ/UPT/BUG code (the developer's requested type). */
     docTypeLabel(t) {
         return ({ requirement: 'Requirement', update: 'Update', bug: 'Bug' })[t] || (t || '');
+    }
+    /** Module / App / EXE — what the task builds. */
+    deliverableLabel(t) {
+        return ({ module: 'Module', app: 'App', exe: 'EXE' })[t] || '';
     }
 
     priorityLabel(p) {
@@ -6898,13 +7030,14 @@ export class KpiAction extends Component {
         try {
             // The server clamps the note too — a maxlength is a courtesy, not a
             // guarantee, and this text has to fit a Workday Map chip.
-            const note = (this.state.idleNote || '').trim().slice(0, 60);
+            const team = code === 'meeting' && this._meetIsTeam('idleMeetList');
+            const note = (this.state.idleNote || '').trim().slice(0, 60) || (team ? TEAM_MEETING_LABEL : '');
             const res = await rpc('/kpi_workday/idle_reason', {
                 reason: code,
                 note,
                 // Attendees only travel with a meeting; the server ignores them
                 // for every other reason anyway, but sending them would be a lie.
-                meeting_with_ids: code === 'meeting' ? Array.from(this._idleMeetWith || []) : [],
+                meeting_with_ids: code === 'meeting' && !team ? Array.from(this._idleMeetWith || []) : [],
             });
             if (res && res.status === false) {
                 this._toast((res && res.message) || "Couldn't save that.", 'danger');
@@ -6917,6 +7050,7 @@ export class KpiAction extends Component {
             // ticked and a second meeting silently inherits them.
             this.state.idleMeetingPick = false;
             this._idleMeetWith = new Set();
+            this._meetSetTeam('idleMeetList', false);
             // No need to touch _idleAskedSeq — the answer drops idle_prompt
             // server-side and loadLiveStatus resets from that.
             await this.loadLiveStatus();

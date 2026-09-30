@@ -412,7 +412,7 @@ export class KpiKraReport extends Component {
                                     </select>
                                 </div>
 
-                                <div class="col-md-6">
+                                <div class="col-md-4">
                                     <label class="form-label fw-bold">Project (KRA) *</label>
                                     <select class="form-select" t-model="state.nt.kra_id"
                                             t-on-change="onNewTaskName">
@@ -422,13 +422,23 @@ export class KpiKraReport extends Component {
                                         </t>
                                     </select>
                                 </div>
-                                <div class="col-md-6">
+                                <div class="col-md-4">
                                     <label class="form-label fw-bold">Assignee *</label>
                                     <select class="form-select" t-model="state.nt.user_id">
                                         <option value="">— unassigned —</option>
                                         <t t-foreach="state.employees" t-as="e" t-key="e.id">
                                             <option t-att-value="e.id" t-esc="e.name"/>
                                         </t>
+                                    </select>
+                                </div>
+                                <!-- What the task builds. Separate from REQ/UPT/BUG below. -->
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">Type (Module / App / EXE) *</label>
+                                    <select class="form-select" t-model="state.nt.deliverable_type">
+                                        <option value="">— choose —</option>
+                                        <option value="module">Module</option>
+                                        <option value="app">App</option>
+                                        <option value="exe">EXE</option>
                                     </select>
                                 </div>
 
@@ -1557,6 +1567,8 @@ export class KpiKraReport extends Component {
         return {
             name: '', kra_id: '', user_id: '',
             doc_type: 'requirement',
+            // Module / App / EXE — no default, the person has to pick one.
+            deliverable_type: '',
             estimate_hours: 0, estimate_minutes: 0,
             worked_hours: 0, worked_minutes: 0,
             priority: 'regular', deadline: '', description: '',
@@ -1629,6 +1641,11 @@ export class KpiKraReport extends Component {
             t.error = 'Pick an assignee — time worked is recorded against a person.';
             return;
         }
+        // Unlike Priority and REQ/UPT/BUG this one starts blank, so it is checked.
+        if (!t.deliverable_type) {
+            t.error = 'Pick a type — Module, App or EXE.';
+            return;
+        }
         t.error = '';
 
         if (scope === 'report') {
@@ -1674,6 +1691,7 @@ export class KpiKraReport extends Component {
                 name: t.name.trim(),
                 kra_id: parseInt(t.kra_id, 10),
                 doc_type: t.doc_type,
+                deliverable_type: t.deliverable_type,
                 estimate_hours: parseInt(t.estimate_hours, 10) || 0,
                 estimate_minutes: parseInt(t.estimate_minutes, 10) || 0,
                 priority: t.priority,

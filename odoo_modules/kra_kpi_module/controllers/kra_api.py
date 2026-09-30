@@ -5,6 +5,9 @@ from odoo.addons.kra_kpi_module.models.kpi_workflow import (
     NAME_PREFIX_FOR_DOC_TYPE,
     REF_PREFIX_FOR_DOC_TYPE,
 )
+# Module / App / EXE. One cleaner for every create path, so each refuses a bad
+# value with the same words.
+from odoo.addons.kra_kpi_module.models.kpi import clean_deliverable_type
 # One line on a Workday Map chip, not a paragraph. Imported rather than redefined
 # so the pause note, the non-task note and the idle note all share one number —
 # the same way kpi_reports_api.py imports it.
@@ -415,6 +418,11 @@ class KraKpiAPI(http.Controller):
             "is_customer_review_needed": params.get("is_customer_review_needed", False),
             "related_links": params.get("related_links", "[]"),
         }
+        deliverable, err = clean_deliverable_type(params.get("deliverable_type"))
+        if err:
+            return {"status": False, "message": err}
+        if deliverable:
+            kpi_vals["deliverable_type"] = deliverable
 
         kpi_vals["timer_total_seconds"] = 0
         kpi_vals["start_time"] = False
@@ -459,6 +467,26 @@ class KraKpiAPI(http.Controller):
                     'reason': block[0] if block else 'multitask'}
         return {'status': True, 'message': 'Task started', 'id': rec.id,
                 'new_state': rec.task_state}
+
+    @http.route('/kra_kpi/task/undo_start', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_undo_start(self, **params):
+        """Take back a Start made by mistake: the task goes back to how it was
+        before today's first Start / Resume and today's time on it is removed.
+        The assignee may undo their own start; an admin may undo any. Every rule lives in kra.kpi.undo_today_start; this carries
+        the answer. with_user so env.user is the CALLER (the rules are about
+        who is asking) while the writes inside still go through sudo().
+        """
+        kpi_id = params.get('kpi_id')
+        if not kpi_id:
+            return {'status': False, 'message': 'kpi_id missing'}
+        rec = request.env['kra.kpi'].sudo().browse(int(kpi_id))
+        if not rec.exists():
+            return {'status': False, 'message': 'Task not found'}
+        try:
+            return rec.with_user(request.env.user).undo_today_start()
+        except (ValidationError, UserError) as exc:
+            return {'status': False,
+                    'message': exc.args[0] if exc.args else 'Cannot undo this start.'}
 
     def _clean_meeting_ids(self, reason_code, raw):
         """Validate meeting participants for a pause. Shared by /task/pause and
@@ -750,6 +778,9 @@ class KraKpiAPI(http.Controller):
         # Only the assigned developer (or an admin) may respond & resume.
         if rec.user_id and rec.user_id.id != user.id and not self._is_kra_admin(user):
             return {'status': False, 'message': 'Only the assigned developer can resume this task.'}
+        # Before the write below clears self_needs_resume_reason: Undo must be
+        # able to put the send-back flag back. resume_task keeps this snapshot.
+        rec._snapshot_before_start()
         rec.write({
             'self_resume_note': reason,
             'self_resume_by': user.name,
@@ -1154,6 +1185,12 @@ class KraKpiAPI(http.Controller):
             rows.sort(key=lambda r: r['seconds'], reverse=True)
             return rows
 
+        # For the Undo-start flag: one "today" and one state-label map for every row.
+        _undo_me = request.env.user
+        _undo_today = fields.Date.context_today(_undo_me)
+        _undo_admin = self._is_kra_admin(_undo_me)
+        _state_labels = dict(request.env['kra.kpi']._fields['task_state'].selection)
+
         def map_rec(k):
             # For in_progress tasks, include timer_start_datetime for real-time calculation
             timer_start_iso = None
@@ -1189,6 +1226,7 @@ class KraKpiAPI(http.Controller):
                 # against it, instead of deciding blind.
                 'requested_priority': k.requested_priority or '',
                 'requested_doc_type': k.requested_doc_type or '',
+                'deliverable_type': k.deliverable_type or '',
                 'reverted_from': k.reverted_from or '',
                 'revert_reason': k.revert_reason or '',
                 'task_state': k.task_state or "assigned",
@@ -1210,6 +1248,17 @@ class KraKpiAPI(http.Controller):
                 # timer_total_seconds is a lifetime figure and
                 # timer_start_datetime is cleared the moment a task is paused.
                 'today_seconds': round(today_map.get(k.id) or 0.0, 2),
+                # Undo a mistaken Start: offered only to the person who started it
+                # today, while it is running or paused. The route re-checks every
+                # rule; this only decides whether the button shows.
+                # An admin sees it on any task started today; a developer only on
+                # their own, and only once they have time on it today.
+                'can_undo_start': bool((_undo_admin or (today_map.get(k.id) or 0) > 0)
+                                       and k._can_undo_start_cheap(_undo_me, _undo_today, _undo_admin)),
+                'undo_start_by': k.undo_start_user_id.name if k.undo_start_user_id else '',
+                'undo_start_prev_state': k.undo_prev_state or '',
+                'undo_start_prev_state_label': _state_labels.get(k.undo_prev_state, '')
+                                               if k.undo_prev_state else '',
                 # When this task was last touched by anyone, so the lanes can
                 # sort by activity instead of by id. False for a task that has
                 # never been worked on; those sort last.
@@ -1388,6 +1437,7 @@ class KraKpiAPI(http.Controller):
             'priority': k.priority or "regular",
             'requested_priority': k.requested_priority or '',
             'requested_doc_type': k.requested_doc_type or '',
+            'deliverable_type': k.deliverable_type or '',
             'reverted_from': k.reverted_from or '',
             'revert_reason': k.revert_reason or '',
             'task_state': k.task_state or "assigned",
@@ -1405,6 +1455,16 @@ class KraKpiAPI(http.Controller):
             'estimate_extension_count': k.estimate_extension_count or 0,
             'timer_total_seconds': k.timer_total_seconds or 0,
             'today_seconds': round(_today_secs, 2),
+            # Same Undo-start keys map_rec sends, so a refetched card keeps its button.
+            'can_undo_start': bool(
+                (self._is_kra_admin(request.env.user) or _today_secs > 0)
+                and k._can_undo_start_cheap(request.env.user,
+                                            fields.Date.context_today(request.env.user),
+                                            self._is_kra_admin(request.env.user))),
+            'undo_start_by': k.undo_start_user_id.name if k.undo_start_user_id else '',
+            'undo_start_prev_state': k.undo_prev_state or '',
+            'undo_start_prev_state_label': dict(k._fields['task_state'].selection).get(
+                k.undo_prev_state, '') if k.undo_prev_state else '',
             'last_activity': _last_activity,
             # Same create_date the board route emits. Without it a card refreshed
             # through this path loses the age the red is judged by, so a new task
@@ -2595,6 +2655,9 @@ class KraKpiAPI(http.Controller):
         if req_doc_type not in ('requirement', 'update', 'bug'):
             req_doc_type = 'requirement'
         description = (params.get('description') or '').strip()
+        deliverable, deliverable_err = clean_deliverable_type(params.get('deliverable_type'))
+        if deliverable_err:
+            return {'status': False, 'message': deliverable_err}
 
         if not name:
             return {'status': False, 'message': 'Task name is required.'}
@@ -2628,6 +2691,7 @@ class KraKpiAPI(http.Controller):
             # becomes real when the admin picks it on Accept and the ref is
             # numbered — so it is stored purely as the request.
             'requested_doc_type': req_doc_type,
+            'deliverable_type': deliverable,
             'description': description,
             'task_state': 'assigned',
             'published': True,
@@ -2682,6 +2746,11 @@ class KraKpiAPI(http.Controller):
         # is now the mandatory first step of the workflow.
         if rec.admin_accepted:
             return {'status': False, 'message': 'This task is not awaiting acceptance.'}
+        # Module / App / EXE: kept as the developer set it unless the admin sends
+        # a correction.
+        deliverable, deliverable_err = clean_deliverable_type(params.get('deliverable_type'))
+        if deliverable_err:
+            return {'status': False, 'message': deliverable_err}
 
         vals = {
             'admin_accepted': True,
@@ -2693,6 +2762,8 @@ class KraKpiAPI(http.Controller):
             'admin_accepted_by_id': user.id,
             'admin_accept_deadline_at': False,
         }
+        if deliverable:
+            vals['deliverable_type'] = deliverable
         # Admin categorizes the accepted task — re-number its provisional TASK-###
         # ref into the chosen sequence (REQ/UPT/BUG) and apply the name prefix.
         # Prefix tables are shared with _auto_admin_accept so the human and
@@ -3381,13 +3452,14 @@ class KraKpiAPI(http.Controller):
     # and not in the browser: ACTIVITY_LIMIT slices the payload before the client
     # sees it, so filtering a mixed slice would silently drop older pause entries.
     ACTIVITY_KINDS = {
-        'pause':   ['pause', 'resume'],
+        'pause':   ['pause', 'resume', 'start_undone'],
         'heading': ['meta_updated'],
     }
 
     # Events whose raw key does not read well once underscores are stripped.
     ACTIVITY_LABELS = {
         'meta_updated': 'Renamed',
+        'start_undone': 'Start undone',
     }
 
     def _activity_log(self, kpi, kind='all'):
@@ -3519,6 +3591,7 @@ class KraKpiAPI(http.Controller):
             "kra": kpi.kra_id.name if kpi.kra_id else "",
             "kra_id": kpi.kra_id.id if kpi.kra_id else False,
             "type": kind,
+            "deliverable_type": kpi.deliverable_type or "",
             "external_ref": kpi.external_ref or "",
             "is_manager": is_manager,
             # 🆕 Part B: gate the in-detail "Complete This Task" panel

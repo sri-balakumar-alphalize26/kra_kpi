@@ -141,6 +141,9 @@ const TEMPLATE = xml/* xml */`
                     <th t-if="!state.isClientOnly" style="width: 70px">Min</th>
                     <th t-if="!state.isClientOnly" style="width: 110px">Priority</th>
                     <th t-if="!state.isClientOnly" style="width: 160px">Developer</th>
+                    <!-- Module / App / EXE. Shown to clients too — it describes the
+                         work, it does not allocate anyone. -->
+                    <th style="width: 110px">Type *</th>
                     <th style="width: 40px">&#160;</th>
                 </tr>
             </thead>
@@ -186,6 +189,14 @@ const TEMPLATE = xml/* xml */`
                                 <t t-foreach="state.users" t-as="u" t-key="u.id">
                                     <option t-att-value="u.id" t-esc="u.name"/>
                                 </t>
+                            </select>
+                        </td>
+                        <td>
+                            <select class="form-select form-select-sm" t-model="t.deliverable_type">
+                                <option value="">— choose —</option>
+                                <option value="module">Module</option>
+                                <option value="app">App</option>
+                                <option value="exe">EXE</option>
                             </select>
                         </td>
                         <td>
@@ -375,6 +386,15 @@ const TEMPLATE = xml/* xml */`
                     </t>
                 </select>
             </div>
+            <div class="col-md-3">
+                <label class="form-label fw-bold">Default Type (Module / App / EXE)</label>
+                <select class="form-select" t-model="state.def_deliverable">
+                    <option value="">— choose —</option>
+                    <option value="module">Module</option>
+                    <option value="app">App</option>
+                    <option value="exe">EXE</option>
+                </select>
+            </div>
         </div>
     </div>
 
@@ -416,11 +436,12 @@ class _BaseUpload extends Component {
             file_data: '',
             file_name: '',
             paste_text: '',
-            tasks: [],               // editable array of {name, estimate_hours, estimate_minutes, priority, primary_user_id}
+            tasks: [],               // editable array of {name, estimate_hours, estimate_minutes, priority, primary_user_id, deliverable_type}
             def_hours: 0,
             def_minutes: 0,
             def_priority: 'regular',
             def_user_id: '',
+            def_deliverable: '',     // Module / App / EXE — blank until chosen
             suggesting: false,
             suggestionSource: '',
             suggestionMessage: '',
@@ -488,6 +509,7 @@ class _BaseUpload extends Component {
             estimate_minutes: this.state.def_minutes || 0,
             priority: this.state.def_priority || 'regular',
             primary_user_id: this.state.def_user_id || '',
+            deliverable_type: this.state.def_deliverable || '',
         };
     }
     addRow() {
@@ -704,15 +726,25 @@ class _BaseUpload extends Component {
                 estimate_minutes: t.estimate_minutes || 0,
                 priority: t.priority || 'regular',
                 primary_user_id: t.primary_user_id || false,
+                deliverable_type: t.deliverable_type || '',
             }));
         if (!tasks.length) {
             alert('Add at least one task row.');
+            return;
+        }
+        // A blank row falls back to the default on the server, so only a row with
+        // neither is missing its type.
+        const untyped = tasks.filter(t => !t.deliverable_type && !this.state.def_deliverable);
+        if (untyped.length) {
+            alert('Please choose a type — Module, App or EXE — for:\n\n'
+                + untyped.map(t => '•  ' + t.name).join('\n'));
             return;
         }
         const r = await rpc('/kpi_requirements/create_bulk_tasks', {
             sub_kra_id: this.state.sub_kra_id,
             doc_type: this.docType,
             tasks: tasks,
+            deliverable_type: this.state.def_deliverable || '',
             file_data: this.state.file_data,
             file_name: this.state.file_name,
             requirement_version: this.state.requirement_version,
@@ -819,6 +851,7 @@ class _BaseUpload extends Component {
         this.state.def_minutes = 0;
         this.state.def_priority = 'regular';
         this.state.def_user_id = '';
+        this.state.def_deliverable = '';
         this.state.suggestionSource = '';
         this.state.suggestionMessage = '';
         this.state.import_status = '';

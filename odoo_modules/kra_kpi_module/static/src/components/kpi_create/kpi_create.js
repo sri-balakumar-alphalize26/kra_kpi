@@ -426,6 +426,17 @@ export class KpiCreate extends Component {
                     </select>
                 </div>
 
+                <!-- Type: what the task builds. Separate from REQ/UPT/BUG. -->
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Type (Module / App / EXE) *</label>
+                    <select class="form-select" t-model="state.deliverable_type">
+                        <option value="">— choose —</option>
+                        <option value="module">Module</option>
+                        <option value="app">App</option>
+                        <option value="exe">EXE</option>
+                    </select>
+                </div>
+
                 <!-- User Group & Assignee Row -->
                 <div class="row g-3">
                     <div class="col-12 col-sm-6">
@@ -714,6 +725,8 @@ export class KpiCreate extends Component {
             estimate_minutes: 0,        
             kra_list: [],
             priority: 'regular',
+            // Module / App / EXE. Required; blank until chosen.
+            deliverable_type: '',
             user_group_id: '',
             user_id: '',
             action_config_id: "",
@@ -1286,6 +1299,10 @@ export class KpiCreate extends Component {
             this.notification.add("Select KRA", { type: "warning" });
             return;
         }
+        if (!this.state.deliverable_type) {
+            this.notification.add("Please choose a type — Module, App or EXE.", { type: "warning" });
+            return;
+        }
         if (!this.state.user_id) {
             this.notification.add("Assignee is required", { type: "warning" });
             return;
@@ -1307,6 +1324,7 @@ export class KpiCreate extends Component {
                 estimate_hours: parseInt(this.state.estimate_hours) || 0,
                 estimate_minutes: parseInt(this.state.estimate_minutes) || 0,
                 priority: this.state.priority,
+                deliverable_type: this.state.deliverable_type,
                 user_group_id: this.state.user_group_id || false,
                 user_id: this.state.user_id || false,
                 action_config_id: this.state.action_config_id ? parseInt(this.state.action_config_id) : false,

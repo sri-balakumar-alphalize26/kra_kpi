@@ -151,7 +151,18 @@ export class KpiPendingQueue extends Component {
                                                                 <option value="regular">Regular</option>
                                                             </select>
                                                         </div>
-                                                        <div class="col-md-6">
+                                                        <!-- Module / App / EXE. Clients may leave it blank; the
+                                                             admin fills it in here. Not required to publish. -->
+                                                        <div class="col-md-2">
+                                                            <label class="form-label small fw-bold">Type (Module / App / EXE)</label>
+                                                            <select class="form-select form-select-sm" t-model="q.deliverable_type">
+                                                                <option value="">— choose —</option>
+                                                                <option value="module">Module</option>
+                                                                <option value="app">App</option>
+                                                                <option value="exe">EXE</option>
+                                                            </select>
+                                                        </div>
+                                                        <div class="col-md-4">
                                                             <label class="form-label small fw-bold">
                                                                 Assign Developer <span class="text-danger">*</span>
                                                             </label>
@@ -275,6 +286,8 @@ export class KpiPendingQueue extends Component {
             external_ref: q.external_ref,
             related_req_ref: q.related_req_ref,
             priority: q.priority,
+            // Blank clears it on the server.
+            deliverable_type: q.deliverable_type || '',
             estimate_hours: q.estimate_hours || 0,
             estimate_minutes: q.estimate_minutes || 0,
             user_id: q.user_id || false,

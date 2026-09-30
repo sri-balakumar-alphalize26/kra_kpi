@@ -89,7 +89,7 @@ export class KpiCompletionCertificate extends Component {
                         <label class="form-label fw-bold">Est. Minutes</label>
                         <input type="number" min="0" max="59" class="form-control" t-model.number="state.newTask.estimate_minutes"/>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label class="form-label fw-bold">Primary Developer</label>
                         <select class="form-select" t-model="state.newTask.primary_user_id">
                             <option value="">-- None --</option>
@@ -98,7 +98,16 @@ export class KpiCompletionCertificate extends Component {
                             </t>
                         </select>
                     </div>
-                    <div class="col-md-3 d-flex align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label fw-bold">Type (Module / App / EXE) *</label>
+                        <select class="form-select" t-model="state.newTask.deliverable_type">
+                            <option value="">— choose —</option>
+                            <option value="module">Module</option>
+                            <option value="app">App</option>
+                            <option value="exe">EXE</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
                         <button class="btn btn-success w-100" t-on-click="quickCreateTask">
                             <i class="fa fa-plus me-1"/> Create Task
                         </button>
@@ -312,6 +321,7 @@ export class KpiCompletionCertificate extends Component {
                 estimate_hours: 0,
                 estimate_minutes: 0,
                 primary_user_id: '',
+                deliverable_type: '',   // Module / App / EXE — required
                 file_data: '',
                 file_name: '',
             },
@@ -364,6 +374,10 @@ export class KpiCompletionCertificate extends Component {
             this._toast('Please select client, project, and enter a task name.', 'warning');
             return;
         }
+        if (!nt.deliverable_type) {
+            this._toast('Please choose a type — Module, App or EXE.', 'warning');
+            return;
+        }
         const r = await rpc('/kpi_completion_cert/create_task_from_doc', {
             client_kra_id: nt.client_kra_id,
             sub_kra_id: nt.sub_kra_id,
@@ -372,6 +386,7 @@ export class KpiCompletionCertificate extends Component {
             estimate_hours: nt.estimate_hours,
             estimate_minutes: nt.estimate_minutes,
             primary_user_id: nt.primary_user_id,
+            deliverable_type: nt.deliverable_type,
             file_data: nt.file_data,
             file_name: nt.file_name,
         });
@@ -381,7 +396,7 @@ export class KpiCompletionCertificate extends Component {
         this.state.newTask = {
             client_kra_id: '', sub_kra_id: '', task_name: '',
             requirement_version: '', estimate_hours: 0, estimate_minutes: 0,
-            primary_user_id: '', file_data: '', file_name: '',
+            primary_user_id: '', deliverable_type: '', file_data: '', file_name: '',
         };
         this.state.subKras = [];
         await this.loadList();

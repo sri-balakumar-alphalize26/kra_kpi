@@ -103,10 +103,20 @@ export class KpiClientDashboard extends Component {
                             <option value="regular">Regular</option>
                         </select>
                     </div>
-                    <div class="col-12">
+                    <div class="col-md-9">
                         <label class="form-label fw-bold">Task Name <span class="text-danger">*</span></label>
                         <input type="text" class="form-control" t-model="state.newTask.name"
                                placeholder="What needs to be done?"/>
+                    </div>
+                    <!-- What is being built. Separate from the Type above. -->
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold">Type (Module / App / EXE) <span class="text-danger">*</span></label>
+                        <select class="form-select" t-model="state.newTask.deliverable_type">
+                            <option value="">— choose —</option>
+                            <option value="module">Module</option>
+                            <option value="app">App</option>
+                            <option value="exe">EXE</option>
+                        </select>
                     </div>
                     <div class="col-12">
                         <label class="form-label fw-bold">Description</label>
@@ -619,6 +629,7 @@ export class KpiClientDashboard extends Component {
                 kind: 'requirement', sub_kra_id: '', name: '',
                 external_ref: '', related_req_ref: '',
                 description: '', priority: 'regular',
+                deliverable_type: '',
             },
             approval: {
                 open: false,
@@ -675,6 +686,10 @@ export class KpiClientDashboard extends Component {
             this._toast('Project and Task Name are required.', 'warning');
             return;
         }
+        if (!t.deliverable_type) {
+            this._toast('Please choose a type — Module, App or EXE.', 'warning');
+            return;
+        }
         const r = await rpc('/kpi_client_portal/add_task', t);
         if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
         this._toast(`Task submitted: ${r.name}. Your admin will review and assign it.`, 'warning');
@@ -682,6 +697,7 @@ export class KpiClientDashboard extends Component {
             kind: 'requirement', sub_kra_id: '', name: '',
             external_ref: '', related_req_ref: '',
             description: '', priority: 'regular',
+            deliverable_type: '',
         };
         this.state.showAdd = false;
         await this.refresh();
