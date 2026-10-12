@@ -45,6 +45,7 @@ import AttendanceScreen from './screens/AttendanceScreen';
 import AppLoginScreen from './screens/AppLoginScreen';
 import AlarmScreen from './screens/AlarmScreen';
 import ScreenTransition from './components/ScreenTransition';
+import WorkdayStartAnimation from './components/WorkdayStartAnimation';
 import { scheduleTaskAlarm, stopAlarm } from './services/alarm';
 import { completeReminder } from './services/reminderList';
 
@@ -84,6 +85,7 @@ import { registerForPushAsync, unregisterPush } from './services/push';
 import { fetchReminders } from './services/reminderList';
 import { syncReminderAlarms, clearReminderAlarms, clearTaskReminders } from './services/reminderAlarm';
 import { getWorkdayStatus } from './services/kpiActions';
+import { fetchAttendanceStatus } from './services/attendance';
 
 const log = createLogger('App');
 
@@ -173,6 +175,8 @@ function AppInner() {
   // call, so they can never disagree with each other.
   const [workdayOpen, setWorkdayOpen] = useState(false);
   const [dayDone, setDayDone] = useState(false);   // ENDED today → one start + one end per day
+  // The drop-in picture after Start Workday — only while attendance is on in the app.
+  const [workdayAnim, setWorkdayAnim] = useState(false);
   // A session for today was closed by the CRON, not by the developer. Restart is
   // still allowed; it only changes what the button is called, so a day the system
   // cut at midnight does not read as a day that never started.
@@ -841,6 +845,7 @@ function AppInner() {
     setDayDone(false);
     setTodayClosed(false);
     setWorkdayReopened(false);
+    setWorkdayAnim(false);
     setGateReady(false);
     // The board's workday cache is module scope, so it survives this sign-out —
     // the JS context doesn't reload. Clearing these state hooks without clearing
@@ -925,6 +930,14 @@ function AppInner() {
     // Start Workday from the read-only bar or the board: unlock immediately for
     // the same reason.
     const onWorkdayStarted = () => {
+      // Attendance on (the admin's "Show attendance in the app" switch) → Start
+      // Workday was also the HR check-in, so mark it with the drop-in picture.
+      // Asked fresh each time so flipping the switch needs no relaunch; never
+      // awaited, so the unlock below is not held up by it. Before the devLocked
+      // return because admins start their day from the board too.
+      fetchAttendanceStatus()
+        .then((st) => { if (st && st.enabled) setWorkdayAnim(true); })
+        .catch(() => {});
       if (!devLocked) return;
       log.info('workday started → unlocked');
       setWorkdayOpen(true);
@@ -1093,9 +1106,12 @@ function AppInner() {
 
     // key by appScreen so each navigation replays the enter animation.
     return (
-      <ScreenTransition screenKey={appScreen}>
-        {renderScreen()}
-      </ScreenTransition>
+      <>
+        <ScreenTransition screenKey={appScreen}>
+          {renderScreen()}
+        </ScreenTransition>
+        <WorkdayStartAnimation visible={workdayAnim} onDone={() => setWorkdayAnim(false)} />
+      </>
     );
   }
 

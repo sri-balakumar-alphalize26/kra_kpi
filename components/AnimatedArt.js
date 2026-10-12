@@ -21,7 +21,8 @@ import { View } from 'react-native';
 let WebView = null;
 let resolved = false;
 
-function getWebView() {
+// Exported for components/WorkdayStartAnimation.js, which plays a full page.
+export function getWebView() {
   if (resolved) return WebView;
   resolved = true;
   try {
