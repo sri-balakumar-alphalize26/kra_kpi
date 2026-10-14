@@ -7,7 +7,11 @@
 // here and unit-test without a device; utils/liveTrackingWidget.js only writes the
 // file. CommonJS so jest reads it without the RN preset.
 
-const MAX_ROWS = 3;
+// Everyone, not a top three: on Android 12+ the widget is a list that scrolls
+// inside the card (plugins/withLiveTrackingWidget.js), and older phones show the
+// first three of these with "+N more". The cap only guards the size of the
+// RemoteViews payload the launcher has to take — far above any real team.
+const MAX_ROWS = 100;
 
 // "A timer is running" is activity_kind === 'task' (or the older on_task flag).
 // NOT `active`: on this route `active` means "heartbeat is fresh" — at the desk —
@@ -52,11 +56,26 @@ function asOfClock(v) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// The names of everything this person has running, oldest first — the order the
+// server sends active_tasks in.
+function taskNames(r) {
+  const tasks = Array.isArray(r.active_tasks) ? r.active_tasks : [];
+  return tasks.map((t) => t && t.name).filter(Boolean);
+}
+
 // One line of "what are they doing". activity_label is the server's own wording
 // and is preferred wherever it exists; the fallbacks only cover the rows where it
 // is deliberately blank (idle, offline), which would otherwise render as a gap.
+//
+// Someone multi-tasking gets EVERY task, not just the first: activity_label names
+// only the oldest timer, and the point of this widget is seeing what the whole
+// team is on.
 function whatFor(r) {
   if (r.day_done) return 'Day ended';
+  if (onTask(r)) {
+    const names = taskNames(r);
+    if (names.length > 1) return names.join(' · ');
+  }
   if (r.activity_label) return r.activity_label;
   if (r.activity_kind === 'offline' || r.attendance === 'absent') return 'Absent';
   if (r.started) return 'Idle';
@@ -66,7 +85,7 @@ function whatFor(r) {
 /**
  * @param {object} res   the /kpi_owner/live_tracking payload
  * @returns {object} the widget's state file:
- *   { ok, as_of, summary, rows: [{ name, what, time }], more, message }
+ *   { ok, as_of, summary, rows: [{ user_id, name, what, task_count, time }], more, message }
  *
  * `ok: false` carries a `message` the widget prints instead of the counts. A
  * deliberate sentence beats an empty card — "no data yet", "not signed in" and
@@ -98,6 +117,7 @@ function shapeLiveTracking(res) {
     user_id: Number(r.user_id) || 0,
     name: r.name || '—',
     what: whatFor(r),
+    task_count: onTask(r) ? Math.max(1, taskNames(r).length) : 0,
     // Blank rather than '0s' when nothing is running: a time next to "Absent"
     // invites the reader to believe it means something.
     time: onTask(r) || away(r) ? (r.elapsed_display || '') : '',
@@ -126,4 +146,15 @@ function signedOutState() {
   return { ok: false, message: 'Sign in to see Live Tracking', as_of: '', rows: [], more: 0 };
 }
 
-module.exports = { shapeLiveTracking, signedOutState, asOfClock, MAX_ROWS };
+/**
+ * What the widget shows to someone who is not an admin.
+ *
+ * The widget is in everybody's picker — the picker cannot filter by role, and
+ * hiding it per role left admins without it on several launchers — while the
+ * route behind it is admin-only. Saying so beats an empty card.
+ */
+function adminOnlyState() {
+  return { ok: false, message: 'Live Tracking is for admins', as_of: '', rows: [], more: 0 };
+}
+
+module.exports = { shapeLiveTracking, signedOutState, adminOnlyState, asOfClock, MAX_ROWS };

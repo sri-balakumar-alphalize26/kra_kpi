@@ -1,5 +1,5 @@
 // Expo config plugin: an ADMIN home-screen widget showing Live Tracking — who is
-// present, who is active, and what the first few people are doing right now.
+// present, who is active, and what every employee is working on right now.
 //
 // WHY A SECOND PROVIDER RATHER THAN A MODE ON THE FIRST. The running-task widget
 // shows YOUR task; an admin runs no tasks, so for them it reads "No task running"
@@ -8,14 +8,14 @@
 // picker and each person places the one they want, with no role logic in Kotlin
 // and no mode flag riding in the state file.
 //
-// WHY THE RECEIVER SHIPS DISABLED. Android's widget picker is the OS's and knows
+// WHY THE RECEIVER SHIPS ENABLED. Android's widget picker is the OS's and knows
 // nothing about who is signed in, while /kpi_owner/live_tracking is gated
-// server-side to Owner/Coordinator/System. Without this a developer would find
-// "Live Tracking" on long-press, add it, and get a permanently empty box — which
-// reads as a broken app rather than as "not for you". Disabling the receiver is
-// the only way to take an entry out of that picker, so it starts disabled and the
-// app switches it on once a role resolves to admin
-// (modules/expo-task-widget-bridge → setLiveTrackingWidgetEnabled).
+// server-side to Owner/Coordinator/System. It used to ship disabled and be
+// switched on at runtime once a role resolved to admin, but many launchers
+// (Samsung, Xiaomi, Oppo) never refresh their picker after a runtime switch, and
+// admins only ever saw "Running task". So it is in everybody's picker, and a
+// non-admin who adds it reads "Live Tracking is for admins" (HomeScreen writes
+// that) rather than an empty box.
 //
 // WHY NO Chronometer. The task widget can tick for free because it has exactly
 // ONE base timestamp. Several people with several elapsed values cannot tick from
@@ -23,9 +23,12 @@
 // is already formatted by the server, so it is rendered as text and refreshed
 // with the rest.
 //
-// WHY NOT A RemoteViewsService. A real adapter-backed list means a separate
-// service process and a factory, for three rows on a home screen. The rows are
-// three fixed LinearLayouts toggled with setViewVisibility instead.
+// EVERYONE, IN A LIST THAT SCROLLS (Android 12+). The rows go into a ListView
+// through RemoteViews.RemoteCollectionItems, which is filled inline on every
+// render: no RemoteViewsService, no factory, no extra manifest entry, and a
+// normal updateAppWidget refreshes it. Below API 31 that call does not exist, so
+// older phones keep the three fixed LinearLayouts (toggled with
+// setViewVisibility) and "+N more".
 //
 // Applied at prebuild/EAS-build time; needs a rebuild and CANNOT work in Expo Go.
 
@@ -41,6 +44,7 @@ const WIDGET_CLASS = 'LiveTrackingWidgetProvider';
 // Must match WIDGET_FILE in utils/liveTrackingWidget.js.
 const STATE_FILE = 'live_tracking_widget.json';
 const DEEP_LINK = 'krakpi://widget/livetracking';
+// Fixed rows for phones below Android 12, which cannot show the scrolling list.
 const ROWS = 3;
 
 // ---------------------------------------------------------------- Kotlin ----
@@ -55,9 +59,12 @@ import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
+import androidx.annotation.RequiresApi
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -102,8 +109,9 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
         }
     }
 
-    /** How many people fit, from the height the launcher currently gives us.
-     *  Returns 0 for a one-cell strip, where only the counts line fits. */
+    /** How many fixed rows fit (below Android 12), from the height the launcher
+     *  currently gives us. Returns 0 for a one-cell strip, where only the counts
+     *  line fits — and the scrolling list is hidden there too. */
     private fun rowsForHeight(mgr: AppWidgetManager, widgetId: Int): Int {
         val h = try {
             mgr.getAppWidgetOptions(widgetId)
@@ -140,6 +148,7 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
             views.setTextViewText(R.id.lt_summary, state.optString("message", "Not signed in"))
             views.setViewVisibility(R.id.lt_divider, View.GONE)
             views.setViewVisibility(R.id.lt_more, View.GONE)
+            views.setViewVisibility(R.id.lt_list, View.GONE)
             for (id in rowIds) views.setViewVisibility(id, View.GONE)
             bindTap(context, views)
             mgr.updateAppWidget(widgetId, views)
@@ -149,34 +158,46 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
         views.setTextViewText(R.id.lt_summary, state.optString("summary", ""))
 
         val rows = state.optJSONArray("rows")
+        val count = rows?.length() ?: 0
         val fit = rowsForHeight(mgr, widgetId)
-        val shown = minOf(fit, rows?.length() ?: 0)
+        val useList = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && fit > 0 && count > 0
+        val shown: Int
 
-        views.setViewVisibility(R.id.lt_divider, if (shown > 0) View.VISIBLE else View.GONE)
-
-        for (i in 0 until ${ROWS}) {
-            if (i < shown) {
-                val r = rows!!.optJSONObject(i)
-                views.setTextViewText(nameIds[i], r?.optString("name", "") ?: "")
-                views.setTextViewText(whatIds[i], r?.optString("what", "") ?: "")
-                views.setTextViewText(timeIds[i], r?.optString("time", "") ?: "")
-                views.setViewVisibility(rowIds[i], View.VISIBLE)
-                // A tap on the row opens THAT person, not the whole list. Request
-                // codes 10.. keep the three rows' intents distinct from each other
-                // and from the card's. No id → the row behaves like the card.
-                val uid = r?.optLong("user_id", 0L) ?: 0L
-                val link = if (uid > 0L) "${DEEP_LINK}?user=" + uid else "${DEEP_LINK}"
-                views.setOnClickPendingIntent(rowIds[i], pendingLink(context, 10 + i, link))
-            } else {
-                views.setViewVisibility(rowIds[i], View.GONE)
+        if (useList) {
+            // Everyone; the ListView scrolls inside the card.
+            bindList(context, views, rows!!)
+            views.setViewVisibility(R.id.lt_list, View.VISIBLE)
+            for (id in rowIds) views.setViewVisibility(id, View.GONE)
+            shown = count
+        } else {
+            views.setViewVisibility(R.id.lt_list, View.GONE)
+            shown = minOf(fit, count)
+            for (i in 0 until ${ROWS}) {
+                if (i < shown) {
+                    val r = rows!!.optJSONObject(i)
+                    views.setTextViewText(nameIds[i], r?.optString("name", "") ?: "")
+                    views.setTextViewText(whatIds[i], r?.optString("what", "") ?: "")
+                    views.setTextViewText(timeIds[i], r?.optString("time", "") ?: "")
+                    views.setViewVisibility(rowIds[i], View.VISIBLE)
+                    // A tap on the row opens THAT person, not the whole list. Request
+                    // codes 10.. keep the three rows' intents distinct from each other
+                    // and from the card's. No id → the row behaves like the card.
+                    val uid = r?.optLong("user_id", 0L) ?: 0L
+                    val link = if (uid > 0L) "${DEEP_LINK}?user=" + uid else "${DEEP_LINK}"
+                    views.setOnClickPendingIntent(rowIds[i], pendingLink(context, 10 + i, link))
+                } else {
+                    views.setViewVisibility(rowIds[i], View.GONE)
+                }
             }
         }
+
+        views.setViewVisibility(R.id.lt_divider, if (shown > 0) View.VISIBLE else View.GONE)
 
         // Count everyone the widget could not show, including people hidden purely
         // because it was resized smaller — otherwise shrinking it silently loses
         // people with no sign that anything is missing. A stale card says so in
         // the same line instead: the count is history too.
-        val hidden = (rows?.length() ?: 0) - shown + state.optInt("more", 0)
+        val hidden = count - shown + state.optInt("more", 0)
         if (stale) {
             views.setTextViewText(R.id.lt_more, STALE_TEXT)
             views.setViewVisibility(R.id.lt_more, View.VISIBLE)
@@ -206,22 +227,65 @@ class ${WIDGET_CLASS} : AppWidgetProvider() {
     private fun bindTap(context: Context, views: RemoteViews) {
         views.setOnClickPendingIntent(R.id.lt_root, pendingLink(context, 1, "${DEEP_LINK}"))
     }
+
+    /** Every person as one item of the scrolling list. Items in a collection
+     *  cannot carry their own PendingIntent: the list holds ONE template and
+     *  each item fills in its own link. */
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun bindList(context: Context, views: RemoteViews, rows: JSONArray) {
+        val items = RemoteViews.RemoteCollectionItems.Builder()
+            .setHasStableIds(true)
+            .setViewTypeCount(1)
+        val seen = HashSet<Long>()
+        for (i in 0 until rows.length()) {
+            val r = rows.optJSONObject(i) ?: continue
+            val item = RemoteViews(context.packageName, R.layout.live_tracking_widget_item)
+            item.setTextViewText(R.id.lt_item_name, r.optString("name", ""))
+            item.setTextViewText(R.id.lt_item_what, r.optString("what", ""))
+            val time = r.optString("time", "")
+            item.setTextViewText(R.id.lt_item_time, time)
+            item.setViewVisibility(R.id.lt_item_time, if (time.isEmpty()) View.GONE else View.VISIBLE)
+            val uid = r.optLong("user_id", 0L)
+            val link = if (uid > 0L) "${DEEP_LINK}?user=" + uid else "${DEEP_LINK}"
+            item.setOnClickFillInIntent(R.id.lt_item_root, Intent().setData(Uri.parse(link)))
+            // Stable ids must be unique, so a missing or repeated user id falls back
+            // to a negative position, which no real user id can collide with.
+            val itemId = if (uid > 0L && seen.add(uid)) uid else -(i + 1).toLong()
+            items.addItem(itemId, item)
+        }
+        views.setRemoteAdapter(R.id.lt_list, items.build())
+        views.setPendingIntentTemplate(R.id.lt_list, listTemplate(context))
+    }
+
+    /** The list's one tap target; each item adds its own krakpi:// link as data.
+     *  MUTABLE because that fill-in is a change to the intent: an immutable
+     *  template drops it and the tap opens nothing. setPackage keeps it explicit,
+     *  which Android 14 requires of a mutable PendingIntent. */
+    private fun listTemplate(context: Context): PendingIntent {
+        val launch = Intent(Intent.ACTION_VIEW).apply {
+            setPackage(context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        return PendingIntent.getActivity(context, 2, launch, flags)
+    }
 }
 `;
 
 // ------------------------------------------------------------------ XML ----
 // resizeMode includes vertical, which is the whole point: onAppWidgetOptionsChanged
 // re-renders with more or fewer people as the admin drags it. minHeight is the
-// 4x2 default; minResizeHeight lets it shrink to the counts-only strip.
+// 4x3 default — tall enough for about six people before the list scrolls;
+// minResizeHeight lets it shrink to the counts-only strip.
 const widgetInfoXml = `<?xml version="1.0" encoding="utf-8"?>
 <!-- GENERATED by plugins/withLiveTrackingWidget.js -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="250dp"
-    android:minHeight="160dp"
+    android:minHeight="220dp"
     android:minResizeWidth="180dp"
     android:minResizeHeight="70dp"
     android:targetCellWidth="4"
-    android:targetCellHeight="2"
+    android:targetCellHeight="3"
     android:description="@string/lt_widget_description"
     android:previewImage="@drawable/live_tracking_widget_preview"
     android:previewLayout="@layout/live_tracking_widget"
@@ -349,6 +413,17 @@ const widgetLayoutXml = `<?xml version="1.0" encoding="utf-8"?>
         android:layout_marginBottom="4dp"
         android:importantForAccessibility="no"
         android:background="@color/widget_divider" />
+
+    <!-- Android 12+: everyone, scrolling inside the card. Takes the space left
+         between the header and the "more" line. -->
+    <ListView
+        android:id="@+id/lt_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="@null"
+        android:dividerHeight="0dp"
+        android:visibility="gone" />
 ${[0, 1, 2].map(rowXml).join('')}
     <TextView
         android:id="@+id/lt_more"
@@ -359,6 +434,60 @@ ${[0, 1, 2].map(rowXml).join('')}
         android:textSize="10sp"
         android:textColor="@color/widget_muted"
         android:visibility="gone" />
+</LinearLayout>
+`;
+
+// One person in the scrolling list: name and elapsed time on the first line,
+// everything they are running underneath — two lines, so a multi-tasker's task
+// names are not cut to the first one.
+const itemLayoutXml = `<?xml version="1.0" encoding="utf-8"?>
+<!-- GENERATED by plugins/withLiveTrackingWidget.js -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/lt_item_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/lt_item_name"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:textColor="@color/widget_text" />
+
+        <TextView
+            android:id="@+id/lt_item_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:paddingStart="8dp"
+            android:paddingLeft="8dp"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="@color/widget_accent" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/lt_item_what"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:textSize="11sp"
+        android:textColor="@color/widget_muted" />
 </LinearLayout>
 `;
 
@@ -411,6 +540,7 @@ module.exports = function withLiveTrackingWidget(config) {
       );
       write(path.join(main, 'res', 'xml', 'live_tracking_widget_info.xml'), widgetInfoXml);
       write(path.join(main, 'res', 'layout', 'live_tracking_widget.xml'), widgetLayoutXml);
+      write(path.join(main, 'res', 'layout', 'live_tracking_widget_item.xml'), itemLayoutXml);
       write(path.join(main, 'res', 'drawable', 'live_tracking_widget_preview.xml'), previewXml);
       write(path.join(main, 'res', 'values', 'lt_widget_strings.xml'), widgetStringsXml);
 
@@ -423,7 +553,11 @@ module.exports = function withLiveTrackingWidget(config) {
     app.receiver = app.receiver || [];
 
     const name = `.${WIDGET_CLASS}`;
-    if (!app.receiver.some((r) => r.$ && r.$['android:name'] === name)) {
+    const existing = app.receiver.find((r) => r.$ && r.$['android:name'] === name);
+    // A prebuild without --clean keeps the manifest an older plugin wrote, which
+    // shipped this receiver disabled — so correct it rather than skip it.
+    if (existing) existing.$['android:enabled'] = 'true';
+    if (!existing) {
       app.receiver.push({
         $: {
           'android:name': name,
@@ -431,11 +565,10 @@ module.exports = function withLiveTrackingWidget(config) {
           // The name under the preview in the widgets tab — below API 31 the
           // picker shows this rather than android:description.
           'android:label': '@string/lt_widget_label',
-          // SHIPS DISABLED. The picker cannot filter by role, and the route behind
-          // this widget is admin-only, so the default state has to be the one that
-          // is safe for a developer. HomeScreen switches it on once the role
-          // resolves to admin.
-          'android:enabled': 'false',
+          // SHIPS ENABLED — see the header. Switching it on at runtime never
+          // reached the picker on several launchers; HomeScreen tells a
+          // non-admin it is not theirs instead.
+          'android:enabled': 'true',
         },
         'intent-filter': [
           { action: [{ $: { 'android:name': 'android.appwidget.action.APPWIDGET_UPDATE' } }] },
@@ -459,4 +592,5 @@ module.exports = function withLiveTrackingWidget(config) {
 // The templates on their own, for plugins/__tests__/widgetLayouts.test.js. Expo
 // reads only the function above, so this changes nothing about how the plugin runs.
 module.exports.widgetLayoutXml = widgetLayoutXml;
+module.exports.itemLayoutXml = itemLayoutXml;
 module.exports.providerKt = providerKt;

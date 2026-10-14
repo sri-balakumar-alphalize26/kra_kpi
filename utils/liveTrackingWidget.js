@@ -27,7 +27,7 @@ import { createLogger } from '../api/logger';
 import { refreshLiveTrackingWidget } from '../modules/expo-task-widget-bridge';
 // The decisions that can be silently wrong — who to show, and what to say when
 // there is nothing — are pure and unit-tested.
-import { shapeLiveTracking, signedOutState } from './liveTrackingWidgetState';
+import { shapeLiveTracking, signedOutState, adminOnlyState } from './liveTrackingWidgetState';
 
 const log = createLogger('ltWidget');
 
@@ -80,6 +80,11 @@ async function put(state) {
  */
 export async function publishLiveTrackingState(res) {
   await put(shapeLiveTracking(res));
+}
+
+/** For a non-admin who placed it anyway: say it is not theirs, not an empty card. */
+export async function publishLiveTrackingAdminOnly() {
+  await put(adminOnlyState());
 }
 
 /** Clear it on logout, so a signed-out device stops showing the team's day. */

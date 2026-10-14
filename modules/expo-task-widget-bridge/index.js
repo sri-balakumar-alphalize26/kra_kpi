@@ -90,10 +90,11 @@ export function liveTrackingWidgetPlaced() {
 /**
  * Show or hide the Live Tracking widget in Android's widget picker.
  *
- * Android's picker knows nothing about who is signed in, and the route behind
- * this widget is admin-only — so without this a developer would find it on
- * long-press, add it, and get a permanently empty box that reads as a broken app.
- * The receiver ships disabled and is switched on only for an admin.
+ * It used to be switched on per role, but many launchers (Samsung, Xiaomi, Oppo)
+ * never refreshed their picker after a runtime switch, so admins never saw it.
+ * The receiver now ships enabled; App.js calls this with true at start to undo
+ * the "off" that older builds left behind (it outlives an update). Non-admins
+ * who add it are told it is for admins (HomeScreen).
  */
 export function setLiveTrackingWidgetEnabled(enabled) {
   return call('setWidgetEnabled', LIVE_TRACKING, !!enabled);

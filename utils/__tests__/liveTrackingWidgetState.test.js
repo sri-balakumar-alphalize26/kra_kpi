@@ -4,7 +4,9 @@
 // loses the counts, the result is a blank-looking card on an admin's home screen
 // and nothing, anywhere, says why — so the decisions are pinned here.
 
-const { shapeLiveTracking, signedOutState, asOfClock } = require('../liveTrackingWidgetState');
+const {
+  shapeLiveTracking, signedOutState, adminOnlyState, asOfClock, MAX_ROWS,
+} = require('../liveTrackingWidgetState');
 
 // One row in the shape /kpi_owner/live_tracking sends.
 const person = (over = {}) => ({
@@ -35,7 +37,7 @@ describe('the counts line', () => {
   });
 });
 
-describe('who gets the three rows', () => {
+describe('who is listed, in what order', () => {
   it('puts people actually working first', () => {
     const s = shapeLiveTracking(payload({
       rows: [
@@ -86,11 +88,19 @@ describe('who gets the three rows', () => {
       .toEqual(['A', 'B', 'C']);
   });
 
-  it('shows three and counts the rest as more', () => {
+  it('lists everybody, not a top three', () => {
+    // The widget scrolls on Android 12+; older phones take the first three.
     const rows = ['A', 'B', 'C', 'D', 'E'].map((n) => person({ name: n }));
     const s = shapeLiveTracking(payload({ rows }));
-    expect(s.rows).toHaveLength(3);
-    expect(s.more).toBe(2);
+    expect(s.rows).toHaveLength(5);
+    expect(s.more).toBe(0);
+  });
+
+  it('stops at the payload guard and counts the rest as more', () => {
+    const rows = Array.from({ length: MAX_ROWS + 7 }, (_, i) => person({ user_id: i + 1, name: `P${i}` }));
+    const s = shapeLiveTracking(payload({ rows }));
+    expect(s.rows).toHaveLength(MAX_ROWS);
+    expect(s.more).toBe(7);
   });
 });
 
@@ -101,6 +111,26 @@ describe('what each row says', () => {
         activity_label: 'Fix login bug', elapsed_display: '3h 4min' })],
     }));
     expect(s.rows[0]).toMatchObject({ what: 'Fix login bug', time: '3h 4min' });
+  });
+
+  it('names every task of someone multi-tasking, not just the first', () => {
+    const s = shapeLiveTracking(payload({
+      rows: [person({ activity_kind: 'task', activity_label: 'Login API', elapsed_display: '40 min',
+        active_tasks: [{ id: 1, name: 'Login API' }, { id: 2, name: 'Invoice fix' }] })],
+    }));
+    expect(s.rows[0]).toMatchObject({ what: 'Login API · Invoice fix', task_count: 2, time: '40 min' });
+  });
+
+  it('counts one task, and none for someone not on a task', () => {
+    const s = shapeLiveTracking(payload({
+      rows: [
+        person({ name: 'One', activity_kind: 'task', activity_label: 'Login API',
+          active_tasks: [{ id: 1, name: 'Login API' }] }),
+        person({ name: 'Idle' }),
+      ],
+    }));
+    expect(s.rows[0]).toMatchObject({ what: 'Login API', task_count: 1 });
+    expect(s.rows[1].task_count).toBe(0);
   });
 
   it('says "Day ended" for someone who finished, even with a stale label', () => {
@@ -181,5 +211,12 @@ describe('the states that must not look like a bug', () => {
     expect(s.ok).toBe(false);
     expect(s.rows).toEqual([]);
     expect(s.message).toMatch(/Sign in/i);
+  });
+
+  it('tells a non-admin the widget is not theirs, with no team data', () => {
+    const s = adminOnlyState();
+    expect(s.ok).toBe(false);
+    expect(s.rows).toEqual([]);
+    expect(s.message).toMatch(/admins/i);
   });
 });

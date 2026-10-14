@@ -48,8 +48,8 @@ import useAppDialog from '../components/useAppDialog';
 // board was the only publisher, which meant the widget froze the moment the
 // developer left that screen.
 import { publishWidgetState } from '../utils/taskWidget';
-import { publishLiveTrackingState } from '../utils/liveTrackingWidget';
-import { liveTrackingWidgetPlaced, setLiveTrackingWidgetEnabled } from '../modules/expo-task-widget-bridge';
+import { publishLiveTrackingState, publishLiveTrackingAdminOnly } from '../utils/liveTrackingWidget';
+import { liveTrackingWidgetPlaced } from '../modules/expo-task-widget-bridge';
 import { fetchLiveTracking } from '../services/liveTracking';
 // The floating Attendance bubble. Exists only while the admin's company-wide
 // switch is on (kra_kpi_attendance_bridge); a server without the bridge
@@ -885,8 +885,8 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
   const [isAdmin, setIsAdmin] = useState(null); // null = still resolving
   // Whether that answer came from the SERVER. On a failed lookup the screen falls
   // back to non-admin so it can draw, but that fallback must never reach the
-  // widget picker: disabling the Live Tracking receiver makes Android delete every
-  // placed copy of it, and an offline launch was taking an admin's widget away.
+  // Live Tracking widget: an offline launch must not tell an admin's widget
+  // "this is not for you".
   const roleFromServer = useRef(false);
   // Coarse role for the stats-strip card set: 'admin' | 'client' | 'developer'.
   const [role, setRole] = useState(null); // null = still resolving
@@ -920,22 +920,21 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
   }, []);
 
   // ---- Live Tracking widget (admin only) -----------------------------------
-  // Two separate jobs, both keyed off the role above.
+  // The widget is in every user's picker (App.js keeps the receiver enabled;
+  // hiding it per role never reached the picker on several launchers), so the
+  // admin-only rule is enforced here instead, by what gets written to it.
   //
-  // 1. SHOW OR HIDE IT IN THE WIDGET PICKER. Android's picker is the OS's and
-  //    knows nothing about who is signed in, while /kpi_owner/live_tracking is
-  //    gated server-side to Owner/Coordinator/System. The receiver therefore
-  //    ships disabled, and is switched on only once the role resolves to admin —
-  //    otherwise a developer would find it on long-press, add it, and get a
-  //    permanently empty box that reads as a broken app rather than "not yours".
-  //
-  // 2. FEED IT. A different route from the 15s live_status poll, so it needs its
-  //    own timer — but only when somebody will actually see it.
+  // FEED IT. A different route from the 15s live_status poll, so it needs its
+  // own timer — but only when somebody will actually see it.
   useEffect(() => {
     if (isAdmin === null) return;          // role still resolving; decide nothing
-    // Only a real answer moves the picker; a failed lookup leaves it as it was.
-    if (roleFromServer.current) setLiveTrackingWidgetEnabled(isAdmin);
-    if (!isAdmin) return;
+    if (!isAdmin) {
+      // A non-admin who added it gets a sentence, not a permanently empty box.
+      // Only on a real answer: a failed lookup must not overwrite an admin's
+      // widget with "not for you" because the phone was offline at launch.
+      if (roleFromServer.current && liveTrackingWidgetPlaced()) publishLiveTrackingAdminOnly();
+      return;
+    }
 
     let alive = true;
     const tick = async () => {

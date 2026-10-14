@@ -9,7 +9,11 @@
 // This pins the allow-list so a restyle cannot reintroduce it.
 
 const { widgetLayoutXml: taskLayout, providerKt: taskProvider } = require('../withTaskWidget');
-const { widgetLayoutXml: liveTrackingLayout, providerKt: liveTrackingProvider } = require('../withLiveTrackingWidget');
+const {
+  widgetLayoutXml: liveTrackingLayout,
+  itemLayoutXml: liveTrackingItem,
+  providerKt: liveTrackingProvider,
+} = require('../withLiveTrackingWidget');
 const { LIGHT, DARK } = require('../widgetShared');
 
 // The view classes RemoteViews supports (android.widget.RemoteViews docs, "the
@@ -45,7 +49,9 @@ function resourcesUsed(kt, kind) {
 
 describe.each([
   ['task widget', taskLayout, taskProvider('com.example.app')],
-  ['live tracking widget', liveTrackingLayout, liveTrackingProvider('com.example.app')],
+  // The card and its list item together: the provider fills both, so an id it
+  // touches may live in either, and both must pass the allow-list.
+  ['live tracking widget', liveTrackingLayout + liveTrackingItem, liveTrackingProvider('com.example.app')],
 ])('%s layout', (_name, xml, kotlin) => {
   it('declares every id the provider touches', () => {
     // A RemoteViews action aimed at an id the layout does not have is the same

@@ -79,7 +79,7 @@ import { jsonRpc, setSessionExpiredHandler } from './api/odooApi';
 import { parseWidgetLink } from './utils/widgetLink';
 import { clearWidgetState } from './utils/taskWidget';
 import { clearLiveTrackingState } from './utils/liveTrackingWidget';
-import { setLockScreenVisible } from './modules/expo-task-widget-bridge';
+import { setLockScreenVisible, setLiveTrackingWidgetEnabled } from './modules/expo-task-widget-bridge';
 import { createLogger } from './api/logger';
 import { registerForPushAsync, unregisterPush } from './services/push';
 import { fetchReminders } from './services/reminderList';
@@ -119,6 +119,11 @@ export default function App() {
     // rings and off after (screens/AlarmScreen.js). Without this first "off",
     // every screen stayed visible and usable on a locked phone.
     setLockScreenVisible(false);
+    // Live Tracking in the widget picker for everyone; HomeScreen tells a
+    // non-admin it is not theirs. Older builds switched the receiver off
+    // at runtime for non-admins, and that setting outlives an app update, so the
+    // manifest's enabled="true" alone would not bring it back on those phones.
+    setLiveTrackingWidgetEnabled(true);
   }, []);
   return (
     <SafeAreaProvider>
