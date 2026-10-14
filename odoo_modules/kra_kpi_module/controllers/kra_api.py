@@ -1080,7 +1080,9 @@ class KraKpiAPI(http.Controller):
             for g in TimeLog.read_group(
                     [('kpi_id', 'in', kpis.ids),
                      ('user_id', '=', request.env.user.id),
-                     ('work_date', '=', today)],
+                     ('work_date', '=', today),
+                     # Back-filled work was not done today, whatever its date.
+                     ('is_manual', '=', False)],
                     ['duration_seconds:sum'], ['kpi_id'], lazy=False):
                 kid = g['kpi_id'][0] if g.get('kpi_id') else False
                 if kid:
@@ -1388,7 +1390,8 @@ class KraKpiAPI(http.Controller):
         for _g in _tl.read_group(
                 [('kpi_id', '=', k.id),
                  ('user_id', '=', request.env.user.id),
-                 ('work_date', '=', fields.Date.context_today(request.env.user))],
+                 ('work_date', '=', fields.Date.context_today(request.env.user)),
+                 ('is_manual', '=', False)],
                 ['duration_seconds:sum'], ['kpi_id'], lazy=False):
             _today_secs += _g.get('duration_seconds') or 0.0
         # Same work_date filter as the board route — the two serializers must
@@ -2716,6 +2719,137 @@ class KraKpiAPI(http.Controller):
 
         return {'status': True, 'id': rec.id, 'external_ref': rec.external_ref,
                 'message': 'Task created in your Pending Review lane.'}
+
+    @http.route('/kra_kpi/task/admin_create_done', type='json', auth='user', methods=['POST'], csrf=False)
+    def admin_create_done_task(self, **params):
+        """Admin records work ALREADY DONE as a finished task awaiting approval.
+
+        The app's "Add Done Task" button. The normal path — New Task, accept,
+        start, complete — needs a running timer and the developer's own workday,
+        neither of which exists for work that happened off-system. So this
+        creates the task straight into `partially_completed` (the board's
+        Pending Approvals lane) with its worked time, in one transaction.
+
+        What it deliberately does NOT do:
+          * call start_task / complete_task — they act on the CALLER's session
+            and breaks, run the start gates, and would credit the admin;
+          * set admin_approved — approving is still a separate, human step, and
+            the client portal only shows admin-approved work;
+          * count the time as presence — the log is is_manual, so attendance,
+            live productive time and the Workday map ignore it, while the KRA /
+            employee / invoice reports include it on `work_date`.
+        """
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Only admins can add a finished task.'}
+
+        # Developer: the caller unless another was picked. Same rules as
+        # self_create and /kra_kpi/get_users, which fills the picker.
+        developer = user
+        if params.get('user_id'):
+            try:
+                candidate = request.env['res.users'].sudo().browse(int(params['user_id']))
+            except (TypeError, ValueError):
+                candidate = request.env['res.users']
+            if (not candidate.exists() or not candidate.active
+                    or candidate.share or candidate.id == 1
+                    or candidate.kpi_role == 'client'):
+                return {'status': False, 'message': 'Please choose a valid developer.'}
+            developer = candidate
+
+        name = (params.get('name') or '').strip()
+        if not name:
+            return {'status': False, 'message': 'Task name is required.'}
+        kra_id = params.get('kra_id')
+        if not kra_id:
+            return {'status': False, 'message': 'Please choose a project (KRA).'}
+        try:
+            kra = request.env['kra.master'].sudo().browse(int(kra_id))
+        except (TypeError, ValueError):
+            kra = request.env['kra.master']
+        if not kra.exists():
+            return {'status': False, 'message': 'Selected project not found.'}
+
+        try:
+            worked = int(float(params.get('worked_seconds') or 0))
+            est_h = int(params.get('estimate_hours') or 0)
+            est_m = int(params.get('estimate_minutes') or 0)
+        except (TypeError, ValueError):
+            return {'status': False, 'message': 'Time worked and estimate must be numbers.'}
+        if worked <= 0:
+            return {'status': False, 'message': 'Enter the time worked.'}
+        if est_h < 0 or not 0 <= est_m <= 59:
+            return {'status': False, 'message': 'Estimate minutes must be between 0 and 59.'}
+        # The app derives the estimate from the time worked and always lands
+        # above it; this is the guard for any other caller.
+        if est_h * 3600 + est_m * 60 <= worked:
+            return {'status': False, 'message': 'Estimate must be more than the time worked.'}
+
+        deliverable, deliverable_err = clean_deliverable_type(params.get('deliverable_type'))
+        if deliverable_err:
+            return {'status': False, 'message': deliverable_err}
+        if not deliverable:
+            return {'status': False, 'message': 'Choose the type: Module, App or EXE.'}
+
+        priority = params.get('priority') or 'regular'
+        if priority not in ('regular', 'important', 'urgent'):
+            priority = 'regular'
+
+        # The day the work is filed under, in the DEVELOPER's calendar — the same
+        # one kpi.time.log.work_date is computed in.
+        today = fields.Date.context_today(request.env['kra.kpi'].with_user(developer))
+        work_date = today
+        if params.get('work_date'):
+            try:
+                work_date = fields.Date.to_date(params['work_date'])
+            except (TypeError, ValueError):
+                return {'status': False, 'message': 'Work date is not a valid date.'}
+            if not work_date:
+                work_date = today
+        if work_date > today:
+            return {'status': False, 'message': 'Work date cannot be in the future.'}
+
+        Kpi = request.env['kra.kpi'].sudo()
+        now = fields.Datetime.now()
+        # Already accepted, so create() neither auto-accepts it (which would ask
+        # the client for pre-approval) nor arms the admin-accept clock.
+        rec = Kpi.create({
+            'name': name,
+            'kra_id': kra.id,
+            'user_id': developer.id,
+            'estimate_hours': est_h,
+            'estimate_minutes': est_m,
+            'priority': priority,
+            'deliverable_type': deliverable,
+            'external_ref': 'REQ-%03d' % Kpi._next_ref_for_prefix('REQ'),
+            'requested_by_id': user.id,
+            'published': True,
+            'admin_accepted': True,
+            'admin_accepted_at': now,
+            'admin_accepted_by_id': user.id,
+            'task_state': 'partially_completed',
+            'completed_by': developer.id,
+            'completion_date': now,
+        })
+        Kpi.log_manual_time(rec.id, worked, developer.id, fields.Date.to_string(work_date),
+                            is_manual=True)
+
+        try:
+            rec._log_action('admin_created_done', source='web', payload={
+                'developer_id': developer.id,
+                'worked_seconds': worked,
+                'work_date': fields.Date.to_string(work_date),
+            })
+        except Exception as exc:
+            _logger.warning("admin_created_done audit failed for %s: %s", rec.id, exc)
+        # Tell the reviewers it is waiting, exactly as a developer's Complete does.
+        try:
+            rec._notify('complete', prev_state=False)
+        except Exception as exc:
+            _logger.warning("admin_created_done notify failed for %s: %s", rec.id, exc)
+
+        return {'status': True, 'id': rec.id, 'external_ref': rec.external_ref,
+                'message': 'Added to Pending Approvals.'}
 
     @http.route(['/kra_kpi/task/admin_accept',
                  '/kra_kpi/task/accept_self_created'],

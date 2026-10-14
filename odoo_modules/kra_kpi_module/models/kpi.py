@@ -1029,7 +1029,7 @@ class KpiMaster(models.Model):
         } for r in rows]
 
     @api.model
-    def log_manual_time(self, kpi_id, seconds, user_id=False, work_date=False):
+    def log_manual_time(self, kpi_id, seconds, user_id=False, work_date=False, is_manual=False):
         """Back-fill work that happened off-system, from the report's New Task box.
 
         Worked time lives in TWO places that are not derived from one another:
@@ -1044,6 +1044,10 @@ class KpiMaster(models.Model):
         start/end, so this sets the times and lets them derive. Midday in the
         user's timezone is used as the anchor so the computed work_date lands on
         the intended day rather than slipping either side of midnight.
+
+        `is_manual` marks the log as back-filled (the app's "Add Done Task"), so
+        it stays out of attendance and live productive time — see
+        kpi.time.log.is_manual.
         """
         seconds = float(seconds or 0)
         if not kpi_id or seconds <= 0:
@@ -1052,6 +1056,14 @@ class KpiMaster(models.Model):
         kpi = self.browse(int(kpi_id))
         if not kpi.exists():
             raise ValidationError("That task no longer exists.")
+
+        # This is a public model method, so it is callable over RPC by any
+        # internal user — and it writes with sudo, for any user_id. Without this
+        # anyone could add hours to anybody's task. Its callers (the web KRA
+        # Report, /kra_kpi/task/admin_create_done) are admin-only anyway.
+        if not (self._user_is_kpi_admin()
+                or (kpi.user_id and kpi.user_id.id == self.env.user.id)):
+            raise ValidationError("Only an admin or the task's assignee can record time worked.")
 
         user = self.env['res.users'].browse(int(user_id)) if user_id else kpi.user_id
         if not user:
@@ -1076,6 +1088,7 @@ class KpiMaster(models.Model):
             'start_time': start,
             'end_time': start + timedelta(seconds=int(seconds)),
             'is_active': False,
+            'is_manual': bool(is_manual),
         })
         kpi.sudo().write({
             'timer_total_seconds': (kpi.timer_total_seconds or 0.0) + seconds,

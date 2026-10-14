@@ -66,7 +66,19 @@ class KpiTimeLog(models.Model):
         default=True,
         help='True if this session is currently running (not yet paused/stopped)'
     )
-    
+
+    # Work back-filled by an admin ("Add Done Task" in the app), not timed live.
+    # It counts in the date-range reports (KRA, employee, invoice) like any other
+    # log, but never as presence: the work-session totals, live status, Workday
+    # map and the retro-session cron skip it, or a record of last week's work
+    # would show up as productive time today and could even invent attendance.
+    is_manual = fields.Boolean(
+        string='Manual Entry',
+        default=False,
+        index=True,
+        help='Back-filled by an admin; excluded from attendance and live productive time.'
+    )
+
     # Related fields for easy access
     kpi_name = fields.Char(
         related='kpi_id.name',

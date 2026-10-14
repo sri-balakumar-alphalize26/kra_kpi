@@ -450,6 +450,8 @@ class KpiWorkSession(models.Model):
             domain = [
                 ('user_id',   '=', rec.user_id.id),
                 ('is_active', '=', False),
+                # Back-filled work is not time spent in this session.
+                ('is_manual', '=', False),
                 ('start_time', '>=', rec.login_at),
             ]
             if rec.logout_at:
@@ -582,7 +584,7 @@ class KpiWorkSession(models.Model):
         Log = self.env['kpi.time.log'].sudo()
 
         worked = Log.read_group(
-            [('user_id', '=', user.id), ('work_date', '=', today)],
+            [('user_id', '=', user.id), ('work_date', '=', today), ('is_manual', '=', False)],
             ['kpi_id'], ['kpi_id'], lazy=False)
         worked_ids = {g['kpi_id'][0] for g in worked if g.get('kpi_id')}
         if not worked_ids:
@@ -824,7 +826,8 @@ class KpiWorkSession(models.Model):
         ], limit=1)
         login_raw = (sess.login_at.isoformat() + 'Z') if sess and sess.login_at else False
         today = fields.Date.context_today(self)
-        done_logs = Log.search([('user_id', '=', user.id), ('work_date', '=', today), ('is_active', '=', False)])
+        done_logs = Log.search([('user_id', '=', user.id), ('work_date', '=', today),
+                                ('is_active', '=', False), ('is_manual', '=', False)])
         # Wall-clock covered, not the sum of durations — the live counter has to
         # agree with the End Workday summary, which measures the same way.
         productive_base = _measure([(l.start_time, l.end_time) for l in done_logs])
@@ -1393,6 +1396,8 @@ class KpiWorkSession(models.Model):
             dom = [
                 ('user_id',   '=', s.user_id.id),
                 ('is_active', '=', False),
+                # Back-filled work did not happen inside this session.
+                ('is_manual', '=', False),
                 ('start_time', '>=', s.login_at),
             ]
             if s.logout_at:
@@ -2354,10 +2359,12 @@ class KpiWorkSession(models.Model):
         retro = 0
 
         # Part 2: retro-create sessions for users who logged time today
-        # but never opened the dashboard.
+        # but never opened the dashboard. Back-filled (is_manual) time is not a
+        # sign anyone was at work today, so it never invents a session.
         Log = self.env['kpi.time.log'].sudo()
         rows = Log.read_group(
-            domain=[('work_date', '=', today), ('is_active', '=', False)],
+            domain=[('work_date', '=', today), ('is_active', '=', False),
+                    ('is_manual', '=', False)],
             fields=['user_id'],
             groupby=['user_id'],
         )
@@ -2375,10 +2382,12 @@ class KpiWorkSession(models.Model):
             first = Log.search([
                 ('user_id', '=', uid),
                 ('work_date', '=', today),
+                ('is_manual', '=', False),
             ], order='start_time asc', limit=1)
             last = Log.search([
                 ('user_id', '=', uid),
                 ('work_date', '=', today),
+                ('is_manual', '=', False),
                 ('end_time', '!=', False),
             ], order='end_time desc', limit=1)
             new_s = Session.create({
