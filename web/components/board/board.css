@@ -1,0 +1,122 @@
+/* Board behaviour the mockup did not need: fluid columns, drag states,
+   collapsible Completed lane, phone scrolling. */
+.k-app .board { display: flex; gap: 12px; flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; scrollbar-width: auto; align-items: flex-start; }
+.k-app .col { width: 250px; min-width: 220px; flex: 1 1 220px; max-width: 320px; max-height: 100%; }
+.k-app .col.narrow { flex: 0 0 56px; min-width: 56px; width: 56px; }
+.k-app .col.narrow .col-h { writing-mode: vertical-rl; height: auto; padding: 14px 0; justify-content: flex-start; }
+.k-app .col.narrow .col-b { display: none; }
+/* End Workday summary (components/work/EndWorkdayDialog.jsx) */
+.ewd { display: flex; flex-direction: column; gap: 12px; }
+.ewd-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.ewd-stats .stat { padding: 12px 14px; box-shadow: none; }
+.ewd-stats .stat b { font-size: 22px; line-height: 26px; }
+.ewd-box { border: 1px solid var(--border); border-radius: var(--r-card); padding: 12px 14px; }
+.ewd-box.warn { background: var(--lz-paused-bg); border-color: var(--pri-important); }
+.ewd-box h3 { margin: 0 0 8px; font-size: 13.5px; font-weight: 800; color: var(--navy); }
+.ewd-away { display: flex; flex-wrap: wrap; gap: 6px; }
+.ewd-tag { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--hover); font-size: 12.5px; color: var(--subtle); }
+.ewd-tag b { color: var(--text); }
+.ewd-tag.sm { padding: 1px 8px; margin-right: 6px; font-weight: 700; }
+.ewd-events { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--subtle); }
+.ewd-map { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 0; }
+.ewd-step { display: inline-flex; align-items: center; }
+.ewd-arrow { font-style: normal; color: var(--subtlest); margin: 0 6px; }
+.ewd-chip { display: inline-flex; flex-direction: column; padding: 5px 10px; border-radius: 10px; background: var(--hover); border: 1px solid var(--border); max-width: 260px; }
+.ewd-chip b { font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ewd-chip small { font-size: 11.5px; color: var(--subtlest); }
+.ewd-chip.k-task { background: var(--lz-prog-bg); }
+.ewd-chip.k-break { background: var(--lz-paused-bg); }
+.ewd-chip.k-start, .ewd-chip.k-end { background: var(--surface); }
+.ewd-prog { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-top: 1px solid rgba(0,0,0,.06); }
+.ewd-prog-name { font-size: 13px; font-weight: 600; }
+.ewd-prog-row { display: flex; gap: 6px; align-items: center; }
+.ewd-prog-row .input { flex: 1; height: 32px; background: var(--surface); }
+
+/* Folded (empty) lanes: full-height strips, clickable to open, still drop targets. */
+.k-app .col.narrow { align-self: stretch; }
+.k-app .col.narrow .col-h { cursor: pointer; border-radius: var(--r-card); }
+.k-app .col.narrow .col-h:hover { background: var(--hover); }
+.k-app .col-h { cursor: default; }
+.k-app .col-h .dotc { width: 8px; height: 8px; border-radius: 50%; margin-right: 2px; }
+.k-app .col-h .collapse { margin-left: auto; width: 24px; height: 24px; }
+.k-app .col-b { overflow-y: auto; flex: 1; min-height: 60px; scrollbar-width: thin; }
+.k-app .col.drop-ok { outline: 2px dashed var(--brand); outline-offset: -2px; background: var(--sel-bg); }
+.k-app .col.drop-no { opacity: .45; }
+.k-app .card { cursor: grab; transition: box-shadow .12s, transform .12s; }
+.k-app .card:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
+.k-app .card.dragging { opacity: .35; }
+.k-app .drag-ghost .card { box-shadow: var(--shadow-lg); transform: rotate(2deg); cursor: grabbing; width: 250px; }
+.k-app .col-b .empty { padding: 22px 8px; font-size: 12.5px; }
+.k-app .board-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.k-app .filters { flex-wrap: wrap; }
+.k-app .readonly { background: var(--lz-paused-bg); border-color: var(--pri-important); color: var(--lz-paused); margin-bottom: 12px; }
+
+/* Task panel (side) */
+.k-app .panel { position: fixed; top: 56px; right: 0; bottom: 0; width: min(560px, 100vw); z-index: 46; border-radius: 16px 0 0 0; }
+.k-app .panel-b { overflow-y: auto; scrollbar-width: thin; overscroll-behavior: contain; /* reaching the top/bottom doesn't scroll the page behind */ }
+.k-app .panel-scrim { overscroll-behavior: contain; touch-action: none; }
+.k-app .panel .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.k-app .panel .details dt { height: auto; min-height: 24px; }
+.k-app .panel .details dd { height: auto; min-height: 24px; flex-wrap: wrap; }
+.k-app .panel .comment p { white-space: pre-wrap; word-break: break-word; }
+.k-app .panel-scrim { position: fixed; inset: 56px 0 0; z-index: 45; }
+@media (max-width: 900px) { .k-app .panel { border-radius: 0; } .k-app .col { min-width: 240px; flex: 0 0 240px; } }
+
+/* Reason chips in dialogs */
+.k-app .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.k-app .chips .pill { height: 34px; }
+.k-app .chips .pill.on { background: var(--sel-bg); color: var(--sel-text); box-shadow: inset 0 0 0 1.5px var(--brand); }
+.k-app .people { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; border: 1.5px solid var(--border); border-radius: 10px; padding: 6px; }
+.k-app .people label { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 6px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.k-app .people label:hover { background: var(--hover); }
+
+/* "Not on a task?" flow (components/work/IdleFlow.jsx) */
+.idle-guide { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 10px; background: var(--over-bg); border-left: 3px solid var(--danger); color: var(--over); font-size: 13px; }
+.idle-opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.idle-opt { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1.5px solid var(--border); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.idle-opt b { font-size: 14px; }
+.idle-opt small { font-size: 11.5px; color: var(--subtlest); line-height: 15px; }
+.idle-opt:hover { border-color: var(--brand); background: var(--hover); }
+.idle-opt.on { border-color: var(--brand); background: var(--sel-bg); }
+.idle-opt.alert { border-color: #FCA5A5; background: #FEF2F2; }
+.idle-opt.alert b { color: #B91C1C; }
+.idle-opt:disabled { opacity: .6; cursor: default; }
+.idle-meet { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; }
+.idle-meet .btn { align-self: flex-start; }
+.now-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.now-pill { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: 999px; background: #EDE9FE; color: #4C1D95; font-size: 13px; font-weight: 700; }
+.now-pill.brk { background: #FEF3C7; color: #92400E; }
+.k-app .pill.alert { background: #FEF2F2; color: #B91C1C; }
+.k-app .pill.idle-ask { background: #E0E7FF; color: #3730A3; font-weight: 600; }
+@media (max-width: 640px) { .idle-opts { grid-template-columns: minmax(0, 1fr); } }
+
+/* Inline buttons on board cards (TaskCard `actions`) */
+.k-app .card-acts { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.k-app .card-acts .btn { height: 26px; padding: 0 9px; font-size: 12px; }
+
+/* Card detail lines (TaskCard): what the Odoo card shows under the title. */
+.k-app .card .cd-desc { font-size: 12px; line-height: 17px; color: var(--subtle); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.k-app .card .cd-desc.one { -webkit-line-clamp: 1; font-style: italic; }
+.k-app .card .cd-say { font-size: 12px; line-height: 17px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.k-app .card .cd-users { display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; color: var(--subtle); }
+.k-app .card .cd-users > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-app .card .cd-users em { font-style: normal; color: var(--pri-regular); font-weight: 700; }
+.k-app .card .cd-note { display: flex; flex-direction: column; gap: 2px; font-size: 12px; padding: 4px 8px; border-radius: var(--r); border: 1px solid var(--border); background: var(--surface); }
+.k-app .card .cd-note.warn { border-color: var(--pri-important); }
+.k-app .card .cd-note span { color: var(--subtle); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Board: running banner, live totals, filter row + chips. */
+.k-app .run-banner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 8px; border-radius: var(--r-card); background: var(--lz-paused-bg); color: var(--lz-paused); border: 1px solid var(--pri-important); font-size: 13px; }
+.k-app .run-banner .run-t { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: var(--text); }
+.k-app .run-banner .totals { margin-left: auto; color: var(--subtle); font-size: 12.5px; }
+.k-app .run-banner .totals b { font-variant-numeric: tabular-nums; color: var(--text); }
+.k-app .fchips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; font-size: 12.5px; }
+.k-app .fchip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px 0 10px; border-radius: 999px; background: var(--sel-bg); color: var(--navy); font-weight: 700; font-size: 12px; }
+.k-app .fchip button { border: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; padding: 2px; border-radius: 50%; }
+.k-app .fchip button:hover { background: var(--hover); }
+.k-app .fsum { font-weight: 700; font-size: 12.5px; }
+.k-app .fsum.ok { color: var(--pri-regular); }
+.k-app .fsum.none { color: var(--danger); }
+.k-app .reopen-line { font-size: 12.5px; color: var(--lz-paused); margin: 0 0 8px; white-space: pre-wrap; }
+.k-app .paid-card { cursor: default; }
+.k-app .paid-card:hover { transform: none; }
