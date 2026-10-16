@@ -3112,10 +3112,79 @@ class KpiReportsAPI(http.Controller):
         except Exception as e:
             return {'status': False, 'message': str(e), 'projects': []}
 
+    # Total decoded size of the files a client may attach to one new task.
+    CLIENT_TASK_FILES_MAX_BYTES = 25 * 1024 * 1024
+
+    def _client_task_files(self, raw):
+        """Validate add_task's `attachments` → ([(name, bytes, mimetype)], error).
+
+        Each entry is {name, data_b64, mimetype}; file_name / file_data are
+        accepted too, the keys the other upload routes use. A data: URL prefix is
+        stripped. The 25 MB cap is on the decoded total, not per file.
+        """
+        import base64
+        import binascii
+        if not raw:
+            return [], None
+        if not isinstance(raw, list):
+            return [], 'Attachments must be a list.'
+        out, total = [], 0
+        for entry in raw:
+            if not isinstance(entry, dict):
+                return [], 'Each attachment needs a name and data.'
+            name = (entry.get('name') or entry.get('file_name') or '').strip()
+            data_b64 = entry.get('data_b64') or entry.get('file_data') or ''
+            if not name or not data_b64:
+                return [], 'Each attachment needs a name and data.'
+            if isinstance(data_b64, str) and data_b64.startswith('data:') and ',' in data_b64:
+                data_b64 = data_b64.split(',', 1)[1]
+            try:
+                data = base64.b64decode(data_b64, validate=True)
+            except (binascii.Error, ValueError, TypeError):
+                return [], '"%s" could not be read.' % name
+            total += len(data)
+            if total > self.CLIENT_TASK_FILES_MAX_BYTES:
+                return [], 'Attachments are over the %d MB limit.' % (
+                    self.CLIENT_TASK_FILES_MAX_BYTES // (1024 * 1024))
+            out.append((name[:255], data, (entry.get('mimetype') or '').strip()[:128]))
+        return out, None
+
+    def _attach_client_files(self, kpi, files):
+        """Store the client's files on the new task as one progress entry.
+
+        The same storage as a progress upload — first file on the entry itself,
+        the rest as kpi.file.attachment rows — so they show wherever a task's
+        files already show, with the client as the author.
+        """
+        import base64
+        name, data, mime = files[0]
+        progress = request.env['kpi.progress'].sudo().create({
+            'kpi_id': kpi.id,
+            'user_id': request.env.user.id,
+            'summary': 'Attached by the client when submitting this task.',
+            'uploaded_file': base64.b64encode(data),
+            'file_name': name,
+        })
+        Att = request.env['kpi.file.attachment'].sudo()
+        for seq, (name, data, mime) in enumerate(files[1:], start=2):
+            Att.create({
+                'progress_id': progress.id,
+                'file': base64.b64encode(data),
+                'file_name': name,
+                'mimetype': mime or False,
+                'sequence': seq * 10,
+            })
+        return progress
+
     @http.route('/kpi_client_portal/add_task', type='json', auth='user', methods=['POST'], csrf=False)
     def client_portal_add_task(self, **params):
         """Allow a client portal user to self-submit a new task under one of their projects.
-        Created in 'assigned' state without a user_id — admin will pick that up and reassign."""
+        Created in 'assigned' state without a user_id — admin will pick that up and reassign.
+
+        Optional: needed_by ('YYYY-MM-DD', today or later) lands on the task's
+        `deadline`; attachments ([{name, data_b64, mimetype}], 25 MB in total)
+        are stored as a progress entry by the client (see _attach_client_files).
+        """
         try:
             sub_kra_id = int(params.get('sub_kra_id') or 0)
             if not sub_kra_id:
@@ -3138,6 +3207,17 @@ class KpiReportsAPI(http.Controller):
             deliverable, err = clean_deliverable_type(params.get('deliverable_type'))
             if err:
                 return {'status': False, 'message': err}
+            needed_by = False
+            if params.get('needed_by'):
+                try:
+                    needed_by = fields.Date.to_date(params['needed_by'])
+                except (TypeError, ValueError):
+                    return {'status': False, 'message': 'Needed-by date is not a valid date.'}
+                if needed_by and needed_by < fields.Date.context_today(request.env.user):
+                    return {'status': False, 'message': 'Needed-by date cannot be in the past.'}
+            files, err = self._client_task_files(params.get('attachments'))
+            if err:
+                return {'status': False, 'message': err}
             vals = {
                 'name': name_prefix + raw_name,
                 'kra_id': sub_kra_id,
@@ -3155,16 +3235,25 @@ class KpiReportsAPI(http.Controller):
             }
             if deliverable:
                 vals['deliverable_type'] = deliverable
+            if needed_by:
+                vals['deadline'] = needed_by
             kpi = request.env['kra.kpi'].sudo().create(vals)
+            if files:
+                self._attach_client_files(kpi, files)
             # Tell the admins a client task is queued (re-nudged while unread).
             try:
-                kpi._notify('client_task_queued')
+                kpi._notify('client_task_queued', attachments_line=(
+                    '\n📎 %d file%s: %s' % (len(files), '' if len(files) == 1 else 's',
+                                           ', '.join(f[0] for f in files))
+                    if files else ''))
                 kpi._schedule_queue_nudge()
             except Exception as exc:
                 import logging
                 logging.getLogger(__name__).warning(
                     "client_task_queued notify failed for kpi %s: %s", kpi.id, exc)
-            return {'status': True, 'kpi_id': kpi.id, 'name': kpi.name}
+            return {'status': True, 'kpi_id': kpi.id, 'name': kpi.name,
+                    'needed_by': fields.Date.to_string(needed_by) if needed_by else '',
+                    'attachment_count': len(files)}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"client_portal_add_task: {str(e)}")
@@ -4777,6 +4866,78 @@ class KpiReportsAPI(http.Controller):
         except Exception as e:
             import logging, traceback
             logging.getLogger(__name__).error(f"kpi_owner_live_tracking: {e}\n{traceback.format_exc()}")
+            return {'status': False, 'message': str(e)}
+
+    # One nudge per developer per this many minutes, whoever sends it.
+    NUDGE_COOLDOWN_MIN = 10
+
+    @http.route('/kpi_owner/nudge_user', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_owner_nudge_user(self, **params):
+        """Admin pings one developer from Live Tracking.
+
+        params: user_id (required), note (optional, the admin's own words).
+
+        Sent as the 'admin_nudge' event: in-app feed + push to that developer
+        only. It has no WhatsApp template, so the WhatsApp leg stays silent like
+        the other developer prompts. The wording depends on whether their
+        workday is open: "start your workday" to someone who has not begun,
+        "checking in" to someone who has.
+
+        The rate limit reads the developer's last admin_nudge notification row,
+        so there is no extra state to keep: a second nudge inside
+        NUDGE_COOLDOWN_MIN is refused with how long ago the last one went.
+        """
+        import logging
+        try:
+            user = request.env.user
+            if not self._is_owner_admin():
+                return {'status': False, 'message': 'Not authorized.'}
+            try:
+                uid = int(params.get('user_id') or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            target = request.env['res.users'].sudo().browse(uid)
+            if (not uid or not target.exists() or not target.active or target.share
+                    or target.id == 1 or target.kpi_role == 'client'):
+                return {'status': False, 'message': 'Please choose a valid developer.'}
+            if target.id == user.id:
+                return {'status': False, 'message': "You can't nudge yourself."}
+
+            now = fields.Datetime.now()
+            last = request.env['kpi.notification'].sudo().search(
+                [('event', '=', 'admin_nudge'), ('user_id', '=', target.id)],
+                order='create_date desc', limit=1)
+            if last and last.create_date > now - timedelta(minutes=self.NUDGE_COOLDOWN_MIN):
+                ago = max(1, int((now - last.create_date).total_seconds() // 60))
+                wait = int((last.create_date + timedelta(minutes=self.NUDGE_COOLDOWN_MIN)
+                            - now).total_seconds())
+                return {'status': False, 'message': 'Nudged %d min ago.' % ago,
+                        'retry_after_seconds': max(1, wait)}
+
+            workday_open = bool(request.env['kpi.work.session'].sudo().search_count(
+                [('user_id', '=', target.id), ('state', '=', 'open')]))
+            admin_name = user.name or 'Your admin'
+            message = ('%s is checking in on you.' % admin_name if workday_open
+                       else '%s asks you to start your workday.' % admin_name)
+            note = (params.get('note') or '').strip()[:300]
+
+            # _notify lives on kra.kpi: hang it off any task. admin_nudge is a
+            # non-task, passthrough event, so the anchor is never shown or used
+            # to pick the recipient — extra_users carries the developer.
+            Kpi = request.env['kra.kpi'].sudo()
+            anchor = (Kpi.search([('user_id', '=', target.id)], order='id desc', limit=1)
+                      or Kpi.search([], order='id desc', limit=1))
+            if not anchor:
+                return {'status': False, 'message': 'No task exists to send the nudge through.'}
+            anchor._notify(
+                'admin_nudge', extra_users=[target.id],
+                admin=admin_name, message=message,
+                note_line=('\n“%s”' % note) if note else '',
+            )
+            return {'status': True, 'user_id': target.id, 'workday_open': workday_open,
+                    'message': 'Nudged %s.' % (target.name or 'them')}
+        except Exception as e:
+            logging.getLogger(__name__).error(f"kpi_owner_nudge_user: {e}")
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_owner/action_log', type='json', auth='user', methods=['POST'], csrf=False)

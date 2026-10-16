@@ -81,6 +81,7 @@ _NON_TASK_EVENTS = {
     'break_budget_exceeded', 'workday_overtime',
     'daily_summary', 'daily_report',
     'invoice_ready', 'invoice_paid', 'invoice_client_paid',
+    'admin_nudge',
 }
 
 _PERSIST_EVENTS = {
@@ -177,6 +178,9 @@ _PERSIST_EVENTS = {
     'partial_timeout',      # client stayed silent → prep auto-started
     'pre_approval_reminder',  # client: you still haven't approved
     'urgent_pause',         # 🚨 dev needs help — re-nudged until an admin reads it
+    # An admin tapped Nudge on Live Tracking. The persisted row doubles as the
+    # rate limit: /kpi_owner/nudge_user refuses another within 10 minutes of it.
+    'admin_nudge',
 }
 
 # Short human labels for the in-app notification title (the body reuses the
@@ -215,6 +219,7 @@ _NOTIF_TITLES = {
     'invoice_paid':         'Payment recorded',
     'invoice_client_paid':  'Client marked invoice paid',
     'dev_idle_check':       'Not started a task yet?',
+    'admin_nudge':          'Nudge from your admin',
     'dev_no_task':          '📭 Developer has no tasks',
     'break_running_long':    '☕ Still on your break?',
     'lunch_running_long':    '🍽 Lunch is running long',
@@ -261,7 +266,8 @@ _APP_TEMPLATES = {
         "🆕 A client submitted a task — it needs a developer.\n"
         "📌 {title}\n"
         "👤 From: {created_by} • Client: {client_name}\n"
-        "🏷 Project: {project}\n\n"
+        "🏷 Project: {project}"
+        "{needed_by_line}{attachments_line}\n\n"
         "Open the Client Task Queue to assign a developer."
     ),
     # Client rejected WHO the task went to → it's back in the queue with no
@@ -386,6 +392,12 @@ _APP_TEMPLATES = {
         "You haven't started a task yet.\n"
         "In a meeting, on a break — or do you have no tasks assigned?\n\n"
         "Tap to tell us, so nobody has to chase you."
+    ),
+    # An admin chasing in person. {message} is built by the route (it knows
+    # whether the developer's workday is open); {note_line} is the admin's own
+    # words on a new line, or nothing.
+    'admin_nudge': (
+        "👋 {message}{note_line}"
     ),
     # The admin's one actionable case.
     'dev_no_task': (
@@ -646,6 +658,9 @@ _EVENT_RECIPIENTS = {
     # would land on the wrong person. The caller passes the real developer via
     # _notify(extra_users=[uid]) instead.
     'dev_idle_check':            (),
+    # Same reason: the nudged developer comes in through extra_users, never the
+    # anchor task's assignee.
+    'admin_nudge':               (),
     # The one case that IS the admin's to fix. Re-nudged every 15 min while unread.
     'dev_no_task':               ('owner', 'coordinator'),
     # Over-run reminders go to the DEVELOPER via extra_users and to NOBODY via
@@ -892,7 +907,9 @@ _PASSTHROUGH_EVENTS = ('daily_summary', 'daily_report',
                        # {dev} built from the anchor would name the wrong person.
                        'break_running_long', 'lunch_running_long',
                        'meeting_running_long', 'break_budget_exceeded',
-                       'workday_overtime')
+                       'workday_overtime',
+                       # About the nudged developer, anchored on any task.
+                       'admin_nudge')
 
 
 _DECISION_EMOJI = {
@@ -1622,6 +1639,10 @@ class KpiNotify(models.Model):
             'client_name': client_name or 'there',
             'priority':    (self.priority or 'regular').title(),
             'deadline':    str(self.deadline) if self.deadline else 'not set',
+            # Whole lines or nothing, like {signoff_note}: a client task with no
+            # date or files reads cleanly instead of "Needed by: not set".
+            'needed_by_line': ('\n📅 Needed by %s' % self.deadline) if self.deadline else '',
+            'attachments_line': ctx.get('attachments_line') or '',
             'dev':         dev_name,
             'estimate':    estimate,
             'description': desc,

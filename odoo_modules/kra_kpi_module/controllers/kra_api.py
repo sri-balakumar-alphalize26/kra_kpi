@@ -3588,12 +3588,13 @@ class KraKpiAPI(http.Controller):
     # sees it, so filtering a mixed slice would silently drop older pause entries.
     ACTIVITY_KINDS = {
         'pause':   ['pause', 'resume', 'start_undone'],
-        'heading': ['meta_updated'],
+        'heading': ['meta_updated', 'priority_changed'],
     }
 
     # Events whose raw key does not read well once underscores are stripped.
     ACTIVITY_LABELS = {
         'meta_updated': 'Renamed',
+        'priority_changed': 'Priority changed',
         'start_undone': 'Start undone',
     }
 
@@ -3883,6 +3884,79 @@ class KraKpiAPI(http.Controller):
                     'name': kpi.name, 'kra_id': kpi.kra_id.id if kpi.kra_id else False}
         except Exception as e:
             _logger.error(f"update_kpi_meta failed: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
+    # The three to-do lanes. The board files a not-yet-started task by its
+    # PRIORITY (laneForTask in the app, the same rule in kpi_action.js), whatever
+    # its task_state — usually 'assigned', 'rework' or a pre_approval_* value.
+    # Reassign is the one place task_state is set to the priority itself.
+    PRIORITY_LANES = ('urgent', 'important', 'regular')
+    # States with a lane of their own, where priority does not decide the lane.
+    STATE_LANES = ('in_progress', 'paused', 'partially_completed',
+                   'awaiting_client', 'completed')
+
+    @http.route('/kpi_action/set_priority', type='json', auth='user', methods=['POST'], csrf=False)
+    def set_kpi_priority(self, **params):
+        """Manager-only: change a task's priority (the web board's lane drag).
+
+        params: kpi_id, priority ('regular' | 'important' | 'urgent').
+
+        Only `priority` is written, so the task's lifecycle never changes. A task
+        still to be started moves to the new priority's lane, because that is how
+        the board files it; `lane_moved` says so. In progress, paused, waiting on
+        approval or the client, or done, it stays in its own lane. The one extra
+        write is task_state, and only when it holds a priority value (left there
+        by a reassign): it follows, so the two never disagree.
+        """
+        try:
+            user = request.env.user
+            is_manager = (
+                user.has_group('kra_kpi_module.group_kra_admin')
+                or user.has_group('kra_kpi_module.group_kra_manager')
+                or user.has_group('base.group_system')
+            )
+            if not is_manager:
+                return {'status': False, 'message': 'Only managers can change priority.'}
+
+            try:
+                kpi_id = int(params.get('kpi_id') or 0)
+            except (TypeError, ValueError):
+                kpi_id = 0
+            if not kpi_id:
+                return {'status': False, 'message': 'KPI id required.'}
+            new = params.get('priority')
+            if new not in self.PRIORITY_LANES:
+                return {'status': False, 'message': 'Priority must be regular, important or urgent.'}
+            kpi = request.env['kra.kpi'].sudo().browse(kpi_id)
+            if not kpi.exists():
+                return {'status': False, 'message': 'Task not found.'}
+
+            old = kpi.priority or 'regular'
+            if old == new:
+                return {'status': True, 'changed': False, 'priority': new,
+                        'previous_priority': old, 'task_state': kpi.task_state or '',
+                        'lane_moved': False}
+
+            state = kpi.task_state or ''
+            vals = {'priority': new}
+            if state in self.PRIORITY_LANES:
+                vals['task_state'] = new
+            # Same rule as the board: a self-created task awaiting Accept sits in
+            # Pending Review, and the state lanes ignore priority.
+            lane_moved = (state not in self.STATE_LANES
+                          and not (kpi.is_self_created and not kpi.admin_accepted))
+            kpi.write(vals)
+            request.env['kpi.action.log'].log(
+                kpi.id, 'priority_changed', source='web',
+                actor_user_id=user.id,
+                payload={'from': old, 'to': new, 'lane_moved': lane_moved,
+                         'task_state': kpi.task_state or ''},
+            )
+            return {'status': True, 'changed': True, 'priority': new,
+                    'previous_priority': old, 'task_state': kpi.task_state or '',
+                    'lane_moved': lane_moved}
+        except Exception as e:
+            _logger.error(f"set_kpi_priority failed: {str(e)}")
             return {'status': False, 'message': str(e)}
 
     # PROGRESS UPDATE ENDPOINTS
