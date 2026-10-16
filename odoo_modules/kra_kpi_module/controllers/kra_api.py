@@ -2821,6 +2821,7 @@ class KraKpiAPI(http.Controller):
             'estimate_minutes': est_m,
             'priority': priority,
             'deliverable_type': deliverable,
+            'description': (params.get('description') or '').strip(),
             'external_ref': 'REQ-%03d' % Kpi._next_ref_for_prefix('REQ'),
             'requested_by_id': user.id,
             'published': True,

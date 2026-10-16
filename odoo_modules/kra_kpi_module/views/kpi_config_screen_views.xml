@@ -48,7 +48,7 @@
                             <field name="name"/>
                             <field name="kra_id"/>
                             <field name="priority"/>
-                            <field name="deliverable_type"/>
+                            <field name="deliverable_type" placeholder="module, app, exe — or e.g. module,app"/>
                             <label for="estimate_hours" string="Estimated Time"/>
                             <div class="o_row">
                                 <field name="estimate_hours" class="oe_inline" style="width: 60px;"/>
@@ -158,7 +158,7 @@
                 <field name="name"/>
                 <field name="kra_id"/>
                 <field name="priority"/>
-                <field name="deliverable_type" optional="show"/>
+                <field name="deliverable_type_display" optional="show"/>
                 <field name="user_id"/>
                 <field name="estimate"/>
                 <field name="points"/>

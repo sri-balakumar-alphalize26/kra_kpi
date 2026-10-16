@@ -10,7 +10,12 @@ from odoo.exceptions import ValidationError
 # axis next to REQ / UPT / BUG (which says what KIND of work it is, and lives in
 # external_ref), so it is its own field rather than a fourth doc type. Every
 # create path runs its input through clean_deliverable_type so a bad value is a
-# readable refusal instead of a Selection write error.
+# readable refusal instead of a write error.
+#
+# A task can build more than one ("Module + App" when one task ships both), so
+# the field holds a comma-separated list of codes, always in the order below —
+# 'module,app', never 'app,module'. A single code is the one-item case, so every
+# task saved before this, and every client that still sends one value, is valid.
 DELIVERABLE_TYPES = [('module', 'Module'), ('app', 'App'), ('exe', 'EXE')]
 DELIVERABLE_TYPE_CODES = tuple(c for c, _ in DELIVERABLE_TYPES)
 
@@ -18,14 +23,27 @@ DELIVERABLE_TYPE_CODES = tuple(c for c, _ in DELIVERABLE_TYPES)
 def clean_deliverable_type(raw):
     """(value | False, error | None). Blank is (False, None) — the field is
     optional on the server so older app builds and imports keep working; the
-    screens are what make it required on a new task. Case-insensitive, so an
-    'EXE' typed into a spreadsheet lands as 'exe'."""
-    v = raw.strip().lower() if isinstance(raw, str) else ''
-    if not v:
+    screens are what make it required on a new task. Takes one code, a
+    comma-separated string or a list. Case-insensitive, so an 'EXE' typed into
+    a spreadsheet lands as 'exe'."""
+    if isinstance(raw, (list, tuple)):
+        parts = [p for p in raw if isinstance(p, str)]
+    elif isinstance(raw, str):
+        parts = raw.split(',')
+    else:
+        parts = []
+    codes = {p.strip().lower() for p in parts if p.strip()}
+    if not codes:
         return False, None
-    if v not in DELIVERABLE_TYPE_CODES:
+    if not codes <= set(DELIVERABLE_TYPE_CODES):
         return False, 'Type must be Module, App or EXE.'
-    return v, None
+    return ','.join(c for c in DELIVERABLE_TYPE_CODES if c in codes), None
+
+
+def deliverable_type_label(value):
+    """'module,app' → 'Module + App'."""
+    labels = dict(DELIVERABLE_TYPES)
+    return ' + '.join(labels[c] for c in (value or '').split(',') if c in labels)
 
 
 class KpiMaster(models.Model):
@@ -144,12 +162,34 @@ class KpiMaster(models.Model):
              "the admin on Accept and used to pre-select the type; the admin's "
              "choice is what is actually applied.")
 
-    # Module / App / EXE — see DELIVERABLE_TYPES. Not required: existing tasks,
-    # the WhatsApp inbound path and backup restores have no value for it.
-    deliverable_type = fields.Selection(
-        DELIVERABLE_TYPES, string='Deliverable Type', index=True,
-        help="What is being built: an Odoo Module, a mobile App or a desktop EXE. "
-             "Separate from the Requirement / Update / Bug classification.")
+    # Module / App / EXE, or several — see DELIVERABLE_TYPES. Not required:
+    # existing tasks, the WhatsApp inbound path and backup restores have no
+    # value for it. A Char rather than a Selection so it can hold 'module,app';
+    # both are varchar, so the column and the values already in it are unchanged.
+    deliverable_type = fields.Char(
+        string='Deliverable Type', index=True,
+        help="What is being built: module, app, exe, or several separated by commas "
+             "(e.g. module,app). Separate from the Requirement / Update / Bug "
+             "classification.")
+    deliverable_type_display = fields.Char(
+        string='Type', compute='_compute_deliverable_type_display')
+
+    @api.depends('deliverable_type')
+    def _compute_deliverable_type_display(self):
+        for rec in self:
+            rec.deliverable_type_display = deliverable_type_label(rec.deliverable_type)
+
+    @api.constrains('deliverable_type')
+    def _check_deliverable_type(self):
+        # The routes clean their input; this guards the backend form, where the
+        # field is now free text.
+        for rec in self:
+            if rec.deliverable_type:
+                clean, err = clean_deliverable_type(rec.deliverable_type)
+                if err or clean != rec.deliverable_type:
+                    raise ValidationError(
+                        "Type must be module, app or exe — or several, comma-separated "
+                        "in that order (e.g. module,app).")
 
     user_group_id = fields.Many2one('res.groups', string='User Group')
     user_id = fields.Many2one('res.users', string='Assignee')

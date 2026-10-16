@@ -1603,6 +1603,15 @@ export class KpiAction extends Component {
                                     t-on-click="() => this.openNewTaskModal()">
                                 <i class="fa fa-plus me-1"></i> New Task
                             </button>
+                            <!-- ✅ Add Done Task — admin records work already finished off-system.
+                                 Lands straight in Pending Approvals; its time is filed on the
+                                 chosen day but never counts as attendance. -->
+                            <button t-if="state.isAdmin"
+                                    class="btn btn-sm btn-warning fw-bold"
+                                    title="Record a task that is already done (goes to Pending Approvals)"
+                                    t-on-click="() => this.openDoneTaskModal()">
+                                <i class="fa fa-check me-1"></i> Add Done Task
+                            </button>
                             <!-- Admin: count of self-created tasks awaiting Accept -->
                             <span t-if="state.isAdmin and state.selfPendingCount"
                                   class="badge bg-warning text-dark"
@@ -6061,8 +6070,8 @@ export class KpiAction extends Component {
         return out;
     }
 
-    async openNewTaskModal() {
-        // Load the project (KRA) list for the dropdown, then render the modal.
+    // Project (KRA) <option>s for the New Task / Add Done Task dropdowns.
+    async _kraOptionsHtml() {
         let kras = [];
         try {
             const res = await rpc("/kra_kpi/get_kra_list", {});
@@ -6070,30 +6079,37 @@ export class KpiAction extends Component {
         } catch (e) {
             kras = [];
         }
-        const options = kras.map(k =>
+        return kras.map(k =>
             `<option value="${k.id}">${(k.label || '').replace(/</g, '&lt;')}</option>`).join('');
+    }
+
+    // Developer <option>s. Uses /kra_kpi/get_users, which already excludes
+    // clients, portal users and OdooBot; the unfiltered searchRead in
+    // kpi_create.js leaks all three.
+    async _userOptionsHtml() {
+        let users = [];
+        try {
+            // Returns a bare [{id, name}] list, not a {status, users} envelope.
+            const ures = await rpc("/kra_kpi/get_users", {});
+            users = Array.isArray(ures) ? ures : [];
+        } catch (e) {
+            users = [];
+        }
+        // Default to the admin's own name, matching every other "who is this
+        // for?" field in the product — you are the most likely answer.
+        const me = this.state.currentUserId;
+        return users.map(u =>
+            `<option value="${u.id}"${u.id === me ? ' selected' : ''}>${(u.name || '').replace(/</g, '&lt;')}</option>`
+        ).join('');
+    }
+
+    async openNewTaskModal() {
+        // Load the project (KRA) list for the dropdown, then render the modal.
+        const options = await this._kraOptionsHtml();
 
         // Assignee picker — admins only. A developer filing their own task has
-        // nobody else to choose, and the route enforces that too. Uses
-        // /kra_kpi/get_users, which already excludes clients, portal users and
-        // OdooBot; the unfiltered searchRead in kpi_create.js leaks all three.
-        let userOptions = '';
-        if (this.state.isAdmin) {
-            let users = [];
-            try {
-                // Returns a bare [{id, name}] list, not a {status, users} envelope.
-                const ures = await rpc("/kra_kpi/get_users", {});
-                users = Array.isArray(ures) ? ures : [];
-            } catch (e) {
-                users = [];
-            }
-            // Default to the admin's own name, matching every other "who is this
-            // for?" field in the product — you are the most likely answer.
-            const me = this.state.currentUserId;
-            userOptions = users.map(u =>
-                `<option value="${u.id}"${u.id === me ? ' selected' : ''}>${(u.name || '').replace(/</g, '&lt;')}</option>`
-            ).join('');
-        }
+        // nobody else to choose, and the route enforces that too.
+        const userOptions = this.state.isAdmin ? await this._userOptionsHtml() : '';
         const assigneeBlock = this.state.isAdmin ? `
                     <div class="mb-2">
                       <label class="form-label fw-bold">Developer *</label>
@@ -6129,15 +6145,7 @@ export class KpiAction extends Component {
                         <input id="ntMinutes" type="number" min="0" max="59" value="0" class="form-control"/>
                       </div>
                     </div>
-                    <div class="mb-2">
-                      <label class="form-label fw-bold">Type (Module / App / EXE) *</label>
-                      <select id="ntDeliverable" class="form-select">
-                        <option value="">— choose —</option>
-                        <option value="module">Module</option>
-                        <option value="app">App</option>
-                        <option value="exe">EXE</option>
-                      </select>
-                    </div>
+                    ${this._deliverableChecksHtml('ntDeliverable')}
                     <div class="mb-2">
                       <label class="form-label fw-bold">Priority</label>
                       <select id="ntPriority" class="form-select">
@@ -6186,14 +6194,14 @@ export class KpiAction extends Component {
         const estimate_minutes = parseInt((g('ntMinutes') && g('ntMinutes').value) || '0', 10) || 0;
         const priority = (g('ntPriority') && g('ntPriority').value) || 'regular';
         const doc_type = (g('ntDocType') && g('ntDocType').value) || 'requirement';
-        const deliverable_type = (g('ntDeliverable') && g('ntDeliverable').value) || '';
+        const deliverable_type = this._checkedDeliverables('ntDeliverable');
         const description = (g('ntDesc') && g('ntDesc').value) || '';
         // Only present for admins; the route falls back to the caller when it is
         // absent, and refuses it outright from a non-admin.
         const user_id = parseInt((g('ntUser') && g('ntUser').value) || '0', 10) || 0;
         if (!name) { this._toast('Please enter a task name.', 'warning'); return; }
         if (!kra_id) { this._toast('Please choose a project (KRA).', 'warning'); return; }
-        if (!deliverable_type) { this._toast('Please choose a type — Module, App or EXE.', 'warning'); return; }
+        if (!deliverable_type) { this._toast('Tick at least one type — Module, App or EXE.', 'warning'); return; }
         if (this.state.isAdmin && !user_id) { this._toast('Please choose a developer.', 'warning'); return; }
         // Estimate deliberately NOT required — same as the requirements upload.
         // The admin fills it in when accepting.
@@ -6211,6 +6219,215 @@ export class KpiAction extends Component {
             }
         } catch (e) {
             this._toast('Create failed: ' + ((e && e.message) || e), 'danger');
+        }
+    }
+
+    // =========================================================
+    // ✅ Admin: Add Done Task — work already finished off-system
+    // =========================================================
+    async openDoneTaskModal() {
+        if (!this.state.isAdmin) return;
+        const options = await this._kraOptionsHtml();
+        const userOptions = await this._userOptionsHtml();
+        // Today in the browser's calendar; the server re-checks it against the
+        // developer's own timezone and refuses a future date.
+        const d = new Date();
+        const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+        const html = `
+            <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                  <div class="modal-header">
+                    <h5 class="modal-title"><i class="fa fa-check me-2"></i>Add Done Task</h5>
+                    <button type="button" class="btn-close" id="closeModalBtn"></button>
+                  </div>
+                  <div class="modal-body">
+                    <div class="mb-2">
+                      <label class="form-label fw-bold">Task Name *</label>
+                      <input id="dtName" class="form-control" placeholder="What was done?"/>
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label fw-bold">Project (KRA) *</label>
+                      <select id="dtKra" class="form-select"><option value="">— choose a project —</option>${options}</select>
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label fw-bold">Developer *</label>
+                      <select id="dtUser" class="form-select">${userOptions}</select>
+                      <small class="text-muted">Who did the work. The time is recorded against them.</small>
+                    </div>
+                    ${this._deliverableChecksHtml('dtDeliverable')}
+                    <div class="row">
+                      <div class="col mb-2">
+                        <label class="form-label fw-bold">Time Worked — Hours *</label>
+                        <input id="dtWorkedHours" type="number" min="0" value="0" class="form-control"/>
+                      </div>
+                      <div class="col mb-2">
+                        <label class="form-label fw-bold">Minutes</label>
+                        <input id="dtWorkedMinutes" type="number" min="0" max="59" value="0" class="form-control"/>
+                      </div>
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label fw-bold">Work Date *</label>
+                      <input id="dtDate" type="date" class="form-control" value="${today}" max="${today}"/>
+                      <small class="text-muted">The day the work was done — today or earlier.</small>
+                    </div>
+                    <div class="row">
+                      <div class="col mb-2">
+                        <label class="form-label fw-bold">Estimate Hours</label>
+                        <input id="dtEstHours" type="number" min="0" class="form-control"/>
+                      </div>
+                      <div class="col mb-2">
+                        <label class="form-label fw-bold">Minutes</label>
+                        <input id="dtEstMinutes" type="number" min="0" max="59" class="form-control"/>
+                      </div>
+                    </div>
+                    <small class="text-muted d-block mb-2" style="margin-top:-4px;">
+                      Fills in from the time worked and the type: 20–40% more, at most
+                      +2h for a Module or EXE, +3h if App is ticked. Change it if you like — it
+                      must stay above the time worked.</small>
+                    <div class="mb-2">
+                      <label class="form-label fw-bold">Priority</label>
+                      <select id="dtPriority" class="form-select">
+                        <option value="regular">Regular</option>
+                        <option value="important">Important</option>
+                        <option value="urgent">Urgent</option>
+                      </select>
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label fw-bold">Description</label>
+                      <textarea id="dtDesc" class="form-control" rows="3"></textarea>
+                    </div>
+                    <div class="alert alert-info small mb-0">
+                      This goes straight to <b>Pending Approvals</b> as a finished task — it still
+                      needs approving. The time counts in the KRA, employee and invoice reports on
+                      the work date, but <b>not as attendance</b> or productive time for the day.
+                    </div>
+                  </div>
+                  <div class="modal-footer">
+                    <button class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
+                    <button class="btn btn-warning fw-bold" id="confirmModalBtn">Add Done Task</button>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        this._renderModal(html, () => this.submitDoneTask());
+
+        // Estimate follows the time worked until the admin types an estimate of
+        // their own.
+        const g = (id) => document.getElementById(id);
+        let estTouched = false;
+        const syncEstimate = () => {
+            if (estTouched) return;
+            const worked = (parseInt(g('dtWorkedHours').value || '0', 10) || 0) * 3600
+                + (parseInt(g('dtWorkedMinutes').value || '0', 10) || 0) * 60;
+            if (worked <= 0) {
+                g('dtEstHours').value = '';
+                g('dtEstMinutes').value = '';
+                return;
+            }
+            const est = this._estimateFromWorked(worked, this._checkedDeliverables('dtDeliverable'));
+            g('dtEstHours').value = Math.floor(est / 3600);
+            g('dtEstMinutes').value = Math.floor((est % 3600) / 60);
+        };
+        for (const id of ['dtWorkedHours', 'dtWorkedMinutes']) {
+            g(id).addEventListener('input', syncEstimate);
+        }
+        // The allowed extra depends on Module / App / EXE. The checkboxes'
+        // change events bubble up to their wrapper.
+        g('dtDeliverable').addEventListener('change', syncEstimate);
+        for (const id of ['dtEstHours', 'dtEstMinutes']) {
+            g(id).addEventListener('input', () => { estTouched = true; });
+        }
+    }
+
+    // An estimate someone would plausibly have given up front: a random 20–40%
+    // over the time actually worked, on a quarter hour, at least 15 minutes more
+    // and at most 2h more for a Module or EXE, 3h when an App is among the
+    // types — 5h worked gives 6h, 6h 15m … 7h. A bare "worked + 1 minute" read
+    // as made up.
+    _estimateFromWorked(workedSeconds, deliverableTypes) {
+        const quarter = 15 * 60;
+        const maxExtra = (String(deliverableTypes || '').split(',').includes('app') ? 3 : 2) * 3600;
+        const extra = Math.round(workedSeconds * (0.2 + Math.random() * 0.2) / quarter) * quarter;
+        const est = workedSeconds + Math.min(Math.max(extra, quarter), maxExtra);
+        // Land on a quarter hour without dropping under worked + 15 minutes.
+        return Math.ceil(est / quarter) * quarter;
+    }
+
+    // Module / App / EXE as checkboxes — a task can build more than one. Used by
+    // New Task and Add Done Task; `id` names the wrapper.
+    _deliverableChecksHtml(id) {
+        const box = (code, label) => `
+                      <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="${id}_${code}" value="${code}"/>
+                        <label class="form-check-label" for="${id}_${code}">${label}</label>
+                      </div>`;
+        return `
+                    <div class="mb-2" id="${id}">
+                      <label class="form-label fw-bold d-block">Type (Module / App / EXE) *</label>
+                      ${box('module', 'Module')}${box('app', 'App')}${box('exe', 'EXE')}
+                      <small class="text-muted d-block">Tick more than one if the task builds several.</small>
+                    </div>`;
+    }
+
+    // The ticked boxes as the server stores them: 'module,app'.
+    _checkedDeliverables(id) {
+        return [...document.querySelectorAll(`#${id} input:checked`)]
+            .map(el => el.value).join(',');
+    }
+
+    async submitDoneTask() {
+        const g = (id) => document.getElementById(id);
+        const val = (id) => (g(id) && g(id).value) || '';
+        const num = (id) => parseInt(val(id) || '0', 10) || 0;
+        const name = val('dtName').trim();
+        const kra_id = parseInt(val('dtKra') || '0', 10) || 0;
+        const user_id = parseInt(val('dtUser') || '0', 10) || 0;
+        const deliverable_type = this._checkedDeliverables('dtDeliverable');
+        const priority = val('dtPriority') || 'regular';
+        const description = val('dtDesc');
+        const work_date = val('dtDate');
+        const worked_seconds = num('dtWorkedHours') * 3600 + num('dtWorkedMinutes') * 60;
+
+        if (!name) { this._toast('Please enter a task name.', 'warning'); return; }
+        if (!kra_id) { this._toast('Please choose a project (KRA).', 'warning'); return; }
+        if (!user_id) { this._toast('Please choose a developer.', 'warning'); return; }
+        if (worked_seconds <= 0) { this._toast('Enter the time worked.', 'warning'); return; }
+        if (num('dtWorkedMinutes') > 59) { this._toast('Minutes worked must be between 0 and 59.', 'warning'); return; }
+        if (!work_date) { this._toast('Please choose the work date.', 'warning'); return; }
+        if (!deliverable_type) { this._toast('Tick at least one type — Module, App or EXE.', 'warning'); return; }
+
+        // The route wants an estimate above the time worked. Blank means "work
+        // one out", the same way the form fills it in.
+        let estSeconds;
+        if (val('dtEstHours') === '' && val('dtEstMinutes') === '') {
+            estSeconds = this._estimateFromWorked(worked_seconds, deliverable_type);
+        } else {
+            if (num('dtEstMinutes') > 59) { this._toast('Estimate minutes must be between 0 and 59.', 'warning'); return; }
+            estSeconds = num('dtEstHours') * 3600 + num('dtEstMinutes') * 60;
+            if (estSeconds <= worked_seconds) {
+                this._toast('Estimate must be more than the time worked — or leave it blank.', 'warning');
+                return;
+            }
+        }
+        const estimate_hours = Math.floor(estSeconds / 3600);
+        const estimate_minutes = Math.floor((estSeconds % 3600) / 60);
+
+        try {
+            const res = await rpc('/kra_kpi/task/admin_create_done', {
+                name, kra_id, user_id, worked_seconds, work_date,
+                estimate_hours, estimate_minutes, deliverable_type, priority, description,
+            });
+            if (res && res.status) {
+                this.closeModal();
+                this._toast(`${res.external_ref || 'Task'} added to Pending Approvals.`, 'success');
+                await this.refresh();
+            } else {
+                this._toast((res && res.message) || 'Could not add the task.', 'danger');
+            }
+        } catch (e) {
+            this._toast('Add failed: ' + ((e && e.message) || e), 'danger');
         }
     }
 
@@ -6815,9 +7032,11 @@ export class KpiAction extends Component {
     docTypeLabel(t) {
         return ({ requirement: 'Requirement', update: 'Update', bug: 'Bug' })[t] || (t || '');
     }
-    /** Module / App / EXE — what the task builds. */
+    /** Module / App / EXE — what the task builds. Several are stored as
+     *  'module,app' and read "Module + App". */
     deliverableLabel(t) {
-        return ({ module: 'Module', app: 'App', exe: 'EXE' })[t] || '';
+        const labels = { module: 'Module', app: 'App', exe: 'EXE' };
+        return String(t || '').split(',').map(c => labels[c]).filter(Boolean).join(' + ');
     }
 
     priorityLabel(p) {
