@@ -108,3 +108,12 @@ access_kpi_report_download_manager,kpi.report.download.manager,model_kpi_report_
 access_kpi_report_download_owner,kpi.report.download.owner,model_kpi_report_download,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_reminder_user,kpi.reminder.user,model_kpi_reminder,base.group_user,1,1,1,1
 access_kpi_reminder_completion_user,kpi.reminder.completion.user,model_kpi_reminder_completion,base.group_user,1,1,1,1
+access_kra_master_coord,kra.master.coord,model_kra_master,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kra_kpi_coord,kra.kpi.coord,model_kra_kpi,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_unit_report_coord,kpi.unit.report.coord,model_kpi_unit_report,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_performance_report_coord,kpi.performance.report.coord,model_kpi_performance_report,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_performance_employee_salary_coord,kpi.performance.employee.salary.coord,model_kpi_performance_employee_salary,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_attention_report_coord,kpi.attention.report.coord,model_kpi_attention_report,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_employee_salary_config_coord,kpi.employee.salary.config.coord,model_kpi_employee_salary_config,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_kra_report_coord,kpi.kra.report.coord,model_kpi_kra_report,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_employee_report_coord,kpi.employee.report.coord,model_kpi_employee_report,kra_kpi_module.group_kra_admin,1,1,1,1

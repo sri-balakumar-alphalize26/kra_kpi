@@ -228,6 +228,13 @@ class KraMaster(models.Model):
                 mapping[kra_id]['kpi_ids'].append({
                     'id': k.id,
                     'name': k.name,
+                    # Read off the already-scoped recordset: the ORM prefetches
+                    # each field for the whole batch, so these cost one read per
+                    # field, not one per task, and record rules still apply.
+                    'external_ref': k.external_ref or '',
+                    'task_state': k.task_state or '',
+                    'user_id': k.user_id.id or False,
+                    'user_name': k.user_id.name or '',
                     'has_user_manual': bool(k.user_manual_ids),
                     'manual_count': len(k.user_manual_ids)
                 })

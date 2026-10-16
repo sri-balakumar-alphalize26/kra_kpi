@@ -673,6 +673,19 @@ class KpiClientInvoice(models.Model):
             })
             _logger.info("invoice %s revised by %s: %s", inv.name, self.env.user.login, reason)
 
+    def _resolve_currency(self):
+        """The invoice's currency: its own, else the project's, else the root
+        client KRA's, else USD. One resolver for the PDF and the list/detail
+        serializers, so the list can never show a different symbol than the PDF."""
+        self.ensure_one()
+        root = self.client_kra_id
+        while root.parent_id:
+            root = root.parent_id
+        cur = self.currency_id or self.client_kra_id.currency_id or root.currency_id
+        if not cur:
+            cur = self.env.ref('base.USD', raise_if_not_found=False) or self.env['res.currency']
+        return cur
+
     def _serialize_for_list(self, for_client=False):
         """`for_client=True` strips the internal payment-record fields.
 
@@ -719,6 +732,12 @@ class KpiClientInvoice(models.Model):
             'grand_total_hours': round(self.grand_total_hours or 0.0, 2),
             'line_count': len(self.line_ids),
         }
+        # Same resolution as the PDF (get_pdf_data). The list had no currency at
+        # all, so the web and the app fell back to a hard-coded symbol.
+        cur = self._resolve_currency()
+        result['currency_id'] = cur.id or False
+        result['currency_symbol'] = cur.symbol or ''
+        result['currency_position'] = cur.position or 'after'
         if for_client:
             # WHO settled it and WHEN it was recorded are ours, not theirs. The
             # client already sees the Paid badge; the staff name behind it is
@@ -768,9 +787,7 @@ class KpiClientInvoice(models.Model):
                 logo_b64 = ''
 
         # Currency info
-        cur = self.currency_id or self.client_kra_id.currency_id or root.currency_id
-        if not cur:
-            cur = self.env.ref('base.USD', raise_if_not_found=False) or self.env['res.currency']
+        cur = self._resolve_currency()
         currency_info = {
             'id': cur.id,
             'name': cur.name or '',

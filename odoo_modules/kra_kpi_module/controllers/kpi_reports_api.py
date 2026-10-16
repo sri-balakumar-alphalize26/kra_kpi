@@ -125,6 +125,8 @@ class KpiReportsAPI(http.Controller):
     @http.route('/kpi_reports/unit/employee_tasks', type='json', auth='user', methods=['POST'], csrf=False)
     def get_employee_tasks(self, **params):
         """Get detailed task breakdown for an employee"""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Admin only.'}
         try:
             employee_id = params.get('employee_id')
             from_date = params.get('from_date')
@@ -509,6 +511,8 @@ class KpiReportsAPI(http.Controller):
     @http.route('/kpi_reports/performance/employee_detail', type='json', auth='user', methods=['POST'], csrf=False)
     def get_employee_performance_detail(self, **params):
         """Get task-level performance breakdown for a specific employee"""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Admin only.'}
         try:
             employee_id = params.get('employee_id')
             from_date = params.get('from_date')
@@ -1135,6 +1139,8 @@ class KpiReportsAPI(http.Controller):
     @http.route('/kpi_reports/employee/task_details', type='json', auth='user', methods=['POST'], csrf=False)
     def get_employee_task_details(self, **params):
         """Get detailed information about a specific task including all progress entries"""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Admin only.'}
         try:
             task_id = params.get('task_id')
             from_date = params.get('from_date')
@@ -2437,10 +2443,17 @@ class KpiReportsAPI(http.Controller):
 
     @http.route('/kpi_pending_queue/list', type='json', auth='user', methods=['POST'], csrf=False)
     def list_pending_queue(self, **params):
-        """Admin view: the Client Task Queue — CLIENT-submitted tasks awaiting a developer.
+        """Admin view: the Client Task Queue — unpublished tasks awaiting a developer.
 
-        Client-only by design: coordinator/owner submissions also carry published=False
-        but are not part of this queue (see kra.kpi.client_submitted).
+        Lists every client submission (client_submitted=True), plus any unpublished
+        task that still has NO developer — which is what admin intake
+        (/kpi_requirements/create_bulk_tasks) creates when no developer is picked.
+        Those used to be listed nowhere: unpublished, so hidden from every board,
+        and not client_submitted, so hidden from here too. They are matched on
+        user_id=False rather than by flagging them client_submitted, because that
+        flag also makes the submitter THE pre-approval approver and arms the
+        auto-approve and queue-nudge paths, which must stay client-only. The
+        WhatsApp queue (_list_client_queue) already uses the same unassigned rule.
         """
         # Every client's unpublished submissions, read under sudo(). The
         # update / publish / delete routes of this queue check the role; this
@@ -2450,7 +2463,7 @@ class KpiReportsAPI(http.Controller):
         try:
             kpis = request.env['kra.kpi'].sudo().search(
                 [('published', '=', False), ('active', '=', True),
-                 ('client_submitted', '=', True)],
+                 '|', ('client_submitted', '=', True), ('user_id', '=', False)],
                 order='create_date desc')
             result = []
             req_cache = {}
@@ -2486,7 +2499,7 @@ class KpiReportsAPI(http.Controller):
                 project = k.kra_id if k.kra_id != root else False
                 nm = k.name or ''
                 ref = (k.external_ref or '').upper()
-                if nm.startswith('[Update]') or ref.startswith('UPD'):
+                if nm.startswith('[Update]') or ref.startswith(('UPT', 'UPD')):
                     kind = 'update'
                 elif nm.startswith('[Bug]') or ref.startswith('BUG'):
                     kind = 'bug'
@@ -2983,7 +2996,7 @@ class KpiReportsAPI(http.Controller):
                 kind = 'requirement'
                 nm = k.name or ''
                 ref = (k.external_ref or '').upper()
-                if nm.startswith('[Update]') or ref.startswith('UPD'):
+                if nm.startswith('[Update]') or ref.startswith(('UPT', 'UPD')):
                     kind = 'update'
                 elif nm.startswith('[Bug]') or ref.startswith('BUG'):
                     kind = 'bug'
@@ -3034,7 +3047,7 @@ class KpiReportsAPI(http.Controller):
             def _kind_of(k):
                 nm = k.name or ''
                 ref = (k.external_ref or '').upper()
-                if nm.startswith('[Update]') or ref.startswith('UPD'):
+                if nm.startswith('[Update]') or ref.startswith(('UPT', 'UPD')):
                     return 'update'
                 if nm.startswith('[Bug]') or ref.startswith('BUG'):
                     return 'bug'
@@ -5491,7 +5504,9 @@ class KpiReportsAPI(http.Controller):
             Log = request.env['kpi.time.log'].sudo()
 
             days = defaultdict(lambda: {'presence': 0.0, 'productive': 0.0, 'paused': 0.0,
-                                        'tasks': {}, 'sessions': 0})
+                                        'tasks': {}, 'sessions': 0,
+                                        'first_login': None, 'last_logout': None,
+                                        'open': False})
             for s in Session.search([('user_id', '=', uid),
                                      ('session_date', '>=', from_date),
                                      ('session_date', '<=', to_date)]):
@@ -5504,6 +5519,15 @@ class KpiReportsAPI(http.Controller):
                 # doubting the figure.
                 days[d]['paused'] += s._paused_total()
                 days[d]['sessions'] += 1
+                # Day bounds for started_at / ended_at: first login, last logout.
+                # An open session means the day has no end yet.
+                if s.login_at and (days[d]['first_login'] is None
+                                   or s.login_at < days[d]['first_login']):
+                    days[d]['first_login'] = s.login_at
+                if s.state == 'open' or not s.logout_at:
+                    days[d]['open'] = True
+                elif days[d]['last_logout'] is None or s.logout_at > days[d]['last_logout']:
+                    days[d]['last_logout'] = s.logout_at
 
             for log in Log.search([('user_id', '=', uid), ('is_active', '=', False),
                                    ('work_date', '>=', from_date), ('work_date', '<=', to_date)]):
@@ -5526,6 +5550,15 @@ class KpiReportsAPI(http.Controller):
                 tasks = sorted(info['tasks'].values(), key=lambda x: -x['secs'])
                 result.append({
                     'date': d,
+                    # Raw seconds next to the display strings, so a client can
+                    # total or chart them without parsing "3h 20m".
+                    'presence': float(info['presence']),
+                    'productive': float(info['productive']),
+                    # HH:MM in the user's timezone. ended_at stays empty while
+                    # any session of the day is still open.
+                    'started_at': _to_user_tz_str(info['first_login'], user, '%H:%M') if info['first_login'] else '',
+                    'ended_at': (_to_user_tz_str(info['last_logout'], user, '%H:%M')
+                                 if info['last_logout'] and not info['open'] else ''),
                     'presence_display': _fmt(info['presence']),
                     'productive_display': _fmt(info['productive']),
                     'paused_seconds': info['paused'],
@@ -5725,7 +5758,7 @@ class KpiReportsAPI(http.Controller):
                 project = k.kra_id if k.kra_id != root else False
                 nm = k.name or ''
                 ref = (k.external_ref or '').upper()
-                if nm.startswith('[Update]') or ref.startswith('UPD'):
+                if nm.startswith('[Update]') or ref.startswith(('UPT', 'UPD')):
                     kind = 'update'
                 elif nm.startswith('[Bug]') or ref.startswith('BUG'):
                     kind = 'bug'
@@ -5843,7 +5876,15 @@ class KpiReportsAPI(http.Controller):
             if (action == 'reject' and kpi.client_submitted
                     and res.get('status') != 'already_decided' and not res.get('late')):
                 kpi._return_to_queue_after_reject()
-            return {'status': bool(res.get('status', True)), **res}
+            # The engine returns a string code ('ok' / 'already_decided' /
+            # 'expired' / 'invalid'). Spreading **res after a bool let that
+            # string win, so 'expired' reached the app as a truthy status and
+            # was shown as success. status is the boolean; the raw code moves
+            # to 'code'.
+            res = dict(res or {})
+            code = res.pop('status', None)
+            return {**res, 'status': code == 'ok', 'code': code,
+                    'message': res.get('message') or ''}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"decide_pre_approval: {str(e)}")
@@ -6080,6 +6121,8 @@ class KpiReportsAPI(http.Controller):
     @http.route('/kpi_completion_cert/set_version', type='json', auth='user', methods=['POST'], csrf=False)
     def set_kpi_delivery_version(self, **params):
         """Quick endpoint to set delivery_version on a KPI (e.g. before generating cert)."""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Admin only.'}
         try:
             kpi = request.env['kra.kpi'].browse(int(params['kpi_id']))
             if not kpi.exists():
@@ -6094,6 +6137,8 @@ class KpiReportsAPI(http.Controller):
     @http.route('/kpi_completion_cert/upload_doc', type='json', auth='user', methods=['POST'], csrf=False)
     def upload_kpi_doc(self, **params):
         """Upload (or clear) a doc on the KPI. doc_type = 'requirement' or 'updates'."""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Admin only.'}
         try:
             kpi = request.env['kra.kpi'].browse(int(params['kpi_id']))
             if not kpi.exists():
@@ -6130,6 +6175,8 @@ class KpiReportsAPI(http.Controller):
     @http.route('/kpi_completion_cert/upload_signed', type='json', auth='user', methods=['POST'], csrf=False)
     def upload_signed_cert(self, **params):
         """Upload the client-signed completion certificate PDF onto a KPI."""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Admin only.'}
         try:
             kpi = request.env['kra.kpi'].browse(int(params['kpi_id']))
             if not kpi.exists():
@@ -6157,6 +6204,8 @@ class KpiReportsAPI(http.Controller):
     def set_kpi_roles(self, **params):
         """Set the 4 role lists on a KPI. Each role param is a list of user ids (or []).
         Pass only the role lists you want to change; omitted roles are left untouched."""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Admin only.'}
         try:
             kpi = request.env['kra.kpi'].browse(int(params['kpi_id']))
             if not kpi.exists():
@@ -6329,6 +6378,8 @@ class KpiReportsAPI(http.Controller):
                     # Every submission (client OR coordinator OR owner) lands in
                     # the Client Task Queue first — coordinator assigns developer
                     # + estimate, which auto-fires the pre-approval pipeline.
+                    # An admin row with no developer is listed there through the
+                    # queue's user_id=False match (see list_pending_queue).
                     'published': False,
                     'submitted_by_uid': request.env.user.id,
                     # Marks the client-only queue + auto-approve path.
@@ -6409,7 +6460,7 @@ class KpiReportsAPI(http.Controller):
                 if nm.startswith('[Bug]'):
                     return 'bug'
                 ref = (kpi.external_ref or '').upper()
-                if ref.startswith('UPD'):
+                if ref.startswith(('UPT', 'UPD')):
                     return 'update'
                 if ref.startswith('BUG'):
                     return 'bug'
@@ -6985,7 +7036,7 @@ class KpiReportsAPI(http.Controller):
                 for k in kpis:
                     nm = (k.name or '')
                     ref = (k.external_ref or '').upper()
-                    if nm.startswith('[Update]') or ref.startswith('UPD'):
+                    if nm.startswith('[Update]') or ref.startswith(('UPT', 'UPD')):
                         kind = 'update'
                     elif nm.startswith('[Bug]') or ref.startswith('BUG'):
                         kind = 'bug'
@@ -7023,7 +7074,7 @@ class KpiReportsAPI(http.Controller):
                                'Reason for Change', 'Priority (Urgent/Important/Regular)',
                                'Requested Delivery', 'Notes']
                     widths = [14, 20, 40, 30, 24, 16, 25]
-                    sample = ['UPD-001', 'REQ-001', '(describe the change)',
+                    sample = ['UPT-001', 'REQ-001', '(describe the change)',
                               '', 'Regular', '', '']
                     fill_color = 'BF8F00'
                 else:  # bug
@@ -7236,7 +7287,7 @@ class KpiReportsAPI(http.Controller):
                                 40,
                                 30,                  24,
                                 16,                  25],
-                    'sample':  ['UPD-001',        'REQ-001',
+                    'sample':  ['UPT-001',        'REQ-001',
                                 '(describe the change)',
                                 '',                              'Regular',
                                 '',                              ''],

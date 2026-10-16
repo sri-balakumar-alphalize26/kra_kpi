@@ -18,7 +18,7 @@
         <field name="name">Manager/Admin: All KPI Access</field>
         <field name="model_id" ref="model_kra_kpi"/>
         <field name="domain_force">[(1, '=', 1)]</field>
-        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('base.group_system'))]"/>
+        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('group_kra_admin')), (4, ref('base.group_system'))]"/>
         <field name="perm_read" eval="True"/>
         <field name="perm_write" eval="True"/>
         <field name="perm_create" eval="True"/>
@@ -42,7 +42,7 @@
         <field name="name">Manager/Admin: All KRA Access</field>
         <field name="model_id" ref="model_kra_master"/>
         <field name="domain_force">[(1, '=', 1)]</field>
-        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('base.group_system'))]"/>
+        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('group_kra_admin')), (4, ref('base.group_system'))]"/>
         <field name="perm_read" eval="True"/>
         <field name="perm_write" eval="True"/>
         <field name="perm_create" eval="True"/>
@@ -69,7 +69,7 @@
         <field name="name">Manager: All Progress Updates</field>
         <field name="model_id" ref="model_kpi_progress"/>
         <field name="domain_force">[(1, '=', 1)]</field>
-        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('base.group_system'))]"/>
+        <field name="groups" eval="[(4, ref('group_kra_manager')), (4, ref('group_kra_admin')), (4, ref('base.group_system'))]"/>
         <field name="perm_read" eval="True"/>
         <field name="perm_write" eval="True"/>
         <field name="perm_create" eval="True"/>

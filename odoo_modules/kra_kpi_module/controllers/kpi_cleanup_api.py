@@ -6,17 +6,32 @@ _logger = logging.getLogger(__name__)
 
 
 class KpiCleanupAPI(http.Controller):
-    
+
+    def _cleanup_refusal(self):
+        """None when the caller may use the cleanup routes, else the refusal.
+
+        These routes preview and run a destructive purge of KRAs, tasks and
+        logs. They checked nothing, so any signed-in user could call them by
+        hand. Only System admins and the Owner may touch them.
+        """
+        user = request.env.user
+        if user.has_group('base.group_system') or user.has_group('kra_kpi_module.group_kra_owner'):
+            return None
+        return {'status': False, 'message': 'Admin only.'}
+
     @http.route('/kpi_cleanup/preview', type='json', auth='user', methods=['POST'], csrf=False)
     def get_cleanup_preview(self, **params):
         """Get preview of records that will be deleted"""
+        refusal = self._cleanup_refusal()
+        if refusal:
+            return refusal
         try:
             cleanup_id = params.get('cleanup_id')
             
             if not cleanup_id:
                 return {'status': False, 'message': 'cleanup_id is required'}
             
-            cleanup = request.env['kpi.data.cleanup'].browse(int(cleanup_id))
+            cleanup = request.env['kpi.data.cleanup'].sudo().browse(int(cleanup_id))
             
             if not cleanup.exists():
                 return {'status': False, 'message': 'Cleanup record not found'}
@@ -50,6 +65,9 @@ class KpiCleanupAPI(http.Controller):
     @http.route('/kpi_cleanup/backup_status', type='json', auth='user', methods=['POST'], csrf=False)
     def get_backup_status(self, **params):
         """Get current backup status"""
+        refusal = self._cleanup_refusal()
+        if refusal:
+            return refusal
         try:
             last_backup = request.env['kpi.backup'].search([
                 ('state', '=', 'completed')
@@ -85,6 +103,9 @@ class KpiCleanupAPI(http.Controller):
     @http.route('/kpi_cleanup/execute', type='json', auth='user', methods=['POST'], csrf=False)
     def execute_cleanup(self, **params):
         """Execute cleanup with confirmation"""
+        refusal = self._cleanup_refusal()
+        if refusal:
+            return refusal
         try:
             cleanup_id = params.get('cleanup_id')
             confirmed = params.get('confirmed', False)
@@ -127,6 +148,9 @@ class KpiCleanupAPI(http.Controller):
     @http.route('/kpi_cleanup/statistics', type='json', auth='user', methods=['POST'], csrf=False)
     def get_cleanup_statistics(self, **params):
         """Get overall statistics of data that can be cleaned"""
+        refusal = self._cleanup_refusal()
+        if refusal:
+            return refusal
         try:
             stats = {
                 'total_kras': request.env['kra.master'].search_count([]),

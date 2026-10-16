@@ -345,6 +345,10 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kra_kpi/create_kra', type='json', auth='user', methods=['POST'], csrf=False)
     def create_kra(self, **params):
+        # The KRA tree is admin-managed; this route checked nothing, so any
+        # signed-in user could add KRAs by calling it by hand.
+        if not self._is_kra_admin(request.env.user):
+            return {"status": False, "message": "Admin only."}
         name = params.get("name")
         is_sub = params.get("is_sub")
         parent_id = params.get("parent_id")
@@ -2128,8 +2132,13 @@ class KraKpiAPI(http.Controller):
         """Admin: list internal users' app-login state + the OTP sender number."""
         if not self._is_kra_admin(request.env.user):
             return {'status': False, 'message': 'Not authorized'}
-        users = request.env['res.users'].sudo().search(
-            [('share', '=', False), ('active', '=', True)], order='name')
+        # Archived users too: /kpi_user_access/update can set active back to True,
+        # but an archived user never appeared in this list, so there was nothing
+        # to click to re-enable them. Each row already carries 'active'.
+        # id 1 (__system__ / OdooBot) is archived by design and must stay hidden
+        # now that active_test is off; share=False still keeps portal users out.
+        users = request.env['res.users'].sudo().with_context(active_test=False).search(
+            [('share', '=', False), ('id', '!=', 1)], order='name')
         # The WhatsApp server that sends the reset codes (latest session record).
         sess = request.env['whatsapp.session'].sudo().search([], limit=1, order='id desc')
         # Keep the session labelled for the OTP sender (rename in place, no reconnect).
@@ -4275,9 +4284,16 @@ class KraKpiAPI(http.Controller):
     def view_progress_file(self, progress_id, **kwargs):
         """View a progress update file inline (for viewing in browser)"""
         try:
-            progress = request.env['kpi.progress'].browse(int(progress_id))
-            
+            # sudo + the task's own rule, exactly as /kpi/progress/file_b64:
+            # admin/coordinator any task, developer only tasks they are on,
+            # client never; the uploader may always read their own. Without sudo
+            # the progress record rules hid every
+            # row but the caller's own, so an admin got 404 on a teammate's file.
+            progress = request.env['kpi.progress'].sudo().browse(int(progress_id))
             if not progress.exists() or not progress.uploaded_file:
+                return request.not_found()
+            if (progress.user_id.id != request.env.uid
+                    and self._may_view_kpi_details(progress.kpi_id)):
                 return request.not_found()
             
             file_content = base64.b64decode(progress.uploaded_file)
@@ -4309,8 +4325,16 @@ class KraKpiAPI(http.Controller):
     def download_progress_file(self, progress_id, **kwargs):
         """Download a progress update file"""
         try:
-            progress = request.env['kpi.progress'].browse(int(progress_id))
+            # sudo + the task's own rule, exactly as /kpi/progress/file_b64:
+            # admin/coordinator any task, developer only tasks they are on,
+            # client never; the uploader may always read their own. Without sudo
+            # the progress record rules hid every
+            # row but the caller's own, so an admin got 404 on a teammate's file.
+            progress = request.env['kpi.progress'].sudo().browse(int(progress_id))
             if not progress.exists() or not progress.uploaded_file:
+                return request.not_found()
+            if (progress.user_id.id != request.env.uid
+                    and self._may_view_kpi_details(progress.kpi_id)):
                 return request.not_found()
             
             file_content = base64.b64decode(progress.uploaded_file)
@@ -4924,6 +4948,9 @@ class KraKpiAPI(http.Controller):
     @http.route('/kra_kpi/update_kra', type='json', auth='user', methods=['POST'], csrf=False)
     def update_kra(self, **params):
         """Update KRA name"""
+        # Renames run under sudo() below, so the role check has to live here.
+        if not self._is_kra_admin(request.env.user):
+            return {"status": False, "message": "Admin only."}
         kra_id = params.get("kra_id")
         name = params.get("name", "").strip()
         
