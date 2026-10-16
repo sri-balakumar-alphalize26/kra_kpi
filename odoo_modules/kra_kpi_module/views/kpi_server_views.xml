@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+         Hosting servers offered by the WhatsApp "New Database" menu.
+
+         The names here are matched CHARACTER FOR CHARACTER against what a
+         poll vote returns, so renaming one changes what the bot accepts.
+         Archive rather than delete anything already referenced by a request.
+    -->
+
+    <record id="view_kpi_server_list" model="ir.ui.view">
+        <field name="name">kpi.server.list</field>
+        <field name="model">kpi.server</field>
+        <field name="arch" type="xml">
+            <list string="Servers" editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="label" string="Menu Label" optional="show"/>
+                <field name="db_count" string="Databases" optional="show"/>
+                <field name="fetch_method" string="Fetch via" optional="show"/>
+                <field name="url" optional="hide"/>
+                <field name="fetch_enabled" string="Can list" optional="hide"/>
+                <field name="host" optional="hide"/>
+                <field name="last_fetch_at" optional="hide"/>
+                <field name="notes" optional="hide"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_kpi_server_form" model="ir.ui.view">
+        <field name="name">kpi.server.form</field>
+        <field name="model">kpi.server</field>
+        <field name="arch" type="xml">
+            <form string="Server">
+                <header>
+                    <button name="action_test_connection" type="object"
+                            string="Test Connection" class="btn-secondary"
+                            invisible="(fetch_method == 'url' and not url) or (fetch_method == 'postgres' and not host)"/>
+                    <button name="action_fetch_databases" type="object"
+                            string="Fetch Databases" class="btn-primary"
+                            invisible="(fetch_method == 'url' and not url) or (fetch_method == 'postgres' and not host)"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Archived"
+                            bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name" string="Server"/>
+                        <h1><field name="name" placeholder="e.g. nexgennpos2"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="label"
+                                   placeholder="Leave empty to show the name"/>
+                            <field name="sequence"/>
+                            <field name="active"/>
+                        </group>
+                        <group>
+                            <field name="db_count" readonly="1"/>
+                            <field name="last_fetch_at" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <div class="alert alert-danger" role="status"
+                         invisible="not last_fetch_error">
+                        <b>The last attempt to read this server failed.</b>
+                        <field name="last_fetch_error" readonly="1" nolabel="1"/>
+                    </div>
+
+                    <group string="Reading the database list (optional)">
+                        <field name="fetch_method" widget="radio"/>
+                        <field name="fetch_enabled" readonly="1"/>
+                    </group>
+
+                    <group invisible="fetch_method != 'url'">
+                        <group>
+                            <field name="url"
+                                   placeholder="https://nexgennpos2.com"/>
+                            <field name="url_verify_ssl"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-info" role="status"
+                         invisible="fetch_method != 'url'">
+                        The easy way. We ask that Odoo for its own database list
+                        at <b>/web/database/list</b> - no password, no firewall
+                        change, and <b>no access to anything inside</b> those
+                        databases.
+                        <br/>
+                        It only works while that server still shows its database
+                        list. If it has <b>list_db = False</b>, or a
+                        <b>db_filter</b> that hides them, you will get an empty
+                        or short list - switch to Postgres, or add the names by
+                        hand.
+                    </div>
+
+                    <group invisible="fetch_method != 'postgres'">
+                        <group>
+                            <field name="host" placeholder="hostname or IP"/>
+                            <field name="port"/>
+                            <field name="pg_maintenance_db"/>
+                        </group>
+                        <group>
+                            <field name="pg_user"/>
+                            <field name="pg_password" password="True"/>
+                            <field name="pg_sslmode"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-warning" role="status"
+                         invisible="fetch_method != 'postgres'">
+                        Use a <b>dedicated Postgres role with CONNECT and nothing
+                        else</b>: listing databases needs no more than that, and
+                        the password is stored in plain text here, like every
+                        other credential in this module. A remote server also
+                        needs a <b>pg_hba.conf</b> line and an open port.
+                    </div>
+
+                    <div class="alert alert-warning" role="status">
+                        Fetching is <b>optional either way</b>. It only saves
+                        typing the list out - the WhatsApp menus read
+                        <b>Setup &gt; Databases</b>, which is also filled by hand
+                        and by the last step of a New Database task, so the bot
+                        never depends on any of this working.
+                        <br/>
+                        A fetch sees <b>every</b> database that server will admit
+                        to. New entries therefore arrive with <b>no client</b> and
+                        are offered to nobody until you assign one.
+                    </div>
+
+                    <group string="Internal notes">
+                        <field name="notes" nolabel="1"
+                               placeholder="Panel URL, who to call, anything the person provisioning needs. Never shown to a client."/>
+                    </group>
+                    <div class="alert alert-info" role="status">
+                        This list becomes the <b>Which server?</b> menu in WhatsApp.
+                        A WhatsApp poll fits <b>11 servers plus "Other"</b> — beyond
+                        that the rest are not offered, so archive the ones you no
+                        longer use.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_kpi_server" model="ir.actions.act_window">
+        <field name="name">Servers</field>
+        <field name="res_model">kpi.server</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiley_face">Add the servers you host on</p>
+            <p>
+                These appear in the WhatsApp <b>New Database</b> menu when someone
+                asks for a database to be set up.
+            </p>
+        </field>
+    </record>
+
+</odoo>

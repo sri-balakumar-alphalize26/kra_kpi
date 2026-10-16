@@ -2519,33 +2519,38 @@ class KraKpiAPI(http.Controller):
         session = Session.browse(int(sid)) if sid else Session.search([], limit=1, order='id desc')
         if not session or not session.exists():
             return {'status': True}
-        db_path = session.db_path
-        # 1) Best-effort logout so WhatsApp also drops this linked device.
+        # 1) Log the device out of WhatsApp on the Evolution server.
         try:
-            from odoo.addons.whatsapp_neonize.models.whatsapp_session import _wa_clients
-            client = _wa_clients.get(session.id)
-            if client is not None:
-                try:
-                    client.logout()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # 2) Stop the live client + remove the Odoo record (unlink also stops it).
+            session.action_disconnect()
+        except Exception as exc:
+            _logger.warning("wa_server delete: logout failed: %s", exc)
+
+        # 2) DO NOT unlink a session that carries history.
+        #
+        #    whatsapp.message.session_id is required + ondelete='cascade', so
+        #    session.unlink() silently deletes EVERY message ever sent or
+        #    received on it. This route used to do exactly that, from an admin
+        #    button, with no warning -- on this database that is thousands of
+        #    rows including the group corpus. whatsapp.session.unlink() now
+        #    refuses outright when message_count is non-zero; here we reset the
+        #    row instead so the button still "clears the connection".
+        #
+        #    The old step 3 (deleting the neonize .db credential file) is gone:
+        #    Evolution holds the session server-side, and db_path is deprecated.
         try:
+            if session.message_count:
+                session.write({
+                    'status': 'disconnected',
+                    'qr_image': False,
+                    'pairing_code': False,
+                    'instance_id': False,
+                    'error_message': 'Disconnected from the WhatsApp admin screen.',
+                })
+                return {'status': True, 'kept_messages': session.message_count}
             session.unlink()
         except Exception as exc:
-            _logger.error("wa_server delete unlink failed: %s", exc)
+            _logger.error("wa_server delete failed: %s", exc)
             return {'status': False, 'message': str(exc)}
-        # 3) Delete the Neonize session file (+ SQLite side files) so the
-        #    connection is truly gone from Neonize, not just from Odoo.
-        if db_path:
-            for p in (db_path, db_path + '-journal', db_path + '-wal', db_path + '-shm'):
-                try:
-                    if os.path.exists(p):
-                        os.remove(p)
-                except Exception:
-                    pass
         return {'status': True}
 
     # ================================================================== #

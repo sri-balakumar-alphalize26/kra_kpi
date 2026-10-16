@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+         Client databases: the registry, and the operational "what is live"
+         view. Two actions over one model, because they answer two different
+         questions.
+
+         THE IMPORTANT COLUMN IS "Client". A row with no client is offered to
+         NOBODY in any WhatsApp menu - that is what stops a fetch from leaking
+         one reseller's database names into another's group.
+    -->
+
+    <record id="view_kpi_client_db_list" model="ir.ui.view">
+        <field name="name">kpi.client.db.list</field>
+        <field name="model">kpi.client.db</field>
+        <field name="arch" type="xml">
+            <list string="Databases" multi_edit="1" editable="bottom"
+                  decoration-muted="state in ('disconnected', 'suspended')"
+                  decoration-danger="track_term and expires_on and days_left &lt; 0"
+                  decoration-warning="disconnect_state == 'requested'">
+                <header>
+                    <button name="action_open_suspend" type="object"
+                            string="Suspend" class="btn-secondary"/>
+                    <button name="action_open_disconnect" type="object"
+                            string="Disconnect" class="btn-secondary"/>
+                    <button name="action_reactivate" type="object"
+                            string="Reactivate" class="btn-secondary"/>
+                </header>
+                <field name="client_kra_id" string="Client"/>
+                <field name="server_id"/>
+                <field name="db_name"/>
+                <field name="label" optional="hide"/>
+                <field name="kra_id" string="Files Under" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'live'"
+                       decoration-warning="state in ('suspended', 'pending')"
+                       decoration-danger="state == 'disconnected'"/>
+                <field name="disconnect_state" widget="badge" string="Request"
+                       decoration-warning="disconnect_state == 'requested'"
+                       decoration-muted="disconnect_state == 'none'"
+                       optional="show"/>
+                <field name="track_term" string="Term?" optional="hide"/>
+                <field name="term_id" optional="hide"/>
+                <field name="activated_on" optional="hide"/>
+                <field name="expires_on" optional="hide"/>
+                <field name="days_left" string="Days Left" optional="hide"/>
+                <field name="source" widget="badge" optional="show"/>
+                <field name="task_count" string="Tasks" optional="hide"/>
+                <field name="last_fetch_at" optional="hide"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_kpi_client_db_form" model="ir.ui.view">
+        <field name="name">kpi.client.db.form</field>
+        <field name="model">kpi.client.db</field>
+        <field name="arch" type="xml">
+            <form string="Client Database">
+                <header>
+                    <button name="action_activate" type="object"
+                            string="Mark Live" class="btn-primary"
+                            invisible="state == 'live'"/>
+                    <button name="action_open_suspend" type="object"
+                            string="Suspend" class="btn-secondary"
+                            invisible="state != 'live'"/>
+                    <button name="action_open_disconnect" type="object"
+                            string="Disconnect" class="btn-secondary"
+                            invisible="state == 'disconnected'"/>
+                    <button name="action_open_reject" type="object"
+                            string="Refuse Request" class="btn-secondary"
+                            invisible="disconnect_state != 'requested'"/>
+                    <button name="action_reactivate" type="object"
+                            string="Reactivate" class="btn-secondary"
+                            invisible="state != 'suspended'"/>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="pending,live,suspended,disconnected"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Archived"
+                            bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="db_name" string="Database"/>
+                        <h1><field name="db_name" placeholder="e.g. aoc"/></h1>
+                        <field name="label" placeholder="Friendly name for the WhatsApp menu, e.g. Al Khuwair shop"/>
+                    </div>
+
+                    <div class="alert alert-warning" role="status"
+                         invisible="client_kra_id">
+                        No client is set, so <b>nobody is offered this database</b>
+                        in any WhatsApp menu. Set the client below to make it
+                        selectable.
+                    </div>
+
+                    <div class="alert alert-warning" role="status"
+                         invisible="disconnect_state != 'requested'">
+                        <b>The client has asked for this to be switched off.</b>
+                        It is still live. Use <b>Disconnect</b> to action it or
+                        <b>Refuse Request</b> to decline, with a reason either way.
+                    </div>
+
+                    <group>
+                        <group string="Where">
+                            <field name="server_id"/>
+                            <field name="source"/>
+                            <field name="last_fetch_at" readonly="1"
+                                   invisible="source != 'fetched'"/>
+                        </group>
+                        <group string="Whose">
+                            <field name="client_kra_id"/>
+                            <field name="kra_id"
+                                   domain="[('id', 'child_of', client_kra_id)]"
+                                   placeholder="Defaults to the client"/>
+                            <field name="task_count" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <group string="Term">
+                        <group>
+                            <field name="track_term"/>
+                            <field name="term_id" invisible="not track_term"
+                                   required="track_term"/>
+                        </group>
+                        <group>
+                            <field name="activated_on"/>
+                            <field name="expires_on" invisible="not track_term"/>
+                            <field name="days_left" invisible="not track_term"
+                                   readonly="1"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-info" role="status"
+                         invisible="track_term">
+                        <b>No term is being tracked.</b> That is the normal case:
+                        the database simply exists and is live, with no expiry
+                        date and no reminders. Tick <b>Track term</b> only where a
+                        weekly / monthly / yearly arrangement is real.
+                    </div>
+
+                    <group string="Disconnection" invisible="disconnect_state == 'none'">
+                        <group>
+                            <field name="disconnect_state"/>
+                            <field name="disconnect_requested_by_name"/>
+                            <field name="disconnect_requested_by_number"/>
+                            <field name="disconnect_requested_at"/>
+                        </group>
+                        <group>
+                            <field name="disconnect_reason_id"/>
+                            <field name="disconnect_request_kpi_id"/>
+                            <field name="disconnected_on"/>
+                            <field name="disconnected_by_id"/>
+                        </group>
+                        <field name="disconnect_reason_text" colspan="2"/>
+                        <field name="disconnect_note" colspan="2"/>
+                    </group>
+
+                    <group string="Notes">
+                        <field name="notes" nolabel="1"
+                               placeholder="Internal only. Never shown to a client."/>
+                        <field name="active"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_kpi_client_db_search" model="ir.ui.view">
+        <field name="name">kpi.client.db.search</field>
+        <field name="model">kpi.client.db</field>
+        <field name="arch" type="xml">
+            <search string="Databases">
+                <field name="db_name"/>
+                <field name="client_kra_id"/>
+                <field name="server_id"/>
+
+                <filter name="f_live" string="Live"
+                        domain="[('state', '=', 'live')]"/>
+                <filter name="f_suspended" string="Suspended"
+                        domain="[('state', '=', 'suspended')]"/>
+                <filter name="f_disconnected" string="Disconnected"
+                        domain="[('state', '=', 'disconnected')]"/>
+                <separator/>
+                <filter name="f_disc_requested" string="Disconnect requested"
+                        domain="[('disconnect_state', '=', 'requested')]"/>
+                <separator/>
+                <!-- Both of these require track_term: a database with no term
+                     has no expiry and must never appear in an expiry filter. -->
+                <filter name="f_expiring" string="Expiring in 30 days"
+                        domain="[('track_term', '=', True),
+                                 ('expires_on', '!=', False),
+                                 ('expires_on', '&gt;=', context_today().strftime('%Y-%m-%d')),
+                                 ('expires_on', '&lt;=', (context_today() + datetime.timedelta(days=30)).strftime('%Y-%m-%d'))]"/>
+                <filter name="f_expired" string="Expired"
+                        domain="[('track_term', '=', True),
+                                 ('expires_on', '!=', False),
+                                 ('expires_on', '&lt;', context_today().strftime('%Y-%m-%d'))]"/>
+                <separator/>
+                <filter name="f_unassigned" string="No client yet"
+                        domain="[('client_kra_id', '=', False)]"/>
+                <filter name="f_fetched" string="Found on a server"
+                        domain="[('source', '=', 'fetched')]"/>
+                <separator/>
+                <filter name="f_archived" string="Archived"
+                        domain="[('active', '=', False)]"/>
+
+                <filter name="g_client" string="Client"
+                        context="{'group_by': 'client_kra_id'}"/>
+                <filter name="g_server" string="Server"
+                        context="{'group_by': 'server_id'}"/>
+                <filter name="g_state" string="Status"
+                        context="{'group_by': 'state'}"/>
+                <filter name="g_term" string="Term"
+                        context="{'group_by': 'term_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- ================= the two doors ================= -->
+
+    <!-- The registry: everything, including names with no client yet. -->
+    <record id="action_kpi_client_db" model="ir.actions.act_window">
+        <field name="name">Databases</field>
+        <field name="res_model">kpi.client.db</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_kpi_client_db_search"/>
+        <field name="context">{'search_default_g_client': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiley_face">Record the databases your clients have</p>
+            <p>
+                These become the <b>Which database?</b> menu when a client raises
+                a requirement, bug or update on WhatsApp.
+            </p>
+            <p>
+                Press <b>New</b> and type them straight into the list: client,
+                server, database name. If the client is not in the list yet,
+                type their name in the <b>Client</b> cell and pick
+                <b>Create</b> — it makes the KRA for you.
+            </p>
+            <p>
+                Or fill in a server's <b>Odoo address</b> under
+                <b>Setup &gt; Servers</b> and press <b>Fetch Databases</b>.
+                Fetched names arrive with <b>no client</b> and are offered to
+                nobody until you say whose they are.
+            </p>
+        </field>
+    </record>
+
+    <!-- The operational view: what is live, for whom, on what terms. -->
+    <record id="action_kpi_live_db" model="ir.actions.act_window">
+        <field name="name">Live Databases</field>
+        <field name="res_model">kpi.client.db</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_kpi_client_db_search"/>
+        <field name="context">{'search_default_f_live': 1, 'search_default_g_client': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiley_face">Nothing is live yet</p>
+            <p>
+                Databases appear here once they are registered and marked live -
+                either by hand, or by ticking the last provisioning step on a
+                New Database task.
+            </p>
+        </field>
+    </record>
+
+    <!-- ================= the status wizard ================= -->
+
+    <record id="view_kpi_client_db_action_form" model="ir.ui.view">
+        <field name="name">kpi.client.db.action.form</field>
+        <field name="model">kpi.client.db.action</field>
+        <field name="arch" type="xml">
+            <form string="Change status">
+                <group>
+                    <field name="mode" readonly="1"/>
+                    <field name="summary" string="Databases" readonly="1"/>
+                    <field name="db_ids" invisible="1"/>
+                </group>
+                <group>
+                    <field name="note" nolabel="1"
+                           placeholder="Why. The client is shown this, so write it for them."/>
+                </group>
+                <group>
+                    <field name="tell_client" invisible="mode == 'reject'"/>
+                </group>
+                <div class="alert alert-info" role="status"
+                     invisible="mode != 'disconnect'">
+                    This switches the database off in our records and tells the
+                    client, naming the database, who asked and when. It does
+                    <b>not</b> touch the server - dropping the actual database is
+                    still a deliberate act by whoever has access to it.
+                </div>
+                <footer>
+                    <button name="action_apply" type="object" string="Confirm"
+                            class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- No act_window records for the wizard: the buttons above are
+         type="object" and build the action in Python
+         (kpi.client.db._open_status_wizard), so they carry the ticked rows
+         from a list header and the single record from a form without the
+         view needing to reference an action defined further down this file. -->
+
+</odoo>

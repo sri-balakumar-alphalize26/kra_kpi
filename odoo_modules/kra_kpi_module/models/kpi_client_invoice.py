@@ -22,11 +22,18 @@ PAYMENT_METHODS = [
 
 def _kind_from_ref(ref):
     """Map a task's external_ref prefix to its billing kind: 'req' / 'upt' / 'bug'
-    (or '' if none). Matches the REQ/UPT/BUG prefixes the task-type filter uses."""
+    (or '' if none). Matches the REQ/UPT/BUG prefixes the task-type filter uses.
+
+    UPD is accepted as a synonym of UPT. Updates are minted as 'UPT-###'
+    everywhere EXCEPT /kpi_action/update_meta (kra_api.py:3689), which writes
+    'UPD-###'. A UPD row used to fall through to '' here, which means
+    _price_for_kind found no rate and the task was silently UNBILLED on a
+    per-task invoice. Read both; keep minting only UPT.
+    """
     r = (ref or '').strip().upper()
     if r.startswith('REQ'):
         return 'req'
-    if r.startswith('UPT'):
+    if r.startswith('UPT') or r.startswith('UPD'):
         return 'upt'
     if r.startswith('BUG'):
         return 'bug'

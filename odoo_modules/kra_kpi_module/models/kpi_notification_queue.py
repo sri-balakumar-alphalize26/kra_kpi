@@ -116,21 +116,28 @@ class KpiNotificationQueue(models.Model):
         if not session:
             _logger.info("notification_queue: no connected session, %s items waiting", len(pending))
             return 0
+        # Transport is Evolution API over HTTP. There is no in-process client to
+        # inspect any more; wa_is_alive() trusts a recent webhook/state-check and
+        # otherwise re-probes the server.
+        #
+        # FAIL-OPEN on error. The old code set mem_status='unknown' in its except
+        # branch, which fell into the `!= 'connected'` test below and returned 0 --
+        # i.e. the moment reading neonize's internals failed, the retry queue
+        # stopped sending ANYTHING and every item silently expired after
+        # RETRY_WINDOW_MIN. The thing that exists so notifications are not lost
+        # was the thing losing them.
         try:
-            from odoo.addons.whatsapp_neonize.models.whatsapp_session import (
-                _wa_status, _wa_clients,
-            )
-            mem_status = _wa_status.get(session.id, 'unknown')
-            has_client = session.id in _wa_clients
+            alive = bool(session.sudo().wa_is_alive())
         except Exception as exc:
-            _logger.warning("notification_queue: can't read neonize memory state: %s", exc)
-            mem_status, has_client = 'unknown', False
+            _logger.warning("notification_queue: liveness probe failed (%s) — "
+                            "assuming alive and attempting the sends", exc)
+            alive = True
 
-        if mem_status != 'connected' or not has_client:
+        if not alive:
             _logger.info(
-                "notification_queue: session in DB=%s but memory=%s (has_client=%s) — "
-                "kicking reconnect, %s items still waiting",
-                session.status, mem_status, has_client, len(pending),
+                "notification_queue: session %s is not connected — kicking "
+                "reconnect, %s items still waiting",
+                session.name, len(pending),
             )
             try:
                 session.sudo()._reconnect_session()
@@ -138,7 +145,7 @@ class KpiNotificationQueue(models.Model):
                 _logger.warning("notification_queue: _reconnect_session raised: %s", exc)
             return 0
 
-        # Memory says we're alive — try the actual sends.
+        # Transport says we're alive — try the actual sends.
         sent = 0
         for item in pending:
             try:

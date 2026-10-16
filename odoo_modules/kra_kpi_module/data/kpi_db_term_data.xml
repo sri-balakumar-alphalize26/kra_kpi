@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+         Starter terms. noupdate so an upgrade never overwrites wording you
+         edited and never resurrects a row you archived.
+
+         Edit, rename, reorder, archive or delete these freely under
+         Setup > Database Terms. Nothing in the code matches on a term's name
+         or code, only on its id and its length, so this list is yours.
+
+         Remember that a term only applies to a database whose "Track term"
+         box is ticked. Leave that off and none of this is involved.
+    -->
+    <data noupdate="1">
+
+        <record id="db_term_weekly" model="kpi.db.term">
+            <field name="name">Weekly</field>
+            <field name="days">7</field>
+            <field name="sequence">10</field>
+        </record>
+
+        <record id="db_term_monthly" model="kpi.db.term">
+            <field name="name">Monthly</field>
+            <field name="months">1</field>
+            <field name="sequence">20</field>
+        </record>
+
+        <record id="db_term_yearly" model="kpi.db.term">
+            <field name="name">Yearly</field>
+            <field name="months">12</field>
+            <field name="sequence">30</field>
+        </record>
+
+        <record id="db_term_lifetime" model="kpi.db.term">
+            <field name="name">Lifetime</field>
+            <field name="is_perpetual" eval="True"/>
+            <field name="sequence">40</field>
+            <field name="notes">Bought outright. No expiry date is ever suggested.</field>
+        </record>
+
+    </data>
+</odoo>

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+         Why a client asks for a database to be switched off. These appear in
+         a WhatsApp POLL, so the wording is read by the client, not by us.
+
+         A poll fits 12 options and the router appends its own "Other" row,
+         so keep this list at 11 or fewer. noupdate, like every other seeded
+         master here.
+    -->
+    <data noupdate="1">
+
+        <record id="db_disc_reason_closed" model="kpi.db.disconnect.reason">
+            <field name="name">Shop closed</field>
+            <field name="code">closed</field>
+            <field name="emoji">🏪</field>
+            <field name="sequence">10</field>
+        </record>
+
+        <record id="db_disc_reason_moved" model="kpi.db.disconnect.reason">
+            <field name="name">Moved to another system</field>
+            <field name="code">moved</field>
+            <field name="emoji">📦</field>
+            <field name="needs_detail" eval="True"/>
+            <field name="sequence">20</field>
+        </record>
+
+        <record id="db_disc_reason_not_needed" model="kpi.db.disconnect.reason">
+            <field name="name">Not needed any more</field>
+            <field name="code">not_needed</field>
+            <field name="emoji">🚫</field>
+            <field name="sequence">30</field>
+        </record>
+
+        <record id="db_disc_reason_duplicate" model="kpi.db.disconnect.reason">
+            <field name="name">Duplicate / test database</field>
+            <field name="code">duplicate</field>
+            <field name="emoji">📋</field>
+            <field name="sequence">40</field>
+        </record>
+
+        <record id="db_disc_reason_merged" model="kpi.db.disconnect.reason">
+            <field name="name">Merged into another shop</field>
+            <field name="code">merged</field>
+            <field name="emoji">🔗</field>
+            <field name="needs_detail" eval="True"/>
+            <field name="sequence">50</field>
+        </record>
+
+    </data>
+</odoo>

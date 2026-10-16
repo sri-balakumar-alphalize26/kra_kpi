@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+         Meetings requested from WhatsApp.
+
+         A request arrives with a time the client tapped (or asked for in
+         words) and NO person assigned. Confirming is a human act: set the
+         time, say who joins, press Confirm. That is when the link is minted
+         and the client is told.
+    -->
+
+    <record id="view_kpi_meeting_list" model="ir.ui.view">
+        <field name="name">kpi.meeting.list</field>
+        <field name="model">kpi.meeting</field>
+        <field name="arch" type="xml">
+            <list string="Meetings"
+                  decoration-warning="state == 'requested'"
+                  decoration-success="state == 'live'"
+                  decoration-muted="state in ('done', 'cancelled')">
+                <field name="scheduled_start" string="Starts"/>
+                <field name="name"/>
+                <field name="client_kra_id" string="Client"/>
+                <field name="organizer_id" string="Who Joins"/>
+                <field name="requested_by_name" string="Asked By" optional="show"/>
+                <field name="requested_text" string="Asked For" optional="hide"/>
+                <field name="state" widget="badge"
+                       decoration-warning="state == 'requested'"
+                       decoration-info="state == 'confirmed'"
+                       decoration-success="state == 'live'"
+                       decoration-muted="state in ('done', 'cancelled')"/>
+                <field name="join_url" widget="url" optional="hide"/>
+                <field name="kpi_id" string="Task" optional="hide"/>
+                <field name="duration_minutes" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_kpi_meeting_form" model="ir.ui.view">
+        <field name="name">kpi.meeting.form</field>
+        <field name="model">kpi.meeting</field>
+        <field name="arch" type="xml">
+            <form string="Meeting">
+                <header>
+                    <button name="action_confirm" type="object"
+                            string="Confirm &amp; Send Link" class="btn-primary"
+                            invisible="state not in ('requested', 'confirmed')"/>
+                    <button name="action_open_now" type="object"
+                            string="Open Now" class="btn-secondary"
+                            invisible="state != 'confirmed'"/>
+                    <button name="action_mark_done" type="object"
+                            string="Finished" class="btn-secondary"
+                            invisible="state != 'live'"/>
+                    <button name="action_post_summary" type="object"
+                            string="Send Summary" class="btn-secondary"
+                            invisible="state != 'done' or summary_posted"/>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="requested,confirmed,live,done"/>
+                </header>
+                <sheet>
+                    <group>
+                        <field name="kpi_id" readonly="1"/>
+                        <field name="client_kra_id" readonly="1"/>
+                        <field name="client_db_id" readonly="1"
+                               invisible="not client_db_id"/>
+                    </group>
+                    <div class="oe_title">
+                        <label for="name" string="Subject"/>
+                        <h1><field name="name"/></h1>
+                    </div>
+
+                    <div class="alert alert-warning" role="status"
+                         invisible="state != 'requested'">
+                        <b>Not confirmed.</b> The client has asked for this and
+                        has not been told anything yet. Set the time, say who
+                        will join, then press <b>Confirm &amp; Send Link</b> -
+                        that is what posts the link into their group.
+                    </div>
+
+                    <div class="alert alert-info" role="status"
+                         invisible="not requested_text">
+                        The client asked for
+                        <b><field name="requested_text" readonly="1" nolabel="1"/></b>
+                        in their own words. Set a real start time below - the bot
+                        deliberately does not guess a date from free text.
+                    </div>
+
+                    <group>
+                        <group string="When">
+                            <field name="scheduled_start"
+                                   required="state == 'confirmed'"/>
+                            <field name="duration_minutes"/>
+                            <field name="local_when" readonly="1"/>
+                        </group>
+                        <group string="Who">
+                            <field name="organizer_id"
+                                   required="state == 'confirmed'"
+                                   placeholder="The person the client will see"/>
+                            <field name="attendee_user_ids"
+                                   widget="many2many_tags"/>
+                            <field name="requested_by_name" readonly="1"/>
+                            <field name="requested_by_number" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <group string="Where">
+                        <group>
+                            <field name="provider"/>
+                            <field name="join_url" widget="url"
+                                   placeholder="https://..."
+                                   readonly="provider == 'jitsi'"/>
+                            <field name="room_name" invisible="provider != 'jitsi'"/>
+                        </group>
+                        <group>
+                            <field name="confirmed_by_id" readonly="1"/>
+                            <field name="confirmed_at" readonly="1"/>
+                            <field name="reminder_sent_at" readonly="1"/>
+                            <field name="link_posted_at" readonly="1"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-info" role="status"
+                         invisible="provider != 'jitsi'">
+                        A Jitsi room needs no account and opens in a browser on
+                        a phone or a desktop. The random part of the name is what
+                        keeps it private, so <b>do not share the link outside the
+                        meeting</b>. Set
+                        <b>kra_kpi.meet_base_url</b> to point at a self-hosted
+                        Jitsi if that is not enough.
+                    </div>
+
+                    <notebook>
+                        <page string="Afterwards">
+                            <group>
+                                <field name="recording_ids" widget="many2many_binary"
+                                       string="Recordings"/>
+                            </group>
+                            <group string="Summary">
+                                <field name="summary" nolabel="1"
+                                       placeholder="What was agreed. This is what gets sent to the client."/>
+                            </group>
+                            <group string="Next steps">
+                                <field name="action_items" nolabel="1"
+                                       placeholder="Who does what, by when."/>
+                            </group>
+                            <group>
+                                <field name="summary_posted" readonly="1"/>
+                                <field name="ended_at" readonly="1"/>
+                            </group>
+                            <div class="alert alert-info" role="status">
+                                <b>Nothing records the call for you.</b> Jitsi needs
+                                a separate recording service; upload the file here
+                                afterwards if you made one.
+                            </div>
+                        </page>
+                        <page string="Internal notes">
+                            <field name="notes" nolabel="1"
+                                   placeholder="Never sent to the client."/>
+                            <group>
+                                <field name="cancel_reason" readonly="1"
+                                       invisible="state != 'cancelled'"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_kpi_meeting_search" model="ir.ui.view">
+        <field name="name">kpi.meeting.search</field>
+        <field name="model">kpi.meeting</field>
+        <field name="arch" type="xml">
+            <search string="Meetings">
+                <field name="name"/>
+                <field name="client_kra_id"/>
+                <field name="organizer_id"/>
+                <filter name="f_requested" string="Waiting to be confirmed"
+                        domain="[('state', '=', 'requested')]"/>
+                <filter name="f_confirmed" string="Confirmed"
+                        domain="[('state', '=', 'confirmed')]"/>
+                <filter name="f_live" string="Open now"
+                        domain="[('state', '=', 'live')]"/>
+                <separator/>
+                <filter name="f_upcoming" string="Upcoming"
+                        domain="[('scheduled_start', '&gt;=', context_today().strftime('%Y-%m-%d'))]"/>
+                <filter name="f_no_time" string="No time set"
+                        domain="[('scheduled_start', '=', False)]"/>
+                <filter name="f_mine" string="Mine"
+                        domain="[('organizer_id', '=', uid)]"/>
+                <separator/>
+                <filter name="f_done" string="Finished"
+                        domain="[('state', '=', 'done')]"/>
+                <filter name="g_client" string="Client"
+                        context="{'group_by': 'client_kra_id'}"/>
+                <filter name="g_who" string="Who Joins"
+                        context="{'group_by': 'organizer_id'}"/>
+                <filter name="g_state" string="Status"
+                        context="{'group_by': 'state'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_kpi_meeting" model="ir.actions.act_window">
+        <field name="name">Meetings</field>
+        <field name="res_model">kpi.meeting</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_kpi_meeting_search"/>
+        <field name="context">{'search_default_f_requested': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiley_face">No meetings requested yet</p>
+            <p>
+                A client taps <b>Request a Meeting</b> on WhatsApp and picks a
+                time. It arrives here with <b>nobody assigned</b>.
+            </p>
+            <p>
+                Set the time, say who will join, and press
+                <b>Confirm &amp; Send Link</b>. The link is posted into that
+                client's group, and again just before the meeting starts.
+            </p>
+        </field>
+    </record>
+
+</odoo>

@@ -36,67 +36,25 @@ class WhatsappSessionGroupPatch(models.Model):
     def _is_group_target(target):
         return GROUP_SUFFIX in (target or '')
 
-    def send_message(self, phone, message):
-        """Send to a group when the target is a group JID; otherwise unchanged.
-
-        Personal sends are deliberately left to super(): that path carries retry,
-        logging and error handling that has been working in production, and there
-        is no reason for a group feature to take ownership of it.
-        """
-        target = (phone or '').strip()
-        if not self._is_group_target(target):
-            return super().send_message(phone, message)
-
-        self.ensure_one()
-        client = self._get_connected_client()
-        from neonize.proto.Neonize_pb2 import JID
-
-        # "120363041234567890@g.us" -> User=120363041234567890, Server=g.us
-        user_part = target.split('@', 1)[0].strip()
-        jid = JID(User=user_part, Server='g.us', Device=0, RawAgent=0,
-                  Integrator=0, IsEmpty=False)
-        try:
-            client.send_message(jid, message)
-            status = 'sent'
-            _logger.info("WhatsApp GROUP message sent to %s", target)
-        except Exception as e:
-            # neonize dispatches to the Go binary FIRST and parses the reply after:
-            #
-            #     bytes_ptr = self.__client.SendMessage(...)          # already sent
-            #     model = SendMessageReturnFunction.FromString(...)   # raises here
-            #
-            # On this build that parse fails for group sends, so a message that
-            # actually arrived was being recorded as failed. That false negative is
-            # not cosmetic: it invites a retry, and retrying a send that already
-            # worked is how one test message became four in a live client group.
-            #
-            # Matched on the type name only — a blanket "treat parse errors as sent"
-            # would start claiming success for genuine failures too.
-            if 'SendMessageReturnFunction' in str(e):
-                status = 'sent'
-                # Deliberately not "sent" in the log's wording: we know it left, we
-                # do not know it arrived, and this gateway cannot tell us.
-                _logger.info(
-                    "WhatsApp GROUP message dispatched to %s; the gateway could not "
-                    "return a receipt (%s). Recorded as sent so nothing retries.",
-                    target, str(e)[:80])
-            else:
-                status = 'failed'
-                _logger.error("WhatsApp group send failed for %s: %s", target, e)
-        # Logged either way, and with the full JID so is_group computes True on
-        # whatsapp.message (it looks for '@g.us' in phone).
-        self.env['whatsapp.message'].sudo().create({
-            'session_id': self.id,
-            'phone': target,
-            'message': message,
-            'direction': 'outgoing',
-            'status': status,
-        })
-        if status == 'failed':
-            # Never raise: a group report is a side-effect of ending a workday,
-            # and a failed report must not roll back the workday itself.
-            return False
-        return True
+    # send_message override REMOVED (16 Oct 2026, Evolution migration).
+    #
+    # Everything above in this file's docstring described a neonize problem:
+    # build_jid("120363...@g.us") produced "120363...@g.us@s.whatsapp.net".
+    # Evolution's REST API takes the group JID directly in its `number` field,
+    # so the base whatsapp.session.send_message is group-aware by construction
+    # (it normalises through whatsapp_neonize/models/wa_jid.py).
+    #
+    # Three real consequences of deleting this override:
+    #   1. send_image / send_document now work for groups. They were NEVER
+    #      overridden here, so every media send to a group has been silently
+    #      going nowhere.
+    #   2. The "treat a SendMessageReturnFunction parse error as sent" fudge is
+    #      gone. It existed because neonize dispatched before parsing the reply,
+    #      so a delivered message looked failed. Evolution returns a real HTTP
+    #      status and a message key, so success and failure are now honest --
+    #      and a genuine failure is no longer recorded as 'sent'.
+    #   3. Group rows are logged by the base _log_outgoing with the full
+    #      "...@g.us", so whatsapp.message.is_group computes True.
 
     # ---- discovery ---------------------------------------------------------- #
 
@@ -108,27 +66,33 @@ class WhatsappSessionGroupPatch(models.Model):
     # SENDING is unaffected — that needs only the JID and goes through send_message,
     # the same path every other message already uses — so the settings screen takes
     # the id by hand and these two stay as a best-effort convenience.
-    _LOOKUP_HINT = ("Asking WhatsApp for the group list does not work on this "
-                    "gateway build. It is not needed: add this number to the group "
-                    "from your phone and send any message there — the group is "
-                    "captured automatically and appears in the list.")
+    _LOOKUP_HINT = ("Could not read the group list from the WhatsApp server. "
+                    "You can still add this number to the group from your phone "
+                    "and send any message there — the group is captured "
+                    "automatically and appears in the list.")
 
     def wa_list_groups(self):
         """The groups this account is already in: [{'jid', 'name', 'size'}].
 
-        Only ever lists groups the connected number has joined — which is why the
-        invite-link path below exists, otherwise a bot that nobody has added has
-        no way in from inside Odoo.
+        WORKS NOW. On the neonize build this raised
+        "Error parsing message with type 'neonize.GetJoinedGroupsReturnFunction'"
+        because the Go binary returned bytes its own Python protos could not
+        parse, which is why the settings screen asked for the group id by hand.
+        Evolution answers GET /group/fetchAllGroups as plain JSON.
         """
         self.ensure_one()
-        client = self._get_connected_client()
+        client, instance = self._get_client()
         out = []
-        for g in client.get_joined_groups() or []:
+        for g in client.fetch_all_groups(instance, get_participants=False) or []:
             try:
-                jid = '%s@g.us' % g.JID.User
-                name = getattr(getattr(g, 'GroupName', None), 'Name', '') or jid
-                out.append({'jid': jid, 'name': name,
-                            'size': len(getattr(g, 'Participants', []) or [])})
+                jid = (g.get('id') or '').strip()
+                if not jid:
+                    continue
+                out.append({
+                    'jid': jid,
+                    'name': g.get('subject') or jid,
+                    'size': g.get('size') or len(g.get('participants') or []),
+                })
             except Exception as e:
                 _logger.warning("skipping unreadable group: %s", e)
         return sorted(out, key=lambda x: (x['name'] or '').lower())
@@ -149,16 +113,16 @@ class WhatsappSessionGroupPatch(models.Model):
         makes a confirm step possible.
         """
         self.ensure_one()
-        client = self._get_connected_client()
+        client, instance = self._get_client()
         code = self._invite_code(link)
         if not code:
             return {'ok': False, 'message': 'That does not look like an invite link.'}
         try:
-            info = client.get_group_info_from_link(code)
+            info = client.group_info_from_invite(instance, code) or {}
             return {'ok': True, 'code': code,
-                    'jid': '%s@g.us' % info.JID.User,
-                    'name': getattr(getattr(info, 'GroupName', None), 'Name', '') or '',
-                    'size': len(getattr(info, 'Participants', []) or [])}
+                    'jid': info.get('id') or '',
+                    'name': info.get('subject') or '',
+                    'size': info.get('size') or len(info.get('participants') or [])}
         except Exception as e:
             _logger.error("wa_peek_invite: %s", e)
             return {'ok': False, 'message': str(e)}
@@ -170,13 +134,16 @@ class WhatsappSessionGroupPatch(models.Model):
         and rotate, the JID does not.
         """
         self.ensure_one()
-        client = self._get_connected_client()
+        client, instance = self._get_client()
         code = self._invite_code(link)
         if not code:
             return {'ok': False, 'message': 'That does not look like an invite link.'}
         try:
-            jid = client.join_group_with_link(code)
-            return {'ok': True, 'jid': '%s@g.us' % jid.User}
+            res = client.group_join(instance, code) or {}
+            jid = res.get('id') or res.get('groupJid') or ''
+            if not jid:
+                return {'ok': False, 'message': 'Joined, but no group id was returned.'}
+            return {'ok': True, 'jid': jid}
         except Exception as e:
             _logger.error("wa_join_invite: %s", e)
             return {'ok': False, 'message': str(e)}

@@ -187,8 +187,66 @@ export class KpiPendingQueue extends Component {
                                                                       t-model="q.description"/>
                                                         </div>
 
+                                                        <!-- Decline / Reclassify panel.
+                                                             Opened from the button row below. Unlike Discard,
+                                                             nothing is destroyed: the task is archived with the
+                                                             reason stored, and the client is told in their own
+                                                             WhatsApp group. -->
+                                                        <t t-if="state.declineFor === q.id">
+                                                            <div class="col-12">
+                                                                <div class="border rounded p-2 bg-body-tertiary">
+                                                                    <div class="d-flex gap-2 mb-2">
+                                                                        <select class="form-select form-select-sm"
+                                                                                style="max-width:170px"
+                                                                                t-model="state.declineMode"
+                                                                                t-on-change="() => this.loadReasons()">
+                                                                            <option value="decline">Decline it</option>
+                                                                            <option value="reclassify">Re-type it</option>
+                                                                        </select>
+                                                                        <select class="form-select form-select-sm"
+                                                                                t-model="state.declineReasonId"
+                                                                                t-on-change="(ev) => this.onReasonPick(ev)">
+                                                                            <option value="">— pick a reason —</option>
+                                                                            <t t-foreach="state.reasons" t-as="r" t-key="r.id">
+                                                                                <option t-att-value="r.id" t-esc="r.name"/>
+                                                                            </t>
+                                                                        </select>
+                                                                        <select t-if="state.declineMode === 'reclassify'"
+                                                                                class="form-select form-select-sm"
+                                                                                style="max-width:160px"
+                                                                                t-model="state.declineDocType">
+                                                                            <option value="">— new type —</option>
+                                                                            <option value="requirement">Requirement</option>
+                                                                            <option value="update">Update</option>
+                                                                            <option value="bug">Bug</option>
+                                                                        </select>
+                                                                    </div>
+                                                                    <textarea class="form-control form-control-sm mb-2" rows="2"
+                                                                              placeholder="What the client will be told. Leave empty to send the reason above as written."
+                                                                              t-model="state.declineText"/>
+                                                                    <div class="d-flex justify-content-between align-items-center">
+                                                                        <small class="text-muted">
+                                                                            The client is messaged in their own WhatsApp group and asked to confirm.
+                                                                        </small>
+                                                                        <div class="d-flex gap-2">
+                                                                            <button class="btn btn-sm btn-outline-secondary"
+                                                                                    t-on-click="() => this.closeDecline()">Cancel</button>
+                                                                            <button class="btn btn-sm btn-warning"
+                                                                                    t-on-click="() => this.submitDecline(q)">
+                                                                                <i class="fa fa-reply me-1"/> Send to client
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </t>
+
                                                         <!-- Actions -->
                                                         <div class="col-12 d-flex justify-content-end gap-2">
+                                                            <button class="btn btn-sm btn-outline-warning"
+                                                                    t-on-click="() => this.openDecline(q)">
+                                                                <i class="fa fa-reply me-1"/> Decline / Re-type
+                                                            </button>
                                                             <button class="btn btn-sm btn-outline-danger"
                                                                     t-on-click="() => this.deleteTask(q)">
                                                                 <i class="fa fa-trash me-1"/> Discard
@@ -220,7 +278,13 @@ export class KpiPendingQueue extends Component {
     setup() {
         // openDates / openClients are plain objects used as sets (key -> true).
         // Everything starts closed: only the dates are visible on load.
-        this.state = useState({ queue: [], users: [], openDates: {}, openClients: {}, openTask: null });
+        this.state = useState({
+            queue: [], users: [], openDates: {}, openClients: {}, openTask: null,
+            // Decline / re-type panel. declineFor holds the task id whose panel
+            // is open, so only one is ever open at a time.
+            declineFor: null, declineMode: 'decline', declineReasonId: '',
+            declineDocType: '', declineText: '', reasons: [],
+        });
         onWillStart(async () => {
             const ru = await rpc('/kpi_completion_cert/get_users', {});
             if (ru && ru.status) this.state.users = ru.users || [];
@@ -306,6 +370,75 @@ export class KpiPendingQueue extends Component {
         if (!r.status) { alert('Publish failed: ' + (r.message || 'unknown')); return; }
         alert(r.message || 'Published.');
         this.state.openTask = null;
+        await this.refresh();
+    }
+
+    // ---- decline / re-type ------------------------------------------------ //
+    async openDecline(q) {
+        this.state.declineFor = q.id;
+        this.state.declineMode = 'decline';
+        this.state.declineReasonId = '';
+        this.state.declineDocType = '';
+        this.state.declineText = '';
+        await this.loadReasons();
+    }
+
+    closeDecline() {
+        this.state.declineFor = null;
+        this.state.declineText = '';
+    }
+
+    async loadReasons() {
+        // Reasons differ by mode, so re-fetch whenever the mode changes rather
+        // than filtering client-side — the server owns which reason is valid.
+        this.state.declineReasonId = '';
+        this.state.declineDocType = '';
+        const r = await rpc('/kpi_pending_queue/decline_reasons', {
+            mode: this.state.declineMode,
+        });
+        this.state.reasons = (r && r.reasons) || [];
+    }
+
+    onReasonPick(ev) {
+        // A reason can carry the type to re-mint as ("Not a bug" -> Update),
+        // so picking it pre-selects the type. The admin can still override.
+        const id = parseInt(ev.target.value || 0, 10);
+        const hit = this.state.reasons.find((x) => x.id === id);
+        if (hit && hit.target_doc_type) {
+            this.state.declineDocType = hit.target_doc_type;
+        }
+    }
+
+    async submitDecline(q) {
+        if (!this.state.declineReasonId && !this.state.declineText.trim()) {
+            alert('Pick a reason or type one — the client is told why.');
+            return;
+        }
+        if (this.state.declineMode === 'reclassify' && !this.state.declineDocType) {
+            alert('Choose what to re-type it as.');
+            return;
+        }
+        const r = await rpc('/kpi_pending_queue/decline', {
+            kpi_id: q.id,
+            mode: this.state.declineMode,
+            reason_id: this.state.declineReasonId || false,
+            reason_text: this.state.declineText || '',
+            doc_type: this.state.declineDocType || false,
+        });
+        if (!r || !r.status) {
+            alert((r && r.message) || 'Could not do that.');
+            return;
+        }
+        // Say plainly whether the client was actually reached. "Saved" alone
+        // would let an admin believe a client was told when no group is linked.
+        if (r.warning) {
+            alert(r.warning);
+        } else if (r.mode === 'reclassify') {
+            alert(`Re-typed to ${r.external_ref} (was ${r.previous_external_ref}). The client has been asked to confirm.`);
+        } else {
+            alert('Declined. The client has been told and asked to confirm.');
+        }
+        this.closeDecline();
         await this.refresh();
     }
 

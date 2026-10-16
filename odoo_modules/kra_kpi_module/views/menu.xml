@@ -82,6 +82,90 @@
               action="whatsapp_neonize.action_whatsapp_session"
               sequence="30"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- WhatsApp Groups -> Client. One group belongs to one client; that
+         client's children are its sub-clients. Rows register themselves when
+         somebody first posts in a group this number is a member of, so this
+         screen is normally about ASSIGNING a client, not creating rows. -->
+    <menuitem id="menu_kpi_wa_groups"
+              parent="menu_grp_setup"
+              name="WhatsApp Groups"
+              action="action_kpi_wa_group"
+              sequence="31"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- Servers offered by the WhatsApp "New Database" menu. -->
+    <menuitem id="menu_kpi_servers"
+              parent="menu_grp_setup"
+              name="Servers"
+              action="action_kpi_server"
+              sequence="32"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- The databases each client has. This is what the WhatsApp "Which
+         database?" menu reads, so a client with nothing listed here is only
+         ever offered "Common". Fetched rows start with no client and are
+         offered to nobody until one is assigned. -->
+    <menuitem id="menu_kpi_client_dbs"
+              parent="menu_grp_setup"
+              name="Databases"
+              action="action_kpi_client_db"
+              sequence="35"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- Optional. A term only applies to a database whose Track term box is
+         ticked, and that is off by default. -->
+    <menuitem id="menu_kpi_db_terms"
+              parent="menu_grp_setup"
+              name="Database Terms"
+              action="action_kpi_db_term"
+              sequence="36"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- Reasons the CLIENT picks when asking for a database to be switched
+         off. Shown in a WhatsApp poll, so the wording is read by them. -->
+    <menuitem id="menu_kpi_db_disconnect_reasons"
+              parent="menu_grp_setup"
+              name="Disconnect Reasons"
+              action="action_kpi_db_disconnect_reason"
+              sequence="37"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- The operational view: what is live, for whom, on what terms, and
+         what has been asked to be switched off. Under Clients rather than
+         Setup because it is read daily, not configured once. -->
+    <menuitem id="menu_kpi_live_dbs"
+              parent="menu_grp_clients"
+              name="Live Databases"
+              action="action_kpi_live_db"
+              sequence="20"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- Meetings a client asked for on WhatsApp. They arrive with NOBODY
+         assigned: confirming one means setting the time, saying who joins,
+         and pressing the button that sends the link. -->
+    <menuitem id="menu_kpi_meetings"
+              parent="menu_grp_my_work"
+              name="Meetings"
+              action="action_kpi_meeting"
+              sequence="20"
+              groups="kra_kpi_module.group_kra_developer"/>
+
+    <!-- Packages offered by the WhatsApp "New Database" menu. -->
+    <menuitem id="menu_kpi_install_presets"
+              parent="menu_grp_setup"
+              name="Install Packages"
+              action="action_kpi_install_preset"
+              sequence="34"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- Reasons the admin can pick when declining or re-typing a submission. -->
+    <menuitem id="menu_kpi_decline_reasons"
+              parent="menu_grp_setup"
+              name="Decline Reasons"
+              action="action_kpi_decline_reason"
+              sequence="33"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
     
     <!-- ✅ Settings Menu. Header visible to manager/admin/owner/system so the
          operational items reparented here (Backup, Snapshots, Login Management,

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+         Seed packages. noupdate so an upgrade never overwrites wording the
+         admin has edited, and never resurrects a row they archived.
+         Edit these under Setup > Install Packages.
+    -->
+    <data noupdate="1">
+
+        <record id="install_preset_pos" model="kpi.install.preset">
+            <field name="name">Standard POS</field>
+            <field name="code">pos</field>
+            <field name="emoji">📦</field>
+            <field name="contents">Point of Sale, products, taxes, basic receipt layout.</field>
+            <field name="sequence">10</field>
+        </record>
+
+        <record id="install_preset_retail" model="kpi.install.preset">
+            <field name="name">Standard Retail</field>
+            <field name="code">retail</field>
+            <field name="emoji">🏪</field>
+            <field name="contents">Point of Sale, Inventory, Purchase, barcode, retail receipt layout.</field>
+            <field name="sequence">20</field>
+        </record>
+
+        <record id="install_preset_pos_scale" model="kpi.install.preset">
+            <field name="name">POS + Weighing Scale</field>
+            <field name="code">pos_scale</field>
+            <field name="emoji">⚖️</field>
+            <field name="contents">Standard POS plus weighing-scale integration and scale barcode handling.</field>
+            <field name="sequence">30</field>
+        </record>
+
+        <record id="install_preset_pos_scale_vfd" model="kpi.install.preset">
+            <field name="name">POS + Scale + VFD</field>
+            <field name="code">pos_scale_vfd</field>
+            <field name="emoji">🖥️</field>
+            <field name="contents">Standard POS, weighing scale, and customer-facing VFD display.</field>
+            <field name="sequence">40</field>
+        </record>
+
+        <record id="install_preset_full" model="kpi.install.preset">
+            <field name="name">Full Package</field>
+            <field name="code">full</field>
+            <field name="emoji">🎁</field>
+            <field name="contents">Retail base, POS, weighing scale, VFD display, KOT printing, reports and backup schedule. Everything.</field>
+            <field name="sequence">50</field>
+        </record>
+
+        <record id="install_preset_copy" model="kpi.install.preset">
+            <field name="name">Same as another shop</field>
+            <field name="code">copy</field>
+            <field name="emoji">📋</field>
+            <field name="contents">Mirror an existing database. The requester is asked which shop to copy.</field>
+            <field name="needs_detail" eval="True"/>
+            <field name="sequence">80</field>
+        </record>
+
+        <record id="install_preset_custom" model="kpi.install.preset">
+            <field name="name">Custom — I'll type it</field>
+            <field name="code">custom</field>
+            <field name="emoji">✍️</field>
+            <field name="contents">Whatever the requester describes in their own words.</field>
+            <field name="needs_detail" eval="True"/>
+            <field name="sequence">90</field>
+        </record>
+
+    </data>
+</odoo>

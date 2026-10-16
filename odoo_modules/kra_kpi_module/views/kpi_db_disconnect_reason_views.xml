@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+         Why a client asks for a database to be switched off. These are shown
+         to the CLIENT in a WhatsApp poll, so the wording is theirs to read.
+         The list is read fresh on every conversation, so a change here is
+         live on the next message. No restart.
+    -->
+
+    <record id="view_kpi_db_disconnect_reason_list" model="ir.ui.view">
+        <field name="name">kpi.db.disconnect.reason.list</field>
+        <field name="model">kpi.db.disconnect.reason</field>
+        <field name="arch" type="xml">
+            <list string="Disconnect Reasons" editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="emoji" string="Icon"/>
+                <field name="name"/>
+                <field name="needs_detail" string="Ask for details"/>
+                <field name="code" optional="hide"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_kpi_db_disconnect_reason_form" model="ir.ui.view">
+        <field name="name">kpi.db.disconnect.reason.form</field>
+        <field name="model">kpi.db.disconnect.reason</field>
+        <field name="arch" type="xml">
+            <form string="Disconnect Reason">
+                <sheet>
+                    <widget name="web_ribbon" title="Archived"
+                            bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name" string="Reason"/>
+                        <h1><field name="name" placeholder="e.g. Shop closed"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="emoji" placeholder="🏪"/>
+                            <field name="sequence"/>
+                        </group>
+                        <group>
+                            <field name="code" placeholder="optional"/>
+                            <field name="needs_detail"/>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-info" role="status">
+                        A WhatsApp poll fits 12 options and the bot adds its own
+                        <b>Other</b> row, so keep this list at <b>11 or fewer</b>.
+                        Archive what you do not use rather than deleting it, so
+                        older requests keep their meaning.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_kpi_db_disconnect_reason" model="ir.actions.act_window">
+        <field name="name">Disconnect Reasons</field>
+        <field name="res_model">kpi.db.disconnect.reason</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiley_face">Why a client switches a database off</p>
+            <p>
+                These become the <b>Why?</b> poll when somebody taps
+                <b>Disconnect a Database</b> on WhatsApp.
+            </p>
+        </field>
+    </record>
+
+</odoo>

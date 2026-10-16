@@ -1,0 +1,1408 @@
+"""Group intake: tappable pickers, one free-text line, AI tidy-up, confirm.
+
+THE FLOW
+--------
+    "hi"              -> LIST: what do you need?        (4 rows)
+    tap type          -> LIST: which area?              (7 rows)
+    tap area          -> "describe it in one line"      <- the ONLY typing
+    free text         -> AI corrects + classifies
+                      -> BUTTONS: Create / Edit / Cancel (3, the WA maximum)
+    tap Create        -> ticket in the admin queue
+
+Interactive messages were verified renderable on this connection on
+16 Oct 2026. They are still not trusted blindly: every step also accepts the
+typed number, and whatsapp.session.send_list/send_buttons fall back to a
+numbered text menu if the server refuses the interactive payload. A flow that
+dead-ends because WhatsApp changed its mind about buttons is worse than an
+ugly one.
+
+MATCHING IS ON THE OPTION ID, NEVER THE LABEL
+---------------------------------------------
+A tap returns the `rowId`/`selectedButtonId` we set (e.g. 'bug'), which the
+webhook stores in whatsapp.message.interactive_reply_id. Matching on that
+rather than the visible text means re-wording or translating a menu cannot
+break the flow.
+
+STATE
+-----
+Keyed by (group, participant): several people can be mid-flow in the same
+group at once, which the phone-keyed kpi.wa.conversation used for 1:1 chats
+cannot represent.
+"""
+
+import logging
+
+from odoo import _, api, fields, models
+
+from .kpi_ai import AREA_LABEL, WORK_AREAS, WORK_AREA_CODES
+
+_logger = logging.getLogger(__name__)
+
+GROUP_TTL_MINUTES = 15
+
+# Interactive (tappable) menus are OFF because WhatsApp does not deliver them
+# to an unofficial client -- see the long note on _list/_buttons below. Set to
+# True only if this number is moved to the official WhatsApp Business API.
+USE_INTERACTIVE = False
+
+_GREETINGS = ('hi', 'hello', 'hey', 'menu', 'start', 'help')
+_CANCELS = ('cancel', 'stop', 'exit', 'abort', 'quit')
+
+# id -> (action_type, label, blurb)
+#
+# ORDER MATTERS for the typed-number fallback, but only within one
+# conversation: the number map is built from the rows ACTUALLY OFFERED and
+# stored on the state (`menu_csv`), because 'dbdisconnect' is hidden from
+# clients who have no live database. A static index map would have made "3"
+# mean different things to different groups.
+_TYPE_ROWS = [
+    ('requirement', '✨ New Requirement', 'Something new to build'),
+    ('bug', '🐞 Report a Bug', 'Something is not working'),
+    ('update', '🔧 Request an Update', 'Change something existing'),
+    ('meeting', '📅 Request a Meeting', 'Call or Google Meet'),
+    ('newdb', '🗄️ New Database', 'Set up a new DB for a shop'),
+    ('dbdisconnect', '🔌 Disconnect a Database',
+     'Switch off a database you no longer need'),
+]
+
+# The types that ask WHICH DATABASE the work is about before anything else.
+# A new database has no database to pick yet, and a disconnect has its own
+# picker (live rows only), so neither is in here.
+_DB_SCOPED_TYPES = ('requirement', 'bug', 'update', 'meeting')
+
+# Every step, in one place. The router used to repeat this list as a literal
+# tuple in its sanitiser, and a step added in one and not the other is how a
+# conversation ends up on a value no branch matches -- which made the bot go
+# silent mid-flow on 16 Oct 2026. Derived, so it cannot drift again.
+_STEPS = [
+    ('idle', 'Idle'),
+    ('pick_type', 'Picking a type'),
+    ('pick_area', 'Picking an area'),
+    ('ask_text', 'Waiting for the description'),
+    ('confirm', 'Waiting for confirmation'),
+    ('decline_reconfirm', 'Answering a decline'),
+    # New database
+    ('pick_server', 'Picking a server'),
+    ('type_server', 'Typing a server name'),
+    ('ask_db_name', 'Typing the database name'),
+    ('confirm_db_name', 'Confirming the database name'),
+    ('ask_db_desc', 'Adding a description'),
+    ('pick_install', 'Picking what to install'),
+    ('type_install', 'Typing what to install'),
+    # Meeting
+    ('pick_slot', 'Picking a time'),
+    ('type_slot', 'Asking for a time in their own words'),
+    # Which existing database is this about
+    ('pick_db', 'Picking a database'),
+    ('type_db', 'Naming a database we do not have listed'),
+    # Disconnect
+    ('pick_disc_db', 'Picking a database to disconnect'),
+    ('pick_disc_reason', 'Picking why'),
+    ('type_disc_reason', 'Typing why'),
+    ('confirm_disconnect', 'Confirming a disconnect'),
+]
+_STEP_CODES = tuple(c for c, _l in _STEPS)
+
+# A poll fits 12 options. The database picker also shows Common and Other, so
+# the client's own rows are capped at 10.
+POLL_MAX_DB_ROWS = 10
+
+# Rows the database picker appends to whatever the client actually has.
+_DB_COMMON_ID = '__common__'
+_DB_OTHER_ID = '__other__'
+_DB_COMMON_LABEL = '🌐 Common — whole server'
+_DB_OTHER_LABEL = '➕ Other — type it'
+
+# Install packages now live in the kpi.install.preset TABLE (Setup > Install
+# Packages), because this list changed twice in its first week. These
+# constants are retained only so an older stored state value still renders.
+_INSTALL_PRESETS = [
+    ('pos', '📦 Standard POS pack'),
+    ('pos_scale', '⚖️ POS + weighing scale'),
+    ('copy', '📋 Same as another shop'),
+    ('custom', "✍️ Custom — I'll type it"),
+]
+_PRESET_BY_ID = dict(_INSTALL_PRESETS)
+_PRESET_BY_NUMBER = {str(i + 1): c for i, (c, _l) in enumerate(_INSTALL_PRESETS)}
+
+# Emoji for the area picker. Kept HERE and not in kpi_ai.WORK_AREAS on
+# purpose: those codes and labels are fed to the LLM prompt as an enum, and
+# decorating a machine-readable enum with emoji is asking for mis-parses.
+_AREA_EMOJI = {
+    'pos': '🧾', 'print': '🖨️', 'hardware': '⚖️', 'apk': '📱',
+    'server': '🖥️', 'report': '📊', 'website': '🌐',
+}
+
+
+def _area_label(code):
+    """Display label for an area: emoji + its plain name."""
+    plain = AREA_LABEL.get(code, code)
+    emoji = _AREA_EMOJI.get(code, '')
+    return ('%s %s' % (emoji, plain)).strip()
+_TYPE_BY_ID = {r[0]: r for r in _TYPE_ROWS}
+# Typed-number fallback, in the order the rows are shown.
+_TYPE_BY_NUMBER = {str(i + 1): r[0] for i, r in enumerate(_TYPE_ROWS)}
+_AREA_BY_NUMBER = {str(i + 1): c for i, (c, _l) in enumerate(WORK_AREAS)}
+
+# A POLL VOTE RETURNS THE OPTION'S VISIBLE LABEL, not an id we chose -- that is
+# the one real cost of using polls instead of buttons. So every menu also needs
+# a label -> id map, and the labels must stay unique within a step.
+def _strip_emoji(text):
+    """'🐞 Report a Bug' -> 'report a bug'. Keeps matching working whether the
+    member tapped the decorated option or typed the plain words."""
+    out = ''.join(ch for ch in (text or '') if ch.isalnum() or ch.isspace()
+                  or ch in "/-&'")
+    return ' '.join(out.split()).lower()
+
+
+# Both the decorated label (what a poll vote returns) and the plain words
+# (what somebody might type) resolve to the same id.
+_TYPE_BY_LABEL = {}
+for _r in _TYPE_ROWS:
+    _TYPE_BY_LABEL[_r[1].lower()] = _r[0]
+    _TYPE_BY_LABEL[_strip_emoji(_r[1])] = _r[0]
+
+_AREA_BY_LABEL = {}
+for _c, _l in WORK_AREAS:
+    _AREA_BY_LABEL[_l.lower()] = _c
+    _AREA_BY_LABEL[_strip_emoji(_l)] = _c
+    _AREA_BY_LABEL[_strip_emoji(_area_label(_c))] = _c
+    _AREA_BY_LABEL[_area_label(_c).lower()] = _c
+
+_CONFIRM_ROWS = [('create', '✅ Create'), ('edit', '✏️ Edit text'),
+                 ('cancel', '❌ Cancel')]
+_CONFIRM_BY_LABEL = {}
+for _i, _l in _CONFIRM_ROWS:
+    _CONFIRM_BY_LABEL[_l.lower()] = _i
+    _CONFIRM_BY_LABEL[_strip_emoji(_l)] = _i
+
+
+def _choose(tapped, typed, valid_ids, by_label, by_number):
+    """Resolve a step's answer, whichever way the member gave it.
+
+    Three routes, in order: an id we already recognise, a poll vote (which
+    arrives as the option's visible label), or a typed number.
+    Returns the id, or None.
+    """
+    t = (tapped or '').strip()
+    if t and t in valid_ids:
+        return t
+    if t and t.lower() in by_label:
+        return by_label[t.lower()]
+    return by_number.get((typed or '').strip())
+
+
+class KpiWaGroupIntake(models.Model):
+    """One in-progress flow, for one person, in one group."""
+    _name = 'kpi.wa.group.intake'
+    _description = 'WhatsApp Group Intake State'
+    _order = 'last_activity desc'
+
+    group_id = fields.Many2one('kpi.wa.group', required=True,
+                               ondelete='cascade', index=True)
+    participant_key = fields.Char(required=True, index=True)
+    participant_name = fields.Char()
+    step = fields.Selection(_STEPS, default='idle', required=True)
+    srv_id = fields.Many2one('kpi.server', string='Chosen Server')
+    srv_other = fields.Char(string='Server (typed)')
+    db_name = fields.Char(string='Database Name')
+    db_note = fields.Text(string='Database Notes')
+    install_preset = fields.Char()
+    install_text = fields.Text()
+
+    # ---- which EXISTING database this is about ---------------------------- #
+    client_db_id = fields.Many2one(
+        'kpi.client.db', string='Chosen Database', ondelete='set null')
+    db_is_common = fields.Boolean(
+        string='Whole server',
+        help='They said it is about the server generally, not one database.')
+    db_other = fields.Char(
+        string='Database (typed)',
+        help='A database the client named that we do not have listed. Kept so '
+             'an admin can register it rather than guess.')
+
+    # ---- meeting ---------------------------------------------------------- #
+    meet_start = fields.Datetime(
+        string='Requested Start',
+        help='Set when they tapped one of the offered slots.')
+    meet_text = fields.Char(
+        string='Requested Time (their words)',
+        help='Set when they asked for a time we did not offer. An admin reads '
+             'it and sets a real time -- the bot never parses a date out of '
+             'free text, because getting that wrong books the wrong day.')
+
+    # ---- disconnect ------------------------------------------------------- #
+    disc_reason_id = fields.Many2one(
+        'kpi.db.disconnect.reason', string='Disconnect Reason',
+        ondelete='set null')
+    disc_reason_text = fields.Text(string='Disconnect Reason (typed)')
+
+    # What the LAST menu actually offered, in the order it was shown. The
+    # typed-number fallback resolves against this rather than against a static
+    # index, because the type menu is not the same for every client.
+    menu_csv = fields.Char()
+
+    pending_decline_kpi_id = fields.Many2one(
+        'kra.kpi', ondelete='set null',
+        help='The task whose decline / reclassification this person is being '
+             'asked to confirm.')
+    # MUST stay in step with _TYPE_ROWS. A menu row whose id is not a valid
+    # Selection value raises on write, the router's try/except swallows it,
+    # and the bot goes silent mid-flow with nothing visible to the user --
+    # which is exactly what 'newdb' did on 16 Oct 2026. Derived from the one
+    # table rather than re-typed, so it cannot drift again.
+    action_type = fields.Selection(
+        selection=lambda self: [(r[0], r[1]) for r in _TYPE_ROWS])
+    work_area = fields.Char()
+    raw_text = fields.Text(help='Exactly what the member typed, before tidying.')
+    draft_title = fields.Char(help='After AI correction; what will be created.')
+    ai_source = fields.Char()
+    last_activity = fields.Datetime(default=lambda s: fields.Datetime.now())
+    created_kpi_id = fields.Many2one('kra.kpi', ondelete='set null')
+
+    _sql_constraints = [
+        ('group_participant_uniq', 'unique(group_id, participant_key)',
+         'One intake state per person per group.'),
+    ]
+
+    @api.model
+    def _get_or_create(self, group, key, name=''):
+        rec = self.sudo().search([('group_id', '=', group.id),
+                                  ('participant_key', '=', key)], limit=1)
+        if rec:
+            if rec._is_stale():
+                rec._reset()
+            if name and rec.participant_name != name:
+                rec.participant_name = name
+            return rec
+        return self.sudo().create({'group_id': group.id, 'participant_key': key,
+                                   'participant_name': name, 'step': 'idle'})
+
+    def _is_stale(self):
+        self.ensure_one()
+        if not self.last_activity:
+            return True
+        return (fields.Datetime.now() - self.last_activity).total_seconds() \
+            > GROUP_TTL_MINUTES * 60
+
+    def _reset(self):
+        self.sudo().write({'step': 'idle', 'action_type': False,
+                           'work_area': False, 'raw_text': False,
+                           'draft_title': False, 'ai_source': False,
+                           'db_note': False,
+                           # Scratch from the database and disconnect pickers.
+                           # Left behind, a stale client_db_id would attach the
+                           # NEXT ticket to the previous conversation's
+                           # database -- the same class of bug as the stale
+                           # poll vote that re-titled a New Database request.
+                           'client_db_id': False, 'db_is_common': False,
+                           'db_other': False, 'disc_reason_id': False,
+                           'disc_reason_text': False, 'menu_csv': False,
+                           'meet_start': False, 'meet_text': False,
+                           'last_activity': fields.Datetime.now()})
+
+    def _touch(self, **vals):
+        vals['last_activity'] = fields.Datetime.now()
+        self.sudo().write(vals)
+
+    @api.model
+    def _cron_prune(self):
+        for rec in self.sudo().search([('step', '!=', 'idle')]):
+            if rec._is_stale():
+                rec._reset()
+        return True
+
+
+class KpiWaGroupIntakeRouter(models.AbstractModel):
+    _name = 'kpi.wa.group.router'
+    _description = 'WhatsApp Group Intake Router'
+
+    @api.model
+    def handle(self, message):
+        """Entry point from whatsapp.message.create(). Never raises."""
+        body = (message.message or '').strip()
+        tapped = (message.interactive_reply_id or '').strip()
+        if not body and not tapped:
+            return False
+
+        jid = (message.phone or '').strip()
+        group = self.env['kpi.wa.group'].sudo().search([('jid', '=', jid)], limit=1)
+        if not group or not group.intake_enabled or not group.kra_id:
+            return False
+
+        key = (message.participant_jid or '').strip() or (message.push_name or '').strip()
+        if not key:
+            return False
+
+        state = self.env['kpi.wa.group.intake']._get_or_create(
+            group, key, message.push_name or '')
+        low = body.lower().strip()
+
+        if low in _CANCELS:
+            if state.step != 'idle':
+                state._reset()
+                self._text(message, _("Cancelled. Send *hi* to start again."))
+                return True
+            return False
+
+        # A GREETING ALWAYS RESTARTS, from any step.
+        #
+        # It used to be handled only from 'idle', which meant a half-finished
+        # flow could not be escaped except by waiting out the TTL or typing
+        # CANCEL -- and nobody guesses CANCEL. It also made a renamed step value
+        # unrecoverable: an in-flight row whose `step` no longer existed matched
+        # no branch at all and the bot went permanently silent for that person.
+        if low in _GREETINGS:
+            return self._show_types(message, state, group)
+
+        # Defensive: a step this code does not know (an old row from a previous
+        # version of the flow) is treated as idle rather than falling through
+        # into silence.
+        # Answering a decline comes BEFORE the step sanitiser, because this
+        # conversation was opened by us, not by them -- they never typed "hi",
+        # so there is no flow for them to be "part way through".
+        if state.step == 'decline_reconfirm':
+            return self._handle_reconfirm(message, state, tapped, low)
+
+        step = state.step
+        if step not in _STEP_CODES:
+            _logger.info('Group intake: resetting unknown step %r', step)
+            state._reset()
+            step = 'idle'
+
+        if step == 'idle':
+            return False                      # ordinary chatter: stay quiet
+
+        if step == 'pick_type':
+            # Numbers resolve against what was OFFERED, not against the full
+            # table -- 'dbdisconnect' is hidden from clients with nothing live.
+            offered = [c for c in (state.menu_csv or '').split(',') if c] \
+                or [r[0] for r in _TYPE_ROWS]
+            by_number = {str(i + 1): c for i, c in enumerate(offered)}
+            choice = _choose(tapped, low, _TYPE_BY_ID, _TYPE_BY_LABEL, by_number)
+            if not choice:
+                if low in _GREETINGS:
+                    return self._show_types(message, state, group)
+                return False
+            if choice == 'newdb':
+                # Skip the area picker: a new database is unambiguously
+                # Server / Hosting. One less turn.
+                state._touch(step='pick_server', action_type='newdb',
+                             work_area='server')
+                return self._show_servers(message, state)
+            if choice == 'dbdisconnect':
+                state._touch(action_type='dbdisconnect', work_area='server')
+                return self._show_disc_dbs(message, state, group)
+            state._touch(action_type=choice)
+            # Which database is this about? Asked BEFORE the area, because it
+            # decides which KRA the ticket is filed against.
+            return self._begin_db_scope(message, state, group)
+
+        if step == 'pick_server':
+            opts = self._server_options_from_state(state)
+            pick = self._resolve_rows(tapped, low, opts)
+            if not pick:
+                return False
+            if pick == _DB_OTHER_ID:
+                state._touch(step='type_server')
+                self._text(message, _('Type the server name exactly.'))
+                return True
+            state._touch(srv_id=int(pick), srv_other=False)
+            # A NEW database needs a name typed next. Anything else is about a
+            # database that already exists, so the next question is which one.
+            if state.action_type == 'newdb':
+                state._touch(step='ask_db_name')
+                return self._ask_db_name(message)
+            return self._show_dbs(message, state, group)
+
+        if step == 'type_server':
+            state._touch(srv_other=body[:80], srv_id=False)
+            if state.action_type == 'newdb':
+                state._touch(step='ask_db_name')
+                return self._ask_db_name(message)
+            # An unlisted server means we have nothing registered on it, so
+            # there is no database list to show. Take the name and move on.
+            state._touch(step='pick_area', db_is_common=True)
+            return self._show_areas(message, state, group)
+
+        if step == 'ask_db_name':
+            clean, err = self.env['kpi.server'].sudo().validate_db_name(body)
+            if err:
+                self._text(message, '%s\n\n%s' % (err, _('Try again.')))
+                return True          # stay on this step; never advance on error
+            dup = self.env['kpi.server'].sudo().existing_request(clean)
+            warn = ''
+            if dup:
+                warn = _('\n\n⚠️ %s already asks for this database.') % (
+                    dup.external_ref or dup.id)
+            state._touch(step='confirm_db_name', db_name=clean)
+            self._poll(message, _('Create the database exactly as:  %s%s') % (
+                clean, warn),
+                [_('✅ Yes — %s') % clean, _('✏️ No — retype')])
+            return True
+
+        if step == 'confirm_db_name':
+            ans = _strip_emoji(tapped or body)
+            if ans.startswith('yes') or low == '1':
+                # Description comes AFTER the name is locked in, and is
+                # optional. Asking for both at once is how a database ends up
+                # named "nexgen_shop3 for the new branch".
+                state._touch(step='ask_db_desc')
+                self._text(message, _(
+                    '*%(db)s* — anything else we should know?\n\n'
+                    'Shop name, branch, who it is for, anything special.\n'
+                    '_Or reply SKIP._') % {'db': state.db_name or ''})
+                return True
+            if ans.startswith('no') or low == '2':
+                state._touch(step='ask_db_name', db_name=False)
+                return self._ask_db_name(message)
+            return False
+
+        if step == 'ask_db_desc':
+            note = '' if low in ('skip', 'no', 'none', '-') else body[:400]
+            state._touch(step='pick_install', db_note=note or False)
+            opts = self.env['kpi.install.preset'].sudo().poll_options()
+            if not opts:
+                # No packages configured: skip straight to free text rather
+                # than showing an empty poll.
+                state._touch(step='type_install')
+                self._text(message, _('List what to install — one message.'))
+                return True
+            self._poll(message, _('%s — what should be installed?') % (
+                state.db_name or ''), [l for _i, l, _n in opts])
+            return True
+
+        if step == 'pick_install':
+            opts = self.env['kpi.install.preset'].sudo().poll_options()
+            by_label = {}
+            by_number = {}
+            needs = {}
+            for n, (pid, plabel, nd) in enumerate(opts):
+                by_label[plabel.lower()] = str(pid)
+                by_label[_strip_emoji(plabel)] = str(pid)
+                by_number[str(n + 1)] = str(pid)
+                needs[str(pid)] = nd
+            pick = _choose(tapped, low, (), by_label, by_number)
+            if not pick:
+                return False
+            preset = self.env['kpi.install.preset'].sudo().browse(int(pick))
+            state._touch(install_preset=preset.name or '')
+            if needs.get(pick):
+                state._touch(step='type_install')
+                self._text(message, _(
+                    'List what to install — one message. Name the shop to copy '
+                    'from if there is one.'))
+                return True
+            state._touch(step='confirm')
+            return self._confirm_newdb(message, state, group)
+
+        if step == 'type_install':
+            state._touch(step='confirm', install_text=body[:600])
+            return self._confirm_newdb(message, state, group)
+
+        # ---- meeting: when? ----------------------------------------------- #
+        if step == 'pick_slot':
+            opts = self._slot_options_from_state(state)
+            pick = self._resolve_rows(tapped, low, opts)
+            if not pick:
+                return False
+            if pick == _DB_OTHER_ID:
+                state._touch(step='type_slot')
+                self._text(message, _(
+                    'When suits you? Tell me the day and time.\n\n'
+                    '_Somebody will confirm it._'))
+                return True
+            state._touch(step='confirm', meet_start=pick, meet_text=False)
+            return self._confirm_meeting(message, state, group)
+
+        if step == 'type_slot':
+            state._touch(step='confirm', meet_text=body[:120],
+                         meet_start=False)
+            return self._confirm_meeting(message, state, group)
+
+        # ---- which EXISTING database is this about ------------------------ #
+        if step == 'pick_db':
+            opts = self._db_options(state, group)
+            pick = self._resolve_rows(tapped, low, opts)
+            if not pick:
+                return False
+            if pick == _DB_OTHER_ID:
+                state._touch(step='type_db')
+                self._text(message, _(
+                    'Which database? Type its name.\n\n'
+                    '_It is not on our list, so somebody will check it._'))
+                return True
+            if pick == _DB_COMMON_ID:
+                # Server-wide: filed against the client, not a sub-client.
+                state._touch(step='pick_area', db_is_common=True,
+                             client_db_id=False, db_other=False)
+                return self._show_areas(message, state, group)
+            state._touch(step='pick_area', client_db_id=int(pick),
+                         db_is_common=False, db_other=False)
+            return self._show_areas(message, state, group)
+
+        if step == 'type_db':
+            state._touch(step='pick_area', db_other=body[:80],
+                         client_db_id=False, db_is_common=False)
+            return self._show_areas(message, state, group)
+
+        # ---- disconnect -------------------------------------------------- #
+        if step == 'pick_disc_db':
+            opts = self._disc_db_options(state, group)
+            pick = self._resolve_rows(tapped, low, opts)
+            if not pick:
+                return False
+            state._touch(client_db_id=int(pick))
+            return self._show_disc_reasons(message, state)
+
+        if step == 'pick_disc_reason':
+            opts = self._disc_reason_options()
+            pick = self._resolve_rows(tapped, low, opts)
+            if not pick:
+                return False
+            if pick == _DB_OTHER_ID:
+                state._touch(step='type_disc_reason', disc_reason_id=False)
+                self._text(message, _('Tell me why, in one line.'))
+                return True
+            reason = self.env['kpi.db.disconnect.reason'].sudo().browse(int(pick))
+            state._touch(disc_reason_id=reason.id)
+            if reason.needs_detail:
+                state._touch(step='type_disc_reason')
+                self._text(message, _(
+                    '*%s* — one line of detail, please.') % reason.name)
+                return True
+            return self._confirm_disconnect(message, state)
+
+        if step == 'type_disc_reason':
+            state._touch(disc_reason_text=body[:400])
+            return self._confirm_disconnect(message, state)
+
+        if step == 'confirm_disconnect':
+            ans = _strip_emoji(tapped or body)
+            if ans.startswith('yes') or low == '1':
+                return self._do_disconnect_request(message, state, group)
+            if ans.startswith('no') or low in ('2', 'cancel'):
+                state._reset()
+                self._text(message, _(
+                    'Cancelled — nothing has been switched off.'))
+                return True
+            return False
+
+        if step == 'pick_area':
+            area = _choose(tapped, low, WORK_AREA_CODES, _AREA_BY_LABEL, _AREA_BY_NUMBER)
+            if not area:
+                return False
+            state._touch(step='ask_text', work_area=area)
+            label = self._type_label(state.action_type)
+            scope = self._db_scope_label(state)
+            self._text(message, _(
+                "*%(kind)s · %(area)s*%(scope)s\n"
+                "Describe it in one line.\n\n"
+                "_Or reply CANCEL to stop._") % {
+                    'kind': label, 'area': _area_label(area),
+                    'scope': ('\n🗄️ %s' % scope) if scope != '—' else ''})
+            return True
+
+        if step == 'ask_text':
+            return self._propose(message, state, group, body)
+
+        if step == 'confirm':
+            action = _choose(tapped, low, ('create', 'edit', 'cancel'),
+                              _CONFIRM_BY_LABEL,
+                              {'1': 'create', '2': 'edit', '3': 'cancel'}) or low
+            if action in ('create', 'yes', 'y', '1', 'ok'):
+                kpi = self._create_ticket(group, state, message)
+                state._touch(step='idle', created_kpi_id=kpi.id if kpi else False)
+                if kpi and state.action_type == 'meeting':
+                    meeting = False
+                    try:
+                        meeting = self.env['kpi.meeting'].sudo() \
+                            .create_from_intake(kpi, state)
+                    except Exception as exc:
+                        # The ticket exists either way. A meeting record that
+                        # failed to create is a thing an admin can add; a
+                        # swallowed error that loses the whole request is not.
+                        _logger.exception(
+                            'could not create meeting for %s: %s', kpi.id, exc)
+                    when = state.meet_text or ''
+                    if state.meet_start:
+                        when = self.env['kpi.tz'].fmt(state.meet_start)
+                    self._text(message, _(
+                        "📅 Logged *%(ref)s* for *%(client)s*.\n"
+                        "%(title)s\n"
+                        "🕒 %(when)s\n\n"
+                        "_Somebody will confirm the time and send you a "
+                        "join link here.%(warn)s_") % {
+                            'ref': kpi.external_ref or kpi.id,
+                            'client': group.kra_id.name,
+                            'title': kpi.name,
+                            'when': when or _('a time to be agreed'),
+                            'warn': '' if meeting else _(
+                                ' (Please mention it again if you do not '
+                                'hear back.)')})
+                    return True
+                if kpi and state.action_type == 'newdb':
+                    # Echo the database name back. It is the one detail that
+                    # must be right, and the requester's last chance to spot a
+                    # typo before somebody creates it.
+                    self._text(message, _(
+                        "Logged *%(ref)s* for *%(client)s*.\n\n"
+                        "🗄️ Database: *%(db)s*\n"
+                        "🖥️ Server: %(srv)s\n"
+                        "📦 Install: %(pkg)s\n\n"
+                        "_In the admin queue for review._") % {
+                            'ref': kpi.external_ref or kpi.id,
+                            'client': group.kra_id.name,
+                            'db': state.db_name or '—',
+                            'srv': (state.srv_id.name if state.srv_id
+                                    else (state.srv_other or '—')),
+                            'pkg': state.install_preset or '—'})
+                elif kpi:
+                    # The database is echoed back for the same reason the New
+                    # DB flow echoes its name: it is the detail that decides
+                    # who looks at this, and the requester's last chance to
+                    # spot that they picked the wrong shop.
+                    scope = self._db_scope_label(state)
+                    self._text(message, _(
+                        "Logged *%(ref)s* for *%(client)s*.\n"
+                        "%(title)s%(scope)s\n\n"
+                        "_In the admin queue for review._") % {
+                            'ref': kpi.external_ref or kpi.id,
+                            'client': group.kra_id.name, 'title': kpi.name,
+                            'scope': ('\n🗄️ %s' % scope) if scope != '—' else ''})
+                else:
+                    self._text(message, _("Sorry — I could not log that."))
+                return True
+            if action in ('edit', 'no', 'n', '2'):
+                state._touch(step='ask_text')
+                self._text(message, _("Go ahead — type the corrected line."))
+                return True
+            if action in ('cancel', '3'):
+                state._reset()
+                self._text(message, _("Cancelled."))
+                return True
+
+            # A TAP that did not match is a stale vote, not a new description.
+            #
+            # WhatsApp sends a pollUpdateMessage every time somebody changes a
+            # vote, and a vote on the PREVIOUS poll can land after the step has
+            # already moved on. Falling through to _propose here treated that
+            # stale label as a retyped title -- which is how a New Database
+            # ticket ended up named "Full Package" instead of its database
+            # name on 16 Oct 2026. Ignore it; the confirm poll is still there
+            # to tap.
+            if tapped:
+                _logger.info('Ignoring stale poll vote %r at confirm', tapped)
+                return False
+
+            # Typed text at confirm genuinely is a retyped description -- but
+            # only for the free-text flows. A New Database request was built
+            # from structured answers and must not be re-titled by a stray
+            # message.
+            if state.action_type in ('newdb', 'dbdisconnect'):
+                return False
+            return self._propose(message, state, group, body)
+
+        return False
+
+    # ------------------------------------------------------------------
+    def _handle_reconfirm(self, message, state, tapped, low):
+        """The client answering a decline / reclassification we posted.
+
+        Deliberately NOT auto-accepted on silence. An unanswered question
+        leaves the task exactly where the admin put it; turning a client's
+        silence into agreement that something is chargeable is precisely the
+        consent that must not be inferred.
+        """
+        kpi = state.pending_decline_kpi_id
+        if not kpi or not kpi.exists():
+            state._reset()
+            return False
+
+        answer = _choose(tapped, low, ('accept', 'dispute', 'withdraw'),
+                         {'yes': 'accept', 'ok': 'accept',
+                          "that's ok": 'accept', 'agree': 'accept',
+                          'no': 'dispute', 'disagree': 'dispute',
+                          'cancel': 'withdraw', 'close it': 'withdraw'},
+                         {'1': 'accept', '2': 'dispute', '3': 'withdraw'})
+        if not answer:
+            # Don't nag. Re-state the question once; a group is a conversation
+            # between people and most of what is said is not aimed at us.
+            if low in _GREETINGS:
+                self._text(message, _(
+                    "Before that — %(ref)s: reply *1* if the change is OK, "
+                    "*2* if you disagree.") % {
+                        'ref': kpi.external_ref or kpi.id})
+                return True
+            return False
+
+        try:
+            msg = kpi.sudo().apply_client_reconfirm(
+                answer, actor_label=state.participant_name
+                or state.participant_key)
+        except Exception as exc:
+            _logger.exception('reconfirm failed for %s: %s', kpi.id, exc)
+            self._text(message, _('Sorry — I could not record that.'))
+            state._touch(step='idle', pending_decline_kpi_id=False)
+            return True
+
+        state._touch(step='idle', pending_decline_kpi_id=False)
+        self._text(message, msg)
+        return True
+
+    @api.model
+    def _type_label(self, action_type):
+        """'bug' -> 'Report a Bug'. One lookup, used by every prompt."""
+        return _TYPE_BY_ID.get(action_type, ('', action_type or '-', ''))[1]
+
+    def _local_now(self):
+        """Now, in the company's timezone, as (date_str, time_str).
+
+        The module hard-defaults to Asia/Kolkata elsewhere, but these groups
+        span India and Oman, so the company's own tz is used when it is set and
+        Kolkata is only the last resort. Falls back to naive UTC rather than
+        raising -- a greeting must never be the thing that breaks the flow.
+        """
+        try:
+            import pytz
+            tzname = (self.env.company.partner_id.tz
+                      or self.env.user.tz
+                      or 'Asia/Kolkata')
+            now = fields.Datetime.now().replace(tzinfo=pytz.utc).astimezone(
+                pytz.timezone(tzname))
+        except Exception:
+            now = fields.Datetime.now()
+        return now.strftime('%a %d %b %Y'), now.strftime('%I:%M %p').lstrip('0')
+
+    def _welcome_header(self, state, group):
+        """The greeting line shown with the menu.
+
+        Deliberately part of the poll's question rather than a separate
+        message: two messages per step is the thing that made this flow feel
+        noisy, and a greeting is not worth a notification of its own.
+        """
+        day, clock = self._local_now()
+        who = (state.participant_name or '').strip()
+        hello = _('👋 Welcome %s') % who if who else _('👋 Welcome')
+        return '%s\n%s · %s, %s\n\n%s' % (
+            hello, group.kra_id.name or '', day, clock,
+            _('What do you need?'))
+
+    def _type_rows_for(self, group):
+        """The main menu for THIS client.
+
+        Disconnect is hidden when the client has no live database: offering it
+        would lead to an empty picker, and a menu option that dead-ends is
+        worse than one that is not there.
+        """
+        rows = list(_TYPE_ROWS)
+        if not self._live_dbs(group):
+            rows = [r for r in rows if r[0] != 'dbdisconnect']
+        return rows
+
+    def _show_types(self, message, state, group):
+        rows = self._type_rows_for(group)
+        state._touch(step='pick_type', action_type=False, work_area=False,
+                     client_db_id=False, db_is_common=False, db_other=False,
+                     disc_reason_id=False, disc_reason_text=False,
+                     menu_csv=','.join(r[0] for r in rows))
+        self._poll(message, self._welcome_header(state, group),
+                   [r[1] for r in rows])
+        return True
+
+    # ------------------------------------------------------------------
+    # which database is this about
+    # ------------------------------------------------------------------
+    @api.model
+    def _resolve_rows(self, tapped, low, rows):
+        """Resolve a tap or a typed number against `rows` = [(id, label)].
+
+        One helper for every picker built from a table, so a new menu cannot
+        get the label/number matching subtly wrong. Ids are strings here
+        because the synthetic rows ('__common__') are not database ids.
+        """
+        by_label, by_number = {}, {}
+        for n, (oid, label) in enumerate(rows):
+            by_label[(label or '').lower()] = oid
+            by_label[_strip_emoji(label)] = oid
+            by_number[str(n + 1)] = oid
+        return _choose(tapped, low, tuple(o for o, _l in rows),
+                       by_label, by_number)
+
+    @api.model
+    def _db_scope_label(self, state):
+        """What the client said this is about, for the description and the log."""
+        if state.client_db_id:
+            return '%s (%s)' % (state.client_db_id.db_name or '?',
+                                state.client_db_id.server_id.name or '?')
+        if state.db_is_common:
+            srv = state.srv_id.name or state.srv_other or ''
+            return _('Common — whole server %s') % srv if srv \
+                else _('Common — whole server')
+        if state.db_other:
+            return _('%s (not on our list)') % state.db_other
+        return '—'
+
+    def _live_dbs(self, group):
+        Db = self.env['kpi.client.db'].sudo()
+        return Db.search([('client_kra_id', '=', group.kra_id.id),
+                          ('state', '=', 'live')])
+
+    def _begin_db_scope(self, message, state, group):
+        """Ask which database, skipping any question that has one answer.
+
+        Three shapes, cheapest first:
+          * nothing registered -> straight to the area picker. This is exactly
+            how the flow behaved before databases existed, so a client whose
+            list has not been filled in yet notices no change.
+          * all on one server  -> skip the server question and go to the
+            database picker. A menu with one option is a wasted turn.
+          * several servers    -> ask the server, then the database.
+        """
+        dbs = self._live_dbs(group)
+        if not dbs:
+            state._touch(step='pick_area', db_is_common=False)
+            return self._show_areas(message, state, group)
+        servers = dbs.mapped('server_id')
+        if len(servers) == 1:
+            state._touch(srv_id=servers.id)
+            return self._show_dbs(message, state, group)
+        return self._show_servers(message, state, group=group,
+                                  only_client=True)
+
+    def _db_options(self, state, group):
+        """[(id, label)] for the database picker: the client's own live rows
+        on the chosen server, then Common, then Other."""
+        Db = self.env['kpi.client.db'].sudo()
+        domain = [('client_kra_id', '=', group.kra_id.id),
+                  ('state', '=', 'live')]
+        if state.srv_id:
+            domain.append(('server_id', '=', state.srv_id.id))
+        rows = Db.search(domain, limit=POLL_MAX_DB_ROWS)
+        opts = [(str(r.id), r.poll_label()) for r in rows]
+        opts.append((_DB_COMMON_ID, _DB_COMMON_LABEL))
+        opts.append((_DB_OTHER_ID, _DB_OTHER_LABEL))
+        return opts
+
+    def _show_dbs(self, message, state, group):
+        opts = self._db_options(state, group)
+        state._touch(step='pick_db',
+                     menu_csv=','.join(o for o, _l in opts))
+        srv = state.srv_id.poll_label() if state.srv_id else ''
+        self._poll(message,
+                   (_('%s — which database?') % srv) if srv
+                   else _('Which database?'),
+                   [l for _o, l in opts])
+        return True
+
+    # ------------------------------------------------------------------
+    # disconnect
+    # ------------------------------------------------------------------
+    def _disc_db_options(self, state, group):
+        """Live rows only, and no Common/Other: you cannot disconnect a
+        database we do not know about, and "the whole server" is not a thing
+        a client gets to switch off from a chat message."""
+        rows = self._live_dbs(group)[:POLL_MAX_DB_ROWS]
+        return [(str(r.id), '%s (%s)' % (r.poll_label(), r.server_id.name or '?'))
+                for r in rows]
+
+    def _show_disc_dbs(self, message, state, group):
+        opts = self._disc_db_options(state, group)
+        if not opts:
+            # Should be unreachable: the type is hidden when nothing is live.
+            state._reset()
+            self._text(message, _(
+                'There are no live databases listed for you. '
+                'Send *hi* to start again.'))
+            return True
+        state._touch(step='pick_disc_db',
+                     menu_csv=','.join(o for o, _l in opts))
+        self._poll(message, _('Which database should be switched off?'),
+                   [l for _o, l in opts])
+        return True
+
+    def _disc_reason_options(self):
+        rows = self.env['kpi.db.disconnect.reason'].sudo().poll_options()
+        opts = [(str(rid), label) for rid, label, _nd in rows]
+        opts.append((_DB_OTHER_ID, _DB_OTHER_LABEL))
+        return opts
+
+    def _show_disc_reasons(self, message, state):
+        opts = self._disc_reason_options()
+        db = state.client_db_id
+        state._touch(step='pick_disc_reason',
+                     menu_csv=','.join(o for o, _l in opts))
+        self._poll(message, _('*%s* — why?') % (db.db_name or ''),
+                   [l for _o, l in opts])
+        return True
+
+    def _confirm_disconnect(self, message, state):
+        """The last gate. Names the database, because this is the one request
+        in the whole flow that ends a service."""
+        db = state.client_db_id
+        reason = ' — '.join(p for p in (
+            state.disc_reason_id.name or '',
+            (state.disc_reason_text or '').strip()) if p) or '—'
+        # There is no free-text step in this flow, so the title is built here.
+        # Without it `name` would be False and create_kpi would refuse the
+        # record -- the same way a renamed step once left a ticket nameless.
+        state._touch(step='confirm_disconnect',
+                     draft_title=_('Disconnect %(db)s on %(srv)s') % {
+                         'db': db.db_name or '?',
+                         'srv': db.server_id.name or '?'})
+        self._poll(message, _(
+            '⚠️ *Switch off a database*\n\n'
+            '🗄️ %(db)s\n'
+            '🖥️ %(srv)s\n'
+            '📝 %(reason)s\n\n'
+            'Is that right?') % {
+                'db': db.db_name or '',
+                'srv': db.server_id.name or '—',
+                'reason': reason},
+            [_('✅ Yes — request it'), _('❌ No — cancel')])
+        return True
+
+    def _do_disconnect_request(self, message, state, group):
+        """Create the ticket, record the request, post the receipt.
+
+        Order matters: the ticket first, so the receipt can quote a reference
+        the client can hold us to, and so the request is attached to something
+        that lands in the admin queue. Nothing here changes the database's
+        state -- only an admin does that.
+        """
+        db = state.client_db_id
+        if not db or not db.exists():
+            state._reset()
+            self._text(message, _('Sorry — I lost track of which database. '
+                                  'Send *hi* to start again.'))
+            return True
+        kpi = self._create_ticket(group, state, message)
+        if not kpi:
+            self._text(message, _('Sorry — I could not log that.'))
+            state._reset()
+            return True
+        try:
+            receipt = db.request_disconnect(
+                kpi=kpi, reason=state.disc_reason_id,
+                reason_text=state.disc_reason_text or '',
+                by_number=self._participant_number(state),
+                by_name=state.participant_name or '')
+        except Exception as exc:
+            _logger.exception('disconnect request failed for %s: %s',
+                              db.db_name, exc)
+            self._text(message, _(
+                'Logged *%s*, but I could not flag the database. '
+                'Somebody will check it.') % (kpi.external_ref or kpi.id))
+            state._touch(step='idle', created_kpi_id=kpi.id)
+            return True
+        state._touch(step='idle', created_kpi_id=kpi.id)
+        self._text(message, receipt)
+        return True
+
+    @api.model
+    def _participant_number(self, state):
+        """The sender's phone digits, when we can get them.
+
+        A group message arrives from a LID on newer WhatsApp builds, which has
+        no digits anybody can dial. The synced member row is where the real
+        number lives, so it is looked up there rather than parsed out of the
+        key -- an invented number on a disconnect receipt is worse than none.
+        """
+        key = (state.participant_key or '').strip()
+        digits = ''.join(ch for ch in key.split('@')[0] if ch.isdigit())
+        member = self.env['kpi.wa.group.member'].sudo().search([
+            ('group_id', '=', state.group_id.id),
+            '|', ('lid', '=', key), ('phone', '=', key)], limit=1)
+        if member and member.phone:
+            return ''.join(ch for ch in member.phone if ch.isdigit())
+        # A LID is a long opaque id, not a dialable number. Only return the
+        # digits when they look like a phone number.
+        return digits if 8 <= len(digits) <= 15 else ''
+
+    def _server_options_from_state(self, state):
+        """Rebuild the server picker exactly as it was SHOWN.
+
+        The list is not the same every time -- a client is offered only the
+        servers they actually have databases on -- so resolving a typed number
+        against `kpi.server.poll_options()` would read "2" off the wrong list.
+        `menu_csv` records what was offered; the fallback covers a
+        conversation that was already mid-flow when this shipped.
+        """
+        Server = self.env['kpi.server'].sudo()
+        opts = []
+        for oid in [c for c in (state.menu_csv or '').split(',') if c]:
+            if oid == _DB_OTHER_ID:
+                opts.append((oid, _('➕ Other (type it)')))
+                continue
+            try:
+                srv = Server.browse(int(oid))
+            except (TypeError, ValueError):
+                continue
+            if srv.exists():
+                opts.append((oid, srv.poll_label()))
+        if not opts:
+            opts = [(str(i), l) for i, l in Server.poll_options()]
+            opts.append((_DB_OTHER_ID, _('➕ Other (type it)')))
+        return opts
+
+    def _show_servers(self, message, state, group=None, only_client=False):
+        """The server picker.
+
+        `only_client` narrows it to the servers this client has live databases
+        on, which is what the "which database is this about" path wants: a
+        server where they have nothing leads to a picker with no real options.
+        The New Database path still shows every server, because that is the
+        whole point of it.
+        """
+        Server = self.env['kpi.server'].sudo()
+        if only_client and group:
+            servers = self.env['kpi.client.db'].sudo().servers_for_client(
+                group.kra_id)
+            opts = [(str(s.id), s.poll_label()) for s in servers]
+        else:
+            opts = [(str(i), l) for i, l in Server.poll_options()]
+        if not opts:
+            # No server list configured. Fall through to typing one rather
+            # than dead-ending the conversation.
+            state._touch(step='type_server')
+            self._text(message, _('Type the server name exactly.'))
+            return True
+        opts.append((_DB_OTHER_ID, _('➕ Other (type it)')))
+        state._touch(step='pick_server',
+                     menu_csv=','.join(o for o, _l in opts))
+        question = (_('New Database — which server?')
+                    if state.action_type == 'newdb'
+                    else _('Which server is it on?'))
+        self._poll(message, question, [l for _o, l in opts])
+        return True
+
+    def _ask_db_name(self, message):
+        self._text(message, _(
+            '*DB NAME* — type the exact database name.\n\n'
+            'Lowercase letters, numbers and _ only. This becomes a real '
+            'database, so it must be exact.'))
+        return True
+
+    def _confirm_newdb(self, message, state, group):
+        srv = state.srv_id.name if state.srv_id else (state.srv_other or '—')
+        lines = [
+            _('*New Database*'),
+            _('Server: %s') % srv,
+            _('Name: %s') % (state.db_name or '—'),
+            _('Install: %s') % (state.install_preset or '—'),
+        ]
+        if state.db_note:
+            lines.append(_('Notes: %s') % state.db_note[:160])
+        if state.install_text:
+            lines.append(state.install_text[:200])
+        state._touch(draft_title=_('New DB %s on %s') % (
+            state.db_name or '?', srv))
+        self._poll(message, '\n'.join(lines),
+                   [l for _i, l in _CONFIRM_ROWS])
+        return True
+
+    def _show_areas(self, message, state, group):
+        self._list(message, _TYPE_BY_ID[state.action_type][1],
+                   _('Which area is it about?'), _('Choose area'),
+                   [{'id': c, 'title': _area_label(c), 'description': ''}
+                    for c, l in WORK_AREAS],
+                   section_title=_('Area'))
+        return True
+
+    # ------------------------------------------------------------------
+    # meeting: when, and the confirm card that shows it
+    # ------------------------------------------------------------------
+    def _slot_options_from_state(self, state):
+        """Rebuild the slot picker as it was SHOWN.
+
+        The slots are relative to the moment they were offered, so
+        regenerating them to resolve a tap would shift every option by however
+        long the person took to answer -- and "2" would book a different hour
+        than the one they read.
+        """
+        rows = []
+        for part in [c for c in (state.menu_csv or '').split('|') if c]:
+            iso, _sep, label = part.partition('~')
+            rows.append((iso, label or iso))
+        if not rows:
+            rows = [(iso, label) for iso, label
+                    in self.env['kpi.meeting'].sudo().slot_options()]
+            rows.append((_DB_OTHER_ID, _('➕ Another time — tell me')))
+        return rows
+
+    def _show_slots(self, message, state):
+        opts = [(iso, label) for iso, label
+                in self.env['kpi.meeting'].sudo().slot_options()]
+        opts.append((_DB_OTHER_ID, _('➕ Another time — tell me')))
+        state._touch(step='pick_slot',
+                     menu_csv='|'.join('%s~%s' % (o, l) for o, l in opts))
+        self._poll(message, _('📅 When suits you?'),
+                   [l for _o, l in opts])
+        return True
+
+    def _confirm_meeting(self, message, state, group):
+        when = state.meet_text or ''
+        if state.meet_start:
+            when = self.env['kpi.tz'].fmt(state.meet_start)
+        state._touch(step='confirm')
+        self._poll(message, _(
+            '📅 *Meeting request*\n\n'
+            '%(title)s\n'
+            '🕒 %(when)s\n\n'
+            '_Somebody will confirm the time and send a link._') % {
+                'title': state.draft_title or state.raw_text or '',
+                'when': when or _('a time to be agreed')},
+            [l for _i, l in _CONFIRM_ROWS])
+        return True
+
+    def _propose(self, message, state, group, body):
+        """Run the text through the AI, then ask for confirmation."""
+        raw = (body or '').strip()
+        if not raw:
+            return False
+        res = self.env['kpi.ai'].correct_and_classify(
+            raw, hint_doc_type=(state.action_type if state.action_type != 'meeting'
+                                else None),
+            hint_area=state.work_area)
+        state._touch(raw_text=raw, draft_title=res['title'],
+                     ai_source=res['source'])
+        # A meeting needs a TIME before it needs confirming. Asked here rather
+        # than before the description so the slot poll is the last thing on
+        # screen when they answer it.
+        if state.action_type == 'meeting':
+            return self._show_slots(message, state)
+        state._touch(step='confirm')
+        # No "(no AI key set)" note. Running without an LLM is a deliberate
+        # configuration here, not a degraded state -- the type and area come
+        # from what the member actually picked, which is better information
+        # than a model would infer anyway. Telling them a key is missing makes
+        # a working flow look broken. Which path ran is still recorded on the
+        # ticket (`Title source:`) and on the intake row for diagnostics.
+        self._buttons(
+            message,
+            _('Confirm'),
+            _("*%(title)s*\n\n%(kind)s · %(area)s%(urgent)s") % {
+                'title': res['title'],
+                'kind': self._type_label(state.action_type),
+                'area': _area_label(state.work_area) if state.work_area else '-',
+                'urgent': _(' · URGENT') if res['urgent'] else '',
+            },
+            [{'id': i, 'text': l} for i, l in _CONFIRM_ROWS],
+            footer=_('Original: %s') % raw[:60])
+        return True
+
+    # ------------------------------------------------------------------
+    def _create_ticket(self, group, state, message):
+        try:
+            Kpi = self.env['kra.kpi'].sudo()
+            kra = group.kra_id
+            db = state.client_db_id if state.client_db_id.exists() else False
+
+            # WHERE THE TICKET IS FILED
+            #
+            # A chosen database names its own KRA, which is the whole point of
+            # asking. "Common" means the whole server, so it goes to the
+            # client itself.
+            #
+            # The last branch is the pre-database behaviour, kept deliberately:
+            # a client whose database list has not been filled in yet should
+            # see no change in where their tickets land. It is a guess -- one
+            # active child gets the ticket -- and the way to stop guessing is
+            # to register that client's databases, not to move everybody's
+            # tickets in the same change that introduced the list.
+            if db:
+                target = db.target_kra() or kra
+            elif state.db_is_common:
+                target = kra
+            else:
+                children = kra.child_ids.filtered('active')
+                target = children[0] if len(children) == 1 else kra
+
+            member = self.env['kpi.wa.group.member'].sudo().search([
+                ('group_id', '=', group.id),
+                '|', ('lid', '=', state.participant_key),
+                ('phone', '=', state.participant_key)], limit=1)
+            # A New DB request is a Requirement with an orthogonal category --
+            # never a new doc type, which _auto_admin_accept would silently
+            # re-derive back to 'requirement' from the name prefix anyway. A
+            # disconnect request is the same shape for the same reason.
+            is_newdb = state.action_type == 'newdb'
+            is_disc = state.action_type == 'dbdisconnect'
+            doc_type = 'requirement' \
+                if state.action_type in ('meeting', 'newdb', 'dbdisconnect') \
+                else state.action_type
+            vals = {
+                'name': state.draft_title or state.raw_text,
+                'kra_id': target.id,
+                'doc_type': doc_type,
+                'description': _(
+                    "Raised on WhatsApp in group '%(group)s' by %(who)s.\n"
+                    "Area: %(area)s\n"
+                    "Type picked: %(kind)s\n"
+                    "Database: %(db)s\n"
+                    "Exactly as typed: %(raw)s\n"
+                    "Title source: %(src)s") % {
+                        'group': group.name or group.jid,
+                        'who': state.participant_name or state.participant_key,
+                        'area': _area_label(state.work_area) if state.work_area else '-',
+                        'kind': state.action_type or '-',
+                        'db': self._db_scope_label(state),
+                        'raw': state.raw_text or '-',
+                        'src': state.ai_source or '-'},
+                # The flag has existed since the beginning and nothing read
+                # it. kpi.meeting reads it now.
+                'is_meeting': state.action_type == 'meeting',
+            }
+            if is_disc:
+                vals['name'] = '[Disconnect] ' + (vals['name'] or '')
+                vals['description'] = '%s\n%s' % (
+                    vals.get('description') or '', _(
+                        "— Disconnect request —\n"
+                        "Database: %(db)s\n"
+                        "Server: %(srv)s\n"
+                        "Reason: %(reason)s\n"
+                        "Detail: %(detail)s\n\n"
+                        "NOT ACTIONED. The database is still live. Approve or "
+                        "refuse it on Clients > Live Databases.") % {
+                            'db': db.db_name if db else '—',
+                            'srv': (db.server_id.name if db else '') or '—',
+                            'reason': state.disc_reason_id.name or '—',
+                            'detail': state.disc_reason_text or '—'})
+            if is_newdb:
+                vals['name'] = '[New DB] ' + (vals['name'] or '')
+                # Spell the request out in the description too. The dedicated
+                # columns are what the queue card and the checklist read, but a
+                # screen that knows nothing about them still has to be able to
+                # show somebody what was actually asked for.
+                srv = (state.srv_id.name if state.srv_id
+                       else (state.srv_other or '—'))
+                vals['description'] = '%s\n%s' % (vals.get('description') or '', _(
+                    "— New database —\n"
+                    "Server: %(srv)s\n"
+                    "Database name: %(db)s\n"
+                    "Install: %(preset)s\n"
+                    "Notes: %(note)s\n"
+                    "Detail: %(detail)s") % {
+                        'srv': srv,
+                        'db': state.db_name or '—',
+                        'preset': state.install_preset or '—',
+                        'note': state.db_note or '—',
+                        'detail': state.install_text or '—'})
+            kpi = Kpi.browse(Kpi.create_kpi(vals))
+            post = {'published': False, 'client_submitted': True,
+                    'submitted_by_uid': member.user_id.id
+                    if member and member.user_id else False,
+                    # create_kpi's whitelist does not accept these, so they go
+                    # in the write that already follows -- the same route the
+                    # provisioning fields take.
+                    'client_db_id': db.id if db else False,
+                    'is_common_request': bool(state.db_is_common)}
+            if is_disc:
+                post['request_category'] = 'db_disconnect'
+            if is_newdb:
+                post.update({
+                    'request_category': 'new_database',
+                    'provision_server_id': state.srv_id.id or False,
+                    'provision_server_other': state.srv_other or False,
+                    'provision_db_name': state.db_name or False,
+                    'provision_preset': state.install_preset or False,
+                    'provision_modules': state.install_text or False,
+                })
+            kpi.write(post)
+            try:
+                kpi._notify('client_task_queued')
+                kpi._schedule_queue_nudge()
+            except Exception as exc:
+                _logger.warning('group intake notify failed: %s', exc)
+            kpi._log_action(
+                'wa_group_intake', source='whatsapp',
+                actor_label=state.participant_name or state.participant_key,
+                payload={'group': group.jid, 'participant': state.participant_key,
+                         'number': self._participant_number(state),
+                         'area': state.work_area, 'ai_source': state.ai_source,
+                         'db_scope': self._db_scope_label(state),
+                         'db_id': db.id if db else False,
+                         'common': bool(state.db_is_common),
+                         'db_typed': state.db_other or '',
+                         'raw_text': state.raw_text})
+            return kpi
+        except Exception as exc:
+            _logger.exception('Group intake could not create a ticket: %s', exc)
+            return False
+
+    # ---- transport helpers (always reply INTO the group) ------------------
+    def _session(self, message):
+        return message.session_id or self.env['whatsapp.session'].sudo().search(
+            [('status', '=', 'connected')], limit=1)
+
+    def _text(self, message, text):
+        try:
+            s = self._session(message)
+            if s:
+                s.sudo().send_message(message.phone, text)
+        except Exception as exc:
+            _logger.warning('group reply failed: %s', exc)
+
+    # ONE numbered text menu per step. No interactive messages.
+    #
+    # Verified on this connection, 16 Oct 2026:
+    #   * /message/sendButtons -> accepted by Evolution, arrives as
+    #     "This message couldn't load. Open the message on your phone to
+    #     view it." -- i.e. it does not render at all.
+    #   * /message/sendList    -> accepted, and WhatsApp delivers it as PLAIN
+    #     TEXT. It looks like a menu but nothing is tappable.
+    #
+    # WhatsApp restricts interactive messages to the official Business API;
+    # an unofficial (Baileys) connection like this one does not get them. The
+    # send SUCCEEDS at every layer we can observe -- Evolution returns a
+    # message id -- so there is nothing server-side to detect or fall back on.
+    # Sending the card AND the text just produced the same menu twice.
+    #
+    # whatsapp.session.send_list / send_buttons are kept (they are correct,
+    # and cost nothing) in case this account is ever moved to the official
+    # API, but the flow does not use them. Flip USE_INTERACTIVE to try again.
+    def _numbered(self, items):
+        return '\n'.join('%d - %s' % (i + 1, t) for i, t in enumerate(items))
+
+    def _list(self, message, title, description, button_text, rows,
+              section_title=''):
+        self._poll(message, '%s — %s' % (title, description),
+                   [r['title'] for r in rows])
+
+    def _buttons(self, message, title, description, buttons, footer=''):
+        self._poll(message, description, [b['text'] for b in buttons])
+
+    def _poll(self, message, question, options):
+        """Send a tappable poll, with a numbered text menu as the safety net.
+
+        A poll is the only tappable menu WhatsApp delivers to an unofficial
+        connection: buttons arrive as "This message couldn't load" and list
+        messages arrive as plain text. A poll renders natively and Evolution
+        decrypts the vote into readable `selectedOptions`.
+
+        The text version still follows, because a poll cannot be voted on from
+        every client and an older WhatsApp build may not render it either. It
+        is the same two-messages-per-step cost as before -- but this time the
+        first message is genuinely tappable, which it never was with buttons.
+        """
+        s = self._session(message)
+        if not s:
+            _logger.warning('Group intake: no connected session to reply with')
+            return
+        # ONE message. The numbered text that used to follow every poll is
+        # gone: it was a hedge against the poll not rendering, and the poll
+        # demonstrably renders on this connection. Sending both just showed
+        # the same menu twice.
+        #
+        # The text version is still the FALLBACK -- but only when the poll is
+        # actually refused, which whatsapp.session.send_poll handles itself.
+        try:
+            s.sudo().send_poll(message.phone, question, options, selectable=1)
+        except Exception as exc:
+            _logger.warning('group poll failed, sending text instead: %s', exc)
+            try:
+                s.sudo().send_message(message.phone, '%s\n\n%s\n\n_%s_' % (
+                    question, self._numbered(options),
+                    _('Reply with the number.')))
+            except Exception as exc2:
+                _logger.warning('group poll text fallback failed: %s', exc2)

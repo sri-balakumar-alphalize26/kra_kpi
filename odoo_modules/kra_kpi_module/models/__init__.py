@@ -43,4 +43,19 @@ from . import kpi_wa_group_capture
 from . import kpi_wa_inbound_hook
 from . import kpi_file_attachment
 from . import kpi_report_download
+from . import kpi_ai
+from . import kpi_wa_group_intake
+from . import kpi_server
+from . import kpi_install_preset
+from . import kpi_decline_reason
+from . import kpi_decline
+from . import kpi_provisioning
+from . import kpi_tz
+from . import kpi_db_term
+from . import kpi_db_disconnect_reason
+# AFTER kpi_provisioning: it adds 'db_disconnect' to that module's
+# request_category with selection_add, which needs the base field to exist.
+from . import kpi_client_db
+from . import kpi_client_db_wizard
+from . import kpi_meeting
 from . import kpi_reminder

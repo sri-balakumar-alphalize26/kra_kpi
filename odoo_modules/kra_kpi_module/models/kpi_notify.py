@@ -1153,17 +1153,20 @@ class KpiNotify(models.Model):
                 _logger.debug("bus.bus send failed for kpi %s: %s", self.id, exc)
 
     def _wa_socket_alive(self, session):
-        """Mirrors the POS check: read neonize's in-memory state to know if
-        the socket is truly alive.  Falls back to True on error so we don't
-        block sends when neonize internals change.
+        """Is the transport actually able to send right now?
+
+        The transport is Evolution API over HTTP; there is no in-process client
+        to inspect any more (the old build read neonize's `_wa_status` /
+        `_wa_clients` module dicts, which no longer exist). `wa_is_alive()`
+        trusts a recent webhook/state-check and otherwise re-probes the server.
+
+        FAIL-OPEN on error, deliberately and unchanged: the old behaviour was
+        that an ImportError returned True = "attempt the send". Fail closed
+        instead and every notification silently queues, then expires after
+        RETRY_WINDOW_MIN with nobody told.
         """
         try:
-            from odoo.addons.whatsapp_neonize.models.whatsapp_session import (
-                _wa_status, _wa_clients,
-            )
-            mem_status = _wa_status.get(session.id, 'unknown')
-            has_client = session.id in _wa_clients
-            return mem_status == 'connected' and has_client
+            return bool(session.wa_is_alive())
         except Exception:
             return True
 

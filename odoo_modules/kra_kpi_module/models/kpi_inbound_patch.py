@@ -723,31 +723,26 @@ def _show_pending_pre_approvals(env, partner, phone_clean):
 def _create_task_from_conversation(env, conv):
     """Materialise a kra.kpi row from the conversation's collected fields.
 
+    Mirrors /kpi_client_portal/add_task (kpi_reports_api.py:3141-3167): a
+    WhatsApp submission IS a client submission and must land in the same
+    admin queue, with the same follow-up notification.
+
     State stays 'assigned' with no user_id — the coordinator picks the dev
     via the web form, which triggers the existing pre-approval / lifecycle
     pipeline automatically (see kpi_workflow.write override).
     """
-    name_prefix_map = {'requirement': '', 'update': '[Update] ', 'bug': '[Bug] '}
-    prefix = name_prefix_map.get(conv.action_type, '')
+    # The single shared doc_type -> prefix tables. This function used to carry
+    # its own copies, which is how the ref prefix here could drift from the
+    # prefix other call sites classify on.
+    from .kpi_workflow import NAME_PREFIX_FOR_DOC_TYPE, REF_PREFIX_FOR_DOC_TYPE
+
+    doc_type = conv.action_type or 'requirement'
+    prefix = NAME_PREFIX_FOR_DOC_TYPE.get(doc_type, '')
+    ref_prefix = REF_PREFIX_FOR_DOC_TYPE.get(doc_type, 'REQ')
     Kpi = env['kra.kpi'].sudo()
 
-    # Re-derive the server-side ref counter (matches /kpi_requirements/create_bulk_tasks)
-    ref_prefix_map = {'requirement': 'REQ', 'update': 'UPT', 'bug': 'BUG'}
-    ref_prefix = ref_prefix_map.get(conv.action_type, 'REQ')
-    import re as _re
-    existing = Kpi.search([('external_ref', '=ilike', '%s-%%' % ref_prefix)]).mapped('external_ref')
-    pat = _re.compile(r'^%s-(\d+)$' % _re.escape(ref_prefix), _re.IGNORECASE)
-    max_n = 0
-    for r in existing:
-        m = pat.match((r or '').strip())
-        if m:
-            try:
-                n = int(m.group(1))
-                if n > max_n:
-                    max_n = n
-            except ValueError:
-                continue
-    ref = '%s-%03d' % (ref_prefix, max_n + 1)
+    # The shared global counter, instead of a third copy-pasted re-derivation.
+    ref = '%s-%03d' % (ref_prefix, Kpi._next_ref_for_prefix(ref_prefix))
 
     # Every WhatsApp-created task — regardless of role — lands UNPUBLISHED
     # in the Client Task Queue so the Coordinator can assign a developer +
@@ -756,13 +751,29 @@ def _create_task_from_conversation(env, conv):
         'name':         (prefix + (conv.task_title or '')).strip()[:240],
         'kra_id':       conv.project_kra_id.id,
         'external_ref': ref,
+        'requested_doc_type': doc_type,
         'task_state':   'assigned',
         'active':       True,
         'published':    False,
         'priority':     'regular',
         'submitted_by_uid': conv.actor_user_id.id if conv.actor_user_id else False,
+        # LOAD-BEARING. /kpi_pending_queue/list (kpi_reports_api.py:2453)
+        # filters published=False AND active=True AND client_submitted=True.
+        # Without this flag the row is created correctly and is then invisible
+        # to the Admin Dashboard queue forever — which is what happened to
+        # every task this function created before 16 Oct 2026.
+        'client_submitted': True,
     }
-    return Kpi.create(vals)
+    kpi = Kpi.create(vals)
+
+    # Tell the admins a client task is queued (re-nudged while unread) —
+    # the same two calls the client-portal route makes.
+    try:
+        kpi._notify('client_task_queued')
+        kpi._schedule_queue_nudge()
+    except Exception as exc:
+        _logger.warning("client_task_queued notify failed for kpi %s: %s", kpi.id, exc)
+    return kpi
 
 
 def _start_create_task_flow(conv, action_type, pool, uid, session_id, phone_clean):

@@ -55,9 +55,14 @@ class KpiWaGroupReport(models.AbstractModel):
             return '@%s' % num
         return user.name or user.login or 'Someone'
 
-    def _post(self, text):
-        """True if it went out. Never raises."""
-        jid = self._group_jid()
+    def _post(self, text, jid=None):
+        """True if it went out. Never raises.
+
+        `jid` lets a caller name the destination; without it the message goes to
+        the single company-wide group (`res.company.kpi_wa_group_jid`), which is
+        what every workday report wants.
+        """
+        jid = (jid or self._group_jid() or '').strip()
         if not jid:
             return False
         session = self._session()
@@ -69,6 +74,61 @@ class KpiWaGroupReport(models.AbstractModel):
         except Exception as e:
             _logger.error("wa group report failed: %s", e)
             return False
+
+    # ---- posting about ONE task, to ITS client's group ---------------------- #
+
+    def _group_for_kpi(self, kpi):
+        """The WhatsApp group that belongs to this task's client, or False.
+
+        Until now a group message could only ever go to ONE destination: the
+        company-wide `res.company.kpi_wa_group_jid`. That is right for a workday
+        report, and wrong for anything about a specific client's task -- telling
+        client A's group that client B's ticket was declined is a real leak, and
+        it is exactly the mistake the kpi.wa.group model's own docstring warns
+        about ("a client group got mistaken for the dev group and posted to").
+
+        Resolution walks UP the KRA tree, because a task hangs off a sub-client
+        (a shop) while the group is linked to the client (the reseller):
+
+            task.kra_id -> ... -> the kra.master a kpi.wa.group points at
+
+        Returns an empty recordset when the task's client has no group. Silence
+        is the correct outcome there -- never fall back to the company group,
+        which would post a named client's business into whatever group happens
+        to be configured.
+        """
+        Group = self.env['kpi.wa.group'].sudo()
+        if not kpi:
+            return Group
+        seen = set()
+        node = kpi.kra_id
+        while node and node.id not in seen:
+            seen.add(node.id)
+            grp = Group.search([('kra_id', '=', node.id),
+                                ('active', '=', True)], limit=1)
+            if grp:
+                return grp
+            node = node.parent_id
+        # Last resort: the task's computed client KRA, in case the chain above
+        # was broken by an archived intermediate node.
+        if kpi.client_kra_id and kpi.client_kra_id.id not in seen:
+            return Group.search([('kra_id', '=', kpi.client_kra_id.id),
+                                 ('active', '=', True)], limit=1)
+        return Group
+
+    def post_for_kpi(self, kpi, text):
+        """Post `text` into the group belonging to `kpi`'s client.
+
+        Returns True only if it actually went somewhere, so callers can tell the
+        admin "the client was told" versus "no group is linked".
+        """
+        grp = self._group_for_kpi(kpi)
+        if not grp:
+            _logger.info("No WhatsApp group linked to the client of %s (%s)",
+                         kpi.external_ref or kpi.id,
+                         kpi.client_kra_id.name or kpi.kra_id.name or '-')
+            return False
+        return self._post(text, jid=grp.jid)
 
     # ---- the reports -------------------------------------------------------- #
 

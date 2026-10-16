@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+         Install packages offered by the WhatsApp "New Database" menu.
+         Edit freely: the list is read fresh on every conversation, so a
+         change here is live on the next message. No restart.
+    -->
+
+    <record id="view_kpi_install_preset_list" model="ir.ui.view">
+        <field name="name">kpi.install.preset.list</field>
+        <field name="model">kpi.install.preset</field>
+        <field name="arch" type="xml">
+            <list string="Install Packages" editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="emoji" string="Icon"/>
+                <field name="name"/>
+                <field name="contents" string="What it includes"/>
+                <field name="needs_detail" string="Ask for details"/>
+                <field name="code" optional="hide"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_kpi_install_preset_form" model="ir.ui.view">
+        <field name="name">kpi.install.preset.form</field>
+        <field name="model">kpi.install.preset</field>
+        <field name="arch" type="xml">
+            <form string="Install Package">
+                <sheet>
+                    <widget name="web_ribbon" title="Archived"
+                            bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name" string="Package"/>
+                        <h1><field name="name"
+                                   placeholder="e.g. POS + Scale + VFD"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="emoji" placeholder="🖥️"/>
+                            <field name="sequence"/>
+                        </group>
+                        <group>
+                            <field name="code" placeholder="optional"/>
+                            <field name="needs_detail"/>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <group string="What it includes">
+                        <field name="contents" nolabel="1"
+                               placeholder="The actual module and hardware list. Written for the person provisioning, not for the client."/>
+                    </group>
+                    <div class="alert alert-info" role="status">
+                        A WhatsApp poll fits <b>12 packages</b>. Archive what you
+                        do not use rather than deleting it, so older tickets keep
+                        their meaning.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_kpi_install_preset" model="ir.actions.act_window">
+        <field name="name">Install Packages</field>
+        <field name="res_model">kpi.install.preset</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiley_face">Define what you install</p>
+            <p>
+                These become the <b>What should be installed?</b> menu when
+                someone asks for a new database on WhatsApp.
+            </p>
+        </field>
+    </record>
+
+</odoo>

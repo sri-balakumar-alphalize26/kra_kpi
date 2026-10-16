@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+         Standard reasons for declining or re-typing a client submission.
+
+         Editable here on purpose: these are the admin's business vocabulary
+         and they change as the business does. "Re-type As" is what makes the
+         list useful rather than decorative. Picking "Not a bug" pre-selects
+         Update on the decline form, so the reason and the re-typing are one
+         decision instead of two.
+    -->
+
+    <record id="view_kpi_decline_reason_list" model="ir.ui.view">
+        <field name="name">kpi.decline.reason.list</field>
+        <field name="model">kpi.decline.reason</field>
+        <field name="arch" type="xml">
+            <list string="Decline Reasons" editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="mode" string="Use For"/>
+                <field name="target_doc_type" string="Re-type As"/>
+                <field name="code" optional="hide"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_kpi_decline_reason_form" model="ir.ui.view">
+        <field name="name">kpi.decline.reason.form</field>
+        <field name="model">kpi.decline.reason</field>
+        <field name="arch" type="xml">
+            <form string="Decline Reason">
+                <sheet>
+                    <widget name="web_ribbon" title="Archived"
+                            bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name" string="Reason"/>
+                        <h1><field name="name"
+                                   placeholder="e.g. Not a bug; this is a paid change"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="mode"/>
+                            <field name="target_doc_type"
+                                   invisible="mode == 'decline'"/>
+                        </group>
+                        <group>
+                            <field name="code" placeholder="optional"/>
+                            <field name="sequence"/>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <group string="Message to the client">
+                        <field name="client_message" nolabel="1"
+                               placeholder="Leave empty to send the reason above exactly as written. Use this when the internal wording is blunter than what the client should read."/>
+                    </group>
+                    <div class="alert alert-info" role="status">
+                        This text is posted into the client's own WhatsApp group,
+                        naming the task, with a request to confirm.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_kpi_decline_reason" model="ir.actions.act_window">
+        <field name="name">Decline Reasons</field>
+        <field name="res_model">kpi.decline.reason</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+</odoo>

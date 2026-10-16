@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+         WhatsApp Groups and their Client.
+
+         One group belongs to ONE client; that client's children are its
+         sub-clients (shops / branches). Rows appear here on their own: the
+         webhook calls kpi.wa.group.record_seen() the first time anybody
+         posts in a group the connected number is a member of.
+
+         A group with no Client set is deliberately NOT an error. It is the
+         normal state for a group we have only just seen; it simply has no
+         scope until somebody assigns one.
+    -->
+
+    <record id="view_kpi_wa_group_list" model="ir.ui.view">
+        <field name="name">kpi.wa.group.list</field>
+        <field name="model">kpi.wa.group</field>
+        <field name="arch" type="xml">
+            <list string="WhatsApp Groups" sample="1"
+                  decoration-muted="not kra_id">
+                <field name="name" string="Label"/>
+                <field name="kra_id" string="Client"/>
+                <field name="member_count" string="Members"/>
+                <field name="client_member_count" string="Clients In Group"/>
+                <field name="sub_client_count" string="Sub-clients"/>
+                <field name="last_sender" optional="show"/>
+                <field name="message_count" optional="hide"/>
+                <field name="last_seen"/>
+                <field name="jid" string="Group ID" optional="hide"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_kpi_wa_group_form" model="ir.ui.view">
+        <field name="name">kpi.wa.group.form</field>
+        <field name="model">kpi.wa.group</field>
+        <field name="arch" type="xml">
+            <form string="WhatsApp Group">
+                <header>
+                    <button name="action_sync_members" type="object"
+                            string="Sync Members" class="btn-primary"
+                            help="Read the group's participant list from WhatsApp and match each member to a contact, user and client."/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Archived" bg_color="text-bg-danger"
+                            invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name" string="Group Label"/>
+                        <h1><field name="name" placeholder="e.g. Nexgennpos Support"/></h1>
+                    </div>
+                    <group>
+                        <group string="Client">
+                            <field name="kra_id" options="{'no_create': True}"/>
+                            <field name="sub_client_count"/>
+                            <field name="member_count"/>
+                            <field name="client_member_count"/>
+                            <field name="intake_enabled"
+                                   widget="boolean_toggle"
+                                   readonly="not kra_id"/>
+                            <div class="text-muted" colspan="2"
+                                 invisible="kra_id">
+                                Set a Client before enabling bot replies.
+                            </div>
+                        </group>
+                        <group string="Activity">
+                            <field name="last_seen" readonly="1"/>
+                            <field name="last_sender" readonly="1"/>
+                            <field name="message_count" readonly="1"/>
+                            <field name="members_synced_at" readonly="1"/>
+                            <field name="jid" readonly="1"/>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Members" name="members">
+                            <div class="alert alert-info" role="status"
+                                 invisible="members_synced_at">
+                                Press <b>Sync Members</b> to read this group's participant
+                                list from WhatsApp. Each member is matched to a contact and
+                                an Odoo user by phone number, so you can see which of them
+                                are the client.
+                            </div>
+                            <div class="alert alert-secondary" role="status"
+                                 invisible="not members_synced_at">
+                                <b>Role</b> is worked out automatically from each
+                                member's Odoo user. If somebody is plainly the client
+                                but shows as <i>Not in Odoo</i>, set
+                                <b>Client (set here)</b> on their row &#8212; that is
+                                kept when you Sync Members again.
+                            </div>
+                            <field name="member_ids" nolabel="1">
+                                <list string="Members" editable="bottom"
+                                      decoration-success="is_client"
+                                      decoration-muted="member_kind == 'unknown'">
+                                    <field name="wa_name" string="WhatsApp Name" readonly="1"/>
+                                    <field name="phone" readonly="1"/>
+                                    <field name="member_kind" string="Role"
+                                           readonly="1" widget="badge"
+                                           decoration-success="member_kind == 'client'"
+                                           decoration-info="member_kind in ('developer','coordinator','owner')"
+                                           decoration-warning="member_kind == 'unknown'"/>
+                                    <field name="manual_client_kra_id"
+                                           string="Client (set here)"
+                                           options="{'no_create': True}"/>
+                                    <field name="partner_id" string="Contact" readonly="1"/>
+                                    <field name="user_id" string="Odoo User"
+                                           readonly="1" optional="show"/>
+                                    <field name="client_kra_ids" string="Client Of (auto)"
+                                           readonly="1" widget="many2many_tags"
+                                           optional="hide"/>
+                                    <field name="is_admin" string="Group Admin"
+                                           readonly="1" optional="hide"/>
+                                    <field name="lid" string="LID" readonly="1" optional="hide"/>
+                                    <field name="is_client" column_invisible="1"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Sub-clients" name="subs">
+                            <div class="alert alert-info" role="status"
+                                 invisible="kra_id">
+                                Pick a Client above. Its sub-clients (shops / branches)
+                                will be listed here, and anything raised in this group
+                                is scoped to them.
+                            </div>
+                            <field name="sub_client_ids" readonly="1" nolabel="1"
+                                   invisible="not kra_id">
+                                <list string="Sub-clients">
+                                    <field name="name"/>
+                                    <field name="is_client" string="Is Client"/>
+                                    <field name="active"/>
+                                </list>
+                            </field>
+                            <div class="alert alert-warning mt-2" role="status"
+                                 invisible="not kra_id or sub_client_count > 0">
+                                This client has no sub-clients yet. Add them as child
+                                records on the client itself (KRA / KPI &gt; Clients),
+                                then they will appear here.
+                            </div>
+                        </page>
+                        <page string="Client Users" name="users">
+                            <field name="client_user_ids" readonly="1" nolabel="1">
+                                <list string="Client Users">
+                                    <field name="name"/>
+                                    <field name="login"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_kpi_wa_group_search" model="ir.ui.view">
+        <field name="name">kpi.wa.group.search</field>
+        <field name="model">kpi.wa.group</field>
+        <field name="arch" type="xml">
+            <search string="WhatsApp Groups">
+                <field name="name" string="Label"/>
+                <field name="jid" string="Group ID"/>
+                <field name="kra_id" string="Client"/>
+                <filter name="unassigned" string="No Client Set"
+                        domain="[('kra_id', '=', False)]"/>
+                <filter name="assigned" string="Linked To A Client"
+                        domain="[('kra_id', '!=', False)]"/>
+                <separator/>
+                <filter name="inactive" string="Archived"
+                        domain="[('active', '=', False)]"/>
+                <separator/>
+                <filter name="by_client" string="Client"
+                        context="{'group_by': 'kra_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_kpi_wa_group" model="ir.actions.act_window">
+        <field name="name">WhatsApp Groups</field>
+        <field name="res_model">kpi.wa.group</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_kpi_wa_group_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiley_face">No WhatsApp groups seen yet</p>
+            <p>
+                Groups register themselves. Add the connected WhatsApp number to a
+                group and send one message there &#8212; the group appears here, and
+                you can then link it to a client.
+            </p>
+        </field>
+    </record>
+
+</odoo>

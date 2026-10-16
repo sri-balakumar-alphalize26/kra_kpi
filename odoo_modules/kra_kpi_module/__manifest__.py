@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.5.9",
+    "version": "19.0.6.0",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -26,6 +26,13 @@
         "data/kpi_break_alert_cron.xml",
         "data/kpi_urgent_nudge_cron.xml",
         "data/kpi_auto_away_cron.xml",
+        "data/kpi_decline_reasons.xml",
+        "data/kpi_server_data.xml",
+        "data/kpi_install_preset_data.xml",
+        "data/kpi_db_term_data.xml",
+        "data/kpi_db_disconnect_reasons.xml",
+        "data/kpi_db_term_cron.xml",
+        "data/kpi_meeting_cron.xml",
         "views/wa_approval_templates.xml",
         # Must load BEFORE menu.xml â€” menu_kra_root references this action.
         "views/kra_welcome_action.xml",
@@ -37,6 +44,19 @@
         "views/task_documents_action.xml",
         "views/kpi_cleanup_views.xml",
         "views/kpi_cleanup_auth_views.xml",
+        # MUST load before menu.xml -- menu_kpi_wa_groups references
+        # action_kpi_wa_group, and an action referenced by a menuitem has to
+        # exist by the time that menuitem is parsed.
+        "views/kpi_wa_group_views.xml",
+        "views/kpi_server_views.xml",
+        "views/kpi_install_preset_views.xml",
+        "views/kpi_decline_reason_views.xml",
+        # MUST load before menu.xml -- it defines action_kpi_client_db and
+        # action_kpi_live_db, both referenced by menuitems there.
+        "views/kpi_client_db_views.xml",
+        "views/kpi_db_term_views.xml",
+        "views/kpi_db_disconnect_reason_views.xml",
+        "views/kpi_meeting_views.xml",
         "views/menu.xml",
         "views/kpi_workflow_views.xml",
         "views/kpi_reports_views.xml",

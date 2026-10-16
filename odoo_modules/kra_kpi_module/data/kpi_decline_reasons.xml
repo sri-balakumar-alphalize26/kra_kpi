@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+        Seed reasons. noupdate="1" so an upgrade never overwrites wording the
+        admin has edited, and never resurrects a row they archived.
+        The set is drawn from the arguments that actually happen: is it a
+        defect or a paid change, is it one shop or all of them, and is the
+        request usable as written.
+    -->
+    <data noupdate="1">
+
+        <record id="decline_reason_not_a_bug" model="kpi.decline.reason">
+            <field name="name">Not a bug; this is a paid change</field>
+            <field name="code">not_a_bug</field>
+            <field name="mode">reclassify</field>
+            <field name="target_doc_type">update</field>
+            <field name="client_message">This works as it was originally delivered, so it is not covered as a defect. We have logged it as a chargeable change instead.</field>
+            <field name="sequence">10</field>
+        </record>
+
+        <record id="decline_reason_new_requirement" model="kpi.decline.reason">
+            <field name="name">New scope, not an update</field>
+            <field name="code">new_scope</field>
+            <field name="mode">reclassify</field>
+            <field name="target_doc_type">requirement</field>
+            <field name="client_message">This is new functionality rather than a change to what exists, so we have logged it as a new requirement.</field>
+            <field name="sequence">20</field>
+        </record>
+
+        <record id="decline_reason_is_a_bug" model="kpi.decline.reason">
+            <field name="name">This is a defect, not new work</field>
+            <field name="code">is_a_bug</field>
+            <field name="mode">reclassify</field>
+            <field name="target_doc_type">bug</field>
+            <field name="client_message">This is a fault in what we delivered, so we have logged it as a bug and there is no charge.</field>
+            <field name="sequence">30</field>
+        </record>
+
+        <record id="decline_reason_duplicate" model="kpi.decline.reason">
+            <field name="name">Already raised</field>
+            <field name="code">duplicate</field>
+            <field name="mode">decline</field>
+            <field name="client_message">This is already on our list under an earlier reference, so we have closed this one to avoid doing it twice.</field>
+            <field name="sequence">40</field>
+        </record>
+
+        <record id="decline_reason_need_detail" model="kpi.decline.reason">
+            <field name="name">Not enough detail to act on</field>
+            <field name="code">need_detail</field>
+            <field name="mode">decline</field>
+            <field name="client_message">We could not act on this as written. Please send it again with the shop name, what you expected, and what actually happened.</field>
+            <field name="sequence">50</field>
+        </record>
+
+        <record id="decline_reason_works_as_designed" model="kpi.decline.reason">
+            <field name="name">Works as designed</field>
+            <field name="code">works_as_designed</field>
+            <field name="mode">decline</field>
+            <field name="client_message">The system is behaving as intended here. If you would like it to work differently, we can log that as a change.</field>
+            <field name="sequence">60</field>
+        </record>
+
+        <record id="decline_reason_not_our_scope" model="kpi.decline.reason">
+            <field name="name">Outside our scope</field>
+            <field name="code">out_of_scope</field>
+            <field name="mode">decline</field>
+            <field name="client_message">This sits outside what we support for this shop. Please contact us if you would like to discuss covering it.</field>
+            <field name="sequence">70</field>
+        </record>
+
+        <record id="decline_reason_other" model="kpi.decline.reason">
+            <field name="name">Other (type a reason)</field>
+            <field name="code">other</field>
+            <field name="mode">both</field>
+            <field name="sequence">99</field>
+        </record>
+
+    </data>
+</odoo>

@@ -47,13 +47,28 @@ class WhatsappMessageKpiHook(models.Model):
         if self.direction != 'incoming':
             return False
         phone = (self.phone or '').strip()
-        # Group traffic is chatter, not a reply to us — and a group JID is not a
-        # phone number, so the parser could not resolve a client from it anyway.
-        if not phone or '@g.us' in phone:
+        if not phone:
             return False
         body = (self.message or '').strip()
         if not body:
             return False
+
+        # Group traffic goes to the group router, NOT to the 1:1 parser.
+        #
+        # The 1:1 parser treats `phone` as both the sender's identity and the
+        # reply destination. In a group those are different things: the message
+        # comes from a participant and any reply goes to the group. Handing it a
+        # group JID would make it look up a client by a chat id and reply to
+        # everyone. It stays well away.
+        #
+        # The router is silent unless that specific group has intake_enabled
+        # AND a Client set -- both off by default.
+        if '@g.us' in phone:
+            try:
+                return self.env['kpi.wa.group.router'].handle(self)
+            except Exception as exc:
+                _logger.warning("KRA/KPI group intake failed for %s: %s", phone, exc)
+                return False
 
         from odoo.addons.kra_kpi_module.models.kpi_inbound_patch import (
             process_inbound_reply,

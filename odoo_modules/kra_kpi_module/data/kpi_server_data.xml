@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Seed from the names the team already uses. noupdate so edits stick. -->
+    <data noupdate="1">
+        <record id="kpi_server_nexgennpos2" model="kpi.server">
+            <field name="name">nexgennpos2</field>
+            <field name="sequence">10</field>
+        </record>
+        <record id="kpi_server_nexgennpos3" model="kpi.server">
+            <field name="name">nexgennpos3</field>
+            <field name="sequence">20</field>
+        </record>
+    </data>
+</odoo>

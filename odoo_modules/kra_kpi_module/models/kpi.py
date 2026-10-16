@@ -828,8 +828,21 @@ class KpiMaster(models.Model):
         '+ New Task' TASK-### ref and for re-numbering on admin accept)."""
         if not prefix:
             return 1
+        like = '%s-%%' % prefix
         refs = self.sudo().search(
-            [('external_ref', '=ilike', '%s-%%' % prefix)]).mapped('external_ref')
+            [('external_ref', '=ilike', like)]).mapped('external_ref')
+
+        # A RETIRED ref must never be handed out again.
+        #
+        # Reclassifying re-mints the reference (REQ-328 -> UPT-018) and keeps
+        # the old one in previous_external_ref. Because this counter is max+1,
+        # the freed number was then reissued to the NEXT task -- so a client
+        # holding "REQ-328" in a WhatsApp message had it meaning two different
+        # pieces of work. Scanning the retired column too closes that.
+        if 'previous_external_ref' in self._fields:
+            refs += self.sudo().with_context(active_test=False).search(
+                [('previous_external_ref', '=ilike', like)]
+            ).mapped('previous_external_ref')
         pat = re.compile(r'^%s-(\d+)$' % re.escape(prefix), re.IGNORECASE)
         max_n = 0
         for r in refs:

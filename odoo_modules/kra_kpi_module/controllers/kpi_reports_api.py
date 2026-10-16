@@ -3596,6 +3596,17 @@ class KpiReportsAPI(http.Controller):
                     'last_sender': g.last_sender or '',
                     'last_seen': fields.Datetime.to_string(g.last_seen) if g.last_seen else '',
                     'seen': True, 'joined': False, 'members': 0,
+                    # One group belongs to ONE client; that client's children are
+                    # its sub-clients. Surfaced here so the settings screen can
+                    # show and change the link without a second round trip.
+                    'id': g.id,
+                    'kra_id': g.kra_id.id or False,
+                    'client_name': g.kra_id.name or '',
+                    'sub_client_count': g.sub_client_count,
+                    'sub_clients': [
+                        {'id': c.id, 'name': c.name}
+                        for c in g.kra_id.child_ids[:50]
+                    ] if g.kra_id else [],
                 }
             session = request.env['whatsapp.session'].sudo().search(
                 [('status', '=', 'connected')], limit=1)
@@ -3700,6 +3711,102 @@ class KpiReportsAPI(http.Controller):
         if (company.kpi_wa_group_jid or '') == jid:
             company.sudo().kpi_wa_group_name = rec.name or ''
         return {'status': True, 'jid': jid, 'name': rec.name or ''}
+
+    @http.route('/kpi_pending_queue/decline_reasons', type='json', auth='user',
+                methods=['POST'], csrf=False)
+    def pending_queue_decline_reasons(self, **params):
+        """The reason picker. `mode` is 'decline' or 'reclassify'."""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.', 'reasons': []}
+        mode = params.get('mode') or 'decline'
+        return {'status': True,
+                'reasons': request.env['kpi.decline.reason'].options_for(mode)}
+
+    @http.route('/kpi_pending_queue/decline', type='json', auth='user',
+                methods=['POST'], csrf=False)
+    def pending_queue_decline(self, **params):
+        """Decline or re-type a queued client submission, WITH a reason.
+
+        This is the alternative to /kpi_pending_queue/delete, which unlinks the
+        record -- destroying the client's media and the audit trail -- and
+        stores the reason nowhere. Here the row is archived, the reason is
+        kept, and the client is told in their own WhatsApp group.
+
+        params: kpi_id, mode ('decline'|'reclassify'), reason_id, reason_text,
+                doc_type (required for reclassify unless the reason carries one)
+        """
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            kpi_id = int(params.get('kpi_id') or 0)
+        except (TypeError, ValueError):
+            return {'status': False, 'message': 'Bad task id.'}
+        kpi = request.env['kra.kpi'].sudo().browse(kpi_id)
+        if not kpi.exists():
+            return {'status': False, 'message': 'Task not found.'}
+        try:
+            res = kpi.action_decline(
+                mode=params.get('mode') or 'decline',
+                reason_id=params.get('reason_id'),
+                reason_text=params.get('reason_text') or '',
+                doc_type=params.get('doc_type') or None,
+            )
+        except Exception as exc:
+            return {'status': False, 'message': str(exc)}
+        if not res.get('posted_to_group'):
+            res['warning'] = (
+                "Saved, but the client was not told: no WhatsApp group is "
+                "linked to this client. Set one under Setup > WhatsApp Groups.")
+        return res
+
+    @http.route('/kpi_wa_group/set_client', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_set_client(self, **params):
+        """Link a WhatsApp group to a client.
+
+        ONE group -> ONE client. The client's own child KRAs are its
+        sub-clients (shops / branches), so anything raised in this group is
+        scoped to that client's subtree. Without the link a group has no scope,
+        and a reference typed in one reseller's group could resolve onto a
+        different reseller's record.
+
+        Pass kra_id = 0/false to clear the link.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        jid = (params.get('jid') or '').strip()
+        rec = request.env['kpi.wa.group'].sudo().search([('jid', '=', jid)], limit=1)
+        if not rec:
+            return {'status': False, 'message': 'Unknown group.'}
+        kra_id = params.get('kra_id')
+        if kra_id:
+            kra = request.env['kra.master'].sudo().browse(int(kra_id))
+            if not kra.exists() or not kra.active:
+                return {'status': False, 'message': 'Client not found.'}
+            if not kra.is_client:
+                return {'status': False,
+                        'message': "'%s' is not marked as a client." % kra.name}
+        res = rec.set_client(kra_id or False)
+        if res.get('status'):
+            res['jid'] = jid
+        return res
+
+    @http.route('/kpi_wa_group/clients', type='json', auth='user', methods=['POST'], csrf=False)
+    def wa_group_clients(self, **params):
+        """Clients selectable as a group's owner, each with its sub-client count.
+
+        Only `is_client` rows are offered -- the same rule the field's domain
+        uses -- so the picker and the model cannot disagree.
+        """
+        if not self._wa_is_admin():
+            return {'status': False, 'message': 'Not authorized.', 'clients': []}
+        kras = request.env['kra.master'].sudo().search(
+            [('is_client', '=', True), ('active', '=', True)], order='name')
+        return {'status': True, 'clients': [{
+            'id': k.id,
+            'name': k.name,
+            'parent_name': k.parent_id.name or '',
+            'sub_client_count': len(k.child_ids),
+        } for k in kras]}
 
     @http.route('/kpi_wa_group/events', type='json', auth='user', methods=['POST'], csrf=False)
     def wa_group_events(self, **params):
@@ -6247,8 +6354,6 @@ class KpiReportsAPI(http.Controller):
         exist in kra_kpi.external_ref.  Case-insensitive match on the prefix,
         any zero-padding allowed (REQ-1, REQ-001, REQ-0001 are all considered).
         """
-        if not prefix:
-            return 1
         refs = request.env['kra.kpi'].sudo().search([
             ('external_ref', '=ilike', '%s-%%' % prefix),
         ]).mapped('external_ref')
