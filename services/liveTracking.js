@@ -70,3 +70,18 @@ export async function revertWorkday(userId, reason) {
   log.info('revertWorkday ←', { user_id: userId, status: res?.status, message: res?.message });
   return res || { status: false, message: 'Could not reopen that workday.' };
 }
+
+// One developer's day — what the End Workday summary shows, live, for an admin
+// who tapped them on Live Tracking. date is 'YYYY-MM-DD'; omit for today.
+// Answers { started: false } for someone with no workday that day.
+export async function fetchEmployeeDay(userId, date) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) {
+    log.info('fetchEmployeeDay — no server, mock');
+    return { status: false, message: 'No server is configured.' };
+  }
+  const res = await jsonRpc(serverUrl, '/kpi_owner/employee_day',
+    { user_id: userId, ...(date ? { date } : {}) });
+  log.info('fetchEmployeeDay ←', { user_id: userId, status: res?.status, started: res?.started });
+  return res || { status: false, message: "Could not load that person's day." };
+}

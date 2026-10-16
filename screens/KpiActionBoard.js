@@ -46,6 +46,7 @@ import { validateWorkdayNote, NOTE_MAX } from '../utils/workdayNote';
 // against real payloads (utils/__tests__/taskGate.test.js).
 import { gateLabel } from '../utils/taskGate';
 import MeetingPicker from '../components/MeetingPicker';
+import WorkdaySummaryBody from '../components/WorkdaySummaryBody';
 import { DELIVERABLE_TYPES, deliverableLabel, hasDeliverable, toggleDeliverable } from '../utils/deliverableType';
 import { estimateFromWorked } from '../utils/doneTaskEstimate';
 import DateGridModal from '../components/DateGridModal';
@@ -173,15 +174,6 @@ const HEARTBEAT_MS = 30000;
 const { width: SW, height: SH } = Dimensions.get('window');
 const LANE_MAX_H = Math.round(SH * 0.78); // lane card-scroll height, adapts to screen
 
-// Phone vs tablet. Read once, like LANE_MAX_H — so it does NOT follow a rotation;
-// that is a known limitation, not an oversight.
-//
-// This exists because "looks right" was only ever true at tablet width. The End
-// Workday popup is the worst of it: its tiles and footer were laid out as fixed
-// horizontal rows that happen to fit 1200px, and on a phone the text clipped and
-// the footer spilled off the left edge.
-const IS_NARROW = SW < 480;
-
 // A modal body cannot use LANE_MAX_H. That is 78% of the screen and correct for
 // the lane card-scrolls, which sit on a plain page — but a modal body also has to
 // leave room for everything around it: modalWrap padding (48), the header (~50),
@@ -231,27 +223,9 @@ const FADE_W = 28;
 // day. Re-exported so nothing that imported them from here changes.
 export { productiveLive, presenceLive };
 
-// "09:30–18:15 · 1h 20m paused" — the line under Presence that
-// reconciles it with the day's own stamps. Presence stops while the workday is
-// frozen, so it no longer equals logout - login, and an unexplained mismatch
-// between a figure and the two timestamps beside it is exactly what made the raw
-// clock the definition before this.
-//
-// logout_at is empty while the day is still open (the End Workday PREVIEW is
-// rendered before the session closes), so the range degrades to just the start
-// rather than printing a dangling dash. Empty when nothing was paused: with no
-// pause Presence DOES equal the stamps, and there is nothing to explain.
-export function presenceFootnote(sum) {
-  if (!sum || !(sum.paused_seconds > 0)) return '';
-  // HH:MM, not HH:MM:SS. The stamps arrive as '%Y-%m-%d %H:%M:%S' and the whole
-  // line has to survive numberOfLines={1} in half a tile on a phone; seconds are
-  // three characters twice over and say nothing. Same trim the PNG header uses.
-  const hm = (stamp) => ((stamp || '').split(' ')[1] || stamp || '').slice(0, 5);
-  const from = hm(sum.login_at);
-  const to = hm(sum.logout_at);
-  const span = from ? (to ? from + '–' + to : from) : '';
-  return (span ? span + ' · ' : '') + (sum.paused_display || '0m') + ' paused';
-}
+// presenceFootnote moved to components/WorkdaySummaryBody.js with the summary
+// it explains. Re-exported so nothing that imported it from here changes.
+export { presenceFootnote } from '../components/WorkdaySummaryBody';
 
 // The Today lane's indigo, shared by its header (via LANES) and the "Today" meta
 // row on the card, so the figure and the lane it explains read as one thing.
@@ -1023,49 +997,6 @@ function Btn({ label, icon, kind, onPress, blocked = false }) {
       <Ionicons name={blocked ? 'lock-closed' : icon} size={14} color={grad && !blocked ? '#fff' : s[`btnTxt_${kind}`].color} />
       <Text style={[s.btnTxt, s[`btnTxt_${kind}`], grad && !blocked && { color: '#fff' }]}>{label}</Text>
     </TouchableOpacity>
-  );
-}
-
-// One node of the End Workday "Workday Map" (start → task → break → … → end).
-// The server already sends a ready-to-render `timeline`; each task chip shows its
-// outcome + the last note/reason underneath (mirrors the web popup).
-function WorkdayMapChip({ node: n }) {
-  const icon = n.icon || '';
-  const label = n.label || '';
-  let border = '#94A3B8';
-  let note = '';
-  let timeLine = n.time || '';
-  if (n.kind === 'break') {
-    // Mirrors AWAY_COLORS in the web board's kpi_action.js — keep them in step.
-    // no_tasks is teal, not red: having nothing assigned is not the developer's
-    // fault and must not be coloured like a warning.
-    const bc = { break: '#F59E0B', lunch: '#10B981', meeting: '#3B82F6', away: '#6B7280', leave: '#8B5CF6', urgent: '#EF4444', no_tasks: '#0891B2', other: '#F59E0B' };
-    border = bc[n.break_type] || '#F59E0B';
-    if (n.duration_display) timeLine = `${n.time || ''}${n.time ? ' · ' : ''}${n.duration_display}`;
-    // The typed note + a live marker. This branch used to drop n.reason entirely,
-    // so a note saved against a meeting/break was stored and then never shown —
-    // while the saved PNG printed it, leaving the image and the popup disagreeing
-    // about the same day.
-    const bparts = [];
-    if (n.running) bparts.push('▶ In progress');
-    if (n.with) bparts.push(`with ${n.with}`);
-    if (n.reason) bparts.push(n.reason);
-    note = bparts.join(' — ');
-  } else if (n.kind === 'task') {
-    const oc = { completed: '#16A34A', submitted: '#0D9488', paused: '#F59E0B', active: '#3B82F6', worked: '#64748B', moved: '#F97316' };
-    border = oc[n.outcome] || '#3B82F6';
-    const ocLabel = { completed: '✓ Completed', submitted: '◑ Verification pending', paused: '⏸ Paused', active: '▶ In progress', worked: '', moved: '↪ Moved' }[n.outcome] || '';
-    const parts = [];
-    if (ocLabel) parts.push(ocLabel);
-    if (n.reason) parts.push(n.reason);
-    note = parts.join(' — ');
-  }
-  return (
-    <View style={[s.mapChip, { borderColor: border, borderTopColor: border }]}>
-      <Text style={s.mapChipLabel} numberOfLines={2}>{icon} {label}</Text>
-      {timeLine ? <Text style={s.mapChipTime}>{timeLine}</Text> : null}
-      {note ? <Text style={s.mapChipNote} numberOfLines={2}>({note})</Text> : null}
-    </View>
   );
 }
 
@@ -5309,229 +5240,9 @@ export default function KpiActionBoard({
 
             <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
               <View style={s.modalPad}>
-                {/* The day was already closed by the cron. Worth saying: the
-                    figures below are of a day that ended without them, and
-                    without this the popup reads as though they are ending it now. */}
-                {endSummary?.auto_closed ? (
-                  <View style={s.autoClosedBox}>
-                    <Ionicons name="moon-outline" size={15} color="#7a5200" />
-                    <Text style={s.autoClosedTxt}>Auto-closed earlier by the system.</Text>
-                  </View>
-                ) : null}
-
-                {/* Tasks worked today with no progress note. A day's hours with
-                    nothing written about them is invisible to everyone
-                    downstream, and by tomorrow nobody can reconstruct where they
-                    went. The server has sent this list for a while and the app
-                    dropped it on the floor. It WARNS and does not block — ending
-                    a day is one-way, and refusing it would strand people. */}
-                {(endSummary?.missing_progress || []).length ? (
-                  <View style={s.missingBox}>
-                    <Text style={s.missingTitle}>
-                      {endSummary.missing_progress.length === 1
-                        ? '1 task you worked on today has no progress update'
-                        : `${endSummary.missing_progress.length} tasks you worked on today have no progress update`}
-                    </Text>
-                    <Text style={s.missingHint}>
-                      Add one from the task, or end your day anyway — this will not stop you.
-                    </Text>
-                    {endSummary.missing_progress.map((m) => (
-                      <Text key={m.id || m.name} style={s.missingRow} numberOfLines={2}>
-                        {m.external_ref ? `${m.external_ref}  ` : ''}{m.name || 'Untitled task'}
-                      </Text>
-                    ))}
-                  </View>
-                ) : null}
-
-                {/* Three stat tiles */}
-                <View style={s.statTiles}>
-                  <View style={s.statTile}>
-                    <Text style={s.statTileLbl}>Login</Text>
-                    {/* On a phone the tile is ~114dp of content and the server's
-                        '%Y-%m-%d %H:%M:%S' is ~124dp, so the full stamp clipped.
-                        The date is redundant here anyway — this is a summary of
-                        today — so drop it and keep the part that carries meaning. */}
-                    <Text style={s.statTileVal} numberOfLines={1}>
-                      {IS_NARROW
-                        ? ((endSummary?.login_at || '—').split(' ')[1] || endSummary?.login_at || '—')
-                        : (endSummary?.login_at || '—')}
-                    </Text>
-                  </View>
-                  <View style={s.statTile}>
-                    {/* The parenthetical is what tips these two labels over the
-                        line on a phone. It is implied by the figure itself, and
-                        the tablet keeps the fuller wording. */}
-                    <Text style={s.statTileLbl}>{IS_NARROW ? 'Productive' : 'Productive (task time)'}</Text>
-                    <Text style={[s.statTileBig, { color: COLORS.green }]}>{endSummary?.productive_display || '0m'}</Text>
-                  </View>
-                  {/* Presence and Accounted share ONE box, split by a rule.
-                      They are the pair that has to be read together: Presence is
-                      time at work (the pause is OFF it), Accounted is the whole
-                      day explained (the pause is IN it), so the gap between the
-                      two IS the pause. As two free-standing tiles the wrapping
-                      row was allowed to put them on different lines, which is
-                      precisely when that comparison stops being visible. */}
-                  <View style={s.pairTile}>
-                    <View style={s.pairHalf}>
-                      <Text style={s.statTileLbl}>{IS_NARROW ? 'Presence' : 'Presence (at work)'}</Text>
-                      {/* Green at/over the standard day, red under it. The verdict is
-                          decided server-side (met_standard) so the app, the web popup
-                          and the saved image always agree. */}
-                      <Text style={[s.statTileBig, {
-                        color: endSummary?.met_standard ? COLORS.green : COLORS.red,
-                      }]}>
-                        {endSummary?.presence_display || '0m'}
-                      </Text>
-                      {endSummary?.standard_display ? (
-                        <Text style={[s.statTileFoot, {
-                          color: endSummary?.met_standard ? COLORS.green : COLORS.red,
-                        }]}>
-                          {endSummary.met_standard ? '✓ ' : '▾ '}
-                          {endSummary.standard_display} standard
-                        </Text>
-                      ) : null}
-                      {presenceFootnote(endSummary) ? (
-                        <Text style={s.pairFoot} numberOfLines={1}>
-                          {presenceFootnote(endSummary)}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <View style={s.pairRule} />
-                    {/* One figure for the whole day's accounted time, so "is my day
-                        explained?" doesn't mean adding five boxes up by eye.
-                        Accounted + Other/Idle = the clock, always — the clock,
-                        not Presence, now that the pause sits outside Presence. */}
-                    <View style={s.pairHalf}>
-                      <Text style={s.statTileLbl}>Accounted</Text>
-                      <Text style={[s.statTileBig, { color: COLORS.blue || '#2563EB' }]}>
-                        {endSummary?.accounted_display || '0m'}
-                      </Text>
-                      {/* 48 chars wraps to three lines in a 114dp tile. The full
-                          breakdown is a nicety; on a phone the one term a reader
-                          would not have guessed is the one worth keeping. */}
-                      <Text style={s.statTileFoot}>
-                        {IS_NARROW ? '+ paused' : 'task + meeting + lunch + break + no-tasks + paused'}
-                      </Text>
-                    </View>
-                  </View>
-                  {/* Only when the day was actually frozen. Reported on its own
-                      line rather than dropped, because a six-hour hole with no
-                      explanation reads as a tracking failure to whoever reviews
-                      the day. It sits OUTSIDE Presence — Presence stops while
-                      the day is frozen — and INSIDE Accounted, so this figure is
-                      exactly the gap between those two numbers. */}
-                  {(endSummary?.paused_seconds || 0) > 0 ? (
-                    <View style={s.statTile}>
-                      <Text style={s.statTileLbl}>Workday paused</Text>
-                      <Text style={[s.statTileBig, { color: '#B45309' }]}>
-                        {endSummary?.paused_display || '0m'}
-                      </Text>
-                      <Text style={s.statTileFoot}>
-                        {IS_NARROW ? 'not in Presence' : 'outside Presence, not worked time'}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-
-                {/* Away time breakdown */}
-                <View style={s.awayBox}>
-                  <Text style={s.awayTitle}>☕  Away time <Text style={s.awaySub}>(inside Presence — never Productive)</Text></Text>
-                  <View style={s.awayGrid}>
-                    {[
-                      ['Break', endSummary?.break_display],
-                      ['Lunch', endSummary?.lunch_display],
-                      ['Meeting', endSummary?.meeting_display],
-                      // Its own bucket: time with nothing assigned is not the
-                      // developer's fault and must not read as idling.
-                      ['No tasks', endSummary?.no_tasks_display],
-                      ['Other', endSummary?.other_display],
-                      // Not idle auto-detection (retired) — time a task was stopped by
-                      // the system: Pause Workday, or the midnight close.
-                      ['Away (system)', endSummary?.away_display],
-                      ['Other/Idle', endSummary?.other_idle_display],
-                    ].map(([lbl, val]) => (
-                      <View key={lbl} style={s.awayCell}>
-                        <Text style={s.awayCellLbl}>{lbl}</Text>
-                        <Text style={s.awayCellVal}>{val || '0m'}</Text>
-                      </View>
-                    ))}
-                  </View>
-                  {(endSummary?.away_events || []).map((e, i) => {
-                    // Urgent breaks are highlighted yellow, matching the web module.
-                    // NOTE the payload key is `note`, not `reason` — this test read
-                    // e.reason, which away_events has never carried, so an urgent
-                    // pause was only ever caught by its label.
-                    const urgent = /urgent/i.test(e.label || '') || /urgent/i.test(e.note || '') || e.is_urgent === true;
-                    return (
-                      <View key={i} style={s.awayEvent}>
-                        <View style={[s.awayTag, urgent && s.awayTagUrgent]}>
-                          <Text style={[s.awayTagTxt, urgent && s.awayTagTxtUrgent]}>{e.label}</Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={s.awayEventTxt} numberOfLines={1}>
-                            {e.start}–{e.end} ({e.duration_display}){e.from ? ` from "${e.from}"` : ''}
-                          </Text>
-                          {/* The typed note and, for a meeting, who it was with.
-                              Neither was rendered here at all: the web away list
-                              and the frozen PNG both printed the note, so the app
-                              was the one surface that silently dropped it. */}
-                          {(e.with || e.note) ? (
-                            <Text style={s.awayEventNote} numberOfLines={2}>
-                              {e.with ? `with ${e.with}` : ''}
-                              {e.with && e.note ? ' — ' : ''}
-                              {e.note || ''}
-                            </Text>
-                          ) : null}
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-
-                {/* Workday Map — the day's flow (start → task → break → … → end) */}
-                {(endSummary?.timeline || []).length > 0 ? (
-                  <View style={s.mapBox}>
-                    <Text style={s.mapTitle}>🗺  Workday Map <Text style={s.awaySub}>(your day in order)</Text></Text>
-                    <View style={s.mapFlow}>
-                      {endSummary.timeline.map((n, i) => (
-                        <React.Fragment key={i}>
-                          {i > 0 ? <Text style={s.mapArrow}>→</Text> : null}
-                          <WorkdayMapChip node={n} />
-                        </React.Fragment>
-                      ))}
-                    </View>
-                  </View>
-                ) : null}
-
-                <Text style={s.endHint}>⚠  Use Complete for finished tasks — Pause is only for breaks/interruptions.</Text>
-
-                {/* Tasks worked today */}
-                <Text style={s.tasksTitle}>Tasks worked today ({(endSummary?.tasks || []).length})</Text>
-                <View style={s.taskTableHead}>
-                  <Text style={[s.thRef]}>Ref</Text>
-                  <Text style={[s.thTitle]}>Title</Text>
-                  <Text style={[s.thTime]}>Time</Text>
-                </View>
-                {(endSummary?.tasks || []).length === 0 ? (
-                  <Text style={[s.centerTxt, { paddingVertical: 12 }]}>No task time logged.</Text>
-                ) : (endSummary.tasks).map((t) => (
-                  <View key={t.kpi_id} style={s.taskRow}>
-                    <Text style={s.tdRef}>{t.concurrent ? '⚡ ' : ''}{t.ref}</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.tdTitle} numberOfLines={1}>{t.name}</Text>
-                      {/* Spelled out only when a task was worked BOTH alone and
-                          alongside another. That is the case a single total gets
-                          wrong: 20 minutes solo in the morning plus 2 hours shared
-                          in the afternoon is not "2h20m of multitasking". */}
-                      {t.concurrent && (t.solo_seconds || 0) > 0 ? (
-                        <Text style={[s.tdTitle, { fontSize: 11, opacity: 0.7 }]} numberOfLines={1}>
-                          {t.solo_display} alone · {t.shared_display} shared
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Text style={s.tdTime}>{t.duration_display}</Text>
-                  </View>
-                ))}
+                {/* Totals, away time, the Workday Map and the tasks: shared with
+                    Live Tracking, where an admin reads the same day for someone else. */}
+                <WorkdaySummaryBody summary={endSummary} viewer="self" />
 
                 {/* Still optional — just big enough to actually write in, and it now says
                     where the note goes. "Anything to add…" in a 60pt box got 3 notes out of
@@ -6149,18 +5860,6 @@ const s = StyleSheet.create({
     backgroundColor: COLORS.amberBg, borderRadius: 10, padding: 10, marginBottom: 12,
     borderWidth: 1, borderColor: '#F3DFA8',
   },
-  autoClosedBox: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.amberBg,
-    borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10, marginBottom: 12,
-  },
-  autoClosedTxt: { fontSize: 12.5, fontWeight: '700', color: '#7a5200' },
-  missingBox: {
-    backgroundColor: COLORS.amberBg, borderRadius: 10, padding: 10, marginBottom: 12,
-    borderWidth: 1, borderColor: '#F3DFA8',
-  },
-  missingTitle: { fontSize: 13, fontWeight: '800', color: '#7a5200' },
-  missingHint: { fontSize: 11.5, color: '#7a5200', marginTop: 2, marginBottom: 6 },
-  missingRow: { fontSize: 12, color: '#7a5200', marginTop: 3, lineHeight: 17 },
   sentBackWho: { fontSize: 12, fontWeight: '800', color: '#7a5200' },
   sentBackNote: { fontSize: 13, fontStyle: 'italic', color: '#7a5200', marginTop: 3, lineHeight: 19 },
   // Same look, WITHOUT flex:1. createdInfoTxt lives inside a row (s.createdInfo)
@@ -6168,82 +5867,7 @@ const s = StyleSheet.create({
   // to nothing, which is why the "developer asked for…" lines rendered blank.
   askedLine: { fontSize: 12.5, color: COLORS.muted, lineHeight: 18, marginBottom: 6 },
 
-  // End Workday summary
-  // The End Workday summary tiles. MUST WRAP: this row holds up to five tiles
-  // (Login, Productive, Presence, Accounted, and Workday paused when the day was
-  // frozen), and as a fixed `flexDirection: row` of flex:1 children they simply
-  // divided whatever width existed. On a tablet that is ~220px each and looks
-  // right; on a phone it is ~58px, minus 20px of padding — too narrow for a
-  // 19px figure, let alone the label above it. It was the fifth tile added for
-  // Pause Workday that pushed it past readable on small screens.
-  //
-  // flexBasis is the wrap threshold, not a fixed width: flexGrow lets tiles
-  // fill the row they land on. 128 puts two per row on a 320dp phone and still
-  // fits all five across a tablet, so the layout that already looked right is
-  // unchanged and only narrow screens reflow.
-  statTiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
-
-  // Workday Map (End Workday popup) — flowing chips: start → task → break → … → end.
-  mapBox: { marginTop: 12, backgroundColor: '#F8FAFC', borderRadius: 10, padding: 10 },
-  mapTitle: { fontSize: 14, fontWeight: '800', color: COLORS.navy, marginBottom: 8 },
-  mapFlow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  mapArrow: { color: '#9CA3AF', fontSize: 15, fontWeight: '700' },
-  mapChip: { borderWidth: 1, borderTopWidth: 3, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 6, backgroundColor: '#fff', minWidth: 92, maxWidth: 152 },
-  mapChipLabel: { fontSize: 12, fontWeight: '700', color: COLORS.ink },
-  mapChipTime: { fontSize: 10.5, color: COLORS.muted, marginTop: 1 },
-  mapChipNote: { fontSize: 10.5, color: '#374151', fontStyle: 'italic', marginTop: 1 },
-  // flexBasis is the WRAP THRESHOLD, not a fixed width — flexGrow still lets a
-  // tile fill whatever row it lands on, so nothing looks half-empty. `flex: 1`
-  // could not do this: it sets flexBasis to 0, so five tiles always "fit" and
-  // the row never wrapped no matter how narrow the screen got.
-  statTile: { flexGrow: 1, flexBasis: 128, minWidth: 128, backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line, padding: 10 },
-  // Presence + Accounted in one box, divided by a rule. Sized as TWO statTiles
-  // (128 + 128 + the 8 gap between them) so it flows inline beside Login and
-  // Productive instead of claiming a row. '100%' did claim one, which dropped the
-  // pair below the fold and put the day's two headline figures under the two
-  // least interesting ones. It still cannot be split across lines whatever the
-  // width, because it is a single element - which is the property that mattered.
-  pairTile: { flexGrow: 1, flexBasis: 264, minWidth: 240, flexDirection: 'row', backgroundColor: '#F7F9FC', borderRadius: 12, borderWidth: 1, borderColor: COLORS.line },
-  pairHalf: { flex: 1, padding: 10 },
-  // The dividing line. Inset vertically so it reads as a separator between two
-  // readings rather than as the border of two boxes pushed together.
-  pairRule: { width: 1, backgroundColor: COLORS.line, marginVertical: 8 },
-  // login–logout · paused, under Presence. Muted and lighter than
-  // statTileFoot: it explains the figure, it is not a verdict on it.
-  pairFoot: { fontSize: 10, color: COLORS.muted, fontWeight: '700', marginTop: 3 },
-  statTileLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '700' },
-  statTileVal: { fontSize: 13, color: COLORS.ink, fontWeight: '800', marginTop: 4 },
-  // 19 is right in a ~220dp tablet tile; in a ~134dp phone tile it crowds the
-  // label above it. Two points back is enough and keeps the figure dominant.
-  statTileBig: { fontSize: IS_NARROW ? 17 : 19, fontWeight: '900', marginTop: 4 },
-  // The standard-day verdict under Presence — green at/over, red under.
-  statTileFoot: { fontSize: 10.5, fontWeight: '800', marginTop: 2 },
-  awayBox: { backgroundColor: '#FEF9E7', borderRadius: 12, padding: 12, marginTop: 14 },
-  awayTitle: { fontSize: 13.5, fontWeight: '900', color: COLORS.ink },
-  awaySub: { fontSize: 11.5, fontWeight: '600', color: COLORS.muted },
-  awayGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  awayCell: { width: '31.5%', backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: COLORS.line, paddingVertical: 8, alignItems: 'center' },
-  awayCellLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '700' },
-  awayCellVal: { fontSize: 14, color: COLORS.ink, fontWeight: '900', marginTop: 2 },
-  awayEvent: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
-  awayTag: { backgroundColor: '#E7ECF3', borderRadius: 5, paddingHorizontal: 7, paddingVertical: 2 },
-  awayTagTxt: { fontSize: 11, fontWeight: '800', color: COLORS.ink },
-  awayTagUrgent: { backgroundColor: '#F6C244' },   // yellow, like the web module
-  awayTagTxtUrgent: { color: '#5c4400' },
-  // No longer flex:1 — it sits inside a flexed column now, and keeping flex here
-  // fought the note underneath it for the same space.
-  awayEventTxt: { fontSize: 11.5, color: COLORS.muted },
-  awayEventNote: { fontSize: 11, color: COLORS.faint, fontStyle: 'italic', marginTop: 1 },
-  endHint: { fontSize: 12.5, color: COLORS.red, fontWeight: '700', marginTop: 12 },
-  tasksTitle: { fontSize: 14.5, fontWeight: '900', color: COLORS.navy, marginTop: 16, marginBottom: 6 },
-  taskTableHead: { flexDirection: 'row', borderBottomWidth: 2, borderBottomColor: COLORS.line, paddingBottom: 6 },
-  thRef: { width: 50, fontSize: 12, fontWeight: '800', color: COLORS.muted },
-  thTitle: { flex: 1, fontSize: 12, fontWeight: '800', color: COLORS.muted },
-  thTime: { width: 64, fontSize: 12, fontWeight: '800', color: COLORS.muted, textAlign: 'right' },
-  taskRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#F0F3F8' },
-  tdRef: { width: 50, fontSize: 13, fontWeight: '800', color: COLORS.ink },
-  tdTitle: { flex: 1, fontSize: 13, color: COLORS.ink },
-  tdTime: { width: 64, fontSize: 13, fontWeight: '800', color: COLORS.navy, textAlign: 'right' },
+  // The End Workday summary's own styles moved to components/WorkdaySummaryBody.js.
 
   // Info banners
   bannerBlue: { backgroundColor: '#DBF0F7', borderRadius: 10, padding: 12, marginTop: 12, marginBottom: 4 },
