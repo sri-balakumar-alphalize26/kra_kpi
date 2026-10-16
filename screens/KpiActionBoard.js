@@ -25,7 +25,7 @@ import {
   approveTask, rejectTask, getTaskChecklists, markReviewStarted,
   CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
   getWorkdayStatus, startWorkday, endWorkday, pauseWorkday, resumeWorkday, sendHeartbeat,
-  selfCreateTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
+  selfCreateTask, adminCreateDoneTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
   acceptSelfCreated, rejectSelfCreated,
   IDLE_REASONS, setIdleReason, endNonTask, IDLE_NOTE_MAX,
   sinceResume, BREAK_SWITCH_REASONS, switchBreak,
@@ -46,7 +46,10 @@ import { validateWorkdayNote, NOTE_MAX } from '../utils/workdayNote';
 // against real payloads (utils/__tests__/taskGate.test.js).
 import { gateLabel } from '../utils/taskGate';
 import MeetingPicker from '../components/MeetingPicker';
-import { DELIVERABLE_TYPES, deliverableLabel } from '../utils/deliverableType';
+import { DELIVERABLE_TYPES, deliverableLabel, hasDeliverable, toggleDeliverable } from '../utils/deliverableType';
+import { estimateFromWorked } from '../utils/doneTaskEstimate';
+import DateGridModal from '../components/DateGridModal';
+import { fmtYMD } from '../utils/dateGrid';
 import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
 import { noteRequired, pauseReasonText, meetingIds, idleMeetingNote } from '../utils/meetingPick';
 import useBackHandler from '../components/useBackHandler';
@@ -320,6 +323,26 @@ function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
 // action buttons. Shared by TaskCard (kanban) and TaskListRow (accordion list) so
 // both views behave identically — same button set, same runAction wiring, same
 // busy spinner. Reassign stays gated behind isAdmin, so role behavior is preserved.
+
+// Module / App / EXE as checkboxes — a task can build more than one. `value` is
+// the 'module,app' string the server stores. Used by New Task and Done Task.
+function DeliverableChecks({ value, onToggle }) {
+  return (
+    <View style={s.segFull}>
+      {DELIVERABLE_TYPES.map((d) => {
+        const on = hasDeliverable(value, d.code);
+        return (
+          <TouchableOpacity key={d.code} style={[s.segFullItem, s.checkItem, on && s.segFullItemOn]}
+            onPress={() => { H.select(); onToggle(d.code); }} activeOpacity={0.8}>
+            <Ionicons name={on ? 'checkbox' : 'square-outline'} size={16} color={on ? '#fff' : COLORS.muted} />
+            <Text style={[s.segFullTxt, on && { color: '#fff' }]}>{d.label}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, currentUserId, reminder, readOnly = false }) {
   const st = task.task_state;
   const running = st === 'in_progress';
@@ -1557,7 +1580,8 @@ export default function KpiActionBoard({
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [raw]);
-  const [createdPopup, setCreatedPopup] = useState(null); // { ref, name } after a New Task is created
+  // { ref, name, kind } after a New Task ('new') or Done Task ('done') is created
+  const [createdPopup, setCreatedPopup] = useState(null);
 
   // New Task modal
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -1580,6 +1604,13 @@ export default function KpiActionBoard({
   const [assignees, setAssignees] = useState([]);
   const [ntUser, setNtUser] = useState(null);
   const [ntUserOpen, setNtUserOpen] = useState(false);
+
+  // Admin "Done Task" modal — work already finished off-system. One object, null
+  // while closed. Shares clientTree and assignees with New Task.
+  //   { name, client, project, user, deliverable, workedH, workedM, workDate,
+  //     estH, estM, estTouched, priority, desc, open: 'client'|'project'|'user'|'date'|null }
+  const [doneTask, setDoneTask] = useState(null);
+  const [doneBusy, setDoneBusy] = useState(false);
 
   // The newest load wins. The 20s silent poll and an All ↔ My toggle overlap,
   // and on a large board the slower "All" answer landed after "My" and
@@ -2341,7 +2372,7 @@ export default function KpiActionBoard({
   async function submitNewTask() {
     if (!ntName.trim()) return say('Task name required', 'Enter a task name.', 'warn');
     if (!ntProject) return say('Project required', 'Choose a project (KRA).', 'warn');
-    if (!ntDeliverable) return say('Type required', 'Choose Module, App or EXE.', 'warn');
+    if (!ntDeliverable) return say('Type required', 'Tick at least one — Module, App or EXE.', 'warn');
     const h = parseInt(ntHours, 10) || 0;
     const m = parseInt(ntMinutes, 10) || 0;
     // Estimate is OPTIONAL, matching the server and the web board. A developer
@@ -2361,9 +2392,82 @@ export default function KpiActionBoard({
       if (res && res.status === false) { say('Cannot create', res.message || 'Failed', 'warn'); return; }
       setNewTaskOpen(false);
       await load({ silent: true });
-      setCreatedPopup({ ref: (res && res.external_ref) || '', name: ntName.trim() });
+      setCreatedPopup({ ref: (res && res.external_ref) || '', name: ntName.trim(), kind: 'new' });
     } catch (e) { say('Error', e.message || 'Failed', 'warn'); }
     finally { setNtBusy(false); }
+  }
+
+  // ── Admin: Done Task ──────────────────────────────────────────────────────
+  // Work that already happened off-system goes straight to Pending Approvals
+  // with its worked time filed on the chosen day. Mirrors the web board's
+  // "Add Done Task".
+  function openDoneTask() {
+    setDoneTask({
+      name: '', client: null, project: null, user: null, deliverable: '',
+      workedH: '', workedM: '', workDate: fmtYMD(new Date()),
+      estH: '', estM: '', estTouched: false,
+      priority: 'regular', desc: '', open: null,
+    });
+    if (clientTree.length === 0) fetchClientTree().then(setClientTree).catch(() => {});
+    if (!assignees.length) {
+      fetchUsers().then((list) => setAssignees(list || [])).catch((e) => log.warn('users load failed', e?.message));
+    }
+  }
+
+  const doneWorkedSecs = (d) =>
+    (parseInt(d.workedH, 10) || 0) * 3600 + (parseInt(d.workedM, 10) || 0) * 60;
+
+  // Merge a change in. The estimate follows the time worked and the type until
+  // the admin types one of their own.
+  function patchDone(patch) {
+    setDoneTask((d) => {
+      if (!d) return d;
+      const next = { ...d, ...patch };
+      const drivesEstimate = 'workedH' in patch || 'workedM' in patch || 'deliverable' in patch;
+      if (drivesEstimate && !next.estTouched) {
+        const worked = doneWorkedSecs(next);
+        if (worked > 0) {
+          const est = estimateFromWorked(worked, next.deliverable);
+          next.estH = String(Math.floor(est / 3600));
+          next.estM = String(Math.floor((est % 3600) / 60));
+        } else {
+          next.estH = ''; next.estM = '';
+        }
+      }
+      return next;
+    });
+  }
+
+  async function submitDoneTask() {
+    const d = doneTask;
+    if (!d) return;
+    const worked = doneWorkedSecs(d);
+    if (!d.name.trim()) return say('Task name required', 'Enter a task name.', 'warn');
+    if (!d.project) return say('Project required', 'Choose a project (KRA).', 'warn');
+    if (!d.deliverable) return say('Type required', 'Tick at least one — Module, App or EXE.', 'warn');
+    if (worked <= 0) return say('Time worked required', 'Enter the hours and/or minutes already spent.', 'warn');
+    if ((parseInt(d.workedM, 10) || 0) > 59) return say('Check the time', 'Minutes worked must be 0–59.', 'warn');
+    if ((parseInt(d.estM, 10) || 0) > 59) return say('Check the estimate', 'Estimate minutes must be 0–59.', 'warn');
+    const blankEst = d.estH === '' && d.estM === '';
+    const est = blankEst
+      ? estimateFromWorked(worked, d.deliverable)
+      : (parseInt(d.estH, 10) || 0) * 3600 + (parseInt(d.estM, 10) || 0) * 60;
+    if (est <= worked) return say('Estimate too low', 'The estimate must be more than the time worked.', 'warn');
+    log.info('done task submit', { name: d.name.trim(), kraId: d.project.id, worked, workDate: d.workDate });
+    setDoneBusy(true);
+    try {
+      const res = await adminCreateDoneTask({
+        name: d.name.trim(), kraId: d.project.id, userId: d.user?.id || 0,
+        workedSeconds: worked, workDate: d.workDate,
+        estimateHours: Math.floor(est / 3600), estimateMinutes: Math.floor((est % 3600) / 60),
+        deliverableType: d.deliverable, priority: d.priority, description: d.desc.trim(),
+      });
+      if (res && res.status === false) { say('Cannot add', res.message || 'Failed', 'warn'); return; }
+      setDoneTask(null);
+      await load({ silent: true });
+      setCreatedPopup({ ref: (res && res.external_ref) || '', name: d.name.trim(), kind: 'done' });
+    } catch (e) { say('Error', e.message || 'Failed', 'warn'); }
+    finally { setDoneBusy(false); }
   }
 
   // Record that a coordinator has opened this task to review it. Fire-and-forget:
@@ -2936,6 +3040,14 @@ export default function KpiActionBoard({
           <TouchableOpacity style={s.newTaskBtn} onPress={openNewTask} activeOpacity={0.85}>
             <Ionicons name="add" size={16} color={COLORS.primary} />
             <Text style={s.newTaskTxt}>New Task</Text>
+          </TouchableOpacity>
+        )}
+        {/* Admin: record work already finished off-system. Not gated on the
+            workday — filing someone else's past work is not the admin working. */}
+        {isAdmin && (
+          <TouchableOpacity style={[s.newTaskBtn, s.doneTaskBtn]} onPress={openDoneTask} activeOpacity={0.85}>
+            <Ionicons name="checkmark-done" size={16} color={COLORS.amber} />
+            <Text style={[s.newTaskTxt, { color: COLORS.amber }]}>Done Task</Text>
           </TouchableOpacity>
         )}
         {/* Only RESUME in the header. Pause lives inside the End Workday dialog,
@@ -4183,17 +4295,10 @@ export default function KpiActionBoard({
                 </View>
 
                 <Text style={s.fieldLabel}>Type (Module / App / EXE) *</Text>
-                <View style={s.segFull}>
-                  {DELIVERABLE_TYPES.map((d) => {
-                    const on = ntDeliverable === d.code;
-                    return (
-                      <TouchableOpacity key={d.code} style={[s.segFullItem, on && s.segFullItemOn]} onPress={() => setNtDeliverable(d.code)}>
-                        <Text style={[s.segFullTxt, on && { color: '#fff' }]}>{d.label}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                {!ntDeliverable ? <Text style={s.fieldHint}>Required — what is being built.</Text> : null}
+                <DeliverableChecks value={ntDeliverable} onToggle={(code) => setNtDeliverable((v) => toggleDeliverable(v, code))} />
+                <Text style={s.fieldHint}>
+                  {ntDeliverable ? deliverableLabel(ntDeliverable) : 'Required — tick one or more.'}
+                </Text>
 
                 <Text style={s.fieldLabel}>Priority</Text>
                 <View style={s.segFull}>
@@ -4232,6 +4337,191 @@ export default function KpiActionBoard({
         </View>
       </Modal>
 
+      {/* Admin Done Task modal — mirrors web "Add Done Task" */}
+      <Modal visible={!!doneTask} transparent animationType="fade" onRequestClose={() => setDoneTask(null)}>
+        <View style={s.modalWrap}>
+          <View style={s.modalCard}>
+            <View style={[s.modalHead, s.headAmber]}>
+              <Text style={s.headAmberTitle}>✓  Add Done Task</Text>
+              <TouchableOpacity onPress={() => setDoneTask(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#3d2c00" />
+              </TouchableOpacity>
+            </View>
+
+            {doneTask ? (
+              <ScrollView style={{ maxHeight: MODAL_BODY_MAX_H }} keyboardShouldPersistTaps="handled">
+                <View style={s.modalPad}>
+                  <Text style={s.fieldLabel}>Task Name *</Text>
+                  <TextInput style={[s.textInput, !doneTask.name.trim() && s.inputErr]} placeholder="What was done?"
+                    placeholderTextColor={COLORS.faint} value={doneTask.name} onChangeText={(v) => patchDone({ name: v })} />
+
+                  <Text style={s.fieldLabel}>Client *</Text>
+                  <TouchableOpacity style={[s.dropdown, !doneTask.client && s.inputErr]} activeOpacity={0.8}
+                    onPress={() => patchDone({ open: doneTask.open === 'client' ? null : 'client' })}>
+                    <Text style={[s.dropdownTxt, !doneTask.client && { color: COLORS.faint }]} numberOfLines={1}>
+                      {doneTask.client ? doneTask.client.name : '— choose a client —'}
+                    </Text>
+                    <Ionicons name={doneTask.open === 'client' ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.muted} />
+                  </TouchableOpacity>
+                  {doneTask.open === 'client' && (
+                    <View style={s.dropdownList}>
+                      <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                        {clientTree.length === 0 && <Text style={[s.centerTxt, { padding: 12 }]}>Loading clients…</Text>}
+                        {clientTree.map((c) => (
+                          <TouchableOpacity key={c.id} style={[s.dropdownItem, doneTask.client?.id === c.id && s.dropdownItemOn]}
+                            onPress={() => patchDone({ client: c, project: null, open: null })}>
+                            <Text style={[s.dropdownItemTxt, doneTask.client?.id === c.id && { color: COLORS.primary, fontWeight: '800' }]}>{c.name}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  <Text style={s.fieldLabel}>Project *</Text>
+                  <TouchableOpacity style={[s.dropdown, !doneTask.project && s.inputErr]} disabled={!doneTask.client} activeOpacity={0.8}
+                    onPress={() => patchDone({ open: doneTask.open === 'project' ? null : 'project' })}>
+                    <Text style={[s.dropdownTxt, !doneTask.project && { color: COLORS.faint }]} numberOfLines={1}>
+                      {doneTask.project ? doneTask.project.display : (doneTask.client ? '— choose a project —' : 'Select a client first')}
+                    </Text>
+                    <Ionicons name={doneTask.open === 'project' ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.muted} />
+                  </TouchableOpacity>
+                  {doneTask.open === 'project' && doneTask.client && (
+                    <View style={s.dropdownList}>
+                      <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                        {(doneTask.client.projects || []).map((p) => (
+                          <TouchableOpacity key={p.id} style={[s.dropdownItem, doneTask.project?.id === p.id && s.dropdownItemOn]}
+                            onPress={() => patchDone({ project: p, open: null })}>
+                            <Text style={[s.dropdownItemTxt, doneTask.project?.id === p.id && { color: COLORS.primary, fontWeight: '800' }]}>{p.display}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  <Text style={s.fieldLabel}>Developer *</Text>
+                  <TouchableOpacity style={s.dropdown} activeOpacity={0.8}
+                    onPress={() => patchDone({ open: doneTask.open === 'user' ? null : 'user' })}>
+                    <Text style={s.dropdownTxt} numberOfLines={1}>{doneTask.user ? doneTask.user.name : 'Me'}</Text>
+                    <Ionicons name={doneTask.open === 'user' ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.muted} />
+                  </TouchableOpacity>
+                  <Text style={s.fieldHint}>Who did the work. The time is recorded against them.</Text>
+                  {doneTask.open === 'user' && (
+                    <View style={s.dropdownList}>
+                      <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                        <TouchableOpacity style={[s.dropdownItem, !doneTask.user && s.dropdownItemOn]}
+                          onPress={() => { H.select(); patchDone({ user: null, open: null }); }}>
+                          <Text style={[s.dropdownItemTxt, !doneTask.user && { color: COLORS.primary, fontWeight: '800' }]}>Me</Text>
+                        </TouchableOpacity>
+                        {assignees.length === 0 ? <Text style={[s.centerTxt, { padding: 12 }]}>Loading people…</Text> : null}
+                        {assignees.map((u) => (
+                          <TouchableOpacity key={u.id} style={[s.dropdownItem, doneTask.user?.id === u.id && s.dropdownItemOn]}
+                            onPress={() => { H.select(); patchDone({ user: u, open: null }); }}>
+                            <Text style={[s.dropdownItemTxt, doneTask.user?.id === u.id && { color: COLORS.primary, fontWeight: '800' }]}>{u.name}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  <Text style={s.fieldLabel}>Type (Module / App / EXE) *</Text>
+                  <DeliverableChecks value={doneTask.deliverable}
+                    onToggle={(code) => patchDone({ deliverable: toggleDeliverable(doneTask.deliverable, code) })} />
+                  <Text style={s.fieldHint}>
+                    {doneTask.deliverable ? deliverableLabel(doneTask.deliverable) : 'Required — tick one or more.'}
+                  </Text>
+
+                  <View style={s.twoCol}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.fieldLabel}>Worked Hours *</Text>
+                      <TextInput style={[s.textInput, !doneWorkedSecs(doneTask) && s.inputErr]} keyboardType="number-pad" selectTextOnFocus
+                        placeholder="0" placeholderTextColor={COLORS.faint}
+                        value={doneTask.workedH} onChangeText={(v) => patchDone({ workedH: v })} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.fieldLabel}>Minutes</Text>
+                      <TextInput style={s.textInput} keyboardType="number-pad" selectTextOnFocus
+                        placeholder="0" placeholderTextColor={COLORS.faint}
+                        value={doneTask.workedM} onChangeText={(v) => patchDone({ workedM: v })} />
+                    </View>
+                  </View>
+
+                  <Text style={s.fieldLabel}>Work Date *</Text>
+                  <TouchableOpacity style={s.dropdown} activeOpacity={0.8} onPress={() => patchDone({ open: 'date' })}>
+                    <Text style={s.dropdownTxt}>
+                      {doneTask.workDate}{doneTask.workDate === fmtYMD(new Date()) ? '  (today)' : ''}
+                    </Text>
+                    <Ionicons name="calendar-outline" size={18} color={COLORS.muted} />
+                  </TouchableOpacity>
+                  <Text style={s.fieldHint}>The day the work was done — today or earlier.</Text>
+
+                  <View style={s.twoCol}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.fieldLabel}>Estimate Hours</Text>
+                      <TextInput style={s.textInput} keyboardType="number-pad" selectTextOnFocus
+                        value={doneTask.estH} onChangeText={(v) => patchDone({ estH: v, estTouched: true })} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.fieldLabel}>Minutes</Text>
+                      <TextInput style={s.textInput} keyboardType="number-pad" selectTextOnFocus
+                        value={doneTask.estM} onChangeText={(v) => patchDone({ estM: v, estTouched: true })} />
+                    </View>
+                  </View>
+                  <Text style={s.fieldHint}>
+                    Fills in from the time worked and the type: 20–40% more, at most +2h for a Module or EXE,
+                    +3h if App is ticked. Change it if you like — it must stay above the time worked.
+                  </Text>
+
+                  <Text style={s.fieldLabel}>Priority</Text>
+                  <View style={s.segFull}>
+                    {PRIORITIES.map((p) => {
+                      const on = doneTask.priority === p.code;
+                      return (
+                        <TouchableOpacity key={p.code} style={[s.segFullItem, on && s.segFullItemOn]} onPress={() => patchDone({ priority: p.code })}>
+                          <Text style={[s.segFullTxt, on && { color: '#fff' }]}>{p.label}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={s.fieldLabel}>Description</Text>
+                  <TextInput style={[s.textInput, { minHeight: 70, textAlignVertical: 'top' }]} multiline
+                    value={doneTask.desc} onChangeText={(v) => patchDone({ desc: v })} />
+
+                  <View style={s.bannerBlue}>
+                    <Text style={s.bannerBlueTxt}>
+                      This goes straight to <Text style={{ fontWeight: '900' }}>Pending Approvals</Text> as a finished task — it still needs approving. The time counts in the KRA, employee and invoice reports on the work date, but <Text style={{ fontWeight: '900' }}>not as attendance</Text> or productive time for the day.
+                    </Text>
+                  </View>
+                </View>
+              </ScrollView>
+            ) : null}
+
+            <View style={s.modalFoot}>
+              <TouchableOpacity style={s.footCancel} onPress={() => setDoneTask(null)}><Text style={s.footCancelTxt}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity
+                style={[s.footConfirm, { backgroundColor: COLORS.amber }, doneBusy && s.footDisabled]}
+                onPress={submitDoneTask}
+                disabled={doneBusy}
+              >
+                {doneBusy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.footConfirmTxt}>Add Done Task</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rendered conditionally, NOT with a visible prop: DateGridModal shows the
+          moment it mounts. */}
+      {doneTask?.open === 'date' ? (
+        <DateGridModal
+          title="Work date"
+          value={doneTask.workDate}
+          maxDate={fmtYMD(new Date())}
+          onCancel={() => patchDone({ open: null })}
+          onPick={(iso) => patchDone({ workDate: iso, open: null })}
+        />
+      ) : null}
+
       {/* Styled success popup after creating a "+ New Task" — shows the new ref */}
       <Modal visible={!!createdPopup} transparent animationType="fade" onRequestClose={() => setCreatedPopup(null)}>
         <View style={s.modalWrap}>
@@ -4252,7 +4542,11 @@ export default function KpiActionBoard({
               <Text style={s.createdName} numberOfLines={2}>{createdPopup?.name}</Text>
               <View style={s.createdInfo}>
                 <Ionicons name="time-outline" size={16} color={COLORS.muted} style={{ marginTop: 1 }} />
-                <Text style={s.createdInfoTxt}>In <Text style={{ fontWeight: '800' }}>Pending Review</Text> — an admin will review it, pick the type (Requirement / Update / Bug) and assign it.</Text>
+                {createdPopup?.kind === 'done' ? (
+                  <Text style={s.createdInfoTxt}>In <Text style={{ fontWeight: '800' }}>Pending Approvals</Text> — approve it to finish. Its time is filed on the work date you chose.</Text>
+                ) : (
+                  <Text style={s.createdInfoTxt}>In <Text style={{ fontWeight: '800' }}>Pending Review</Text> — an admin will review it, pick the type (Requirement / Update / Bug) and assign it.</Text>
+                )}
               </View>
             </View>
             <View style={[s.modalFoot, { justifyContent: 'flex-end' }]}>
@@ -5348,6 +5642,7 @@ const s = StyleSheet.create({
   roleBadgeTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.green },
   newTaskBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 36, paddingHorizontal: 12, borderRadius: 10, backgroundColor: '#EAF1FE', borderWidth: 1.5, borderColor: COLORS.primary },
   newTaskTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary },
+  doneTaskBtn: { backgroundColor: COLORS.amberBg, borderColor: COLORS.amber },
   workdayBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 36, paddingHorizontal: 12, borderRadius: 10, backgroundColor: COLORS.green, minWidth: 108, justifyContent: 'center' },
   workdayBtnEnd: { backgroundColor: COLORS.red },
   workdayBtnLoading: { backgroundColor: '#94A3B8' },
@@ -5998,6 +6293,7 @@ const s = StyleSheet.create({
   segFull: { flexDirection: 'row', gap: 8 },
   segFullItem: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   segFullItemOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  checkItem: { flexDirection: 'row', gap: 6 },
   segFullTxt: { fontSize: 13.5, fontWeight: '800', color: COLORS.ink },
 
   errorMsg: { fontSize: 14.5, color: COLORS.ink, lineHeight: 21, paddingVertical: 10 },

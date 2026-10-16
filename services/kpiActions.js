@@ -973,3 +973,25 @@ export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, pr
     user_id: userId || 0,
     deliverable_type: deliverableType || '',
   });
+
+// ── Admin: record a task that is already done ("Done Task") ─────────────────
+// Lands straight in Pending Approvals with its worked time filed on workDate
+// ('YYYY-MM-DD', today or earlier). The time counts in the reports but never as
+// attendance. Admin-only on the server. userId 0 means the caller.
+// deliverableType may hold several: 'module,app'.
+export const adminCreateDoneTask = ({
+  name, kraId, userId, workedSeconds, workDate, estimateHours, estimateMinutes,
+  deliverableType, priority, description,
+}) =>
+  action('/kra_kpi/task/admin_create_done', {
+    name: name || '',
+    kra_id: kraId,
+    user_id: userId || 0,
+    worked_seconds: workedSeconds || 0,
+    work_date: workDate || '',
+    estimate_hours: estimateHours || 0,
+    estimate_minutes: estimateMinutes || 0,
+    deliverable_type: deliverableType || '',
+    priority: priority || 'regular',
+    description: description || '',
+  });

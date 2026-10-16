@@ -11,7 +11,26 @@ export const DELIVERABLE_TYPES = [
 
 export const isDeliverableType = (code) => DELIVERABLE_TYPES.some((t) => t.code === code);
 
+// A task can build several; the server stores them as 'module,app', which reads
+// "Module + App".
 export const deliverableLabel = (code) =>
-  (DELIVERABLE_TYPES.find((t) => t.code === code) || {}).label || '';
+  String(code || '')
+    .split(',')
+    .map((c) => (DELIVERABLE_TYPES.find((t) => t.code === c) || {}).label)
+    .filter(Boolean)
+    .join(' + ');
+
+// Multi-select: one task can build several, held as 'module,app'.
+const codesOf = (value) => String(value || '').split(',').filter(Boolean);
+
+export const hasDeliverable = (value, code) => codesOf(value).includes(code);
+
+// Tick or untick one type. Always returns the codes in DELIVERABLE_TYPES order —
+// the same order the server stores them in, so 'app,module' never reaches it.
+export const toggleDeliverable = (value, code) => {
+  const on = new Set(codesOf(value));
+  if (on.has(code)) on.delete(code); else on.add(code);
+  return DELIVERABLE_TYPES.map((t) => t.code).filter((c) => on.has(c)).join(',');
+};
 
 export const DELIVERABLE_REQUIRED_MSG = 'Pick a type — Module, App or EXE.';
