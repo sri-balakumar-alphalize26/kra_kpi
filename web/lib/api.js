@@ -3,6 +3,7 @@
 
    rpc(path, params)      one JSON-RPC call (writes, one-off reads)
    read(path, params)     the same, cached 15 s and shared between callers
+   mutate(path, params, fn) edit a cached read in place, without a request
    upload(path, formData) multipart with progress (the file-upload routes)
    href(path)             the URL of a type='http' download, for <a href>
    serverNow()            Date.now() corrected onto Odoo's clock */
@@ -103,19 +104,56 @@ export function peek(path, params) {
   return hit && Date.now() - hit.at < PEEK_MAX_AGE ? hit.value : undefined;
 }
 
+/* A request already on the wire is shared even with `fresh`: two screens (or
+   a poll and an action's refresh) asking at once get ONE answer, not two
+   racing full loads. invalidate() drops it, so a read after a write still
+   goes to the server. */
 export function read(path, params = {}, { fresh = false, ttl = TTL, timeout } = {}) {
   const key = stableKey(path, params);
   const hit = cache.get(key);
-  if (!fresh && hit && Date.now() - hit.at < ttl) return hit.promise;
-  const promise = send(BASE + path, { body: params, timeout }).then((value) => {
-    if (value && value.status !== false) settled.set(key, { at: Date.now(), value });
+  if (hit && (hit.pending || (!fresh && Date.now() - hit.at < ttl))) return hit.promise;
+  const entry = { at: Date.now(), promise: null, pending: true };
+  entry.promise = send(BASE + path, { body: params, timeout }).then((value) => {
+    entry.pending = false;
+    /* Dropped by invalidate() or replaced by mutate() meanwhile: this answer
+       predates that, so it must not become what peek() hands out. */
+    if (cache.get(key) === entry && value && value.status !== false) settled.set(key, { at: Date.now(), value });
     return value;
   }, (e) => {
-    cache.delete(key); /* never cache a failure */
+    entry.pending = false;
+    if (cache.get(key) === entry) cache.delete(key); /* never cache a failure */
     throw e;
   });
-  cache.set(key, { at: Date.now(), promise });
-  return promise;
+  cache.set(key, entry);
+  return entry.promise;
+}
+
+/* ---- local edits ---------------------------------------------------------
+   mutate(path, params, fn): change what the app holds for one read without
+   asking the server, e.g. slot a just-created task into the cached board
+   instead of re-downloading every task. `fn(value)` returns the new value
+   (undefined = leave it). Screens showing that read (lib/useFetch) hear about
+   it through watch() and apply the same `fn` to what they hold. */
+const watchers = new Map(); /* key -> Set(fn) */
+export function watch(path, params, fn) {
+  const key = stableKey(path, params);
+  if (!watchers.has(key)) watchers.set(key, new Set());
+  watchers.get(key).add(fn);
+  return () => { watchers.get(key)?.delete(fn); };
+}
+export function mutate(path, params, fn) {
+  const key = stableKey(path, params);
+  const hit = settled.get(key);
+  const next = hit ? fn(hit.value) : undefined;
+  if (next !== undefined) {
+    const at = Date.now();
+    settled.set(key, { at, value: next });
+    cache.set(key, { at, promise: Promise.resolve(next), pending: false });
+  } else {
+    cache.delete(key); /* nothing held to edit: the next read asks the server */
+  }
+  for (const w of [...(watchers.get(key) || [])]) w(fn);
+  return next;
 }
 
 /* ---- uploads -------------------------------------------------------------

@@ -99,18 +99,35 @@ export function sinceMs(t, nowMs = Date.now()) {
 }
 
 /* A React hook: a `now` that ticks every second from the server clock, paused
-   while the tab is hidden. */
-import { useEffect, useState } from "react";
+   while the tab is hidden. Every caller with the same interval shares ONE
+   timer, so a board of running timers ticks together on one interval. */
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { serverNow } from "@/lib/api";
+const clocks = new Map(); /* everyMs -> { now, subs, id } */
+function subscribeClock(everyMs, cb) {
+  let c = clocks.get(everyMs);
+  if (!c) { c = { now: serverNow(), subs: new Set(), id: null }; clocks.set(everyMs, c); }
+  c.subs.add(cb);
+  if (!c.id) {
+    c.tick = () => { if (document.visibilityState === "visible") { c.now = serverNow(); for (const f of [...c.subs]) f(); } };
+    c.now = serverNow();
+    c.id = setInterval(c.tick, everyMs);
+    document.addEventListener("visibilitychange", c.tick);
+  }
+  return () => {
+    c.subs.delete(cb);
+    if (!c.subs.size && c.id) { clearInterval(c.id); c.id = null; document.removeEventListener("visibilitychange", c.tick); }
+  };
+}
+const noop = () => () => {};
 export function useNow(active = true, everyMs = 1000) {
-  const [now, setNow] = useState(() => serverNow());
-  useEffect(() => {
-    if (!active) return;
-    const tick = () => { if (document.visibilityState === "visible") setNow(serverNow()); };
-    tick();
-    const id = setInterval(tick, everyMs);
-    document.addEventListener("visibilitychange", tick);
-    return () => { clearInterval(id); document.removeEventListener("visibilitychange", tick); };
-  }, [active, everyMs]);
+  const [first] = useState(() => serverNow());
+  const last = useRef(first);
+  const subscribe = useCallback((cb) => subscribeClock(everyMs, cb), [everyMs]);
+  const now = useSyncExternalStore(active ? subscribe : noop, () => {
+    const c = active && clocks.get(everyMs);
+    return c && c.id ? c.now : last.current;
+  }, () => first);
+  last.current = now;
   return now;
 }
