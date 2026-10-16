@@ -90,8 +90,14 @@ _STEPS = [
     ('pick_install', 'Picking what to install'),
     ('type_install', 'Typing what to install'),
     # Meeting
+    ('pick_hour', 'Picking which hour'),
     ('pick_slot', 'Picking a time'),
+    # Retired, kept so a conversation mid-flow when this shipped does not
+    # land on a step the router cannot name.
+    ('pick_day', 'Picking a day (retired)'),
+    ('pick_band', 'Picking a part of the day (retired)'),
     ('type_slot', 'Asking for a time in their own words'),
+    ('pick_tz', 'Saying which timezone they meant'),
     # Which existing database is this about
     ('pick_db', 'Picking a database'),
     ('type_db', 'Naming a database we do not have listed'),
@@ -225,6 +231,23 @@ class KpiWaGroupIntake(models.Model):
     meet_start = fields.Datetime(
         string='Requested Start',
         help='Set when they tapped one of the offered slots.')
+    meet_hour = fields.Char(
+        string='Chosen Hour',
+        help="'now' for the hour in progress, otherwise the local hour as "
+             "two digits. The first of the two taps that pick a time.")
+    meet_band = fields.Char(
+        string='Part of Day (retired)',
+        help='Was morning / afternoon / evening / night. Replaced by '
+             'meet_hour; kept so in-flight rows do not break.')
+    meet_tz = fields.Char(
+        string='Timezone They Meant',
+        help='Asked whenever a time is typed. IST and the Gulf are 90 '
+             'minutes apart and the difference is never guessed.')
+    meet_day = fields.Integer(
+        string='Day Offset', default=-1,
+        help='0 = today, 1 = tomorrow, -1 = not picked yet. NOT zero for '
+             '"unset": today is 0 and 0 is falsy, so `meet_day or None` threw '
+             'the day away and a typed time lost the day it belonged to.')
     meet_text = fields.Char(
         string='Requested Time (their words)',
         help='Set when they asked for a time we did not offer. An admin reads '
@@ -299,6 +322,8 @@ class KpiWaGroupIntake(models.Model):
                            'db_other': False, 'disc_reason_id': False,
                            'disc_reason_text': False, 'menu_csv': False,
                            'meet_start': False, 'meet_text': False,
+                           'meet_day': -1, 'meet_tz': False,
+                           'meet_band': False, 'meet_hour': False,
                            'last_activity': fields.Datetime.now()})
 
     def _touch(self, **vals):
@@ -501,6 +526,19 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             return self._confirm_newdb(message, state, group)
 
         # ---- meeting: when? ----------------------------------------------- #
+        if step == 'pick_hour':
+            opts = self._hour_options_from_state(state)
+            pick = self._resolve_rows(tapped, low, opts)
+            if not pick:
+                return False
+            if pick == _DB_OTHER_ID:
+                state._touch(step='type_slot')
+                self._text(message, _(
+                    'What time suits you?\n\n_Somebody will confirm it._'))
+                return True
+            state._touch(meet_hour=pick, meet_day=0)
+            return self._show_slots(message, state)
+
         if step == 'pick_slot':
             opts = self._slot_options_from_state(state)
             pick = self._resolve_rows(tapped, low, opts)
@@ -516,8 +554,23 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             return self._confirm_meeting(message, state, group)
 
         if step == 'type_slot':
-            state._touch(step='confirm', meet_text=body[:120],
-                         meet_start=False)
+            # Which zone they meant is ASKED, never guessed: IST and the Gulf
+            # are 90 minutes apart, and a meeting booked in the wrong one is
+            # a missed meeting.
+            state._touch(meet_text=body[:120], meet_start=False)
+            return self._show_tz(message, state)
+
+        if step == 'pick_tz':
+            opts = self._tz_options_from_state(state)
+            pick = self._resolve_rows(tapped, low, opts)
+            if not pick:
+                return False
+            Meeting = self.env['kpi.meeting'].sudo()
+            when, _local = Meeting.parse_time_text(
+                state.meet_text or '', pick,
+                day_offset=state.meet_day if state.meet_day >= 0 else None)
+            state._touch(step='confirm', meet_tz=pick,
+                         meet_start=when or False)
             return self._confirm_meeting(message, state, group)
 
         # ---- which EXISTING database is this about ------------------------ #
@@ -624,19 +677,21 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                         # swallowed error that loses the whole request is not.
                         _logger.exception(
                             'could not create meeting for %s: %s', kpi.id, exc)
-                    when = state.meet_text or ''
-                    if state.meet_start:
-                        when = self.env['kpi.tz'].fmt(state.meet_start)
+                    when = self._meet_when_label(state)
+                    link = ''
+                    if meeting and meeting.page_url():
+                        link = _('\n🔗 %s') % meeting.page_url()
                     self._text(message, _(
                         "📅 Logged *%(ref)s* for *%(client)s*.\n"
                         "%(title)s\n"
-                        "🕒 %(when)s\n\n"
-                        "_Somebody will confirm the time and send you a "
-                        "join link here.%(warn)s_") % {
+                        "🕒 %(when)s%(link)s\n\n"
+                        "_Somebody will confirm and tell you who is "
+                        "joining.%(warn)s_") % {
                             'ref': kpi.external_ref or kpi.id,
                             'client': group.kra_id.name,
                             'title': kpi.name,
                             'when': when or _('a time to be agreed'),
+                            'link': link,
                             'warn': '' if meeting else _(
                                 ' (Please mention it again if you do not '
                                 'hear back.)')})
@@ -1112,38 +1167,139 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
     # ------------------------------------------------------------------
     # meeting: when, and the confirm card that shows it
     # ------------------------------------------------------------------
-    def _slot_options_from_state(self, state):
-        """Rebuild the slot picker as it was SHOWN.
+    def _menu_from_state(self, state):
+        """Rebuild a picker exactly as it was SHOWN, from `menu_csv`.
 
-        The slots are relative to the moment they were offered, so
-        regenerating them to resolve a tap would shift every option by however
-        long the person took to answer -- and "2" would book a different hour
-        than the one they read.
+        Slots are relative to the moment they were offered, so regenerating
+        them to resolve a tap would shift every option by however long the
+        person took to answer -- "2" would then book a different time than the
+        one they read.
         """
         rows = []
         for part in [c for c in (state.menu_csv or '').split('|') if c]:
-            iso, _sep, label = part.partition('~')
-            rows.append((iso, label or iso))
+            key, _sep, label = part.partition('~')
+            rows.append((key, label or key))
+        return rows
+
+    def _store_menu(self, state, opts, step):
+        state._touch(step=step,
+                     menu_csv='|'.join('%s~%s' % (o, l) for o, l in opts))
+
+    def _day_options_from_state(self, state):
+        rows = self._menu_from_state(state)
         if not rows:
-            rows = [(iso, label) for iso, label
-                    in self.env['kpi.meeting'].sudo().slot_options()]
-            rows.append((_DB_OTHER_ID, _('➕ Another time — tell me')))
+            rows = list(self.env['kpi.meeting'].sudo().day_options())
+            rows.append((_DB_OTHER_ID, _('📆 A later date — tell me')))
+        return rows
+
+    def _show_days(self, message, state):
+        """Ask the day first, so the time poll only has to list one day.
+
+        Asked before the time because the whole of today plus the whole of
+        tomorrow does not fit in a 12-option poll once the slots are half
+        hourly.
+        """
+        opts = list(self.env['kpi.meeting'].sudo().day_options())
+        # The ONLY typing left in this flow, and only for a date beyond the
+        # six offered. Day and time within those six are pure taps.
+        opts.append((_DB_OTHER_ID, _('📆 A later date — tell me')))
+        self._store_menu(state, opts, 'pick_day')
+        self._poll(message, _('📅 Which day?'), [l for _o, l in opts])
+        return True
+
+    def _tz_options_from_state(self, state):
+        rows = self._menu_from_state(state)
+        if not rows:
+            rows = list(self.env['kpi.meeting'].sudo().tz_options())
+        return rows
+
+    def _show_tz(self, message, state):
+        opts = list(self.env['kpi.meeting'].sudo().tz_options())
+        self._store_menu(state, opts, 'pick_tz')
+        self._poll(message, _(
+            '*%s* — which time is that?') % (state.meet_text or ''),
+            [l for _o, l in opts])
+        return True
+
+    def _hour_options_from_state(self, state):
+        rows = self._menu_from_state(state)
+        if not rows:
+            rows = list(self.env['kpi.meeting'].sudo().hour_options())
+        return rows
+
+    def _show_hours(self, message, state):
+        """Tap one: which hour. Today only.
+
+        'Within the hour' then one row per hour left today. The client reads
+        their own zone and the developer's on the same line, because the
+        client is in Oman and whoever takes the call is on IST.
+        """
+        Meeting = self.env['kpi.meeting'].sudo()
+        opts = list(Meeting.hour_options())
+        if not opts:
+            # Too late in the day for anything. The one place typing is still
+            # offered, because there is genuinely nothing left to tap.
+            state._touch(step='type_slot')
+            self._text(message, _(
+                'Nothing left today. What time suits you?\n\n'
+                '_Somebody will confirm it._'))
+            return True
+        # Exactly four rows, no escape row. Five would still fit a poll, but
+        # the point of four is that the whole menu is readable at a glance.
+        self._store_menu(state, opts, 'pick_hour')
+        self._poll(message, _('🕒 When today?'), [l for _o, l in opts])
+        return True
+
+    def _slot_options_from_state(self, state):
+        rows = self._menu_from_state(state)
+        if not rows:
+            rows = list(self.env['kpi.meeting'].sudo()
+                        .hour_slots(state.meet_hour))
         return rows
 
     def _show_slots(self, message, state):
-        opts = [(iso, label) for iso, label
-                in self.env['kpi.meeting'].sudo().slot_options()]
-        opts.append((_DB_OTHER_ID, _('➕ Another time — tell me')))
-        state._touch(step='pick_slot',
-                     menu_csv='|'.join('%s~%s' % (o, l) for o, l in opts))
-        self._poll(message, _('📅 When suits you?'),
-                   [l for _o, l in opts])
+        """Tap two: the exact quarter hour inside the chosen hour."""
+        Meeting = self.env['kpi.meeting'].sudo()
+        opts = list(Meeting.hour_slots(state.meet_hour))
+        if not opts:
+            return self._show_hours(message, state)
+        # No "tell me" row: every quarter of that hour is already listed.
+        self._store_menu(state, opts, 'pick_slot')
+        self._poll(message, _('🕒 Exact time?'), [l for _o, l in opts])
         return True
 
+    def _meet_when_label(self, state):
+        """What the confirm card shows for the time.
+
+        A resolved time is echoed in BOTH zones, so the person who typed
+        "11:50 IST" can see what that is for the other half of the group. A
+        time we could not read is shown back in their own words, with no
+        pretence that it has been understood.
+        """
+        if not state.meet_start:
+            return (state.meet_text or '').strip()
+        import pytz
+        Meeting = self.env['kpi.meeting'].sudo()
+        try:
+            here = state.meet_start.replace(tzinfo=pytz.utc).astimezone(
+                pytz.timezone(self.env['kpi.tz'].tz_name()))
+            # Name the day in words as well as by date: "Tomorrow" read the
+            # next morning means the wrong thing, and a bare date makes
+            # somebody count.
+            days = (here.date() - Meeting._now_local().date()).days
+            if days == 0:
+                word = _('Today')
+            elif days == 1:
+                word = _('Tomorrow')
+            else:
+                word = here.strftime('%A')
+            return '%s, %s · %s' % (word, here.strftime('%d %b'),
+                                    Meeting._slot_label(here).replace('🕒 ', ''))
+        except Exception:
+            return self.env['kpi.tz'].fmt(state.meet_start)
+
     def _confirm_meeting(self, message, state, group):
-        when = state.meet_text or ''
-        if state.meet_start:
-            when = self.env['kpi.tz'].fmt(state.meet_start)
+        when = self._meet_when_label(state)
         state._touch(step='confirm')
         self._poll(message, _(
             '📅 *Meeting request*\n\n'
@@ -1170,7 +1326,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         # than before the description so the slot poll is the last thing on
         # screen when they answer it.
         if state.action_type == 'meeting':
-            return self._show_slots(message, state)
+            return self._show_hours(message, state)
         state._touch(step='confirm')
         # No "(no AI key set)" note. Running without an LLM is a deliberate
         # configuration here, not a degraded state -- the type and area come

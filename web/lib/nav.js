@@ -29,6 +29,7 @@ export const WORK_MENU = [
     { key: "workday", label: "My Workday", href: "/your-work/timeline" },
     { key: "reminders", label: "Reminders", href: "/reminders" },
     { key: "snapshots", label: "My Workday Snapshots", href: "/your-work/snapshots" },
+    { key: "meetings", label: "Meetings", href: "/meetings" },
     { key: "documents", label: "Task Related Documents", href: "/documents" },
     { key: "notifications", label: "Notifications", href: "/notifications" }, /* web only */
     { key: "manual", label: "User Manual", href: "/manual" }, /* web only */

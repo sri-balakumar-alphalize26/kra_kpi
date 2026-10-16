@@ -153,3 +153,7 @@ access_kpi_meeting_admin,kpi.meeting.admin,model_kpi_meeting,kra_kpi_module.grou
 access_kpi_meeting_owner,kpi.meeting.owner,model_kpi_meeting,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_meeting_system,kpi.meeting.system,model_kpi_meeting,base.group_system,1,1,1,1
 access_kpi_meeting_dev,kpi.meeting.dev,model_kpi_meeting,kra_kpi_module.group_kra_developer,1,1,0,0
+access_kpi_meeting_participant_admin,kpi.meeting.participant.admin,model_kpi_meeting_participant,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_meeting_participant_owner,kpi.meeting.participant.owner,model_kpi_meeting_participant,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_meeting_participant_system,kpi.meeting.participant.system,model_kpi_meeting_participant,base.group_system,1,1,1,1
+access_kpi_meeting_participant_dev,kpi.meeting.participant.dev,model_kpi_meeting_participant,kra_kpi_module.group_kra_developer,1,0,0,0

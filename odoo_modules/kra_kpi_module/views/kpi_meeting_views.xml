@@ -107,9 +107,12 @@
                         <group>
                             <field name="provider"/>
                             <field name="join_url" widget="url"
+                                   string="Jitsi room (raw)"
                                    placeholder="https://..."
                                    readonly="provider == 'jitsi'"/>
                             <field name="room_name" invisible="provider != 'jitsi'"/>
+                            <field name="participant_summary" readonly="1"
+                                   invisible="not participant_summary"/>
                         </group>
                         <group>
                             <field name="confirmed_by_id" readonly="1"/>
@@ -131,6 +134,37 @@
                     <notebook>
                         <page string="Afterwards">
                             <group>
+                                <group string="How long it ran">
+                                    <field name="opened_at" readonly="1"/>
+                                    <field name="ended_at" readonly="1"/>
+                                    <field name="actual_minutes" readonly="1"/>
+                                </group>
+                                <group>
+                                    <field name="summary_posted" readonly="1"/>
+                                    <button name="action_draft_summary" type="object"
+                                            string="Draft with AI" class="btn-link"
+                                            invisible="state != 'done'"/>
+                                </group>
+                            </group>
+                            <group string="Who was actually in the room">
+                                <field name="participant_ids" nolabel="1" readonly="1">
+                                    <list string="Participants" create="false" delete="false">
+                                        <field name="person_name" string="Name (as they typed it)"/>
+                                        <field name="joined_at"/>
+                                        <field name="left_at"/>
+                                        <field name="minutes"/>
+                                    </list>
+                                </field>
+                            </group>
+                            <div class="alert alert-info" role="status"
+                                 invisible="participant_ids">
+                                Nobody recorded yet. Names and times are captured
+                                automatically <b>only when people join through the
+                                link Odoo sends</b> — that page embeds the room and
+                                reports back. Opening the raw meet.jit.si address
+                                instead means Odoo never sees the call.
+                            </div>
+                            <group>
                                 <field name="recording_ids" widget="many2many_binary"
                                        string="Recordings"/>
                             </group>
@@ -142,14 +176,33 @@
                                 <field name="action_items" nolabel="1"
                                        placeholder="Who does what, by when."/>
                             </group>
-                            <group>
-                                <field name="summary_posted" readonly="1"/>
-                                <field name="ended_at" readonly="1"/>
-                            </group>
+                            <div class="alert alert-warning" role="status">
+                                <b>Nothing records the call automatically.</b> The
+                                meeting runs in people's browsers and this server
+                                cannot see it. Server-side recording needs Jitsi with
+                                <b>Jibri</b>, which is a separate deployment on its
+                                own machine; the public meet.jit.si will not hand a
+                                recording back.
+                                <br/>
+                                What is automatic is the <b>timing</b>: the clock
+                                starts when the link is posted and stops when you
+                                press <b>Finished</b>. Upload a recording here if
+                                somebody made one locally.
+                            </div>
+                        </page>
+                        <page string="Log">
+                            <field name="log_ids" readonly="1">
+                                <list string="Meeting log" create="false" delete="false">
+                                    <field name="create_date" string="When"/>
+                                    <field name="event"/>
+                                    <field name="actor_user_id" string="By"/>
+                                    <field name="source" widget="badge"/>
+                                    <field name="payload_json" string="Detail"/>
+                                </list>
+                            </field>
                             <div class="alert alert-info" role="status">
-                                <b>Nothing records the call for you.</b> Jitsi needs
-                                a separate recording service; upload the file here
-                                afterwards if you made one.
+                                Every step is written to the task's own log as well,
+                                so it survives even if this meeting is deleted.
                             </div>
                         </page>
                         <page string="Internal notes">
