@@ -5,6 +5,7 @@ import { useMe } from "@/lib/me";
 import * as S from "@/lib/services/kpiActions";
 import { fmtHM, estimateSeconds, laneForTask, refPrefix, TYPE_TILE } from "@/lib/services/kpiActions";
 import { liveFromAnchor, fmtClock, secsSince, useNow } from "@/lib/liveTime";
+import LiveTick from "./LiveTick";
 import { actionsFor } from "./actions";
 import { useTaskActions } from "./TaskActions";
 import { EditHeadingDialog, FilesTab, HistoryTab, ProgressComposer, ProgressList } from "./TaskExtras";
@@ -18,7 +19,8 @@ export default function TaskPanel({ id, onClose }) {
   const [err, setErr] = useState("");
   const [tab, setTab] = useState("updates");
   const [editing, setEditing] = useState(false);
-  const now = useNow(!!d?.task && d.task.task_state === "in_progress");
+  /* Timers tick inside LiveTick; the deadline flag needs only a one-minute clock. */
+  const now = useNow(!!d?.task && d.task.task_state !== "completed", 60000);
 
   /* /kpi_action/details: the flags and low-signal fields the Odoo detail pane
      shows (mandatory, service KPI, reviews, warehouse, next KPI, task file…). */
@@ -56,7 +58,7 @@ export default function TaskPanel({ id, onClose }) {
   const [tone, label] = t ? (lane === "pending_review" ? ["review", "Pending review"] : lane === "approvals" ? ["review", "Pending approval"] : stateTone(t.task_state)) : [];
   const actions = t ? actionsFor(t, me, { workdayLocked: acts.workdayLocked }) : [];
   const running = t?.task_state === "in_progress" && t.timer_start_datetime;
-  const spent = t ? (running ? liveFromAnchor(t.timer_start_datetime, t.timer_total_seconds, now) : t.timer_total_seconds || 0) : 0;
+  const spentAt = (n) => (t ? (running ? liveFromAnchor(t.timer_start_datetime, t.timer_total_seconds, n) : t.timer_total_seconds || 0) : 0);
   const est = t ? estimateSeconds(t) : 0;
   const [tileLetter, tileColor] = TYPE_TILE[refPrefix(t?.external_ref || meta.external_ref)] || TYPE_TILE.TASK;
 
@@ -85,7 +87,7 @@ export default function TaskPanel({ id, onClose }) {
               <h2>{t.name}</h2>
               <div className="row" style={{ flexWrap: "wrap" }}>
                 <Lozenge tone={tone} style={{ height: 24, padding: "0 8px" }}>{label}</Lozenge>
-                {running && <span className="timer"><span className="pulse" />{fmtClock(secsSince(t.timer_start_datetime, now))} running</span>}
+                {running && <span className="timer"><span className="pulse" /><LiveTick fn={(n) => fmtClock(secsSince(t.timer_start_datetime, n))} /> running</span>}
                 {t.paused_reason && lane === "paused" && <Lozenge tone="paused">{t.paused_reason}</Lozenge>}
                 {t.self_needs_resume_reason && <Lozenge tone="danger">Sent back</Lozenge>}
                 {late && <Lozenge tone="danger">Deadline passed</Lozenge>}
@@ -117,7 +119,7 @@ export default function TaskPanel({ id, onClose }) {
                 <dt>Type</dt><dd>{meta.kind || refPrefix(t.external_ref) || "Task"}{t.deliverable_type ? ` · ${S.deliverableLabel(t.deliverable_type)}` : ""}{t.is_self_created && !t.admin_accepted && t.requested_doc_type ? <span className="mini"> (asked: {t.requested_doc_type})</span> : null}</dd>
                 <dt>Priority</dt><dd style={{ color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)", fontWeight: 800 }}>{t.priority === "urgent" ? "▲▲ Urgent" : t.priority === "important" ? "▲ Important" : "– Regular"}{t.requested_priority && t.requested_priority !== t.priority ? <span className="mini"> (developer asked for {S.priorityLabel(t.requested_priority)})</span> : null}</dd>
                 <dt>Estimate</dt><dd style={{ height: "auto", minHeight: 24, flexWrap: "wrap" }}>{fmtHM(est)}{t.estimate_extension_count > 0 && <span className="mini"> · extended {t.estimate_extension_count}×{t.estimate_extended_by_name ? ` by ${t.estimate_extended_by_name}` : ""} {t.estimate_extend_reason ? `— ${t.estimate_extend_reason}` : ""}</span>}</dd>
-                <dt>Time spent</dt><dd>{fmtHM(spent)}<span className="bar"><i style={{ width: `${est ? Math.min(100, (spent / est) * 100) : 0}%`, background: est && spent > est ? "var(--danger)" : "var(--brand)" }} /></span></dd>
+                <dt>Time spent</dt><dd><LiveTick active={!!running} fn={(n) => { const spent = spentAt(n); return <>{fmtHM(spent)}<span className="bar"><i style={{ width: `${est ? Math.min(100, (spent / est) * 100) : 0}%`, background: est && spent > est ? "var(--danger)" : "var(--brand)" }} /></span></>; }} /></dd>
                 {(t.time_by_user || []).length > 0 && <><dt>Time by person</dt><dd style={{ height: "auto", minHeight: 24, flexDirection: "column", alignItems: "flex-start", gap: 2 }}>{t.time_by_user.map((u) => <span key={u.user_id}>{u.user_name}{u.is_current ? <span className="mini" style={{ color: "var(--pri-regular)" }}> (current)</span> : null} — <b>{u.display}</b></span>)}</dd></>}
                 {t.today_seconds > 0 && <><dt>Today</dt><dd>{fmtHM(t.today_seconds)}</dd></>}
                 {t.progress_count > 0 && <><dt>Updates</dt><dd>{t.progress_count}</dd></>}

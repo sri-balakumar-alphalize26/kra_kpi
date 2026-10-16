@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Icon, Modal } from "@/components/ui";
 import { useMe } from "@/lib/me";
 import { invalidate } from "@/lib/api";
-import { useResource } from "@/lib/useFetch";
+import { useIsPolled, useResource } from "@/lib/useFetch";
 import { useNow, liveFromAnchor } from "@/lib/liveTime";
 import * as S from "@/lib/services/kpiActions";
 
@@ -20,14 +20,21 @@ import * as S from "@/lib/services/kpiActions";
    whose paused_reason carries the "🔴 REJECTED" marker an admin's Reject
    writes. Each is shown once per page session, like the Odoo board. */
 const seenRejections = new Set();
+const BOARD_PARAMS = { my_tasks_only: false };
+const MINE_PARAMS = { my_tasks_only: true };
 const REJECT_MARK = "🔴 REJECTED";
 const rejectionText = (r) => String(r || "").replace("🔴 REJECTED - Manager Feedback: ", "").replace("🔴 REJECTED -", "").replace("Manager Feedback:", "").trim();
 
 export default function TaskAlerts() {
   const [rejected, setRejected] = useState(null); /* tasks to show */
   const { me } = useMe();
-  /* Same params as the board, so this shares its cached read. */
-  const board = useResource(S.TASKS_PATH, { my_tasks_only: false }, { pollMs: 60000 });
+  /* Only the caller's own tasks matter here. While a screen is polling the
+     full board (Board, List, Your work), read its copy; otherwise poll just
+     my tasks, instead of the whole board, on every work page. */
+  const boardPolled = useIsPolled(S.TASKS_PATH, BOARD_PARAMS);
+  const shared = useResource(S.TASKS_PATH, BOARD_PARAMS, { enabled: false });
+  const own = useResource(S.TASKS_PATH, MINE_PARAMS, { enabled: !boardPolled, pollMs: 60000 });
+  const board = boardPolled ? shared : own;
   const now = useNow(true, 30000);
   const [alert, setAlert] = useState(null); /* { kind, task } */
   const seen = useRef({}); /* "deadline:<id>" → true, "reminder:<id>" → ms dismissed */

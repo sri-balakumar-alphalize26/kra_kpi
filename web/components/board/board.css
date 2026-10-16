@@ -45,6 +45,8 @@
 .k-app .card { cursor: grab; transition: box-shadow .12s, transform .12s; }
 .k-app .card:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
 .k-app .card.dragging { opacity: .35; }
+/* Off-screen cards in a long lane skip layout and paint until scrolled to. */
+.k-app .col-b .card { content-visibility: auto; contain-intrinsic-size: auto 150px; }
 .k-app .drag-ghost .card { box-shadow: var(--shadow-lg); transform: rotate(2deg); cursor: grabbing; width: 250px; }
 .k-app .col-b .empty { padding: 22px 8px; font-size: 12.5px; }
 .k-app .board-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }

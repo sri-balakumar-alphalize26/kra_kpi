@@ -1,6 +1,6 @@
 "use client";
 import { Suspense, useCallback, useEffect, useState } from "react";
-import { TaskActionsProvider, useTaskActions } from "@/components/task/TaskActions";
+import { TaskActionsProvider, useTaskActs } from "@/components/task/TaskActions";
 import { WorkdayButton } from "@/components/work/WorkdayButton";
 import SideIcon from "./SideIcon";
 import { IdlePrompt } from "@/components/work/IdleFlow";
@@ -121,7 +121,7 @@ function TopNav({ variant, onBurger }) {
   const activeTab = activeKey(tabs, pathname);
   /* The top bar renders inside TaskActionsProvider (work area), which says
      whether a developer may create (their workday must be open). Admins always can. */
-  const acts = useTaskActions();
+  const acts = useTaskActs();
   const showCreate = variant !== "work" || me.role === "admin" || acts?.canCreate !== false;
 
   return (

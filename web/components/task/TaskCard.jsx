@@ -1,27 +1,36 @@
 "use client";
+import { memo } from "react";
 import { Avatar, Button, Icon, Lozenge } from "@/components/ui";
 import { useMe } from "@/lib/me";
+import { serverNow } from "@/lib/api";
 import { deadlinePassed, deliverableLabel, estimateSeconds, fmtHM, isWithinFreshWindow, laneForTask, PAUSED_STATES, priorityLabel, refPrefix, sinceResume, TYPE_TILE } from "@/lib/services/kpiActions";
-import { liveFromAnchor, fmtClock, secsSince, gateLabel } from "@/lib/liveTime";
+import { liveFromAnchor, fmtClock, secsSince, gateLabel, useNow } from "@/lib/liveTime";
+import LiveTick from "./LiveTick";
 
-/* The issue card. `now` is the server-corrected clock from useNow().
+const SETTLED = ["completed", "awaiting_client", "partially_completed"];
+
+/* The issue card. Memoised: it re-renders only when its task (or a prop)
+   changes. A running card's timer and spent time tick on their own
+   (LiveTick); the "New" and "Past deadline" flags follow a shared one-minute
+   clock, and only on cards where either can still flip.
    Carries what the Odoo board card shows (kpi_action.js): description, time per
    developer, deliverable, the send-back conversation, revert reason, release /
    auto-accept badges, requested priority, add-time reason, update count, and
    completed-by / review on cards waiting for approval. */
-export default function TaskCard({ task: t, now, selected, onOpen, dragging, dragHandle, actions, onAction }) {
+function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, onAction }) {
   const { me } = useMe();
   const admin = me?.role === "admin";
   const lane = laneForTask(t);
   const running = t.task_state === "in_progress" && t.timer_start_datetime;
-  const spent = running ? liveFromAnchor(t.timer_start_datetime, t.timer_total_seconds, now) : (t.timer_total_seconds || 0);
   const est = estimateSeconds(t);
-  const over = est > 0 && spent > est;
-  const fresh = !t.last_activity && !["completed", "awaiting_client", "partially_completed"].includes(t.task_state) && isWithinFreshWindow(t, now);
+  const open = !SETTLED.includes(t.task_state);
+  const at = serverNow();
+  const now = useNow(open && ((!t.last_activity && isWithinFreshWindow(t, at)) || (!!t.deadline && !deadlinePassed(t, at))), 60000);
+  const fresh = !t.last_activity && open && isWithinFreshWindow(t, now);
   const [tileLetter, tileColor] = TYPE_TILE[refPrefix(t.external_ref)] || TYPE_TILE.TASK;
   const resume = sinceResume(t);
   const gate = gateLabel(t);
-  const late = !["completed", "awaiting_client", "partially_completed"].includes(t.task_state) && deadlinePassed(t, now);
+  const late = open && deadlinePassed(t, now);
   const pri = t.priority === "urgent" ? ["up2", "var(--pri-urgent)", "Urgent"] : t.priority === "important" ? ["up", "var(--pri-important)", "Important"] : ["dash1", "var(--pri-regular)", "Regular"];
   const pendingSelf = t.is_self_created && !t.admin_accepted;
   /* Send-back conversation: YOUR note reads green, the other side's red (Odoo). */
@@ -40,7 +49,7 @@ export default function TaskCard({ task: t, now, selected, onOpen, dragging, dra
       <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
         {t.client_name && <Lozenge tone="todo">{t.client_name}</Lozenge>}
         {t.deliverable_type && <Lozenge tone="neutral" style={{ textTransform: "none" }}>{deliverableLabel(t.deliverable_type)}</Lozenge>}
-        {running && <span className="timer"><span className="pulse" />{fmtClock(secsSince(t.timer_start_datetime, now))}{resume ? ` ${resume.label}` : " running"}</span>}
+        {running && <span className="timer"><span className="pulse" /><LiveTick fn={(n) => fmtClock(secsSince(t.timer_start_datetime, n))} />{resume ? ` ${resume.label}` : " running"}</span>}
         {t.paused_reason && PAUSED_STATES.includes(t.task_state) && <Lozenge tone="paused" style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", textTransform: "none" }}>{t.paused_reason}</Lozenge>}
         {lane === "paused" && !t.paused_reason && <Lozenge tone="paused">Paused</Lozenge>}
         {lane === "approvals" && <Lozenge tone="review">{t.coordinator_review_started_at ? "Review started" : "Awaiting admin"}</Lozenge>}
@@ -80,7 +89,11 @@ export default function TaskCard({ task: t, now, selected, onOpen, dragging, dra
         <span className="key"><span className="type" style={{ background: tileColor }}>{tileLetter}</span>{t.external_ref || `#${t.id}`}</span>
         <span className="pri" style={{ color: pri[1] }} title={pri[2]}><Icon n={pri[0]} size={16} /></span>
         {t.progress_count > 0 && <span className="mini" title={`${t.progress_count} progress update${t.progress_count === 1 ? "" : "s"}`}><Icon n="doc" size={12} />{t.progress_count}</span>}
-        <span className={`time ${over ? "over" : ""}`} title={`${fmtHM(spent)} spent of ${fmtHM(est)} estimated`}>{fmtHM(spent)} / {fmtHM(est)}</span>
+        <LiveTick active={!!running} fn={(n) => {
+          const spent = running ? liveFromAnchor(t.timer_start_datetime, t.timer_total_seconds, n) : (t.timer_total_seconds || 0);
+          const over = est > 0 && spent > est;
+          return <span className={`time ${over ? "over" : ""}`} title={`${fmtHM(spent)} spent of ${fmtHM(est)} estimated`}>{fmtHM(spent)} / {fmtHM(est)}</span>;
+        }} />
         {t.user_name ? <Avatar name={t.user_name} id={t.user_id} size={24} /> : <span className="avatar" style={{ width: 24, height: 24, background: "var(--border)", color: "var(--subtlest)", fontSize: 10 }} title="Unassigned">—</span>}
       </div>
       {actions?.length > 0 && (
@@ -93,3 +106,5 @@ export default function TaskCard({ task: t, now, selected, onOpen, dragging, dra
     </article>
   );
 }
+
+export default memo(TaskCard);

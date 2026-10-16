@@ -14,6 +14,7 @@ const COLS = [
   ["ref", "Key"], ["name", "Task"], ["lane", "Status"], ["priority", "Priority"], ["user_name", "Assignee"], ["client_name", "Client / project"],
   ["estimate", "Estimate", "num"], ["spent", "Logged", "num"], ["today_seconds", "Today", "num"], ["last_activity", "Last activity"], ["deadline", "Deadline"],
 ];
+const ROW_PAGE = 100;
 export default function TaskList() {
   const { me } = useMe();
   const acts = useTaskActions();
@@ -25,7 +26,8 @@ export default function TaskList() {
   const [grouped, setGrouped] = useState(true);
   const board = useResource(S.TASKS_PATH, { my_tasks_only: false }, { pollMs: 30000 });
   const paid = useResource("/kra_kpi/tasks/paid", {}, { enabled: admin && tab === "paid" });
-  useEffect(() => { const on = () => board.refresh(); window.addEventListener("kpi:refresh", on); return () => window.removeEventListener("kpi:refresh", on); }, [board]);
+  const boardRefresh = board.refresh;
+  useEffect(() => { const on = () => boardRefresh(); window.addEventListener("kpi:refresh", on); return () => window.removeEventListener("kpi:refresh", on); }, [boardRefresh]);
 
   const source = tab === "paid" ? (paid.data?.tasks || []) : (board.data?.tasks || []);
   const rows = useMemo(() => source
@@ -42,6 +44,13 @@ export default function TaskList() {
     for (const r of rows) { const k = r.lane; if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
     return S.LANES.filter((l) => l.key !== "today" && m.has(l.key)).map((l) => ({ key: l.key, label: l.label, rows: m.get(l.key) }));
   }, [rows, grouped]);
+
+  /* A long list draws ROW_PAGE rows, then "Show more"; each group takes what
+     is left of that budget, in order, and keeps its full count in the header. */
+  const [limit, setLimit] = useState(ROW_PAGE);
+  useEffect(() => { setLimit(ROW_PAGE); }, [tab, q, sort, grouped]);
+  let left = limit;
+  const budget = groups.map((g) => { const n = Math.min(g.rows.length, left); left -= n; return n; });
 
   const th = (k, label, cls) => (
     <th key={k} className={cls || ""} style={{ cursor: "pointer", userSelect: "none" }} onClick={() => setSort((s) => ({ key: k, dir: s.key === k ? -s.dir : -1 }))}>
@@ -71,9 +80,10 @@ export default function TaskList() {
             <table className="table">
               <thead><tr>{COLS.map(([k, l, c]) => th(k, l, c))}</tr></thead>
               <tbody>
-                {groups.map((g) => (
-                  <GroupRows key={g.key} group={g} admin={admin} onOpen={(t) => acts.openTask(t.id)} selected={+sp.get("task")} />
+                {groups.map((g, i) => budget[i] > 0 && (
+                  <GroupRows key={g.key} group={g} limit={budget[i]} admin={admin} onOpen={(t) => acts.openTask(t.id)} selected={+sp.get("task")} />
                 ))}
+                {rows.length > limit && <tr><td colSpan={COLS.length} style={{ textAlign: "center" }}><Button size="sm" kind="ghost" onClick={() => setLimit((n) => n + ROW_PAGE)}>Show {Math.min(ROW_PAGE, rows.length - limit)} more</Button></td></tr>}
                 {!rows.length && <tr><td colSpan={COLS.length} className="empty">No tasks match.</td></tr>}
               </tbody>
             </table>
@@ -84,11 +94,11 @@ export default function TaskList() {
   );
 }
 
-function GroupRows({ group, onOpen, selected }) {
+function GroupRows({ group, limit, onOpen, selected }) {
   return (
     <>
       {group.label && <tr className="group"><td colSpan={COLS.length}>{group.label} · {group.rows.length}</td></tr>}
-      {group.rows.map(({ t, ref, lane, estimate, spent }) => {
+      {(group.rows.length > limit ? group.rows.slice(0, limit) : group.rows).map(({ t, ref, lane, estimate, spent }) => {
         const [tone, label] = lane === "approvals" ? ["review", "In review"] : lane === "pending_review" ? ["review", "Pending review"] : stateTone(t.task_state);
         const over = estimate > 0 && spent > estimate;
         return (

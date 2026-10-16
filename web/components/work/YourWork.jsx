@@ -6,10 +6,13 @@ import { useMe } from "@/lib/me";
 import { useResource } from "@/lib/useFetch";
 import * as S from "@/lib/services/kpiActions";
 import { fmtHM, laneForTask } from "@/lib/services/kpiActions";
-import { useNow, fmtClock, secsSince, liveFromAnchor, productiveLive, presenceLive } from "@/lib/liveTime";
+import { fmtClock, secsSince, liveFromAnchor, productiveLive, presenceLive } from "@/lib/liveTime";
+import LiveTick from "@/components/task/LiveTick";
 import { WorkdayButton, WorkdayPausedBanner } from "@/components/work/WorkdayButton";
 import { actionsFor } from "@/components/task/actions";
 import { useTaskActions } from "@/components/task/TaskActions";
+
+const EMPTY = [];
 
 /* Your work — the app's Home: running task, today's numbers, what was worked
    on today, quick actions. */
@@ -18,9 +21,9 @@ export default function YourWork() {
   const acts = useTaskActions();
   const admin = me.role === "admin";
   const board = useResource(S.TASKS_PATH, { my_tasks_only: false }, { pollMs: 30000 });
-  useEffect(() => { const on = () => board.refresh(); window.addEventListener("kpi:refresh", on); return () => window.removeEventListener("kpi:refresh", on); }, [board]);
-  const now = useNow(true);
-  const tasks = board.data?.tasks || [];
+  const boardRefresh = board.refresh;
+  useEffect(() => { const on = () => boardRefresh(); window.addEventListener("kpi:refresh", on); return () => window.removeEventListener("kpi:refresh", on); }, [boardRefresh]);
+  const tasks = board.data?.tasks || EMPTY;
   const live = acts.live.data;
   const workdayOpen = acts.workdayOpen;
 
@@ -49,7 +52,7 @@ export default function YourWork() {
   return (
     <>
       <PageHeader crumbs={[{ label: "Your work" }]} title={`${greet}, ${me.name.split(" ")[0]}`}>
-        {workdayOpen && live && <span className="chip"><span className="pulse" />Workday {fmtClock(presenceLive(live, now))} · productive {fmtClock(productiveLive(live, now))}</span>}
+        {workdayOpen && live && <span className="chip"><span className="pulse" /><LiveTick fn={(n) => `Workday ${fmtClock(presenceLive(live, n))} · productive ${fmtClock(productiveLive(live, n))}`} /></span>}
       </PageHeader>
       <div className="page">
         <WorkdayPausedBanner />
@@ -63,7 +66,7 @@ export default function YourWork() {
           ))}
         </div>
         <div className="g21">
-          {running.length > 0 ? <RunningCard task={running[0]} more={running.length - 1} now={now} /> : (
+          {running.length > 0 ? <RunningCard task={running[0]} more={running.length - 1} /> : (
             <div className="cardbox" style={{ justifyContent: "center", minHeight: 150 }}>
               {!workdayOpen && !admin
                 ? <><b style={{ color: "var(--navy)", fontSize: 16 }}>Your workday hasn't started</b><span className="mini">Start it to work on tasks. Presence and productive time count from then.</span><div><WorkdayButton /></div></>
@@ -97,7 +100,7 @@ export default function YourWork() {
                     <tr key={t.id} style={{ cursor: "pointer" }} onClick={() => acts.openTask(t.id)}>
                       <td><span className="ref">{t.external_ref || `#${t.id}`}</span></td><td><b>{t.name}</b></td><td>{t.client_name || "—"}</td>
                       {admin && <td><Avatar name={t.user_name} id={t.user_id} size={22} /> {t.user_name}</td>}
-                      <td className="num">{fmtHM(t.task_state === "in_progress" && t.timer_start_datetime ? (t.today_seconds || 0) + secsSince(t.timer_start_datetime, now) : t.today_seconds)}</td>
+                      <td className="num">{t.task_state === "in_progress" && t.timer_start_datetime ? <LiveTick fn={(n) => fmtHM((t.today_seconds || 0) + secsSince(t.timer_start_datetime, n))} /> : fmtHM(t.today_seconds)}</td>
                       <td><Lozenge tone={tone}>{t.task_state === "in_progress" ? "Running" : label}</Lozenge></td>
                     </tr>
                   );
@@ -111,17 +114,16 @@ export default function YourWork() {
   );
 }
 
-function RunningCard({ task: t, more, now }) {
+function RunningCard({ task: t, more }) {
   const { me } = useMe();
   const acts = useTaskActions();
-  const spent = liveFromAnchor(t.timer_start_datetime, t.timer_total_seconds, now);
   const actions = actionsFor(t, me, { workdayLocked: acts.workdayLocked }).filter((a) => ["pause", "complete", "switch", "add_time"].includes(a.key));
   return (
     <div className="run">
       <small>Running now{more > 0 ? ` · +${more} more` : ""}</small>
       <b>{t.external_ref ? `${t.external_ref} · ` : ""}{t.name}</b>
       <span style={{ fontSize: 12.5, opacity: .85, fontWeight: 600 }}>{t.client_name || ""}{t.project_name ? ` · ${t.project_name}` : ""} · {t.priority} · estimate {t.estimate_display}</span>
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}><span className="big">{fmtClock(secsSince(t.timer_start_datetime, now))}</span><span style={{ fontSize: 12.5, opacity: .85, fontWeight: 600 }}>{fmtHM(spent)} logged in total</span></div>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}><span className="big"><LiveTick fn={(n) => fmtClock(secsSince(t.timer_start_datetime, n))} /></span><span style={{ fontSize: 12.5, opacity: .85, fontWeight: 600 }}><LiveTick fn={(n) => fmtHM(liveFromAnchor(t.timer_start_datetime, t.timer_total_seconds, n))} /> logged in total</span></div>
       <div className="row" style={{ flexWrap: "wrap" }}>
         {actions.map((a, i) => <button key={a.key} className={`btn ${i === 0 ? "w" : ""}`} onClick={() => acts.run(a, t)}>{a.label}</button>)}
         {more > 0 && <button className="btn" onClick={() => acts.pauseAll()}>Pause all ({more + 1})</button>}

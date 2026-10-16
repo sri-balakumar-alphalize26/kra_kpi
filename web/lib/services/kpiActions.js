@@ -14,9 +14,13 @@ export async function getKraTree() {
 }
 
 /* Two-step Client → Project source for "+ Create": clients (is_client roots),
-   each with its flattened descendant projects [{id, display}]. */
+   each with its flattened descendant projects [{id, display}].
+   Reads /kra_kpi/get_kra_list with with_tasks:false (children under
+   `children`), cached 5 minutes. get_kra_tree serialised every task in the
+   system just to fill two dropdowns (Odoo commit 649180c did the same). */
 export async function fetchClientTree() {
-  const { tree } = await getKraTree();
+  const res = await read("/kra_kpi/get_kra_list", { with_tasks: false }, { ttl: 5 * 60 * 1000 });
+  const tree = res?.tree || [];
   const clients = [];
   const collect = (node) => {
     const projects = [];
@@ -24,10 +28,10 @@ export async function fetchClientTree() {
       for (const n of nodes || []) {
         const path = prefix ? `${prefix} › ${n.name}` : n.name;
         projects.push({ id: n.id, display: path });
-        walk(n.child_ids, path);
+        walk(n.children, path);
       }
     };
-    walk(node.child_ids, "");
+    walk(node.children, "");
     if (projects.length === 0) projects.push({ id: node.id, display: node.name });
     return projects;
   };
@@ -156,9 +160,10 @@ export async function fetchTaskById(kpiId) {
 }
 
 /* Everything the task panel renders, in one round-trip. Surfaces WHY it failed
-   (the route is access-gated). */
-export async function fetchTaskDetails(kpiId) {
-  const res = await rpc("/kra_kpi/task/details", { kpi_id: kpiId });
+   (the route is access-gated). The panel reads it fresh; the Start / Complete
+   dialogs pass { fresh: false } to reuse the open panel's answer. */
+export async function fetchTaskDetails(kpiId, { fresh = true, ttl = 60000 } = {}) {
+  const res = await read("/kra_kpi/task/details", { kpi_id: kpiId }, { fresh, ttl });
   if (!res?.status) return { ok: false, message: res?.message || "Could not load details" };
   return {
     ok: true,

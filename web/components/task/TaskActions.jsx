@@ -1,9 +1,9 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useFlags } from "@/components/ui";
 import { useMe } from "@/lib/me";
-import { invalidate } from "@/lib/api";
+import { invalidate, mutate } from "@/lib/api";
 import { useResource } from "@/lib/useFetch";
 import * as S from "@/lib/services/kpiActions";
 import TaskDialog, { CreateTaskDialog } from "./dialogs";
@@ -17,9 +17,20 @@ import TaskAlerts from "./TaskAlerts";
    flag. `openDialog(dialog, task, extra)` shows the matching dialog first.
    `openTask(id)` opens the side panel (?task=<id> in the URL, so it survives a
    reload and can be linked). The Create dialog listens for the top-nav button
-   (window event "kpi:create"). */
-const Ctx = createContext(null);
-export const useTaskActions = () => useContext(Ctx);
+   (window event "kpi:create").
+
+   Two contexts underneath. The live and workday reads change every few
+   seconds; putting them in the same value as the actions re-rendered every
+   consumer (each board card) on every 5 s live poll. useTaskActs() is the
+   stable half only: actions plus the workday flags. useTaskActions() is both. */
+const ActsCtx = createContext(null);
+const LiveCtx = createContext(null);
+export const useTaskActs = () => useContext(ActsCtx);
+export function useTaskActions() {
+  const a = useContext(ActsCtx);
+  const l = useContext(LiveCtx);
+  return useMemo(() => (a ? { ...a, ...l } : null), [a, l]);
+}
 
 export const REFRESH_PREFIXES = ["/kra_kpi/tasks/get", "/kra_kpi/task/", "/kpi_action/live_status", "/kpi_workday/status", "/kpi_action/activity"];
 
@@ -49,17 +60,46 @@ export function TaskActionsProvider({ children }) {
     return () => clearInterval(id);
   }, [workdayOpen]);
 
+  const workdayRefresh = workday.refresh, liveRefresh = live.refresh;
   const refreshAll = useCallback(() => {
     for (const p of REFRESH_PREFIXES) invalidate(p);
-    workday.refresh(); live.refresh();
+    workdayRefresh(); liveRefresh();
     window.dispatchEvent(new CustomEvent("kpi:refresh"));
-  }, [workday, live]);
+  }, [workdayRefresh, liveRefresh]);
 
+  /* After a create, fetch just THAT task and slot it into the cached board
+     (Odoo _addTaskCard), instead of re-downloading every task. Anything else
+     that changed meanwhile comes with the next poll. Falls back to the full
+     refresh if the single read fails for any reason (/kra_kpi/task/get only
+     answers admins, the assignee and notified users). */
+  const addCreated = useCallback(async (res) => {
+    liveRefresh();
+    try {
+      const task = res?.id ? await S.fetchTaskById(res.id) : null;
+      if (!task || !task.id || !task.task_state) throw new Error("no task");
+      /* task/get has no estimate_extended_by_name; the spread keeps a known one. */
+      const put = (data) => {
+        if (!data || !Array.isArray(data.tasks)) return undefined;
+        const i = data.tasks.findIndex((x) => x.id === task.id);
+        const tasks = i >= 0 ? data.tasks.map((x, j) => (j === i ? { ...x, ...task } : x)) : [...data.tasks, task];
+        return { ...data, tasks, self_pending_count: tasks.filter((x) => x.is_self_created && !x.admin_accepted).length };
+      };
+      mutate(S.TASKS_PATH, { my_tasks_only: false }, put);
+      if (task.user_id === me.uid) mutate(S.TASKS_PATH, { my_tasks_only: true }, put);
+    } catch (e) {
+      refreshAll();
+    }
+  }, [liveRefresh, refreshAll, me.uid]);
+
+  /* Stable across URL changes: every card's onOpen holds it. */
+  const nav = useRef(null);
+  nav.current = { params, pathname, router };
   const openTask = useCallback((id) => {
-    const sp = new URLSearchParams(params.toString());
+    const { params: p, pathname: path, router: r } = nav.current;
+    const sp = new URLSearchParams(p.toString());
     if (id) sp.set("task", String(id)); else sp.delete("task");
-    router.replace(`${pathname}${sp.toString() ? "?" + sp.toString() : ""}`, { scroll: false });
-  }, [params, pathname, router]);
+    r.replace(`${path}${sp.toString() ? "?" + sp.toString() : ""}`, { scroll: false });
+  }, []);
   const openId = params.get("task");
 
   /* The server call for each action key. */
@@ -137,10 +177,13 @@ export function TaskActionsProvider({ children }) {
 
   /* Pause every task the caller has running (multitask), one shared reason. The
      route takes no task id; the dialog gets a stand-in task for its title. */
+  const liveData = useRef(null);
+  liveData.current = live.data;
   const pauseAll = useCallback(() => {
-    const running = live.data?.active_tasks?.length ? live.data.active_tasks : live.data?.active_task ? [live.data.active_task] : [];
+    const d = liveData.current;
+    const running = d?.active_tasks?.length ? d.active_tasks : d?.active_task ? [d.active_task] : [];
     return openDialog("pause_all", { id: 0, external_ref: `${running.length} running` }, { tasks: running });
-  }, [live.data, openDialog]);
+  }, [openDialog]);
 
   /* Creating a task is work, so a developer needs an open workday (Odoo hides
      New Task until then, and /kra_kpi/task/self_create refuses). Admins keep it:
@@ -156,16 +199,20 @@ export function TaskActionsProvider({ children }) {
 
   /* canCreate: whether "+ Create" should show (the Shell's button can read it). */
   const canCreate = !workdayLocked;
-  const value = useMemo(() => ({ perform, run, openDialog, openTask, pauseAll, refreshAll, workday, live, workdayOpen, workdayLocked, canCreate, busy }),
-    [perform, run, openDialog, openTask, pauseAll, refreshAll, workday, live, workdayOpen, workdayLocked, canCreate, busy]);
+  const acts = useMemo(() => ({ perform, run, openDialog, openTask, pauseAll, refreshAll, workdayOpen, workdayLocked, canCreate }),
+    [perform, run, openDialog, openTask, pauseAll, refreshAll, workdayOpen, workdayLocked, canCreate]);
+  const liveValue = useMemo(() => ({ workday, live, busy }), [workday, live, busy]);
+  const closePanel = useCallback(() => openTask(null), [openTask]);
 
   return (
-    <Ctx.Provider value={value}>
-      {children}
-      {dialog && <TaskDialog dialog={dialog.dialog} task={dialog.task} extra={dialog.extra} busy={busy} onClose={onClose} onConfirm={onConfirm} />}
-      <CreateTaskDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={refreshAll} />
-      {openId && <TaskPanel id={+openId} onClose={() => openTask(null)} />}
-      <TaskAlerts />
-    </Ctx.Provider>
+    <ActsCtx.Provider value={acts}>
+      <LiveCtx.Provider value={liveValue}>
+        {children}
+        {dialog && <TaskDialog dialog={dialog.dialog} task={dialog.task} extra={dialog.extra} busy={busy} onClose={onClose} onConfirm={onConfirm} />}
+        <CreateTaskDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={addCreated} />
+        {openId && <TaskPanel id={+openId} onClose={closePanel} />}
+        <TaskAlerts />
+      </LiveCtx.Provider>
+    </ActsCtx.Provider>
   );
 }

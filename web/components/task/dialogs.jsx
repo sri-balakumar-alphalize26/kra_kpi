@@ -60,7 +60,7 @@ function StartDialog({ task, busy, onClose, onConfirm }) {
   const [guide, setGuide] = useState(null); /* null loading | "" none | text */
   useEffect(() => {
     let live = true;
-    S.fetchTaskDetails(task.id).then((r) => { if (live) setGuide(r.ok ? String(r.meta?.guidelines || "").trim() : ""); }).catch(() => { if (live) setGuide(""); });
+    S.fetchTaskDetails(task.id, { fresh: false }).then((r) => { if (live) setGuide(r.ok ? String(r.meta?.guidelines || "").trim() : ""); }).catch(() => { if (live) setGuide(""); });
     return () => { live = false; };
   }, [task.id]);
   return (
@@ -173,7 +173,7 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
   const [inferred, setInferred] = useState([]);
   useEffect(() => {
     let live = true;
-    S.fetchTaskDetails(task.id).then((r) => {
+    S.fetchTaskDetails(task.id, { fresh: false }).then((r) => {
       if (!live || !r.ok) return;
       const pre = {};
       if ((r.github || []).length) pre.verify_github = true;

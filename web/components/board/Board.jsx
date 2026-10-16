@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { Avatar, Button, ErrorState, Icon, IconButton, Lozenge, PageHeader, Select, Skeleton, StaleBar, useFlags, useOutside } from "@/components/ui";
@@ -9,6 +9,7 @@ import { getPref, setPref } from "@/lib/prefs";
 import * as S from "@/lib/services/kpiActions";
 import { useNow, fmtClock, fmtHMS, liveFromAnchor, presenceLive, productiveLive } from "@/lib/liveTime";
 import TaskCard from "@/components/task/TaskCard";
+import LiveTick from "@/components/task/LiveTick";
 import { actionsFor, dropTargets } from "@/components/task/actions";
 import { useTaskActions } from "@/components/task/TaskActions";
 import { useFitHeight } from "@/lib/useFitHeight";
@@ -17,6 +18,8 @@ import { WorkdayPausedBanner } from "@/components/work/WorkdayButton";
 
 const PAID_PATH = "/kra_kpi/tasks/paid";
 const SEL = { border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" };
+const EMPTY = [];
+const LANE_PAGE = 50; /* cards per lane before "Show more" */
 
 /* The KPI Action Board: the app's lanes as Jira columns, all visible, with
    drag-and-drop mapped onto the task routes (actions.js dropTargets). */
@@ -37,7 +40,7 @@ export default function Board() {
   useEffect(() => { const p = getPref("board", me.uid, null); if (p) { if (p.mine != null) setMine(p.mine); if (p.hideDone != null) setHideDone(p.hideDone); } }, [me.uid]);
   useEffect(() => { setPref("board", me.uid, { mine, hideDone }); }, [mine, hideDone, me.uid]);
 
-  const board = useResource(S.TASKS_PATH, { my_tasks_only: false }, { pollMs: 15000 });
+  const board = useResource(S.TASKS_PATH, { my_tasks_only: false }, { pollMs: 30000 });
   /* Paid: settled work, admin only (the route refuses anyone else). An archive,
      outside the search / filter pipeline, shown with the finished lanes. */
   const showPaid = admin && !hideDone;
@@ -53,9 +56,13 @@ export default function Board() {
     }, 250);
     return () => clearTimeout(t);
   }, [q, quick, assignee, mine, priority, status]);
-  useEffect(() => { const on = () => { board.refresh(); if (showPaid) paid.refresh(); }; window.addEventListener("kpi:refresh", on); return () => window.removeEventListener("kpi:refresh", on); }, [board, paid, showPaid]);
-  const now = useNow(true);
-  const tasks = board.data?.tasks || [];
+  const boardRefresh = board.refresh, paidRefresh = paid.refresh;
+  useEffect(() => { const on = () => { boardRefresh(); if (showPaid) paidRefresh(); }; window.addEventListener("kpi:refresh", on); return () => window.removeEventListener("kpi:refresh", on); }, [boardRefresh, paidRefresh, showPaid]);
+  /* No shared one-second clock here: it re-rendered every card each second.
+     Timers tick inside LiveTick; the time-based quick filters use a one-minute
+     clock, and only while one is on. */
+  const qNow = useNow(!!quick, 60000);
+  const tasks = board.data?.tasks || EMPTY;
 
   const people = useMemo(() => {
     const m = new Map();
@@ -78,14 +85,23 @@ export default function Board() {
     if (priority && t.priority !== priority) return false;
     if (status && S.laneForTask(t) !== status) return false;
     if (!matchQ(t)) return false;
-    if (quick === "fresh" && !(S.isWithinFreshWindow(t, now) && !t.last_activity)) return false;
-    if (quick === "recent" && !(t.last_activity && now - S.parseServerTs(t.last_activity) < 86400000 * 2)) return false;
+    if (quick === "fresh" && !(S.isWithinFreshWindow(t, qNow) && !t.last_activity)) return false;
+    if (quick === "recent" && !(t.last_activity && qNow - S.parseServerTs(t.last_activity) < 86400000 * 2)) return false;
     if (quick === "overdue" && !(S.estimateSeconds(t) > 0 && (t.timer_total_seconds || 0) > S.estimateSeconds(t) && t.task_state !== "completed")) return false;
     return true;
-  }), [tasks, mine, assignee, priority, status, q, quick, now, me.uid]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [tasks, mine, assignee, priority, status, q, quick, qNow, me.uid]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* Lanes are built once per data/filter change. A lane whose cards did not
+     change keeps its old array, so its (memoised) column skips the render. */
+  const prevLanes = useRef({});
   const lanes = useMemo(() => {
     const g = S.groupIntoLanes(filtered);
     if (status) g.today = []; /* the Status filter shows that one lane only (Odoo) */
+    const prev = prevLanes.current;
+    for (const k of Object.keys(g)) {
+      const a = prev[k];
+      if (a && a.length === g[k].length && a.every((x, i) => x === g[k][i])) g[k] = a;
+    }
+    prevLanes.current = g;
     return g;
   }, [filtered, status]);
   const laneList = S.LANES.filter((l) => !(hideDone && l.key === "completed" && status !== "completed") && !(l.key === "pending_review" && !lanes.pending_review.length && !admin));
@@ -103,8 +119,13 @@ export default function Board() {
     ? (filtered.length ? `${filtered.length} task${filtered.length === 1 ? "" : "s"} found for "${q.trim()}"` : `No tasks match "${q.trim()}"`)
     : (filtered.length ? `${filtered.length} of ${tasks.length} tasks` : "No tasks match these filters");
 
+  /* Stable handlers, so memoised lanes and cards skip renders that change nothing. */
+  const { openTask, run: runAction } = acts;
+  const onOpen = useCallback((t) => openTask(t.id), [openTask]);
+  const onAction = useCallback((a, t) => runAction(a, t), [runAction]);
+
   /* ---- drag and drop ---- */
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const sensors =useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const targets = dragging ? dropTargets(dragging, me, { workdayLocked: acts.workdayLocked }) : {};
   const onDragEnd = useCallback(async (e) => {
     const task = dragging; setDragging(null);
@@ -146,10 +167,10 @@ export default function Board() {
         <div className="run-banner" role="status">
           {running.length > 1 && <b><Icon n="live" size={14} /> Multi-tasking {running.length} tasks:</b>}
           {running.map((r) => (
-            <span key={r.id} className="run-t"><span className="pulse" />{r.external_ref ? `${r.external_ref} ` : ""}{r.name} · {fmtClock(liveFromAnchor(r.timer_start, r.timer_total_seconds, now))}</span>
+            <span key={r.id} className="run-t"><span className="pulse" />{r.external_ref ? `${r.external_ref} ` : ""}{r.name} · <LiveTick fn={(n) => fmtClock(liveFromAnchor(r.timer_start, r.timer_total_seconds, n))} /></span>
           ))}
           {running.length > 0 && <span>A task is running. It keeps counting until you Pause, Complete, Switch task or End workday — closing this tab won't stop it.</span>}
-          {liveData?.login_raw && <span className="totals">Presence <b>{fmtHMS(presenceLive(liveData, now))}</b> · Productive <b>{fmtHMS(productiveLive(liveData, now))}</b></span>}
+          {liveData?.login_raw && <span className="totals">Presence <b><LiveTick fn={(n) => fmtHMS(presenceLive(liveData, n))} /></b> · Productive <b><LiveTick fn={(n) => fmtHMS(productiveLive(liveData, n))} /></b></span>}
         </div>
       )}
       <NowStrip />
@@ -187,11 +208,11 @@ export default function Board() {
         <DndContext sensors={sensors} onDragStart={(e) => setDragging(tasks.find((t) => t.id === e.active.id) || null)} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
           <div className="board" ref={boardRef}>
             {laneList.map((l) => (
-              <Lane key={l.key} lane={l} items={lanes[l.key]} dragging={dragging} allowed={targets[l.key] != null} now={now} selectedId={+sp.get("task")} onOpen={(t) => acts.openTask(t.id)} />
+              <Lane key={l.key} lane={l} items={lanes[l.key]} dragging={dragging} allowed={targets[l.key] != null} selectedId={+sp.get("task")} onOpen={onOpen} onAction={onAction} workdayLocked={acts.workdayLocked} />
             ))}
             {showPaid && !status && <PaidLane res={paid} />}
           </div>
-          <DragOverlay dropAnimation={null}>{dragging ? <div className="drag-ghost"><TaskCard task={dragging} now={now} /></div> : null}</DragOverlay>
+          <DragOverlay dropAnimation={null}>{dragging ? <div className="drag-ghost"><TaskCard task={dragging} /></div> : null}</DragOverlay>
         </DndContext>
       )}
     </div>
@@ -315,12 +336,16 @@ function PeopleFilter({ people, value, onChange }) {
   );
 }
 
-function Lane({ lane, items, dragging, allowed, now, selectedId, onOpen }) {
+const Lane = memo(function Lane({ lane, items, dragging, allowed, selectedId, onOpen, onAction, workdayLocked }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane.key });
   /* Odoo style: "auto" folds the lane into a thin strip while it has no cards;
      "open" / "folded" are the user's own choice and stick until changed. */
   const [mode, setMode] = useState("auto");
   const narrow = mode === "folded" || (mode === "auto" && items.length === 0);
+  /* A long lane draws LANE_PAGE cards, then "Show more". */
+  const [limit, setLimit] = useState(LANE_PAGE);
+  const shown = items.length > limit ? items.slice(0, limit) : items;
+  const hidden = items.length - shown.length;
   const cls = ["col", narrow ? "narrow" : "", dragging ? (allowed ? "drop-ok" : S.laneForTask(dragging) === lane.key || lane.key === "today" ? "" : "drop-no") : "", isOver && allowed ? "over" : ""].join(" ");
   return (
     <section ref={setNodeRef} className={cls}>
@@ -330,21 +355,22 @@ function Lane({ lane, items, dragging, allowed, now, selectedId, onOpen }) {
         {narrow && <IconButton className="collapse" icon="cright" label="Open lane" size={14} onClick={(e) => { e.stopPropagation(); setMode("open"); }} />}
       </header>
       <div className="col-b">
-        {items.map((t) => <DraggableCard key={`${lane.key}-${t.id}`} task={t} now={now} selected={selectedId === t.id} onOpen={onOpen} isDragging={dragging?.id === t.id} />)}
+        {shown.map((t) => <DraggableCard key={`${lane.key}-${t.id}`} task={t} selected={selectedId === t.id} onOpen={onOpen} onAction={onAction} workdayLocked={workdayLocked} isDragging={dragging?.id === t.id} />)}
+        {hidden > 0 && <div style={{ display: "flex", justifyContent: "center", padding: "4px 0 8px" }}><Button size="sm" kind="ghost" onClick={() => setLimit((n) => n + LANE_PAGE)}>Show {Math.min(LANE_PAGE, hidden)} more</Button></div>}
         {!items.length && <div className="empty">{lane.key === "today" ? "Nothing worked on yet today" : "No tasks"}</div>}
       </div>
     </section>
   );
-}
+});
 
-function DraggableCard({ task, now, selected, onOpen, isDragging }) {
+/* Memoised: a poll or a timer tick elsewhere leaves an unchanged card alone. */
+const DraggableCard = memo(function DraggableCard({ task, selected, onOpen, onAction, workdayLocked, isDragging }) {
   const { attributes, listeners, setNodeRef } = useDraggable({ id: task.id, data: { task } });
   const { me } = useMe();
-  const acts = useTaskActions();
-  const cardActs = actionsFor(task, me, { workdayLocked: acts.workdayLocked }).filter((a) => a.card);
+  const cardActs = useMemo(() => actionsFor(task, me, { workdayLocked }).filter((a) => a.card), [task, me, workdayLocked]);
   return (
     <div ref={setNodeRef} {...attributes} style={{ outline: "none" }}>
-      <TaskCard task={task} now={now} selected={selected} onOpen={onOpen} dragging={isDragging} dragHandle={listeners} actions={cardActs} onAction={(a, t) => acts.run(a, t)} />
+      <TaskCard task={task} selected={selected} onOpen={onOpen} dragging={isDragging} dragHandle={listeners} actions={cardActs} onAction={onAction} />
     </div>
   );
-}
+});
