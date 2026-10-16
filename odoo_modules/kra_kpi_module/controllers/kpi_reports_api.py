@@ -6354,21 +6354,10 @@ class KpiReportsAPI(http.Controller):
         exist in kra_kpi.external_ref.  Case-insensitive match on the prefix,
         any zero-padding allowed (REQ-1, REQ-001, REQ-0001 are all considered).
         """
-        refs = request.env['kra.kpi'].sudo().search([
-            ('external_ref', '=ilike', '%s-%%' % prefix),
-        ]).mapped('external_ref')
-        pat = re.compile(r'^%s-(\d+)$' % re.escape(prefix), re.IGNORECASE)
-        max_n = 0
-        for r in refs:
-            m = pat.match((r or '').strip())
-            if m:
-                try:
-                    n = int(m.group(1))
-                    if n > max_n:
-                        max_n = n
-                except ValueError:
-                    continue
-        return max_n + 1
+        # One counter for every path. This copy did not check
+        # previous_external_ref, so a bulk upload could reissue a reference that
+        # re-typing had retired -- two pieces of work answering to "REQ-328".
+        return request.env['kra.kpi'].sudo()._next_ref_for_prefix(prefix)
 
     @http.route('/kpi_requirements/peek_next_ref', type='json', auth='user', methods=['POST'], csrf=False)
     def peek_next_ref(self, **params):

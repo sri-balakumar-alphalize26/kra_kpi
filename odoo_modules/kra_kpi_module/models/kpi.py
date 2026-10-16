@@ -57,7 +57,8 @@ class KpiMaster(models.Model):
         "kra.master",
         string="Related KRA",
         required=True,
-        ondelete="cascade"
+        ondelete="cascade",
+        index=True,  # project filters, name matching, reports
     )
     progress_ids = fields.One2many(
         'kpi.progress',
@@ -192,7 +193,9 @@ class KpiMaster(models.Model):
                         "in that order (e.g. module,app).")
 
     user_group_id = fields.Many2one('res.groups', string='User Group')
-    user_id = fields.Many2one('res.users', string='Assignee')
+    # Indexed: the developer board, the running-task lookups and the record
+    # rules all filter on it, and it had no index at all.
+    user_id = fields.Many2one('res.users', string='Assignee', index=True)
 
     # Multi-developer contributors — extras (beyond user_id) who can log time on this KPI.
     contributor_ids = fields.Many2many(
@@ -502,7 +505,7 @@ class KpiMaster(models.Model):
         ('partially_completed', 'Verification Pending'),
         ('awaiting_client', 'Awaiting Client Sign-off'),  # admin approved, client to sign
         ('completed', 'Completed'),
-    ], string='Task State', default='assigned')
+    ], string='Task State', default='assigned', index=True)  # every lane, cron and timer lookup
 
     # 🆕 NEW: Approval fields
     # ---- Revert out of "Awaiting Client Sign-off" ------------------------ #
@@ -828,31 +831,30 @@ class KpiMaster(models.Model):
         '+ New Task' TASK-### ref and for re-numbering on admin accept)."""
         if not prefix:
             return 1
+        # ONE query instead of loading every matching ref into Python. Same rules
+        # as before: active tasks' current refs, plus every RETIRED ref (archived
+        # rows included) -- a number freed by re-typing is never issued again.
+        # \d{1,15} keeps the cast inside bigint for any odd hand-typed ref.
+        self.env['kra.kpi'].flush_model(['external_ref', 'active'])
+        has_prev = 'previous_external_ref' in self._fields
+        if has_prev:
+            self.env['kra.kpi'].flush_model(['previous_external_ref'])
         like = '%s-%%' % prefix
-        refs = self.sudo().search(
-            [('external_ref', '=ilike', like)]).mapped('external_ref')
-
-        # A RETIRED ref must never be handed out again.
-        #
-        # Reclassifying re-mints the reference (REQ-328 -> UPT-018) and keeps
-        # the old one in previous_external_ref. Because this counter is max+1,
-        # the freed number was then reissued to the NEXT task -- so a client
-        # holding "REQ-328" in a WhatsApp message had it meaning two different
-        # pieces of work. Scanning the retired column too closes that.
-        if 'previous_external_ref' in self._fields:
-            refs += self.sudo().with_context(active_test=False).search(
-                [('previous_external_ref', '=ilike', like)]
-            ).mapped('previous_external_ref')
-        pat = re.compile(r'^%s-(\d+)$' % re.escape(prefix), re.IGNORECASE)
-        max_n = 0
-        for r in refs:
-            m = pat.match((r or '').strip())
-            if m:
-                try:
-                    max_n = max(max_n, int(m.group(1)))
-                except ValueError:
-                    pass
-        return max_n + 1
+        rx = '^%s-([0-9]{1,15})$' % re.escape(prefix)
+        sql = """
+            SELECT COALESCE(MAX((regexp_match(btrim(ref), %s, 'i'))[1]::bigint), 0)
+              FROM (SELECT external_ref AS ref FROM kra_kpi
+                     WHERE active AND external_ref ILIKE %s"""
+        args = [rx, like]
+        if has_prev:
+            sql += """
+                    UNION ALL
+                    SELECT previous_external_ref FROM kra_kpi
+                     WHERE previous_external_ref ILIKE %s"""
+            args.append(like)
+        sql += ") s"
+        self.env.cr.execute(sql, args)
+        return int(self.env.cr.fetchone()[0] or 0) + 1
 
     def reassign_task(self, user_id, reason):
         """

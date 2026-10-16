@@ -111,7 +111,23 @@ const BREAK_SWITCH_REASONS = [
 // a task's Start button, too short to duck the question all day.
 const IDLE_SNOOZE_MS = 60000;
 
+/* One live clock reading. It re-renders ONLY itself once a second; the board
+   around it does not. The board used to tick a shared state.currentTime every
+   second, which re-rendered and re-diffed every card (500+ on an admin board)
+   just to move a few timers. `fn` is called on each tick and returns the text. */
+class LiveTick extends Component {
+    static template = xml`<t t-set="_tick" t-value="tick.n"/><t t-esc="props.fn()"/>`;
+    static props = ["fn"];
+    setup() {
+        this.tick = useState({ n: 0 });
+        let id = null;
+        onMounted(() => { id = setInterval(() => { this.tick.n++; }, 1000); });
+        onWillUnmount(() => clearInterval(id));
+    }
+}
+
 export class KpiAction extends Component {
+    static components = { LiveTick };
 
     static template = xml/* xml */`
         <div class="o_kpi_action_wrapper">
@@ -1467,7 +1483,7 @@ export class KpiAction extends Component {
                                                     <div class="text-muted" style="font-size:.72rem;"
                                                          t-if="currentBlock()">
                                                         started <t t-esc="currentBlock().start_display"/>
-                                                        · <t t-esc="nontaskDisplay()"/>
+                                                        · <LiveTick fn="() => nontaskDisplay()"/>
                                                     </div>
                                                 </span>
                                                 <span class="text-muted" style="font-size:.72rem;">ends now</span>
@@ -1729,7 +1745,7 @@ export class KpiAction extends Component {
                                         <t t-foreach="getActiveTasks()" t-as="at" t-key="at.id">
                                             <span class="text-success fw-bold">
                                                 <i class="fa fa-play me-1"></i> Working: "<t t-esc="at.name"/>"
-                                                <span class="ms-1 font-monospace"><t t-esc="getDisplayTime(at)"/></span>
+                                                <span class="ms-1 font-monospace"><LiveTick fn="() => getDisplayTime(at)"/></span>
                                             </span>
                                         </t>
                                     </t>
@@ -1760,7 +1776,7 @@ export class KpiAction extends Component {
                                                 <i class="fa fa-pause-circle me-1"></i>
                                                 <t t-esc="state.liveStatus.nontask.reason_label"/>
                                                 · started <t t-esc="state.liveStatus.nontask.start_display"/>
-                                                · <span class="font-monospace"><t t-esc="nontaskDisplay()"/></span>
+                                                · <span class="font-monospace"><LiveTick fn="() => nontaskDisplay()"/></span>
                                             </span>
                                         </span>
                                         <t t-foreach="otherReasons()" t-as="r" t-key="r.code">
@@ -1787,7 +1803,7 @@ export class KpiAction extends Component {
                                             <i class="fa fa-coffee me-1"></i><t t-esc="state.liveBreak.type_label"/>
                                             <t t-if="state.liveBreak.source_task_name"> (from "<t t-esc="state.liveBreak.source_task_name"/>")</t>
                                             · started <t t-esc="state.liveBreak.start_display"/>
-                                            · <span class="font-monospace"><t t-esc="liveBreakDisplay()"/></span>
+                                            · <span class="font-monospace"><LiveTick fn="() => liveBreakDisplay()"/></span>
                                         </span>
                                         <!-- Straight back to the task the break came from. The pill
                                              already names it, and naming it is not much use without
@@ -1851,8 +1867,8 @@ export class KpiAction extends Component {
                                     </t>
                                     <!-- Day totals (live) -->
                                     <span class="ms-auto small text-muted">
-                                        Presence <span class="fw-bold text-primary font-monospace"><t t-esc="livePresenceDisplay()"/></span>
-                                        · Productive <span class="fw-bold text-success font-monospace"><t t-esc="liveProductiveDisplay()"/></span>
+                                        Presence <span class="fw-bold text-primary font-monospace"><LiveTick fn="() => livePresenceDisplay()"/></span>
+                                        · Productive <span class="fw-bold text-success font-monospace"><LiveTick fn="() => liveProductiveDisplay()"/></span>
                                     </span>
                                 </div>
                             </div>
@@ -2283,7 +2299,7 @@ export class KpiAction extends Component {
                                                         <t t-if="task.task_state === 'in_progress'">
                                                             <i class="fa fa-clock-o"></i> 
                                                         </t>
-                                                        Time: <t t-esc="getDisplayTime(task)"/>
+                                                        Time: <LiveTick fn="() => getDisplayTime(task)"/>
                                                     </div>
                                                     <!-- Second clock, right under the total. That total is a
                                                          lifetime figure, so after a lunch break it still reads
@@ -2293,7 +2309,7 @@ export class KpiAction extends Component {
                                                     <t t-if="since">
                                                         <div class="small text-primary fw-semibold">
                                                             <i class="fa fa-play-circle me-1"/>
-                                                            <t t-esc="since.display"/>
+                                                            <LiveTick fn="() => (sinceResume(task) || since).display"/>
                                                             <span class="text-muted fw-normal ms-1" t-esc="since.label"/>
                                                         </div>
                                                     </t>
@@ -3208,13 +3224,9 @@ export class KpiAction extends Component {
             // Sync the top scrollbar with the kanban row
             this._setupTopScrollSync();
 
-            // 🆕 UPDATED: Real-time timer update every second
-            this.timerInterval = setInterval(() => {
-                if (this.state.view === 'list') {
-                    // Update currentTime to trigger re-render for running timers
-                    this.state.currentTime = Date.now();
-                }
-            }, 1000);
+            // Live timers tick on their own (LiveTick, above). Writing a shared
+            // state.currentTime every second re-rendered the WHOLE board -- every
+            // card -- each second, which is what made a 500-task board sluggish.
             
             // Refresh data every 30 seconds (reduced from 5 seconds since timers are now real-time)
             this.refreshInterval = setInterval(() => {
@@ -6037,7 +6049,14 @@ export class KpiAction extends Component {
     async _kraOptionsHtml() {
         let kras = [];
         try {
-            const res = await rpc("/kra_kpi/get_kra_list", {});
+            // Cached for 5 minutes: opening New Task waited on this every time.
+            const c = this._kraOptsCache;
+            let res;
+            if (c && Date.now() - c.at < 300000) res = c.res;
+            else {
+                res = await rpc("/kra_kpi/get_kra_list", { with_tasks: false });
+                if (res && res.tree) this._kraOptsCache = { at: Date.now(), res };
+            }
             kras = this._flattenKras(res && res.tree ? res.tree : [], '');
         } catch (e) {
             kras = [];
@@ -6053,7 +6072,13 @@ export class KpiAction extends Component {
         let users = [];
         try {
             // Returns a bare [{id, name}] list, not a {status, users} envelope.
-            const ures = await rpc("/kra_kpi/get_users", {});
+            const c = this._userOptsCache;
+            let ures;
+            if (c && Date.now() - c.at < 300000) ures = c.res;
+            else {
+                ures = await rpc("/kra_kpi/get_users", {});
+                if (Array.isArray(ures)) this._userOptsCache = { at: Date.now(), res: ures };
+            }
             users = Array.isArray(ures) ? ures : [];
         } catch (e) {
             users = [];
@@ -6176,7 +6201,7 @@ export class KpiAction extends Component {
             });
             if (res && res.status) {
                 this.closeModal();
-                await this.refresh();
+                await this._addTaskCard(res.id);
             } else {
                 this._toast((res && res.message) || 'Could not create the task.', 'danger');
             }
@@ -6385,7 +6410,7 @@ export class KpiAction extends Component {
             if (res && res.status) {
                 this.closeModal();
                 this._toast(`${res.external_ref || 'Task'} added to Pending Approvals.`, 'success');
-                await this.refresh();
+                await this._addTaskCard(res.id);
             } else {
                 this._toast((res && res.message) || 'Could not add the task.', 'danger');
             }
@@ -7027,7 +7052,7 @@ export class KpiAction extends Component {
         if (!rawIso) return base;
         const start = new Date(rawIso).getTime();
         if (isNaN(start)) return base;
-        const now = this.state.currentTime || Date.now();
+        const now = Date.now();
         return Math.max(0, base + Math.floor((now - start) / 1000));
     }
     liveBreakDisplay() {
@@ -7061,7 +7086,7 @@ export class KpiAction extends Component {
         if (task && task.task_state === 'in_progress' && task.timer_start_datetime) {
             const start = new Date(task.timer_start_datetime).getTime();
             if (!isNaN(start)) {
-                const now = this.state.currentTime || Date.now();
+                const now = Date.now();
                 running = Math.max(0, Math.floor((now - start) / 1000));
             }
         }
@@ -7610,7 +7635,7 @@ export class KpiAction extends Component {
         // For in_progress tasks with a start time, calculate real-time elapsed
         if (task.task_state === 'in_progress' && task.timer_start_datetime) {
             const startTime = new Date(task.timer_start_datetime).getTime();
-            const now = this.state.currentTime;
+            const now = Date.now();
             const elapsedSinceStart = Math.floor((now - startTime) / 1000);
             const totalSeconds = (task.timer_total_seconds || 0) + elapsedSinceStart;
             return this.formatTime(totalSeconds);
@@ -7649,7 +7674,7 @@ export class KpiAction extends Component {
         if (!(task.timer_total_seconds > 0)) return null;
         const started = new Date(task.timer_start_datetime).getTime();
         if (isNaN(started)) return null;
-        const secs = Math.floor((this.state.currentTime - started) / 1000);
+        const secs = Math.floor((Date.now() - started) / 1000);
         if (secs < 0) return null;
         return {
             display: this.formatTime(secs),
@@ -7700,7 +7725,22 @@ export class KpiAction extends Component {
         this._scrollObserver.observe(rowEl);
     }
 
-    async refresh() {
+    /* One refresh at a time. The 30 s interval used to start a second full load
+       while one triggered by an action was still running -- two 500-task fetches
+       racing to write the board. A call that arrives mid-refresh now asks for ONE
+       more pass after the current one, so nothing is lost (a save that lands
+       while an older fetch is in flight still shows up). */
+    refresh() {
+        if (this._refreshP) { this._refreshAgain = true; return this._refreshP; }
+        this._refreshP = (async () => {
+            try {
+                do { this._refreshAgain = false; await this._doRefresh(); } while (this._refreshAgain);
+            } finally { this._refreshP = null; }
+        })();
+        return this._refreshP;
+    }
+
+    async _doRefresh() {
         // Re-read the workday flags on every refresh. They used to be fetched
         // once in onMounted, so any handler that failed to update one by hand
         // left the header lying until a full page reload — which is exactly how
@@ -7754,62 +7794,7 @@ export class KpiAction extends Component {
             }
             this.state.assignees = Object.values(assigneeMap).sort((a, b) => a.name.localeCompare(b.name));
             
-            for (const t of payload.tasks) {
-                let key = null;
-                if (t.is_self_created && !t.admin_accepted) {
-                    // Self-created tasks awaiting admin acceptance live in their
-                    // own "Pending Review" lane, regardless of task_state.
-                    key = "self_pending";
-                } else if (t.task_state === "partially_completed") {
-                    key = "partially_completed";
-                } else if (t.task_state === "awaiting_client") {
-                    key = "awaiting_client";
-                } else if (t.task_state === "in_progress") {
-                    key = "in_progress";
-                } else if (t.task_state === "paused") {
-                    key = "paused";
-                } else if (t.task_state === "completed") {
-                    key = "completed";
-                } else {
-                    key = t.priority;
-                }
-                
-                if (groups[key]) {
-                    groups[key].push(t);
-                }
-
-                // Today is an ADDITIONAL membership, not an alternative one — the
-                // push above has already happened and is left alone. A task worked
-                // today appears here AND in its real column, because this lane is a
-                // shortcut for picking work back up, not a new home for it: nothing
-                // moves, and the Paused count stays true.
-                //
-                // Driven by today_seconds from the server, which counts kpi.time.log
-                // rows whose work_date is today in the DEVELOPER's timezone. That is
-                // also why the lane empties itself at midnight — the date stops
-                // matching, so there is no cron and nothing to reset.
-                if ((t.today_seconds || 0) > 0) {
-                    groups.today.push(t);
-                }
-            }
-            // Most recently worked first, in every STATUS column. Without this the
-            // columns read oldest-at-top: kra.kpi declares no _order, so the ORM
-            // falls back to id ASC and a task opened months ago but worked
-            // yesterday sits at the bottom of Paused.
-            //
-            // byRecency is defined at module scope now — the switch picker needs
-            // the same rule, and a second copy here is how the two would start
-            // disagreeing about what "most recent" means.
-            for (const k of Object.keys(groups)) {
-                // Today is the exception and keeps its own order below. It answers
-                // "what was I last deep in", which is about how MUCH was worked
-                // today, not which task was touched most recently.
-                if (k === "today") continue;
-                groups[k].sort(byRecency);
-            }
-            // Most time today first: someone coming back to the board is looking for
-            // what they were last deep in, not whatever happens to sort first.
-            groups.today.sort((a, b) => (b.today_seconds || 0) - (a.today_seconds || 0));
+            Object.assign(groups, this._bucketTasks(payload.tasks));
         }
         this.state.tasksByState = groups;
         // ✅ NEW: Check for rejected tasks after loading
@@ -7819,6 +7804,98 @@ export class KpiAction extends Component {
         // 🆕 Part C: keep the live strip (active break, anchors) in sync with actions.
         this.loadLiveStatus();
     }
+    /* Tasks -> lanes, exactly as the board shows them. Shared by refresh() and by
+       _addTaskCard(), so a card added after a save lands in the same lane, in the
+       same order, as a full reload would put it. */
+    _bucketTasks(tasks) {
+        const groups = {};
+        for (const c of this._allColumns) {
+            groups[c.key] = [];
+        }
+        for (const t of tasks) {
+            let key = null;
+            if (t.is_self_created && !t.admin_accepted) {
+                // Self-created tasks awaiting admin acceptance live in their
+                // own "Pending Review" lane, regardless of task_state.
+                key = "self_pending";
+            } else if (t.task_state === "partially_completed") {
+                key = "partially_completed";
+            } else if (t.task_state === "awaiting_client") {
+                key = "awaiting_client";
+            } else if (t.task_state === "in_progress") {
+                key = "in_progress";
+            } else if (t.task_state === "paused") {
+                key = "paused";
+            } else if (t.task_state === "completed") {
+                key = "completed";
+            } else {
+                key = t.priority;
+            }
+            
+            if (groups[key]) {
+                groups[key].push(t);
+            }
+
+            // Today is an ADDITIONAL membership, not an alternative one — the
+            // push above has already happened and is left alone. A task worked
+            // today appears here AND in its real column, because this lane is a
+            // shortcut for picking work back up, not a new home for it: nothing
+            // moves, and the Paused count stays true.
+            //
+            // Driven by today_seconds from the server, which counts kpi.time.log
+            // rows whose work_date is today in the DEVELOPER's timezone. That is
+            // also why the lane empties itself at midnight — the date stops
+            // matching, so there is no cron and nothing to reset.
+            if ((t.today_seconds || 0) > 0) {
+                groups.today.push(t);
+            }
+        }
+        // Most recently worked first, in every STATUS column. Without this the
+        // columns read oldest-at-top: kra.kpi declares no _order, so the ORM
+        // falls back to id ASC and a task opened months ago but worked
+        // yesterday sits at the bottom of Paused.
+        //
+        // byRecency is defined at module scope now — the switch picker needs
+        // the same rule, and a second copy here is how the two would start
+        // disagreeing about what "most recent" means.
+        for (const k of Object.keys(groups)) {
+            // Today is the exception and keeps its own order below. It answers
+            // "what was I last deep in", which is about how MUCH was worked
+            // today, not which task was touched most recently.
+            if (k === "today") continue;
+            groups[k].sort(byRecency);
+        }
+        // Most time today first: someone coming back to the board is looking for
+        // what they were last deep in, not whatever happens to sort first.
+        groups.today.sort((a, b) => (b.today_seconds || 0) - (a.today_seconds || 0));
+        return groups;
+    }
+
+    /* After a create, fetch just THAT task and slot it into the board, instead of
+       re-downloading every task (500+ on an admin board) and re-rendering them all.
+       Falls back to a full refresh if the single fetch fails for any reason. The
+       30 s refresh still reconciles anything else that changed meanwhile. */
+    async _addTaskCard(kpiId) {
+        try {
+            if (!kpiId) throw new Error('no id');
+            const res = await rpc('/kra_kpi/task/details', { kpi_id: kpiId });
+            const task = res && res.status && res.task;
+            if (!task || !task.id || !task.task_state) throw new Error('no task');
+            const all = (this.state.allTasks || []).filter((x) => x.id !== task.id);
+            all.unshift(task);
+            this.state.allTasks = all;
+            if (task.user_id && task.user_name
+                && !(this.state.assignees || []).some((a) => a.id === task.user_id)) {
+                this.state.assignees = [...(this.state.assignees || []), { id: task.user_id, name: task.user_name }]
+                    .sort((a, b) => a.name.localeCompare(b.name));
+            }
+            this.state.tasksByState = this._bucketTasks(all);
+            this.loadLiveStatus();
+        } catch (e) {
+            await this.refresh();
+        }
+    }
+
     _renderModal(html, confirmCallback) {
         const container = document.getElementById("modalContainer");
         container.innerHTML = html;
@@ -7966,7 +8043,23 @@ export class KpiAction extends Component {
             && this.isWithinFreshWindow(task);
     }
 
+    /* One render asks for the same lane 3-4 times (visibleColumns, the lane badge,
+       the card loop, the header total), each a full filter + fresh-sort pass. The
+       cache lives for ONE synchronous render only -- it is dropped on the next
+       microtask -- so it can never serve stale results after data or a filter
+       changes. */
     getFilteredTasksByState(columnKey) {
+        if (!this._laneCache) {
+            this._laneCache = new Map();
+            Promise.resolve().then(() => { this._laneCache = null; });
+        }
+        if (this._laneCache.has(columnKey)) return this._laneCache.get(columnKey);
+        const out = this._filterLane(columnKey);
+        this._laneCache.set(columnKey, out);
+        return out;
+    }
+
+    _filterLane(columnKey) {
         let tasks = this.state.tasksByState[columnKey] || [];
         // Never-started work sits at the top of its lane: a card added to the
         // bottom of a long Regular lane is a card nobody sees. Stable otherwise —

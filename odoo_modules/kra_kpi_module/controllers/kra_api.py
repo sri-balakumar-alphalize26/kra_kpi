@@ -308,7 +308,12 @@ class KraKpiAPI(http.Controller):
         return {'status': True, 'history': history, 'count': len(history)}
 
     @http.route('/kra_kpi/get_kra_list', type='json', auth='user', methods=['POST'], csrf=False)
-    def get_kra_list(self):
+    def get_kra_list(self, **params):
+        # with_tasks=False skips every task under every KRA. The New Task popup only
+        # needs project names for a dropdown, and on a 500-task board shipping
+        # every task (plus a manual count per task) just to fill it was slow.
+        # Default stays True so every existing caller is unchanged.
+        with_tasks = params.get('with_tasks', True) is not False
         kra_records = request.env['kra.master'].search([])
 
         def build_tree(kra_list):
@@ -332,7 +337,7 @@ class KraKpiAPI(http.Controller):
                         "estimate_hours": kpi.estimate_hours,
                         "estimate_minutes": kpi.estimate_minutes,
                         "manual_count": len(kpi.user_manual_ids),  # ✅ ADD THIS
-                    } for kpi in kra.kpi_ids],
+                    } for kpi in kra.kpi_ids] if with_tasks else [],
                 })
             return output
 
@@ -1025,9 +1030,18 @@ class KraKpiAPI(http.Controller):
             ('task_state', '=', 'in_progress'),
             ('active', '=', True),
         ]).ids
+        # Running tasks for EVERY assignee in one query (see _multitask_blocker):
+        # an admin's board is mostly other people's rows, which the caller-only
+        # set above cannot answer, so each row used to run its own search.
+        _running_by_user = {}
+        for _r in request.env['kra.kpi'].sudo().search_read(
+                [('task_state', '=', 'in_progress'), ('active', '=', True),
+                 ('user_id', '!=', False)], ['user_id']):
+            _running_by_user.setdefault(_r['user_id'][0], []).append(_r['id'])
         kpis = kpis.with_context(kpi_workday_open=_wd_open,
                                  kpi_workday_paused=_wd_paused,
-                                 kpi_running_task_ids=_running_ids)
+                                 kpi_running_task_ids=_running_ids,
+                                 kpi_running_by_user=_running_by_user)
 
         # Per-developer time on each task (survives reassignment — kpi.time.log
         # rows are kept per user). One batched read_group for all listed tasks,

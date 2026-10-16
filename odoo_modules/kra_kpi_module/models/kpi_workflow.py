@@ -929,6 +929,15 @@ class KpiWorkflow(models.Model):
         self.ensure_one()
         if not self.user_id or self.user_id.kpi_allow_multitask:
             return self.env['kra.kpi']
+        # Every assignee's running tasks, resolved ONCE per board load by
+        # /kra_kpi/tasks/get. Without it an admin board (other people's rows) fell
+        # through to the search below for every listed task: ~500 table scans on a
+        # 500-task board. Same answer as the search -- the map holds exactly the
+        # in_progress, active tasks per user.
+        by_user = self.env.context.get('kpi_running_by_user')
+        if by_user is not None:
+            other_ids = [i for i in by_user.get(self.user_id.id, []) if i != self.id]
+            return self.sudo().browse(other_ids[:1])
         cached = self.env.context.get('kpi_running_task_ids')
         # Only usable for the caller's OWN tasks: the cached set is what THEY
         # have running. An admin's board lists other people's rows, and reusing
