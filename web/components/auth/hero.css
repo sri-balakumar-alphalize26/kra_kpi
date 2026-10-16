@@ -1,0 +1,37 @@
+/* Login hero — the "Spotlight" SMART/KPI wheel animation (from the 369 Hero 4
+   mockup), as the login page's brand panel. Plays once on load; the KPI hub
+   keeps cycling through the six goals. */
+.k-hero { --hbg: #EBF1FC; --hwave: #DCE6FA; --hnavy: #1B2A4E; --hblue: #1B4E9B; --hcyan: #17A2C4; --horange: #F5931E; position: relative; min-height: 100%; width: 100%; overflow: hidden; color: var(--hnavy); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.k-hero .cards .card { position: absolute; width: 58px; height: 58px; border-radius: 16px; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 26px; box-shadow: 0 6px 14px #33415524; z-index: 2; opacity: 0; }
+.k-hero .cards .card span { display: block; }
+.k-hero .grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; align-items: center; gap: 20px; padding: 64px 48px 130px 64px; position: relative; z-index: 1; min-height: 100vh; }
+.k-hero .logo { display: block; width: 180px; height: auto; opacity: 0; }
+.k-hero h1 { font-size: 40px; font-weight: 900; line-height: 1.15; margin: 18px 0 0; color: var(--hnavy); letter-spacing: -.01em; }
+.k-hero .la, .k-hero .lb { display: table; opacity: 0; }
+.k-hero .w { display: inline-block; }
+.k-hero .c { color: var(--hcyan); } .k-hero .o { color: var(--horange); }
+.k-hero .ul { width: 90px; height: 5px; border-radius: 3px; background: var(--hcyan); margin-top: 12px; transform-origin: left; transform: scaleX(0); }
+.k-hero .sub { font-size: 16px; line-height: 1.55; color: #4a5878; max-width: 420px; margin: 16px 0 0; opacity: 0; }
+.k-hero .right { display: flex; justify-content: center; }
+.k-hero .wrap { position: relative; width: 380px; height: 380px; flex: none; }
+.k-hero .wheel { position: absolute; overflow: visible; }
+.k-hero .seg { transform-box: view-box; transition: transform .4s cubic-bezier(.34,1.56,.64,1), opacity .4s; }
+.k-hero .seg.dim { opacity: .4; } .k-hero .seg.hot { transform: scale(1.1); }
+.k-hero .lab { position: absolute; display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 13px; font-weight: 800; text-align: center; line-height: 16px; white-space: pre-line; transition: transform .4s, opacity .4s; opacity: 0; }
+.k-hero .lab i { width: 8px; height: 8px; border-radius: 4px; flex: none; }
+.k-hero .lab.hot { transform: scale(1.2); } .k-hero .lab.dim { opacity: .4; }
+.k-hero .kpi { position: absolute; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; font-weight: 900; box-shadow: 0 5px 14px #1e293b26; z-index: 3; transform: scale(0); }
+.k-hero .kpi span { font-size: 26px; letter-spacing: 1px; text-align: center; line-height: 1.1; padding: 0 6px; }
+.k-hero .bottom { position: absolute; left: 0; right: 0; bottom: 0; height: 110px; pointer-events: none; }
+.k-hero .bottom svg { position: absolute; bottom: 0; width: 100%; height: 80px; }
+.k-hero .alpha { position: absolute; bottom: 18px; left: 0; right: 0; display: flex; justify-content: center; opacity: 0; }
+.k-hero .alpha img { height: 34px; width: auto; }
+[data-mode="dark"] .k-hero { --hnavy: #DEE4EA; } [data-mode="dark"] .k-hero .sub { color: #9FADBC; } [data-mode="dark"] .k-hero .bottom svg path { fill: #1C2B41; }
+[data-theme="family369"] .k-hero { --hnavy: #eaf3f8; } [data-theme="family369"] .k-hero .sub { color: #c7d6e0; } [data-theme="family369"] .k-hero .bottom svg path { fill: #072b40; }
+@media (max-width: 1200px) { .k-hero .grid { grid-template-columns: minmax(0, 1fr); padding: 48px 32px 120px; } .k-hero .right { order: -1; } .k-hero .wrap { scale: .85; margin: -28px 0; } }
+@media (max-width: 900px) {
+  .k-hero .grid { min-height: 0; padding: 40px 20px 100px; text-align: center; }
+  .k-hero .logo, .k-hero .la, .k-hero .lb, .k-hero .ul, .k-hero .sub { margin-left: auto; margin-right: auto; }
+  .k-hero h1 { font-size: 30px; } .k-hero .wrap { scale: .72; margin: -50px 0; } .k-hero .cards { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .k-hero .card, .k-hero .logo, .k-hero .la, .k-hero .lb, .k-hero .sub, .k-hero .lab, .k-hero .alpha { opacity: 1; } .k-hero .kpi { transform: none; } .k-hero .ul { transform: none; } }

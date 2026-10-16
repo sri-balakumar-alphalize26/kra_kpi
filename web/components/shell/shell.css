@@ -1,0 +1,209 @@
+/* The frame: top nav + sidebar + main. Component looks (.top, .side, .main …)
+   come from ui.css (exported from the canvas); this file adds what a live
+   page needs that a 1600×960 mockup did not: fluid sizes, sticky chrome,
+   responsive behaviour, the mobile drawer and the flag (toast) host. */
+
+.k-app .top { position: sticky; top: 0; z-index: 40; flex: none; }
+.k-app .body { flex: 1; min-height: 0; display: flex; align-items: stretch; }
+
+/* "Turn on desktop notifications" bar above the header (WhatsApp Web style). */
+.k-app .desk-bar { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--brand); color: #fff; font-size: 13.5px; line-height: 18px; }
+.k-app .desk-bar .ic { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 50%; background: rgba(255, 255, 255, .18); }
+.k-app .desk-bar .txt { flex: 1; min-width: 0; }
+.k-app .desk-bar .lnk { border: 0; background: none; padding: 0; font: inherit; font-weight: 700; color: #fff; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.k-app .desk-bar .x { color: #fff; flex: none; }
+.k-app .desk-bar .x:hover { background: rgba(255, 255, 255, .15); }
+.k-app .side { position: sticky; top: 56px; height: calc(100vh - 56px); overflow-y: auto; scrollbar-width: thin; flex: none; }
+.k-app .main { flex: 1; min-width: 0; padding: 16px 24px 32px; position: relative; display: flex; flex-direction: column; overflow-x: clip; }
+/* overflow-x: clip (not hidden) keeps wide content from scrolling the whole
+   page sideways without making .main a scroll container, so sticky still works.
+   Wide tables scroll inside their own box (.table-scroll). */
+.k-app .page { overflow: visible; }
+
+/* Links that look like the mockup's buttons/items. */
+.k-app a.nav-btn, .k-app a.side-item, .k-app a.btn { text-decoration: none; }
+.k-app .nav-btn:hover, .k-app .side-item:hover { background: var(--hover); color: var(--text); }
+.k-app .nav-btn.on:hover, .k-app .side-item.on:hover { background: var(--sel-bg); color: var(--sel-text); }
+.k-app .side-item:focus-visible, .k-app .nav-btn:focus-visible, .k-app .btn:focus-visible, .k-app .icon-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.k-app .btn:hover { filter: brightness(.97); }
+.k-app .btn-primary:hover { filter: brightness(1.08); }
+.k-app .btn:disabled, .k-app .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; filter: none; }
+.k-app .side-item .lz { margin-left: auto; }
+.k-app .top .search { min-width: 0; }
+.k-app .top .search input { min-width: 0; }
+
+/* Top-bar hamburger (phones) and the collapse handle (desktop). */
+.k-app .burger { display: none; }
+.k-app .side-foot { margin-top: auto; padding: 10px 6px 0; border-top: 1px solid var(--nav-border); font-size: 11.5px; color: var(--subtlest); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.k-app .side-foot .icon-btn { width: 28px; height: 28px; margin-left: auto; }
+.k-app.side-collapsed .side { width: 64px; padding: 16px 8px; }
+.k-app.side-collapsed .side .proj > div, .k-app.side-collapsed .side-item > span, .k-app.side-collapsed .side-h, .k-app.side-collapsed .side-foot span { display: none; }
+.k-app.side-collapsed .side-item { justify-content: center; padding: 0; }
+.k-app.side-collapsed .side-item.on::before { left: -8px; }
+.k-app.side-collapsed .proj { justify-content: center; padding-left: 0; padding-right: 0; }
+.k-app.side-collapsed .side-foot .icon-btn { margin: 0 auto; }
+.k-app .proj { position: relative; }
+.k-app .side-toggle { margin-left: auto; width: 26px; height: 26px; flex: none; }
+.k-app .side-expand { border: 1.5px dashed var(--border); background: none; color: var(--subtlest); justify-content: center; margin-bottom: 4px; cursor: pointer; }
+.k-app .side-expand:hover { background: var(--hover); color: var(--brand); border-color: var(--brand); }
+/* Keep the footer above the Next.js dev badge, which sits bottom-left in development. */
+.k-app .side-foot { padding-bottom: 56px; }
+
+/* Avatar menu */
+.k-app .menu-wrap { position: relative; }
+.k-app .menu { position: absolute; right: 0; top: calc(100% + 8px); width: 280px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 50; display: flex; flex-direction: column; gap: 2px; }
+.k-app .menu header { display: flex; align-items: center; gap: 10px; padding: 10px 10px 8px; }
+.k-app .menu header b { display: block; font-size: 14px; color: var(--navy); }
+.k-app .menu header small { font-size: 12px; color: var(--subtlest); font-weight: 600; }
+.k-app .menu .mi { display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; border: 0; border-radius: 9px; background: none; color: var(--text); font-weight: 600; font-size: 13.5px; text-align: left; cursor: pointer; text-decoration: none; }
+.k-app .menu .mi:hover { background: var(--hover); }
+.k-app .menu .mi svg { width: 18px; height: 18px; color: var(--subtlest); }
+.k-app .menu .mi.danger { color: var(--danger); }
+.k-app .menu .pw-note { display: flex; align-items: flex-start; gap: 8px; margin: 0 4px 4px; padding: 9px 10px; border-radius: 10px; background: var(--over-bg); border-left: 3px solid var(--danger); color: var(--over); font-size: 12.5px; font-weight: 600; line-height: 17px; text-decoration: none; }
+.k-app .menu .pw-note svg { flex: none; margin-top: 1px; }
+.k-app .menu .pw-note b { white-space: nowrap; }
+.k-app .menu .pw-note:hover { filter: brightness(.97); }
+.k-app .menu .sep { height: 1px; background: var(--border); margin: 4px 6px; }
+.k-app .menu footer { padding: 6px 10px 4px; font-size: 11px; color: var(--subtlest); font-weight: 600; }
+.k-app .swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 4px 10px 8px; }
+.k-app .swatch { border: 2px solid transparent; border-radius: 10px; padding: 3px; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.k-app .swatch i { display: block; width: 100%; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,.08); }
+.k-app .swatch small { font-size: 10px; font-weight: 700; color: var(--subtle); white-space: nowrap; }
+.k-app .swatch.on { border-color: var(--brand); }
+
+/* Flags (toasts) */
+.k-app .flags { position: fixed; left: 24px; bottom: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 90; pointer-events: none; }
+.k-app .flags .flag { position: static; pointer-events: auto; min-width: 280px; max-width: 420px; animation: k-rise .22s ease-out both; }
+.k-app .flag.err { border-left-color: var(--danger); }
+.k-app .flag.warn { border-left-color: var(--pri-important); }
+.k-app .flag .icon-btn { width: 26px; height: 26px; margin-left: auto; }
+@keyframes k-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* The Gate's full-page states */
+.k-gate { min-height: 100vh; display: grid; place-items: center; background: var(--canvas); color: var(--text); font-family: var(--font); padding: 24px; }
+.k-gate .cardbox { width: min(420px, 100%); align-items: center; text-align: center; padding: 28px; }
+.k-gate .spin { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--border); border-top-color: var(--brand); animation: k-spin .8s linear infinite; }
+@keyframes k-spin { to { transform: rotate(360deg); } }
+
+/* Phones and small laptops */
+@media (max-width: 1100px) {
+  .k-app .stats, .k-app .stats.s5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .k-app .grid3, .k-app .g21, .k-app .g12 { grid-template-columns: minmax(0, 1fr); }
+  .k-app .top .nav-btn span.lbl { display: none; }
+}
+@media (max-width: 900px) {
+  .k-app .burger { display: grid; }
+  .k-app .top .search { display: none; }
+  .k-app .top .nav-btn { display: none; }
+  .k-app .side { position: fixed; left: 0; top: 56px; height: calc(100vh - 56px); width: 260px; z-index: 45; transform: translateX(-100%); transition: transform .2s ease-out; box-shadow: none; }
+  .k-app.side-open .side { transform: none; box-shadow: var(--shadow-lg); }
+  .k-app .scrim { position: fixed; inset: 56px 0 0; background: rgba(15,23,42,.35); z-index: 44; }
+  .k-app .main { padding: 12px 14px 28px; }
+  .k-app .head { flex-wrap: wrap; }
+  .k-app .head h1 { font-size: 20px; line-height: 24px; }
+  .k-app .side-tabs { overflow-x: auto; margin-left: 8px; }
+  .k-app .side-tabs a { padding: 0 8px; white-space: nowrap; }
+  .k-app .stats, .k-app .stats.s5 { grid-template-columns: minmax(0, 1fr); }
+  .k-app .flags { left: 12px; right: 12px; bottom: 12px; }
+  .k-app .panel, .k-app .sheet { width: 100vw; border-radius: 0; }
+}
+/* Light / Dark / System in the avatar menu */
+.k-app .modes { display: flex; gap: 6px; padding: 2px 10px 6px; }
+.k-app .modes .pill { flex: 1; height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12.5px; }
+.k-app .modes .pill.on { background: var(--sel-bg); color: var(--sel-text); box-shadow: inset 0 0 0 1.5px var(--brand); }
+
+/* Sidebar icons (components/shell/SideIcon.jsx): each icon acts out its meaning
+   on hover, and turns yellow-orange. */
+.k-app .si{width:20px;height:20px;flex:none;overflow:visible;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:color .2s}
+.k-app .si *{transform-box:fill-box}
+.k-app .si-item:hover .si{color:#F5A000}
+@keyframes si-grow{0%{transform:scaleY(.35)}60%{transform:scaleY(1.1)}100%{transform:scaleY(1)}}
+@keyframes si-slide{0%{transform:translateX(-5px);opacity:0}100%{transform:none;opacity:1}}
+@keyframes si-pop{0%{transform:scale(0)}60%{transform:scale(1.5)}100%{transform:scale(1)}}
+@keyframes si-lift{0%,100%{transform:none}40%{transform:translateY(-2.5px) rotate(-6deg)}}
+@keyframes si-shake{0%,100%{transform:rotate(0)}15%{transform:rotate(-14deg)}30%{transform:rotate(12deg)}45%{transform:rotate(-9deg)}60%{transform:rotate(6deg)}75%{transform:rotate(-3deg)}}
+@keyframes si-hand{to{transform:rotate(360deg)}}
+@keyframes si-swing{0%,100%{transform:rotate(0)}20%{transform:rotate(18deg)}40%{transform:rotate(-14deg)}60%{transform:rotate(9deg)}80%{transform:rotate(-4deg)}}
+@keyframes si-clap{0%,100%{transform:translateX(0)}20%{transform:translateX(-2.5px)}40%{transform:translateX(2px)}60%{transform:translateX(-1.2px)}}
+@keyframes si-flip{0%,100%{transform:scaleX(1)}45%{transform:scaleX(.15)}}
+@keyframes si-draw{0%{stroke-dashoffset:1}60%,100%{stroke-dashoffset:0}}
+@keyframes si-ping{0%{transform:scale(1);opacity:1}100%{transform:scale(3);opacity:0}}
+@keyframes si-drop{0%{transform:translateY(-7px);opacity:0}45%{opacity:1}70%{transform:translateY(1px)}100%{transform:none}}
+@keyframes si-jump{0%,100%{transform:none}40%{transform:translateY(-3.5px)}}
+@keyframes si-join{0%{transform:translateX(-4px);opacity:0}100%{transform:none;opacity:1}}
+@keyframes si-bob{0%,100%{transform:none}50%{transform:translateY(-1.5px)}}
+@keyframes si-spin{to{transform:rotate(180deg)}}
+.k-app .si-item:hover .si-board rect{transform-origin:50% 0;animation:si-grow .5s cubic-bezier(.34,1.56,.64,1) both}
+.k-app .si-item:hover .si-board rect:nth-child(2){animation-delay:.07s}.k-app .si-item:hover .si-board rect:nth-child(3){animation-delay:.14s}
+.k-app .si-item:hover .si-list path{animation:si-slide .35s ease-out both}
+.k-app .si-item:hover .si-list path:nth-of-type(2){animation-delay:.08s}.k-app .si-item:hover .si-list path:nth-of-type(3){animation-delay:.16s}
+.k-app .si-item:hover .si-list circle{transform-origin:center;animation:si-pop .35s cubic-bezier(.34,1.56,.64,1) both}
+.k-app .si-item:hover .si-list circle:nth-of-type(2){animation-delay:.08s}.k-app .si-item:hover .si-list circle:nth-of-type(3){animation-delay:.16s}
+.k-app .si-item:hover .si-docs .si-pg{transform-origin:50% 100%;animation:si-lift .5s ease}
+.k-app .si-item:hover .si-docs .si-ln{stroke-dasharray:1;animation:si-draw .5s ease-out both}.k-app .si-item:hover .si-docs .si-ln+.si-ln{animation-delay:.12s}
+.k-app .si-item:hover .si-remind{transform-origin:12px 13px;transform-box:view-box;animation:si-shake .55s ease}
+.k-app .si-item:hover .si-remind .si-hand{transform-box:view-box;transform-origin:12px 13px;animation:si-hand .9s ease-in-out}
+.k-app .si-item:hover .si-notif .si-bell{transform-origin:50% 0;animation:si-swing .7s ease}
+.k-app .si-item:hover .si-notif .si-clap{animation:si-clap .7s ease .05s}
+.k-app .si-item:hover .si-manual .si-pr{transform-box:view-box;transform-origin:12px 12px;animation:si-flip .55s ease-in-out}
+.k-app .si-item:hover .si-live .si-pulse{stroke-dasharray:1;animation:si-draw 1.1s ease-in-out infinite}
+.k-app .si-item:hover .si-live .si-ring{transform-origin:center;animation:si-ping 1.1s ease-out infinite}
+.k-app .si-item:hover .si-queue .si-qitem{animation:si-drop .55s cubic-bezier(.34,1.56,.64,1) both}
+.k-app .si-item:hover .si-upload .si-arr{animation:si-jump .6s ease-in-out infinite}
+.k-app .si-item:hover .si-dash rect{transform-origin:center;animation:si-pop .4s cubic-bezier(.34,1.56,.64,1) both}
+.k-app .si-item:hover .si-dash rect:nth-child(2){animation-delay:.06s}.k-app .si-item:hover .si-dash rect:nth-child(3){animation-delay:.12s}.k-app .si-item:hover .si-dash rect:nth-child(4){animation-delay:.18s}
+.k-app .si-item:hover .si-people .si-p2{animation:si-join .4s ease-out both}
+.k-app .si-item:hover .si-people .si-p1{animation:si-bob .5s ease .2s}
+.k-app .si-item:hover .si-reports .si-bar{transform-origin:50% 100%;animation:si-grow .5s cubic-bezier(.34,1.56,.64,1) both}
+.k-app .si-item:hover .si-reports .si-bar:nth-of-type(2){animation-delay:.08s}.k-app .si-item:hover .si-reports .si-bar:nth-of-type(3){animation-delay:.16s}
+.k-app .si-item:hover .si-settings{transform-box:view-box;transform-origin:12px 12px;animation:si-spin .8s cubic-bezier(.34,1.3,.64,1)}
+@media (prefers-reduced-motion:reduce){.k-app .si-item .si,.k-app .si-item .si *{animation:none!important}}
+
+/* "↺ Reopened" tag next to the workday button (WorkdayButton) */
+.k-app .reopen-tag { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; background: var(--lz-paused-bg); color: var(--lz-paused); border: 1px solid var(--pri-important); font-size: 12px; font-weight: 800; white-space: nowrap; cursor: default; animation: mo-reveal .3s ease-out both; }
+/* My workday (timeline) and My snapshots (camera), plus a wiggle for any icon without its own motion */
+@keyframes si-flashk{0%,100%{opacity:1}30%{opacity:0}50%{opacity:1}70%{opacity:0}}
+@keyframes si-snap{0%,100%{transform:scale(1)}35%{transform:scale(.6)}65%{transform:scale(1.12)}}
+@keyframes si-wiggle{0%,100%{transform:none}25%{transform:rotate(-10deg) scale(1.08)}60%{transform:rotate(8deg)}}
+.k-app .si-item:hover .si-timeline .si-tl{stroke-dasharray:1;animation:si-draw .6s ease-out both}
+.k-app .si-item:hover .si-timeline .si-dot{transform-origin:center;animation:si-pop .4s cubic-bezier(.34,1.56,.64,1) both}
+.k-app .si-item:hover .si-timeline .si-dot:nth-of-type(2){animation-delay:.12s}.k-app .si-item:hover .si-timeline .si-dot:nth-of-type(3){animation-delay:.24s}
+.k-app .si-item:hover .si-camera .si-lens{transform-origin:center;animation:si-snap .5s cubic-bezier(.34,1.56,.64,1)}
+.k-app .si-item:hover .si-camera .si-flash{animation:si-flashk .6s steps(1)}
+.k-app .si-fallback{display:inline-grid;place-items:center;flex:none}
+.k-app .si-item:hover .si-fallback{color:#F5A000;animation:si-wiggle .5s ease}
+
+/* Top bar icons: the bell swings, the theme toggle turns, any icon button gets a little lift */
+.k-app .top .icon-btn svg{transition:transform .2s cubic-bezier(.34,1.56,.64,1)}
+.k-app .top .icon-btn:hover svg{transform:translateY(-1px) scale(1.08)}
+.k-app .top a.icon-btn[title="Notifications"]:hover svg{transform-origin:50% 0;animation:si-swing .7s ease}
+.k-app .top .mode-btn:hover .mode-ic svg{animation:si-spin .6s cubic-bezier(.34,1.3,.64,1)}
+.k-app .top .icon-btn:active svg{transform:scale(.9)}
+@media (prefers-reduced-motion:reduce){.k-app .si-item .si-fallback,.k-app .top .icon-btn svg{animation:none!important;transition:none!important}}
+/* Top menu links (Your work, Projects, …) and sidebar rows: a small slide on hover */
+.k-app .nav-btn{transition:background-color .2s,color .2s,transform .16s cubic-bezier(.34,1.56,.64,1)}
+.k-app .nav-btn:hover{transform:translateY(-1px)}
+.k-app .nav-btn:active{transform:scale(.96)}
+.k-app .side-item{transition:background-color .2s,color .2s}
+.k-app .side-item > span{transition:transform .2s cubic-bezier(.34,1.56,.64,1)}
+.k-app .side-item:hover > span{transform:translateX(3px)}
+@media (prefers-reduced-motion:reduce){.k-app .nav-btn,.k-app .side-item > span{transition:none!important;transform:none!important}}
+
+/* ---- Smooth transitions ----
+   Page change: the new page eases in. The wrapper keeps the page's flex
+   layout so the Board still fills the height. */
+.k-app .page-in{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;animation:pg-in .32s cubic-bezier(.22,.61,.36,1) backwards}
+@keyframes pg-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+/* Sidebar collapse / expand */
+@media (min-width:901px){.k-app .side{transition:width .25s cubic-bezier(.22,.61,.36,1),padding .25s cubic-bezier(.22,.61,.36,1)}}
+/* Task panel slides in from the right; its backdrop fades */
+.k-app .panel{animation:pn-in .3s cubic-bezier(.22,.61,.36,1) backwards}
+@keyframes pn-in{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
+.k-app .panel-scrim{animation:mo-fade .2s ease-out}
+/* Board: lanes fold / open smoothly, cards fade in */
+.k-app .col{transition:flex-basis .25s cubic-bezier(.22,.61,.36,1),width .25s cubic-bezier(.22,.61,.36,1),min-width .25s cubic-bezier(.22,.61,.36,1),background-color .2s}
+.k-app .col-b .card{animation:cd-in .28s ease-out backwards}
+@keyframes cd-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* Content blocks and table rows ease in as they appear */
+.k-app .cardbox,.k-app .stat{animation:cd-in .3s ease-out backwards}
+@media (prefers-reduced-motion:reduce){.k-app .page-in,.k-app .panel,.k-app .panel-scrim,.k-app .col-b .card,.k-app .cardbox,.k-app .stat{animation:none!important}.k-app .side,.k-app .col{transition:none!important}}

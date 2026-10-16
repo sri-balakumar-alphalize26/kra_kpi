@@ -1,0 +1,33 @@
+/* Sign-in: brand panel + card, on the app's gradient (login mockup). */
+.k-login { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: linear-gradient(160deg, #EAF2FF, #C7DDF7); font-family: var(--font); color: var(--text); }
+[data-mode="dark"] .k-login { background: linear-gradient(160deg, #161A1D, #1C2B41); }
+[data-theme="family369"] .k-login { background: linear-gradient(160deg, #0b3c58, #072b40); }
+[data-theme="family369"] .k-login .brand h1, [data-theme="family369"] .k-login .brand p { color: #eaf3f8; }
+[data-theme="family369"] .k-login .brand .chip-sm { background: rgba(255,255,255,.14); color: #fff; }
+[data-theme="dense"] .k-login { background: linear-gradient(160deg, #F6F4F0, #E7E2DA); }
+.k-login .brand { padding: 0; display: flex; flex-direction: column; justify-content: stretch; min-width: 0; }
+.k-login .brand h1 { margin: 0; font-size: 42px; font-weight: 900; color: var(--navy); line-height: 48px; letter-spacing: -.02em; }
+.k-login .brand p { margin: 0; font-size: 17px; color: var(--subtle); max-width: 470px; font-weight: 500; line-height: 26px; }
+.k-login .brand .chip-sm { background: var(--surface); color: var(--navy); }
+.k-login .lside { display: grid; place-items: center; padding: 40px 24px; }
+.k-login form.cardbox { width: min(430px, 100%); padding: 30px; border-radius: 22px; gap: 16px; }
+.k-login form h2 { font-size: 22px; font-weight: 900; }
+.k-login .input { height: 46px; }
+.k-login .input input { border: 0; background: none; outline: 0; font: inherit; color: inherit; width: 100%; min-width: 0; }
+.k-login .input .dial { color: var(--subtlest); font-weight: 700; }
+.k-login .links { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 700; flex-wrap: wrap; }
+.k-login .links button { border: 0; background: none; padding: 0; color: var(--brand); font: inherit; font-weight: 700; cursor: pointer; }
+.k-login .err { color: var(--danger); font-size: 12.5px; font-weight: 700; }
+.k-login .note { font-size: 13px; color: var(--subtle); font-weight: 500; line-height: 19px; margin: 0; }
+.k-login .who { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--hover); font-weight: 700; color: var(--navy); }
+.k-login .who button { margin-left: auto; }
+.k-login .brand small { margin-top: 30px; }
+@media (max-width: 900px) {
+  .k-login { grid-template-columns: minmax(0, 1fr); }
+  .k-login .brand { padding: 0; }
+  .k-login .lside { padding: 24px 16px 40px; align-items: start; }
+}
+/* Dark mode wins over every skin's login gradient. */
+html[data-mode="dark"] .k-login { background: linear-gradient(160deg, #161A1D, #1C2B41); }
+html[data-mode="dark"] .k-login .brand h1 { color: #DEE4EA; } html[data-mode="dark"] .k-login .brand p { color: #9FADBC; }
+html[data-mode="dark"] .k-login form.cardbox { background: #22272B; border-color: #38414A; }

@@ -1,0 +1,414 @@
+/* Theme tokens — exported from the design canvas (scratchpad themes/tok/export_css.pl).
+   :root is the default look (KRA KPI blue). Each [data-theme] block overrides it.
+   Components use these names only; never a hex. */
+
+:root { color-scheme: light; }
+:root {
+  --canvas:#F7F9FC;
+  --sunken:#EEF1F7;
+  --surface:#FFFFFF;
+  --raised:#FFFFFF;
+  --border:#E5E9F0;
+  --text:#1F2937;
+  --subtle:#374151;
+  --subtlest:#6B7280;
+  --brand:#1E40AF;
+  --on-brand:#FFFFFF;
+  --sel-bg:#E0ECFF;
+  --sel-text:#1E40AF;
+  --nav-bg:#FFFFFF;
+  --nav-text:#374151;
+  --nav-border:#E5E9F0;
+  --side-bg:#FFFFFF;
+  --side-text:#374151;
+  --hover:#F1F5FB;
+  --input:#F4F7FB;
+  --fresh:#FEE2E2;
+  --fresh-border:#FCA5A5;
+  --lz-todo-bg:#E5E7EB;
+  --lz-todo:#374151;
+  --lz-prog-bg:#DBEAFE;
+  --lz-prog:#1D4ED8;
+  --lz-done-bg:#DCFCE7;
+  --lz-done:#15803D;
+  --lz-paused-bg:#FEF3C7;
+  --lz-paused:#B45309;
+  --lz-review-bg:#EDE9FE;
+  --lz-review:#6D28D9;
+  --over-bg:#FEE2E2;
+  --over:#B91C1C;
+  --pri-urgent:#DC2626;
+  --pri-important:#D97706;
+  --pri-regular:#16A34A;
+  --danger:#DC2626;
+  --proj:#7C3AED;
+  --navy:#16306B;
+  --r:8px;
+  --r-card:12px;
+  --fs:14px;
+  --h1w:800;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --shadow:0 1px 2px rgba(30,41,59,.06),0 4px 12px -6px rgba(30,41,59,.12);
+  --shadow-lg:0 12px 32px -12px rgba(30,41,59,.3)
+}
+
+/* ---- krakpi (default) — the same values again under its name, plus its accents ---- */
+[data-theme="krakpi"] {
+  --canvas:#F7F9FC;
+  --sunken:#EEF1F7;
+  --surface:#FFFFFF;
+  --raised:#FFFFFF;
+  --border:#E5E9F0;
+  --text:#1F2937;
+  --subtle:#374151;
+  --subtlest:#6B7280;
+  --brand:#1E40AF;
+  --on-brand:#FFFFFF;
+  --sel-bg:#E0ECFF;
+  --sel-text:#1E40AF;
+  --nav-bg:#FFFFFF;
+  --nav-text:#374151;
+  --nav-border:#E5E9F0;
+  --side-bg:#FFFFFF;
+  --side-text:#374151;
+  --hover:#F1F5FB;
+  --input:#F4F7FB;
+  --fresh:#FEE2E2;
+  --fresh-border:#FCA5A5;
+  --lz-todo-bg:#E5E7EB;
+  --lz-todo:#374151;
+  --lz-prog-bg:#DBEAFE;
+  --lz-prog:#1D4ED8;
+  --lz-done-bg:#DCFCE7;
+  --lz-done:#15803D;
+  --lz-paused-bg:#FEF3C7;
+  --lz-paused:#B45309;
+  --lz-review-bg:#EDE9FE;
+  --lz-review:#6D28D9;
+  --over-bg:#FEE2E2;
+  --over:#B91C1C;
+  --pri-urgent:#DC2626;
+  --pri-important:#D97706;
+  --pri-regular:#16A34A;
+  --danger:#DC2626;
+  --proj:#7C3AED;
+  --navy:#16306B;
+  --r:8px;
+  --r-card:12px;
+  --fs:14px;
+  --h1w:800;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --shadow:0 1px 2px rgba(30,41,59,.06),0 4px 12px -6px rgba(30,41,59,.12);
+  --shadow-lg:0 12px 32px -12px rgba(30,41,59,.3)
+}
+[data-theme="krakpi"] .head h1,[data-theme="krakpi"] .proj b,[data-theme="krakpi"] .panel h2,[data-theme="krakpi"] .logo{color:var(--navy)}
+[data-theme="krakpi"] .side-item,[data-theme="krakpi"] .nav-btn,[data-theme="krakpi"] .pill{font-weight:600}
+[data-theme="krakpi"] .card p{font-weight:600}
+[data-theme="krakpi"] .col-h{font-weight:800;color:var(--navy)}
+[data-theme="krakpi"] .logo-tile{border-radius:9px}
+[data-theme="krakpi"] .avatar{font-weight:800}
+[data-theme="krakpi"] .panel{border-radius:16px 0 0 0}
+
+/* ---- jira ---- */
+[data-theme="jira"] {
+  --canvas:#FFFFFF;
+  --sunken:#F7F8F9;
+  --surface:#FFFFFF;
+  --raised:#FFFFFF;
+  --border:#DFE1E6;
+  --text:#172B4D;
+  --subtle:#44546F;
+  --subtlest:#626F86;
+  --brand:#0052CC;
+  --on-brand:#FFFFFF;
+  --sel-bg:#E9F2FF;
+  --sel-text:#0052CC;
+  --nav-bg:#FFFFFF;
+  --nav-text:#42526E;
+  --nav-border:#DFE1E6;
+  --side-bg:#FFFFFF;
+  --side-text:#42526E;
+  --hover:#F4F5F7;
+  --input:#FAFBFC;
+  --fresh:#FFEBE6;
+  --fresh-border:#FF8F73;
+  --lz-todo-bg:#DFE1E6;
+  --lz-todo:#42526E;
+  --lz-prog-bg:#DEEBFF;
+  --lz-prog:#0747A6;
+  --lz-done-bg:#E3FCEF;
+  --lz-done:#006644;
+  --lz-paused-bg:#FFF7D6;
+  --lz-paused:#974F0C;
+  --lz-review-bg:#EAE6FF;
+  --lz-review:#403294;
+  --over-bg:#FFEBE6;
+  --over:#AE2A19;
+  --pri-urgent:#DE350B;
+  --pri-important:#FF8B00;
+  --pri-regular:#2D8738;
+  --danger:#DE350B;
+  --proj:#FF8B00;
+  --r:3px;
+  --r-card:3px;
+  --fs:14px;
+  --h1w:500;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --shadow:0 1px 1px rgba(9,30,66,.25),0 0 1px rgba(9,30,66,.31);
+  --shadow-lg:0 8px 12px rgba(9,30,66,.15),0 0 1px rgba(9,30,66,.31);
+  --navy:#172B4D
+}
+
+/* ---- family369 ---- */
+[data-theme="family369"] {
+  --canvas:#f3f6f8;
+  --sunken:#e9eef2;
+  --surface:#FFFFFF;
+  --raised:#FFFFFF;
+  --border:#e4eaef;
+  --text:#13212b;
+  --subtle:#3c4a55;
+  --subtlest:#64757f;
+  --brand:#0a78ab;
+  --on-brand:#FFFFFF;
+  /* Selection / icon colours for the light page surfaces (menus, pills, cards).
+     The dark top bar and sidebar get their own light-on-dark values below. */
+  --sel-bg:#e3f1f8;
+  --sel-text:#0a6f9e;
+  --nav-bg:#0b3c58;
+  --nav-text:#3c4a55;
+  --nav-border:#072b40;
+  --side-bg:#0b3c58;
+  --side-text:rgba(234,243,248,.82);
+  --hover:#e9eef2;
+  --input:#FFFFFF;
+  --fresh:#fdeeea;
+  --fresh-border:#f2a79f;
+  --lz-todo-bg:#e4eaef;
+  --lz-todo:#3c4a55;
+  --lz-prog-bg:#e3f1f8;
+  --lz-prog:#0b4a6e;
+  --lz-done-bg:#e2f3e8;
+  --lz-done:#1a7f3c;
+  --lz-paused-bg:#fff1dc;
+  --lz-paused:#8a5a00;
+  --lz-review-bg:#ece7fb;
+  --lz-review:#5a3fb0;
+  --over-bg:#fdeeea;
+  --over:#c8433a;
+  --pri-urgent:#c8433a;
+  --pri-important:#f7931e;
+  --pri-regular:#1a7f3c;
+  --danger:#c8433a;
+  --proj:#f7931e;
+  --r:8px;
+  --r-card:10px;
+  --fs:14px;
+  --h1w:700;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --shadow:0 1px 2px rgba(11,60,88,.08),0 6px 14px -8px rgba(11,60,88,.2);
+  --shadow-lg:0 24px 50px -24px rgba(11,60,88,.45);
+  --navy:#0b3c58
+}
+[data-theme="family369"] .top{background:linear-gradient(90deg,#0b3c58,#072b40)}
+[data-theme="family369"] .side{background:linear-gradient(170deg,#0b3c58,#072b40);border-right:0}
+[data-theme="family369"] .logo{color:#fff}
+[data-theme="family369"] .logo-tile{background:#f7931e;color:#2a1600}
+[data-theme="family369"] .proj b{color:#fff}
+[data-theme="family369"] .proj small{color:rgba(234,243,248,.6)}
+[data-theme="family369"] .side-h{color:rgba(234,243,248,.5)}
+[data-theme="family369"] .side-item.on::before{background:#f7931e}
+[data-theme="family369"] .nav-btn.on{color:#fff}
+[data-theme="family369"] .top .search{border-color:transparent;background:rgba(255,255,255,.12);color:#eaf3f8}
+[data-theme="family369"] .top .search input,[data-theme="family369"] .top .search input::placeholder{color:#eaf3f8}
+[data-theme="family369"] .top,[data-theme="family369"] .side{--sel-bg:rgba(255,255,255,.14);--sel-text:#FFFFFF;--nav-text:rgba(234,243,248,.85)}
+[data-theme="family369"] .top .menu{--sel-bg:#e3f1f8;--sel-text:#0a6f9e;--nav-text:#3c4a55}
+[data-theme="family369"] .side .proj-tile.proj-ic{background:rgba(255,255,255,.14);color:#fff}
+[data-theme="family369"] .dot{border-color:#0b3c58;background:#f7931e}
+[data-theme="family369"] .filters .search{background:#fff;border-color:#e4eaef;color:#64757f}
+[data-theme="family369"] .btn-primary{background:linear-gradient(180deg,#0c86be,#096b99);box-shadow:0 10px 18px -12px rgba(9,107,153,.9)}
+[data-theme="family369"] .seg span.on{color:#0b3c58}
+[data-theme="family369"] .head h1,[data-theme="family369"] .panel h2{color:#0b3c58}
+[data-theme="family369"] .panel-h .icon-btn{color:#64757f}
+
+/* ---- dark ---- */
+[data-mode="dark"] {
+  color-scheme: dark;
+  --mode:dark;
+  --canvas:#161A1D;
+  --sunken:#1D2125;
+  --surface:#1D2125;
+  --raised:#22272B;
+  --border:#38414A;
+  --text:#B6C2CF;
+  --subtle:#9FADBC;
+  --subtlest:#8C9BAB;
+  --brand:#579DFF;
+  --on-brand:#1D2125;
+  --sel-bg:#1C2B41;
+  --sel-text:#85B8FF;
+  --nav-bg:#1D2125;
+  --nav-text:#9FADBC;
+  --nav-border:#2C333A;
+  --side-bg:#1D2125;
+  --side-text:#9FADBC;
+  --hover:#282E33;
+  --input:#22272B;
+  --fresh:#42221F;
+  --fresh-border:#F87168;
+  --lz-todo-bg:#2C333A;
+  --lz-todo:#B6C2CF;
+  --lz-prog-bg:#09326C;
+  --lz-prog:#85B8FF;
+  --lz-done-bg:#164B35;
+  --lz-done:#7EE2B8;
+  --lz-paused-bg:#533F04;
+  --lz-paused:#F5CD47;
+  --lz-review-bg:#352C63;
+  --lz-review:#B8ACF6;
+  --over-bg:#42221F;
+  --over:#FD9891;
+  --pri-urgent:#F87168;
+  --pri-important:#FEA362;
+  --pri-regular:#4BCE97;
+  --danger:#F87168;
+  --proj:#FEA362;
+  --r:8px;
+  --r-card:12px;
+  --fs:14px;
+  --h1w:800;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --shadow:0 0 0 1px #2C333A;
+  --shadow-lg:0 8px 12px rgba(0,0,0,.5),0 0 0 1px #38414A;
+  --navy:#DEE4EA
+}
+[data-mode="dark"] .head h1,[data-mode="dark"] .panel h2,[data-mode="dark"] .proj b,[data-mode="dark"] .logo,[data-mode="dark"] .card p,[data-mode="dark"] .sec p,[data-mode="dark"] .check,[data-mode="dark"] .details dd{color:#DEE4EA}
+[data-mode="dark"] .seg span.on{background:#2C333A;color:#DEE4EA;box-shadow:none}
+[data-mode="dark"] .box{border-color:#596773;background:#22272B}
+[data-mode="dark"] .bar{background:#2C333A}
+[data-mode="dark"] .proj-tile{color:#1D2125}
+[data-mode="dark"] .fresh .lz{background:#5D1F1A!important;color:#FD9891!important}
+[data-mode="dark"] .avs .avatar{border-color:#161A1D}
+[data-mode="dark"] .dot{border-color:#1D2125}
+[data-mode="dark"] .search{border-color:#38414A}
+[data-mode="dark"] .btn{color:#DEE4EA}
+
+/* ---- dense ---- */
+[data-theme="dense"] {
+  --canvas:#F6F4F0;
+  --sunken:#EFEBE4;
+  --surface:#FFFDFA;
+  --raised:#FFFDFA;
+  --border:#E3DED5;
+  --text:#262320;
+  --subtle:#4A443E;
+  --subtlest:#6B655D;
+  --brand:#0F766E;
+  --on-brand:#FFFFFF;
+  --sel-bg:#DDF1EE;
+  --sel-text:#0B5E57;
+  --nav-bg:#FFFDFA;
+  --nav-text:#4A443E;
+  --nav-border:#E3DED5;
+  --side-bg:#F1EDE6;
+  --side-text:#4A443E;
+  --hover:#EBE6DE;
+  --input:#FFFDFA;
+  --fresh:#FBE8C8;
+  --fresh-border:#E0A94F;
+  --lz-todo-bg:#E7E2DA;
+  --lz-todo:#4A443E;
+  --lz-prog-bg:#D6EFEA;
+  --lz-prog:#0B5E57;
+  --lz-done-bg:#DFF0D8;
+  --lz-done:#2F6B1F;
+  --lz-paused-bg:#FBE8C8;
+  --lz-paused:#8A5300;
+  --lz-review-bg:#E9E2F5;
+  --lz-review:#5B3E96;
+  --over-bg:#F9DEDA;
+  --over:#9B2C21;
+  --pri-urgent:#B3261E;
+  --pri-important:#B45309;
+  --pri-regular:#2F6B1F;
+  --danger:#B3261E;
+  --proj:#B45309;
+  --r:4px;
+  --r-card:4px;
+  --fs:13px;
+  --h1w:600;
+  --font:"IBM Plex Sans",system-ui,sans-serif;
+  --shadow:0 1px 1px rgba(38,35,32,.12),0 0 0 1px rgba(38,35,32,.08);
+  --shadow-lg:0 8px 16px rgba(38,35,32,.14),0 0 0 1px rgba(38,35,32,.08);
+  --navy:#262320
+}
+[data-theme="dense"] {line-height:18px}
+[data-theme="dense"] .top{height:48px}
+[data-theme="dense"] .nav-btn,[data-theme="dense"] .btn,[data-theme="dense"] .pill,[data-theme="dense"] .who-chip,[data-theme="dense"] .search,[data-theme="dense"] .icon-btn,[data-theme="dense"] .chip{height:28px}
+[data-theme="dense"] .side{width:216px;padding:12px 10px}
+[data-theme="dense"] .side-item{height:30px}
+[data-theme="dense"] .main{padding:12px 20px 0}
+[data-theme="dense"] .head h1{font-size:20px;line-height:24px}
+[data-theme="dense"] .head{margin:4px 0 10px}
+[data-theme="dense"] .filters{margin-bottom:10px}
+[data-theme="dense"] .col{width:240px}
+[data-theme="dense"] .col-h{height:36px}
+[data-theme="dense"] .card{padding:8px 10px;gap:6px}
+[data-theme="dense"] .card p{font-size:13px;line-height:18px}
+[data-theme="dense"] .panel{width:440px}
+[data-theme="dense"] .panel-h{height:44px}
+[data-theme="dense"] .panel-b{gap:12px;padding:12px 16px}
+[data-theme="dense"] .panel h2{font-size:17px;line-height:22px}
+[data-theme="dense"] .check{height:24px}
+[data-theme="dense"] .details dt,[data-theme="dense"] .details dd{height:22px;font-size:12px}
+[data-theme="dense"] .avs .avatar{width:28px;height:28px;font-size:11px}
+[data-theme="dense"] .fresh .lz{background:#F3D9A4!important;color:#6B3E00!important}
+
+/* ---- tints: the pastel chip / icon-tile / callout colours used across the
+   screens. Light values on :root (every skin), dark values under the mode. ---- */
+:root {
+  --tint-blue-bg:#E0ECFF; --tint-blue:#2563EB; --tint-blue-border:#BFD0F0;
+  --tint-green-bg:#DCFCE7; --tint-green:#16A34A;
+  --tint-violet-bg:#EDE9FE; --tint-violet:#7C3AED; --tint-violet-text:#4C1D95; --tint-violet-border:#C4B5FD;
+  --tint-amber-bg:#FEF3C7; --tint-amber:#D97706;
+  --tint-red-bg:#FEE2E2; --tint-red:#DC2626;
+  --tint-cyan-bg:#CFFAFE; --tint-cyan:#0891B2;
+  --tint-pink-bg:#FCE7F3; --tint-pink:#DB2777;
+  --tint-orange-bg:#FFEDD5; --tint-orange:#EA580C;
+  --tint-grey-bg:#F1F5F9; --tint-grey:#64748B;
+  --wa-bg:#E7FBE9; --wa-text:#065F46; --wa-body:#1F2937;
+  --paper:#FFFFFF; --paper-line:#E5E9F0; --paper-tint:#EAF2FF;
+}
+[data-mode="dark"] {
+  --tint-blue-bg:#1C2B41; --tint-blue:#85B8FF; --tint-blue-border:#2E4A7A;
+  --tint-green-bg:#164B35; --tint-green:#7EE2B8;
+  --tint-violet-bg:#352C63; --tint-violet:#B8ACF6; --tint-violet-text:#D6CCFF; --tint-violet-border:#5A4BA0;
+  --tint-amber-bg:#533F04; --tint-amber:#F5CD47;
+  --tint-red-bg:#42221F; --tint-red:#FD9891;
+  --tint-cyan-bg:#15393F; --tint-cyan:#6CD5EF;
+  --tint-pink-bg:#4A1D33; --tint-pink:#F7A8CC;
+  --tint-orange-bg:#4A2A12; --tint-orange:#FEA362;
+  --tint-grey-bg:#2C333A; --tint-grey:#B6C2CF;
+  --wa-bg:#1E3A2A; --wa-text:#9BE7B5; --wa-body:#DEE4EA;
+  --paper:#22272B; --paper-line:#38414A; --paper-tint:#1C2B41;
+}
+/* Dark keeps the chosen skin's shape; these are the colour touches that
+   inline styles cannot express. */
+[data-mode="dark"] .k-app .logo, [data-mode="dark"] .k-app .head h1, [data-mode="dark"] .k-app .panel h2, [data-mode="dark"] .k-app .proj b, [data-mode="dark"] .k-app .stat b, [data-mode="dark"] .k-app .cardbox h2, [data-mode="dark"] .k-app .modal h2, [data-mode="dark"] .k-app .sheet h2 { color: var(--navy); }
+[data-mode="dark"] .k-app .seg span.on { background: var(--raised); color: var(--navy); box-shadow: none; }
+[data-mode="dark"] .k-app .tabs span.on { background: var(--raised); color: var(--navy); }
+[data-mode="dark"] .k-app .box { border-color: #596773; background: var(--raised); }
+[data-mode="dark"] .k-app .toggle { background: #3F4A55; }
+[data-mode="dark"] .k-app .toggle.on { background: var(--brand); }
+[data-mode="dark"] .k-app .input, [data-mode="dark"] .k-app .search { border-color: var(--border); }
+[data-mode="dark"] .k-app .dropzone { background: var(--raised); border-color: var(--border); }
+[data-mode="dark"] .k-app .run { background: linear-gradient(135deg, #1E3A8A, #1D4ED8); }
+[data-mode="dark"] .k-app .thumb { background: linear-gradient(135deg, #1C2B41, #0F2140); color: var(--navy); }
+[data-mode="dark"] .k-app .dot, [data-mode="dark"] .k-app .avs .avatar { border-color: var(--nav-bg); }
+[data-mode="dark"] .k-app .menu, [data-mode="dark"] .k-app .flags .flag, [data-mode="dark"] .k-app .modal { background: var(--raised); }
+[data-mode="dark"] .k-app .fresh .lz { background: #5D1F1A !important; color: #FD9891 !important; }
+[data-mode="dark"] .k-app .table tr.sel td { background: var(--sel-bg); }
+[data-mode="dark"] .k-app .callout { color: var(--text); }
+[data-mode="dark"] .k-app .readonly { background: var(--tint-amber-bg); color: var(--tint-amber); }
+[data-mode="dark"] .k-gate .cardbox { background: var(--raised); }
+[data-mode="dark"] ::selection { background: #3B6FD8; color: #fff; }

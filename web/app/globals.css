@@ -1,0 +1,46 @@
+@import "./fonts/inter.css";
+@import "./themes/tokens.css";
+@import "../components/ui/ui.css";
+@import "../components/ui/loader.css";
+@import "../components/ui/serverdown.css";
+@import "../components/shell/shell.css";
+@import "../components/board/board.css";
+@import "../components/auth/auth.css";
+@import "../components/auth/hero.css";
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; height: 100%; }
+body { margin: 0; min-height: 100%; background: var(--canvas); color: var(--text); font-family: var(--font); font-size: var(--fs); line-height: 20px; -webkit-font-smoothing: antialiased; }
+a { color: var(--brand); }
+a:hover { color: var(--sel-text); }
+img { max-width: 100%; }
+button { font: inherit; }
+input, textarea, select { font: inherit; color: inherit; }
+::selection { background: var(--brand); color: #fff; }
+
+/* ---- theme switch animation ------------------------------------------------
+   1) View Transitions: the new look is revealed as a circle growing from the
+      click (--vt-x/--vt-y set by lib/theme.js), the old look stays underneath.
+   2) Fallback / reduced motion: a short cross-fade of colours. */
+html.theme-switching::view-transition-old(root),
+html.theme-switching::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+html.theme-switching::view-transition-old(root) { z-index: 1; }
+html.theme-switching::view-transition-new(root) { z-index: 2; animation: kpi-reveal .62s cubic-bezier(.22, .61, .36, 1) both; }
+@keyframes kpi-reveal {
+  from { clip-path: circle(0 at var(--vt-x, 50%) var(--vt-y, 50%)); }
+  to   { clip-path: circle(var(--vt-r, 150vmax) at var(--vt-x, 50%) var(--vt-y, 50%)); }
+}
+html.theme-fading, html.theme-fading * { transition: background-color .4s ease, color .4s ease, border-color .4s ease, fill .4s ease, stroke .4s ease, box-shadow .4s ease !important; }
+
+/* The sun / moon button: the two icons cross-rotate, with a little spring. */
+.k-app .mode-btn { position: relative; overflow: hidden; }
+.k-app .mode-btn .mode-ic { position: absolute; inset: 0; display: grid; place-items: center; transition: transform .5s cubic-bezier(.34, 1.56, .64, 1), opacity .3s ease; }
+.k-app .mode-btn.is-light .mode-sun { transform: rotate(90deg) scale(.4); opacity: 0; }
+.k-app .mode-btn.is-light .mode-moon { transform: none; opacity: 1; }
+.k-app .mode-btn.is-dark .mode-sun { transform: none; opacity: 1; }
+.k-app .mode-btn.is-dark .mode-moon { transform: rotate(-90deg) scale(.4); opacity: 0; }
+.k-app .mode-btn:hover .mode-ic { transform: rotate(15deg) scale(1.1); }
+.k-app .mode-btn:active .mode-ic { transform: scale(.85); }
+.k-app .mode-btn.is-dark { color: #F5CD47; }
+.k-app .mode-btn.is-light { color: var(--brand); }
+@media (prefers-reduced-motion: reduce) { .k-app .mode-btn .mode-ic { transition: none; } }

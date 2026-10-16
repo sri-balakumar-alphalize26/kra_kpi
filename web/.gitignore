@@ -1,0 +1,10 @@
+node_modules
+.next
+.next-prod
+.next-dev
+out
+.env*.local
+
+# Playwright
+/test-results/
+/playwright-report/

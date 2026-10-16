@@ -1,0 +1,17 @@
+/* KraLoader (components/ui/KraLoader.jsx): floating app logo + typed message. */
+.kl-screen{position:fixed;inset:0;background:var(--canvas);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px}
+.kl-inline{flex:1;display:flex;align-items:flex-start;justify-content:center;padding:56px 0}
+.kl-card{width:min(520px,100%);padding:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;font-family:var(--font)}
+
+.kl-logo{position:relative;width:128px;height:128px;border-radius:30px;overflow:hidden;filter:drop-shadow(0 10px 18px rgba(11,63,196,.28));animation:kl-pop .6s cubic-bezier(.34,1.56,.64,1) both,kl-float 3.2s ease-in-out .6s infinite}
+.kl-logo img{display:block;width:100%;height:100%}
+@keyframes kl-pop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.05);opacity:1}100%{transform:scale(1)}}
+@keyframes kl-float{50%{transform:translateY(-5px)}}
+/* glossy sweep across the tile */
+.kl-shine{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.45) 50%,transparent 70%);transform:translateX(-130%);animation:kl-shine 3.2s ease-in-out 1s infinite}
+@keyframes kl-shine{0%,60%{transform:translateX(-130%)}85%,100%{transform:translateX(130%)}}
+
+.kl-msg{font-size:16px;font-weight:600;letter-spacing:.3px;color:var(--navy);min-height:22px;transition:opacity .35s;white-space:nowrap}
+.kl-caret{display:inline-block;width:2px;height:1em;margin-left:2px;vertical-align:-2px;background:#F5931E;animation:kl-blink .7s steps(1) infinite}
+@keyframes kl-blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.kl-logo,.kl-shine{animation:none}.kl-caret{animation-duration:1.4s}}

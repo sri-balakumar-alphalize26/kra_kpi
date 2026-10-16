@@ -1,0 +1,41 @@
+/* ServerDown (components/ui/ServerDown.jsx): "Server not reachable" scene.
+   2.4 s loop — the cable scrolls in and the server hops it at ~74 %. */
+.sd-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 2px 10px #1b2a4e0d;width:min(520px,100%);padding:26px 24px 28px;text-align:center;font-family:var(--font)}
+.sd-card.compact{padding:16px 16px 18px;width:min(420px,100%);align-self:center;margin:24px auto}
+.sd-scene{display:block;width:100%;max-width:340px;height:auto;margin:0 auto 14px;overflow:hidden}
+.sd-card.compact .sd-scene{max-width:220px;margin-bottom:8px}
+.sd-card h2{margin:0 0 8px;font-size:20px;color:var(--navy)}
+.sd-card.compact h2{font-size:16px;margin-bottom:4px}
+.sd-card p{margin:0 0 16px;color:var(--subtle);font-size:15px}
+.sd-card.compact p{font-size:13.5px;margin-bottom:12px}
+.sd-btns{display:flex;gap:10px;justify-content:center}
+
+.sd-ground{stroke:var(--subtlest);stroke-width:2;stroke-dasharray:14 9 4 11;animation:sd-ground .6s linear infinite}
+@keyframes sd-ground{to{stroke-dashoffset:-38}}
+.sd-pebble{fill:var(--border);animation:sd-scroll 2.4s linear infinite}
+@keyframes sd-scroll{from{transform:translateX(0)}to{transform:translateX(-380px)}}
+.sd-cloud{fill:none;stroke:var(--border);stroke-width:2;stroke-linejoin:round;animation:sd-cloud 14s linear infinite}
+.sd-cloud.c2{animation-duration:20s;animation-delay:-9s}
+@keyframes sd-cloud{from{transform:translateX(0)}to{transform:translateX(-440px)}}
+.sd-badge{stroke:var(--subtlest)}
+.sd-plug{animation:sd-scroll 2.4s linear infinite}
+.sd-runner{animation:sd-jump 2.4s infinite}
+@keyframes sd-jump{0%,63%{transform:translateY(0);animation-timing-function:cubic-bezier(.2,.7,.4,1)}75%{transform:translateY(-44px);animation-timing-function:cubic-bezier(.6,0,.8,.3)}87%,100%{transform:translateY(0)}}
+.sd-bob{animation:sd-bob .3s ease-in-out infinite alternate}
+@keyframes sd-bob{to{transform:translateY(-1.5px)}}
+.sd-leg{transform-box:fill-box;transform-origin:50% 0;animation:sd-leg .3s linear infinite alternate}
+.sd-leg.l2{animation-direction:alternate-reverse}
+@keyframes sd-leg{from{transform:rotate(28deg)}to{transform:rotate(-28deg)}}
+.sd-led{animation:sd-led .8s steps(1) infinite}
+.sd-led.b{animation-delay:.4s}
+@keyframes sd-led{50%{opacity:.15}}
+.sd-eyes{transform-box:fill-box;transform-origin:center;animation:sd-blink 3.2s infinite}
+@keyframes sd-blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+.sd-sweat{animation:sd-sweat 2.4s infinite;opacity:0}
+@keyframes sd-sweat{0%,62%{opacity:0;transform:translate(0,0)}66%{opacity:1}80%,100%{opacity:0;transform:translate(6px,-6px)}}
+.sd-signal path{animation:sd-sig 1.6s infinite;opacity:.2}
+.sd-signal path:nth-child(2){animation-delay:.2s}.sd-signal path:nth-child(3){animation-delay:.4s}
+@keyframes sd-sig{0%,100%{opacity:.2}30%{opacity:1}}
+.sd-slash{stroke-dasharray:30;animation:sd-slash 1.6s ease-in-out infinite}
+@keyframes sd-slash{0%,40%{stroke-dashoffset:30}60%,100%{stroke-dashoffset:0}}
+@media (prefers-reduced-motion:reduce){.sd-scene *{animation:none!important}}
