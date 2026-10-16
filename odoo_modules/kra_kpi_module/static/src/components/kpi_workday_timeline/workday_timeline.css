@@ -1,0 +1,60 @@
+/* Workday Map (web): to-scale bar + vertical cards. See workday_timeline.js. */
+.wt { font-size: 13px; }
+.wt-empty { color: #64748B; padding: 6px 0; }
+.wt-bar { position: relative; height: 18px; border-radius: 9px; background: #EEF2F7; }
+.wt-seg { position: absolute; top: 0; bottom: 0; cursor: help; }
+.wt-seg:first-child { border-radius: 9px 0 0 9px; }
+.wt-seg-idle { background-image: repeating-linear-gradient(45deg, #CBD5E1 0 4px, #E2E8F0 4px 8px) !important; }
+.wt-ticks { position: relative; height: 16px; margin-top: 2px; }
+.wt-tick { position: absolute; transform: translateX(-50%); font-size: 10px; color: #64748B; }
+.wt-hint { font-size: 11px; color: #94A3B8; margin: 2px 0 6px; }
+.wt-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; font-size: 11px; color: #64748B; font-weight: 700; }
+.wt-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.wt-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.wt-edge { font-weight: 800; color: #1E3A8A; margin: 6px 0 6px 4px; font-size: 12px; }
+.wt-edge-live { color: #1D4ED8; }
+.wt-row { display: flex; align-items: stretch; }
+.wt-rail { width: 50px; flex: none; display: flex; flex-direction: column; align-items: center; }
+.wt-time { font-size: 11px; font-weight: 800; color: #64748B; margin-top: 8px; }
+.wt-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 3px; }
+.wt-dot-live { box-shadow: 0 0 0 3px #BFDBFE; }
+.wt-line { flex: 1; width: 2px; min-height: 6px; background: #E2E8F0; }
+.wt-line-idle { background: repeating-linear-gradient(#CBD5E1 0 4px, transparent 4px 8px); }
+.wt-card { flex: 1; background: #fff; border: 1px solid #E2E8F0; border-left: 4px solid; border-radius: 10px; padding: 7px 10px; margin: 3px 0; }
+.wt-card-top { display: flex; align-items: flex-start; gap: 8px; }
+.wt-title { flex: 1; font-weight: 800; color: #0F172A; }
+.wt-when { font-weight: 700; margin-top: 2px; font-size: 12px; }
+.wt-dur { color: #64748B; }
+.wt-meta { font-size: 11px; color: #64748B; margin-top: 1px; }
+.wt-note { font-size: 12px; color: #374151; font-style: italic; margin-top: 3px; }
+.wt-pill { border-radius: 6px; padding: 1px 6px; font-size: 10.5px; font-weight: 800; white-space: nowrap; }
+.wt-pill-live { background: #DBEAFE; color: #1D4ED8; }
+.wt-pill-good { background: #DCFCE7; color: #15803D; }
+.wt-pill-info { background: #CCFBF1; color: #0F766E; }
+.wt-pill-warn { background: #FEF3C7; color: #B45309; }
+.wt-pill-alert { background: #FFEDD5; color: #C2410C; }
+.wt-pill-muted { background: #F1F5F9; color: #475569; }
+.wt-link { flex: 1; padding: 4px 0; font-size: 12px; color: #475569; font-weight: 600; cursor: help; align-self: center; }
+.wt-link-idle { font-style: italic; color: #64748B; }
+/* Hover tooltip: the long "moved from A to B · next: …" story. */
+.wt-link[data-tip] { position: relative; }
+[data-tip]:hover::after {
+  content: attr(data-tip); position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 20;
+  background: #0F172A; color: #fff; font-size: 12px; font-weight: 500; font-style: normal;
+  line-height: 1.4; padding: 6px 9px; border-radius: 6px; width: max-content; max-width: 340px;
+  white-space: normal; box-shadow: 0 4px 14px rgba(0,0,0,.25); pointer-events: none;
+}
+
+/* Live Tracking side panel (kpi_live_tracking.js). */
+.kpi-lt-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.35); z-index: 1040; }
+.kpi-lt-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 100vw); z-index: 1041;
+  background: #F4F7FB; overflow-y: auto; box-shadow: -8px 0 24px rgba(0,0,0,.18); }
+.kpi-lt-tile { background: #fff; border: 1px solid #E2E8F0; border-radius: 10px; padding: 8px 10px; height: 100%;
+  display: flex; flex-direction: column; }
+.kpi-lt-tile small { color: #64748B; font-weight: 700; }
+.kpi-lt-tile b { font-size: 18px; }
+.kpi-lt-away { background: #FEF9E7; border-radius: 10px; padding: 10px 12px; }
+.kpi-lt-away-cell { background: #fff; border: 1px solid #E2E8F0; border-radius: 8px; padding: 5px 10px;
+  min-width: 96px; text-align: center; display: flex; flex-direction: column; }
+.kpi-lt-away-cell small { color: #64748B; font-weight: 700; font-size: 11px; }
+.kpi-lt-log { background: #fff; border: 1px solid #E2E8F0; border-radius: 10px; padding: 10px 12px; }

@@ -1854,6 +1854,12 @@ class KpiWorkSession(models.Model):
                 return a + '-' + b
             return a or b or ''
 
+        # Raw UTC instants beside the formatted `time`, so a renderer can draw the
+        # day to scale and see the gaps between nodes. Additive: every existing
+        # reader (the snapshot image, the web popup) keeps using `time`.
+        def _ts(dt):
+            return fields.Datetime.to_string(dt) if dt else ''
+
         _far = fields.Datetime.now()
         # Same clock for every "still running" duration on this Map, so two chips
         # drawn in one render can't disagree by a few milliseconds.
@@ -1863,7 +1869,8 @@ class KpiWorkSession(models.Model):
         # Start node
         if first_login:
             nodes.append({'kind': 'start', 'icon': '🌅', 'label': 'Started workday',
-                          'time': _hm(first_login), '_sort': first_login})
+                          'time': _hm(first_login), 'ts': _ts(first_login),
+                          '_sort': first_login})
 
         # Per-task final state + latest progress summary (for completion nodes)
         kpi_ids = list({s['kpi_id'] for s in segments})
@@ -1918,11 +1925,18 @@ class KpiWorkSession(models.Model):
                         if is_last and st in ('completed', 'partially_completed'):
                             outcome = 'completed' if st == 'completed' else 'submitted'
                             reason = prog_by.get(s['kpi_id'], '')
+            t_running = outcome == 'active'
+            t_secs = (max(0.0, ((_now_ts if t_running else end) - start).total_seconds())
+                      if start and (end or t_running) else 0.0)
             nodes.append({
                 'kind': 'task', 'icon': '🛠',
                 'ref': s['ref'], 'name': s['name'] or '',
+                'task_id': s['kpi_id'],
                 'label': (str(s['ref']) + ' ' + (s['name'] or '')).strip(),
                 'time': _range(start, end), 'outcome': outcome, 'reason': reason,
+                'start_ts': _ts(start), 'end_ts': '' if t_running else _ts(end),
+                'seconds': t_secs, 'duration_display': _fmt_hms(t_secs),
+                'running': t_running,
                 '_sort': start or first_login or _far,
             })
 
@@ -1946,6 +1960,9 @@ class KpiWorkSession(models.Model):
                 'with': (b.meeting_with_display or '').strip(),
                 'running': b_running,
                 'from': b.source_task_id.name if b.source_task_id else '',
+                'start_ts': _ts(b.start_time),
+                'end_ts': '' if b_running else _ts(b.end_time),
+                'seconds': b_secs,
                 '_sort': b.start_time or first_login or _far,
             })
 
@@ -1969,6 +1986,9 @@ class KpiWorkSession(models.Model):
                 'reason': (bk.get('note') or '').strip(),
                 'running': bool(running),
                 'from': '',   # no task was running — that is the whole point
+                'start_ts': _ts(bk['start_at']),
+                'end_ts': '' if running else _ts(bk.get('end_at')),
+                'seconds': bk.get('seconds') or 0,
                 '_sort': bk['start_at'] or first_login or _far,
             })
 
@@ -1979,6 +1999,7 @@ class KpiWorkSession(models.Model):
         # AFTER the sort, so numbers follow the clock and not the query order.
         # Start/End are never numbered — there is only one of each.
         _seq = {}
+        _visits = {}
         for n in nodes:
             key = 'task' if n['kind'] == 'task' else n.get('break_type')
             if not key:
@@ -1986,6 +2007,10 @@ class KpiWorkSession(models.Model):
             _seq[key] = _seq.get(key, 0) + 1
             n['seq'] = _seq[key]
             if n['kind'] == 'task':
+                # Which time today THIS task is being worked: "Task 5" alone hides
+                # that it is the same task as Task 1 picked up again.
+                _visits[n['task_id']] = _visits.get(n['task_id'], 0) + 1
+                n['visit'] = _visits[n['task_id']]
                 # Keep the task's identity — an admin reading the saved image must
                 # still be able to tell WHICH task this was.
                 n['label'] = ('Task %d · %s' % (_seq[key], n['label'])).strip()
@@ -1994,9 +2019,11 @@ class KpiWorkSession(models.Model):
 
         # End node — always last, and never numbered.
         if last_logout:
-            nodes.append({'kind': 'end', 'icon': '🌙', 'label': 'Ended workday', 'time': _hm(last_logout)})
+            nodes.append({'kind': 'end', 'icon': '🌙', 'label': 'Ended workday',
+                          'time': _hm(last_logout), 'ts': _ts(last_logout)})
         else:
-            nodes.append({'kind': 'end', 'icon': '⏳', 'label': 'Still working', 'time': ''})
+            nodes.append({'kind': 'end', 'icon': '⏳', 'label': 'Still working', 'time': '',
+                          'ts': ''})
 
         for n in nodes:
             n.pop('_sort', None)

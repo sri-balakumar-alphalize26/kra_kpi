@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.5.7",
+    "version": "19.0.5.8",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -71,6 +71,9 @@
             
             # Shared utils
             "kra_kpi_module/static/src/utils/upload_with_progress.js",
+            # Workday Map renderer shared by Live Tracking and the End Workday popup.
+            "kra_kpi_module/static/src/components/kpi_workday_timeline/workday_timeline.js",
+            "kra_kpi_module/static/src/components/kpi_workday_timeline/workday_timeline.css",
 
             # Existing JS files
             "kra_kpi_module/static/src/js/router.js",

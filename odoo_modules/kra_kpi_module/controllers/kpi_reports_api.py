@@ -4728,6 +4728,16 @@ class KpiReportsAPI(http.Controller):
                 lambda u: u.active and not u.share and u.kpi_app_login_enabled
                 and not u.has_group('kra_kpi_module.group_kra_admin')
                 and not u.has_group('base.group_system'))
+            # ...plus admins who clock in themselves. Leaving every admin out hid an
+            # admin who had started their workday entirely, while a day's attendance
+            # was being read off this screen. Only those with a workday in the last
+            # 30 days: an admin who never uses the workday must not show as Absent
+            # every single day.
+            recent = Session.search([
+                ('session_date', '>=', today - _td(days=30)),
+                ('user_id', 'not in', devs.ids),
+            ]).mapped('user_id')
+            devs |= recent.filtered(lambda u: u.active and not u.share and u.id != 1)
 
             rows = []
             for u in devs.sorted(lambda x: (x.name or x.login or '').lower()):
@@ -4938,6 +4948,113 @@ class KpiReportsAPI(http.Controller):
                     'message': 'Nudged %s.' % (target.name or 'them')}
         except Exception as e:
             logging.getLogger(__name__).error(f"kpi_owner_nudge_user: {e}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_owner/employee_day', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_owner_employee_day(self, **params):
+        """One developer's day for an admin: what Live Tracking opens on a tap.
+
+        params: user_id (required), date ('YYYY-MM-DD', optional — default today).
+
+        The same payload the End Workday summary is built from
+        (_daily_summary_payload, full day), so the admin reads exactly what the
+        developer reads — totals, away time, the Workday Map, tasks — but live,
+        at any hour, not only once the day is ended.
+
+        Unlike /kpi_workday/today_summary this never OPENS a session: that route
+        is the developer looking at their own day, and opening one is right for
+        them. Here it would start someone else's workday just because an admin
+        looked. A day with no session answers started: False.
+
+        "Today" is the admin's calendar day, the same one Live Tracking uses, so
+        the two screens always talk about the same day.
+        """
+        import logging
+        try:
+            if not self._is_owner_admin():
+                return {'status': False, 'message': 'Not authorized.'}
+            try:
+                uid = int(params.get('user_id') or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            target = request.env['res.users'].sudo().browse(uid)
+            if not uid or not target.exists():
+                return {'status': False, 'message': 'Developer not found.'}
+
+            today = fields.Date.context_today(request.env.user)
+            day = today
+            if params.get('date'):
+                try:
+                    day = fields.Date.to_date(params['date']) or today
+                except (TypeError, ValueError):
+                    return {'status': False, 'message': 'Date is not valid.'}
+            if day > today:
+                return {'status': False, 'message': 'That day has not happened yet.'}
+
+            Session = request.env['kpi.work.session'].sudo()
+            sess = Session.search([('user_id', '=', target.id), ('session_date', '=', day)],
+                                  order='login_at desc, id desc', limit=1)
+            if not sess:
+                return {'status': True, 'started': False, 'user_id': target.id,
+                        'dev': target.name or '', 'session_date': fields.Date.to_string(day)}
+
+            # Live presence must reflect "now", as on the developer's own screen.
+            sess.invalidate_recordset(['productive_seconds', 'presence_seconds', 'task_count'])
+            payload = sess._daily_summary_payload(full_day=True)
+            payload.update({'status': True, 'started': True, 'user_id': target.id,
+                            'is_today': day == today})
+            # Every start and end of the day, oldest first: the first start is
+            # what attendance is judged on, and a restart or a reopen later in
+            # the day shows here instead of being guessed at.
+            all_sess = Session.search([('user_id', '=', target.id), ('session_date', '=', day)],
+                                      order='login_at asc, id asc')
+            now = fields.Datetime.now()
+
+            def _hm(dt):
+                return _to_user_tz_str(dt, target, fmt='%H:%M') if dt else ''
+
+            sessions = []
+            for i, ss in enumerate(all_sess, start=1):
+                end = ss.logout_at or (now if ss.state == 'open' else False)
+                secs = max(0, int((end - ss.login_at).total_seconds())) if (end and ss.login_at) else 0
+                sessions.append({
+                    'n': i,
+                    'login': _hm(ss.login_at),
+                    'logout': _hm(ss.logout_at),
+                    'open': ss.state == 'open',
+                    'auto_closed': bool(ss.auto_closed),
+                    'duration_display': _fmt_hms(secs) if secs else '0m',
+                    'reopened': bool(ss.reverted),
+                    'reopened_at': _hm(ss.reverted_at),
+                    'reopened_by': ss.reverted_by_id.name if ss.reverted_by_id else '',
+                    'reopen_reason': (ss.revert_reason or '').strip(),
+                })
+            payload['sessions'] = sessions
+            # Arrival = the FIRST start of the day, judged against the same cutoff
+            # Live Tracking uses. A later restart or reopen never changes it.
+            first = all_sess[:1].login_at if all_sess else False
+            payload['first_login'] = _hm(first)
+            try:
+                cut = float(request.env.company.attendance_cutoff_hour or 10.667)
+            except Exception:
+                cut = 10.667
+            local_first = _to_user_tz_str(first, target, fmt='%H:%M') if first else ''
+            if local_first:
+                h, m = (int(x) for x in local_first.split(':'))
+                payload['late'] = (h + m / 60.0) > cut + 1e-6
+            else:
+                payload['late'] = False
+
+            # The "no progress note yet" warning is about today's work only.
+            payload['missing_progress'] = []
+            if day == today:
+                try:
+                    payload['missing_progress'] = Session._tasks_missing_progress_today(user=target)
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("employee_day missing_progress: %s", exc)
+            return payload
+        except Exception as e:
+            logging.getLogger(__name__).error(f"kpi_owner_employee_day: {e}")
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_owner/action_log', type='json', auth='user', methods=['POST'], csrf=False)

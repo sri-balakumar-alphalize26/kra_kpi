@@ -6,6 +6,7 @@ import { rpc } from "@web/core/network/rpc";
 import { useService } from "@web/core/utils/hooks";
 import { session } from "@web/session";
 import { uploadWithProgress } from "@kra_kpi_module/utils/upload_with_progress";
+import { renderTimelineHtml } from "@kra_kpi_module/components/kpi_workday_timeline/workday_timeline";
 
 // How long a never-started card stays red before dropping back to its lane
 // colour. Mirrors FRESH_MAX_AGE_MS in the app's services/kpiActions.js — the two
@@ -4395,51 +4396,13 @@ export class KpiAction extends Component {
                     </div>
                 `).join('')}
             </div>` : '';
-        // 🗺 Workday Map — render the day's flow as chips: start → task → break → … → end.
-        // Server sends a ready-to-render `timeline` list; each task chip shows its
-        // outcome + the last reason/note typed underneath (in brackets).
-        const tlEsc = (x) => (x == null ? '' : x.toString()).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const tlChip = (n) => {
-            const icon = n.icon || '';
-            const label = tlEsc(n.label || '');
-            const time = tlEsc(n.time || '');
-            let border = '#cbd5e1', sub = '', note = '';
-            if (n.kind === 'start' || n.kind === 'end') {
-                border = '#94a3b8';
-                if (time) sub = `<div style="font-size:11px;color:#6b7280;">${time}</div>`;
-            } else if (n.kind === 'break') {
-                border = awayColor(n.break_type);
-                const dur = n.duration_display ? ` · ${tlEsc(n.duration_display)}` : '';
-                sub = `<div style="font-size:11px;color:#6b7280;">${time}${dur}</div>`;
-                // The typed note + a live marker. This branch used to drop n.reason
-                // entirely, so a note saved against a meeting/break was stored and
-                // never shown — while the saved PNG printed it, leaving the image and
-                // this popup disagreeing about the same day.
-                const bparts = [];
-                if (n.running) bparts.push('▶ In progress');
-                if (n['with']) bparts.push('with ' + tlEsc(n['with']));
-                if (n.reason) bparts.push(tlEsc(n.reason));
-                if (bparts.length) note = `<div style="font-size:11px;color:#374151;font-style:italic;line-height:1.3;">(${bparts.join(' — ')})</div>`;
-            } else { // task
-                const oc = { completed:'#16a34a', submitted:'#0d9488', paused:'#f59e0b', active:'#3b82f6', worked:'#64748b', moved:'#f97316' };
-                border = oc[n.outcome] || '#3b82f6';
-                if (time) sub = `<div style="font-size:11px;color:#6b7280;">${time}</div>`;
-                const ocLabel = { completed:'✓ Completed', submitted:'◑ Verification pending', paused:'⏸ Paused', active:'▶ In progress', worked:'', moved:'↪ Moved' }[n.outcome] || '';
-                const parts = [];
-                if (ocLabel) parts.push(ocLabel);
-                if (n.reason) parts.push(tlEsc(n.reason));
-                if (parts.length) note = `<div style="font-size:11px;color:#374151;font-style:italic;line-height:1.3;">(${parts.join(' — ')})</div>`;
-            }
-            return `<div style="display:inline-flex;flex-direction:column;min-width:104px;max-width:190px;border:1px solid ${border};border-top:3px solid ${border};border-radius:10px;padding:6px 10px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.06);">`
-                + `<div style="font-weight:600;font-size:13px;line-height:1.25;">${icon} ${label}</div>${sub}${note}</div>`;
-        };
-        const timelineInner = (data.timeline && data.timeline.length)
-            ? data.timeline.map(tlChip).join('<span style="align-self:center;color:#9ca3af;font-size:16px;">→</span>')
-            : '<span class="text-muted small">No activity recorded yet today.</span>';
+        // 🗺 Workday Map — the shared renderer (to-scale bar + cards in order,
+        // hover a ↓ line for what changed). Same one Live Tracking uses.
+        const timelineInner = renderTimelineHtml(data.timeline || [], Date.now());
         const timelineSection = `
             <div class="border rounded p-3 mb-3" style="background:#f8fafc;">
-                <div class="fw-bold mb-2">🗺 Workday Map <span class="text-muted fw-normal small">(your day in order — each task shows the last reason/note typed)</span></div>
-                <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;">${timelineInner}</div>
+                <div class="fw-bold mb-2">🗺 Workday Map <span class="text-muted fw-normal small">(your day in order)</span></div>
+                ${timelineInner}
             </div>`;
         const modalHTML = `
             <div class="modal-backdrop fade show"></div>
