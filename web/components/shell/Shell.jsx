@@ -7,7 +7,7 @@ import { IdlePrompt } from "@/components/work/IdleFlow";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useMe } from "@/lib/me";
-import { TOP_NAV, WORK_SIDE, PORTAL_TABS, allowed, activeKey } from "@/lib/nav";
+import { TOP_NAV, PORTAL_TABS, allowed, allowedMenu, activeKey } from "@/lib/nav";
 import KraLoader from "@/components/ui/KraLoader";
 import { useResource } from "@/lib/useFetch";
 import { getPref, setPref } from "@/lib/prefs";
@@ -244,9 +244,22 @@ function DesktopAlertsItem() {
 function Sidebar({ collapsed, onToggle }) {
   const { me } = useMe();
   const pathname = usePathname();
-  const items = allowed(WORK_SIDE, me);
-  const active = activeKey(items, pathname);
+  const groups = allowedMenu(me);
+  const active = activeKey(groups.flatMap((g) => g.items), pathname);
   const admin = me.role === "admin";
+  /* Open groups are remembered per user. The group holding the current page
+     is always open, so the highlighted item is never hidden. */
+  const [open, setOpen] = useState(() => getPref("side.open", me.uid, ["mywork"]) || ["mywork"]);
+  const current = groups.find((g) => g.items.some((it) => it.key === active))?.key;
+  const isOpen = (k) => open.includes(k) || k === current;
+  const toggle = (k) => {
+    if (collapsed) { onToggle(); if (!open.includes(k)) setOpen((o) => [...o, k]); return; }
+    setOpen((o) => {
+      const next = isOpen(k) ? o.filter((x) => x !== k) : [...o, k];
+      setPref("side.open", me.uid, next);
+      return next;
+    });
+  };
   return (
     <nav className="side" aria-label="Sections">
       <div className="proj" style={{ cursor: collapsed ? "pointer" : "default" }} onClick={() => { if (collapsed) onToggle(); }} title={collapsed ? "Expand sidebar" : undefined}>
@@ -256,13 +269,22 @@ function Sidebar({ collapsed, onToggle }) {
         {!collapsed && <IconButton icon="cleft" label="Collapse sidebar" size={16} className="side-toggle" onClick={(e) => { e.stopPropagation(); onToggle(); }} />}
       </div>
       {collapsed && <button className="side-item side-expand" onClick={onToggle} title="Expand sidebar" aria-label="Expand sidebar"><Icon n="cright" size={18} /></button>}
-      {items.map((it, i) => it.group
-        ? <p key={`g${i}`} className="side-h">{it.group}</p>
-        : (
-          <Link key={it.key} href={it.href} className={`side-item si-item ${active === it.key ? "on" : ""}`} title={collapsed ? it.label : undefined}>
-            <SideIcon n={it.icon} /><span>{it.label}</span>
-          </Link>
-        ))}
+      {groups.map((g) => {
+        const show = isOpen(g.key);
+        return (
+          <div key={g.key} className="side-grp">
+            <button type="button" className={`side-item si-item side-grp-h ${!show && current === g.key ? "on" : ""}`} aria-expanded={show} onClick={() => toggle(g.key)} title={collapsed ? g.group : undefined}>
+              <SideIcon n={g.icon} /><span>{g.group}</span>
+              <Icon n={show ? "chev" : "cright"} size={14} className="side-chev" />
+            </button>
+            {show && !collapsed && g.items.map((it) => (
+              <Link key={it.key} href={it.href} className={`side-item side-sub ${active === it.key ? "on" : ""}`}>
+                <span>{it.label}</span>
+              </Link>
+            ))}
+          </div>
+        );
+      })}
     </nav>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Avatar, Button, ErrorState, Field, Input, Lozenge, Modal, PageHeader, Select, Skeleton, Tabs, useDialogs, useFlags } from "@/components/ui";
 import * as R from "@/lib/services/reports";
 import ReportsNav from "./ReportsNav";
@@ -132,7 +133,11 @@ async function employeeDetailPdf(name, tasks, from, to) {
 }
 
 export default function PerformanceReport() {
-  const [tab, setTab] = useState("report");
+  /* ?tab=salary opens the salary master (the sidebar's "Employee Salary Master"). */
+  const sp = useSearchParams();
+  const want = sp.get("tab") === "salary" ? "salary" : "report";
+  const [tab, setTab] = useState(want);
+  useEffect(() => { setTab(want); }, [want]);
   const [staff, setStaff] = useState([]);
   const [prefill, setPrefill] = useState(null);
   useEffect(() => { R.fetchStaff().then(setStaff).catch(() => {}); }, []);

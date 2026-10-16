@@ -207,3 +207,12 @@
 /* Content blocks and table rows ease in as they appear */
 .k-app .cardbox,.k-app .stat{animation:cd-in .3s ease-out backwards}
 @media (prefers-reduced-motion:reduce){.k-app .page-in,.k-app .panel,.k-app .panel-scrim,.k-app .col-b .card,.k-app .cardbox,.k-app .stat{animation:none!important}.k-app .side,.k-app .col{transition:none!important}}
+
+/* Sidebar groups: the Odoo menu's sections (My Work, Tracking, …). The header
+   opens and closes the group; sub-options sit indented under it. */
+.k-app .side-grp { display: flex; flex-direction: column; }
+.k-app .side-grp-h { width: 100%; border: 0; background: none; font: inherit; cursor: pointer; text-align: left; font-weight: 600; }
+.k-app .side-grp-h .side-chev { margin-left: auto; color: var(--subtlest); flex: none; }
+.k-app .side-sub { padding-left: 44px; font-size: 13px; min-height: 30px; }
+.k-app .side-grp + .side-grp { margin-top: 2px; }
+.k-app.side-collapsed .side-grp-h .side-chev { display: none; }

@@ -15,6 +15,11 @@ export default function Configuration() {
   const [samples, setSamples] = useState({});
   const [saving, setSaving] = useState("");
   useEffect(() => { S.fetchGroupEvents().then((r) => { setEvents(r?.events || []); setSamples(r?.samples || {}); }).catch(() => setEvents([])); }, []);
+  /* The sidebar's "Multi-task Settings" opens this page with ?section=multitask. */
+  const hasDevs = !!devs.data;
+  useEffect(() => {
+    if (hasDevs && /[?&]section=multitask\b/.test(window.location.search)) document.getElementById("multitask")?.scrollIntoView({ block: "start" });
+  }, [hasDevs]);
   const refused = cfg.data?.status === false ? { message: cfg.data.message || cfg.data.error || "Could not load the configuration." } : null;
   const c = refused ? null : cfg.data;
 
@@ -85,7 +90,7 @@ export default function Configuration() {
                 <div className="kv"><span className="lbl">Workday snapshots</span><span className="val">Keep end-of-day images for</span><span className="right"><Ret k="sr" number={c.snapshot_retention_number} unit={c.snapshot_retention_unit} onSave={(n, u) => save("sr", () => S.cfgSet.snapshotRetention(n, u))} /></span></div>
                 <div className="kv"><span className="lbl">Daily reports</span><span className="val">Keep PDFs for</span><span className="right"><Ret k="rr" number={c.report_retention_number} unit={c.report_retention_unit} onSave={(n, u) => save("rr", () => S.cfgSet.reportRetention(n, u))} /></span></div>
                 <div className="kv"><span className="lbl">Report downloads</span><span className="val">Keep generated KRA report files for (0 = forever)</span><span className="right"><Ret k="dl" number={c.download_retention_number} unit={c.download_retention_unit} onSave={(n, u) => save("dl", () => S.cfgSet.downloadRetention(n, u))} /></span></div>
-                <h2 style={{ marginTop: 10 }}>Developers · multitask &amp; WhatsApp</h2>
+                <h2 id="multitask" style={{ marginTop: 10, scrollMarginTop: 72 }}>Developers · multitask &amp; WhatsApp</h2>
                 {(devs.data?.developers || []).map((d) => (
                   <div key={d.id} className="kv" style={{ padding: "7px 0" }}><Avatar name={d.name} id={d.id} size={24} /><span className="val">{d.name}</span><span className="right"><WaField d={d} onSave={(v) => save(`wa${d.id}`, () => S.cfgSet.devWa(d.id, v))} /><Toggle k={`mt${d.id}`} on={d.allow_multitask} onChange={(v) => save(`mt${d.id}`, () => S.cfgSet.multitask(d.id, v))} /></span></div>
                 ))}

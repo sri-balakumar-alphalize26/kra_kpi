@@ -16,37 +16,84 @@ export const TOP_NAV = [
   { key: "people", label: "People", href: "/people", roles: ["admin"] },
 ];
 
-/* Left sidebar for developers and admins (one workspace; admin items appear
-   for admins, as Jira does with permissions). `group` starts a new section. */
-export const WORK_SIDE = [
-  { key: "dash", label: "Dashboard", icon: "dash", href: "/dashboards", roles: ["admin"], owner: true },
-  { key: "dash-me", label: "Dashboard", icon: "dash", href: "/your-work", roles: ["developer", "admin"], notOwner: true },
-  { key: "board", label: "Board", icon: "board", href: "/board" },
-  { key: "list", label: "List", icon: "list", href: "/list" },
-  /* Admins keep a workday too, so they see their own day and snapshots. */
-  { key: "workday", label: "My workday", icon: "timeline", href: "/your-work/timeline", roles: ["developer", "admin"] },
-  { key: "snapshots", label: "My snapshots", icon: "camera", href: "/your-work/snapshots", roles: ["developer", "admin"] },
-  { key: "documents", label: "Documents", icon: "doc", href: "/documents" },
-  { key: "reminders", label: "Reminders", icon: "alarm", href: "/reminders" },
-  { key: "notifications", label: "Notifications", icon: "bell", href: "/notifications" },
-  { key: "manual", label: "User manual", icon: "book", href: "/manual" },
-  { group: "Admin", roles: ["admin"] },
-  { key: "live", label: "Live Tracking", icon: "live", href: "/people", roles: ["admin"] },
-  { key: "queue", label: "Client queue", icon: "inbox", href: "/queue", roles: ["admin"] },
-  { key: "intake", label: "Intake / uploads", icon: "upload", href: "/intake/requirement", match: ["/intake"], roles: ["admin"] },
-  { key: "certs", label: "Certificates", icon: "doc", href: "/intake/certificates", roles: ["admin"] },
-  { key: "tracker", label: "People", icon: "people", href: "/people/tracker", match: ["/people/attendance", "/people/action-log"], roles: ["admin"] },
-  { key: "reports", label: "Reports", icon: "chart", href: "/reports/kra", match: ["/reports"], roles: ["admin"] },
-  { key: "settings", label: "Settings", icon: "gear", href: "/settings/kra-tree", match: ["/settings"], roles: ["admin"] },
-  /* Odoo System administrators only (also hidden from coordinators / owners).
-     KPI configuration (kpi.config.screen) stays here until Odoo's ACL lets
-     group_kra_admin use that model too. */
-  { group: "System", roles: ["admin"], system: true },
-  { key: "kpi-config", label: "KPI configuration", icon: "list", href: "/settings/kpi-config", roles: ["admin"], system: true },
-  { key: "sessions", label: "Workday sessions", icon: "timeline", href: "/settings/workday-sessions", roles: ["admin"], system: true },
-  { key: "backup", label: "Backup & restore", icon: "download", href: "/settings/backup", roles: ["admin"], system: true },
-  { key: "cleanup", label: "Data cleanup", icon: "trash", href: "/settings/cleanup", roles: ["admin"], system: true },
+/* Left sidebar for developers and admins: the Odoo "KRA / KPI" menu, same
+   groups, same sub-options, same order (views/menu.xml and the menu records
+   in the other views). Each group opens and closes; its items are the
+   sub-options. A group's `roles`/flags hide the whole group; an item's hide
+   just that item. Items marked "web only" have no Odoo menu but live here so
+   they stay reachable. */
+const ADMIN = ["admin"];
+export const WORK_MENU = [
+  { key: "mywork", group: "My Work", icon: "board", roles: ["developer", "admin"], items: [
+    { key: "board", label: "KPI Actions", href: "/board", match: ["/browse"] },
+    { key: "workday", label: "My Workday", href: "/your-work/timeline" },
+    { key: "reminders", label: "Reminders", href: "/reminders" },
+    { key: "snapshots", label: "My Workday Snapshots", href: "/your-work/snapshots" },
+    { key: "documents", label: "Task Related Documents", href: "/documents" },
+    { key: "notifications", label: "Notifications", href: "/notifications" }, /* web only */
+    { key: "manual", label: "User Manual", href: "/manual" }, /* web only */
+  ] },
+  { key: "tracking", group: "Tracking", icon: "live", roles: ADMIN, items: [
+    { key: "live", label: "Live Tracking", href: "/people" },
+    { key: "owner", label: "Owner Dashboard", href: "/dashboards", owner: true },
+    { key: "attendance", label: "Attendance", href: "/people/attendance" }, /* web only */
+  ] },
+  { key: "clients", group: "Clients", icon: "inbox", roles: ADMIN, items: [
+    { key: "queue", label: "Client Task Queue", href: "/queue" },
+    { key: "files", label: "Generate Client Files", href: "/intake/files" },
+  ] },
+  { key: "uploads", group: "Uploads", icon: "upload", roles: ADMIN, items: [
+    { key: "up-req", label: "Upload Requirements", href: "/intake/requirement" },
+    { key: "up-upd", label: "Upload Updates", href: "/intake/update" },
+    { key: "up-bug", label: "Upload Bug Reports", href: "/intake/bug" },
+  ] },
+  { key: "setup", group: "Setup", icon: "list", roles: ADMIN, items: [
+    { key: "kra-master", label: "KRA / KPI Master", href: "/settings/kra-tree" },
+    /* kpi.config.screen is System/Manager-only in Odoo's access rules. */
+    { key: "kpi-config", label: "KPI Configuration", href: "/settings/kpi-config", system: true },
+    { key: "whatsapp", label: "WhatsApp Connect", href: "/settings/whatsapp" },
+  ] },
+  { key: "reports", group: "KPI Reports", icon: "chart", roles: ADMIN, items: [
+    { key: "salary", label: "Employee Salary Master", href: "/reports/performance?tab=salary" },
+    { key: "unit", label: "KPI Unit Report", href: "/reports/unit" },
+    { key: "performance", label: "KPI Performance Report", href: "/reports/performance" },
+    { key: "kra", label: "KRA Report", href: "/reports/kra" },
+    { key: "attention", label: "KPI Attention Report", href: "/reports/attention" },
+    { key: "employee", label: "KRA Employee Report", href: "/reports/employee" },
+    { key: "invoices", label: "Client Invoices", href: "/reports/invoices" },
+    { key: "tracker", label: "Employee Tracker", href: "/people/tracker" },
+    { key: "work", label: "Work Report", href: "/reports/work" },
+    { key: "certs", label: "Completion Certificates", href: "/intake/certificates" },
+    { key: "project-status", label: "Project Completion Check", href: "/intake/project-status" },
+    { key: "daily", label: "Daily Task Reports", href: "/reports/daily" },
+    { key: "paid", label: "Paid Work", href: "/reports/paid-work" }, /* web only */
+  ] },
+  { key: "settings", group: "Settings", icon: "gear", roles: ADMIN, items: [
+    { key: "configuration", label: "Configuration", href: "/settings/configuration" },
+    { key: "branding", label: "Company Branding", href: "/settings/branding" },
+    /* Multi-task settings live inside the Configuration page on the web. */
+    { key: "multitask", label: "Multi-task Settings", href: "/settings/configuration?section=multitask" },
+    { key: "sessions", label: "Workday Sessions", href: "/settings/workday-sessions", system: true },
+    { key: "action-log", label: "Action Log", href: "/people/action-log" },
+    { key: "backup", label: "Backup & Restore", href: "/settings/backup", system: true },
+    { key: "wd-snapshots", label: "Workday Snapshots", href: "/reports/snapshots" },
+    { key: "login", label: "Login Management", href: "/settings/login" },
+    { key: "users", label: "Users", href: "/settings/users" }, /* web only */
+    { key: "cleanup", label: "Data Cleanup", href: "/settings/cleanup", system: true },
+    { key: "reassignments", label: "Reassignment History", href: "/reports/reassignments" },
+    { key: "pre-approvals", label: "Client Pre-Approvals", href: "/settings/pre-approvals" },
+  ] },
 ];
+
+/* The same items as one flat list (page titles, active-item lookup). */
+export const WORK_SIDE = WORK_MENU.flatMap((g) => g.items.map((it) => ({ ...it, roles: it.roles || g.roles, system: it.system || g.system, owner: it.owner || g.owner })));
+
+/* WORK_MENU cut down to what this person may see; empty groups drop out. */
+export function allowedMenu(me) {
+  return allowed(WORK_MENU, me)
+    .map((g) => ({ ...g, items: allowed(g.items, me) }))
+    .filter((g) => g.items.length);
+}
 
 /* The client portal has no sidebar: tabs in the header. */
 export const PORTAL_TABS = [
