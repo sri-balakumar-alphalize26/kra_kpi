@@ -81,8 +81,8 @@ function ConfigScreens() {
       {edit && (
         <Modal open onClose={() => setEdit(null)} title={edit.id ? "Edit screen" : "New screen"} width={480}
           footer={<><Button kind="ghost" onClick={() => setEdit(null)}>Cancel</Button><Button kind="primary" busy={busy} disabled={!edit.name.trim() || !edit.url.trim()} onClick={save}>{edit.id ? "Save" : "Add"}</Button></>}>
-          <Field label="Screen name"><Input value={edit.name} autoFocus onChange={(e) => setEdit({ ...edit, name: e.target.value })} placeholder="e.g. Deploy to staging" /></Field>
-          <Field label="Screen URL"><Input value={edit.url} onChange={(e) => setEdit({ ...edit, url: e.target.value })} placeholder="e.g. /odoo/action-123" /></Field>
+          <Field label="Screen name" required><Input value={edit.name} autoFocus onChange={(e) => setEdit({ ...edit, name: e.target.value })} placeholder="e.g. Deploy to staging" /></Field>
+          <Field label="Screen URL" required><Input value={edit.url} onChange={(e) => setEdit({ ...edit, url: e.target.value })} placeholder="e.g. /odoo/action-123" /></Field>
           <label className="chk"><input type="checkbox" checked={edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} />Active</label>
         </Modal>
       )}

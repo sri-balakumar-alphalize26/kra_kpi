@@ -1,6 +1,7 @@
 /* Ports of the mobile services for the developer tools:
    notifications, task documents, my workday, workday snapshots, user manual,
    reminders. Same routes and params as the app. */
+import { useEffect, useState } from "react";
 import { rpc, read, callKw, assertOk } from "@/lib/api";
 
 /* ---- notifications (/kpi_notifications/*) ---- */
@@ -137,17 +138,36 @@ export const timeToFloat = (s) => { const [h, m] = String(s || "0:0").split(":")
 export const setAppPassword = (newPassword) => rpc("/kpi_app/set_password", { new_password: newPassword });
 /* Profile photo, stored on the user in Odoo. image_1920 is in res.users
    SELF_WRITEABLE_FIELDS (Odoo 19), so any user may set their own; Odoo derives
-   avatar_128 from it, which /web/image serves through our proxy. */
+   avatar_128 from it, which /web/image serves through our proxy.
+   Odoo gives every internal user without a photo a generated initials SVG
+   (_avatar_generate_svg). That is not a photo: it counts as none, so our own
+   coloured initials show instead. */
+const isGeneratedAvatar = (b64) => /^(PD94|PHN2Zy)/.test(b64 || ""); /* "<?xml" / "<svg" */
 export async function fetchMyPhoto(uid) {
   try {
     const rows = await callKw("res.users", "read", [[Number(uid)], ["image_128", "write_date"]]);
     const r = Array.isArray(rows) ? rows[0] : null;
-    return { has: !!r?.image_128, version: r?.write_date || "" };
+    return { has: !!r?.image_128 && !isGeneratedAvatar(r.image_128), version: r?.write_date || "" };
   } catch (e) { return { has: false, version: "", error: e }; }
 }
 export const myPhotoUrl = (uid, version) => `/web/image/res.users/${uid}/avatar_128${version ? `?unique=${encodeURIComponent(version)}` : ""}`;
 /* b64: raw base64 (no data: prefix), or false to remove the photo. */
 export const saveMyPhoto = (uid, b64) => callKw("res.users", "write", [[Number(uid)], { image_1920: b64 || false }]);
+/* Fired after a save / remove, so every avatar of "me" (top bar, Profile) reloads. */
+export const PHOTO_EVENT = "kpi:photo";
+/* My photo's URL, or null for initials. Follows PHOTO_EVENT. */
+export function useMyPhoto(uid) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    if (!uid) return undefined;
+    let live = true;
+    const load = () => fetchMyPhoto(uid).then((p) => { if (live) setSrc(p.has ? myPhotoUrl(uid, p.version) : null); });
+    load();
+    window.addEventListener(PHOTO_EVENT, load);
+    return () => { live = false; window.removeEventListener(PHOTO_EVENT, load); };
+  }, [uid]);
+  return src;
+}
 export const fetchAttendanceMine = () => read("/kpi_attendance/mine", {}, { ttl: 60000 }).catch(() => ({ status: false, notInstalled: true }));
 
 export { assertOk };

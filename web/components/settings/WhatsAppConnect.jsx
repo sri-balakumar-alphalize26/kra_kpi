@@ -148,8 +148,8 @@ export default function WhatsAppConnect() {
       <Modal open={!!send} onClose={() => setSend(null)} title="Send a WhatsApp message" width={480}
         footer={<><Button kind="ghost" onClick={() => setSend(null)}>Cancel</Button><Button kind="primary" busy={busy === "send"} disabled={!send?.phone.replace(/\D/g, "") || !send?.message.trim()} onClick={doSend}>Send</Button></>}>
         {send && <>
-          <Field label="Phone number" hint="With the country code, digits only (e.g. 919876543210)"><Input value={send.phone} inputMode="tel" autoFocus onChange={(e) => setSend({ ...send, phone: e.target.value })} /></Field>
-          <Field label="Message"><span className="input ta" style={{ height: "auto" }}><textarea rows={5} value={send.message} onChange={(e) => setSend({ ...send, message: e.target.value })} style={{ border: 0, background: "none", outline: 0, resize: "vertical", width: "100%", font: "inherit", color: "inherit" }} /></span></Field>
+          <Field label="Phone number" required hint="With the country code, digits only (e.g. 919876543210)"><Input value={send.phone} inputMode="tel" autoFocus onChange={(e) => setSend({ ...send, phone: e.target.value })} /></Field>
+          <Field label="Message" required><span className="input ta" style={{ height: "auto" }}><textarea rows={5} value={send.message} onChange={(e) => setSend({ ...send, message: e.target.value })} style={{ border: 0, background: "none", outline: 0, resize: "vertical", width: "100%", font: "inherit", color: "inherit" }} /></span></Field>
         </>}
       </Modal>
     </>

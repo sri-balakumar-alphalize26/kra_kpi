@@ -221,7 +221,7 @@ function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
         {mode === "sendback" && (
           <div className="cardbox" style={{ gap: 10 }}>
             <b style={{ color: "var(--navy)" }}>What isn&apos;t right?</b>
-            <Field label="Reason (required)"><span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus placeholder="e.g. The merged table name doesn't show in the waiter app" style={{ border: 0, background: "none", outline: 0, resize: "none", width: "100%", height: "100%", font: "inherit", color: "inherit" }} /></span></Field>
+            <Field label="Reason" required><span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus placeholder="e.g. The merged table name doesn't show in the waiter app" style={{ border: 0, background: "none", outline: 0, resize: "none", width: "100%", height: "100%", font: "inherit", color: "inherit" }} /></span></Field>
             <div className="row"><Button kind="danger" busy={busy} disabled={!reason.trim()} onClick={() => run(() => P.sendBack(k.id, reason), "Sent back for rework.")}>Request changes</Button><Button kind="ghost" onClick={() => setMode("view")}>Cancel</Button></div>
           </div>
         )}

@@ -18,15 +18,45 @@
 .ewd-tag b { color: var(--text); }
 .ewd-tag.sm { padding: 1px 8px; margin-right: 6px; font-weight: 700; }
 .ewd-events { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--subtle); }
-.ewd-map { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 0; }
-.ewd-step { display: inline-flex; align-items: center; }
-.ewd-arrow { font-style: normal; color: var(--subtlest); margin: 0 6px; }
-.ewd-chip { display: inline-flex; flex-direction: column; padding: 5px 10px; border-radius: 10px; background: var(--hover); border: 1px solid var(--border); max-width: 260px; }
-.ewd-chip b { font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ewd-chip small { font-size: 11.5px; color: var(--subtlest); }
-.ewd-chip.k-task { background: var(--lz-prog-bg); }
-.ewd-chip.k-break { background: var(--lz-paused-bg); }
-.ewd-chip.k-start, .ewd-chip.k-end { background: var(--surface); }
+/* Workday Map (components/work/WorkdayTimeline.jsx), ported from Odoo's
+   kpi_workday_timeline/workday_timeline.css. Category colours stay fixed, as in
+   Odoo and the app, so a colour means the same thing on every client. */
+.wt { font-size: 13px; }
+.wt-empty { color: var(--subtle); padding: 6px 0; }
+.wt-bar { position: relative; height: 18px; border-radius: 9px; background: var(--hover); overflow: hidden; }
+.wt-seg { position: absolute; top: 0; bottom: 0; cursor: help; }
+.wt-seg-idle { background-image: repeating-linear-gradient(45deg, #CBD5E1 0 4px, #E2E8F0 4px 8px) !important; }
+.wt-ticks { position: relative; height: 16px; margin-top: 2px; }
+.wt-tick { position: absolute; transform: translateX(-50%); font-size: 10px; color: var(--subtle); }
+.wt-hint { font-size: 11px; color: var(--subtlest); margin: 2px 0 6px; }
+.wt-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; font-size: 11px; color: var(--subtle); font-weight: 700; }
+.wt-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.wt-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.wt-edge { font-weight: 800; color: var(--navy); margin: 6px 0 6px 4px; font-size: 12px; }
+.wt-edge-live { color: #2563EB; }
+.wt-row { display: flex; align-items: stretch; }
+.wt-rail { width: 50px; flex: none; display: flex; flex-direction: column; align-items: center; }
+.wt-time { font-size: 11px; font-weight: 800; color: var(--subtle); margin-top: 8px; }
+.wt-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 3px; }
+.wt-dot-live { box-shadow: 0 0 0 3px #BFDBFE; }
+.wt-line { flex: 1; width: 2px; min-height: 6px; background: var(--border); }
+.wt-line-idle { background: repeating-linear-gradient(#CBD5E1 0 4px, transparent 4px 8px); }
+.wt-card { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid; border-radius: 10px; padding: 7px 10px; margin: 3px 0; }
+.wt-card-top { display: flex; align-items: flex-start; gap: 8px; }
+.wt-title { flex: 1; min-width: 0; font-weight: 800; color: var(--text); overflow-wrap: anywhere; }
+.wt-when { font-weight: 700; margin-top: 2px; font-size: 12px; color: var(--text); }
+.wt-dur, .wt-meta { color: var(--subtle); }
+.wt-meta { font-size: 11px; margin-top: 1px; }
+.wt-note { font-size: 12px; color: var(--text); font-style: italic; margin-top: 3px; }
+.wt-pill { border-radius: 6px; padding: 1px 6px; font-size: 10.5px; font-weight: 800; white-space: nowrap; }
+.wt-pill-live { background: #DBEAFE; color: #1D4ED8; }
+.wt-pill-good { background: #DCFCE7; color: #15803D; }
+.wt-pill-info { background: #CCFBF1; color: #0F766E; }
+.wt-pill-warn { background: #FEF3C7; color: #B45309; }
+.wt-pill-alert { background: #FFEDD5; color: #C2410C; }
+.wt-pill-muted { background: #F1F5F9; color: #475569; }
+.wt-link { flex: 1; padding: 4px 0; font-size: 12px; color: var(--subtle); font-weight: 600; cursor: help; align-self: center; }
+.wt-link-idle { font-style: italic; }
 .ewd-prog { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-top: 1px solid rgba(0,0,0,.06); }
 .ewd-prog-name { font-size: 13px; font-weight: 600; }
 .ewd-prog-row { display: flex; gap: 6px; align-items: center; }
@@ -38,12 +68,32 @@
 .k-app .col.narrow .col-h:hover { background: var(--hover); }
 .k-app .col-h { cursor: default; }
 .k-app .col-h .dotc { width: 8px; height: 8px; border-radius: 50%; margin-right: 2px; }
+
+/* Plan → Do → Check phases (Board.jsx PHASES): an arrow header per phase over
+   its lanes, which sit on the phase's own tint. The tint is mixed from the
+   phase colour so it reads in light and dark themes alike. */
+.k-app .board.pdc { align-items: stretch; gap: 16px; }
+.k-app .pdc-phase { flex: none; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.k-app .pdc-head { height: 36px; flex: none; background: var(--pc); color: #fff; display: flex; align-items: center; gap: 10px; padding: 0 30px 0 24px; font-size: 13px; font-weight: 800; letter-spacing: 1px;
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 0 100%, 12px 50%); }
+.k-app .pdc-phase:first-child .pdc-head { padding-left: 16px; border-radius: 10px 0 0 10px; clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 0 100%); }
+.k-app .pdc-head small { font-weight: 600; letter-spacing: 0; font-size: 12px; opacity: .92; }
+.k-app .pdc-cols { flex: 1; min-height: 0; display: flex; gap: 12px; align-items: flex-start; padding: 10px; border-radius: 14px; background: color-mix(in srgb, var(--pc) 7%, transparent); }
+.k-app .pdc-cols .col { flex: 0 0 260px; width: 260px; max-width: 260px; }
+.k-app .pdc-cols .col.narrow { flex: 0 0 56px; width: 56px; min-width: 56px; }
+
+/* Lane header icon tile (Board.jsx LANE_TILE). */
+.k-app .ctile { width: 26px; height: 26px; border-radius: 8px; background: var(--c); color: #fff; display: inline-grid; place-items: center; flex: none;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--c) 35%, transparent); }
+.k-app .col.narrow .ctile { margin-bottom: 6px; }
 .k-app .col-h .collapse { margin-left: auto; width: 24px; height: 24px; }
 .k-app .col-b { overflow-y: auto; flex: 1; min-height: 60px; scrollbar-width: thin; }
 .k-app .col.drop-ok { outline: 2px dashed var(--brand); outline-offset: -2px; background: var(--sel-bg); }
 .k-app .col.drop-no { opacity: .45; }
 .k-app .card { cursor: grab; transition: box-shadow .12s, transform .12s; }
 .k-app .card:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
+/* Hover lifts a new (red) card too, without losing its red ring. */
+.k-app .card.fresh:hover { box-shadow: inset 0 0 0 1.5px #dc3545, var(--shadow-lg); }
 .k-app .card.dragging { opacity: .35; }
 /* Off-screen cards in a long lane skip layout and paint until scrolled to. */
 .k-app .col-b .card { content-visibility: auto; contain-intrinsic-size: auto 150px; }

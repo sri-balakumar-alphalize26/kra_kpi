@@ -156,7 +156,7 @@ export default function InvoiceDetail({ id }) {
         {f.billing_method === "per_task" && <p className="mini" style={{ margin: 0 }}>Changing the method or a type price re-prices every task line by its type.</p>}
       </Modal>
       <Modal open={dlg === "adjust"} onClose={() => setDlg(null)} title="Add adjustment" width={460} footer={<><Button kind="ghost" onClick={() => setDlg(null)}>Cancel</Button><Button kind="primary" busy={busy === "adj"} disabled={!f.description} onClick={() => run("adj", () => R.addAdjustment({ invoice_id: +id, description: f.description, quoted_hours: +f.quoted_hours || 0, notes: f.notes || "" }), "Adjustment added.")}>Add</Button></>}>
-        <Field label="Description"><Input value={f.description || ""} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Goodwill discount" autoFocus /></Field>
+        <Field label="Description" required><Input value={f.description || ""} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="e.g. Goodwill discount" autoFocus /></Field>
         <Field label="Hours (negative to deduct)"><Input type="number" step="0.25" value={f.quoted_hours} onChange={(e) => setF({ ...f, quoted_hours: e.target.value })} /></Field>
         <Field label="Note (optional)"><Input value={f.notes || ""} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field>
       </Modal>
@@ -166,7 +166,7 @@ export default function InvoiceDetail({ id }) {
       </Modal>
       <Modal open={dlg === "revise"} onClose={() => setDlg(null)} title="Revise invoice" width={460} footer={<><Button kind="ghost" onClick={() => setDlg(null)}>Cancel</Button><Button kind="primary" busy={busy === "rev"} disabled={!f.reason} onClick={() => run("rev", () => R.reviseInvoice(id, f.reason), "Revision opened as a draft.")}>Revise</Button></>}>
         <p className="note" style={{ margin: 0 }}>Reopens the invoice as a draft with a revision number; the client sees the reason.</p>
-        <Field label="Reason"><Input value={f.reason || ""} onChange={(e) => setF({ ...f, reason: e.target.value })} autoFocus /></Field>
+        <Field label="Reason" required><Input value={f.reason || ""} onChange={(e) => setF({ ...f, reason: e.target.value })} autoFocus /></Field>
       </Modal>
       <Confirm open={dlg === "delete"} onClose={() => setDlg(null)} title={`Delete ${inv.name}?`} text="Only drafts can be deleted. Its tasks become available for a new invoice." confirmLabel="Delete" danger busy={busy === "del"} onConfirm={doDelete} />
       <style>{`@media print { .k-app .top, .k-app .side, .k-app .head > span, .k-app .crumbs, .flags, .steps, .k-app .cardbox h2 .right { display: none !important; } .k-app .main { padding: 0 !important; } .k-app .g21 { grid-template-columns: 1fr !important; } .k-app .cardbox { box-shadow: none !important; border-color: #ccc !important; break-inside: avoid; } }`}</style>

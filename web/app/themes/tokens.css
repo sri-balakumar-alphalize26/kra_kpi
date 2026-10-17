@@ -287,7 +287,10 @@
 [data-mode="dark"] .box{border-color:#596773;background:#22272B}
 [data-mode="dark"] .bar{background:#2C333A}
 [data-mode="dark"] .proj-tile{color:#1D2125}
-[data-mode="dark"] .fresh .lz{background:#5D1F1A!important;color:#FD9891!important}
+[data-mode="dark"] .fresh .lz{background:#dc3545!important;color:#fff!important}
+/* The new-task card in dark mode: deep red, the same red ring, light text. */
+[data-mode="dark"] .card.fresh{background:#5D1F1A;--text:#FBE4E2;--subtle:#F0B9B4;--subtlest:#D99A94}
+[data-mode="dark"] .card.fresh p{color:#FBE4E2}
 [data-mode="dark"] .avs .avatar{border-color:#161A1D}
 [data-mode="dark"] .dot{border-color:#1D2125}
 [data-mode="dark"] .search{border-color:#38414A}

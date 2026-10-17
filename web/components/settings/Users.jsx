@@ -80,7 +80,7 @@ export default function Users() {
         {edit && (
           <form className="sheet" onSubmit={save} aria-label={edit.id ? "Edit user" : "New user"}>
             <h2>{edit.id ? "Edit user" : "New user"} {edit.id && <span className="mini" style={{ fontWeight: 600 }}>· {edit.name}</span>}</h2>
-            <div className="grid2"><Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} autoFocus /></Field><Field label="Login"><Input value={edit.login} onChange={(e) => setEdit({ ...edit, login: e.target.value })} /></Field></div>
+            <div className="grid2"><Field label="Name" required><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} autoFocus /></Field><Field label="Login" required><Input value={edit.login} onChange={(e) => setEdit({ ...edit, login: e.target.value })} /></Field></div>
             <Field label="Email"><Input type="email" value={edit.email || ""} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
             <Field label="Role"><Tabs items={S.ROLES.map((r) => ({ key: r.code, label: r.label }))} value={edit.role} onChange={(r) => setEdit({ ...edit, role: r })} /></Field>
             <Field label="Mobile (app login)" hint="Digits only; the country's dial code is added."><Input inputMode="numeric" value={edit.mobile || ""} onChange={(e) => setEdit({ ...edit, mobile: e.target.value.replace(/\D/g, "") })} /></Field>

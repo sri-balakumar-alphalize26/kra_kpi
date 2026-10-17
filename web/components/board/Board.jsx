@@ -21,6 +21,27 @@ const SEL = { border: 0, background: "none", outline: 0, width: "100%", font: "i
 const EMPTY = [];
 const LANE_PAGE = 50; /* cards per lane before "Show more" */
 
+/* Plan → Do → Check: the lanes grouped under one arrow header per phase, each
+   phase on its own tint. Lanes keep their own order inside a phase; a phase
+   with no lane showing is left out. */
+const PHASES = [
+  { key: "plan", label: "PLAN", color: "#0284C7", lanes: ["regular", "important", "urgent"] },
+  { key: "do", label: "DO", color: "#D97706", lanes: ["today", "in_progress", "paused"] },
+  { key: "check", label: "CHECK", color: "#15803D", lanes: ["pending_review", "approvals", "awaiting_client", "completed"] },
+];
+/* The coloured icon tile in each lane header: [icon, colour]. */
+const LANE_TILE = {
+  today: ["sun", "#2563EB"], pending_review: ["eye", "#8B5CF6"],
+  regular: ["list", "#0EA5E9"], important: ["star", "#7C3AED"], urgent: ["bolt", "#EF4444"],
+  in_progress: ["play", "#F59E0B"], paused: ["pause", "#64748B"],
+  approvals: ["check", "#16A34A"], awaiting_client: ["clock", "#0891B2"], completed: ["flag", "#15803D"],
+  paid: ["cash", "#0F766E"],
+};
+function LaneTile({ k }) {
+  const [icon, c] = LANE_TILE[k] || ["list", "#64748B"];
+  return <span className="ctile" style={{ "--c": c }}><Icon n={icon} size={15} stroke={2.2} /></span>;
+}
+
 /* The KPI Action Board: the app's lanes as Jira columns, all visible, with
    drag-and-drop mapped onto the task routes (actions.js dropTargets). */
 export default function Board() {
@@ -85,7 +106,7 @@ export default function Board() {
     if (priority && t.priority !== priority) return false;
     if (status && S.laneForTask(t) !== status) return false;
     if (!matchQ(t)) return false;
-    if (quick === "fresh" && !(S.isWithinFreshWindow(t, qNow) && !t.last_activity)) return false;
+    if (quick === "fresh" && !S.isFreshTask(t, qNow)) return false;
     if (quick === "recent" && !(t.last_activity && qNow - S.parseServerTs(t.last_activity) < 86400000 * 2)) return false;
     if (quick === "overdue" && !(S.estimateSeconds(t) > 0 && (t.timer_total_seconds || 0) > S.estimateSeconds(t) && t.task_state !== "completed")) return false;
     return true;
@@ -206,11 +227,25 @@ export default function Board() {
       {board.loading && !board.data && <div className="board">{[1, 2, 3, 4].map((i) => <section key={i} className="col"><header className="col-h">&nbsp;</header><div className="col-b" style={{ padding: 12 }}><Skeleton rows={4} /></div></section>)}</div>}
       {board.data && (
         <DndContext sensors={sensors} onDragStart={(e) => setDragging(tasks.find((t) => t.id === e.active.id) || null)} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
-          <div className="board" ref={boardRef}>
-            {laneList.map((l) => (
-              <Lane key={l.key} lane={l} items={lanes[l.key]} dragging={dragging} allowed={targets[l.key] != null} selectedId={+sp.get("task")} onOpen={onOpen} onAction={onAction} workdayLocked={acts.workdayLocked} />
-            ))}
-            {showPaid && !status && <PaidLane res={paid} />}
+          <div className="board pdc" ref={boardRef}>
+            {PHASES.map((ph) => {
+              const own = laneList.filter((l) => ph.lanes.includes(l.key));
+              const paidHere = ph.key === "check" && showPaid && !status;
+              if (!own.length && !paidHere) return null;
+              /* Today repeats tasks that also sit in another lane: count each once. */
+              const n = new Set(own.flatMap((l) => lanes[l.key].map((t) => t.id))).size;
+              return (
+                <section key={ph.key} className="pdc-phase" style={{ "--pc": ph.color }}>
+                  <div className="pdc-head">{ph.label}<small>{n} task{n === 1 ? "" : "s"}</small></div>
+                  <div className="pdc-cols">
+                    {own.map((l) => (
+                      <Lane key={l.key} lane={l} items={lanes[l.key]} dragging={dragging} allowed={targets[l.key] != null} selectedId={+sp.get("task")} onOpen={onOpen} onAction={onAction} workdayLocked={acts.workdayLocked} />
+                    ))}
+                    {paidHere && <PaidLane res={paid} />}
+                  </div>
+                </section>
+              );
+            })}
           </div>
           <DragOverlay dropAnimation={null}>{dragging ? <div className="drag-ghost"><TaskCard task={dragging} /></div> : null}</DragOverlay>
         </DndContext>
@@ -229,7 +264,7 @@ function PaidLane({ res }) {
   return (
     <section className={`col ${narrow ? "narrow" : ""}`}>
       <header className="col-h" onClick={narrow ? () => setMode("open") : undefined} onDoubleClick={narrow ? undefined : () => setMode("folded")} title={narrow ? "Click to open" : "Double-click to fold"}>
-        <span className="dotc" style={{ background: "#0F766E" }} />Paid <em>{items.length}{res.data?.truncated ? "+" : ""}</em>
+        <LaneTile k="paid" />Paid <em>{items.length}{res.data?.truncated ? "+" : ""}</em>
         {!narrow && <IconButton className="collapse" icon="cleft" label="Fold lane" size={14} onClick={() => setMode("folded")} />}
         {narrow && <IconButton className="collapse" icon="cright" label="Open lane" size={14} onClick={(e) => { e.stopPropagation(); setMode("open"); }} />}
       </header>
@@ -350,7 +385,7 @@ const Lane = memo(function Lane({ lane, items, dragging, allowed, selectedId, on
   return (
     <section ref={setNodeRef} className={cls}>
       <header className="col-h" onClick={narrow ? () => setMode("open") : undefined} onDoubleClick={narrow ? undefined : () => setMode("folded")} title={narrow ? "Click to open" : "Double-click to fold"}>
-        <span className="dotc" style={{ background: lane.color }} />{lane.label} <em>{items.length}</em>
+        <LaneTile k={lane.key} />{lane.label} <em>{items.length}</em>
         {!narrow && <IconButton className="collapse" icon="cleft" label="Fold lane" size={14} onClick={() => setMode("folded")} />}
         {narrow && <IconButton className="collapse" icon="cright" label="Open lane" size={14} onClick={(e) => { e.stopPropagation(); setMode("open"); }} />}
       </header>

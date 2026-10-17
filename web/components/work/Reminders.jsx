@@ -134,9 +134,9 @@ export default function Reminders() {
         {edit && (
           <form className="cardbox fixed" onSubmit={save}>
             <h2>{edit.id ? "Edit reminder" : "New reminder"}</h2>
-            <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} autoFocus /></Field>
+            <Field label="Name" required><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} autoFocus /></Field>
             <div className="grid2">
-              <Field label="Date"><Input type="date" value={edit.remind_date || ""} onChange={(e) => setEdit({ ...edit, remind_date: e.target.value })} /></Field>
+              <Field label="Date" required><Input type="date" value={edit.remind_date || ""} onChange={(e) => setEdit({ ...edit, remind_date: e.target.value })} /></Field>
               <Field label="Time"><Input type="time" value={edit.time || "09:30"} onChange={(e) => setEdit({ ...edit, time: e.target.value })} /></Field>
             </div>
             <Field label="Repeat"><span className="input"><Select value={edit.repeat || "none"} onChange={(e) => setEdit({ ...edit, repeat: e.target.value })} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}>{M.REPEATS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></span></Field>

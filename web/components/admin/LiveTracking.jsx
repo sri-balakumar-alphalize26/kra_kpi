@@ -104,7 +104,7 @@ export default function LiveTracking() {
       <Modal open={!!revert} onClose={() => setRevert(null)} title={revert ? `Reopen ${revert.name}'s workday` : ""} width={460}
         footer={<><Button kind="ghost" onClick={() => setRevert(null)}>Cancel</Button><Button kind="primary" busy={busy} disabled={!note.trim()} onClick={doRevert}>Reopen</Button></>}>
         <p className="note" style={{ margin: 0 }}>They ended today already. Reopening lets them press "Reopen and continue workday"; the reason is shown to them.</p>
-        <Field label="Reason (required)"><span className="input"><input value={note} onChange={(e) => setNote(e.target.value)} autoFocus style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }} /></span></Field>
+        <Field label="Reason" required><span className="input"><input value={note} onChange={(e) => setNote(e.target.value)} autoFocus style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }} /></span></Field>
       </Modal>
     </>
   );

@@ -3,12 +3,11 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button, ErrorState, IconButton, Lozenge, Modal, PageHeader, Skeleton, Tabs } from "@/components/ui";
 import * as M from "@/lib/services/more";
-import { parseServerTs, fmtLocalDateTime } from "@/lib/services/kpiActions";
 
-/* generated_at is UTC (fields.Datetime.to_string) → the viewer's local HH:MM. */
-const genTime = (s) => { const ms = parseServerTs(s); return ms == null ? "" : new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
-/* reopened_at is UTC too → the viewer's local date + time. */
-const reopenTime = (s) => fmtLocalDateTime(parseServerTs(s)) || s || "";
+/* The server sends saved / reopened times already in IST ("17 Oct 2026, 01:10 AM IST"),
+   the exact strings Odoo and the phone print. Formatting the raw UTC value here used the
+   browser's clock instead, so the three could disagree. genTime is the time half. */
+const genTime = (s) => (s.generated_at_display || "").split(", ")[1] || "";
 /* Both list routes clamp limit_days to 1..365 — Odoo's picker is 7 / 30 / 90 / 1 year. */
 const RANGES = [{ key: 7, label: "7 days" }, { key: 30, label: "30 days" }, { key: 90, label: "90 days" }, { key: 365, label: "1 year" }];
 
@@ -34,7 +33,7 @@ function ReopenBox({ s }) {
       <div style={{ fontSize: 12, fontWeight: 700, color: "var(--lz-paused, #B45309)", marginBottom: s.reopen_reason ? 4 : 0 }}>
         ↺ Reopened workday
         {s.reopened_by && <span style={{ fontWeight: 400, color: "var(--subtle)" }}> — by {s.reopened_by}</span>}
-        {s.reopened_at && <span style={{ fontWeight: 400, color: "var(--subtle)" }}> on {reopenTime(s.reopened_at)}</span>}
+        {s.reopened_at && <span style={{ fontWeight: 400, color: "var(--subtle)" }}> on {s.reopened_at_display || s.reopened_at}</span>}
       </div>
       {s.reopen_reason && <div style={{ fontSize: 12.5, whiteSpace: "pre-wrap" }}>{s.reopen_reason}</div>}
     </div>
@@ -82,7 +81,7 @@ export default function Snapshots({ mine = false }) {
                   <figure key={s.snapshot_id} style={{ margin: 0, cursor: "pointer" }} onClick={() => open(s)}>
                     <div className="thumb" style={{ background: "linear-gradient(135deg,#1E40AF,#2563EB)", color: "#fff", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
                       <b>{mine ? d.label || d.date : s.name || "—"}</b>
-                      <span style={{ fontSize: 11, opacity: .9 }}>{genTime(s.generated_at) ? `${genTime(s.generated_at)} · ` : ""}{s.productive_display || "—"} productive{s.task_count != null ? ` · ${s.task_count} tasks` : ""}</span>
+                      <span style={{ fontSize: 11, opacity: .9 }}>{genTime(s) ? `${genTime(s)} · ` : ""}{s.productive_display || "—"} productive{s.task_count != null ? ` · ${s.task_count} tasks` : ""}</span>
                       <span style={{ marginTop: 4 }}><Presence s={s} light /></span>
                       {(s.reopened_at || s.reopen_reason) && <Lozenge tone="review" style={{ marginTop: 4 }}>Reopened</Lozenge>}
                     </div>
@@ -93,12 +92,13 @@ export default function Snapshots({ mine = false }) {
           );
         })}
       </div>
-      <Modal open={!!view} onClose={() => setView(null)} title={view ? `${view.snap.name || "Snapshot"}${genTime(view.snap.generated_at) ? ` · ${genTime(view.snap.generated_at)}` : ""}` : ""} width={900}
+      <Modal open={!!view} onClose={() => setView(null)} title={view ? `${view.snap.name || "Snapshot"}${genTime(view.snap) ? ` · ${genTime(view.snap)}` : ""}` : ""} width={900}
         footer={view?.src ? <><a className="btn" href={view.src} download={view.fileName || view.snap.image_name || "snapshot.png"}>Download</a><Button kind="primary" onClick={() => setView(null)}>Close</Button></> : null}>
         {view && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 10, fontSize: 12.5 }}>
             <Presence s={view.snap} />
             <span className="mini">Productive {view.snap.productive_display || "—"} · {view.snap.task_count || 0} task{view.snap.task_count === 1 ? "" : "s"}</span>
+            {view.snap.generated_at_display && <span className="mini">Saved {view.snap.generated_at_display}</span>}
           </div>
         )}
         {/* Odoo order: the end-of-day note, then the reopen box, then the image. */}

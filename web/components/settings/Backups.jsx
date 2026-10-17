@@ -97,7 +97,7 @@ function BackupList() {
       {create && (
         <Modal open onClose={() => busy ? null : setCreate(null)} title="New backup" width={560}
           footer={<><Button kind="ghost" disabled={!!busy} onClick={() => setCreate(null)}>Cancel</Button><Button kind="primary" busy={busy === "create"} disabled={!create.name.trim() || !X.INCLUDES.some(([k]) => create[k])} onClick={run}>Create backup</Button></>}>
-          <Field label="Name"><Input value={create.name} onChange={(e) => setCreate({ ...create, name: e.target.value })} /></Field>
+          <Field label="Name" required><Input value={create.name} onChange={(e) => setCreate({ ...create, name: e.target.value })} /></Field>
           <Field label="Type"><Tabs items={[{ key: "full", label: "Full" }, { key: "incremental", label: "Incremental" }, { key: "selective", label: "Selective" }]} value={create.backup_type} onChange={(v) => setCreate({ ...create, backup_type: v })} /></Field>
           <p className="mini" style={{ margin: 0 }}>{create.backup_type === "incremental" ? "Only what changed since the last full backup (a full one is made first if there is none)." : "Everything ticked below."}</p>
           <div className="grid2">{X.INCLUDES.map(([k, l]) => <label key={k} className="chk"><input type="checkbox" checked={!!create[k]} onChange={(e) => setCreate({ ...create, [k]: e.target.checked })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} />{l}</label>)}</div>

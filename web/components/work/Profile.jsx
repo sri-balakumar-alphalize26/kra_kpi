@@ -38,7 +38,7 @@ export default function Profile({ portal = false }) {
   /* Square-cropped to 512 px JPEG; Odoo derives the smaller sizes from it. */
   const savePhoto = async (b64) => {
     setPhotoBusy(true);
-    try { await M.saveMyPhoto(me.uid, b64); setPref("avatar", me.uid, null); await loadPhoto(); flags.ok(b64 ? "Photo saved." : "Photo removed."); }
+    try { await M.saveMyPhoto(me.uid, b64); setPref("avatar", me.uid, null); await loadPhoto(); window.dispatchEvent(new Event(M.PHOTO_EVENT)); flags.ok(b64 ? "Photo saved." : "Photo removed."); }
     catch (ex) { flags.err(ex.message || "Could not save the photo."); } finally { setPhotoBusy(false); }
   };
   const pickAvatar = (e) => {

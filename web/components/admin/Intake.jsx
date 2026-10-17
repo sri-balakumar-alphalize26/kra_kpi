@@ -119,8 +119,8 @@ export default function Intake({ docType = "requirement", portal = false }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div className="steps"><span className={client && kra ? "on" : ""}><b>1</b>Destination</span><span>›</span><span className={rows.length ? "on" : ""}><b>2</b>Source</span><span>›</span><span><b>3</b>Review &amp; create</span></div>
           <div className="cardbox"><h2>Destination</h2>
-            <Field label="Client"><span className="input"><Select value={client} onChange={(e) => setClient(e.target.value)} style={SEL}><option value="">Choose a client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}{c.parent_name ? ` · ${c.parent_name}` : ""}</option>)}</Select></span></Field>
-            <Field label="Project / sub-KRA"><span className="input"><Select value={kra} onChange={(e) => setKra(e.target.value)} disabled={!kras.length} style={SEL}>{kras.map((k) => <option key={k.id} value={k.id}>{k.display || k.name}</option>)}{!kras.length && <option value="">{client ? "No projects under this client" : "—"}</option>}</Select></span></Field>
+            <Field label="Client" required><span className="input"><Select value={client} onChange={(e) => setClient(e.target.value)} style={SEL}><option value="">Choose a client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}{c.parent_name ? ` · ${c.parent_name}` : ""}</option>)}</Select></span></Field>
+            <Field label="Project / sub-KRA" required><span className="input"><Select value={kra} onChange={(e) => setKra(e.target.value)} disabled={!kras.length} style={SEL}>{kras.map((k) => <option key={k.id} value={k.id}>{k.display || k.name}</option>)}{!kras.length && <option value="">{client ? "No projects under this client" : "—"}</option>}</Select></span></Field>
             <div className="grid2">
               <Field label="Version (optional)"><Input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="v2.3" /></Field>
               <Field label="Next ref"><span className="input" style={{ color: "var(--brand)", fontWeight: 800 }}>{refOf(0)}</span></Field>

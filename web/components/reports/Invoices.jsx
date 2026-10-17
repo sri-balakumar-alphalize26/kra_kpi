@@ -133,7 +133,7 @@ export default function Invoices() {
         footer={<><Button kind="ghost" onClick={() => setCreate(false)}>Cancel</Button><Button kind="primary" busy={busy} onClick={doCreate}>Create draft</Button></>}>
         <p className="note" style={{ margin: 0 }}>Signed-off tasks of the client that are not on an invoice yet become its lines. Narrow by dates, sub-projects, people or tasks if you like — leaving a list empty means all.</p>
         <div className="grid2">
-          <Field label="Client" hint={chosen ? `${chosen.billable_count ?? 0} billable of ${chosen.task_count ?? 0} tasks${chosen.has_client_user === false ? " · no client user assigned" : ""}` : undefined}>
+          <Field label="Client" required hint={chosen ? `${chosen.billable_count ?? 0} billable of ${chosen.task_count ?? 0} tasks${chosen.has_client_user === false ? " · no client user assigned" : ""}` : undefined}>
             <span className="input"><Select value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} style={selStyle}><option value="">Choose a client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}{c.billable_count ? ` · ${c.billable_count} billable` : ""}</option>)}</Select></span>
           </Field>
           <Field label="Title (optional)"><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. October 2026" /></Field>
@@ -155,7 +155,7 @@ export default function Invoices() {
                 <Field label="BUG price"><Input type="number" min="0" value={form.bug} onChange={(e) => setForm({ ...form, bug: e.target.value })} /></Field>
               </div>}
         </div>
-        <Field label="Include task types" hint={!types.length ? "Tick at least one — otherwise there is nothing to bill." : undefined}>
+        <Field label="Include task types" required hint={!types.length ? "Tick at least one — otherwise there is nothing to bill." : undefined}>
           <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
             {[["incReq", "REQ", "Requirements", "review"], ["incUpt", "UPT", "Updates / Amendments", "progress"], ["incBug", "BUG", "Bug fixes", "danger"]].map(([k, code, l, tone]) => (
               <label key={k} className="chk" style={{ fontSize: 13 }}><input type="checkbox" checked={!!form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.checked })} /><Lozenge tone={tone}>{code}</Lozenge>{l}</label>

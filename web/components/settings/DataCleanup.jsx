@@ -215,9 +215,9 @@ function ChangePassword({ onClose }) {
     <Modal open onClose={onClose} title="Change the cleanup password" width={460}
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="primary" busy={busy} disabled={!cur || next.length < 6 || next !== conf} onClick={save}>Change password</Button></>}>
       <p className="mini" style={{ margin: 0 }}>{info?.last_changed_date ? `Last changed ${X.local(info.last_changed_date, { date: true })}${info.last_changed_by ? ` by ${X.m2o(info.last_changed_by)}` : ""}.` : "Not changed yet — if it was never set, Odoo's default is still in place, so change it now."}</p>
-      <Field label="Current password"><PasswordInput value={cur} onChange={setCur} autoFocus placeholder="Current password" /></Field>
-      <Field label="New password (at least 6 characters)"><PasswordInput value={next} onChange={setNext} placeholder="New password" /></Field>
-      <Field label="Confirm new password" error={mismatch ? "Doesn't match." : null}><PasswordInput value={conf} onChange={setConf} placeholder="Confirm new password" /></Field>
+      <Field label="Current password" required><PasswordInput value={cur} onChange={setCur} autoFocus placeholder="Current password" /></Field>
+      <Field label="New password (at least 6 characters)" required><PasswordInput value={next} onChange={setNext} placeholder="New password" /></Field>
+      <Field label="Confirm new password" required error={mismatch ? "Doesn't match." : null}><PasswordInput value={conf} onChange={setConf} placeholder="Confirm new password" /></Field>
     </Modal>
   );
 }

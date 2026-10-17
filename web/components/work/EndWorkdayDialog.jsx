@@ -8,10 +8,10 @@
 import { useEffect, useState } from "react";
 import { Button, Input, Modal, Skeleton } from "@/components/ui";
 import * as S from "@/lib/services/kpiActions";
+import WorkdayTimeline from "./WorkdayTimeline";
 
 const NOTE_MAX = 2000;
 const AWAY = [["break", "Break"], ["lunch", "Lunch"], ["meeting", "Meeting"], ["no_tasks", "No tasks"], ["other", "Other"], ["away", "Away (system)"], ["other_idle", "Other / Idle"]];
-const OUTCOME = { completed: "✓ Completed", submitted: "◑ Verification pending", paused: "⏸ Paused", active: "▶ In progress", moved: "↪ Moved", worked: "Worked" };
 const hhmm = (ts) => (ts ? String(ts).slice(11, 16) || ts : "—");
 
 export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened, paused }) {
@@ -108,21 +108,7 @@ export function Summary({ d, readOnly = false }) {
       {(d.timeline || []).length > 0 && (
         <section className="ewd-box">
           <h3>Workday map</h3>
-          <MapBar timeline={d.timeline} />
-          <div className="ewd-map">
-            {d.timeline.map((n, i) => (
-              <span key={i} className="ewd-step">
-                {i > 0 && <i className="ewd-arrow">→</i>}
-                <span className={`ewd-chip k-${n.kind}`}>
-                  <b>{n.kind === "task" ? `${n.ref ? `${n.ref} ` : ""}${n.name || n.label}` : n.label}</b>
-                  <small>
-                    {n.time}{n.duration_display ? ` · ${n.duration_display}` : ""}{n.kind === "task" && OUTCOME[n.outcome] ? ` · ${OUTCOME[n.outcome]}` : ""}{n.running ? " · running" : ""}
-                    {n.with ? ` · with ${n.with}` : ""}{n.reason ? ` · ${n.reason}` : ""}
-                  </small>
-                </span>
-              </span>
-            ))}
-          </div>
+          <WorkdayTimeline timeline={d.timeline} />
           <p className="mini" style={{ margin: "8px 0 0" }}>Use Complete for finished tasks — Pause is only for breaks/interruptions.</p>
         </section>
       )}
@@ -145,103 +131,6 @@ export function Summary({ d, readOnly = false }) {
         ) : <span className="mini">No task time logged today.</span>}
         {multi && <p className="mini" style={{ margin: "6px 0 0" }}>⚡ ran at the same time as another task.</p>}
       </section>
-    </div>
-  );
-}
-
-/* ---- Workday Map to-scale bar: a port of Odoo's buildWorkdayTimeline strip /
-   ticks / legend (kpi_workday_timeline/workday_timeline.js), which the Odoo End
-   Workday modal and Live Tracking draw above the cards. One colour per KIND of
-   time; gaps of 5+ minutes with nothing running are hatched as Idle. */
-const MAP_IDLE_MIN = 5;
-const MAP_CAT = {
-  work: ["Working", "#2563EB"], break: ["Break", "#F59E0B"], lunch: ["Lunch", "#EC4899"], meeting: ["Meeting", "#8B5CF6"],
-  no_tasks: ["No tasks", "#0891B2"], urgent: ["Urgent", "#EF4444"], away: ["Away", "#64748B"], idle: ["Idle", "#CBD5E1"],
-};
-const MAP_BREAK_CAT = { break: "break", lunch: "lunch", meeting: "meeting", no_tasks: "no_tasks", urgent: "urgent", away: "away", leave: "away", other: "away" };
-const MAP_BREAK_TITLE = { break: "Break", lunch: "Lunch", meeting: "Meeting", no_tasks: "No tasks", urgent: "Urgent", away: "Away", leave: "Leave", other: "Other" };
-const IDLE_HATCH = "repeating-linear-gradient(45deg, #CBD5E1 0 4px, #E2E8F0 4px 8px)";
-/* 'YYYY-MM-DD HH:MM:SS' UTC → epoch ms (parsed by hand, as Odoo does). */
-const mapTs = (ts) => { const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(ts || ""); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null; };
-const mapDur = (sec) => { const s = Math.max(0, Math.round(sec || 0)); if (s < 60) return "<1m"; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return !h ? `${m}m` : m ? `${h}h ${m}m` : `${h}h`; };
-/* The server prints `time` in the developer's timezone and sends instants in UTC:
-   one pair gives the offset, so ticks read in the developer's clock like the chips. */
-function mapOffset(nodes) {
-  for (const n of nodes) {
-    const ts = mapTs(n.ts || n.start_ts), hm = /^(\d{1,2}):(\d{2})/.exec(n.time || "");
-    if (ts == null || !hm) continue;
-    const dt = new Date(ts);
-    let off = (+hm[1] * 60 + +hm[2]) - (dt.getUTCHours() * 60 + dt.getUTCMinutes());
-    if (off > 840) off -= 1440;
-    if (off < -720) off += 1440;
-    return off;
-  }
-  return -new Date().getTimezoneOffset();
-}
-const mapHm = (ms, off) => { const dt = new Date(ms + off * 60000); return `${String(dt.getUTCHours()).padStart(2, "0")}:${String(dt.getUTCMinutes()).padStart(2, "0")}`; };
-
-function buildMapBar(timeline, now) {
-  const nodes = Array.isArray(timeline) ? timeline : [];
-  const off = mapOffset(nodes);
-  const startNode = nodes.find((n) => n.kind === "start"), endNode = nodes.find((n) => n.kind === "end");
-  const cards = nodes.filter((n) => n.kind === "task" || n.kind === "break").map((n) => {
-    const startMs = mapTs(n.start_ts), running = !!n.running;
-    const endMs = running ? now : mapTs(n.end_ts);
-    const seconds = n.seconds != null ? n.seconds : (startMs != null && endMs != null ? (endMs - startMs) / 1000 : 0);
-    const cat = n.kind === "task" ? "work" : (MAP_BREAK_CAT[n.break_type || "other"] || "away");
-    const title = n.kind === "task" ? (n.name || n.label || "Task") : (MAP_BREAK_TITLE[n.break_type || "other"] || "Other");
-    return { startMs, endMs, running, seconds, cat, title };
-  }).filter((c) => c.startMs != null).sort((a, b) => a.startMs - b.startMs);
-  const ended = !!(endNode && mapTs(endNode.ts));
-  const live = !ended && cards.some((c) => c.running);
-  const dayStart = mapTs(startNode?.ts) ?? (cards[0] ? cards[0].startMs : null);
-  const lastEnd = cards.reduce((m, c) => Math.max(m, c.endMs ?? c.startMs), dayStart ?? 0);
-  const dayEnd = ended ? mapTs(endNode.ts) : Math.max(lastEnd, live ? now : lastEnd);
-  if (!cards.length || dayStart == null || !(dayEnd > dayStart)) return null;
-  const span = dayEnd - dayStart;
-  const pct = (ms) => Math.min(100, Math.max(0, ((ms - dayStart) / span) * 100));
-  const strip = [];
-  let covered = dayStart;
-  for (const c of cards) {
-    const end = c.endMs ?? c.startMs, gap = (c.startMs - covered) / 1000;
-    if (gap >= MAP_IDLE_MIN * 60) strip.push({ cat: "idle", left: pct(covered), width: pct(c.startMs) - pct(covered), label: `Idle ${mapDur(gap)} (${mapHm(covered, off)}–${mapHm(c.startMs, off)})` });
-    strip.push({ cat: c.cat, left: pct(c.startMs), width: Math.max(0.6, pct(end) - pct(c.startMs)), label: `${c.title} · ${mapHm(c.startMs, off)}–${c.running ? "now" : mapHm(end, off)} · ${mapDur(c.seconds)}` });
-    covered = Math.max(covered, end);
-  }
-  /* Hour marks; every 2h on a day longer than 10h so they don't crowd. */
-  const ticks = [], H = 3600000, step = span > 10 * H ? 2 : 1;
-  for (let t = Math.ceil((dayStart + off * 60000) / H) * H; t - off * 60000 <= dayEnd; t += H) {
-    const hour = new Date(t).getUTCHours();
-    if (hour % step === 0) ticks.push({ pct: pct(t - off * 60000), label: String(hour).padStart(2, "0") });
-  }
-  const present = new Set(strip.map((s) => s.cat));
-  return { strip, ticks, legend: Object.keys(MAP_CAT).filter((k) => present.has(k)), startLabel: mapHm(dayStart, off), endLabel: ended ? mapHm(dayEnd, off) : "", live };
-}
-
-function MapBar({ timeline }) {
-  const bar = buildMapBar(timeline, Date.now());
-  if (!bar) return null;
-  return (
-    <div style={{ margin: "2px 0 12px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, color: "var(--subtle)", marginBottom: 3 }}>
-        <span>Started {bar.startLabel}</span><span>{bar.live ? "● Still working" : bar.endLabel ? `Ended ${bar.endLabel}` : "Not ended yet"}</span>
-      </div>
-      <div role="img" aria-label="Workday to scale" style={{ position: "relative", height: 18, borderRadius: 9, background: "var(--sunken, #EEF2F7)", overflow: "hidden" }}>
-        {bar.strip.map((s, i) => (
-          <span key={i} title={s.label} style={{ position: "absolute", top: 0, bottom: 0, left: `${s.left}%`, width: `${s.width}%`, background: s.cat === "idle" ? IDLE_HATCH : MAP_CAT[s.cat][1], cursor: "help" }} />
-        ))}
-      </div>
-      <div style={{ position: "relative", height: 16, marginTop: 2 }}>
-        {bar.ticks.map((k, i) => <span key={i} style={{ position: "absolute", left: `${k.pct}%`, transform: "translateX(-50%)", fontSize: 10, color: "var(--subtle)" }}>{k.label}</span>)}
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 11, fontWeight: 700, color: "var(--subtle)", marginTop: 2 }}>
-        {bar.legend.map((k) => (
-          <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <i style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: k === "idle" ? IDLE_HATCH : MAP_CAT[k][1] }} />{MAP_CAT[k][0]}
-          </span>
-        ))}
-        <span style={{ fontWeight: 400 }}>Hover the bar for details.</span>
-      </div>
     </div>
   );
 }

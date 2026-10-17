@@ -3,7 +3,7 @@ import { memo } from "react";
 import { Avatar, Button, Icon, Lozenge } from "@/components/ui";
 import { useMe } from "@/lib/me";
 import { serverNow } from "@/lib/api";
-import { deadlinePassed, deliverableLabel, estimateSeconds, fmtHM, isWithinFreshWindow, laneForTask, PAUSED_STATES, priorityLabel, refPrefix, sinceResume, TYPE_TILE } from "@/lib/services/kpiActions";
+import { deadlinePassed, deliverableLabel, estimateSeconds, fmtHM, isFreshTask, laneForTask, PAUSED_STATES, priorityLabel, refPrefix, sinceResume, TYPE_TILE } from "@/lib/services/kpiActions";
 import { liveFromAnchor, fmtClock, secsSince, gateLabel, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
 
@@ -25,8 +25,9 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
   const est = estimateSeconds(t);
   const open = !SETTLED.includes(t.task_state);
   const at = serverNow();
-  const now = useNow(open && ((!t.last_activity && isWithinFreshWindow(t, at)) || (!!t.deadline && !deadlinePassed(t, at))), 60000);
-  const fresh = !t.last_activity && open && isWithinFreshWindow(t, now);
+  const now = useNow(open && (isFreshTask(t, at) || (!!t.deadline && !deadlinePassed(t, at))), 60000);
+  /* A new task is a solid red card, as on the Odoo board (isFreshTask). */
+  const fresh = isFreshTask(t, now);
   const [tileLetter, tileColor] = TYPE_TILE[refPrefix(t.external_ref)] || TYPE_TILE.TASK;
   const resume = sinceResume(t);
   const gate = gateLabel(t);
@@ -50,7 +51,10 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
         {t.client_name && <Lozenge tone="todo">{t.client_name}</Lozenge>}
         {t.deliverable_type && <Lozenge tone="neutral" style={{ textTransform: "none" }}>{deliverableLabel(t.deliverable_type)}</Lozenge>}
         {running && <span className="timer"><span className="pulse" /><LiveTick fn={(n) => fmtClock(secsSince(t.timer_start_datetime, n))} />{resume ? ` ${resume.label}` : " running"}</span>}
-        {t.paused_reason && PAUSED_STATES.includes(t.task_state) && <Lozenge tone="paused" style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", textTransform: "none" }}>{t.paused_reason}</Lozenge>}
+        {/* A reason can be a sentence ("🔴 CLIENT REJECTED — …"). The lozenge's fixed
+            16px height cut its second line in half: up to two whole lines here,
+            the rest on hover and in the task panel. */}
+        {t.paused_reason && PAUSED_STATES.includes(t.task_state) && <Lozenge tone="paused" title={t.paused_reason} style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, height: "auto", lineHeight: "16px", padding: "1px 6px", maxWidth: "100%", overflow: "hidden", overflowWrap: "anywhere", textTransform: "none" }}>{t.paused_reason}</Lozenge>}
         {lane === "paused" && !t.paused_reason && <Lozenge tone="paused">Paused</Lozenge>}
         {lane === "approvals" && <Lozenge tone="review">{t.coordinator_review_started_at ? "Review started" : "Awaiting admin"}</Lozenge>}
         {lane === "awaiting_client" && <Lozenge tone="review">Awaiting client</Lozenge>}

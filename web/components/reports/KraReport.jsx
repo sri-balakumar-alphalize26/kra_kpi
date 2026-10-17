@@ -554,8 +554,8 @@ export default function KraReport() {
         {nt && (
           <>
             <div className="grid3" style={{ gap: 10 }}>
-              <div style={{ gridColumn: "span 2", display: "flex", flexDirection: "column" }}><Field label="Task name *"><Input value={nt.name} onChange={(e) => setNt({ ...nt, name: e.target.value })} autoFocus /></Field></div>
-              <Field label="Priority *"><span className="input"><Select value={nt.priority} onChange={(e) => setNt({ ...nt, priority: e.target.value })} style={selStyle}><option value="regular">Regular</option><option value="important">Important</option><option value="urgent">Urgent</option></Select></span></Field>
+              <div style={{ gridColumn: "span 2", display: "flex", flexDirection: "column" }}><Field label="Task name" required><Input value={nt.name} onChange={(e) => setNt({ ...nt, name: e.target.value })} autoFocus /></Field></div>
+              <Field label="Priority" required><span className="input"><Select value={nt.priority} onChange={(e) => setNt({ ...nt, priority: e.target.value })} style={selStyle}><option value="regular">Regular</option><option value="important">Important</option><option value="urgent">Urgent</option></Select></span></Field>
             </div>
             {ntMatches.length > 0 && (
               <div className="callout" style={{ background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)", color: "var(--lz-paused)", flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
@@ -565,21 +565,21 @@ export default function KraReport() {
               </div>
             )}
             <div className="grid3" style={{ gap: 10 }}>
-              <Field label="Project (KRA) *"><span className="input"><Select value={nt.kra_id} onChange={(e) => setNt({ ...nt, kra_id: e.target.value })} style={selStyle}><option value="">— pick a project —</option>{(f?.kras || []).map((k) => <option key={k.id} value={String(k.id)}>{k.display || k.name}</option>)}</Select></span></Field>
-              <Field label="Assignee *"><span className="input"><Select value={nt.user_id} onChange={(e) => setNt({ ...nt, user_id: e.target.value })} style={selStyle}><option value="">— unassigned —</option>{(f?.employees || []).map((e) => <option key={e.id} value={String(e.id)}>{e.name}</option>)}</Select></span></Field>
-              <Field label="Type (Module / App / EXE) *"><span className="input"><Select value={nt.deliverable_type} onChange={(e) => setNt({ ...nt, deliverable_type: e.target.value })} style={selStyle}><option value="">— choose —</option><option value="module">Module</option><option value="app">App</option><option value="exe">EXE</option></Select></span></Field>
+              <Field label="Project (KRA)" required><span className="input"><Select value={nt.kra_id} onChange={(e) => setNt({ ...nt, kra_id: e.target.value })} style={selStyle}><option value="">— pick a project —</option>{(f?.kras || []).map((k) => <option key={k.id} value={String(k.id)}>{k.display || k.name}</option>)}</Select></span></Field>
+              <Field label="Assignee" required><span className="input"><Select value={nt.user_id} onChange={(e) => setNt({ ...nt, user_id: e.target.value })} style={selStyle}><option value="">— unassigned —</option>{(f?.employees || []).map((e) => <option key={e.id} value={String(e.id)}>{e.name}</option>)}</Select></span></Field>
+              <Field label="Type (Module / App / EXE)" required><span className="input"><Select value={nt.deliverable_type} onChange={(e) => setNt({ ...nt, deliverable_type: e.target.value })} style={selStyle}><option value="">— choose —</option><option value="module">Module</option><option value="app">App</option><option value="exe">EXE</option></Select></span></Field>
             </div>
             <div className="grid3" style={{ gap: 10 }}>
-              <Field label="Type *"><span className="input"><Select value={nt.doc_type} onChange={(e) => setNt({ ...nt, doc_type: e.target.value })} style={selStyle}><option value="requirement">Requirement → REQ</option><option value="update">Update → UPT</option><option value="bug">Bug → BUG</option></Select></span></Field>
+              <Field label="Type" required><span className="input"><Select value={nt.doc_type} onChange={(e) => setNt({ ...nt, doc_type: e.target.value })} style={selStyle}><option value="requirement">Requirement → REQ</option><option value="update">Update → UPT</option><option value="bug">Bug → BUG</option></Select></span></Field>
               <div className="grid2" style={{ gap: 6 }}>
-                <Field label="Estimate (h) *"><Input type="number" min="0" value={nt.estimate_hours} onChange={(e) => setNt({ ...nt, estimate_hours: e.target.value })} /></Field>
+                <Field label="Estimate (h)" required><Input type="number" min="0" value={nt.estimate_hours} onChange={(e) => setNt({ ...nt, estimate_hours: e.target.value })} /></Field>
                 <Field label="Estimate (m)"><Input type="number" min="0" max="59" value={nt.estimate_minutes} onChange={(e) => setNt({ ...nt, estimate_minutes: e.target.value })} /></Field>
               </div>
               <Field label="Deadline"><Input type="date" value={nt.deadline} onChange={(e) => setNt({ ...nt, deadline: e.target.value })} /></Field>
             </div>
             <div className="grid3" style={{ gap: 10, alignItems: "end" }}>
               <div className="grid2" style={{ gap: 6 }}>
-                <Field label="Time worked (h) *"><Input type="number" min="0" value={nt.worked_hours} onChange={(e) => setNt({ ...nt, worked_hours: e.target.value })} /></Field>
+                <Field label="Time worked (h)" required><Input type="number" min="0" value={nt.worked_hours} onChange={(e) => setNt({ ...nt, worked_hours: e.target.value })} /></Field>
                 <Field label="Time worked (m)"><Input type="number" min="0" max="59" value={nt.worked_minutes} onChange={(e) => setNt({ ...nt, worked_minutes: e.target.value })} /></Field>
               </div>
               <span className="mini" style={{ gridColumn: "span 2" }}>Work already done, before the task existed. It is filed today, against the assignee.</span>

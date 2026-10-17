@@ -9,9 +9,9 @@ import { useState } from "react";
 import { Button, IconButton, Lozenge, Modal, Skeleton } from "@/components/ui";
 import { useResource } from "@/lib/useFetch";
 import * as A from "@/lib/services/admin";
+import WorkdayTimeline from "@/components/work/WorkdayTimeline";
 
 const AWAY = [["break", "Break"], ["lunch", "Lunch"], ["meeting", "Meeting"], ["no_tasks", "No tasks"], ["other", "Other"], ["away", "Away (system)"], ["other_idle", "Other / Idle"]];
-const OUTCOME = { completed: "✓ Completed", submitted: "◑ Verification pending", paused: "⏸ Paused", active: "▶ In progress", moved: "↪ Moved", worked: "Worked" };
 const hhmm = (ts) => (ts ? String(ts).slice(11, 16) || ts : "—");
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
@@ -108,20 +108,7 @@ function DaySummary({ d, onOpenTask }) {
       {(d.timeline || []).length > 0 && (
         <section className="ewd-box">
           <h3>Workday map <span className="mini">({d.dev || "their"} day in order)</span></h3>
-          <div className="ewd-map">
-            {d.timeline.map((n, i) => (
-              <span key={i} className="ewd-step">
-                {i > 0 && <i className="ewd-arrow">→</i>}
-                <span className={`ewd-chip k-${n.kind}`}>
-                  <b>{n.kind === "task" ? `${n.ref ? `${n.ref} ` : ""}${n.name || n.label}` : n.label}</b>
-                  <small>
-                    {n.time}{n.duration_display ? ` · ${n.duration_display}` : ""}{n.kind === "task" && OUTCOME[n.outcome] ? ` · ${OUTCOME[n.outcome]}` : ""}{n.running ? " · running" : ""}
-                    {n.with ? ` · with ${n.with}` : ""}{n.reason ? ` · ${n.reason}` : ""}
-                  </small>
-                </span>
-              </span>
-            ))}
-          </div>
+          <WorkdayTimeline timeline={d.timeline} />
         </section>
       )}
 
