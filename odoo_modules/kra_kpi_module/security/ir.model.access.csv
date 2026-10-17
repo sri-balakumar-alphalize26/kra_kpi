@@ -164,7 +164,7 @@ access_kpi_approval_decide_admin,kpi.approval.decide.admin,model_kpi_approval_de
 access_kpi_approval_decide_owner,kpi.approval.decide.owner,model_kpi_approval_decide,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_approval_decide_system,kpi.approval.decide.system,model_kpi_approval_decide,base.group_system,1,1,1,1
 access_kpi_wa_database_system,kpi.wa.database.system,model_kpi_wa_database,base.group_system,1,1,1,1
-access_kpi_doubt_dev,kpi.doubt.dev,model_kpi_doubt,kra_kpi_module.group_kra_developer,1,1,1,0
+access_kpi_doubt_dev,kpi.doubt.dev,model_kpi_doubt,kra_kpi_module.group_kra_developer,1,0,1,0
 access_kpi_doubt_admin,kpi.doubt.admin,model_kpi_doubt,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_doubt_owner,kpi.doubt.owner,model_kpi_doubt,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_doubt_system,kpi.doubt.system,model_kpi_doubt,base.group_system,1,1,1,1

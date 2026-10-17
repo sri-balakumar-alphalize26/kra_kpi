@@ -37,9 +37,15 @@ action_release_to_client, and a manager chose it.
 import logging
 
 from odoo import _, api, fields, models
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 
 _logger = logging.getLogger(__name__)
+
+# What a developer may set when raising a question. Everything else on the row
+# is the manager's (answer, state, client_posted_at...) and `readonly=True` only
+# hides it in the form -- over call_kw a developer could have created a
+# question already "answered", or already "sent to the client".
+ASKER_FIELDS = {'kpi_id', 'kind', 'question'}
 
 KINDS = [
     ('question', 'Question'),
@@ -126,6 +132,14 @@ class KpiDoubt(models.Model):
     # ------------------------------------------------------------------
     @api.model_create_multi
     def create(self, vals_list):
+        if not self.env.su and not self._may_decide(self.env.user):
+            # A developer asks about a task they can see, as themselves.
+            vals_list = [{k: v for k, v in vals.items() if k in ASKER_FIELDS}
+                         for vals in vals_list]
+            for vals in vals_list:
+                vals['raised_by_id'] = self.env.user.id
+                if vals.get('kpi_id'):
+                    self.env['kra.kpi'].browse(vals['kpi_id']).check_access('read')
         for vals in vals_list:
             if not vals.get('manager_user_id') and vals.get('kpi_id'):
                 kpi = self.env['kra.kpi'].sudo().browse(vals['kpi_id'])
@@ -183,6 +197,31 @@ class KpiDoubt(models.Model):
         return sent
 
     # ------------------------------------------------------------------
+    def _may_decide(self, user):
+        """A coordinator (owner and system imply it), or the manager asked."""
+        return bool(user) and (
+            user.has_group('kra_kpi_module.group_kra_admin')
+            or (self and all(rec.manager_user_id == user for rec in self)))
+
+    def _decider(self, by_user=None):
+        """Who is deciding, refused unless they may.
+
+        The actions below write under sudo() and one of them is the only path
+        to a client group, so the check has to live here, not in whichever
+        screen calls them: over call_kw any developer could otherwise answer
+        their own question or put it to the client. `by_user` is the manager a
+        WhatsApp vote resolved to; from RPC it would arrive as a bare id, and
+        is refused rather than trusted.
+        """
+        if by_user and not isinstance(by_user, models.BaseModel):
+            raise AccessError(_('Only a manager can decide on a question.'))
+        if self.env.su and not by_user:
+            return self.env.user        # internal code; it has decided already
+        user = by_user or self.env.user
+        if not self._may_decide(user):
+            raise AccessError(_('Only a manager can decide on a question.'))
+        return user
+
     def _tell_the_team(self, text):
         """Back to the group it was raised in, so the asker sees the answer.
 
@@ -199,10 +238,10 @@ class KpiDoubt(models.Model):
     def action_answer(self, text, by_user=None):
         """The manager answers it themselves. The client never hears about it."""
         self.ensure_one()
+        user = self._decider(by_user)
         body = (text or '').strip()
         if not body:
             raise UserError(_('Write the answer first.'))
-        user = by_user or self.env.user
         self.sudo().write({'answer': body, 'answered_by_id': user.id,
                            'answered_at': fields.Datetime.now(),
                            'state': 'answered'})
@@ -222,6 +261,7 @@ class KpiDoubt(models.Model):
         cannot ask the customer the same thing twice.
         """
         self.ensure_one()
+        user = self._decider(by_user)
         if self.client_posted_at:
             raise UserError(_('That was already sent to the client on %s.')
                             % fields.Datetime.to_string(self.client_posted_at))
@@ -246,7 +286,6 @@ class KpiDoubt(models.Model):
                 'That client has no WhatsApp group set up, so there is '
                 'nowhere to ask them. Set the Client on their group first.'))
 
-        user = by_user or self.env.user
         self.sudo().write({'state': 'released',
                            'client_posted_at': fields.Datetime.now(),
                            'answered_by_id': user.id})
@@ -276,9 +315,9 @@ class KpiDoubt(models.Model):
         what action_confirm already enforces.
         """
         self.ensure_one()
+        user = self._decider(by_user)
         if self.meeting_id:
             return self.meeting_id
-        user = by_user or self.env.user
         internal = self.kind == 'meet_admin'
         Meeting = self.env['kpi.meeting'].sudo()
         meeting = Meeting.create({
@@ -322,7 +361,7 @@ class KpiDoubt(models.Model):
 
     def action_reject(self, note='', by_user=None):
         self.ensure_one()
-        user = by_user or self.env.user
+        user = self._decider(by_user)
         self.sudo().write({'state': 'rejected', 'answer': note or '',
                            'answered_by_id': user.id,
                            'answered_at': fields.Datetime.now()})

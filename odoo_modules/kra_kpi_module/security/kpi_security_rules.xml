@@ -169,4 +169,32 @@
         <field name="perm_create" eval="True"/>
         <field name="perm_unlink" eval="True"/>
     </record>
+
+    <!-- Questions to the manager. A developer sees the ones they raised and the
+         ones on tasks they work on, so the team on a task reads the answers;
+         not every question in the company, with the client wording in them. -->
+    <record id="kpi_doubt_developer_rule" model="ir.rule">
+        <field name="name">Developer: questions they raised or on their tasks</field>
+        <field name="model_id" ref="model_kpi_doubt"/>
+        <field name="domain_force">['|', ('raised_by_id', '=', user.id), '|', ('kpi_id.user_id', '=', user.id), ('kpi_id.contributor_ids', 'in', [user.id])]</field>
+        <field name="groups" eval="[(4, ref('group_kra_developer'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Coordinators, owners and system: every question. Every admin is also a
+         developer by implication, so without this the rule above would apply
+         to them too. -->
+    <record id="kpi_doubt_admin_rule" model="ir.rule">
+        <field name="name">Coordinator/Owner/System: all questions</field>
+        <field name="model_id" ref="model_kpi_doubt"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_admin')), (4, ref('base.group_system'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
 </odoo>

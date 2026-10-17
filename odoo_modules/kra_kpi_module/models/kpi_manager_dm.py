@@ -124,6 +124,7 @@ class KraKpiManagerAsk(models.Model):
         self.ensure_one()
         return self.external_ref or ('TASK-%s' % self.id)
 
+    @api.private
     def ask_manager_to_decide(self, escalate=False):
         """Send the approve/reject poll privately. Never raises.
 
@@ -298,9 +299,15 @@ class KpiManagerDmRouter(models.AbstractModel):
             return 'reject'
         return None
 
+    @api.private
     @api.model
     def handle(self, phone, body):
-        """True when this was a manager's message and we answered it."""
+        """True when this was a manager's message and we answered it.
+
+        Private: it resolves the actor from `phone` and acts under sudo, so
+        over call_kw anyone could pass the manager's number and a "✅ REQ-002
+        — Approve" body and approve as them. Only the inbound webhook calls it.
+        """
         text = (body or '').strip()
         if not text:
             return False

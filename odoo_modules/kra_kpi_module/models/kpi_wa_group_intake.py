@@ -392,9 +392,13 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
     _name = 'kpi.wa.group.router'
     _description = 'WhatsApp Group Intake Router'
 
+    @api.private
     @api.model
     def handle(self, message):
-        """Entry point from whatsapp.message.create(). Never raises."""
+        """Entry point from whatsapp.message.create(). Never raises.
+
+        Private, like kpi.manager.dm.handle: the sender is whoever the message
+        says it is, so this must only ever be reached from the webhook."""
         body = (message.message or '').strip()
         tapped = (message.interactive_reply_id or '').strip()
         if not body and not tapped:

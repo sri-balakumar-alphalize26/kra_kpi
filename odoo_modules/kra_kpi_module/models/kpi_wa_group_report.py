@@ -17,7 +17,7 @@ person's name otherwise rather than printing a broken @12345.
 
 import logging
 
-from odoo import fields, models
+from odoo import api, fields, models
 
 _logger = logging.getLogger(__name__)
 
@@ -108,10 +108,17 @@ class KpiWaGroupReport(models.AbstractModel):
             _logger.error('wa poll to %s failed: %s', target, exc)
             return False
 
+    # Every post_* below is @api.private. This is an AbstractModel with no ACL,
+    # so a public method here is callable by ANY signed-in user over call_kw --
+    # post_poll(question, options, jid) let a developer put any text into any
+    # group, a client's included, which is the one thing this design forbids.
+    # Python callers are unaffected; only RPC is refused.
+    @api.private
     def post_poll(self, question, options, jid=None):
         """Poll into a named group, or the company-wide one."""
         return self._post_poll(jid or self._group_jid(), question, options)
 
+    @api.private
     def post_poll_to_user(self, user, question, options):
         """Poll privately to one person. False when they cannot be reached.
 
@@ -140,6 +147,7 @@ class KpiWaGroupReport(models.AbstractModel):
             return False
         return self._post_poll(digits, question, options)
 
+    @api.private
     def post_poll_for_kpi(self, kpi, question, options):
         """A tappable menu in THIS task's client group. False if we cannot.
 
@@ -161,6 +169,7 @@ class KpiWaGroupReport(models.AbstractModel):
             return False
         return self._post_poll(group.jid, question, options)
 
+    @api.private
     def post_text_to_user(self, user, text):
         """The same contract, for a line that needs no answer."""
         if not user:
@@ -218,6 +227,7 @@ class KpiWaGroupReport(models.AbstractModel):
                                  ('active', '=', True)], limit=1)
         return Group
 
+    @api.private
     def post_for_kpi(self, kpi, text):
         """Post `text` into the group belonging to `kpi`'s client.
 
@@ -262,6 +272,7 @@ class KpiWaGroupReport(models.AbstractModel):
     # hr_attendance_369_whatsapp as "@Name present 9:30" when the attendance
     # check-in is created.
 
+    @api.private
     def post_workday_end(self, user, when_label, worked_seconds,
                          tasks_touched=0, tasks_completed=None, note=''):
         if not self._group_jid():
