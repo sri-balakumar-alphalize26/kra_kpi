@@ -75,6 +75,108 @@ class KpiWaGroupReport(models.AbstractModel):
             _logger.error("wa group report failed: %s", e)
             return False
 
+    # ---- tappable menus sent somewhere we choose ---------------------------- #
+    #
+    # The router's own _poll (kpi_wa_group_intake.py) can only reply into the
+    # group a message arrived from -- it takes the inbound `message` and reuses
+    # message.phone. That is right for a conversation and useless for the two
+    # things this feature needs: pushing an approval to a manager who has not
+    # said anything, and posting a question into the internal group from code
+    # that has no inbound message at all.
+    #
+    # These live here, beside _post, because this abstract model is already the
+    # module's single "send to a named destination" entry point: it owns
+    # _session() and the never-raise discipline, and needs no whatsapp.message.
+
+    def _post_poll(self, target, question, options):
+        """Send a tappable poll to a group JID or a bare number. Never raises.
+
+        send_poll normalizes either shape (whatsapp_session.py -> wa_jid), and
+        falls back to a numbered text message by itself when Evolution refuses
+        the poll, so a failure here degrades rather than disappears.
+        """
+        target = (target or '').strip()
+        if not target or not options:
+            return False
+        session = self._session()
+        if not session:
+            _logger.info('wa poll skipped: no connected session')
+            return False
+        try:
+            return bool(session.send_poll(target, question, list(options)))
+        except Exception as exc:
+            _logger.error('wa poll to %s failed: %s', target, exc)
+            return False
+
+    def post_poll(self, question, options, jid=None):
+        """Poll into a named group, or the company-wide one."""
+        return self._post_poll(jid or self._group_jid(), question, options)
+
+    def post_poll_to_user(self, user, question, options):
+        """Poll privately to one person. False when they cannot be reached.
+
+        Returning False rather than silently doing nothing is the whole point:
+        the caller has just written a decision that now needs a human, and it
+        has to be able to fall back to another channel. A send that reports
+        success to a number nobody owns is how an approval disappears.
+
+        REFUSES A GROUP JID. A manager's "number" that ends @g.us means a
+        misconfiguration, and sending there would put a private approval --
+        with the client's own wording in it -- in front of whoever is in that
+        group. That is the one failure this whole design exists to prevent, so
+        it is blocked here rather than trusted to every caller.
+        """
+        if not user:
+            return False
+        digits = user._kpi_wa_target()
+        if not digits:
+            _logger.info('no WhatsApp number for %s -- nothing sent',
+                         user.login)
+            return False
+        if '@g.us' in digits or '@' in digits:
+            _logger.error(
+                'refusing to send a private message to %r for %s: that is a '
+                'group, not a person.', digits, user.login)
+            return False
+        return self._post_poll(digits, question, options)
+
+    def post_poll_for_kpi(self, kpi, question, options):
+        """A tappable menu in THIS task's client group. False if we cannot.
+
+        The decline message used to be plain text ending "reply 1 if that is
+        OK, 2 if you disagree", purely because this file had no poll path --
+        every other question the bot asks is a tap. Clients had no reason to
+        know that one message was different, and a typed digit is exactly the
+        step where people reply with a sentence instead.
+
+        Resolution goes through _group_for_kpi, which walks up the KRA tree
+        and returns nothing rather than falling back to the company group --
+        so a task whose client cannot be identified stays unasked instead of
+        being broadcast to the wrong people.
+        """
+        group = self._group_for_kpi(kpi)
+        if not group:
+            _logger.info('no client group for %s -- poll not sent',
+                         kpi.external_ref or kpi.id)
+            return False
+        return self._post_poll(group.jid, question, options)
+
+    def post_text_to_user(self, user, text):
+        """The same contract, for a line that needs no answer."""
+        if not user:
+            return False
+        digits = user._kpi_wa_target()
+        if not digits or '@' in digits:
+            return False
+        session = self._session()
+        if not session:
+            return False
+        try:
+            return bool(session.send_message(digits, text))
+        except Exception as exc:
+            _logger.error('wa dm to %s failed: %s', user.login, exc)
+            return False
+
     # ---- posting about ONE task, to ITS client's group ---------------------- #
 
     def _group_for_kpi(self, kpi):

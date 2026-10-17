@@ -81,6 +81,15 @@ _STEPS = [
     ('ask_text', 'Waiting for the description'),
     ('confirm', 'Waiting for confirmation'),
     ('decline_reconfirm', 'Answering a decline'),
+    # They tapped "Send a correction" on a refusal; their next message is it.
+    ('ask_correction', 'Typing a corrected version'),
+    # The internal group: a developer working, not a client asking.
+    ('staff_menu', 'Staff: picking what to do'),
+    ('staff_pick_task', 'Staff: picking which task'),
+    ('staff_task_actions', 'Staff: picking what to do with it'),
+    ('staff_pause_reason', 'Staff: saying why they paused'),
+    ('staff_text', 'Staff: typing a question or a meeting request'),
+    ('staff_day_note', 'Staff: what they got done today'),
     # New database
     ('pick_server', 'Picking a server'),
     ('type_server', 'Typing a server name'),
@@ -109,9 +118,16 @@ _STEPS = [
 ]
 _STEP_CODES = tuple(c for c, _l in _STEPS)
 
-# A poll fits 12 options. The database picker also shows Common and Other, so
-# the client's own rows are capped at 10.
-POLL_MAX_DB_ROWS = 10
+# A poll fits TEN options, not twelve -- Evolution answers an 11-row poll with
+# 400 "values does not meet maximum length of 10" and whatsapp.session then
+# falls back to a numbered text list, so an oversized menu stops being
+# tappable rather than losing its tail.
+#
+# This was 10 while the comment said 12 fit: the picker appends Common AND
+# Other, so a client with ten databases produced twelve rows and the menu
+# silently became text. Eight leaves exactly ten with both extras.
+POLL_MAX_OPTIONS = 10
+POLL_MAX_DB_ROWS = 8
 
 # Rows the database picker appends to whatever the client actually has.
 _DB_COMMON_ID = '__common__'
@@ -265,6 +281,16 @@ class KpiWaGroupIntake(models.Model):
     # index, because the type menu is not the same for every client.
     menu_csv = fields.Char()
 
+    # ---- the internal group's scratch ------------------------------------ #
+    # Separate from created_kpi_id and pending_decline_kpi_id on purpose:
+    # those belong to the client flows, and one field doing three jobs is how
+    # a stale value from one conversation lands on another.
+    staff_action = fields.Char(
+        string='Staff action in flight',
+        help='take / pause / done / doubt / meet_admin / meet_client')
+    staff_kpi_id = fields.Many2one(
+        'kra.kpi', string='Task the developer picked', ondelete='set null')
+
     pending_decline_kpi_id = fields.Many2one(
         'kra.kpi', ondelete='set null',
         help='The task whose decline / reclassification this person is being '
@@ -301,8 +327,21 @@ class KpiWaGroupIntake(models.Model):
         return self.sudo().create({'group_id': group.id, 'participant_key': key,
                                    'participant_name': name, 'step': 'idle'})
 
+    # Conversations WE opened, where the next move is the client's. These do
+    # not time out.
+    #
+    # The TTL exists so somebody who wandered off half way through a menu
+    # gets a clean start instead of a half-filled one. A question we pushed
+    # at them is the opposite situation: a refusal posted at 6pm and answered
+    # at 9am next morning is a perfectly normal thing for a client to do, and
+    # expiring it would silently throw away their answer -- or, worse, the
+    # correction they had just typed out.
+    _PUSHED_STEPS = ('decline_reconfirm', 'ask_correction')
+
     def _is_stale(self):
         self.ensure_one()
+        if self.step in self._PUSHED_STEPS:
+            return False
         if not self.last_activity:
             return True
         return (fields.Datetime.now() - self.last_activity).total_seconds() \
@@ -324,6 +363,17 @@ class KpiWaGroupIntake(models.Model):
                            'meet_start': False, 'meet_text': False,
                            'meet_day': -1, 'meet_tz': False,
                            'meet_band': False, 'meet_hour': False,
+                           # Which refusal we were waiting on an answer about.
+                           # Left behind it is only noise -- step is idle so
+                           # nothing reads it -- but a dangling pointer to an
+                           # archived task is exactly what the comment above
+                           # is about.
+                           'pending_decline_kpi_id': False,
+                           # The internal group's scratch. Listed here for
+                           # the same reason as everything above it: a value
+                           # left behind attaches the NEXT action to the
+                           # PREVIOUS conversation's task.
+                           'staff_action': False, 'staff_kpi_id': False,
                            'last_activity': fields.Datetime.now()})
 
     def _touch(self, **vals):
@@ -352,7 +402,13 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
 
         jid = (message.phone or '').strip()
         group = self.env['kpi.wa.group'].sudo().search([('jid', '=', jid)], limit=1)
-        if not group or not group.intake_enabled or not group.kra_id:
+        if not group or not group.intake_enabled:
+            return False
+        # A CLIENT group needs a Client; the internal group must not have one.
+        # Checked separately because _welcome_header and _live_dbs both
+        # dereference group.kra_id -- letting a client-less group into the
+        # client chain would raise, not merely misbehave.
+        if not group.is_staff_group and not group.kra_id:
             return False
 
         key = (message.participant_jid or '').strip() or (message.push_name or '').strip()
@@ -362,6 +418,15 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         state = self.env['kpi.wa.group.intake']._get_or_create(
             group, key, message.push_name or '')
         low = body.lower().strip()
+
+        # THE INTERNAL GROUP IS A DIFFERENT CONVERSATION ENTIRELY.
+        #
+        # Branched here, before the cancel/greeting handling and the client
+        # step chain, because a developer saying "hi" wants the staff menu and
+        # not the "what do you need?" menu a customer gets. The client flow
+        # below is untouched.
+        if group.is_staff_group:
+            return self._handle_staff(message, state, group)
 
         if low in _CANCELS:
             if state.step != 'idle':
@@ -388,6 +453,12 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         # so there is no flow for them to be "part way through".
         if state.step == 'decline_reconfirm':
             return self._handle_reconfirm(message, state, tapped, low)
+
+        # Same reasoning: this conversation is one we opened. It also takes
+        # the message BODY rather than a menu choice, so it must not reach the
+        # pickers below, which would read a sentence as a failed option tap.
+        if state.step == 'ask_correction':
+            return self._handle_correction(message, state, body)
 
         step = state.step
         if step not in _STEP_CODES:
@@ -761,6 +832,35 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         return False
 
     # ------------------------------------------------------------------
+    @api.model
+    def _reconfirm_answer(self, tapped, low):
+        """Which of the three answers this is, or None.
+
+        NOT _choose(), which does an exact dictionary lookup on the whole
+        label. These options carry the reference so a vote can be bound to
+        the right task -- "✏️ REQ-336 — Send a correction" -- so the label is
+        never equal to any key and every tap resolved to nothing.
+
+        Order matters twice over: "disagree" contains "agree", and the
+        reference contains digits, so a bare position number is only read as
+        one when it is the entire message.
+        """
+        text = _strip_emoji('%s %s' % (tapped or '', low or '')).lower()
+
+        if 'correction' in text or 'correct' in text:
+            return 'correct'
+        if 'disagree' in text:                    # before 'agree'
+            return 'dispute'
+        if 'withdraw' in text or 'close it' in text or 'cancel' in text:
+            return 'withdraw'
+        if ('go ahead' in text or 'agree' in text or 'yes' in text
+                or ' ok' in text or text.strip().endswith('ok')):
+            return 'accept'
+
+        # Typed, not tapped: only when the message is nothing but the number.
+        return {'1': 'accept', '2': 'correct', '3': 'dispute',
+                '4': 'withdraw'}.get((low or '').strip())
+
     def _handle_reconfirm(self, message, state, tapped, low):
         """The client answering a decline / reclassification we posted.
 
@@ -774,19 +874,14 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             state._reset()
             return False
 
-        answer = _choose(tapped, low, ('accept', 'dispute', 'withdraw'),
-                         {'yes': 'accept', 'ok': 'accept',
-                          "that's ok": 'accept', 'agree': 'accept',
-                          'no': 'dispute', 'disagree': 'dispute',
-                          'cancel': 'withdraw', 'close it': 'withdraw'},
-                         {'1': 'accept', '2': 'dispute', '3': 'withdraw'})
+        answer = self._reconfirm_answer(tapped, low)
         if not answer:
             # Don't nag. Re-state the question once; a group is a conversation
             # between people and most of what is said is not aimed at us.
             if low in _GREETINGS:
                 self._text(message, _(
-                    "Before that — %(ref)s: reply *1* if the change is OK, "
-                    "*2* if you disagree.") % {
+                    "Before that — %(ref)s: tap *OK*, *Send a correction* or "
+                    "*I disagree* on the question above.") % {
                         'ref': kpi.external_ref or kpi.id})
                 return True
             return False
@@ -801,6 +896,30 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             state._touch(step='idle', pending_decline_kpi_id=False)
             return True
 
+        if answer == 'correct':
+            # Stay on this task and wait for the words. The id is kept so the
+            # correction lands on the right one even with two open refusals.
+            state._touch(step='ask_correction')
+        else:
+            state._touch(step='idle', pending_decline_kpi_id=False)
+        self._text(message, msg)
+        return True
+
+    def _handle_correction(self, message, state, body):
+        """The client's corrected wording, arriving as free text."""
+        kpi = state.pending_decline_kpi_id
+        if not kpi or not kpi.exists():
+            state._reset()
+            return False
+        try:
+            msg = kpi.sudo().apply_client_correction(
+                body, actor_label=state.participant_name
+                or state.participant_key)
+        except Exception as exc:
+            _logger.exception('correction failed for %s: %s', kpi.id, exc)
+            self._text(message, _('Sorry — I could not record that.'))
+            state._touch(step='idle', pending_decline_kpi_id=False)
+            return True
         state._touch(step='idle', pending_decline_kpi_id=False)
         self._text(message, msg)
         return True
@@ -970,6 +1089,14 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                 'There are no live databases listed for you. '
                 'Send *hi* to start again.'))
             return True
+        # One live database: do not ask which. A single-option poll is
+        # refused by WhatsApp and arrives as untappable text -- and "which of
+        # these one things did you mean" is not a question worth asking.
+        if len(opts) == 1:
+            db = self.env['kpi.client.db'].sudo().browse(int(opts[0][0]))
+            if db.exists():
+                state._touch(client_db_id=db.id)
+                return self._show_disc_reasons(message, state)
         state._touch(step='pick_disc_db',
                      menu_csv=','.join(o for o, _l in opts))
         self._poll(message, _('Which database should be switched off?'),
@@ -1545,6 +1672,25 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         if not s:
             _logger.warning('Group intake: no connected session to reply with')
             return
+        # A poll needs TWO options. WhatsApp refuses a single-option poll, the
+        # fallback below then sends a numbered text list, and the person is
+        # left reading "1 - REQ-002 ..." with nothing to tap -- which is how
+        # the one-task developer menu ended up untappable.
+        #
+        # Logged loudly rather than quietly worked around: a menu with one
+        # answer is a question that should not have been asked, and the fix
+        # belongs at the call site. Kept as a warning so a fourth caller
+        # someday is findable instead of silently degrading.
+        n = len(options or [])
+        if n < 2 or n > POLL_MAX_OPTIONS:
+            # Both ends of the range turn a tappable menu into plain text:
+            # one option is refused as not being a choice, more than ten is
+            # refused by Evolution outright. Named here so the next occurrence
+            # is one grep away rather than a screenshot of a numbered list.
+            _logger.warning(
+                'poll with %d option(s) (allowed 2-%d) -- it will be refused '
+                'and arrive as untappable text. Question was: %r',
+                n, POLL_MAX_OPTIONS, (question or '')[:80])
         # ONE message. The numbered text that used to follow every poll is
         # gone: it was a hedge against the poll not rendering, and the poll
         # demonstrably renders on this connection. Sending both just showed

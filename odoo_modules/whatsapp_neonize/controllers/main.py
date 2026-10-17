@@ -24,37 +24,25 @@ class WhatsAppController(http.Controller):
         Falls back to database when in-memory state is unavailable
         (handles multi-worker Odoo deployments).
         """
-        from odoo.addons.whatsapp_neonize.models.whatsapp_session import (
-            _wa_status, _wa_qr_image,
-        )
-
         session = request.env['whatsapp.session'].browse(session_id)
         if not session.exists():
             return {'status': 'error', 'message': 'Session not found'}
 
-        # Prefer in-memory status; fall back to DB status
-        # (in-memory may be empty when a different worker handled the connect)
-        mem_status = _wa_status.get(session_id) or session.status
+        # There is no in-memory state any more. Evolution pushes QRCODE_UPDATED
+        # and CONNECTION_UPDATE to the webhook, which writes straight to the row,
+        # so the database IS the single source of truth -- and the multi-worker
+        # "memory says one thing, DB says another" problem this used to paper
+        # over cannot occur.
         result = {
-            'status': mem_status,
+            'status': session.status,
             'session_id': session_id,
         }
-
-        if mem_status == 'waiting_qr':
-            # Try in-memory QR first (same worker), then fall back to DB
-            qr = _wa_qr_image.get(session_id)
-            if qr:
-                result['qr_image'] = (
-                    qr.decode('utf-8') if isinstance(qr, bytes) else qr
-                )
-            elif session.qr_image:
-                # DB fallback — critical for multi-worker servers
-                result['qr_image'] = (
-                    session.qr_image.decode('utf-8')
-                    if isinstance(session.qr_image, bytes)
-                    else session.qr_image
-                )
-
+        if session.status == 'waiting_qr' and session.qr_image:
+            result['qr_image'] = (
+                session.qr_image.decode('utf-8')
+                if isinstance(session.qr_image, bytes)
+                else session.qr_image
+            )
         return result
 
     @http.route(
@@ -63,11 +51,8 @@ class WhatsAppController(http.Controller):
     )
     def qr_image(self, session_id, **kwargs):
         """Serve the QR code as a PNG image."""
-        from odoo.addons.whatsapp_neonize.models.whatsapp_session import (
-            _wa_qr_image,
-        )
-
-        qr = _wa_qr_image.get(session_id)
+        session = request.env['whatsapp.session'].browse(session_id)
+        qr = session.qr_image if session.exists() else None
         if qr:
             image_data = base64.b64decode(qr)
             return request.make_response(
@@ -186,31 +171,96 @@ class WhatsAppController(http.Controller):
             return {'success': False, 'error': str(e)}
 
     @http.route(
+        '/whatsapp/webhook/incoming',
+        type='jsonrpc', auth='public', methods=['POST'], csrf=False,
+    )
+    def webhook_incoming(self, **kwargs):
+        """
+        Public webhook for external gateways / bridge services to push
+        incoming WhatsApp messages into Odoo.
+
+        POST /whatsapp/webhook/incoming  (Content-Type: application/json)
+        Body params:
+            from:   sender phone (e.g. "919944080209" or "919944080209@s.whatsapp.net")
+            body:   message text
+            secret: must match the `whatsapp_neonize.webhook_secret`
+                    system parameter (default: 'neonize-webhook')
+
+        Returns: {'ok': bool, ...}
+        """
+        phone = kwargs.get('from', '')
+        body = kwargs.get('body', '')
+        secret = kwargs.get('secret', '')
+
+        _logger.info("WhatsApp webhook: from=%s body=%r", phone, body)
+
+        expected = request.env['ir.config_parameter'].sudo().get_param(
+            'whatsapp_neonize.webhook_secret', 'neonize-webhook',
+        )
+        if secret != expected:
+            _logger.warning("Webhook: invalid secret from %s", phone)
+            return {'ok': False, 'error': 'Invalid secret'}
+
+        if not phone or not body:
+            return {'ok': False, 'error': 'Missing from or body'}
+
+        phone_clean = (
+            phone.replace('@c.us', '')
+                 .replace('@s.whatsapp.net', '')
+                 .replace('@g.us', '')
+                 .replace('@lid', '')
+                 .replace('+', '').replace(' ', '').replace('-', '')
+        )
+
+        try:
+            session = request.env['whatsapp.session'].sudo().search(
+                [('status', '=', 'connected')], limit=1,
+            )
+            request.env['whatsapp.message'].sudo().create({
+                'session_id': session.id if session else False,
+                'phone': phone_clean,
+                'message': body,
+                'direction': 'incoming',
+                'status': 'received',
+            })
+            _logger.info(
+                "Webhook: saved incoming message from %s: %r",
+                phone_clean, body,
+            )
+            return {'ok': True, 'status': 'message_saved'}
+        except Exception as e:
+            _logger.error("Webhook save error: %s", e, exc_info=True)
+            return {'ok': False, 'error': str(e)}
+
+    @http.route(
         '/whatsapp/debug/status',
         type='http', auth='user', methods=['GET'],
     )
     def debug_status(self, **kwargs):
-        """Diagnostic endpoint to check in-memory WhatsApp status."""
+        """Diagnostic endpoint: what Odoo stores vs what Evolution reports."""
         import json
-        from odoo.addons.whatsapp_neonize.models.whatsapp_session import (
-            _wa_clients, _wa_status,
-        )
 
         sessions = request.env['whatsapp.session'].sudo().search([])
-        info = {
-            'memory_clients': {str(k): str(type(v).__name__) for k, v in _wa_clients.items()},
-            'memory_status': dict(_wa_status),
-            'db_sessions': [],
-        }
+        info = {'transport': 'evolution-api', 'db_sessions': []}
         for s in sessions:
-            info['db_sessions'].append({
+            row = {
                 'id': s.id,
                 'name': s.name,
                 'db_status': s.status,
-                'mem_status': _wa_status.get(s.id, 'NOT IN MEMORY'),
-                'has_client': s.id in _wa_clients,
-                'db_path': s.db_path,
-            })
+                'base_url': s.base_url,
+                'instance_name': s.instance_name,
+                'last_webhook_at': str(s.last_webhook_at or ''),
+                'last_state_check': str(s.last_state_check or ''),
+                'webhook_url': s.webhook_url,
+            }
+            # One live probe, so the two sides can be compared directly. This is
+            # the whole diagnostic now -- there is no third "in-memory" state to
+            # disagree with them.
+            try:
+                row['evolution_state'] = s._api().connection_state(s.instance_name)
+            except Exception as exc:
+                row['evolution_state'] = 'probe failed: %s' % exc
+            info['db_sessions'].append(row)
 
         return request.make_response(
             json.dumps(info, indent=2),

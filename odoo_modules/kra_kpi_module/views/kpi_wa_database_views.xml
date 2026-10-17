@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_kpi_wa_database_list" model="ir.ui.view">
+        <field name="name">kpi.wa.database.list</field>
+        <field name="model">kpi.wa.database</field>
+        <field name="arch" type="xml">
+            <list string="WhatsApp Database" create="false" delete="false"
+                  edit="false">
+                <field name="ready" column_invisible="1"/>
+                <field name="is_served" column_invisible="1"/>
+                <field name="name" string="Database"/>
+                <field name="state_label" string="Status"
+                       decoration-success="is_served and connected_session"
+                       decoration-muted="not ready"/>
+                <field name="connected_session" string="Connected As"/>
+                <field name="schema_kind" string="Build" widget="badge"
+                       decoration-success="schema_kind == 'evolution'"
+                       decoration-danger="schema_kind == 'neonize'"/>
+                <field name="module_state" string="Module" optional="show"/>
+                <field name="session_count" string="Sessions" optional="hide"/>
+                <field name="last_message_at" string="Last Message"
+                       optional="show"/>
+                <!-- The reason carries the whole value of this screen for the
+                     four databases that cannot take WhatsApp. It is a
+                     sentence, not a flag, because "no" without "why" sends
+                     somebody to edit odoo.conf by hand anyway. -->
+                <field name="blocked_reason" string="Why not"
+                       decoration-warning="not ready"/>
+                <button name="action_take_over" type="object"
+                        string="Give WhatsApp to this one"
+                        class="btn-primary" icon="fa-exchange"
+                        invisible="not ready or is_served"
+                        confirm="This restarts Odoo for everybody, about a
+                                 minute, and signs you out.
+
+                                 The current settings are backed up first and
+                                 put back automatically if Odoo does not come
+                                 back up.
+
+                                 Afterwards, open WhatsApp Sessions in that
+                                 database and press Connect WhatsApp.
+
+                                 Continue?"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_kpi_wa_database" model="ir.actions.server">
+        <field name="name">WhatsApp Database</field>
+        <field name="model_id" ref="model_kpi_wa_database"/>
+        <field name="state">code</field>
+        <!-- A server action, not a plain window: the rows have to be built
+             from Postgres and odoo.conf BEFORE the list renders, or the
+             screen opens empty the first time and right only on the second. -->
+        <field name="code">action = model.action_open()</field>
+    </record>
+
+</odoo>

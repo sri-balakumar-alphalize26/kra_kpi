@@ -157,3 +157,14 @@ access_kpi_meeting_participant_admin,kpi.meeting.participant.admin,model_kpi_mee
 access_kpi_meeting_participant_owner,kpi.meeting.participant.owner,model_kpi_meeting_participant,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_meeting_participant_system,kpi.meeting.participant.system,model_kpi_meeting_participant,base.group_system,1,1,1,1
 access_kpi_meeting_participant_dev,kpi.meeting.participant.dev,model_kpi_meeting_participant,kra_kpi_module.group_kra_developer,1,0,0,0
+access_kpi_approval_admin,kpi.approval.admin,model_kpi_approval,kra_kpi_module.group_kra_admin,1,0,0,0
+access_kpi_approval_owner,kpi.approval.owner,model_kpi_approval,kra_kpi_module.group_kra_owner,1,0,0,0
+access_kpi_approval_system,kpi.approval.system,model_kpi_approval,base.group_system,1,0,0,0
+access_kpi_approval_decide_admin,kpi.approval.decide.admin,model_kpi_approval_decide,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_approval_decide_owner,kpi.approval.decide.owner,model_kpi_approval_decide,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_approval_decide_system,kpi.approval.decide.system,model_kpi_approval_decide,base.group_system,1,1,1,1
+access_kpi_wa_database_system,kpi.wa.database.system,model_kpi_wa_database,base.group_system,1,1,1,1
+access_kpi_doubt_dev,kpi.doubt.dev,model_kpi_doubt,kra_kpi_module.group_kra_developer,1,1,1,0
+access_kpi_doubt_admin,kpi.doubt.admin,model_kpi_doubt,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_doubt_owner,kpi.doubt.owner,model_kpi_doubt,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_doubt_system,kpi.doubt.system,model_kpi_doubt,base.group_system,1,1,1,1

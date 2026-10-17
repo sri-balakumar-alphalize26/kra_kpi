@@ -125,6 +125,14 @@ class KpiMeeting(models.Model):
         ('done', 'Finished'),
         ('cancelled', 'Cancelled'),
     ], default='requested', required=True, index=True)
+    # Between US, not with the client. A developer asking their manager for a
+    # word is about the client's work but is no business of theirs -- so every
+    # message for this meeting goes to the internal team group instead, and
+    # the client never learns it happened. See _post.
+    is_internal = fields.Boolean(
+        string='Internal Only', default=False, index=True,
+        help='Between staff. Nothing about it is posted to the client.')
+
     confirmed_by_id = fields.Many2one('res.users', readonly=True,
                                       ondelete='set null')
     confirmed_at = fields.Datetime(readonly=True)
@@ -202,7 +210,11 @@ class KpiMeeting(models.Model):
         link to localhost is worse than a plain room.
         """
         self.ensure_one()
-        base = (self.env['whatsapp.config'].sudo()
+        # get_config() FIRST. get_kpi_public_base_url() calls ensure_one(),
+        # so calling it straight off the model is an empty recordset and a
+        # "Expected singleton" every single time -- which meant every meeting
+        # confirmation raised, and is why requested meetings piled up.
+        base = (self.env['whatsapp.config'].sudo().get_config()
                 .get_kpi_public_base_url() or '').rstrip('/')
         if not base or 'localhost' in base or '127.0.0.1' in base:
             return self.join_url or ''
@@ -268,6 +280,72 @@ class KpiMeeting(models.Model):
         self.sudo().write(vals)
         return True
 
+    def _recap_body(self, closed_by=None, quiet=False):
+        """What the room actually did: how long, and who was in it."""
+        self.ensure_one()
+        tz = self.env['kpi.tz']
+        who = self.participant_summary or _('nobody we could see')
+        mins = self.actual_minutes or 0
+        ran = (_('%d min') % mins) if mins else _('under a minute')
+        lines = [
+            _('🏁 *Meeting finished*%s') % (
+                (' — %s' % self.kpi_id.external_ref)
+                if self.kpi_id.external_ref else ''),
+            self.name or '',
+            '',
+            _('⏱️ Ran for %s') % ran,
+            _('👥 In the room: %s') % who,
+        ]
+        if self.opened_at:
+            lines.append(_('▶️ Started %s') % tz.fmt(self.opened_at))
+        if self.ended_at:
+            lines.append(_('⏹️ Ended %s') % tz.fmt(self.ended_at))
+        if quiet:
+            lines.append('')
+            lines.append(_('_Closed automatically — the room went quiet._'))
+        elif closed_by:
+            lines.append('')
+            lines.append(_('_Closed by %s_') % (closed_by.name or ''))
+        return '\n'.join(l for l in lines if l is not None)
+
+    def close_meeting(self, closed_by=None, quiet=False, at=None):
+        """End the room, post what happened, and write it on the task.
+
+        One method for both ways a meeting ends -- somebody says so, or the
+        cron notices the room went quiet -- because the recap and the task
+        log entry are the same in both cases, and two copies would drift.
+
+        The end time for a quiet close is the LAST THING WE HEARD, never now:
+        recording a meeting as having run until a cron noticed would invent
+        minutes, and those minutes are read by people deciding what to bill.
+        """
+        self.ensure_one()
+        if self.state == 'done':
+            return False
+        end = at or (self.last_event_at if quiet else fields.Datetime.now())
+        self.sudo().write({'state': 'done', 'ended_at': end or fields.Datetime.now()})
+        self.participant_ids.filtered(lambda p: not p.left_at).sudo().write(
+            {'left_at': self.ended_at})
+        # Recompute before reading them for the recap.
+        self.invalidate_recordset(['actual_minutes', 'participant_summary'])
+
+        self._post(self._recap_body(closed_by=closed_by, quiet=quiet))
+        # The task's own log, so the meeting shows on the task rather than
+        # only inside the meeting record.
+        self._log('meeting_finished', {
+            'ran_for_minutes': self.actual_minutes,
+            'who': self.participant_summary,
+            'started_at': fields.Datetime.to_string(self.opened_at or ''),
+            'ended_at': fields.Datetime.to_string(self.ended_at or ''),
+            'closed_by': (closed_by.login if closed_by else
+                          ('cron' if quiet else '')),
+            # Stated in the log itself: meeting time is NOT task time. It is
+            # never written to kpi.time.log and never touches
+            # timer_total_seconds, or it would land in hourly invoicing.
+            'counts_as_task_time': False,
+        })
+        return True
+
     @api.model
     def _cron_close_stale_meetings(self):
         """Close a room whose browser vanished without saying goodbye.
@@ -284,13 +362,11 @@ class KpiMeeting(models.Model):
                                     ('last_event_at', '!=', False),
                                     ('last_event_at', '<', cutoff)])
         for rec in stale:
-            rec.sudo().write({'state': 'done',
-                              'ended_at': rec.last_event_at})
-            rec.participant_ids.filtered(lambda p: not p.left_at).sudo().write(
-                {'left_at': rec.last_event_at})
-            rec._log('meeting_closed_quiet', {
-                'ran_for_minutes': rec.actual_minutes,
-                'who': rec.participant_summary})
+            # Through the shared path, so a quietly-closed meeting gets the
+            # same recap and the same task-log entry as one somebody ended.
+            # It used to only write a log line, which is why a meeting could
+            # finish and nobody was told anything.
+            rec.close_meeting(quiet=True, at=rec.last_event_at)
         if stale:
             _logger.info('kpi.meeting: closed %s silent room(s)', len(stale))
         return True
@@ -525,9 +601,29 @@ class KpiMeeting(models.Model):
     # talking to the client
     # ------------------------------------------------------------------
     def _post(self, body):
-        """Into the group that belongs to THIS meeting's client. Never raises."""
+        """Into the right group, and never raises.
+
+        A meeting is normally between us and a client, so this posts into
+        that client's group. An INTERNAL meeting -- a developer wanting a
+        word with their manager -- must not go there: the client has no part
+        in it and would be handed a link to a conversation about them.
+
+        The branch lives here, in the one method every meeting message passes
+        through, rather than at the call sites. There are five of them
+        (confirmation, reminder, opening, cancellation, summary) and a rule
+        enforced in five places is a rule that holds in four.
+        """
         self.ensure_one()
         try:
+            if self.is_internal:
+                group = self.env['kpi.wa.group'].sudo()._staff_group()
+                if not group:
+                    _logger.warning(
+                        'meeting %s is internal but no team group is marked; '
+                        'not posting rather than guessing.', self.id)
+                    return False
+                return bool(self.env['kpi.wa.group.report'].sudo()
+                            ._post(body, jid=group.jid))
             return bool(self.env['kpi.wa.group.report'].sudo()
                         .post_for_kpi(self.kpi_id, body))
         except Exception as exc:

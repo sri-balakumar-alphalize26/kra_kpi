@@ -76,7 +76,97 @@ class KraKpiDecline(models.Model):
         ('accepted', 'Client accepted'),
         ('disputed', 'Client disputed'),
         ('withdrawn', 'Client withdrew it'),
+        ('corrected', 'Client sent a correction'),
     ], readonly=True, copy=False, index=True)
+
+    # ---- the client fixing it and sending it back ------------------------- #
+    #
+    # Until now a refused task could only be accepted, disputed or withdrawn.
+    # None of those carries a corrected version, so "not enough detail to act
+    # on" left the client with no way to supply the detail -- they had to
+    # raise the whole thing again under a new reference, and the manager lost
+    # the thread between the two.
+    #
+    # The correction keeps the SAME record and the SAME reference. REQ-336
+    # stays REQ-336, because that is what the client has in writing.
+    correction_round = fields.Integer(
+        string='Corrections Sent', default=0, readonly=True, copy=False,
+        help='How many times the client has re-sent this after a refusal.')
+    original_client_text = fields.Text(
+        string='Original Words', readonly=True, copy=False,
+        help="What the client wrote the first time, kept verbatim. Written "
+             "once and never again, so no correction can overwrite it.")
+    last_correction_text = fields.Text(
+        string='Latest Correction', readonly=True, copy=False)
+
+    # Two rounds, then a human. A loop with no limit is a loop a client and a
+    # manager can sit in all day, each believing the other is about to move.
+    MAX_CORRECTION_ROUNDS = 2
+
+    def apply_client_correction(self, text, actor_label=''):
+        """The client's corrected wording. Same task, same reference.
+
+        The original words are NEVER overwritten: description is appended to,
+        original_client_text is written once behind a guard, and every round
+        is also copied verbatim into an immutable kpi.action.log row. Three
+        copies, because the one thing this must not do is lose what a client
+        actually asked for.
+        """
+        self.ensure_one()
+        body = (text or '').strip()
+        if not body:
+            return _('Send the corrected wording and I will pass it on.')
+
+        if self.correction_round >= self.MAX_CORRECTION_ROUNDS:
+            return _(
+                "This is the third time round on %s, so I have passed it to "
+                "a person instead. Somebody will come back to you."
+            ) % (self.external_ref or self.id)
+
+        vals = {
+            'last_correction_text': body,
+            'correction_round': self.correction_round + 1,
+            'client_reconfirm_state': 'corrected',
+            'client_dispute': False,
+            # Back in front of the manager, exactly where a fresh submission
+            # sits: un-archived, unpublished, nobody assigned.
+            'active': True,
+            'published': False,
+            'user_id': False,
+            'task_state': 'queue_waiting',
+            'self_review_note': ('[CLIENT CORRECTED] %s' % body)[:255],
+            # The accept-deadline must stay clear. _cron_admin_accept_timeout
+            # would otherwise publish the corrected words, re-derive the doc
+            # type from the name prefix and ask the client to pre-approve --
+            # with nobody having read the correction.
+            'admin_accept_deadline_at': False,
+        }
+        if not self.original_client_text:
+            vals['original_client_text'] = self.description or ''
+
+        stamp = fields.Datetime.to_string(fields.Datetime.now())
+        vals['description'] = '%s\n\n--- Correction %d (client, %s) ---\n%s' % (
+            (self.description or '').rstrip(), self.correction_round + 1,
+            stamp, body)
+
+        self.sudo().write(vals)
+        self.sudo()._log_action(
+            'client_correction', source='whatsapp', actor_label=actor_label,
+            payload={'round': self.correction_round, 'text': body})
+        try:
+            self.sudo()._notify('client_task_queued')
+            self.sudo()._schedule_queue_nudge()
+        except Exception as exc:
+            _logger.warning('correction notify failed for %s: %s', self.id, exc)
+        try:
+            self.sudo().ask_manager_to_decide()
+        except Exception as exc:
+            _logger.warning('could not re-ask the manager for %s: %s',
+                            self.id, exc)
+        return _(
+            "Thanks — %s has gone back for another look with your new "
+            "wording. The reference is unchanged."
+        ) % (self.external_ref or self.id)
 
     # ------------------------------------------------------------------
     def _kind_now(self):
@@ -194,28 +284,57 @@ class KraKpiDecline(models.Model):
 
     # ------------------------------------------------------------------
     def _post_decline_to_group(self, mode, text, old_ref):
-        """Tell the client, in their own group, naming the task."""
+        """Tell the client, in their own group, as a TAPPABLE question.
+
+        This used to be plain text ending "reply 1 if that is OK, 2 if you
+        disagree" -- the only question in the whole bot that asked somebody to
+        type a digit, because this file had no poll path. A client has no way
+        to know that one message works differently from every other, and a
+        typed answer is where people reply with a sentence instead.
+
+        It also offers a third answer that did not exist at all: send the
+        corrected version. "Not enough detail to act on" was a dead end -- the
+        client could agree or disagree with the refusal, but could not supply
+        the detail being asked for.
+
+        The reference leads every option, because a poll vote carries only the
+        visible label. With two refusals open in one group, "OK" alone could
+        not say which was meant.
+        """
         self.ensure_one()
         Report = self.env['kpi.wa.group.report'].sudo()
+        ref = old_ref or self.external_ref or ('#%s' % self.id)
         if mode == 'decline':
-            body = _(
+            question = _(
                 "*Not taken forward*\n"
                 "%(ref)s — %(title)s\n\n"
-                "%(reason)s\n\n"
-                "Reply *1* if that is OK, *2* if you disagree."
-            ) % {'ref': old_ref or self.id, 'title': self.name or '',
-                 'reason': text}
+                "%(reason)s"
+            ) % {'ref': ref, 'title': self.name or '', 'reason': text}
+            options = [
+                '✅ %s — OK' % ref,
+                '✏️ %s — Send a correction' % ref,
+                '❌ %s — I disagree' % ref,
+            ]
         else:
-            body = _(
+            question = _(
                 "*Re-classified*\n"
                 "%(old)s is now *%(new)s*\n"
                 "%(title)s\n\n"
-                "%(reason)s\n\n"
-                "Reply *1* to go ahead, *2* if you disagree."
-            ) % {'old': old_ref or '—', 'new': self.external_ref or '',
+                "%(reason)s"
+            ) % {'old': ref, 'new': self.external_ref or '',
                  'title': self.name or '', 'reason': text}
+            options = [
+                '✅ %s — Go ahead' % ref,
+                '❌ %s — I disagree' % ref,
+            ]
         try:
-            return bool(Report.post_for_kpi(self, body))
+            if Report.post_poll_for_kpi(self, question, options):
+                return True
+            # No poll got out. Say it in words rather than saying nothing --
+            # the client still has to be told their request was refused.
+            return bool(Report.post_for_kpi(self, '%s\n\n%s' % (
+                question, _('Reply *1* if that is OK, *2* to send a '
+                            'correction, *3* if you disagree.'))))
         except Exception as exc:
             _logger.warning('Could not post decline for %s: %s',
                             self.external_ref or self.id, exc)
@@ -253,6 +372,16 @@ class KraKpiDecline(models.Model):
     def apply_client_reconfirm(self, answer, actor_label=''):
         """Record the client's answer. `answer` in {'accept','dispute','withdraw'}."""
         self.ensure_one()
+        if answer == 'correct':
+            # Nothing changes on the task yet. The client has said they WANT
+            # to correct it; the correction itself is their next message, and
+            # until it arrives the refusal stands exactly as it was.
+            self.sudo().write({'client_reconfirm_state': 'pending'})
+            return _(
+                "Send the corrected version as your next message and I will "
+                "pass it back for another look. %s keeps its reference."
+            ) % (self.external_ref or self.id)
+
         if answer == 'accept':
             self.sudo().write({'client_reconfirm_state': 'accepted',
                                'client_dispute': False})

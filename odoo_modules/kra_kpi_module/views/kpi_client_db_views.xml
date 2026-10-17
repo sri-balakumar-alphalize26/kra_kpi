@@ -46,6 +46,8 @@
                 <field name="expires_on" optional="hide"/>
                 <field name="days_left" string="Days Left" optional="hide"/>
                 <field name="source" widget="badge" optional="show"/>
+                <field name="first_seen_at" string="Added On" optional="show"/>
+                <field name="disconnected_at" string="Stopped At" optional="show"/>
                 <field name="task_count" string="Tasks" optional="hide"/>
                 <field name="last_fetch_at" optional="hide"/>
                 <field name="active" column_invisible="1"/>
@@ -74,6 +76,9 @@
                     <button name="action_reactivate" type="object"
                             string="Reactivate" class="btn-secondary"
                             invisible="state != 'suspended'"/>
+                    <button name="action_build_kra" type="object"
+                            string="Build KRA Tree" class="btn-secondary"
+                            invisible="kra_id or not client_kra_id"/>
                     <field name="state" widget="statusbar"
                            statusbar_visible="pending,live,suspended,disconnected"/>
                 </header>
@@ -93,6 +98,14 @@
                         selectable.
                     </div>
 
+                    <div class="alert alert-danger" role="status"
+                         invisible="state != 'disconnected'">
+                        <b>This database is stopped.</b> No new task can be
+                        raised against it from anywhere — WhatsApp, the web or
+                        the app. Work logged before it stopped is untouched and
+                        still invoiceable.
+                    </div>
+
                     <div class="alert alert-warning" role="status"
                          invisible="disconnect_state != 'requested'">
                         <b>The client has asked for this to be switched off.</b>
@@ -109,10 +122,16 @@
                         </group>
                         <group string="Whose">
                             <field name="client_kra_id"/>
-                            <field name="kra_id"
+                            <field name="kra_id" readonly="1"
                                    domain="[('id', 'child_of', client_kra_id)]"
-                                   placeholder="Defaults to the client"/>
+                                   placeholder="Built automatically on save"/>
                             <field name="task_count" readonly="1"/>
+                            <button name="action_view_tasks" type="object"
+                                    string="See the tasks" class="btn-link"
+                                    invisible="task_count == 0"/>
+                            <field name="first_seen_at" readonly="1"/>
+                            <field name="disconnected_at" readonly="1"
+                                   invisible="state != 'disconnected'"/>
                         </group>
                     </group>
 
@@ -147,7 +166,7 @@
                         <group>
                             <field name="disconnect_reason_id"/>
                             <field name="disconnect_request_kpi_id"/>
-                            <field name="disconnected_on"/>
+                            <field name="disconnected_at"/>
                             <field name="disconnected_by_id"/>
                         </group>
                         <field name="disconnect_reason_text" colspan="2"/>

@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================
+         THE LIST
+         Grouped by kind out of the box, because "Approve" means six
+         different things here and the group heading is what says
+         which one. The admin reads the heading once and then works
+         down the rows under it.
+         ============================================================ -->
+    <record id="view_kpi_approval_list" model="ir.ui.view">
+        <field name="name">kpi.approval.list</field>
+        <field name="model">kpi.approval</field>
+        <field name="arch" type="xml">
+            <list string="Waiting for you" create="false" delete="false"
+                  edit="false" default_order="requested_on desc">
+                <field name="kind" column_invisible="1"/>
+                <field name="reference" string="Ref" optional="show"/>
+                <field name="name" string="What is waiting"/>
+                <field name="detail" string="About" optional="show"/>
+                <field name="client_kra_id" string="Client" optional="show"/>
+                <field name="requested_by" string="Asked by" optional="show"/>
+                <field name="requested_on" string="Asked on" widget="date"/>
+                <field name="waiting_days" string="Days" optional="show"/>
+                <button name="action_approve" type="object"
+                        string="Approve" class="btn-success"
+                        icon="fa-check"/>
+                <button name="action_reject" type="object"
+                        string="Refuse" class="btn-danger"
+                        icon="fa-times"/>
+                <button name="action_open" type="object"
+                        string="Open" class="btn-link"
+                        icon="fa-external-link"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ============================================================
+         THE SINGLE ITEM
+         Reached by clicking a row. Everything here is read-only: the
+         two buttons are the only things that do anything, and the
+         link at the bottom goes to the real record for the cases
+         where one line is not enough to decide on.
+         ============================================================ -->
+    <record id="view_kpi_approval_form" model="ir.ui.view">
+        <field name="name">kpi.approval.form</field>
+        <field name="model">kpi.approval</field>
+        <field name="arch" type="xml">
+            <form string="Waiting for you" create="false" edit="false">
+                <header>
+                    <button name="action_approve" type="object"
+                            string="Approve" class="btn-success"/>
+                    <button name="action_reject" type="object"
+                            string="Refuse" class="btn-danger"/>
+                    <button name="action_open" type="object"
+                            string="Open the record" class="btn-secondary"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                        <h3><field name="reference" readonly="1"/></h3>
+                    </div>
+                    <group>
+                        <group string="What this is">
+                            <field name="kind" readonly="1"/>
+                            <field name="detail" readonly="1"/>
+                            <field name="client_kra_id" readonly="1"/>
+                        </group>
+                        <group string="Who and when">
+                            <field name="requested_by" readonly="1"/>
+                            <field name="requested_on" readonly="1"/>
+                            <field name="waiting_days" readonly="1"/>
+                        </group>
+                    </group>
+                    <!-- The two buttons above say "Approve" and "Refuse" on
+                         every kind. These two lines say what they will
+                         actually do to THIS one. -->
+                    <group string="So you know what the buttons do">
+                        <field name="approve_label" string="Approve means"
+                               readonly="1"/>
+                        <field name="reject_label" string="Refuse means"
+                               readonly="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_kpi_approval_search" model="ir.ui.view">
+        <field name="name">kpi.approval.search</field>
+        <field name="model">kpi.approval</field>
+        <field name="arch" type="xml">
+            <search string="Waiting for you">
+                <field name="name" string="What is waiting"
+                       filter_domain="['|', ('name', 'ilike', self),
+                                            ('reference', 'ilike', self)]"/>
+                <field name="client_kra_id"/>
+                <field name="requested_by"/>
+
+                <filter name="f_new_request" string="Client raised something"
+                        domain="[('kind', '=', 'new_request')]"/>
+                <filter name="f_new_database" string="New database"
+                        domain="[('kind', '=', 'new_database')]"/>
+                <filter name="f_disconnect" string="Switch-off requests"
+                        domain="[('kind', '=', 'disconnect')]"/>
+                <filter name="f_db_live" string="Databases to go live"
+                        domain="[('kind', '=', 'db_live')]"/>
+                <filter name="f_meeting" string="Meetings"
+                        domain="[('kind', '=', 'meeting')]"/>
+                <filter name="f_qa" string="Finished work to check"
+                        domain="[('kind', '=', 'qa')]"/>
+                <separator/>
+                <!-- From the client's side this is the number that matters:
+                     how long they have been waiting for an answer.
+                     datetime.timedelta, not relativedelta — the search-domain
+                     evaluator here has the former and not the latter. -->
+                <filter name="f_week" string="Waiting over a week"
+                        domain="[('requested_on', '&lt;',
+                                  (context_today() - datetime.timedelta(days=7))
+                                  .strftime('%Y-%m-%d'))]"/>
+                <separator/>
+                <filter name="g_kind" string="What it is"
+                        context="{'group_by': 'kind'}"/>
+                <filter name="g_client" string="Client"
+                        context="{'group_by': 'client_kra_id'}"/>
+                <filter name="g_day" string="Asked on"
+                        context="{'group_by': 'requested_on:day'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_kpi_approval" model="ir.actions.act_window">
+        <field name="name">Approvals</field>
+        <field name="res_model">kpi.approval</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_kpi_approval_search"/>
+        <field name="context">{'search_default_g_kind': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Nothing is waiting on you.
+            </p>
+            <p>
+                Everything a client asked for, and every piece of finished
+                work, lands here until you approve it or refuse it.
+            </p>
+        </field>
+    </record>
+
+    <!-- ============================================================
+         THE DIALOG
+         One form for both buttons and all six kinds. It shows only
+         the fields that decision needs; the rest are hidden rather
+         than disabled, so the admin is never looking at a box that
+         does nothing.
+         ============================================================ -->
+    <record id="view_kpi_approval_decide_form" model="ir.ui.view">
+        <field name="name">kpi.approval.decide.form</field>
+        <field name="model">kpi.approval.decide</field>
+        <field name="arch" type="xml">
+            <form string="Decide">
+                <field name="res_model" invisible="1"/>
+                <field name="res_id" invisible="1"/>
+                <field name="kind" invisible="1"/>
+                <field name="decision" invisible="1"/>
+
+                <div class="alert alert-info" role="status">
+                    <field name="headline" readonly="1" nolabel="1"
+                           class="fw-bold"/>
+                    <div><field name="summary" readonly="1" nolabel="1"/></div>
+                </div>
+
+                <group>
+                    <!-- Accepting a client request. A developer is not
+                         optional: publishing without one is refused by the
+                         model, because the client is asked to approve the
+                         person as well as the work. -->
+                    <field name="user_id"
+                           invisible="decision != 'approve' or
+                                      kind not in ('new_request', 'new_database')"
+                           required="decision == 'approve' and
+                                     kind in ('new_request', 'new_database')"/>
+
+                    <!-- Confirming a meeting. Both are required by
+                         action_confirm, so asking here saves a round trip
+                         into the meeting form. -->
+                    <field name="requested_text"
+                           invisible="kind != 'meeting' or decision != 'approve'"/>
+                    <field name="scheduled_start"
+                           invisible="kind != 'meeting' or decision != 'approve'"
+                           required="kind == 'meeting' and decision == 'approve'"/>
+                    <field name="organizer_id"
+                           invisible="kind != 'meeting' or decision != 'approve'"
+                           required="kind == 'meeting' and decision == 'approve'"/>
+
+                    <!-- Refusing anything, and switching a database off.
+                         Both are told to the client, so both need wording. -->
+                    <field name="reason_id"
+                           invisible="decision != 'reject' or
+                                      kind in ('db_live', 'qa')"/>
+                    <field name="note"
+                           placeholder="The client reads this. Write it for them."
+                           invisible="decision == 'approve' and
+                                      kind != 'disconnect'"
+                           required="kind in ('db_live', 'qa', 'disconnect')
+                                     and (decision == 'reject' or
+                                          kind == 'disconnect')"/>
+                    <field name="tell_client"
+                           invisible="kind == 'db_live' or
+                                      (decision == 'approve' and
+                                       kind not in ('disconnect',))"/>
+                </group>
+
+                <footer>
+                    <button name="action_apply" type="object"
+                            string="Confirm" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary"
+                            special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+</odoo>

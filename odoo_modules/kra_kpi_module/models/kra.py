@@ -62,6 +62,67 @@ class KraMaster(models.Model):
         help="Users with the Client role authorized to view this client's invoices and KPIs."
     )
 
+    # ---- Who decides for this client ------------------------------------- #
+    #
+    # The manager is the ONLY bridge between a client and a developer: every
+    # request this client raises is approved or refused by this person, and
+    # every question a developer has about their work passes through them.
+    #
+    # Settable on ANY node, not just a client. A task's kra_id is often a
+    # database node under a server node under the client (kpi_client_db.py
+    # _ensure_kra / target_kra), so putting it here gives a per-server or
+    # per-database override for free, with no second field and no new table.
+    # resolve_manager() walks up and takes the first one that is set.
+    manager_user_id = fields.Many2one(
+        'res.users', string='Manager', ondelete='set null', index=True,
+        domain="[('share', '=', False)]",
+        help="The person who approves work for this client, and the only one "
+             "who passes anything between the client and a developer.\n\n"
+             "Set it on a server or database node to override it for just "
+             "that part of the tree. Left empty, the nearest parent that has "
+             "one is used, and failing that every Coordinator.")
+
+    @api.constrains('manager_user_id')
+    def _check_manager_is_coordinator(self):
+        """A manager must actually hold the role that lets them approve.
+
+        Not expressed as a domain: group membership is implied rather than
+        direct for most people here (base.group_system -> owner ->
+        coordinator), and a domain on group_ids catches only direct members --
+        the same trap that already makes /kpi_multitask/list unable to list a
+        coordinator at all.
+        """
+        for rec in self:
+            user = rec.manager_user_id
+            if not user:
+                continue
+            if not (user.has_group('kra_kpi_module.group_kra_admin')
+                    or user.has_group('kra_kpi_module.group_kra_owner')
+                    or user.has_group('base.group_system')):
+                raise ValidationError(
+                    "%s cannot be a manager: they are not a Coordinator.\n\n"
+                    "Give them the KRA / KPI Coordinator role first "
+                    "(Settings > Users), or pick somebody who already has it."
+                    % (user.name or user.login))
+
+    def resolve_manager(self):
+        """The manager responsible for this node. Nearest one wins.
+
+        Walks parent_id upwards. The `seen` set is not defensive padding:
+        kra.master has no loop guard of its own, parent_id is writable, and
+        the one other place in this module that walks this tree
+        (kpi_wa_group_report._group_for_kpi) carries the same set for the same
+        reason.
+        """
+        self.ensure_one()
+        node, seen = self, set()
+        while node and node.id not in seen:
+            seen.add(node.id)
+            if node.manager_user_id:
+                return node.manager_user_id
+            node = node.parent_id
+        return self.env['res.users']
+
     # Company-style logo (used by invoice PDFs). Typically set on root KRAs.
     logo = fields.Binary(string='Logo', attachment=True,
         help='Logo image used on invoice PDFs. Set this on the root KRA (your company).')

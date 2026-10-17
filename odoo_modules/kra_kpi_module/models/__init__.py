@@ -58,4 +58,17 @@ from . import kpi_db_disconnect_reason
 from . import kpi_client_db
 from . import kpi_client_db_wizard
 from . import kpi_meeting
+# LAST of the WhatsApp group: kpi.approval is a SQL view UNIONing kra_kpi,
+# kpi_client_db and kpi_meeting, so every one of those tables has to be
+# created before its init() runs.
+from . import kpi_approval
+from . import kpi_wa_database
+from . import kpi_manager
+# AFTER kpi_manager (it uses _manager_users) and AFTER kpi_wa_conversation,
+# whose step Selection it extends.
+from . import kpi_manager_dm
+# AFTER kpi_meeting and kpi_wa_group_capture: kpi.doubt points at both.
+from . import kpi_doubt
+# AFTER kpi_wa_group_intake: it inherits that router and imports _strip_emoji.
+from . import kpi_wa_staff_menu
 from . import kpi_reminder

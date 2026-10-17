@@ -18,9 +18,19 @@
         <field name="name">kpi.wa.group.list</field>
         <field name="model">kpi.wa.group</field>
         <field name="arch" type="xml">
-            <list string="WhatsApp Groups" sample="1"
+            <!-- create="false": a group cannot be made by hand. `jid` is a
+                 WhatsApp-assigned id and is required, so New could only ever
+                 end in "Missing required fields". Import Groups is the way
+                 in, and the webhook is the other. -->
+            <list string="WhatsApp Groups" sample="1" create="false"
                   decoration-muted="not kra_id">
+                <!-- No header button here. In a list view those render only
+                     once rows are SELECTED, so an action that CREATES rows
+                     can never be reached from it. The import runs when the
+                     screen opens instead; see action_open_groups. -->
                 <field name="name" string="Label"/>
+                <field name="is_staff_group" string="Ours" optional="show"
+                       widget="boolean_toggle"/>
                 <field name="kra_id" string="Client"/>
                 <field name="member_count" string="Members"/>
                 <field name="client_member_count" string="Clients In Group"/>
@@ -38,7 +48,7 @@
         <field name="name">kpi.wa.group.form</field>
         <field name="model">kpi.wa.group</field>
         <field name="arch" type="xml">
-            <form string="WhatsApp Group">
+            <form string="WhatsApp Group" create="false">
                 <header>
                     <button name="action_sync_members" type="object"
                             string="Sync Members" class="btn-primary"
@@ -53,16 +63,36 @@
                     </div>
                     <group>
                         <group string="Client">
-                            <field name="kra_id" options="{'no_create': True}"/>
-                            <field name="sub_client_count"/>
+                            <!-- A group is EITHER a client's or ours. Making
+                                 the two mutually exclusive on screen is what
+                                 stops somebody marking a client group as
+                                 internal and then wondering why the team's
+                                 messages are going to the customer. -->
+                            <field name="is_staff_group"
+                                   widget="boolean_toggle"
+                                   readonly="kra_id"/>
+                            <div class="text-muted" colspan="2"
+                                 invisible="not is_staff_group">
+                                This is your own team's group. The bot posts
+                                the developer menu and internal warnings here,
+                                and never anything a client should see.
+                                <b>Do not put a client in it.</b>
+                            </div>
+                            <field name="kra_id" options="{'no_create': True}"
+                                   readonly="is_staff_group"/>
+                            <field name="sub_client_count"
+                                   invisible="is_staff_group"/>
                             <field name="member_count"/>
-                            <field name="client_member_count"/>
+                            <field name="client_member_count"
+                                   invisible="is_staff_group"/>
                             <field name="intake_enabled"
                                    widget="boolean_toggle"
-                                   readonly="not kra_id"/>
+                                   readonly="not kra_id and not is_staff_group"/>
                             <div class="text-muted" colspan="2"
-                                 invisible="kra_id">
-                                Set a Client before enabling bot replies.
+                                 invisible="kra_id or is_staff_group">
+                                Set a Client before enabling bot replies — or
+                                tick <b>Our Internal Team Group</b> above if
+                                this one is yours.
                             </div>
                         </group>
                         <group string="Activity">
@@ -176,19 +206,35 @@
         </field>
     </record>
 
+    <!-- This id keeps its original model. An XML id that already exists as
+         an ir.actions.act_window cannot be redefined as an ir.actions.server
+         on an upgrade, so the refreshing action below gets an id of its own
+         and the menu points at that. -->
     <record id="action_kpi_wa_group" model="ir.actions.act_window">
         <field name="name">WhatsApp Groups</field>
         <field name="res_model">kpi.wa.group</field>
         <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_kpi_wa_group_search"/>
         <field name="help" type="html">
-            <p class="o_view_nocontent_smiley_face">No WhatsApp groups seen yet</p>
+            <p class="o_view_nocontent_smiley_face">No WhatsApp groups here yet</p>
             <p>
-                Groups register themselves. Add the connected WhatsApp number to a
-                group and send one message there &#8212; the group appears here, and
-                you can then link it to a client.
+                Add the bot's number to a group on WhatsApp, then open this
+                screen — the groups it belongs to appear by themselves.
+            </p>
+            <p>
+                A group does nothing until you either set its <b>Client</b>
+                and turn on <b>Bot Replies In This Group</b>, or tick
+                <b>Our Internal Team Group</b>.
             </p>
         </field>
+    </record>
+
+    <!-- What the menu opens: refresh from WhatsApp, then show the list. -->
+    <record id="action_kpi_wa_group_open" model="ir.actions.server">
+        <field name="name">WhatsApp Groups</field>
+        <field name="model_id" ref="model_kpi_wa_group"/>
+        <field name="state">code</field>
+        <field name="code">action = model.action_open_groups()</field>
     </record>
 
 </odoo>

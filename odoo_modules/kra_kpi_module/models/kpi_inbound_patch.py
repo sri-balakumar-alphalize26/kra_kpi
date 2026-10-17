@@ -1328,6 +1328,26 @@ try:
             # except Exception as exc:
             #     _logger.warning("Conversation trigger raised: %s", exc)
 
+            # (0) MANAGER approvals — approve / reject / assign, privately.
+            #
+            # First in the chain on purpose. It must run before
+            # _process_kpi_reply_instant (step 4), which matches "1-<token>":
+            # a manager who is ALSO a client would otherwise have their vote
+            # eaten by the token parser. Our labels carry a REQ-nnn reference
+            # and cannot match that pattern, so putting us first is safe in
+            # both directions.
+            #
+            # It returns False for anybody who is not a coordinator or owner,
+            # so the rest of the chain is untouched for clients.
+            try:
+                with pool.cursor() as cr:
+                    env = api.Environment(cr, uid, {})
+                    if env['kpi.manager.dm'].handle(phone_clean, msg_text):
+                        cr.commit()
+                        return True
+            except Exception as exc:
+                _logger.exception("Manager DM handler raised: %s", exc)
+
             # (3.5) Client-only 'hi'/'menu' → list of pending pre-approvals.
             #       Other roles fall through (handler resolves role and bails).
             try:

@@ -1225,6 +1225,32 @@ class KpiNotify(models.Model):
                 'role':       role,
             })
 
+        def _add_user(u, role):
+            """Add an internal person, preferring their WhatsApp number.
+
+            This function exists because res.users.kpi_wa_number -- the field
+            whose entire stated purpose is "this person's WhatsApp number" --
+            was never read here. Every recipient was resolved from the
+            CONTACT's phone instead, so somebody whose number was recorded in
+            the WhatsApp field and nowhere else resolved to nothing at all.
+
+            That is not hypothetical: it is why a developer assigned a task
+            received no message. _resolve_recipients returned an empty list,
+            _notify found nobody to tell, and nothing anywhere said so.
+
+            The partner fallback is kept, so anybody who was reachable before
+            still is. This only ADDS the people who were being dropped.
+            """
+            p = u.partner_id
+            number = ''
+            try:
+                number = u._kpi_wa_target()
+            except Exception:
+                number = ''
+            _add(number or (getattr(p, 'mobile', None) if p else None)
+                 or (p.phone if p else None),
+                 partner_id=p.id if p else None, user_id=u.id, role=role)
+
         config = self.env['whatsapp.config'].sudo().get_config()
 
         if 'owner' in roles:
@@ -1236,26 +1262,19 @@ class KpiNotify(models.Model):
             if owner_grp:
                 # all_user_ids, NOT user_ids: see _notif_recipient_users.
                 for u in owner_grp.all_user_ids:
-                    p = u.partner_id
-                    if p:
-                        _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=u.id, role='owner')
+                    _add_user(u, 'owner')
 
         if 'coordinator' in roles:
             coord_grp = self.env.ref('kra_kpi_module.group_kra_admin', raise_if_not_found=False)
             if coord_grp:
                 for u in coord_grp.all_user_ids:
-                    p = u.partner_id
-                    if p:
-                        _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=u.id, role='coordinator')
+                    _add_user(u, 'coordinator')
 
         if 'developer' in roles:
-            if self.user_id and self.user_id.partner_id:
-                p = self.user_id.partner_id
-                _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=self.user_id.id, role='developer')
+            if self.user_id:
+                _add_user(self.user_id, 'developer')
             for u in (self.contributor_ids or []):
-                p = u.partner_id
-                if p:
-                    _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=u.id, role='developer')
+                _add_user(u, 'developer')
 
         if 'client' in roles:
             # Walk up to client_kra; gather portal users on that KRA.
@@ -1266,9 +1285,7 @@ class KpiNotify(models.Model):
             client_kra = getattr(self, 'client_kra_id', False) or self.kra_id
             if client_kra:
                 for u in client_kra._effective_client_users():
-                    p = u.partner_id
-                    if p:
-                        _add(getattr(p, 'mobile', None) or p.phone, partner_id=p.id, user_id=u.id, role='client')
+                    _add_user(u, 'client')
 
         # NOTE: the 'urgent_extra' role (ad-hoc WhatsApp numbers from
         # res.company.kpi_urgent_recipients) is gone. Those numbers had no user

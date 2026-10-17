@@ -23,4 +23,49 @@
         <field name="active">True</field>
     </record>
 
+    <!-- Group-name refresh — hourly resync of cached whatsapp.group records -->
+    <record id="ir_cron_whatsapp_refresh_group_names" model="ir.cron">
+        <field name="name">WhatsApp: Refresh Group Names</field>
+        <field name="model_id" ref="model_whatsapp_group"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_refresh_group_names()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">hours</field>
+        <field name="active">True</field>
+    </record>
+
+    <!-- LID → phone resolver — hourly cleanup of LID-shaped contact phones -->
+    <record id="ir_cron_whatsapp_resolve_lids" model="ir.cron">
+        <field name="name">WhatsApp: Resolve LIDs to Phone Numbers</field>
+        <field name="model_id" ref="model_whatsapp_session"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_resolve_lids()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">hours</field>
+        <field name="active">True</field>
+    </record>
+
+    <!-- Email: Poll inboxes for credit-approval YES/NO replies -->
+    <record id="ir_cron_email_poll_replies" model="ir.cron">
+        <field name="name">Email: Poll for Approval Replies (YES/NO)</field>
+        <field name="model_id" ref="model_email_session"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_poll_replies()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="active">True</field>
+    </record>
+
+    <!-- Invoice payment reminders — daily at 09:00 server time -->
+    <record id="ir_cron_whatsapp_invoice_reminders" model="ir.cron">
+        <field name="name">WhatsApp: Invoice Payment Reminders</field>
+        <field name="model_id" ref="account.model_account_move"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_whatsapp_payment_reminders()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="nextcall" eval="(DateTime.now().replace(hour=9, minute=0, second=0))"/>
+        <field name="active">True</field>
+    </record>
+
 </odoo>

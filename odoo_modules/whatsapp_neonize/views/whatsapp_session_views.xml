@@ -27,6 +27,22 @@
                             string="Refresh Status"
                             type="object"
                             class="btn-secondary"/>
+                    <button name="action_register_webhook"
+                            string="Fix Incoming Messages"
+                            type="object"
+                            class="btn-warning"
+                            invisible="status != 'connected' or webhook_ok"/>
+                    <button name="action_resolve_pending_lids"
+                            string="🔁 Resolve LIDs"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="status != 'connected'"
+                            help="Re-process old messages whose contact phone is a WhatsApp LID (long ID number) and replace it with the real phone."/>
+                    <button name="action_capture_phone"
+                            string="📱 Capture Phone"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="status != 'connected'"/>
                     <field name="status" widget="statusbar"
                            statusbar_visible="disconnected,waiting_qr,connected"/>
                 </header>
@@ -51,16 +67,52 @@
                     <group>
                         <group string="Connection">
                             <field name="phone_number"/>
+                            <field name="country_name" string="Country"/>
+                            <field name="country_code" string="Calling Code"/>
                             <field name="auto_reconnect"/>
-                            <field name="db_path"
-                                   groups="base.group_no_one"/>
+                        </group>
+                        <!-- The Evolution binding. These fields existed on the
+                             model from the neonize -> Evolution rewrite but
+                             were on no view at all, so "Set the Evolution URL
+                             first" named a field nobody could reach. Connect
+                             creates the instance and registers the webhook
+                             itself, so URL + instance name is all it needs. -->
+                        <group string="Evolution API">
+                            <field name="base_url"
+                                   placeholder="http://localhost:8080"/>
+                            <field name="instance_name"
+                                   placeholder="e.g. kra-kpi"/>
+                            <field name="instance_id"/>
+                            <field name="instance_token"/>
+                            <field name="send_delay_ms"/>
                         </group>
                         <group string="Settings">
                             <field name="company_id"
                                    groups="base.group_multi_company"/>
                             <field name="active" invisible="1"/>
+                            <!-- Read-only, and worth showing: this is the
+                                 address Evolution calls back on. If messages
+                                 stop arriving, this is the first thing to
+                                 compare against what Evolution has. -->
+                            <field name="webhook_url" readonly="1"
+                                   widget="CopyClipboardChar"/>
+                            <field name="webhook_ok" readonly="1"/>
+                            <field name="webhook_checked_at" readonly="1"/>
+                            <field name="last_webhook_at" readonly="1"/>
+                            <field name="last_state_check" readonly="1"/>
                         </group>
                     </group>
+
+                    <div class="alert alert-info" role="status"
+                         invisible="base_url">
+                        This session is not pointed at Evolution yet. Set the
+                        <b>Evolution URL</b> and an <b>Instance Name</b> above,
+                        save, then press <b>Connect WhatsApp</b>.
+                        <br/>
+                        One instance belongs to one session: reusing an
+                        instance name that another session already uses makes
+                        the two fight over the same webhook.
+                    </div>
 
                     <!-- QR Code Section — Odoo 19: invisible is a Python expression -->
                     <div invisible="status != 'waiting_qr'"
@@ -94,8 +146,11 @@
                         </p>
                     </div>
 
-                    <!-- Connected Banner -->
-                    <div invisible="status != 'connected'"
+                    <!-- Connected Banner. Only claims BOTH directions work
+                         when the webhook really points here; "connected"
+                         alone means the phone is linked, which is only half
+                         the story. -->
+                    <div invisible="status != 'connected' or not webhook_ok"
                          class="alert alert-success text-center mt-4"
                          role="status"
                          style="font-size: 18px; border-radius: 12px;">
@@ -106,6 +161,34 @@
                         </span>
                     </div>
 
+                    <!-- Linked, but Evolution is delivering somewhere else.
+                         Sending works; nothing arrives. This is what a
+                         moved database leaves behind, and without a banner
+                         the only symptom is silence. -->
+                    <div invisible="status != 'connected' or webhook_ok"
+                         class="alert alert-danger mt-4"
+                         role="alert">
+                        <b>Sending works — but nothing can arrive</b>
+                        <br/>
+                        The phone is linked, yet Evolution is delivering
+                        messages to a different address, so everything sent
+                        to this number is being dropped.
+                        <br/>
+                        <span class="text-muted">
+                            Evolution is delivering to:
+                            <field name="webhook_actual" readonly="1"
+                                   nolabel="1"/>
+                        </span>
+                        <br/>
+                        <span class="text-muted">
+                            This session expects:
+                            <field name="webhook_url" readonly="1"
+                                   nolabel="1"/>
+                        </span>
+                        <br/>
+                        Press <b>Fix Incoming Messages</b> above.
+                    </div>
+
                     <!-- Error Banner -->
                     <div invisible="status != 'error'"
                          class="alert alert-danger text-center mt-4"
@@ -113,6 +196,19 @@
                         <b>Connection Error</b>
                         <br/>
                         <field name="error_message" readonly="1"/>
+                    </div>
+
+                    <!-- Why a session went offline on its own. Without this
+                         the explanation written by _demote_other_sessions
+                         lands in a field only shown on the 'error' banner,
+                         so a session switched off by another one connecting
+                         just reads "Disconnected" with no reason given. -->
+                    <div invisible="status != 'disconnected' or not error_message"
+                         class="alert alert-warning mt-4"
+                         role="status">
+                        <b>This session is not the active one</b>
+                        <br/>
+                        <field name="error_message" readonly="1" nolabel="1"/>
                     </div>
 
                     <notebook>
@@ -149,11 +245,18 @@
             <list>
                 <field name="name"/>
                 <field name="phone_number"/>
+                <!-- Which Evolution instance this row drives. Without it two
+                     sessions look identical in the list and the only way to
+                     tell which one is the live one is to open both. -->
+                <field name="instance_name" string="Instance"/>
+                <field name="country_name" string="Country" optional="hide"/>
                 <field name="company_id"
                        groups="base.group_multi_company"
                        optional="hide"/>
-                <field name="auto_reconnect"/>
+                <field name="auto_reconnect" optional="hide"/>
                 <field name="status" widget="badge"/>
+                <field name="last_webhook_at" string="Last Message In"
+                       optional="show"/>
                 <field name="message_count" string="Messages"/>
             </list>
         </field>

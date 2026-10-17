@@ -25,6 +25,34 @@
          should see part of it, or it appears for someone who should
          see none of it.
          ============================================================ -->
+    <!-- ============================================================
+         APPROVALS — a top-level entry, not a section, and first.
+
+         Six different things used to wait on an admin in four
+         different screens: client submissions and finished work in
+         two tabs of the OWL KPI board, switch-off requests under
+         Clients, half-registered databases under Setup, and meeting
+         requests under My Work. Counted on the day this was built
+         that was seventy decisions, and the board is the screen the
+         admin says is the confusing one.
+
+         So this is deliberately NOT a child of any of those
+         sections: it is its own button, at sequence 3 so it sits
+         left of everything else, and it is the only screen where
+         Approve and Refuse appear side by side on one row.
+
+         Admin / owner / system only — exactly the three groups the
+         underlying routes check. A developer never sees it, which
+         is also why it can sit first without pushing My Work out of
+         the way for them.
+         ============================================================ -->
+    <menuitem id="menu_kpi_approvals"
+              name="Approvals"
+              parent="menu_kra_root"
+              action="action_kpi_approval"
+              sequence="3"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
     <menuitem id="menu_grp_my_work"  name="My Work"  parent="menu_kra_root" sequence="5"/>
     <menuitem id="menu_grp_tracking" name="Tracking" parent="menu_kra_root" sequence="10"/>
     <menuitem id="menu_grp_clients"  name="Clients"  parent="menu_kra_root" sequence="15"/>
@@ -90,7 +118,7 @@
     <menuitem id="menu_kpi_wa_groups"
               parent="menu_grp_setup"
               name="WhatsApp Groups"
-              action="action_kpi_wa_group"
+              action="action_kpi_wa_group_open"
               sequence="31"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
 
@@ -112,6 +140,18 @@
               action="action_kpi_client_db"
               sequence="35"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- Which Odoo database on this server owns WhatsApp, and moving it.
+         base.group_system ONLY, and not because of the data: pressing the
+         button on this screen restarts the Odoo service for everybody. An
+         admin who can run the business should not be able to take the
+         server down by misreading a list. -->
+    <menuitem id="menu_kpi_wa_database"
+              parent="menu_grp_setup"
+              name="WhatsApp Database"
+              action="action_kpi_wa_database"
+              sequence="29"
+              groups="base.group_system"/>
 
     <!-- Optional. A term only applies to a database whose Track term box is
          ticked, and that is off by default. -->

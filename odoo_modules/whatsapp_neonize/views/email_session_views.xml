@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============ EMAIL SESSION FORM ============ -->
+    <record id="view_email_session_form" model="ir.ui.view">
+        <field name="name">email.session.form</field>
+        <field name="model">email.session</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="connect_and_test" type="object"
+                            string="✓ Connect &amp; Test"
+                            class="btn-primary"/>
+                    <button name="action_force_poll_now" type="object"
+                            string="🔍 Force Poll Now"
+                            class="btn-secondary"
+                            invisible="status != 'connected' or not enable_reply_polling"/>
+                    <button name="action_set_default" type="object"
+                            string="⭐ Set as Default"
+                            class="btn-secondary"
+                            invisible="is_default or status != 'connected'"/>
+                    <field name="status" widget="statusbar"
+                           statusbar_visible="not_set,connected"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="e.g. Sales Team"/></h1>
+                    </div>
+
+                    <group>
+                        <group>
+                            <field name="email_address" placeholder="you@gmail.com"/>
+                            <field name="app_password" password="True"
+                                   placeholder="paste your app password"/>
+                            <field name="from_email"
+                                   placeholder="leave blank to use email above"/>
+                        </group>
+                        <group>
+                            <field name="is_default" widget="boolean_toggle"/>
+                            <field name="active" widget="boolean_toggle"/>
+                            <field name="enable_reply_polling" widget="boolean_toggle"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="last_poll_at" readonly="1"
+                                   invisible="not last_poll_at"/>
+                            <field name="last_message" readonly="1"
+                                   invisible="not last_message"/>
+                        </group>
+                    </group>
+
+                    <div class="alert alert-info" role="alert"
+                         invisible="not enable_reply_polling"
+                         style="margin: 8px 0;">
+                        <strong>📥 Auto-Process Approval Replies</strong> is ON.
+                        When the approver replies <strong>YES</strong> or <strong>NO</strong>
+                        to a credit-facility approval email, the application is
+                        approved/rejected automatically within a minute.
+                    </div>
+
+                    <details style="margin: 8px 0;"
+                             invisible="not enable_reply_polling">
+                        <summary style="cursor: pointer; color: #875A7B; font-weight: bold;">
+                            ❓ Replies not working? Click here for the 30-second fix
+                        </summary>
+                        <div style="padding: 12px; background-color: #fff8e1; border-radius: 4px; margin-top: 8px; border-left: 4px solid #ff9800;">
+                            <p>Most providers ship with IMAP already enabled, so you usually don't
+                            need to do anything. If <strong>Connect &amp; Test</strong> says replies
+                            aren't working, follow the steps for your provider:</p>
+                            <p><strong>📨 For Gmail / Google Workspace</strong> — 3 clicks:</p>
+                            <ol>
+                                <li>Open this link in a new tab:
+                                    <a href="https://mail.google.com/mail/u/0/#settings/fwdandpop" target="_blank">
+                                        Gmail → Settings → Forwarding and POP/IMAP
+                                    </a>
+                                </li>
+                                <li>Scroll to <strong>"IMAP access"</strong> → click
+                                    <strong>"Enable IMAP"</strong>.</li>
+                                <li>Click <strong>"Save Changes"</strong> at the bottom.</li>
+                                <li>Come back here, click <strong>Connect &amp; Test</strong> — done.</li>
+                            </ol>
+                            <p><strong>📨 For Outlook / Hotmail / Live</strong> — IMAP is on by default.
+                            If it fails, you may need to use an App Password (see App Password help above).</p>
+                            <p><strong>📨 For Yahoo</strong> — go to
+                                <a href="https://login.yahoo.com/account/security" target="_blank">Yahoo Account Security</a>
+                                → enable "Allow apps that use less secure sign in".</p>
+                            <p><strong>📨 For company email (your own domain):</strong> ask your IT
+                            admin to confirm IMAP is enabled on the mail server.</p>
+                            <p style="margin-bottom: 0;"><em>This is a one-time setup. Once enabled,
+                            you'll never have to touch it again.</em></p>
+                        </div>
+                    </details>
+
+                    <details style="margin: 12px 0;">
+                        <summary style="cursor: pointer; color: #875A7B; font-weight: bold;">
+                            📖 How to get an App Password (click to expand)
+                        </summary>
+                        <div style="padding: 12px; background-color: #f8f9fa; border-radius: 4px; margin-top: 8px;">
+                            <p><strong>Gmail / Google Workspace:</strong></p>
+                            <ol>
+                                <li>Open <a href="https://myaccount.google.com/security" target="_blank">Google Account → Security</a> and turn on <strong>2-Step Verification</strong>.</li>
+                                <li>Open <a href="https://myaccount.google.com/apppasswords" target="_blank">myaccount.google.com/apppasswords</a>.</li>
+                                <li>Type a name like "Odoo" → click <strong>Create</strong>.</li>
+                                <li>Copy the 16-character password and paste it above.</li>
+                            </ol>
+                            <p><strong>Outlook / Hotmail / Live:</strong>
+                                <a href="https://account.microsoft.com/security/app-passwords" target="_blank">account.microsoft.com/security/app-passwords</a></p>
+                            <p><strong>Yahoo:</strong>
+                                <a href="https://login.yahoo.com/account/security" target="_blank">login.yahoo.com/account/security</a></p>
+                            <p><strong>Company email:</strong> ask your IT admin for the SMTP password.</p>
+                        </div>
+                    </details>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============ EMAIL SESSION LIST ============ -->
+    <record id="view_email_session_list" model="ir.ui.view">
+        <field name="name">email.session.list</field>
+        <field name="model">email.session</field>
+        <field name="arch" type="xml">
+            <list decoration-success="status == 'connected'"
+                  decoration-danger="status == 'failed'"
+                  decoration-muted="status == 'not_set'">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="email_address"/>
+                <field name="status" widget="badge"
+                       decoration-success="status == 'connected'"
+                       decoration-danger="status == 'failed'"
+                       decoration-muted="status == 'not_set'"/>
+                <field name="is_default" widget="boolean_toggle"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ============ EMAIL SESSION ACTION ============ -->
+    <record id="action_email_session" model="ir.actions.act_window">
+        <field name="name">Email Sessions</field>
+        <field name="res_model">email.session</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Add an Email Account
+            </p>
+            <p>
+                Add as many email accounts as you want. Pick one as <strong>Default</strong>
+                so auto-send features (sale confirm, PO confirm, vendor bills, POS) use it.
+                The manual <em>Send WhatsApp &amp; Email</em> button on documents will let
+                you pick which account to send from when more than one is configured.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu items for these actions are defined in views/menu.xml so they
+         load AFTER menu_whatsapp_root and menu_whatsapp_config are created. -->
+
+</odoo>

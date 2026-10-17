@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_sale_order_form_send_channels" model="ir.ui.view">
+        <field name="name">sale.order.form.send.channels</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_order_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_send_via_channels"
+                        string="Send WhatsApp &amp; Email"
+                        type="object"
+                        class="btn-secondary"
+                        invisible="state == 'cancel'"/>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

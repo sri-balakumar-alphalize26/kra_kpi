@@ -174,6 +174,71 @@ class ResUsers(models.Model):
             return dial, length
         return self.env.company._kpi_mobile_cfg()
 
+    # ---- Reaching this person on WhatsApp -------------------------------- #
+    #
+    # ONE forward resolver, so every sender agrees on which number is "theirs".
+    # Before this, three places disagreed: the OTP path reads
+    # kpi_mobile_number -> kpi_wa_number -> partner (kra_api.py:2044-2045), the
+    # group mention reads kpi_wa_number first (kpi_wa_group_report.py:46-56),
+    # and the notification path reads ONLY the partner and never looks at
+    # kpi_wa_number at all (kpi_notify.py:1224-1254).
+    #
+    # kpi_wa_number comes first here because it is the only field whose stated
+    # purpose IS WhatsApp. kpi_mobile_number is an app-login credential that
+    # usually happens to be the same number, which makes it a good second
+    # guess and a bad first one.
+    _MIN_INTL_DIGITS = 11
+
+    def _kpi_wa_target(self):
+        """Dialable digits for this person, or '' when we cannot reach them.
+
+        Returns '' rather than a short number on purpose. A 10-digit value
+        builds a JID that simply does not exist, so the send succeeds, nothing
+        arrives, and nobody finds out -- the same silent class of failure as a
+        webhook pointing at a dead port. An empty string lets the caller fall
+        back to a channel that works.
+        """
+        self.ensure_one()
+        for raw in (self.kpi_wa_number, self.kpi_mobile_number,
+                    getattr(self.partner_id, 'mobile', None),
+                    self.partner_id.phone):
+            digits = ''.join(ch for ch in (raw or '') if ch.isdigit())
+            if len(digits) >= self._MIN_INTL_DIGITS:
+                return digits
+        return ''
+
+    @api.model
+    def _kpi_user_for_number(self, number):
+        """The Odoo user a WhatsApp number belongs to, or an empty recordset.
+
+        Matches on the LAST NINE DIGITS, which is the rule _resolve_identity
+        already proves works here (kpi_wa_group_capture.py:411-444). The other
+        approach in this codebase -- an `ilike` on the raw string
+        (kpi_inbound_patch.py:508-513) -- cannot match 919876543210 against
+        '+91 98765 43210', and that is exactly the shape a number takes when a
+        human types it into a contact form.
+        """
+        digits = ''.join(ch for ch in (number or '') if ch.isdigit())
+        if len(digits) < 9:
+            return self.browse()
+        tail = digits[-9:]
+        Users = self.sudo()
+        for field in ('kpi_wa_number', 'kpi_mobile_number'):
+            hit = Users.search([(field, 'like', '%' + tail)], limit=1)
+            if hit:
+                return hit
+        partners = self.env['res.partner'].sudo().search(
+            [('phone', 'like', '%' + tail)], limit=20)
+        if partners:
+            hit = Users.search([('partner_id', 'in', partners.ids)], limit=1)
+            if hit:
+                return hit
+        # Last resort: the WhatsApp group member table, which is the only place
+        # most of these people have a number at all today.
+        member = self.env['kpi.wa.group.member'].sudo().search(
+            [('phone', 'like', '%' + tail), ('user_id', '!=', False)], limit=1)
+        return member.user_id if member else self.browse()
+
     # ---- Password hashing (reuses Odoo's own passlib crypt context) ------ #
     def _set_app_password(self, raw):
         """Hash + store the app PIN; clears the must-change flag.

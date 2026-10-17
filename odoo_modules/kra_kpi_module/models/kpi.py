@@ -831,11 +831,14 @@ class KpiMaster(models.Model):
         '+ New Task' TASK-### ref and for re-numbering on admin accept)."""
         if not prefix:
             return 1
-        # ONE query instead of loading every matching ref into Python. Same rules
-        # as before: active tasks' current refs, plus every RETIRED ref (archived
-        # rows included) -- a number freed by re-typing is never issued again.
+        # ONE query instead of loading every matching ref into Python. Every
+        # task's current ref, ARCHIVED ones included, plus every RETIRED ref --
+        # a number freed by declining or re-typing is never issued again.
+        # Declining archives the task, and the client is then told "REQ-002 was
+        # not taken forward, send a corrected version"; skipping archived rows
+        # here handed REQ-002 to the next task while the client still held it.
         # \d{1,15} keeps the cast inside bigint for any odd hand-typed ref.
-        self.env['kra.kpi'].flush_model(['external_ref', 'active'])
+        self.env['kra.kpi'].flush_model(['external_ref'])
         has_prev = 'previous_external_ref' in self._fields
         if has_prev:
             self.env['kra.kpi'].flush_model(['previous_external_ref'])
@@ -844,7 +847,7 @@ class KpiMaster(models.Model):
         sql = """
             SELECT COALESCE(MAX((regexp_match(btrim(ref), %s, 'i'))[1]::bigint), 0)
               FROM (SELECT external_ref AS ref FROM kra_kpi
-                     WHERE active AND external_ref ILIKE %s"""
+                     WHERE external_ref ILIKE %s"""
         args = [rx, like]
         if has_prev:
             sql += """

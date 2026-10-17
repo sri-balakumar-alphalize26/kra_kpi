@@ -49,6 +49,14 @@ class WhatsAppSendMessageWizard(models.TransientModel):
                 "Please provide a message or attachment."
             ))
 
+        # Check if the number is registered on WhatsApp before sending
+        if not self.session_id.is_on_whatsapp(self.phone):
+            raise UserError(_(
+                "The number %s is not registered on WhatsApp.\n\n"
+                "Please verify the number and try again.",
+                self.phone,
+            ))
+
         # Send text message
         if self.message:
             self.session_id.send_message(self.phone, self.message)

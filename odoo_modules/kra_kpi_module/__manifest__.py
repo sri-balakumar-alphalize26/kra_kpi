@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.6.1",
+    "version": "19.0.6.2",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -34,7 +34,7 @@
         "data/kpi_db_term_cron.xml",
         "data/kpi_meeting_cron.xml",
         "views/wa_approval_templates.xml",
-        # Must load BEFORE menu.xml â€” menu_kra_root references this action.
+        # Must load BEFORE menu.xml — menu_kra_root references this action.
         "views/kra_welcome_action.xml",
         "views/client_action.xml",
         "views/kpi_action_screen.xml",
@@ -57,6 +57,10 @@
         "views/kpi_db_term_views.xml",
         "views/kpi_db_disconnect_reason_views.xml",
         "views/kpi_meeting_views.xml",
+        # MUST load before menu.xml -- menu_kpi_approvals points at
+        # action_kpi_approval.
+        "views/kpi_approval_views.xml",
+        "views/kpi_wa_database_views.xml",
         "views/menu.xml",
         "views/kpi_workflow_views.xml",
         "views/kpi_reports_views.xml",

@@ -2,14 +2,14 @@
 
 Why this exists
 ---------------
-Posting to a group needs the group's id ("120363â€¦@g.us"). There are normally
+Posting to a group needs the group's id ("120363…@g.us"). There are normally
 three ways to get one, and on this gateway all three crash inside neonize's Go
 binary: get_joined_groups, get_group_info_from_link and join_group_with_link.
-The gateway also drops group messages before recording them â€”
+The gateway also drops group messages before recording them —
 
     if IsFromMe or IsGroup: return   # whatsapp_session.py
 
-â€” so the id never reaches the database either. Between them there is no way to
+— so the id never reaches the database either. Between them there is no way to
 learn a group id from inside Odoo.
 
 How this works
@@ -19,7 +19,7 @@ neonize keeps exactly one handler per event type in a plain dict
 WRAPPED rather than replaced: ours calls theirs first, then records the group.
 
 Their handler runs first and its result is untouched, and ours is wrapped in a
-try â€” so a fault here cannot affect password-reset or OTP replies, which ride on
+try — so a fault here cannot affect password-reset or OTP replies, which ride on
 the same event. That is the whole reason for this shape.
 
 Groups only appear once somebody posts in them. A silent group stays unknown,
@@ -46,14 +46,22 @@ class KpiWaGroup(models.Model):
 
     jid = fields.Char(string='Group ID', required=True, index=True)
     # The admin's own label. Left EMPTY when unknown rather than defaulted to the
-    # jid: a row reading "120363â€¦@g.us" looks like a name and is not one, and that
+    # jid: a row reading "120363…@g.us" looks like a name and is not one, and that
     # is exactly how a client group got mistaken for the dev group and posted to.
+    #
+    # The old help here said WhatsApp does not tell us the group's real name on
+    # this gateway. That was true of neonize; Evolution's /group/fetchAllGroups
+    # returns `subject`, which is the actual WhatsApp group name. Import Groups
+    # fills this in, and you can still overwrite it with your own label.
     name = fields.Char(
         string='Group Name',
-        help="Your label for this group. WhatsApp does not tell us the real name "
-             "on this gateway, so set it yourself â€” it is the only reliable way to "
-             "tell one group id from another before posting to it.")
-    last_seen = fields.Datetime(string='Last Message', required=True)
+        help="Your label for this group. Import Groups fills it in with the "
+             "real WhatsApp name; change it to whatever you would rather see. "
+             "It is what tells one group id from another before posting.")
+    # NOT required. A group imported from WhatsApp has genuinely never been
+    # posted in as far as we know, and inventing a "last message" time to
+    # satisfy a constraint would put a date on screen that never happened.
+    last_seen = fields.Datetime(string='Last Message')
     last_sender = fields.Char(
         string='Last Posted By',
         help="Display name of whoever last posted in this group. Free from the "
@@ -88,6 +96,69 @@ class KpiWaGroup(models.Model):
     client_member_count = fields.Integer(compute='_compute_member_stats',
                                          string='Client Members')
     members_synced_at = fields.Datetime(string='Members Synced', readonly=True)
+
+    # ---- the one group that is OURS, not a client's ----------------------- #
+    #
+    # Every other group in this table belongs to a client and is read by them.
+    # This one is the team's own: approvals that could not be delivered, the
+    # developer menu, questions on their way to a manager. Nothing a client
+    # should ever see is posted to a client group by accident, and nothing
+    # internal is posted anywhere but here.
+    #
+    # Deliberately a separate flag from intake_enabled rather than a third
+    # state of it: a group can be internal AND have the bot answering in it,
+    # and the two answer different questions -- "whose group is this" versus
+    # "does the bot speak here".
+    is_staff_group = fields.Boolean(
+        string='Our Internal Team Group', default=False,
+        help="Tick this on the ONE group that is your own team's, not a "
+             "client's.\n\n"
+             "The bot uses it for everything staff-facing: the developer "
+             "menu, questions on their way to a manager, and a warning when "
+             "an approval could not be delivered to anybody.\n\n"
+             "A client must never be in this group.")
+
+    @api.constrains('is_staff_group')
+    def _check_one_staff_group(self):
+        """Exactly one, or the bot has to guess which team it belongs to."""
+        for rec in self.filtered('is_staff_group'):
+            other = self.sudo().search([('is_staff_group', '=', True),
+                                        ('id', '!=', rec.id)], limit=1)
+            if other:
+                raise UserError(
+                    "%s is already marked as the internal team group.\n\n"
+                    "There can only be one, or the bot cannot tell where to "
+                    "put a message that is not for a client. Untick it there "
+                    "first." % other.name)
+
+    def write(self, vals):
+        res = super().write(vals)
+        if vals.get('is_staff_group'):
+            # Point the company-wide sender here too. _post() with no jid --
+            # used by workday reports and by the "no manager reachable"
+            # warning -- falls back to res.company.kpi_wa_group_jid, and
+            # while that is empty those messages are built, sent nowhere and
+            # reported as failed. Marking the group is the moment somebody
+            # has actually decided where they should go.
+            for rec in self.filtered(lambda r: r.jid):
+                rec.env.company.sudo().kpi_wa_group_jid = rec.jid
+        return res
+
+    @api.model
+    def _staff_group(self):
+        """The internal group, however it was named.
+
+        One resolver so the router, the question poster and the fallback
+        warning cannot disagree about which group is internal -- that
+        disagreement is how an internal message ends up in a client's chat.
+        """
+        hit = self.sudo().search([('is_staff_group', '=', True)], limit=1)
+        if hit:
+            return hit
+        jid = (self.env.company.kpi_wa_group_jid or '').strip()
+        if jid:
+            return self.sudo().search([('jid', '=', jid)], limit=1)
+        return self.browse()
 
     intake_enabled = fields.Boolean(
         string='Bot Replies In This Group', default=False,
@@ -137,6 +208,117 @@ class KpiWaGroup(models.Model):
         return {'status': True, 'kra_id': self.kra_id.id,
                 'client_name': self.kra_id.name or '',
                 'sub_client_count': self.sub_client_count}
+
+    # ------------------------------------------------------------------
+    # Importing the groups themselves
+    # ------------------------------------------------------------------
+    @api.model
+    def action_import_groups(self):
+        """Create a row for every WhatsApp group this number is a member of.
+
+        Rows normally appear by themselves when somebody posts, which is fine
+        on a database that has been running a while and useless on a fresh
+        one: nothing exists until a client happens to type something, and
+        there is no way to prepare the groups before that.
+
+        Creating one by hand is not an option either -- `jid` is required and
+        is a WhatsApp-assigned id nobody can type -- so the New button on
+        this screen could only ever produce "Missing required fields".
+
+        This asks Evolution instead. It fills in the id and the real group
+        name, and deliberately leaves Client and Bot Replies alone: who a
+        group belongs to, and whether the bot should speak in it, are
+        decisions, not facts to be imported.
+        """
+        session = self.env['whatsapp.session'].sudo().search(
+            [('status', '=', 'connected')], limit=1)
+        if not session:
+            raise UserError(_(
+                'No connected WhatsApp session. Connect one under '
+                'Setup > WhatsApp Connect first.'))
+        client, instance = session._get_client()
+        try:
+            groups = client.fetch_all_groups(instance, get_participants=False)
+        except Exception as exc:
+            raise UserError(_('Could not read the group list: %s') % exc)
+
+        added, renamed, already = 0, 0, 0
+        for g in groups or []:
+            jid = (g.get('id') or '').strip()
+            if not jid or not jid.endswith(GROUP_SERVER):
+                continue
+            subject = (g.get('subject') or '').strip()
+            row = self.sudo().with_context(active_test=False).search(
+                [('jid', '=', jid)], limit=1)
+            if not row:
+                self.sudo().create({'jid': jid, 'name': subject or False})
+                added += 1
+            elif subject and not row.name:
+                # Only fills a BLANK label. An admin who renamed a group in
+                # Odoo did it so the screen would read the way they want; a
+                # sync should not undo that every time it runs.
+                row.name = subject
+                renamed += 1
+            else:
+                already += 1
+
+        parts = []
+        if added:
+            parts.append(_('%s added') % added)
+        if renamed:
+            parts.append(_('%s named') % renamed)
+        if already:
+            parts.append(_('%s already here') % already)
+        _logger.info('kpi.wa.group: imported %s group(s) from WhatsApp',
+                     len(groups or []))
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'type': 'success' if (added or renamed) else 'info',
+                'title': _('Groups imported'),
+                'sticky': False,
+                'message': (', '.join(parts) or _('Nothing found.'))
+                + _('\n\nSet a Client on each one, then turn on Bot Replies '
+                    'for the groups the bot should answer in.'),
+                'next': {'type': 'ir.actions.act_window_close'},
+            },
+        }
+
+    @api.model
+    def action_open_groups(self):
+        """Refresh from WhatsApp, then show the list.
+
+        The import used to sit on a button in the list header. That does not
+        work: a <header> button in a list view only appears once rows are
+        SELECTED, because it is meant for acting on a selection -- so an
+        action that creates rows could never be reached from an empty or
+        unselected list. Every core example does it that way for the same
+        reason (ir.profile, res.lang).
+
+        Doing it on open is also closer to what somebody expects: they added
+        a group on their phone, so it should be here. There is nothing to
+        press and nothing to remember.
+
+        Failures are swallowed on purpose. The import talks to Evolution over
+        HTTP, and WhatsApp being down must not make this screen unopenable --
+        the rows already in it are still worth reading. The explicit path
+        still raises, so a deliberate import that fails still says why.
+        """
+        try:
+            self.action_import_groups()
+        except Exception as exc:
+            _logger.info('WhatsApp group auto-import skipped: %s', exc)
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('WhatsApp Groups'),
+            'res_model': 'kpi.wa.group',
+            'view_mode': 'list,form',
+            'target': 'current',
+            'search_view_id': [
+                self.env.ref('kra_kpi_module.view_kpi_wa_group_search').id,
+                'search'],
+        }
 
     # ------------------------------------------------------------------
     # Members
@@ -207,7 +389,7 @@ class KpiWaGroup(models.Model):
 
     @api.model
     def record_seen(self, jid, name='', sender=''):
-        """Upsert on every group message. Cheap by design â€” it runs inside the
+        """Upsert on every group message. Cheap by design — it runs inside the
         gateway's inbound path, so it must not do real work.
 
         `name` is only ever written when it carries something real; a hand-set

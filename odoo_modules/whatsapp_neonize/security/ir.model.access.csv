@@ -8,3 +8,8 @@ access_whatsapp_config_user,whatsapp.config.user,model_whatsapp_config,group_wha
 access_whatsapp_config_manager,whatsapp.config.manager,model_whatsapp_config,group_whatsapp_manager,1,1,1,1
 access_whatsapp_owner_number_user,whatsapp.owner.number.user,model_whatsapp_owner_number,group_whatsapp_user,1,0,0,0
 access_whatsapp_owner_number_manager,whatsapp.owner.number.manager,model_whatsapp_owner_number,group_whatsapp_manager,1,1,1,1
+access_email_session_user,email.session.user,model_email_session,group_whatsapp_user,1,0,0,0
+access_email_session_manager,email.session.manager,model_email_session,group_whatsapp_manager,1,1,1,1
+access_send_channel_wizard_user,whatsapp.send.channel.wizard.user,model_whatsapp_send_channel_wizard,group_whatsapp_user,1,1,1,1
+access_whatsapp_group_user,whatsapp.group.user,model_whatsapp_group,group_whatsapp_user,1,0,0,0
+access_whatsapp_group_manager,whatsapp.group.manager,model_whatsapp_group,group_whatsapp_manager,1,1,1,1

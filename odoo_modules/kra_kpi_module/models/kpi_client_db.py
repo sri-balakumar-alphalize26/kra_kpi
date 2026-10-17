@@ -145,6 +145,10 @@ class KpiClientDb(models.Model):
     disconnect_request_kpi_id = fields.Many2one(
         'kra.kpi', string='Request Ticket', ondelete='set null', readonly=True)
     disconnected_on = fields.Date(readonly=True)
+    # The moment it stopped, to the minute. A date alone cannot settle "was
+    # this ticket raised before or after we switched it off", which is the
+    # one question a disputed invoice turns on.
+    disconnected_at = fields.Datetime(string='Stopped At', readonly=True)
     disconnected_by_id = fields.Many2one(
         'res.users', string='Disconnected By', readonly=True,
         ondelete='set null')
@@ -154,9 +158,17 @@ class KpiClientDb(models.Model):
 
     # ---- bookkeeping -------------------------------------------------------- #
     first_seen_at = fields.Datetime(
-        default=lambda s: fields.Datetime.now(), readonly=True)
+        string='Added On', default=lambda s: fields.Datetime.now(),
+        readonly=True,
+        help='When this database was first recorded here — by hand, by a '
+             'fetch, or by the last step of a New Database task.')
     last_fetch_at = fields.Datetime(
         string='Last Seen On Server', readonly=True)
+    # A real relation, not a search in a compute. The first version counted
+    # with search_count() and declared no depends, so Odoo cached the number
+    # and never refreshed it -- the screen kept showing a stale count after
+    # tickets were added.
+    task_ids = fields.One2many('kra.kpi', 'client_db_id', string='Tasks')
     task_count = fields.Integer(compute='_compute_task_count')
     active = fields.Boolean(default=True)
     notes = fields.Text(help='Internal only. Never shown to a client.')
@@ -193,26 +205,49 @@ class KpiClientDb(models.Model):
             else:
                 rec.days_left = 0
 
+    @api.depends('task_ids')
     def _compute_task_count(self):
-        Kpi = self.env['kra.kpi'].sudo()
         for rec in self:
-            rec.task_count = Kpi.search_count(
-                [('client_db_id', '=', rec.id)]) if rec.id else 0
+            rec.task_count = len(rec.task_ids)
+
+    def action_view_tasks(self):
+        """Every ticket ever raised against this database, stopped or not."""
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Tasks on %s') % self.db_name,
+            'res_model': 'kra.kpi',
+            'view_mode': 'list,form',
+            'domain': [('client_db_id', '=', self.id)],
+            'context': {'active_test': False},
+        }
 
     # ------------------------------------------------------------------
     # validation
     # ------------------------------------------------------------------
+    # Saving a database row is what builds its KRA tree. The alternative was
+    # typing the server and the database twice -- once here and once in the
+    # KRA master -- and then remembering to untick a flag.
+    _KRA_TRIGGERS = {'client_kra_id', 'server_id', 'db_name'}
+
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
             if vals.get('db_name'):
                 vals['db_name'] = self._clean_name(vals['db_name'])
-        return super().create(vals_list)
+        recs = super().create(vals_list)
+        recs._ensure_kra()
+        return recs
 
     def write(self, vals):
         if vals.get('db_name'):
             vals['db_name'] = self._clean_name(vals['db_name'])
-        return super().write(vals)
+        res = super().write(vals)
+        # No recursion: _ensure_kra writes only `kra_id`, which is not a
+        # trigger, and it returns early once kra_id is set.
+        if self._KRA_TRIGGERS & set(vals):
+            self._ensure_kra()
+        return res
 
     @api.model
     def _clean_name(self, raw):
@@ -252,10 +287,83 @@ class KpiClientDb(models.Model):
     # ------------------------------------------------------------------
     # the KRA a task about this database belongs to
     # ------------------------------------------------------------------
+    def _ensure_kra(self):
+        """Build  client -> server -> database  in the KRA tree, on demand.
+
+        The shape the business actually uses:
+
+            Nexgennpos        the client        bills go here
+              nexgennpos2     main KRA          the server
+                rtr           sub KRA           the database
+                  REQ-123     KPI               the task
+
+        Created from the database row rather than typed twice. Nodes are
+        found by name before being created, so saving the same row again, or
+        adding a second database on the same server, reuses the server node
+        instead of making a duplicate.
+
+        THE SERVER NODE IS UNTICKED AS A CLIENT. `kra.master._compute_is_client`
+        marks every node one level under a root as a client automatically, so
+        a server would otherwise show up as a billable customer in the
+        invoices and the KRA report. Unticking it also makes the billing walk
+        work: a task under `rtr` looks UP for the nearest node still marked as
+        a client, skips the server, and finds Nexgennpos -- which is who the
+        invoice should name.
+        """
+        Kra = self.env['kra.master'].sudo()
+        for rec in self:
+            if rec.kra_id or not rec.client_kra_id or not rec.db_name:
+                continue
+            server_name = (rec.server_id.name or '').strip()
+            if not server_name:
+                continue
+
+            node = Kra.search([('name', '=', server_name),
+                               ('parent_id', '=', rec.client_kra_id.id)],
+                              limit=1)
+            if not node:
+                node = Kra.create({'name': server_name,
+                                   'parent_id': rec.client_kra_id.id,
+                                   'is_sub': True})
+                _logger.info('kpi.client.db: created server KRA %r under %r',
+                             server_name, rec.client_kra_id.name)
+            if node.is_client:
+                # A server is not a customer.
+                node.write({'is_client': False})
+
+            db_node = Kra.search([('name', '=', rec.db_name),
+                                  ('parent_id', '=', node.id)], limit=1)
+            if not db_node:
+                db_node = Kra.create({'name': rec.db_name,
+                                      'parent_id': node.id,
+                                      'is_sub': True})
+                _logger.info('kpi.client.db: created database KRA %r under %r',
+                             rec.db_name, server_name)
+            rec.write({'kra_id': db_node.id})
+        return True
+
+    def action_build_kra(self):
+        """The same thing from a button, for a row that predates this."""
+        self._ensure_kra()
+        return True
+
     def target_kra(self):
-        """Where a ticket about this database is filed. Never empty-handed:
-        falls back to the client, which is always set for an offerable row."""
+        """Where a ticket about this database is filed.
+
+        Builds the tree if it is not there yet -- a database registered
+        before this existed, or one a client picks seconds after an admin
+        adds it, should not have to wait for somebody to create two KRA
+        records by hand. Never empty-handed: falls back to the client.
+        """
         self.ensure_one()
+        if not self.kra_id and self.client_kra_id and self.db_name:
+            try:
+                self._ensure_kra()
+            except Exception as exc:
+                # A ticket must never fail to be created because the tree
+                # could not be built. It lands on the client instead.
+                _logger.warning('could not build the KRA tree for %s: %s',
+                                self.db_name, exc)
         return self.kra_id or self.client_kra_id
 
     # ------------------------------------------------------------------
@@ -386,6 +494,7 @@ class KpiClientDb(models.Model):
                 'state': 'disconnected',
                 'disconnect_state': 'done',
                 'disconnected_on': fields.Date.context_today(rec),
+                'disconnected_at': fields.Datetime.now(),
                 'disconnected_by_id': rec.env.user.id,
                 'disconnect_note': note or rec.disconnect_note,
             })
@@ -656,11 +765,15 @@ class KpiClientDb(models.Model):
                 'source': existing.source or 'provisioned',
             })
             return existing
+        # NO kra_id here on purpose. Setting it to the request ticket's KRA
+        # (which is the client) would make _ensure_kra skip, and a database
+        # created through WhatsApp would end up with no server/database nodes
+        # while a hand-added one got them. Leaving it empty lets create()
+        # build  client -> server -> database  the same way for both routes.
         return self.sudo().create({
             'db_name': clean,
             'server_id': kpi.provision_server_id.id,
             'client_kra_id': (kpi.client_kra_id or kpi.kra_id).id,
-            'kra_id': kpi.kra_id.id,
             'source': 'provisioned',
             'state': 'live',
             'activated_on': fields.Date.context_today(self),
@@ -669,7 +782,23 @@ class KpiClientDb(models.Model):
 
 
 class KraKpiClientDb(models.Model):
-    """The ticket's link to a database, beside its link to a KRA."""
+    """The ticket's link to a database, beside its link to a KRA.
+
+    A DISCONNECTED DATABASE TAKES NO NEW WORK, AND LOSES NONE OF ITS OLD WORK.
+
+    Those are two different things and both matter. Once a client has asked
+    for a database to be switched off and an admin has actioned it, nobody
+    should be able to raise a ticket against it -- not from WhatsApp, not
+    from the web, not from the app. But every ticket raised BEFORE that
+    moment stays exactly where it is: active, visible, and billable. Nothing
+    is archived, nothing is unlinked, and the KRA nodes stay in the tree, so
+    an invoice raised next month still finds the work and still names the
+    client.
+
+    The bot is already handled -- `poll_options_for_client` only ever offers
+    `state='live'` rows -- but that only covers WhatsApp. The guard below is
+    what covers everything else.
+    """
     _inherit = 'kra.kpi'
 
     client_db_id = fields.Many2one(
@@ -686,3 +815,66 @@ class KraKpiClientDb(models.Model):
     request_category = fields.Selection(
         selection_add=[('db_disconnect', 'Disconnect Database')],
         ondelete={'db_disconnect': 'set default'})
+
+    # ------------------------------------------------------------------
+    @api.model
+    def _stopped_db(self, db_id=None, kra_id=None):
+        """The disconnected database a new ticket would land on, or empty.
+
+        Checked two ways because tickets arrive two ways: the bot sets
+        `client_db_id` directly, while the web and the app create against a
+        `kra_id`. Without the second check a disconnected database is still
+        reachable from every screen in the system.
+        """
+        Db = self.env['kpi.client.db'].sudo()
+        if db_id:
+            row = Db.browse(int(db_id))
+            if row.exists() and row.state == 'disconnected':
+                return row
+        if kra_id:
+            row = Db.search([('kra_id', '=', int(kra_id)),
+                             ('state', '=', 'disconnected')], limit=1)
+            if row:
+                return row
+        return Db
+
+    @api.model
+    def _refuse_if_stopped(self, db_id=None, kra_id=None):
+        row = self._stopped_db(db_id=db_id, kra_id=kra_id)
+        if not row:
+            return
+        when = self.env['kpi.tz'].fmt(row.disconnected_at) \
+            if row.disconnected_at else fields.Date.to_string(row.disconnected_on)
+        raise ValidationError(_(
+            '%(db)s was disconnected on %(when)s, so no new work can be '
+            'raised against it.\n\n'
+            'Everything logged before then is untouched and still '
+            'invoiceable. If this database is coming back, reactivate it '
+            'under Clients > Live Databases first.') % {
+                'db': row.display_name, 'when': when})
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        Db = self.env['kpi.client.db'].sudo()
+        for vals in vals_list:
+            self._refuse_if_stopped(db_id=vals.get('client_db_id'),
+                                    kra_id=vals.get('kra_id'))
+            # Link the ticket to its database even when it was created by
+            # KRA alone, which is how the web and the app create everything.
+            # Without this a database's own task list and invoice trail only
+            # ever contained the tickets the WhatsApp bot made, and the count
+            # on the Databases screen quietly undercounted.
+            if not vals.get('client_db_id') and vals.get('kra_id'):
+                row = Db.search([('kra_id', '=', vals['kra_id'])], limit=1)
+                if row:
+                    vals['client_db_id'] = row.id
+        return super().create(vals_list)
+
+    def write(self, vals):
+        # Only guards a MOVE onto a stopped database. Editing a ticket that
+        # already lives on one stays allowed: the work happened, and it still
+        # has to be completed, approved and invoiced.
+        if vals.get('client_db_id') or vals.get('kra_id'):
+            self._refuse_if_stopped(db_id=vals.get('client_db_id'),
+                                    kra_id=vals.get('kra_id'))
+        return super().write(vals)

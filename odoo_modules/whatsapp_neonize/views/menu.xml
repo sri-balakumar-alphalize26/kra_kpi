@@ -3,14 +3,14 @@
 
     <!-- Root Menu - visible to WhatsApp users -->
     <menuitem id="menu_whatsapp_root"
-              name="WhatsApp"
+              name="WhatsApp and Email"
               web_icon="whatsapp_neonize,static/description/icon.png"
               groups="group_whatsapp_user"
               sequence="100"/>
 
     <!-- Sessions -->
     <menuitem id="menu_whatsapp_sessions"
-              name="Sessions"
+              name="WhatsApp Sessions"
               parent="menu_whatsapp_root"
               action="action_whatsapp_session"
               groups="group_whatsapp_user"
@@ -40,17 +40,32 @@
               sequence="90"/>
 
     <menuitem id="menu_whatsapp_config_sessions"
-              name="Sessions"
+              name="WhatsApp Sessions"
               parent="menu_whatsapp_config"
               action="action_whatsapp_session"
               groups="group_whatsapp_manager"
               sequence="10"/>
 
     <menuitem id="menu_whatsapp_config_settings"
-              name="Settings"
+              name="WhatsApp and Email Settings"
               parent="menu_whatsapp_config"
               action="action_whatsapp_config_server"
               groups="group_whatsapp_manager"
               sequence="20"/>
+
+    <!-- Email Sessions menus (action defined in email_session_views.xml). -->
+    <menuitem id="menu_email_sessions"
+              name="Email Sessions"
+              parent="menu_whatsapp_root"
+              action="action_email_session"
+              sequence="15"
+              groups="group_whatsapp_user"/>
+
+    <menuitem id="menu_email_sessions_config"
+              name="Email Sessions"
+              parent="menu_whatsapp_config"
+              action="action_email_session"
+              sequence="15"
+              groups="group_whatsapp_manager"/>
 
 </odoo>

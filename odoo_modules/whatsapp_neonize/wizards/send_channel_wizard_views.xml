@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_send_channel_wizard_form" model="ir.ui.view">
+        <field name="name">whatsapp.send.channel.wizard.form</field>
+        <field name="model">whatsapp.send.channel.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Send WhatsApp &amp; Email">
+                <group>
+                    <field name="record_label" readonly="1"/>
+                    <field name="partner_id" readonly="1"/>
+                </group>
+                <separator string="Choose Channels"/>
+                <group>
+                    <group>
+                        <field name="send_email" widget="boolean_toggle"/>
+                        <field name="email_session_id"
+                               options="{'no_create': True}"
+                               invisible="not send_email"
+                               required="send_email"/>
+                    </group>
+                    <group>
+                        <field name="send_whatsapp" widget="boolean_toggle"/>
+                        <field name="whatsapp_session_id"
+                               options="{'no_create': True}"
+                               invisible="not send_whatsapp"
+                               required="send_whatsapp"/>
+                    </group>
+                </group>
+                <field name="res_model" invisible="1"/>
+                <field name="res_id" invisible="1"/>
+                <footer>
+                    <button name="action_send" string="✓ Send" type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_send_channel_wizard" model="ir.actions.act_window">
+        <field name="name">Send WhatsApp &amp; Email</field>
+        <field name="res_model">whatsapp.send.channel.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+</odoo>

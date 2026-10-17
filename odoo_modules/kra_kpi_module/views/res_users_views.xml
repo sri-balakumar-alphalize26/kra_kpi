@@ -12,6 +12,20 @@
                 <field name="kpi_role" string="KRA / KPI Role"
                        widget="radio" options="{'horizontal': true}"
                        invisible="share"/>
+                <!-- kpi_wa_number existed on the model but on NO view, and the
+                     only route that wrote it (/kpi_multitask/set_wa) lists
+                     developers only. A coordinator or owner therefore could
+                     not be given a WhatsApp number at all, which is the same
+                     as saying they cannot be sent an approval. One field, one
+                     screen, every role. -->
+                <field name="kpi_wa_number" string="WhatsApp number"
+                       invisible="share"
+                       placeholder="e.g. 919876543210 — with the country code"/>
+                <div class="text-muted" colspan="2" invisible="share">
+                    Approvals, assignment notices and urgent alerts are sent
+                    here. Include the country code; without it the number
+                    cannot be dialled and the message is never delivered.
+                </div>
             </xpath>
         </field>
     </record>
@@ -29,6 +43,10 @@
             <xpath expr="//field[@name='login']" position="after">
                 <field name="kpi_role" string="KRA / KPI Role"
                        widget="badge" readonly="1" optional="show"/>
+                <!-- So "who can actually be messaged?" is answerable by
+                     looking, rather than by opening twelve user records. -->
+                <field name="kpi_wa_number" string="WhatsApp"
+                       optional="show"/>
             </xpath>
         </field>
     </record>

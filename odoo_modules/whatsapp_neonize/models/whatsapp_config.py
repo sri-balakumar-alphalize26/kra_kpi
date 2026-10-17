@@ -1,7 +1,43 @@
 import logging
-from odoo import models, fields, api
+import re
+from odoo import models, fields, api, _
+from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
+
+EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+# Auto-detect SMTP host/port/security from the email's domain.
+# Format: domain -> (smtp_host, port, encryption: 'ssl'|'starttls'|'none')
+SMTP_PRESETS = {
+    'gmail.com':       ('smtp.gmail.com',          587, 'starttls'),
+    'googlemail.com':  ('smtp.gmail.com',          587, 'starttls'),
+    'outlook.com':     ('smtp-mail.outlook.com',   587, 'starttls'),
+    'hotmail.com':     ('smtp-mail.outlook.com',   587, 'starttls'),
+    'live.com':        ('smtp-mail.outlook.com',   587, 'starttls'),
+    'office365.com':   ('smtp.office365.com',      587, 'starttls'),
+    'yahoo.com':       ('smtp.mail.yahoo.com',     587, 'starttls'),
+    'yahoo.co.in':     ('smtp.mail.yahoo.com',     587, 'starttls'),
+    'icloud.com':      ('smtp.mail.me.com',        587, 'starttls'),
+    'me.com':          ('smtp.mail.me.com',        587, 'starttls'),
+    'zoho.com':        ('smtp.zoho.com',           587, 'starttls'),
+    'zoho.in':         ('smtp.zoho.in',            587, 'starttls'),
+    'aol.com':         ('smtp.aol.com',            587, 'starttls'),
+    'protonmail.com':  ('smtp.protonmail.com',     587, 'starttls'),
+}
+
+# Provider-specific App Password help links shown in error messages
+APP_PASSWORD_HELP = {
+    'gmail.com':       'https://myaccount.google.com/apppasswords',
+    'googlemail.com':  'https://myaccount.google.com/apppasswords',
+    'outlook.com':     'https://account.microsoft.com/security/app-passwords',
+    'hotmail.com':     'https://account.microsoft.com/security/app-passwords',
+    'live.com':        'https://account.microsoft.com/security/app-passwords',
+    'yahoo.com':       'https://login.yahoo.com/account/security',
+    'icloud.com':      'https://support.apple.com/en-us/HT204397',
+}
+
+MAIL_SERVER_AUTO_NAME = 'WhatsApp & Email Auto-Configured SMTP'
 
 
 class WhatsAppOwnerNumber(models.Model):
@@ -76,34 +112,144 @@ Thank you for your purchase! 🙏""",
              '{amount_paid}, {customer_name}, {customer_info}',
     )
 
-    # --- Simple (fill-in-the-blanks) message builder ---
-    pos_message_mode = fields.Selection([
-        ('simple', 'Simple (fill-in-the-blanks)'),
-        ('advanced', 'Advanced template'),
-    ], string='Message Style', default='simple',
-        help='Simple: just tick what to include, no codes. '
-             'Advanced: edit the raw template with {placeholders}.')
-    pos_msg_header = fields.Char(
-        'Header', default='🧾 New POS Order',
-        help='First line of the message. The order number is added automatically '
-             'if "Show Order Number" is on.')
-    pos_msg_footer = fields.Text(
-        'Footer', default='Thank you for your purchase! 🙏')
-    pos_show_order_number = fields.Boolean('Show Order Number', default=True)
-    pos_show_date = fields.Boolean('Show Date', default=True)
-    pos_show_pos_name = fields.Boolean('Show POS Name', default=True)
-    pos_show_items = fields.Boolean('Show Items', default=True)
-    pos_show_subtotal = fields.Boolean('Show Subtotal', default=True)
-    pos_show_tax = fields.Boolean('Show Tax', default=True)
-    pos_show_total = fields.Boolean('Show Total', default=True)
-    pos_show_paid = fields.Boolean('Show Amount Paid', default=False)
-    pos_show_customer = fields.Boolean('Show Customer', default=True)
-    pos_message_preview = fields.Text(
-        'Live Preview', compute='_compute_pos_message_preview', readonly=True)
-
     owner_number_ids = fields.One2many(
         'whatsapp.owner.number', 'config_id', string='Owner Numbers',
     )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # MULTI-SESSION DEFAULTS
+    # ──────────────────────────────────────────────────────────────────────
+
+    default_email_session_id = fields.Many2one(
+        'email.session', string='Default Email Session',
+        domain="[('active', '=', True), ('status', '=', 'connected')]",
+        help='Default email account used for auto-send (sale confirm, PO confirm, '
+             'vendor bill post, POS, credit approvals).',
+    )
+    default_whatsapp_session_id = fields.Many2one(
+        'whatsapp.session', string='Default WhatsApp Session',
+        domain="[('status', '=', 'connected')]",
+        help='Default WhatsApp session used for auto-send. Leave blank to use '
+             'the first connected session.',
+    )
+
+    # Backward-compat: admin_email + from_email now read from the default email session.
+    admin_email = fields.Char(
+        string='Default Admin Email',
+        compute='_compute_admin_email', store=False,
+        help='Default email address. Comes from the Default Email Session.',
+    )
+    from_email = fields.Char(
+        string='Default Send From',
+        compute='_compute_admin_email', store=False,
+    )
+
+    @api.depends('default_email_session_id',
+                 'default_email_session_id.email_address',
+                 'default_email_session_id.from_email')
+    def _compute_admin_email(self):
+        for rec in self:
+            sess = rec.default_email_session_id
+            rec.admin_email = sess.email_address if sess else False
+            rec.from_email = (sess.from_email or sess.email_address) if sess else False
+
+    # ──────────────────────────────────────────────────────────────────────
+    # AUTO-SEND TOGGLES (Email + WhatsApp, per event)
+    # ──────────────────────────────────────────────────────────────────────
+
+    # Sales — Quotation/SO
+    auto_send_so_quotation_email = fields.Boolean(
+        string='Auto Email Quotation',
+        help="Email the quotation PDF when state changes to 'sent' (Send by Email pressed).",
+    )
+    auto_send_so_quotation_wa = fields.Boolean(
+        string='Auto WhatsApp Quotation',
+        help="WhatsApp the quotation PDF when state changes to 'sent'.",
+    )
+    auto_send_so_confirm_email = fields.Boolean(
+        string='Auto Email on SO Confirm',
+        help='Email the sale order PDF to the customer when the order is confirmed.',
+    )
+    auto_send_so_confirm_wa = fields.Boolean(
+        string='Auto WhatsApp on SO Confirm',
+        help='WhatsApp the sale order PDF to the customer when the order is confirmed.',
+    )
+
+    # Purchase
+    auto_send_po_confirm_email = fields.Boolean(
+        string='Auto Email PO on Confirm',
+        help='Email the purchase order PDF to the vendor when the PO is confirmed.',
+    )
+    auto_send_po_confirm_wa = fields.Boolean(
+        string='Auto WhatsApp PO on Confirm',
+        help='WhatsApp the purchase order PDF to the vendor when the PO is confirmed.',
+    )
+
+    # Vendor bills
+    auto_send_bill_email = fields.Boolean(
+        string='Auto Email Vendor Bill on Post',
+        help='Email the vendor bill PDF when posted.',
+    )
+    auto_send_bill_wa = fields.Boolean(
+        string='Auto WhatsApp Vendor Bill on Post',
+        help='WhatsApp the vendor bill PDF when posted.',
+    )
+
+    # Customer invoices
+    auto_send_invoice_email = fields.Boolean(
+        string='Auto Email Customer Invoice on Post',
+        help='Email the customer invoice PDF to the customer when posted.',
+    )
+    auto_send_invoice_wa = fields.Boolean(
+        string='Auto WhatsApp Customer Invoice on Post',
+        help='WhatsApp the customer invoice PDF to the customer when posted.',
+    )
+
+    # Payment receipts (account.payment.action_post)
+    auto_send_payment_receipt_email = fields.Boolean(
+        string='Auto Email Payment Receipt',
+        help='Email a receipt to the customer when an inbound payment is '
+             'posted, OR a remittance to the vendor when an outbound payment '
+             'is posted.',
+    )
+    auto_send_payment_receipt_wa = fields.Boolean(
+        string='Auto WhatsApp Payment Receipt',
+        help='WhatsApp a receipt to the customer/vendor when a payment is '
+             'posted.',
+    )
+
+    # POS Email — mirrors the existing WhatsApp POS auto-send
+    pos_email_notify_enabled = fields.Boolean(
+        string='Enable POS Email Notifications', default=False,
+    )
+    pos_email_notify_owners = fields.Boolean(
+        string='Email POS Order to Owners',
+        help='Email the POS order summary to the addresses listed in Owner Emails '
+             'when a POS order is paid/done/invoiced.',
+    )
+    pos_email_notify_customer = fields.Boolean(
+        string='Email POS Receipt to Customer',
+        help='Email the POS order summary to the customer (partner_id.email) when '
+             'a POS order is paid/done/invoiced.',
+    )
+    pos_owner_emails = fields.Char(
+        string='Owner Emails (comma-separated)',
+        help='One or more email addresses (comma-separated) that receive POS '
+             'order summaries.',
+    )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # EMAIL HELPERS
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _get_from_email(self):
+        """Return the From address of the default email session, falling back
+        to the company email."""
+        self.ensure_one()
+        sess = self.default_email_session_id
+        if sess:
+            return sess.get_from_email()
+        return self.env.company.email or 'noreply@example.com'
 
     @api.model
     def get_config(self, company_id=None):
@@ -115,8 +261,9 @@ Thank you for your purchase! 🙏""",
         return config
 
     def format_pos_message(self, order):
-        """Format a POS order into a WhatsApp message."""
+        """Format POS order into WhatsApp message."""
         self.ensure_one()
+        template = self.pos_message_template or self._fields['pos_message_template'].default
 
         # Build order lines
         lines = []
@@ -129,120 +276,35 @@ Thank you for your purchase! 🙏""",
                 line_text += f"  (-{line.discount:g}%)"
             line_text += f"  = {line_total:,.2f}"
             lines.append(line_text)
+
         order_lines = "\n".join(lines) if lines else "  (no items)"
 
-        # Customer
+        # Customer info
         customer_name = order.partner_id.name if order.partner_id else 'Walk-in Customer'
-        customer_phone = order.partner_id.phone if order.partner_id else ''
         customer_info = ""
         if order.partner_id:
             customer_info = f"👤 Customer: {order.partner_id.name}"
             if order.partner_id.phone:
                 customer_info += f"\n📱 Phone: {order.partner_id.phone}"
 
-        # POS name
+        # Get POS config name
         pos_name = 'N/A'
         if order.session_id and order.session_id.config_id:
             pos_name = order.session_id.config_id.name
 
+        # Format amounts
         amount_untaxed = order.amount_total - order.amount_tax
         date_str = order.date_order.strftime('%d/%m/%Y %I:%M %p') if order.date_order else ''
 
-        ctx = {
-            'order_name': order.name or '',
-            'date': date_str,
-            'pos_name': pos_name,
-            'order_lines': order_lines,
-            'amount_untaxed': f"{amount_untaxed:,.2f}",
-            'amount_tax': f"{order.amount_tax:,.2f}",
-            'amount_total': f"{order.amount_total:,.2f}",
-            'amount_paid': f"{order.amount_paid:,.2f}",
-            'customer_name': customer_name,
-            'customer_phone': customer_phone,
-            'customer_info': customer_info,
-        }
-
-        if self.pos_message_mode == 'advanced':
-            template = self.pos_message_template or self._fields['pos_message_template'].default
-            return template.format(**ctx)
-        return self._render_simple(ctx)
-
-    def _render_simple(self, ctx):
-        """Assemble the POS message from the fill-in-the-blanks settings."""
-        self.ensure_one()
-        parts = []
-
-        header = (self.pos_msg_header or '').strip()
-        if self.pos_show_order_number and ctx.get('order_name'):
-            header = f"{header} {ctx['order_name']}".strip() if header else ctx['order_name']
-        if header:
-            parts.append(f"*{header}*")
-
-        meta = []
-        if self.pos_show_date and ctx.get('date'):
-            meta.append(f"📅 {ctx['date']}")
-        if self.pos_show_pos_name and ctx.get('pos_name'):
-            meta.append(f"🏪 {ctx['pos_name']}")
-        if meta:
-            parts.append("\n".join(meta))
-
-        if self.pos_show_items and ctx.get('order_lines'):
-            parts.append(ctx['order_lines'])
-
-        money = []
-        if self.pos_show_subtotal:
-            money.append(f"💰 Subtotal: {ctx.get('amount_untaxed', '')}")
-        if self.pos_show_tax:
-            money.append(f"📊 Tax: {ctx.get('amount_tax', '')}")
-        if self.pos_show_total:
-            money.append(f"✅ *Total: {ctx.get('amount_total', '')}*")
-        if self.pos_show_paid:
-            money.append(f"💳 Paid: {ctx.get('amount_paid', '')}")
-        if money:
-            parts.append("\n".join(money))
-
-        if self.pos_show_customer and ctx.get('customer_name'):
-            cust = f"👤 {ctx['customer_name']}"
-            if ctx.get('customer_phone'):
-                cust += f"\n📱 {ctx['customer_phone']}"
-            parts.append(cust)
-
-        footer = (self.pos_msg_footer or '').strip()
-        if footer:
-            parts.append(footer)
-
-        return "\n\n".join(p for p in parts if p)
-
-    @api.model
-    def _sample_ctx(self):
-        """Sample data used for the live preview in the settings form."""
-        return {
-            'order_name': 'Order 00042',
-            'date': '08/07/2026 10:48 AM',
-            'pos_name': 'Main Counter',
-            'order_lines': "  • Milk  ×2  = 90.00\n  • Bread  ×1  = 25.00",
-            'amount_untaxed': '110.00',
-            'amount_tax': '5.00',
-            'amount_total': '115.00',
-            'amount_paid': '115.00',
-            'customer_name': 'Ramesh',
-            'customer_phone': '919944080209',
-            'customer_info': "👤 Customer: Ramesh\n📱 Phone: 919944080209",
-        }
-
-    @api.depends('pos_message_mode', 'pos_msg_header', 'pos_msg_footer',
-                 'pos_show_order_number', 'pos_show_date', 'pos_show_pos_name',
-                 'pos_show_items', 'pos_show_subtotal', 'pos_show_tax',
-                 'pos_show_total', 'pos_show_paid', 'pos_show_customer',
-                 'pos_message_template')
-    def _compute_pos_message_preview(self):
-        for rec in self:
-            ctx = rec._sample_ctx()
-            if rec.pos_message_mode == 'advanced':
-                try:
-                    tmpl = rec.pos_message_template or rec._fields['pos_message_template'].default
-                    rec.pos_message_preview = tmpl.format(**ctx)
-                except Exception as e:
-                    rec.pos_message_preview = f"⚠ Template error: {e}"
-            else:
-                rec.pos_message_preview = rec._render_simple(ctx)
+        return template.format(
+            order_name=order.name or '',
+            date=date_str,
+            pos_name=pos_name,
+            order_lines=order_lines,
+            amount_untaxed=f"{amount_untaxed:,.2f}",
+            amount_tax=f"{order.amount_tax:,.2f}",
+            amount_total=f"{order.amount_total:,.2f}",
+            amount_paid=f"{order.amount_paid:,.2f}",
+            customer_name=customer_name,
+            customer_info=customer_info,
+        )
