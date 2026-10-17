@@ -29,7 +29,10 @@ class KpiUserManual(models.Model):
     file_name = fields.Char(
         string='File Name'
     )
-    
+    # When the file now on manual_file was saved (see kpi.progress.file_at).
+    # Empty on older rows → upload_date.
+    file_at = fields.Datetime(string='File Saved On', readonly=True, copy=False)
+
     related_links = fields.Text(
         string='Related Links',
         help='Store documentation links as JSON array'

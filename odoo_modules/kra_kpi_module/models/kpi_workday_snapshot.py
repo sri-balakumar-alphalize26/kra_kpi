@@ -18,9 +18,11 @@
 # One server path covers web + app + cron.
 
 import base64
+import calendar
 import io
 import logging
 import re
+import time
 
 from dateutil.relativedelta import relativedelta
 from psycopg2 import IntegrityError
@@ -33,7 +35,7 @@ _logger = logging.getLogger(__name__)
 IMG_W = 980
 PAD = 26
 
-# Palette — mirrors AWAY_COLORS in kpi_action.js and WorkdayMapChip in the app.
+# Palette for the header, tiles and away strip.
 C_INK = '#0F172A'
 C_MUTED = '#64748B'
 C_LINE = '#E2E8F0'
@@ -46,15 +48,7 @@ C_BLUE = '#1E40AF'
 # image and the screen agree; C_MUTED read as disabled text beside two figures
 # that carry colour.
 C_AMBER = '#B45309'
-AWAY_COLORS = {
-    'break': '#F59E0B', 'lunch': '#10B981', 'meeting': '#3B82F6',
-    'away': '#6B7280', 'leave': '#8B5CF6', 'urgent': '#EF4444',
-    'no_tasks': '#0891B2', 'other': '#F59E0B',
-}
-OUTCOME_COLORS = {
-    'completed': '#16A34A', 'submitted': '#0D9488', 'paused': '#F59E0B',
-    'active': '#3B82F6', 'worked': '#64748B', 'moved': '#F97316',
-}
+# The Workday Map's own colours are WT_CATEGORY / WT_PILL below.
 
 # Pillow with a normal TTF draws colour emoji as TOFU BOXES. The timeline keeps
 # its icon in a separate key so labels are already clean, but names and typed
@@ -79,6 +73,13 @@ _FONT_BOLD_CANDIDATES = (
     '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
     'DejaVuSans-Bold.ttf',
 )
+# Notes and idle lines, italic as on screen. Falls back to the regular face.
+_FONT_ITALIC_CANDIDATES = (
+    r'C:\Windows\Fonts\segoeuii.ttf',
+    r'C:\Windows\Fonts\ariali.ttf',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
+    'DejaVuSans-Oblique.ttf',
+) + _FONT_CANDIDATES
 
 
 def _clean(text):
@@ -87,6 +88,227 @@ def _clean(text):
     s = _EMOJI_RE.sub('', s)
     s = s.replace('\r', ' ').replace('\n', ' ')
     return ' '.join(s.split()).strip()
+
+
+# --------------------------------------------------------------------------- #
+# Workday Map, worked out once: the to-scale day bar, the cards in time order  #
+# and what changed between one card and the next.                             #
+#                                                                             #
+# A Python copy of buildWorkdayTimeline in utils/workdayTimeline.js (the app)  #
+# and static/src/components/kpi_workday_timeline/workday_timeline.js (Odoo     #
+# web), so the saved image tells the same story as the End Workday popup.      #
+# Change all three together. Times are epoch SECONDS here, not ms.            #
+# --------------------------------------------------------------------------- #
+WT_IDLE_MIN_MINUTES = 5
+
+# One colour per KIND of time; outcome is a labelled pill, never a colour.
+# Insertion order is the legend order.
+WT_CATEGORY = {
+    'work':     ('Working',  '#2563EB'),
+    'break':    ('Break',    '#F59E0B'),
+    'lunch':    ('Lunch',    '#EC4899'),
+    'meeting':  ('Meeting',  '#8B5CF6'),
+    'no_tasks': ('No tasks', '#0891B2'),
+    'urgent':   ('Urgent',   '#EF4444'),
+    'away':     ('Away',     '#64748B'),
+    'idle':     ('Idle',     '#CBD5E1'),
+}
+WT_BREAK_CATEGORY = {
+    'break': 'break', 'lunch': 'lunch', 'meeting': 'meeting', 'no_tasks': 'no_tasks',
+    'urgent': 'urgent', 'away': 'away', 'leave': 'away', 'other': 'away',
+}
+WT_BREAK_TITLE = {
+    'break': 'Break', 'lunch': 'Lunch', 'meeting': 'Meeting', 'no_tasks': 'No tasks',
+    'urgent': 'Urgent', 'away': 'Away', 'leave': 'Leave', 'other': 'Other',
+}
+WT_OUTCOME = {
+    'active':    ('Working now', 'live'),
+    'completed': ('Completed',   'good'),
+    'submitted': ('Submitted',   'info'),
+    'paused':    ('Paused',      'warn'),
+    'moved':     ('Reassigned',  'alert'),
+    'worked':    ('Switched',    'muted'),
+}
+# (background, text) per pill tone — the .wt-pill-* colours in workday_timeline.css.
+WT_PILL = {
+    'live': ('#DBEAFE', '#1D4ED8'), 'good': ('#DCFCE7', '#15803D'),
+    'info': ('#CCFBF1', '#0F766E'), 'warn': ('#FEF3C7', '#B45309'),
+    'alert': ('#FFEDD5', '#C2410C'), 'muted': ('#F1F5F9', '#475569'),
+}
+_WT_TS_RE = re.compile(r'^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})')
+
+
+def _wt_ts(ts):
+    """'YYYY-MM-DD HH:MM:SS' in UTC -> epoch seconds, or None."""
+    m = _WT_TS_RE.match(ts or '')
+    return calendar.timegm(tuple(int(g) for g in m.groups()) + (0, 0, 0)) if m else None
+
+
+def _wt_dur(seconds):
+    s = max(0, int(round(seconds or 0)))
+    if s < 60:
+        return '<1m'
+    h, m = s // 3600, (s % 3600) // 60
+    if not h:
+        return '%dm' % m
+    return '%dh %dm' % (h, m) if m else '%dh' % h
+
+
+def _wt_ordinal(n):
+    if 11 <= n % 100 <= 13:
+        return '%dth' % n
+    return '%d%s' % (n, {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th'))
+
+
+def _wt_offset_minutes(nodes):
+    """The developer's UTC offset, read off one node's local `time` against its
+    UTC instant — so bar ticks and idle gaps are in the same clock as the cards."""
+    for n in nodes:
+        ts = _wt_ts(n.get('ts') or n.get('start_ts'))
+        hm = re.match(r'^(\d{1,2}):(\d{2})', n.get('time') or '')
+        if ts is None or not hm:
+            continue
+        g = time.gmtime(ts)
+        off = int(hm.group(1)) * 60 + int(hm.group(2)) - (g.tm_hour * 60 + g.tm_min)
+        if off > 840:
+            off -= 1440
+        if off < -720:
+            off += 1440
+        return off
+    return 330   # IST, the house default, when no node carries both
+
+
+def _wt_hm(sec, off):
+    return '' if sec is None else time.strftime('%H:%M', time.gmtime(sec + off * 60))
+
+
+def _wt_card(n, now):
+    start = _wt_ts(n.get('start_ts'))
+    running = bool(n.get('running'))
+    end = now if running else _wt_ts(n.get('end_ts'))
+    seconds = n.get('seconds')
+    if seconds is None:
+        seconds = (end - start) if (start is not None and end is not None) else 0
+    if n.get('kind') == 'task':
+        label, tone = WT_OUTCOME.get(n.get('outcome'), WT_OUTCOME['worked'])
+        visit = n.get('visit') or 1
+        return {
+            'kind': 'task', 'cat': 'work', 'running': running,
+            'title': n.get('name') or n.get('label') or 'Task', 'ref': str(n.get('ref') or ''),
+            'task_id': n.get('task_id'),
+            'visit_label': ('%s time today' % _wt_ordinal(visit)) if visit > 1 else '',
+            'outcome': n.get('outcome') or 'worked', 'outcome_label': label, 'tone': tone,
+            'note': (n.get('reason') or '').strip(), 'with': '',
+            'start': start, 'end': end, 'seconds': seconds,
+        }
+    kind = n.get('break_type') or 'other'
+    return {
+        'kind': 'break', 'cat': WT_BREAK_CATEGORY.get(kind, 'away'), 'running': running,
+        'title': WT_BREAK_TITLE.get(kind, 'Other'), 'ref': '', 'task_id': None,
+        'visit_label': '', 'outcome': '',
+        'outcome_label': 'Now' if running else '', 'tone': 'live' if running else '',
+        'note': (n.get('reason') or '').strip(), 'with': (n.get('with') or '').strip(),
+        'start': start, 'end': end, 'seconds': seconds,
+    }
+
+
+def _wt_transition(a, b, idle_sec):
+    """What happened between two cards, as the short line under the card."""
+    if a['kind'] == 'task' and b['kind'] == 'task':
+        if a['task_id'] and a['task_id'] == b['task_id']:
+            verb = 'Picked %s up again' % b['title']
+        elif a['outcome'] in ('completed', 'submitted'):
+            verb = 'Finished %s, started %s' % (a['title'], b['title'])
+        elif a['outcome'] == 'moved':
+            verb = '%s was reassigned; started %s' % (a['title'], b['title'])
+        else:
+            verb = 'Moved from %s to %s' % (a['title'], b['title'])
+    elif a['kind'] == 'task':
+        if a['outcome'] == 'paused':
+            verb = 'Paused %s for %s' % (a['title'], b['title'].lower())
+        elif a['outcome'] == 'completed':
+            verb = 'Finished %s, then %s' % (a['title'], b['title'].lower())
+        else:
+            verb = 'Went on %s' % b['title'].lower()
+    elif b['kind'] == 'task':
+        if b['task_id'] and b['task_id'] == a.get('resume_task_id'):
+            verb = 'Back from %s to %s' % (a['title'].lower(), b['title'])
+        else:
+            verb = 'After %s, started %s' % (a['title'].lower(), b['title'])
+    else:
+        # "to", not an arrow: _clean() strips U+2192.
+        verb = '%s to %s' % (a['title'], b['title'])
+    idle = idle_sec >= WT_IDLE_MIN_MINUTES * 60
+    return {'type': 'link', 'idle': idle,
+            'short': ('Idle %s · %s' % (_wt_dur(idle_sec), verb)) if idle else verb}
+
+
+def _wt_build(timeline, now=None):
+    """The server's timeline nodes -> {empty, start_label, end_label, live,
+    items, strip, ticks, legend}, the same shape the JS builders return."""
+    nodes = timeline if isinstance(timeline, list) else []
+    now = time.time() if now is None else now
+    off = _wt_offset_minutes(nodes)
+    start_node = next((n for n in nodes if n.get('kind') == 'start'), None)
+    end_node = next((n for n in nodes if n.get('kind') == 'end'), None)
+    cards = [_wt_card(n, now) for n in nodes if n.get('kind') in ('task', 'break')]
+    cards = sorted((c for c in cards if c['start'] is not None), key=lambda c: c['start'])
+
+    end_ts = _wt_ts(end_node.get('ts')) if end_node else None
+    ended = end_ts is not None
+    live = not ended and any(c['running'] for c in cards)
+    day_start = _wt_ts(start_node.get('ts')) if start_node else None
+    if day_start is None and cards:
+        day_start = cards[0]['start']
+    last_end = max([c['end'] if c['end'] is not None else c['start'] for c in cards]
+                   + [day_start or 0])
+    day_end = end_ts if ended else max(last_end, now if live else last_end)
+
+    out = {'start_label': _wt_hm(day_start, off) if day_start is not None else '',
+           'end_label': _wt_hm(day_end, off) if ended else '', 'live': live,
+           'empty': True, 'items': [], 'strip': [], 'ticks': [], 'legend': []}
+    if not cards or day_start is None or not day_end > day_start:
+        return out
+
+    for prev, cur in zip(cards, cards[1:]):
+        if cur['kind'] == 'break' and prev['kind'] == 'task':
+            cur['resume_task_id'] = prev['task_id']
+
+    span = float(day_end - day_start)
+
+    def pct(t):
+        return min(100.0, max(0.0, (t - day_start) / span * 100.0))
+
+    strip, items, covered = [], [], day_start
+    for i, c in enumerate(cards):
+        end = c['end'] if c['end'] is not None else c['start']
+        gap = c['start'] - covered
+        if gap >= WT_IDLE_MIN_MINUTES * 60:
+            strip.append({'cat': 'idle', 'left': pct(covered),
+                          'width': pct(c['start']) - pct(covered)})
+        strip.append({'cat': c['cat'], 'left': pct(c['start']),
+                      'width': max(0.6, pct(end) - pct(c['start']))})
+        if i:
+            items.append(_wt_transition(cards[i - 1], c, max(0, gap)))
+        items.append(dict(c, type='card', start_label=_wt_hm(c['start'], off),
+                          end_label='' if c['running'] else _wt_hm(end, off),
+                          duration_label=_wt_dur(c['seconds'])))
+        covered = max(covered, end)
+
+    # Hour marks; every 2h on a long day so they don't crowd.
+    step = 2 if span > 10 * 3600 else 1
+    t = -(-(day_start + off * 60) // 3600) * 3600   # ceil to the local hour
+    ticks = []
+    while t - off * 60 <= day_end:
+        hour = time.gmtime(t).tm_hour
+        if hour % step == 0:
+            ticks.append({'pct': pct(t - off * 60), 'label': '%02d' % hour})
+        t += 3600
+
+    present = {s['cat'] for s in strip}
+    out.update(empty=False, items=items, strip=strip, ticks=ticks,
+               legend=[k for k in WT_CATEGORY if k in present])
+    return out
 
 
 class KpiWorkdaySnapshot(models.Model):
@@ -170,9 +392,11 @@ class KpiWorkdaySnapshot(models.Model):
     # Fonts                                                              #
     # ------------------------------------------------------------------ #
     @api.model
-    def _font(self, size, bold=False):
+    def _font(self, size, bold=False, italic=False):
         from PIL import ImageFont
-        for path in (_FONT_BOLD_CANDIDATES if bold else _FONT_CANDIDATES):
+        paths = (_FONT_BOLD_CANDIDATES if bold
+                 else _FONT_ITALIC_CANDIDATES if italic else _FONT_CANDIDATES)
+        for path in paths:
             try:
                 return ImageFont.truetype(path, size)
             except Exception:
@@ -200,10 +424,16 @@ class KpiWorkdaySnapshot(models.Model):
         f_txt = self._font(13)
         f_bold = self._font(13, bold=True)
         f_small = self._font(11)
+        f_small_b = self._font(11, bold=True)
+        f_ital = self._font(12, italic=True)
+        f_title = self._font(14, bold=True)
 
         # Draw on a generously tall canvas, then crop to what we used. Simpler and
         # safer than trying to pre-compute the height of a variable-length map.
-        img = Image.new('RGB', (IMG_W, 4000), C_BG)
+        # 8000, not 4000: a Map card plus its link line is ~100px, so a busy day
+        # (30+ switches) ran off the old canvas and was silently cut.
+        canvas_h = 8000
+        img = Image.new('RGB', (IMG_W, canvas_h), C_BG)
         d = ImageDraw.Draw(img)
 
         def text(xy, s, font, fill=C_INK):
@@ -313,39 +543,134 @@ class KpiWorkdaySnapshot(models.Model):
         y += 54 + 20
 
         # ---- Workday Map --------------------------------------------------
+        # The End Workday popup's layout (workday_timeline.js / WorkdayTimeline.js):
+        # a to-scale bar of the day with hour ticks and a legend, then one card per
+        # task or break in time order, joined by a line saying what changed.
         text((PAD, y), 'Workday Map  (your day in order)', f_h2, C_INK)
-        y += 24
-        for n in (p.get('timeline') or []):
-            kind = n.get('kind')
-            if kind == 'break':
-                col = AWAY_COLORS.get(n.get('break_type'), '#F59E0B')
-            elif kind == 'task':
-                col = OUTCOME_COLORS.get(n.get('outcome'), '#64748B')
+        y += 26
+        wt = _wt_build(p.get('timeline') or [])
+        if wt['empty']:
+            text((PAD + 4, y), 'No activity recorded on this day.', f_txt, C_MUTED)
+            y += 30
+        else:
+            bar_w, bar_h = IMG_W - PAD * 2, 18
+            bar = Image.new('RGB', (bar_w, bar_h), '#EEF2F7')
+            bd = ImageDraw.Draw(bar)
+            for seg in wt['strip']:
+                x0 = int(seg['left'] / 100.0 * bar_w)
+                x1 = max(x0 + 1, int((seg['left'] + seg['width']) / 100.0 * bar_w))
+                if seg['cat'] == 'idle':
+                    # Hatched, as on screen: idle is an absence, not a colour.
+                    hatch = Image.new('RGB', (x1 - x0, bar_h), '#E2E8F0')
+                    hd = ImageDraw.Draw(hatch)
+                    for sx in range(-bar_h, x1 - x0, 8):
+                        hd.line([sx, bar_h, sx + bar_h, 0], fill=WT_CATEGORY['idle'][1], width=3)
+                    bar.paste(hatch, (x0, 0))
+                else:
+                    bd.rectangle([x0, 0, x1, bar_h], fill=WT_CATEGORY[seg['cat']][1])
+            mask = Image.new('L', (bar_w, bar_h), 0)
+            ImageDraw.Draw(mask).rounded_rectangle([0, 0, bar_w - 1, bar_h - 1],
+                                                   radius=bar_h // 2, fill=255)
+            img.paste(bar, (PAD, int(y)), mask)
+            y += bar_h + 3
+            for tk in wt['ticks']:
+                tx = PAD + tk['pct'] / 100.0 * bar_w - width(tk['label'], f_small) / 2
+                text((min(max(PAD, tx), IMG_W - PAD - 14), y), tk['label'], f_small, C_MUTED)
+            y += 20
+            lx = PAD
+            for cat in wt['legend']:
+                lbl, col = WT_CATEGORY[cat]
+                d.rounded_rectangle([lx, y + 3, lx + 10, y + 13], radius=3, fill=col)
+                text((lx + 15, y), lbl, f_small_b, C_MUTED)
+                lx += 15 + width(lbl, f_small_b) + 16
+            y += 24
+
+            rail_x = PAD + 25                      # centre of the 50px time rail
+            card_x0, card_x1 = PAD + 56, IMG_W - PAD
+            edge_col = '#1E3A8A'
+            text((PAD + 4, y), 'Started %s' % wt['start_label'], f_bold, edge_col)
+            y += 24
+            # Room kept below the Map for the task list. A day that would need more
+            # than the canvas says so instead of being cut off mid-card.
+            map_limit = canvas_h - 300 - 26 * len(p.get('tasks') or [])
+            for idx, it in enumerate(wt['items']):
+                if y > map_limit:
+                    rest = sum(1 for x in wt['items'][idx:] if x['type'] == 'card')
+                    text((card_x0 + 4, y + 6),
+                         '… and %d more entr%s, not shown here' % (rest, 'y' if rest == 1 else 'ies'),
+                         f_ital, C_MUTED)
+                    y += 30
+                    break
+                if it['type'] == 'link':
+                    h = 26
+                    if it['idle']:
+                        for dy in range(0, h, 8):
+                            d.line([rail_x, y + dy, rail_x, y + min(h, dy + 4)],
+                                   fill='#CBD5E1', width=2)
+                    else:
+                        d.line([rail_x, y, rail_x, y + h], fill=C_LINE, width=2)
+                    # A drawn chevron: U+2193 is in the range _clean() strips.
+                    cx, cy = card_x0 + 5, y + 13
+                    d.polygon([(cx - 4, cy - 3), (cx + 4, cy - 3), (cx, cy + 3)],
+                              fill='#94A3B8')
+                    f_link = f_ital if it['idle'] else f_small_b
+                    text((card_x0 + 16, y + 5),
+                         ellipsize(it['short'], f_link, card_x1 - card_x0 - 24),
+                         f_link, C_MUTED if it['idle'] else '#475569')
+                    y += h
+                    continue
+
+                col = WT_CATEGORY[it['cat']][1]
+                meta = [m for m in (' · '.join(x for x in (it['ref'], it['visit_label']) if x),
+                                    ('with %s' % it['with']) if it['with'] else '') if m]
+                h = 54 + 17 * len(meta) + (19 if it['note'] else 0)
+                # Rail: start time, a dot in the category colour, a line on down.
+                tl = it['start_label']
+                text((rail_x - width(tl, f_small_b) / 2, y + 6), tl, f_small_b, C_MUTED)
+                if it['running']:
+                    d.ellipse([rail_x - 8, y + 21, rail_x + 8, y + 37], fill='#BFDBFE')
+                d.ellipse([rail_x - 5, y + 24, rail_x + 5, y + 34], fill=col)
+                d.line([rail_x, y + 37, rail_x, y + h + 6], fill=C_LINE, width=2)
+                # Card, with the category colour down its left edge.
+                d.rounded_rectangle([card_x0, y + 3, card_x1, y + h], radius=10, fill=col)
+                d.rounded_rectangle([card_x0 + 4, y + 3, card_x1, y + h], radius=9,
+                                    fill='#FFFFFF', outline=C_LINE)
+                pill_w = 0
+                if it['outcome_label']:
+                    bg, fg = WT_PILL.get(it['tone'], WT_PILL['muted'])
+                    pw = width(it['outcome_label'], f_small_b) + 14
+                    px1 = card_x1 - 10
+                    d.rounded_rectangle([px1 - pw, y + 11, px1, y + 29], radius=6, fill=bg)
+                    text((px1 - pw + 7, y + 12), it['outcome_label'], f_small_b, fg)
+                    pill_w = pw + 12
+                tx = card_x0 + 16
+                text((tx, y + 9), ellipsize(it['title'], f_title,
+                                            card_x1 - tx - 12 - pill_w), f_title, C_INK)
+                # En dash, not an arrow: U+2192 would be stripped by _clean().
+                span_txt = '%s – %s' % (it['start_label'], 'now' if it['running']
+                                        else it['end_label'])
+                text((tx, y + 31), span_txt, f_bold, C_INK)
+                # Gap by offset: text() runs _clean(), which squashes repeated spaces.
+                text((tx + width(span_txt, f_bold) + 6, y + 31),
+                     '· %s' % it['duration_label'], f_txt, C_MUTED)
+                ly = y + 52
+                for m in meta:
+                    text((tx, ly), ellipsize(m, f_small, card_x1 - tx - 14), f_small, C_MUTED)
+                    ly += 17
+                if it['note']:
+                    text((tx, ly), ellipsize('“%s”' % it['note'], f_ital, card_x1 - tx - 14),
+                         f_ital, '#374151')
+                y += h + 3
+
+            if wt['live']:
+                end_txt, end_col = 'Still working', '#1D4ED8'
+            elif wt['end_label']:
+                end_txt, end_col = 'Ended %s' % wt['end_label'], edge_col
             else:
-                col = '#94A3B8'
-            # "with X, Y — the reason". One line, because the row only has one:
-            # the participants and the note are separate keys precisely so this
-            # can decide how to join them, rather than receiving them pre-glued.
-            note = n.get('reason') or ''
-            who = n.get('with') or ''
-            if who:
-                note = ('with %s — %s' % (who, note)).rstrip(' —') if note else 'with %s' % who
-            row_h = 40 if not note else 56
-            d.rounded_rectangle([PAD, y, IMG_W - PAD, y + row_h], radius=8,
-                                fill=C_PANEL, outline=C_LINE)
-            # Left colour bar carries the meaning the emoji used to.
-            d.rounded_rectangle([PAD, y, PAD + 5, y + row_h], radius=2, fill=col)
-            text((PAD + 16, y + 9), ellipsize(n.get('label'), f_bold, 560), f_bold, C_INK)
-            when = n.get('time') or ''
-            if n.get('duration_display'):
-                when = ('%s · %s' % (when, n['duration_display'])).strip(' ·')
-            if when:
-                text((IMG_W - PAD - 12 - width(when, f_txt), y + 10), when, f_txt, C_MUTED)
-            if note:
-                text((PAD + 16, y + 32), ellipsize(note, f_small, IMG_W - PAD * 2 - 40),
-                     f_small, C_MUTED)
-            y += row_h + 6
-        y += 14
+                end_txt, end_col = 'Not ended yet', edge_col
+            text((PAD + 4, y + 6), end_txt, f_bold, end_col)
+            y += 34
+        y += 6
 
         # ---- Tasks --------------------------------------------------------
         tasks = p.get('tasks') or []
@@ -382,7 +707,7 @@ class KpiWorkdaySnapshot(models.Model):
                  f_txt, C_MUTED)
             y += 24
 
-        img = img.crop((0, 0, IMG_W, min(4000, int(y) + PAD)))
+        img = img.crop((0, 0, IMG_W, min(canvas_h, int(y) + PAD)))
         buf = io.BytesIO()
         img.save(buf, format='PNG', optimize=True)
         return buf.getvalue()

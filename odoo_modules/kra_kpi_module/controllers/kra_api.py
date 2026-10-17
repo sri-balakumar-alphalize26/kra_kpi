@@ -118,6 +118,19 @@ def _gate_keys(k):
     }
 
 
+def _github_key(url):
+    """A GitHub URL reduced to what identifies the repo, so the same link typed
+    two ways compares equal: no scheme, no www., no trailing / or .git, lower case.
+    Mirrored in kpi_action.js (_githubKey) for the warning while pasting."""
+    u = (url or '').strip().lower()
+    u = re.sub(r'^https?://', '', u)
+    u = re.sub(r'^www\.', '', u)
+    u = u.rstrip('/')
+    if u.endswith('.git'):
+        u = u[:-4]
+    return u.rstrip('/')
+
+
 def convert_to_user_tz(datetime_obj, user=None):
     """
     Convert a UTC datetime to user's timezone.
@@ -1694,6 +1707,9 @@ class KraKpiAPI(http.Controller):
                 'has_file': (has_primary := bool(p.uploaded_file)),
                 'employee_name': p.employee_name or '',
                 'create_date': convert_to_user_tz(p.create_date),
+                # When it was last changed (/kpi/progress/update, or a file removed),
+                # so the history can say "Modified <time>" under the original time.
+                'edited_at': convert_to_user_tz(p.edited_at) if p.edited_at else '',
                 'related_links': p.related_links or '[]',
                 # Whether THIS user may edit or delete the entry. The app reads its
                 # progress history from here, not from /kpi/progress/list, so
@@ -3760,6 +3776,13 @@ class KraKpiAPI(http.Controller):
             "is_manager": is_manager,
             # 🆕 Part B: gate the in-detail "Complete This Task" panel
             "task_state": kpi.task_state or "",
+            # Progress updates, manuals, files and GitHub links are added only once
+            # the task has been started, i.e. it has left the Regular / Important /
+            # Urgent lanes. Everything else (assigned, rework, hold, pre-approval…)
+            # sits in those lanes and must be started first — for everyone, admins
+            # included. Rework counts as not started: it is picked up again by Start.
+            "has_started": kpi.task_state in ('in_progress', 'paused', 'partially_completed',
+                                              'awaiting_client', 'completed'),
             "is_assignee": bool(kpi.user_id and kpi.user_id.id == user.id),
             "available_kras": available_kras,
             "priority": kpi.priority or "",
@@ -4105,6 +4128,8 @@ class KraKpiAPI(http.Controller):
                         has_primary=has_file),
                     'employee_name': progress.employee_name,
                     'create_date': convert_to_user_tz(progress.create_date),
+                    # '' until someone edits it (the board shows "Edited <time>").
+                    'edited_at': convert_to_user_tz(progress.edited_at),
                     'user_id': progress.user_id.id,
                     'related_links': progress.related_links or '[]',
                     # Drives whether the row offers Edit / a delete checkbox. The
@@ -4166,6 +4191,9 @@ class KraKpiAPI(http.Controller):
                 vals['summary'] = summary
             if 'related_links' in params:
                 vals['related_links'] = params.get('related_links') or '[]'
+            # "Edited <time>" only for a real change: Save on an untouched form
+            # must not mark the update as edited.
+            changed = any((progress[k] or '') != (v or '') for k, v in vals.items())
             if vals:
                 progress.write(vals)
             # Done AFTER the write, and through the promotion helper rather than by
@@ -4176,9 +4204,103 @@ class KraKpiAPI(http.Controller):
             # which read only the scalar field.
             if params.get('clear_file'):
                 self._promote_next_file(progress, 'uploaded_file')
+                changed = True
+            if changed:
+                progress.sudo().write({'edited_at': fields.Datetime.now()})
             return {'status': True, 'message': 'Progress update saved', 'id': progress.id}
         except Exception as e:
             _logger.error("update_progress_update failed: %s", str(e))
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi/task/files_index', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_files_index(self, **params):
+        """Every file NAME on a task, whoever uploaded it, for the "already on
+        this task" popup.
+
+        /kpi/progress/list runs under the caller's record rules, and a developer
+        only sees their OWN progress updates ("Employee: Own Progress Updates"),
+        so a file the admin had put on the same task was invisible to them and a
+        same-named upload went through with no warning. This answers the one
+        question the popup asks — is that name taken, by whom, when — and nothing
+        more: names and times, never the bytes, and only to someone who may view
+        the task. can_edit says whether the caller may Replace that file.
+        """
+        try:
+            kpi = request.env['kra.kpi'].sudo().browse(int(params.get('kpi_id') or 0))
+            if not kpi.exists():
+                return {'status': False, 'message': 'Task not found'}
+            denied = self._may_view_kpi_details(kpi)
+            if denied:
+                return {'status': False, 'message': denied}
+            out = []
+            for p in request.env['kpi.progress'].sudo().search([('kpi_id', '=', kpi.id)]):
+                can = bool(self._may_edit_progress(p))
+                # file_name is written alongside uploaded_file, so it answers "has a
+                # file" without pulling every blob off disk.
+                for f in self._entry_files_payload(p, 'uploaded_file', '/kpi/progress/download?progress_id=',
+                                                   has_primary=bool(p.file_name)):
+                    out.append({'kind': 'progress', 'entry_id': p.id, 'attachment_id': f['id'],
+                                'file_name': f['file_name'], 'uploaded_at': f['uploaded_at'],
+                                'who': p.employee_name or '', 'can_edit': can})
+            for m in request.env['kpi.user.manual'].sudo().search([('kpi_id', '=', kpi.id)]):
+                can = bool(self._may_edit_manual(m))
+                for f in self._entry_files_payload(m, 'manual_file', '/kpi/manual/download/',
+                                                   has_primary=bool(m.file_name)):
+                    out.append({'kind': 'manual', 'entry_id': m.id, 'attachment_id': f['id'],
+                                'file_name': f['file_name'], 'uploaded_at': f['uploaded_at'],
+                                'who': m.uploader_name or '', 'can_edit': can})
+            return {'status': True, 'files': out}
+        except Exception as e:
+            _logger.error("task_files_index failed: %s", str(e))
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi/file/remove', type='json', auth='user', methods=['POST'], csrf=False)
+    def remove_entry_file(self, **params):
+        """Remove ONE file from a progress update or a manual: the board's
+        "Replace" when a same-named file is uploaded to the task again.
+
+        params: kind ('progress' | 'manual'), entry_id, attachment_id (0 = the
+        entry's own file). Same permission as editing the entry, so only its
+        uploader or an admin can replace it. A progress update keeps its note
+        when its last file goes; a manual with no document left is deleted, as an
+        empty manual entry has nothing to show.
+        """
+        try:
+            kind = params.get('kind')
+            entry_id = int(params.get('entry_id') or 0)
+            att_id = int(params.get('attachment_id') or 0)
+            if kind == 'progress':
+                entry, field = request.env['kpi.progress'].sudo().browse(entry_id), 'uploaded_file'
+                if not entry.exists():
+                    return {'status': False, 'message': 'Update not found'}
+                if not self._may_edit_progress(entry):
+                    return {'status': False, 'message': 'Only the uploader or an admin can replace this file.'}
+            elif kind == 'manual':
+                entry, field = request.env['kpi.user.manual'].sudo().browse(entry_id), 'manual_file'
+                if not entry.exists():
+                    return {'status': False, 'message': 'Manual not found'}
+                if not self._may_edit_manual(entry):
+                    return {'status': False, 'message': 'Only the uploader or an admin can replace this file.'}
+            else:
+                return {'status': False, 'message': 'Unknown kind'}
+
+            if att_id:
+                att = request.env['kpi.file.attachment'].sudo().browse(att_id)
+                parent, _pf = self._attachment_parent(att) if att.exists() else (None, None)
+                if not parent or parent != entry:
+                    return {'status': False, 'message': 'File not found on this entry'}
+                att.unlink()
+                left = True
+            else:
+                left = self._promote_next_file(entry, field)
+            if not left and kind == 'manual' and not request.env['kpi.file.attachment'].sudo().search_count(
+                    [('manual_id', '=', entry.id)]):
+                entry.unlink()
+            elif kind == 'progress':
+                entry.write({'edited_at': fields.Datetime.now()})
+            return {'status': True}
+        except Exception as e:
+            _logger.error("remove_entry_file failed: %s", str(e))
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi/progress/delete', type='json', auth='user', methods=['POST'], csrf=False)
@@ -4422,6 +4544,7 @@ class KraKpiAPI(http.Controller):
         record.sudo().write({
             primary_field: base64.b64encode(first_data),
             'file_name': first_name,
+            'file_at': fields.Datetime.now(),
         })
         if len(files) == 1:
             return 1
@@ -4454,9 +4577,11 @@ class KraKpiAPI(http.Controller):
         nxt = request.env['kpi.file.attachment'].sudo().search(
             [(link, '=', record.id)], order='sequence, id', limit=1)
         if not nxt:
-            record.sudo().write({primary_field: False, 'file_name': False})
+            record.sudo().write({primary_field: False, 'file_name': False, 'file_at': False})
             return False
-        record.sudo().write({primary_field: nxt.file, 'file_name': nxt.file_name})
+        # The promoted file keeps its own saved time, not the entry's.
+        record.sudo().write({primary_field: nxt.file, 'file_name': nxt.file_name,
+                             'file_at': nxt.create_date})
         nxt.unlink()
         return True
 
@@ -4469,10 +4594,13 @@ class KraKpiAPI(http.Controller):
         return None, None
 
     def _entry_files_payload(self, record, primary_field, download_route, has_primary=None):
-        """Every file on an entry as [{id, file_name, url}].
+        """Every file on an entry as [{id, file_name, url, uploaded_at}].
 
         The parent's own file is id 0 — it is served by the entry's existing
-        download route, not by an attachment id.
+        download route, not by an attachment id. uploaded_at is each file's own
+        saved time, in the viewer's timezone: file_at for the parent's file
+        (falling back to when the entry was made, for rows older than file_at),
+        the attachment row's create_date for the rest.
 
         `has_primary` lets a caller that has already tested the field pass the
         answer in. Binary fields are attachment-backed, so reading one pulls the
@@ -4483,10 +4611,12 @@ class KraKpiAPI(http.Controller):
         if has_primary is None:
             has_primary = bool(record[primary_field])
         if has_primary:
+            made = record.upload_date if record._name == 'kpi.user.manual' else record.create_date
             out.append({
                 'id': 0,
                 'file_name': record.file_name or 'download',
                 'url': '%s%s' % (download_route, record.id),
+                'uploaded_at': convert_to_user_tz(record.file_at or made),
             })
         link = 'progress_id' if record._name == 'kpi.progress' else 'manual_id'
         extras = request.env['kpi.file.attachment'].sudo().search(
@@ -4496,6 +4626,7 @@ class KraKpiAPI(http.Controller):
                 'id': att.id,
                 'file_name': att.file_name or 'download',
                 'url': '/kpi/attachment/download?attachment_id=%s' % att.id,
+                'uploaded_at': convert_to_user_tz(att.create_date),
             })
         return out
 
@@ -5274,7 +5405,21 @@ class KraKpiAPI(http.Controller):
             kpi = request.env['kra.kpi'].browse(int(kpi_id))
             if not kpi.exists():
                 return {'status': False, 'message': 'KPI not found'}
-            
+
+            # The same repo + branch twice on one task is a duplicate, however it
+            # was typed (http/https, www., trailing / or .git, case). The Odoo board
+            # warns while pasting; this is the rule for every client, the web and
+            # the phone included. Another branch of the same repo is allowed.
+            repo, branch = _github_key(github_url), branch_name.strip().lower()
+            for old in request.env['kpi.github.link'].sudo().search([('kpi_id', '=', kpi.id)]):
+                if _github_key(old.github_url) == repo and (old.branch_name or '').strip().lower() == branch:
+                    return {
+                        'status': False, 'duplicate': True,
+                        'message': 'This GitHub link is already on the task: added by %s on %s (branch %s).' % (
+                            old.employee_name or (old.user_id.name or 'someone'),
+                            convert_to_user_tz(old.create_date), old.branch_name or ''),
+                    }
+
             # Create GitHub link record
             github_link = request.env['kpi.github.link'].create({
                 'kpi_id': int(kpi_id),

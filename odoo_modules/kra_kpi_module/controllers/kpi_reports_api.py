@@ -1,4 +1,5 @@
 from odoo import http, fields
+from odoo.exceptions import ConcurrencyError
 from odoo.http import request
 
 # Timestamps shown to a user must be in THEIR timezone, and kra_api already owns
@@ -21,6 +22,15 @@ from ..models.kpi import clean_deliverable_type
 # characters over a dozen lines). Mirrors NOTE_MAX in utils/workdayNote.js; keep the two
 # in step. A sanity bound only: the column is TEXT and this route never rejects.
 WORKDAY_NOTE_MAX = 2000
+
+# How a snapshot's saved / reopened moment reads on every client: Odoo, the web app
+# and the phone all print this string as-is, so they agree. The raw UTC value beside
+# it was printed verbatim before, which put a 01:10 IST save at "19:40" the day before.
+SNAPSHOT_TS_FMT = '%d %b %Y, %I:%M %p %Z'
+
+
+def _snapshot_ts(dt):
+    return _to_user_tz_str(dt, request.env.user, SNAPSHOT_TS_FMT) if dt else ''
 
 
 def _parse_task_array(text):
@@ -4096,6 +4106,8 @@ class KpiReportsAPI(http.Controller):
                 'login_at':   fields.Datetime.to_string(sess.login_at),
                 'opened':     not bool(existed),
             }
+        except ConcurrencyError:
+            raise  # a parallel Start opened the session first: Odoo retries this
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"workday_ping: {e}")
@@ -4152,6 +4164,8 @@ class KpiReportsAPI(http.Controller):
                 logging.getLogger(__name__).warning("missing_progress failed: %s", exc)
                 payload['missing_progress'] = []
             return payload
+        except ConcurrencyError:
+            raise  # see workday_ping
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"workday_today_summary: {e}")
@@ -4208,6 +4222,8 @@ class KpiReportsAPI(http.Controller):
                     'switched_from': res['switched_from'],
                     'started_at': (sess.nontask_started_at.strftime('%Y-%m-%d %H:%M:%S')
                                    if sess.nontask_started_at else '')}
+        except ConcurrencyError:
+            raise  # see workday_ping
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"workday_idle_reason: {e}")
@@ -4228,6 +4244,8 @@ class KpiReportsAPI(http.Controller):
             closed = sess._close_nontask_block()
             return {'status': True, 'closed': closed,
                     'ask_again': not sess._has_running_task()}
+        except ConcurrencyError:
+            raise  # see workday_ping
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"workday_end_nontask: {e}")
@@ -4291,6 +4309,8 @@ class KpiReportsAPI(http.Controller):
             payload = sess.action_end_day(note=note)
             payload['status'] = True
             return payload
+        except ConcurrencyError:
+            raise  # see workday_ping
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"workday_end: {e}")
@@ -4382,9 +4402,11 @@ class KpiReportsAPI(http.Controller):
                     'reopened_by': r.reopened_by_id.name or '',
                     'reopened_at': (fields.Datetime.to_string(r.reopened_at)
                                     if r.reopened_at else ''),
+                    'reopened_at_display': _snapshot_ts(r.reopened_at),
                     'image_name': r.image_name or 'workday.png',
                     'generated_at': (fields.Datetime.to_string(r.generated_at)
                                      if r.generated_at else ''),
+                    'generated_at_display': _snapshot_ts(r.generated_at),
                 })
             return {'status': True, 'days': days}
         except Exception as e:
@@ -4465,9 +4487,11 @@ class KpiReportsAPI(http.Controller):
                     'reopened_by': r.reopened_by_id.name or '',
                     'reopened_at': (fields.Datetime.to_string(r.reopened_at)
                                     if r.reopened_at else ''),
+                    'reopened_at_display': _snapshot_ts(r.reopened_at),
                     'image_name': r.image_name or 'workday.png',
                     'generated_at': (fields.Datetime.to_string(r.generated_at)
                                      if r.generated_at else ''),
+                    'generated_at_display': _snapshot_ts(r.generated_at),
                 })
             return {'status': True, 'days': days}
         except Exception as e:

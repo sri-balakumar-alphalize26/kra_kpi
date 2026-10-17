@@ -155,7 +155,7 @@ export class KraNode extends Component {
 
                             <!-- 🔥 Delete KPI -->
                             <span class="ms-2 text-danger small"
-                                  t-on-click="(ev) => deleteKpi(kpi.id, ev)"
+                                  t-on-click="(ev) => this.deleteKpi(kpi.id, ev)"
                                   title="Delete this KPI"
                                   style="cursor: pointer;">
                                 <i class="fa fa-trash"></i>

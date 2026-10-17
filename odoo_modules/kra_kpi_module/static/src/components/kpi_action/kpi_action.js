@@ -298,6 +298,31 @@ export class KpiAction extends Component {
                     </div>
                     <div class="modal-body">
                         <p t-if="state.dlg.message" style="white-space:pre-wrap;" t-esc="state.dlg.message"/>
+                        <!-- Optional tick list (several duplicate files in ONE popup).
+                             Disabled rows say why; Tick all / Untick all touch only the
+                             enabled ones. -->
+                        <t t-if="state.dlg.checks.length">
+                            <div class="small mb-1">
+                                <a href="#" t-on-click.prevent="() => this.dlgCheckAll(true)">Tick all</a>
+                                <span class="text-muted mx-1">·</span>
+                                <a href="#" t-on-click.prevent="() => this.dlgCheckAll(false)">Untick all</a>
+                            </div>
+                            <div class="list-group mb-2" style="max-height:260px; overflow-y:auto;">
+                                <label t-foreach="state.dlg.checks" t-as="c" t-key="c.key"
+                                       class="list-group-item d-flex gap-2 align-items-start mb-0"
+                                       t-att-style="c.disabled ? 'cursor:default;' : 'cursor:pointer;'">
+                                    <input type="checkbox" class="form-check-input mt-1"
+                                           t-att-checked="state.dlg.checkVals[c.key]"
+                                           t-att-disabled="c.disabled"
+                                           t-on-change="() => this.dlgCheck(c.key)"/>
+                                    <span style="min-width:0;">
+                                        <b class="d-block text-break" t-esc="c.label"/>
+                                        <small class="d-block text-muted" t-esc="c.sub"/>
+                                        <small t-if="c.note" class="d-block" style="color:#B45309;" t-esc="c.note"/>
+                                    </span>
+                                </label>
+                            </div>
+                        </t>
                         <div t-if="state.dlg.nums.length" class="d-flex gap-2 mb-2">
                             <div t-foreach="state.dlg.nums" t-as="n" t-key="n.key">
                                 <label class="form-label fw-bold small mb-0" t-esc="n.label"/>
@@ -327,6 +352,8 @@ export class KpiAction extends Component {
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" t-on-click="dlgCancel">Cancel</button>
+                        <button t-if="state.dlg.altLabel" type="button" t-att-class="'btn ' + state.dlg.altClass"
+                                t-on-click="dlgAlt" t-esc="state.dlg.altLabel"/>
                         <button type="button" t-att-class="'btn ' + state.dlg.okClass"
                                 t-on-click="dlgOk" t-esc="state.dlg.okLabel"/>
                     </div>
@@ -487,6 +514,8 @@ export class KpiAction extends Component {
                                                             <li class="mb-1">
                                                                 <i class="fa fa-external-link text-primary me-1"/>
                                                                 <a t-att-href="link" target="_blank" class="text-truncate" style="max-width: 300px; display: inline-block; vertical-align: bottom;" t-esc="link"/>
+                                                                <button type="button" class="btn btn-link btn-sm p-0 ms-1 text-secondary" title="Copy link"
+                                                                        t-on-click.stop="() => this.copyLink(link)"><i class="fa fa-copy"/></button>
                                                             </li>
                                                         </t>
                                                     </ul>
@@ -582,10 +611,18 @@ export class KpiAction extends Component {
                         </t>
                         
 
+                        <!-- Not started yet: no progress / manual / file / GitHub forms.
+                             Details are added while working on the task, so until its
+                             first Start there is nothing to report against. -->
+                        <div t-if="!detailStarted()" class="alert alert-info d-flex align-items-center gap-2 mb-3">
+                            <i class="fa fa-info-circle"></i>
+                            <span>Start this task to add progress updates, files, manuals and GitHub links.</span>
+                        </div>
+
                         <!-- ============================================ -->
                         <!-- 📚 UPDATED: Multiple User Manuals Section -->
                         <!-- ============================================ -->
-                        <div class="card p-4 mb-3 bg-light">
+                        <div t-if="detailStarted() or state.manualsList.length" class="card p-4 mb-3 bg-light">
                             <h4 class="fw-bold mb-3">📖 User Manual / Documentation</h4>
                             <p class="text-muted">Upload comprehensive guides or documentation for this task</p>
                             
@@ -603,8 +640,8 @@ export class KpiAction extends Component {
                                                             <div>
                                                                 <strong t-esc="manual.file_name"/>
                                                                 <div class="small text-muted">
-                                                                    Uploaded by: <t t-esc="manual.uploaded_by"/> | 
-                                                                    Date: <t t-esc="formatDate(manual.upload_date)"/>
+                                                                    Uploaded by: <t t-esc="manual.uploaded_by"/> |
+                                                                    Saved: <t t-esc="formatDate((manual.files and manual.files.length and manual.files[0].uploaded_at) or manual.upload_date)"/>
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -623,10 +660,15 @@ export class KpiAction extends Component {
                                                         <t t-if="(manual.files or []).length > 1">
                                                             <div class="mb-2 d-flex flex-wrap gap-2">
                                                                 <t t-foreach="manual.files.slice(1)" t-as="mfile" t-key="mfile.id">
-                                                                    <a t-att-href="mfile.url" target="_blank"
-                                                                       class="btn btn-sm btn-outline-secondary">
-                                                                        <i class="fa fa-download"></i> <t t-esc="mfile.file_name"/>
-                                                                    </a>
+                                                                    <div class="d-inline-flex flex-column align-items-start">
+                                                                        <a t-att-href="mfile.url" target="_blank"
+                                                                           class="btn btn-sm btn-outline-secondary">
+                                                                            <i class="fa fa-download"></i> <t t-esc="mfile.file_name"/>
+                                                                        </a>
+                                                                        <small t-if="mfile.uploaded_at" class="text-muted" style="font-size:.72rem;">
+                                                                            Saved <t t-esc="formatDate(mfile.uploaded_at)"/>
+                                                                        </small>
+                                                                    </div>
                                                                 </t>
                                                             </div>
                                                         </t>
@@ -641,6 +683,8 @@ export class KpiAction extends Component {
                                                                             <a t-att-href="link" target="_blank" class="text-decoration-none">
                                                                                 <i class="fa fa-external-link"></i> <t t-esc="link"/>
                                                                             </a>
+                                                                            <button type="button" class="btn btn-link btn-sm p-0 ms-1 text-secondary" title="Copy link"
+                                                                                    t-on-click.stop="() => this.copyLink(link)"><i class="fa fa-copy"/></button>
                                                                         </li>
                                                                     </t>
                                                                 </ul>
@@ -678,7 +722,7 @@ export class KpiAction extends Component {
                             </t>
                             
                             <!-- Upload New Manual Form -->
-                            <div>
+                            <div t-if="detailStarted()">
                                 <button class="btn btn-primary mb-3" 
                                         t-on-click="() => this.state.showManualUpload = !this.state.showManualUpload">
                                     <i class="fa fa-plus"></i> Add New Manual
@@ -785,11 +829,15 @@ export class KpiAction extends Component {
                                                     class="form-control" 
                                                     t-model="state.manualForm.link_input"
                                                     placeholder="https://docs.google.com/..."/>
-                                                <button class="btn btn-outline-primary" 
+                                                <button class="btn btn-outline-primary"
                                                         type="button"
+                                                        t-att-disabled="linkDup('manual')"
                                                         t-on-click="addManualLink">
                                                     <i class="fa fa-plus"></i> Add Link
                                                 </button>
+                                            </div>
+                                            <div t-if="linkDup('manual')" class="text-danger small mb-1 fw-bold">
+                                                <i class="fa fa-exclamation-triangle me-1"/><t t-esc="linkDup('manual')"/>
                                             </div>
                                             
                                             <t t-if="state.manualForm.related_links.length > 0">
@@ -839,7 +887,7 @@ export class KpiAction extends Component {
                         
 
                        <!-- Progress Updates Section -->
-                        <div class="card p-4 mb-3">
+                        <div t-if="detailStarted()" class="card p-4 mb-3">
                             <h4 class="fw-bold mb-3">Submit Progress Update</h4>
                             
                             <div class="mb-3">
@@ -857,11 +905,16 @@ export class KpiAction extends Component {
                                            class="form-control" 
                                            t-model="state.progressForm.link_input"
                                            placeholder="https://github.com/repo or https://drive.google.com/..."/>
-                                    <button class="btn btn-outline-primary" 
+                                    <button class="btn btn-outline-primary"
                                             type="button"
+                                            t-att-disabled="linkDup('progress')"
                                             t-on-click="addLink">
                                         <i class="fa fa-plus"></i> Add Link
                                     </button>
+                                </div>
+                                <!-- Red while pasting a link that is already on this task. -->
+                                <div t-if="linkDup('progress')" class="text-danger small mb-1 fw-bold">
+                                    <i class="fa fa-exclamation-triangle me-1"/><t t-esc="linkDup('progress')"/>
                                 </div>
                                 <small class="text-muted">Add GitHub repos, Google Drive, websites, or any related links</small>
                                 <!-- Typing a URL and pressing Submit used to discard it in
@@ -968,7 +1021,7 @@ export class KpiAction extends Component {
                         </div>
 
                         <!-- Part B: GitHub branch — its own card, URL + Branch side by side -->
-                        <div class="card p-4 mb-3">
+                        <div t-if="detailStarted()" class="card p-4 mb-3">
                             <h4 class="fw-bold mb-3"><i class="fa fa-github"></i> Link a GitHub branch
                                 <span class="text-muted fw-normal small">(optional)</span></h4>
                             <div class="row g-2">
@@ -989,7 +1042,7 @@ export class KpiAction extends Component {
                                          once a repo URL is present (there is nothing to branch off
                                          otherwise) and only while the field is empty, so it stops
                                          nagging the moment a real branch is typed. -->
-                                    <t t-if="state.progressForm.github_url and !state.progressForm.branch_name">
+                                    <t t-if="isGithubRepo(state.progressForm.github_url) and !state.progressForm.branch_name">
                                         <button class="btn btn-sm btn-outline-secondary py-0 px-2 mt-1"
                                                 type="button" style="font-size:.75rem;"
                                                 title="Use the main branch"
@@ -1000,8 +1053,17 @@ export class KpiAction extends Component {
                                     <small class="d-block text-muted">Branch name or short description</small>
                                 </div>
                             </div>
+                            <!-- Checked while pasting/typing, against the links already on
+                                 this task: same repo + branch blocks Add, the same repo on
+                                 another branch is only mentioned. -->
+                            <t t-set="ghDup" t-value="githubDup()"/>
+                            <div t-if="ghDup" t-att-class="'small mt-1 ' + (ghDup.level !== 'repo' ? 'text-danger fw-bold' : 'text-muted')">
+                                <i t-att-class="'fa me-1 ' + (ghDup.level !== 'repo' ? 'fa-exclamation-triangle' : 'fa-info-circle')"/>
+                                <t t-esc="ghDup.text"/>
+                            </div>
                             <div class="mt-2">
-                                <button class="btn btn-success" type="button" t-on-click="addGithubLink">
+                                <button class="btn btn-success" type="button" t-on-click="addGithubLink"
+                                        t-att-disabled="ghDup and (ghDup.level === 'exact' or ghDup.level === 'notgit')">
                                     <i class="fa fa-github"></i> Add GitHub Link
                                 </button>
                             </div>
@@ -1059,7 +1121,7 @@ export class KpiAction extends Component {
                                                 <strong t-esc="file.file_name"/>
                                                 <div class="small text-muted mt-1">
                                                     <span>Uploaded by: <t t-esc="file.employee_name"/></span><br/>
-                                                    <span>Date: <t t-esc="formatDate(file.create_date)"/></span>
+                                                    <span>Saved: <t t-esc="formatDate(file.uploaded_at)"/></span>
                                                 </div>
                                             </div>
                                             <div class="d-flex gap-2">
@@ -1095,11 +1157,13 @@ export class KpiAction extends Component {
                                                 <div class="flex-grow-1">
                                                     <div class="mb-2">
                                                         <i class="fa fa-github text-dark me-2" style="font-size: 1.5rem;"></i>
-                                                        <a t-att-href="git.github_url" 
-                                                        target="_blank" 
+                                                        <a t-att-href="git.github_url"
+                                                        target="_blank"
                                                         class="fw-bold text-primary">
                                                             <t t-esc="git.github_url"/>
                                                         </a>
+                                                        <button type="button" class="btn btn-link btn-sm p-0 ms-2 text-secondary" title="Copy link"
+                                                                t-on-click.stop="() => this.copyLink(git.github_url)"><i class="fa fa-copy"/></button>
                                                     </div>
                                                     <div class="mb-2">
                                                         <strong class="text-success">🌿 Branch:</strong>
@@ -1141,8 +1205,12 @@ export class KpiAction extends Component {
                                         <div class="list-group">
                                             <t t-foreach="sortedGithub()" t-as="g" t-key="g.id">
                                                 <div class="list-group-item">
-                                                    <a t-att-href="g.github_url" target="_blank" class="fw-bold text-primary text-truncate d-inline-block" style="max-width:100%;" t-esc="g.github_url"/>
-                                                    <div class="small text-muted">🌿 <t t-esc="g.branch_name"/> · <t t-esc="g.uploaded_by"/> · <t t-esc="g.upload_date"/></div>
+                                                    <div class="d-flex align-items-center gap-1" style="min-width:0;">
+                                                        <a t-att-href="g.github_url" target="_blank" class="fw-bold text-primary text-truncate d-inline-block" style="min-width:0;" t-esc="g.github_url"/>
+                                                        <button type="button" class="btn btn-link btn-sm p-0 text-secondary flex-shrink-0" title="Copy link"
+                                                                t-on-click.stop="() => this.copyLink(g.github_url)"><i class="fa fa-copy"/></button>
+                                                    </div>
+                                                    <div class="small text-muted">🌿 <t t-esc="g.branch_name"/> · <t t-esc="g.uploaded_by"/> · <t t-esc="formatDate(g.upload_date)"/></div>
                                                 </div>
                                             </t>
                                         </div>
@@ -1166,7 +1234,7 @@ export class KpiAction extends Component {
                                                 <div class="list-group-item d-flex justify-content-between align-items-center">
                                                     <div class="text-truncate" style="max-width:58%;">
                                                         <i class="fa fa-file me-1"></i><span t-esc="doc.file_name"/>
-                                                        <div class="small text-muted"><t t-esc="doc.uploaded_by"/> · <t t-esc="doc.upload_date"/></div>
+                                                        <div class="small text-muted"><t t-esc="doc.uploaded_by"/> · <t t-esc="formatDate(doc.upload_date)"/></div>
                                                     </div>
                                                     <div class="d-flex gap-1">
                                                         <a class="btn btn-sm btn-info" t-att-href="doc.view_url" target="_blank">View</a>
@@ -1193,8 +1261,12 @@ export class KpiAction extends Component {
                                         <div class="list-group">
                                             <t t-foreach="sortedDrive()" t-as="lk" t-key="lk_index">
                                                 <div class="list-group-item">
-                                                    <a t-att-href="lk.url" target="_blank" class="text-truncate d-inline-block" style="max-width:100%;" t-esc="lk.url"/>
-                                                    <div class="small text-muted"><t t-esc="lk.added_by"/> · <t t-esc="lk.added_date"/></div>
+                                                    <div class="d-flex align-items-center gap-1" style="min-width:0;">
+                                                        <a t-att-href="lk.url" target="_blank" class="text-truncate d-inline-block" style="min-width:0;" t-esc="lk.url"/>
+                                                        <button type="button" class="btn btn-link btn-sm p-0 text-secondary flex-shrink-0" title="Copy link"
+                                                                t-on-click.stop="() => this.copyLink(lk.url)"><i class="fa fa-copy"/></button>
+                                                    </div>
+                                                    <div class="small text-muted"><t t-esc="lk.added_by"/> · <t t-esc="formatDate(lk.added_date)"/></div>
                                                 </div>
                                             </t>
                                         </div>
@@ -1280,6 +1352,10 @@ export class KpiAction extends Component {
                                                 <strong t-esc="update.employee_name"/>
                                                 <span class="mx-1">•</span>
                                                 <span t-esc="formatDate(update.create_date)"/>
+                                                <span t-if="update.edited_at" class="fst-italic ms-1"
+                                                      t-att-title="'Last edited ' + formatDate(update.edited_at)">
+                                                    · ✏️ Edited <t t-esc="formatDate(update.edited_at)"/>
+                                                </span>
                                                 <!-- Edit reopens the entry holding what was written —
                                                      description, links and the attachment — rather than
                                                      an empty form that would replace it on save. -->
@@ -1320,6 +1396,8 @@ export class KpiAction extends Component {
                                                                 <a t-att-href="link" target="_blank" class="text-decoration-none small">
                                                                     <i class="fa fa-external-link"></i> <t t-esc="link"/>
                                                                 </a>
+                                                                <button type="button" class="btn btn-link btn-sm p-0 ms-1 text-secondary small" title="Copy link"
+                                                                        t-on-click.stop="() => this.copyLink(link)"><i class="fa fa-copy"/></button>
                                                             </li>
                                                         </t>
                                                     </ul>
@@ -1333,11 +1411,17 @@ export class KpiAction extends Component {
                                             <t t-if="(update.files or []).length">
                                                 <div class="mt-2 d-flex flex-wrap gap-2">
                                                     <t t-foreach="update.files" t-as="uf" t-key="uf.id">
-                                                        <a t-att-href="uf.url"
-                                                           class="btn btn-sm btn-outline-primary"
-                                                           target="_blank">
-                                                            <i class="fa fa-download"></i> <t t-esc="uf.file_name"/>
-                                                        </a>
+                                                        <!-- Each file with its own saved time, small, under it. -->
+                                                        <div class="d-inline-flex flex-column align-items-start">
+                                                            <a t-att-href="uf.url"
+                                                               class="btn btn-sm btn-outline-primary"
+                                                               target="_blank">
+                                                                <i class="fa fa-download"></i> <t t-esc="uf.file_name"/>
+                                                            </a>
+                                                            <small t-if="uf.uploaded_at" class="text-muted" style="font-size:.72rem;">
+                                                                Saved <t t-esc="formatDate(uf.uploaded_at)"/>
+                                                            </small>
+                                                        </div>
                                                     </t>
                                                 </div>
                                             </t>
@@ -1670,6 +1754,7 @@ export class KpiAction extends Component {
                                 <button t-if="!state.dayDone"
                                         class="btn btn-sm btn-success fw-bold"
                                         title="Start your workday + notify owner + coordinator"
+                                        t-att-disabled="state.workdayStarting"
                                         t-on-click="() => this.startWorkday()">
                                     <i class="fa fa-play-circle me-1"></i>
                                     <!-- workdayClosed is true for TWO different causes: the cron
@@ -2954,6 +3039,8 @@ export class KpiAction extends Component {
             // Those are the browser's chrome, not ours: unstyleable, and on a work
             // screen they read as something having gone wrong.
             dlg: { open: false, title: '', message: '', okLabel: 'OK', okClass: 'btn-primary',
+                   altLabel: '', altClass: 'btn-outline-primary',
+                   checks: [], checkVals: {},
                    input: false, inputLabel: '', placeholder: '', required: false,
                    value: '', error: '', resolve: null,
                    // Optional numeric fields, e.g. the hours/minutes on Add time.
@@ -2985,6 +3072,7 @@ export class KpiAction extends Component {
             workdayPaused:  false,   // open but frozen — Presence stopped, tasks blocked
             workdayClosed:  false,   // a closed session today with no open one (e.g. cron auto-closed)
             dayDone:        false,   // developer ENDED today themselves → one start + one end per day (no restart)
+            workdayStarting: false,  // a /kpi_workday/ping is in flight — Start stays disabled
             reopenReason:   '',      // an admin reopened this day — shown under the workday button
             reopenedBy:     '',
             // 🆕 NEW: Filter state variables
@@ -3024,6 +3112,9 @@ export class KpiAction extends Component {
                 branch_name: '',
             },
             githubLinks: [],
+            // Old files the user chose to Replace, removed only once the new upload
+            // has succeeded, so a failed upload never loses them.
+            pendingReplace: { progress: [], manual: [] },
             manualsList: [],
             
             manualForm: {
@@ -3125,6 +3216,14 @@ export class KpiAction extends Component {
         this.refresh = this.refresh.bind(this);
         this.formatTime = this.formatTime.bind(this);
         this.getDisplayTime = this.getDisplayTime.bind(this);  // 🆕 NEW: Bind real-time timer method
+        // LiveTick readouts. Their fn="() => ..." props are captured by OWL, which
+        // lifts the method off ctx before calling it, so an unbound one runs with
+        // `this` undefined and the board fails to render.
+        this.sinceResume = this.sinceResume.bind(this);
+        this.nontaskDisplay = this.nontaskDisplay.bind(this);
+        this.liveBreakDisplay = this.liveBreakDisplay.bind(this);
+        this.livePresenceDisplay = this.livePresenceDisplay.bind(this);
+        this.liveProductiveDisplay = this.liveProductiveDisplay.bind(this);
         this.formatDate = this.formatDate.bind(this);
         
         // Modal methods
@@ -4301,6 +4400,11 @@ export class KpiAction extends Component {
     }
 
     async startWorkday() {
+        // The first ping can take seconds (it notifies admins), and every extra
+        // click used to send another one: one burst opened six sessions at once.
+        // The server now refuses a second open session; this stops the requests.
+        if (this.state.workdayStarting) { return; }
+        this.state.workdayStarting = true;
         try {
             const res = await rpc("/kpi_workday/ping", {});
             if (res && res.status) {
@@ -4321,6 +4425,8 @@ export class KpiAction extends Component {
             }
         } catch (err) {
             this._toast("Start Workday request failed: " + ((err && err.message) || err), 'danger');
+        } finally {
+            this.state.workdayStarting = false;
         }
     }
 
@@ -4970,7 +5076,224 @@ export class KpiAction extends Component {
     }
 
     // Progress Update Methods
-    handleProgressFileUpload(event) {
+    // ---- Same-named file on this task: Replace / Keep both / Cancel ----------
+    /** "Guide (1).DOCX" → "guide.docx". A file downloaded twice comes back as
+     *  "Guide (1).docx", so a re-upload of the same document rarely has exactly
+     *  the old name; the copy number a browser (or Keep both) adds is ignored. */
+    _fileKey(name) {
+        let n = String(name || '').trim().toLowerCase();
+        const copy = /\s*\(\d+\)(?=(\.[^.]*)?$)/;
+        while (copy.test(n)) n = n.replace(copy, '');
+        return n;
+    }
+
+    /** Every file already on the task: by exact (lower-cased) name, and by
+     *  _fileKey so "Guide (1).docx" finds "Guide.docx".
+     *
+     *  `all` is /kpi/task/files_index — every file on the task whoever uploaded
+     *  it. The lists on screen are not enough: a developer only sees their own
+     *  progress updates, so the admin's copy of a file was invisible to them and
+     *  the same name went up with no warning. The on-screen lists remain the
+     *  fallback when that call fails. */
+    _taskFileIndex(all) {
+        const byName = new Map();
+        const byKey = new Map();
+        const put = (name, info) => {
+            const lower = (name || '').toLowerCase();
+            byName.set(lower, info);
+            if (!byKey.has(this._fileKey(name))) byKey.set(this._fileKey(name), info);
+        };
+        if (Array.isArray(all)) {
+            for (const f of all) {
+                put(f.file_name, {
+                    name: f.file_name, who: f.who, when: f.uploaded_at, kind: f.kind,
+                    entry_id: f.entry_id, attachment_id: f.attachment_id || 0, can_edit: !!f.can_edit,
+                });
+            }
+            return { byName, byKey };
+        }
+        for (const f of this.state.attachedFiles || []) {
+            put(f.file_name, {
+                name: f.file_name, who: f.employee_name, when: f.uploaded_at, kind: 'progress',
+                entry_id: f.id, attachment_id: f.att_id || 0, can_edit: f.can_edit,
+            });
+        }
+        for (const m of this.state.manualsList || []) {
+            for (const mf of m.files || []) {
+                put(mf.file_name, {
+                    name: mf.file_name, who: m.uploaded_by, when: mf.uploaded_at || m.upload_date,
+                    kind: 'manual', entry_id: m.id, attachment_id: mf.id || 0, can_edit: !!m.can_edit,
+                });
+            }
+        }
+        return { byName, byKey };
+    }
+
+    /** "report.pdf" → the first of "report (2).pdf", "report (3).pdf"… not in `taken`.
+     *  A copy number already on the name is replaced, not stacked: "report (1).pdf"
+     *  becomes "report (2).pdf", never "report (1) (2).pdf". */
+    _freeName(name, taken) {
+        const dot = name.lastIndexOf('.');
+        let base = dot > 0 ? name.slice(0, dot) : name;
+        const ext = dot > 0 ? name.slice(dot) : '';
+        while (/\s*\(\d+\)$/.test(base)) base = base.replace(/\s*\(\d+\)$/, '');
+        for (let n = 2; ; n++) {
+            const cand = `${base} (${n})${ext}`;
+            if (!taken.has(cand.toLowerCase())) return cand;
+        }
+    }
+
+    /** Ask about each picked file whose name is already on the task (or picked
+     *  twice). Returns the files to upload (renamed where kept) and the old files
+     *  to remove once the upload succeeds. */
+    async _resolveDuplicates(picked) {
+        let all = null;
+        try {
+            const res = await rpc('/kpi/task/files_index', { kpi_id: this.state.detailKpiId });
+            if (res && res.status) all = res.files || [];
+        } catch (e) { /* fall back to the lists on screen */ }
+        const { byName, byKey } = this._taskFileIndex(all);
+        const lowerOf = (f) => (f.name || '').toLowerCase();
+
+        // Pass 1 — sort the pick. A file is a duplicate when its name (or its name
+        // without a copy number) is on the task, or it was picked twice. One old
+        // file can be replaced by one new file only.
+        const items = [];
+        const pickedNames = new Set();
+        const claimed = new Set();
+        for (const f of picked) {
+            const lower = lowerOf(f);
+            const old = byName.get(lower) || byKey.get(this._fileKey(f.name)) || null;
+            const repeat = pickedNames.has(lower);
+            pickedNames.add(lower);
+            if (!old && !repeat) { items.push({ f, dup: false }); continue; }
+            const canReplace = !!(old && !repeat && old.can_edit && !claimed.has(old));
+            if (canReplace) claimed.add(old);
+            items.push({ f, dup: true, old, repeat, canReplace });
+        }
+        const dups = items.filter((it) => it.dup);
+
+        // Names a copy must not take: everything on the task, plus the new files
+        // that go up under their own names.
+        const taken = new Set(byName.keys());
+        for (const it of items) if (!it.dup) taken.add(lowerOf(it.f));
+        const decision = new Map();   // item → 'replace' | 'copy' | 'skip'
+
+        if (dups.length === 1) {
+            // One duplicate: Replace / Keep both / Cancel, as before.
+            const it = dups[0];
+            const { f, old, canReplace } = it;
+            const lower = lowerOf(f);
+            const keepName = taken.has(lower) ? this._freeName(f.name, taken) : f.name;
+            const kept = keepName === f.name ? '' : ` (the new one is saved as "${keepName}")`;
+            const message = old && !it.repeat
+                ? (old.name.toLowerCase() === lower
+                    ? `"${f.name}" is already on this task.`
+                    : `"${f.name}" looks like "${old.name}", which is already on this task.`) +
+                  `\nUploaded by ${old.who || 'someone'} on ${this.formatDate(old.when)}.\n\n` +
+                  (canReplace ? `Replace it with the new file, or keep both${kept}?`
+                              : `Keep both${kept}?`) +
+                  (old.can_edit ? '' : '\n\nOnly the uploader or an admin can replace it.')
+                : `Two of the picked files are named "${f.name}". Keep both${kept}?`;
+            const ans = await this._dialog({
+                title: 'File already exists', message,
+                okLabel: canReplace ? 'Replace' : 'Keep both',
+                okClass: canReplace ? 'btn-danger' : 'btn-primary',
+                altLabel: canReplace ? 'Keep both' : '', altClass: 'btn-primary',
+            });
+            decision.set(it, ans === true && canReplace ? 'replace'
+                : (ans === true || ans === 'alt') ? 'copy' : 'skip');
+        } else if (dups.length > 1) {
+            // Several: ONE popup with a tick per file — Replace all, or only the
+            // ticked ones. Unticked files are kept as copies, never dropped.
+            const anyReplace = dups.some((it) => it.canReplace);
+            const checks = dups.map((it, i) => ({
+                key: String(i),
+                label: it.f.name,
+                sub: it.old && !it.repeat
+                    ? (it.old.name.toLowerCase() === lowerOf(it.f)
+                        ? 'Already on this task' : `Looks like "${it.old.name}"`) +
+                      ` · uploaded by ${it.old.who || 'someone'} on ${this.formatDate(it.old.when)}`
+                    : 'Picked twice in this upload',
+                checked: it.canReplace,
+                disabled: !it.canReplace,
+                note: it.canReplace ? ''
+                    : (it.old && !it.repeat && !it.old.can_edit)
+                        ? 'Only the uploader or an admin can replace this. It will be kept as a copy.'
+                        : 'It will be kept as a copy.',
+            }));
+            const ans = await this._dialog({
+                title: `${dups.length} files are already on this task`,
+                message: anyReplace
+                    ? 'Tick the files to replace. Unticked files are kept as a copy, saved with a (2), (3)… name.'
+                    : 'You can not replace these, so they will be kept as copies, saved with a (2), (3)… name.',
+                checks,
+                okLabel: anyReplace ? 'Replace selected' : 'Keep all as copies',
+                okClass: anyReplace ? 'btn-danger' : 'btn-primary',
+                altLabel: anyReplace ? 'Replace all' : '', altClass: 'btn-outline-danger',
+            });
+            dups.forEach((it, i) => {
+                if (!ans) { decision.set(it, 'skip'); return; }
+                const wants = ans.action === 'alt' ? true : !!ans.checks[String(i)];
+                decision.set(it, it.canReplace && wants ? 'replace' : 'copy');
+            });
+        }
+
+        // Pass 2 — the upload list, in picked order.
+        const files = [];
+        const replace = [];
+        const rename = (f, name) => (name === f.name ? f
+            : new File([f], name, { type: f.type, lastModified: f.lastModified }));
+        for (const it of items) {
+            if (!it.dup) { files.push(it.f); continue; }
+            const d = decision.get(it);
+            if (d === 'replace') {
+                // The new file takes the old one's place AND name, so replacing
+                // "Guide.docx" with a downloaded "Guide (1).docx" leaves "Guide.docx".
+                taken.add(it.old.name.toLowerCase());
+                files.push(rename(it.f, it.old.name));
+                replace.push({ old: it.old, key: it.old.name.toLowerCase(), kind: it.old.kind,
+                               entry_id: it.old.entry_id, attachment_id: it.old.attachment_id });
+            } else if (d === 'copy') {
+                // Its own name if that is free ("Guide (1).docx" next to
+                // "Guide.docx"), else the next free "(n)".
+                const lower = lowerOf(it.f);
+                const name = taken.has(lower) ? this._freeName(it.f.name, taken) : it.f.name;
+                taken.add(name.toLowerCase());
+                files.push(rename(it.f, name));
+            }
+            // 'skip' (Cancel / ×): left out of the upload.
+        }
+        return { files, replace };
+    }
+
+    /** After a successful upload: remove the old files the user chose to Replace.
+     *  Extra files before entry files, so promoting a next file can't move one
+     *  that is about to be removed by id. */
+    async _applyReplacements(slot, uploaded) {
+        // Only for files that actually went up: one taken back out of the pick
+        // before submitting must not cost the old file.
+        const sent = new Set((uploaded || []).map((f) => (f.name || '').toLowerCase()));
+        const list = (this.state.pendingReplace[slot] || []).filter((r) => sent.has(r.key))
+            .sort((a, b) => (b.attachment_id ? 1 : 0) - (a.attachment_id ? 1 : 0));
+        this.state.pendingReplace[slot] = [];
+        if (!list.length) return;
+        const failed = [];
+        for (const r of list) {
+            try {
+                const res = await rpc('/kpi/file/remove', {
+                    kind: r.kind, entry_id: r.entry_id, attachment_id: r.attachment_id || 0 });
+                if (!res || !res.status) failed.push((res && res.message) || r.key);
+            } catch (e) { failed.push(r.key); }
+        }
+        if (failed.length) {
+            this._toast('The new file was saved, but the old one could not be removed: ' + failed.join('; '), 'warning');
+        }
+        await this._reloadProgressLists();
+        await this.loadUserManualInfo(this.state.detailKpiId);
+    }
+
+    async handleProgressFileUpload(event) {
         // Several files land on ONE update now — three screenshots of the same bug
         // used to mean writing the same note three times, once per file.
         const picked = Array.from(event.target.files || []);
@@ -4990,13 +5313,17 @@ export class KpiAction extends Component {
             event.target.value = '';
             return;
         }
-        this.state.progressForm.fileObjs = picked;
+        const input = event.target;
+        const { files, replace } = await this._resolveDuplicates(picked);
+        this.state.pendingReplace.progress = replace;
+        if (!files.length) { input.value = ''; return; }
+        this.state.progressForm.fileObjs = files;
         // Selection is by array index, so a fresh pick must not inherit ticks that
         // pointed at the previous one.
         this.state.progressFileSel = {};
-        this.state.progressForm.file_name = picked.length === 1
-            ? picked[0].name : `${picked.length} files`;
-        this.state.progressForm.size_display = this._fmtBytes(this._totalBytes(picked));
+        this.state.progressForm.file_name = files.length === 1
+            ? files[0].name : `${files.length} files`;
+        this.state.progressForm.size_display = this._fmtBytes(this._totalBytes(files));
     }
 
     // Total bytes queued, for the progress ring's denominator.
@@ -5206,6 +5533,7 @@ export class KpiAction extends Component {
             if (result && result.status) {
                 this._resetProgressForm();
                 await this._reloadProgressLists();
+                await this._applyReplacements('progress', files);
             } else {
                 us.error = (result && result.message) || 'Upload failed.';
             }
@@ -5336,9 +5664,12 @@ export class KpiAction extends Component {
                         // repeats once an update has more than one file.
                         key: `${update.id}:${f.id}`,
                         id: update.id,                   // Part D: scrollToNote target
+                        att_id: f.id,                    // 0 = the update's own file
                         file_name: f.file_name,
                         employee_name: update.employee_name,
                         create_date: update.create_date,
+                        uploaded_at: f.uploaded_at || update.create_date,
+                        can_edit: !!update.can_edit,     // may Replace it
                         summary: update.summary || '',   // Part D: link back to the note
                         // Only the entry's own file has an inline viewer route; the
                         // extras are served as downloads, so View points at the same
@@ -5423,7 +5754,7 @@ export class KpiAction extends Component {
     static MANUAL_MAX_BYTES = 25 * 1024 * 1024;
     static MANUAL_EXTENSIONS = ['.pdf', '.doc', '.docx'];
 
-    handleManualUpload(event) {
+    async handleManualUpload(event) {
         // One manual entry can carry several documents — a spec plus its annexes
         // used to need one entry each, with the same description retyped.
         const picked = Array.from(event.target.files || []);
@@ -5451,13 +5782,17 @@ export class KpiAction extends Component {
                 return;
             }
         }
+        const input = event.target;
+        const { files, replace } = await this._resolveDuplicates(picked);
+        this.state.pendingReplace.manual = replace;
+        if (!files.length) { input.value = ''; return; }
         // Keep the Files themselves — the multipart upload posts them directly, so
         // there is no FileReader to wait on and the button enables immediately.
-        this.state.manualForm.files = picked;
+        this.state.manualForm.files = files;
         this.state.manualFileSel = {};
-        this.state.manualForm.file_name = picked.length === 1
-            ? picked[0].name : `${picked.length} files`;
-        this.state.manualForm.size_display = this._fmtBytes(this._totalBytes(picked));
+        this.state.manualForm.file_name = files.length === 1
+            ? files[0].name : `${files.length} files`;
+        this.state.manualForm.size_display = this._fmtBytes(this._totalBytes(files));
     }
 
     _fmtBytes(n) {
@@ -5554,9 +5889,11 @@ export class KpiAction extends Component {
             const result = await promise;
 
             if (result && result.status) {
+                const sentFiles = form.files;
                 this.state.manualForm = this._blankManualForm();
                 this.state.showManualUpload = false;
                 await this.loadUserManualInfo(this.state.detailKpiId);
+                await this._applyReplacements('manual', sentFiles);
             } else {
                 // The server's own reason — "Only PDF, DOC and DOCX…",
                 // "Not authorized" — instead of one catch-all string that sent
@@ -5640,13 +5977,52 @@ export class KpiAction extends Component {
             : `"${pending}" is in the link box but is not a valid URL. Fix it and press "Add Link", or clear the box.`;
     }
 
+    /** Every link already on the task, wherever it was added: GitHub links,
+     *  related links of updates / the task (Drive & Links), and manual links.
+     *  Keyed like _githubKey, so http/https, www., a trailing / or .git and
+     *  letter case do not make one link look like two. */
+    _taskLinkIndex() {
+        const idx = new Map();
+        const put = (url, who, when, where) => {
+            const k = this._githubKey(url);
+            if (k && !idx.has(k)) idx.set(k, { who, when, where });
+        };
+        for (const g of this.state.githubLinks || []) {
+            put(g.github_url, g.employee_name, g.create_date, `GitHub, branch ${g.branch_name}`);
+        }
+        for (const l of (this.state.docSections && this.state.docSections.drive) || []) {
+            put(l.url, l.added_by, l.added_date, 'related link');
+        }
+        for (const m of this.state.manualsList || []) {
+            for (const u of m.links || []) put(u, m.uploaded_by, m.upload_date, 'manual link');
+        }
+        return idx;
+    }
+
+    /** The red line under a Related Links box while a link is pasted / typed:
+     *  '' when the link is new, else where it already is and who added it when. */
+    linkDup(which) {
+        const form = which === 'manual' ? this.state.manualForm : this.state.progressForm;
+        const k = this._githubKey(form.link_input);
+        if (!k || !k.includes('.')) return '';
+        if ((form.related_links || []).some((u) => this._githubKey(u) === k)) {
+            return 'Already added to this list.';
+        }
+        const hit = this._taskLinkIndex().get(k);
+        return hit
+            ? `Already on this task (${hit.where}): added by ${hit.who || 'someone'} on ${this.formatDate(hit.when)}.`
+            : '';
+    }
+
     addLink() {
         const link = this.state.progressForm.link_input.trim();
-        
+
         if (!link) {
             this._toast('Please enter a link', 'warning');
             return;
         }
+        const dup = this.linkDup('progress');
+        if (dup) { this._toast('⚠ ' + dup, 'warning'); return; }
         
         // Basic URL validation
         try {
@@ -5667,11 +6043,13 @@ export class KpiAction extends Component {
     // 🆕 NEW: Methods for User Manual Related Links
     addManualLink() {
         const link = this.state.manualForm.link_input.trim();
-        
+
         if (!link) {
             this._toast('Please enter a link', 'warning');
             return;
         }
+        const dup = this.linkDup('manual');
+        if (dup) { this._toast('⚠ ' + dup, 'warning'); return; }
         
         // Basic URL validation
         try {
@@ -5711,8 +6089,98 @@ export class KpiAction extends Component {
         return githubPattern.test(url.trim());
     }
 
+    /** Progress, manuals, files and GitHub links are added only once the task has
+     *  been started (has_started from /kpi_action/details). Older payloads without
+     *  the flag keep the forms, as before. */
+    detailStarted() {
+        return this.state.detailData.has_started !== false;
+    }
+
+    /** Same reduction as _github_key in kra_api.py: no scheme, www., trailing
+     *  / or .git, lower case — so one repo typed two ways compares equal. */
+    _githubKey(url) {
+        let u = String(url || '').trim().toLowerCase()
+            .replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+        if (u.endsWith('.git')) u = u.slice(0, -4);
+        return u.replace(/\/+$/, '');
+    }
+
+    /** The copy icon next to every saved link (GitHub, Drive, any related link).
+     *  navigator.clipboard exists only on https or localhost; Odoo opened on a
+     *  plain-http LAN address has none, so fall back to a hidden textarea. */
+    async copyLink(url) {
+        const text = String(url || '').trim();
+        if (!text) return;
+        let ok = false;
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+                ok = true;
+            }
+        } catch (e) { /* try the fallback */ }
+        if (!ok) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+        }
+        this._toast(ok ? '📋 Link copied' : 'Could not copy — select the link and press Ctrl+C.',
+                    ok ? 'success' : 'warning');
+    }
+
+    /** "Use main" is offered only for an actual GitHub repo link: a Drive or
+     *  other link has no branch to pick. */
+    isGithubRepo(url) {
+        return /^github\.com\/[^/]+\/[^/]+/.test(this._githubKey(url));
+    }
+
+    /** While a GitHub URL is being pasted / typed: is it already on this task?
+     *  'exact' = same repo + branch (Add is blocked), 'repo' = same repo on another
+     *  branch (allowed, just said). Null when nothing matches. */
+    githubDup() {
+        const repo = this._githubKey(this.state.progressForm.github_url);
+        if (!repo) return null;
+        if (!repo.startsWith('github.com/')) {
+            // Not a GitHub link. Already in Drive & Links (or a manual)? Red, like
+            // a repeated repo. Otherwise say plainly that this box takes GitHub only.
+            const hit = this._taskLinkIndex().get(repo);
+            if (hit) {
+                return { level: 'exact', text: `Already on this task (${hit.where}): added by ${hit.who || 'someone'} on ${this.formatDate(hit.when)}.` };
+            }
+            return repo.includes('.')
+                ? { level: 'notgit', text: 'Only GitHub repository links can be added here. Add other links under Related Links.' }
+                : null;
+        }
+        const branch = String(this.state.progressForm.branch_name || '').trim().toLowerCase();
+        const same = (this.state.githubLinks || []).filter((g) => this._githubKey(g.github_url) === repo);
+        if (!same.length) {
+            // Not a GitHub link yet, but maybe pasted earlier as a related link:
+            // red, so it reads as "already there"; adding it with its branch is fine.
+            const hit = this._taskLinkIndex().get(repo);
+            return hit
+                ? { level: 'linked', text: `Already on this task (${hit.where}): added by ${hit.who || 'someone'} on ${this.formatDate(hit.when)}.` }
+                : null;
+        }
+        const exact = branch && same.find((g) => String(g.branch_name || '').trim().toLowerCase() === branch);
+        const g = exact || same[0];
+        const when = this.formatDate(g.create_date);
+        return exact
+            ? { level: 'exact', text: `Already linked by ${g.employee_name || 'someone'} on ${when} (branch ${g.branch_name}).` }
+            : { level: 'repo', text: `This repo is already linked on branch ${same.map((x) => x.branch_name).join(', ')} (${g.employee_name || 'someone'}, ${when}). A different branch is fine.` };
+    }
+
     // 🆕 NEW: Add GitHub Link
     async addGithubLink() {
+        const dup = this.githubDup();
+        if (dup && dup.level === 'exact') {
+            this._toast('⚠ ' + dup.text, 'warning');
+            return;
+        }
         const github_url = this.state.progressForm.github_url.trim();
         const branch_name = this.state.progressForm.branch_name.trim();
         
@@ -5745,6 +6213,10 @@ export class KpiAction extends Component {
                 this.state.progressForm.github_url = '';
                 this.state.progressForm.branch_name = '';
                 // Reload GitHub links
+                await this.loadGithubLinks(this.state.detailKpiId);
+            } else if (result.duplicate) {
+                // Someone added it since this task was opened: show it, then the list.
+                this._toast('⚠ ' + result.message, 'warning');
                 await this.loadGithubLinks(this.state.detailKpiId);
             } else {
                 this._toast('❌ Error: ' + result.message, 'danger');
@@ -8295,13 +8767,20 @@ export class KpiAction extends Component {
     dismissToast() { this.state.toast.show = false; }
 
 
+    // altLabel adds a third button between Cancel and OK; clicking it resolves 'alt'.
+    // checks = [{key, label, sub, checked, disabled, note}] adds a tick list; then OK
+    // and alt resolve {action: 'ok' | 'alt', checks: {key: bool}} instead.
     _dialog({ title, message = '', okLabel = 'OK', okClass = 'btn-primary',
+              altLabel = '', altClass = 'btn-outline-primary', checks = [],
               input = false, inputLabel = '', placeholder = '', required = false,
               nums = [], footNote = '', ctx = null }) {
         const numVals = {};
         for (const n of nums) numVals[n.key] = n.value !== undefined ? n.value : 0;
+        const checkVals = {};
+        for (const c of checks) checkVals[c.key] = !!c.checked;
         Object.assign(this.state.dlg, {
-            open: true, title, message, okLabel, okClass,
+            open: true, title, message, okLabel, okClass, altLabel, altClass,
+            checks, checkVals,
             input, inputLabel, placeholder, required, value: '', error: '',
             nums, numVals, footNote, ctx,
         });
@@ -8320,6 +8799,20 @@ export class KpiAction extends Component {
         this.state.dlg.open = false; this.state.dlg.resolve = null;
         if (r) r(null);
     }
+    dlgAlt() {
+        const d = this.state.dlg;
+        const r = d.resolve;
+        const val = d.checks.length ? { action: 'alt', checks: { ...d.checkVals } } : 'alt';
+        d.open = false; d.resolve = null;
+        if (r) r(val);
+    }
+    dlgCheck(key) {
+        const c = this.state.dlg.checks.find((x) => x.key === key);
+        if (c && !c.disabled) this.state.dlg.checkVals[key] = !this.state.dlg.checkVals[key];
+    }
+    dlgCheckAll(on) {
+        for (const c of this.state.dlg.checks) if (!c.disabled) this.state.dlg.checkVals[c.key] = on;
+    }
     dlgOk() {
         const d = this.state.dlg;
         // Stated rather than enforced by disabling OK, so a click that does nothing
@@ -8328,9 +8821,11 @@ export class KpiAction extends Component {
             d.error = (d.inputLabel || 'This') + ' is required.';
             return;
         }
-        // With numbers present the caller wants the whole set, not just the text.
-        const val = d.nums.length ? { ...d.numVals, text: d.value }
-                                  : (d.input ? d.value : true);
+        // With numbers present the caller wants the whole set, not just the text;
+        // with a tick list, which rows are ticked.
+        const val = d.checks.length ? { action: 'ok', checks: { ...d.checkVals } }
+                  : d.nums.length ? { ...d.numVals, text: d.value }
+                  : (d.input ? d.value : true);
         const r = d.resolve;
         d.open = false; d.resolve = null;
         if (r) r(val);

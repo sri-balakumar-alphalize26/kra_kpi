@@ -20,8 +20,10 @@ import logging
 from datetime import datetime, time, timedelta
 
 import pytz
+from psycopg2 import errors as pg_errors
 
 from odoo import api, fields, models
+from odoo.exceptions import ConcurrencyError
 
 # Safe: kpi_nontask_block imports nothing from here, so there is no cycle. Shared
 # so the session's open-block note and the saved block row can't disagree on the
@@ -222,6 +224,39 @@ class KpiWorkSession(models.Model):
     _name = 'kpi.work.session'
     _description = 'Developer Workday Session'
     _order = 'session_date desc, login_at desc'
+
+    def init(self):
+        """At most one OPEN session per developer per day, enforced by the database.
+
+        _get_or_open_today used to guard its create with LOCK TABLE ... IN ROW
+        EXCLUSIVE MODE, which does not conflict with itself, so a burst of Start
+        Workday calls each opened their own session. End Workday closes one, the
+        status call still finds another open, and the button stays red.
+
+        Duplicates already in the table are closed first, or the index could not
+        be built. The one kept is the one the code has been reading as live
+        (search() with _order: latest login_at). The others become zero-length
+        auto-closed rows: they add no presence and do not count as "day ended".
+        """
+        self.env.cr.execute("""
+            UPDATE kpi_work_session s
+               SET state = 'closed', auto_closed = TRUE, logout_at = s.login_at
+             WHERE s.state = 'open'
+               AND EXISTS (
+                   SELECT 1 FROM kpi_work_session k
+                    WHERE k.user_id = s.user_id
+                      AND k.session_date = s.session_date
+                      AND k.state = 'open'
+                      AND (k.login_at > s.login_at
+                           OR (k.login_at = s.login_at AND k.id > s.id)))
+        """)
+        if self.env.cr.rowcount:
+            _logger.warning("kpi.work.session: closed %s duplicate open session(s)",
+                            self.env.cr.rowcount)
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS kpi_work_session_one_open_per_day
+                ON kpi_work_session (user_id, session_date) WHERE state = 'open'
+        """)
 
     user_id = fields.Many2one(
         'res.users', string='Developer',
@@ -427,8 +462,8 @@ class KpiWorkSession(models.Model):
 
     # Multiple sessions per day are explicitly allowed so a developer can
     # restart a workday after an accidental End Workday.  The only invariant
-    # we still enforce (at the application level, in _get_or_open_today) is
-    # at most ONE 'open' session per user per day.
+    # we still enforce is at most ONE 'open' session per user per day: by the
+    # partial unique index built in init(), which _get_or_open_today relies on.
 
     # ------------------------------------------------------------------ #
     # Compute                                                            #
@@ -642,15 +677,6 @@ class KpiWorkSession(models.Model):
         ended_today = self._ended_session_today(user=user)
         if ended_today:
             return ended_today
-        # Take a row-exclusive lock to dodge double-create on parallel tab loads.
-        self.env.cr.execute("LOCK TABLE kpi_work_session IN ROW EXCLUSIVE MODE")
-        existing_open = self.sudo().search([
-            ('user_id',      '=', user.id),
-            ('session_date', '=', today),
-            ('state',        '=', 'open'),
-        ], limit=1)
-        if existing_open:
-            return existing_open
         # Self-heal before opening today's session: a workday that crossed midnight
         # without a clean close can leave an is_active time-log or break-log from a
         # PREVIOUS day. Left open it reads as this developer's "current" task/break
@@ -669,16 +695,26 @@ class KpiWorkSession(models.Model):
                           'end_time': _local_day_end_utc(bk.work_date or bk.start_time.date(), user)})
         except Exception as exc:
             _logger.warning("_get_or_open_today heal stale-active failed for %s: %s", user.id, exc)
-        new_sess = self.sudo().create({
-            'user_id':      user.id,
-            'session_date': today,
-            'login_at':     fields.Datetime.now(),
-            'state':        'open',
-            'last_heartbeat': fields.Datetime.now(),
-            # Arm the idle check. If a task is running by then the cron just clears
-            # it; if not, the DEVELOPER gets asked why (never the admin first).
-            'idle_check_at': fields.Datetime.now() + timedelta(minutes=IDLE_CHECK_MIN),
-        })
+        # Parallel Start calls (several tabs, a double click, app + web) race to
+        # here. The unique index in init() lets one insert win; the others wait
+        # for it to commit and then fail. Under REPEATABLE READ this transaction
+        # cannot see the winner's row, so ConcurrencyError hands the request back
+        # to Odoo, which retries it with a fresh snapshot that returns that row.
+        try:
+            with self.env.cr.savepoint():
+                new_sess = self.sudo().create({
+                    'user_id':      user.id,
+                    'session_date': today,
+                    'login_at':     fields.Datetime.now(),
+                    'state':        'open',
+                    'last_heartbeat': fields.Datetime.now(),
+                    # Arm the idle check. If a task is running by then the cron just clears
+                    # it; if not, the DEVELOPER gets asked why (never the admin first).
+                    'idle_check_at': fields.Datetime.now() + timedelta(minutes=IDLE_CHECK_MIN),
+                })
+        except pg_errors.UniqueViolation as exc:
+            raise ConcurrencyError(
+                "Another request opened this workday at the same time") from exc
         # Announce the start to the owner/coordinator feed, but ONLY on the first
         # start of the day. Multiple sessions per day
         # are allowed (restart after an accidental End Workday), and re-announcing
@@ -1239,7 +1275,21 @@ class KpiWorkSession(models.Model):
 
         now = fields.Datetime.now()
         reason = (reason or '').strip()
-        self.sudo().write({
+        # EVERY session that ended the day, not just this one. _ended_session_today
+        # reads "day done" as ANY closed, hand-ended, unreverted session today, but
+        # hands back only the first. A day with several (a burst of Start clicks
+        # once opened six sessions at once, and each was ended) needed one Reopen
+        # per session: each click reverted one, the next still counted as "ended",
+        # and the header stayed on "Workday ended for today" while the admin
+        # assumed the reopen had failed.
+        ended = self | self.sudo().search([
+            ('user_id', '=', self.user_id.id),
+            ('session_date', '=', self.session_date),
+            ('state', '=', 'closed'),
+            ('auto_closed', '=', False),
+            ('reverted', '=', False),
+        ])
+        ended.sudo().write({
             # The session stays CLOSED, and logout_at is kept. Reverting restores the
             # RIGHT to work today, it does not put the developer back on the clock:
             # they get a notification with the reason and press Start themselves.

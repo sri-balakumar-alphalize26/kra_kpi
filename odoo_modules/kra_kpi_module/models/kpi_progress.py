@@ -49,6 +49,13 @@ class KpiProgress(models.Model):
     file_name = fields.Char(
         string='File Name'
     )
+    # When the file now on uploaded_file was saved. Not create_date: the first
+    # file can be removed later and the next one promoted into its place, and
+    # each file shows its own saved time. Empty on older rows → create_date.
+    file_at = fields.Datetime(string='File Saved On', readonly=True, copy=False)
+    # Set by /kpi/progress/update only — "Edited <time>" on the update. Not
+    # write_date, which also moves on internal writes nobody would call an edit.
+    edited_at = fields.Datetime(string='Edited On', readonly=True, copy=False)
     # 🆕 NEW: Related Links field
     related_links = fields.Text(
         string='Related Links',

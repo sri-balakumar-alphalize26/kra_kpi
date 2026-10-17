@@ -131,7 +131,7 @@ export class KpiWorkdaySnapshot extends Component {
                                                             — by <t t-esc="dev.reopened_by"/>
                                                         </span>
                                                         <span t-if="dev.reopened_at" class="text-muted fw-normal">
-                                                            on <t t-esc="dev.reopened_at"/>
+                                                            on <t t-esc="dev.reopened_at_display"/>
                                                         </span>
                                                     </div>
                                                     <div class="small" style="white-space:pre-wrap;" t-esc="dev.reopen_reason"/>
@@ -163,7 +163,7 @@ export class KpiWorkdaySnapshot extends Component {
                                                     </a>
                                                     <span class="text-muted small align-self-center ms-2"
                                                           t-if="dev.generated_at">
-                                                        Saved <t t-esc="dev.generated_at"/>
+                                                        Saved <t t-esc="dev.generated_at_display"/>
                                                     </span>
                                                 </div>
                                                 </t>
