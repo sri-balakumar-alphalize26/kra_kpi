@@ -359,7 +359,7 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId, mine }) {
                         <Text style={s.reopenHeadTxt}>Reopened workday</Text>
                         {dev.reopened_by ? <Text style={s.reopenWho}>— by {dev.reopened_by}</Text> : null}
                       </View>
-                      {dev.reopened_at ? <Text style={s.reopenWhen}>on {dev.reopened_at}</Text> : null}
+                      {dev.reopened_at ? <Text style={s.reopenWhen}>on {dev.reopened_at_display || dev.reopened_at}</Text> : null}
                       <Text style={s.reopenTxt}>{dev.reopen_reason}</Text>
                     </View>
                   ) : null}
@@ -402,9 +402,11 @@ export default function WorkdaySnapshots({ onBack, focusSnapshotId, mine }) {
                           </View>
                           {/* When this picture was frozen. A snapshot is a claim about
                               a day, and "which day" is not the same question as "when
-                              was this taken" once a day has been reopened and re-ended. */}
+                              was this taken" once a day has been reopened and re-ended.
+                              _display is the server's IST string, the same one Odoo and
+                              the web app print; the raw value is UTC. */}
                           {dev.generated_at ? (
-                            <Text style={s.savedAt}>Saved {dev.generated_at}</Text>
+                            <Text style={s.savedAt}>Saved {dev.generated_at_display || dev.generated_at}</Text>
                           ) : null}
                         </>
                       )}

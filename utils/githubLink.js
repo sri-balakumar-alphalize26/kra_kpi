@@ -10,6 +10,9 @@
 //
 // Purely a convenience over the fields: the server still owns the rules (github.com
 // only, branch required), so nothing here decides whether a link is acceptable.
+//
+// The web app keeps a copy in web/lib/githubLink.js (it is its own Next root and
+// cannot import from here). Change both together.
 
 // A branch can contain slashes ("feature/x"), so everything after /tree/ is the
 // branch — it is the LAST path segment that varies, not the depth.
