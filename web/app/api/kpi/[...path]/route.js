@@ -44,7 +44,9 @@ const PREFIXES = new Set([
 const ODOO_OWN = new Set(["web/dataset/call_kw"]);
 /* Cookie-setting routes go through /api/auth/*; public WhatsApp approval pages
    and FCM push registration are not the browser's business. */
-const BLOCKED = [/^kpi_app\/(login|login_check|otp|config)\b/, /^kpi\/wa\//, /^kpi_push\//];
+/* /kpi/wa/<token> and /kpi/meet/<token> are public pages a CLIENT opens from a
+   WhatsApp link; they must never be reached through a staff session. */
+const BLOCKED = [/^kpi_app\/(login|login_check|otp|config)\b/, /^kpi\/wa\//, /^kpi\/meet(\/|$)/, /^kpi_push\//];
 
 /* Destructive maintenance routes (Settings › Data cleanup). Forwarded only for
    a System administrator: the proxy checks /kpi_user/info for THIS session on
@@ -102,11 +104,20 @@ async function handle(req, ctx) {
     });
   }
 
-  /* ---- multipart uploads: forward untouched, plain-JSON answer ---- */
+  /* ---- multipart uploads: forward untouched, plain-JSON answer ----
+     STREAMED, not buffered. Reading the whole body first (arrayBuffer) let the
+     browser finish its hop to this proxy at once, so the upload bar jumped to
+     100% and the real transfer to Odoo happened under "Saving…". Piped through,
+     the browser can only send as fast as Odoo reads, and its progress events
+     follow the actual upload. Content-Length is passed on so Odoo gets a
+     fixed-length body, not a chunked one. */
   const contentType = req.headers.get("content-type") || "";
   if (contentType.startsWith("multipart/form-data")) {
-    const body = await req.arrayBuffer();
-    const r = await odooRaw(target, { method: "POST", session, body, headers: { "Content-Type": contentType } });
+    const len = req.headers.get("content-length");
+    const r = await odooRaw(target, {
+      method: "POST", session, body: req.body, timeout: 600000,
+      headers: { "Content-Type": contentType, ...(len ? { "Content-Length": len } : {}) },
+    });
     if (!r) return NextResponse.json({ ok: false, error: OFFLINE }, { status: 503 });
     if (r.status >= 300 && r.status < 400) return NextResponse.json({ ok: false, error: "Please sign in again." }, { status: 401 });
     const text = await r.text();

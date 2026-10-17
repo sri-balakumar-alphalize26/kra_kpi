@@ -71,7 +71,13 @@
 .col-h em{font-style:normal;font-weight:500}
 .col-b{padding:0 8px 8px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
 .card{background:var(--raised);border-radius:var(--r-card);box-shadow:var(--shadow);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
-.card.fresh{background:var(--fresh);box-shadow:inset 0 0 0 1px var(--fresh-border)}
+/* A NEW task (isFreshTask): a solid red card, as on the Odoo board
+   (kra_style.scss .kpi-task-fresh). The ring is an inset shadow, so the card is
+   no taller. --text/--subtle are reset inside it so every line of text stays
+   black on the red; badges keep their own colours. Same in every light skin;
+   dark mode gets a deep red with light text (tokens.css). */
+.card.fresh{background:#ffb4b4;box-shadow:inset 0 0 0 1.5px #dc3545;--text:#111827;--subtle:#3f2a2a;--subtlest:#5b3b3b}
+.card.fresh.sel{box-shadow:inset 0 0 0 1.5px #dc3545,0 0 0 2px var(--brand)}
 .card.sel{box-shadow:0 0 0 2px var(--brand)}
 .card p{margin:0;font-size:14px;line-height:20px;color:var(--text)}
 .lz{display:inline-flex;height:16px;padding:0 4px;border-radius:var(--r);font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;align-items:center}
@@ -146,6 +152,14 @@
 .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .toolbar .right{margin-left:auto;display:inline-flex;gap:8px;align-items:center}
 .field{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--subtle);font-weight:700;min-width:0}
+.req{color:var(--danger);font-weight:800}
+/* Sidebar count (e.g. Approvals waiting on a manager). */
+.side-badge{margin-left:auto;min-width:18px;height:18px;padding:0 6px;border-radius:9px;background:var(--danger);color:#fff;font-size:11px;font-weight:800;font-style:normal;display:inline-grid;place-items:center;line-height:1}
+/* File-type badge (task files and links): see FileBadge in task/TaskExtras.jsx. */
+.fbadge{flex:none;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;color:#fff;line-height:1;letter-spacing:-.2px}
+.frow{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);text-decoration:none}
+.frow .fname{color:var(--brand);font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .fsub{display:block;font-size:10.5px;color:var(--subtle);margin-top:1px}
 .input{height:38px;padding:0 10px;border:1.5px solid var(--border);border-radius:var(--r);background:var(--input);font:inherit;font-size:13.5px;color:var(--text);display:flex;align-items:center;gap:8px;font-weight:500}
 .input svg{width:16px;height:16px;color:var(--subtlest);flex:none}
 .input .ph{color:var(--subtlest)}

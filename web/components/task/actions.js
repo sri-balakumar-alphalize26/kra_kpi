@@ -24,12 +24,10 @@ export function actionsFor(task, me, { workdayLocked = false } = {}) {
   const locked = workdayLocked && !admin;
   const gate = gateLabel(task);
   const lockReason = locked ? "Start your workday first" : gate;
-  /* Start / Pause / Complete / Resume log time to whoever presses them, so only
-     the assignee (or anyone, on an unassigned task) may. An admin still sees
-     them on someone else's task, greyed out with the reason. */
-  const actor = mine || !task.user_id;
-  const who = task.user_name || "the assignee";
-  const notYours = (verb) => `Only ${who} can ${verb} this task`;
+  /* Start / Pause / Complete / Resume: the assignee, anyone on an unassigned
+     task, or an admin on any task, the same rule as the server
+     (_task_actor_or_refuse) and the Odoo board, which offers them to admins. */
+  const actor = mine || !task.user_id || admin;
 
   if (lane === "pending_review" && admin) {
     add({ key: "accept_self", label: "Accept", kind: "primary", icon: "check", dialog: "accept", card: true });
@@ -37,25 +35,17 @@ export function actionsFor(task, me, { workdayLocked = false } = {}) {
   }
   if (!NOT_STARTABLE.includes(st)) {
     if (actor) add({ key: "start", label: "Start", kind: "primary", icon: "play", dialog: "start", disabled: locked || task.can_start === false, reason: lockReason, card: true });
-    else if (admin) add({ key: "start", label: "Start", kind: "primary", icon: "play", disabled: true, reason: notYours("start"), card: true });
   }
   if (st === "in_progress") {
     if (actor) {
       add({ key: "pause", label: "Pause", kind: "default", icon: "pause", dialog: "pause", disabled: locked, card: true });
       add({ key: "complete", label: "Complete", kind: "ok", icon: "check", dialog: "complete", disabled: locked, card: true });
-    } else if (admin) {
-      add({ key: "pause", label: "Pause", kind: "default", icon: "pause", disabled: true, reason: notYours("pause"), card: true });
-      add({ key: "complete", label: "Complete", kind: "ok", icon: "check", disabled: true, reason: notYours("complete"), card: true });
     }
     if (mine) add({ key: "switch", label: "Switch to…", kind: "ghost", icon: "swap", dialog: "switch", disabled: locked });
   }
   if (st === "paused") {
-    /* Resume runs the timer as whoever presses it, so only the assignee can.
-       An admin still sees it, greyed out with the reason, instead of nothing. */
     if (actor) add({ key: "resume", label: "Resume", kind: "primary", icon: "play", dialog: task.self_needs_resume_reason ? "resume_reason" : "resume", disabled: locked || task.can_start === false, reason: lockReason, card: true });
-    else if (admin) add({ key: "resume", label: "Resume", kind: "primary", icon: "play", disabled: true, reason: notYours("resume"), card: true });
     if (actor) add({ key: "complete", label: "Complete", kind: "ok", icon: "check", dialog: "complete", disabled: locked, card: true });
-    else if (admin) add({ key: "complete", label: "Complete", kind: "ok", icon: "check", disabled: true, reason: notYours("complete"), card: true });
   }
   if (task.can_undo_start && (mine || admin)) {
     add({ key: "undo_start", label: "Undo start", kind: "ghost", icon: "swap", dialog: "undo_start" });
@@ -95,7 +85,7 @@ export function dropTargets(task, me, { workdayLocked = false } = {}) {
   const from = laneForTask(task);
   const admin = canManage(me);
   const mine = isMine(task, me);
-  const actor = mine || !task.user_id; /* start/pause/resume/complete: the assignee only (see actionsFor) */
+  const actor = mine || !task.user_id || admin; /* start/pause/resume/complete: same rule as actionsFor */
   const t = {};
   if (workdayLocked && !admin) return t;
   const own = task.priority === "urgent" ? "urgent" : task.priority === "important" ? "important" : "regular";

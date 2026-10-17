@@ -9,11 +9,14 @@ import { usePathname, useRouter } from "next/navigation";
 import { useMe } from "@/lib/me";
 import { TOP_NAV, PORTAL_TABS, allowed, allowedMenu, activeKey } from "@/lib/nav";
 import KraLoader from "@/components/ui/KraLoader";
+import UploadMonitor from "@/components/ui/UploadMonitor";
+import { countOpenDoubts, waitingCounts } from "@/lib/services/approvals";
 import { useResource } from "@/lib/useFetch";
 import { getPref, setPref } from "@/lib/prefs";
 import { SKINS, MODES, useTheme } from "@/lib/theme";
 import { useDesktopNotifications, useDesktopState } from "@/lib/desktopNotify";
 import { Avatar, DialogHost, FlagHost, Icon, IconButton, useOutside, useFlags } from "@/components/ui";
+import { useMyPhoto } from "@/lib/services/more";
 
 /* The Jira-style frame. `variant` is "work" (developers + admins: top nav +
    sidebar) or "portal" (clients: header tabs, no sidebar). Who sees which
@@ -24,6 +27,7 @@ export default function Shell({ variant = "work", children }) {
       <FlagHost>
         <DialogHost>
           <Frame variant={variant}>{children}</Frame>
+          <UploadMonitor />
         </DialogHost>
       </FlagHost>
     </PortalGuard>
@@ -185,15 +189,16 @@ function AvatarMenu() {
   const { skin, setSkin, mode, setMode } = useTheme();
   const profile = me.role === "client" ? "/portal/profile" : "/profile";
   const roleLabel = { admin: "Admin", developer: "Developer", client: "Client" }[me.role] || me.role;
+  const photo = useMyPhoto(me.uid);
   return (
     <div className="menu-wrap" ref={ref}>
       <button className="icon-btn" style={{ width: "auto", padding: 0, background: "none" }} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu" onClick={() => setOpen((o) => !o)}>
-        <Avatar name={me.name} id={me.uid} size={28} />
+        <Avatar name={me.name} id={me.uid} size={28} src={photo} />
         {me.mustChange && <span className="dot" aria-label="Password needs changing" />}
       </button>
       {open && (
         <div className="menu" role="menu">
-          <header><Avatar name={me.name} id={me.uid} size={36} /><div><b>{me.name}</b><small>{roleLabel} · {me.login}</small></div></header>
+          <header><Avatar name={me.name} id={me.uid} size={36} src={photo} /><div><b>{me.name}</b><small>{roleLabel} · {me.login}</small></div></header>
           {me.mustChange && <MustChangeNote href={`${profile}?change=1`} />}
           <Link className="mi" href={profile} role="menuitem"><Icon n="user" />Profile</Link>
           <DesktopAlertsItem />
@@ -252,6 +257,20 @@ function Sidebar({ collapsed, onToggle }) {
   const [open, setOpen] = useState(() => getPref("side.open", me.uid, ["mywork"]) || ["mywork"]);
   const current = groups.find((g) => g.items.some((it) => it.key === active))?.key;
   const isOpen = (k) => open.includes(k) || k === current;
+  /* "Approvals" count for admins: everything waiting on a manager plus open
+     questions from developers. Polled a minute apart, and at once after a
+     decision on the Approvals page (kpi:approvals). call_kw, so not useResource. */
+  const [badges, setBadges] = useState({});
+  useEffect(() => {
+    if (!admin) return undefined;
+    let live = true;
+    const pull = () => Promise.all([waitingCounts().catch(() => null), countOpenDoubts().catch(() => 0)])
+      .then(([c, q]) => { if (live) setBadges({ approvals: (c?.total || 0) + (q || 0) }); });
+    pull();
+    const t = setInterval(pull, 60000);
+    window.addEventListener("kpi:approvals", pull);
+    return () => { live = false; clearInterval(t); window.removeEventListener("kpi:approvals", pull); };
+  }, [admin]);
   const toggle = (k) => {
     if (collapsed) { onToggle(); if (!open.includes(k)) setOpen((o) => [...o, k]); return; }
     setOpen((o) => {
@@ -275,11 +294,13 @@ function Sidebar({ collapsed, onToggle }) {
           <div key={g.key} className="side-grp">
             <button type="button" className={`side-item si-item side-grp-h ${!show && current === g.key ? "on" : ""}`} aria-expanded={show} onClick={() => toggle(g.key)} title={collapsed ? g.group : undefined}>
               <SideIcon n={g.icon} /><span>{g.group}</span>
+              {!show && g.items.some((it) => it.badge && badges[it.badge] > 0) && <em className="side-badge" aria-label="Waiting">{g.items.reduce((n, it) => n + (it.badge ? badges[it.badge] || 0 : 0), 0)}</em>}
               <Icon n={show ? "chev" : "cright"} size={14} className="side-chev" />
             </button>
             {show && !collapsed && g.items.map((it) => (
               <Link key={it.key} href={it.href} className={`side-item side-sub ${active === it.key ? "on" : ""}`}>
                 <span>{it.label}</span>
+                {it.badge && badges[it.badge] > 0 && <em className="side-badge" aria-label={`${badges[it.badge]} waiting`}>{badges[it.badge]}</em>}
               </Link>
             ))}
           </div>

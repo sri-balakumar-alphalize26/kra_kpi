@@ -14,7 +14,9 @@ export function Button({ kind = "default", size, icon, children, className = "",
   const k = { primary: "btn-primary", danger: "btn-danger", ok: "btn-ok", ghost: "btn-ghost", default: "" }[kind] || "";
   const s = size === "sm" ? { height: 28, fontSize: 12.5 } : size === "lg" ? { height: 46, fontSize: 15, fontWeight: 800, borderRadius: 12 } : undefined;
   return (
-    <button className={`btn ${k} ${className}`} style={s} disabled={busy || rest.disabled} {...rest}>
+    /* rest first, then disabled: a caller's own disabled={false} must not
+       re-enable a button whose request is still running. */
+    <button className={`btn ${k} ${className}`} style={s} {...rest} disabled={busy || rest.disabled}>
       {busy ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : icon ? <Icon n={icon} size={16} /> : null}
       {children}
     </button>
@@ -31,9 +33,9 @@ const TONES = {
   review: ["var(--lz-review-bg)", "var(--lz-review)"], danger: ["var(--over-bg)", "var(--over)"],
   fresh: ["var(--fresh)", "var(--over)"], neutral: ["var(--hover)", "var(--subtle)"],
 };
-export function Lozenge({ tone = "todo", children, style, className = "" }) {
+export function Lozenge({ tone = "todo", children, style, className = "", title }) {
   const [bg, fg] = TONES[tone] || TONES.todo;
-  return <span className={`lz ${className}`} style={{ background: bg, color: fg, ...style }}>{children}</span>;
+  return <span className={`lz ${className}`} title={title} style={{ background: bg, color: fg, ...style }}>{children}</span>;
 }
 /* kra.kpi.task_state → tone + label */
 export function stateTone(state) {
@@ -304,7 +306,7 @@ function FormDialog({ opts, onDone }) {
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {opts.text && <p style={{ margin: 0, fontSize: 14, lineHeight: "21px" }}>{opts.text}</p>}
         {(opts.fields || []).map((f, i) => (
-          <Field key={f.key} label={f.label}>
+          <Field key={f.key} label={f.label} required={f.required !== false}>
             {f.options
               ? <span className="input"><Select value={vals[f.key]} onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}>{f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</Select></span>
               : <Input type={f.type || "text"} autoComplete={f.type === "password" ? "off" : undefined} value={vals[f.key]} autoFocus={i === 0} placeholder={f.placeholder} onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} />}
@@ -330,10 +332,12 @@ export function useOutside(onClose) {
 }
 
 /* ---- form field ---- */
-export function Field({ label, error, hint, children, className = "" }) {
+/* `required` adds Odoo's red asterisk after the label, so a mandatory field
+   says so before Save is pressed rather than after. */
+export function Field({ label, error, hint, required, children, className = "" }) {
   return (
     <label className={`field ${className}`}>
-      {label}
+      {required ? <span>{label}<span className="req" aria-hidden="true"> *</span></span> : label}
       {children}
       {error && <small className="err" style={{ color: "var(--danger)", fontSize: 12 }}>{error}</small>}
       {hint && !error && <small className="mini">{hint}</small>}

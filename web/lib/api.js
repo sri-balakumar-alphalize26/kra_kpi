@@ -48,7 +48,60 @@ function fireSignedOut() {
    limit_time_real is 120 s; AI suggestions and PDF builds can take a while. */
 const TIMEOUT_MS = 60000;
 
+/* ---- uploads sent as JSON ------------------------------------------------
+   Most file uploads (certificates, intake, portal requests, manuals, logos,
+   signatures, photos) travel as base64 inside an ordinary JSON call, and fetch
+   reports no upload progress — a 20 MB file sat behind a spinner. A body this big
+   goes by XHR instead, and every one in flight is listed here so the app-wide
+   upload card (components/ui/UploadMonitor.jsx) can show its percent, MB, speed
+   and time left, and cancel it. Same answer handling as send() below. */
+const TRACK_FROM = 256 * 1024;
+const live = new Map();       /* id -> { id, label, loaded, total, done, xhr } */
+const liveWatchers = new Set();
+let liveSeq = 0;
+const emitLive = () => { const list = [...live.values()]; for (const fn of [...liveWatchers]) fn(list); };
+export function watchUploads(fn) { liveWatchers.add(fn); fn([...live.values()]); return () => liveWatchers.delete(fn); }
+export function cancelUpload(id) { live.get(id)?.xhr.abort(); }
+/* What the card calls it: the file name when the call names one. */
+function uploadLabel(body) {
+  const b = body || {};
+  const n = b.file_name || b.filename || b.fileName || b.image_name || b.name;
+  if (Array.isArray(b.attachments) && b.attachments.length) return b.attachments.length === 1 ? (b.attachments[0].name || "1 file") : `${b.attachments.length} files`;
+  return typeof n === "string" && n ? n : "File";
+}
+function sendTracked(url, json, body, timeout) {
+  return new Promise((resolve, reject) => {
+    const id = ++liveSeq;
+    const xhr = new XMLHttpRequest();
+    const entry = { id, label: uploadLabel(body), loaded: 0, total: json.length, done: false, xhr };
+    live.set(id, entry); emitLive();
+    const finish = () => { live.delete(id); emitLive(); };
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    xhr.timeout = Math.max(timeout || 0, 300000); /* a big file on a slow line needs more than a minute */
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.upload.onprogress = (e) => { entry.loaded = e.loaded || 0; entry.total = e.total || entry.total; emitLive(); };
+    xhr.upload.onload = () => { entry.loaded = entry.total; entry.done = true; emitLive(); };
+    xhr.onload = () => {
+      finish();
+      learnSkew({ headers: { get: (h) => xhr.getResponseHeader(h) } });
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (_) {}
+      if (xhr.status === 401) fireSignedOut();
+      if (xhr.status === 413) reject(new ApiError("File too large — add a Drive or GitHub link instead.", { status: 413, data }));
+      else if (xhr.status < 200 || xhr.status >= 300) reject(new ApiError(data?.error || OFFLINE, { status: xhr.status, field: data?.field ?? null, data }));
+      else resolve(data);
+    };
+    xhr.onerror = () => { finish(); reject(new ApiError(OFFLINE, { status: 0 })); };
+    xhr.ontimeout = () => { finish(); reject(new ApiError("The upload took too long.", { status: 0 })); };
+    xhr.onabort = () => { finish(); reject(new ApiError(UPLOAD_CANCELLED, { status: 0 })); };
+    xhr.send(json);
+  });
+}
+
 async function send(url, { body, timeout = TIMEOUT_MS } = {}) {
+  const json = JSON.stringify(body ?? {});
+  if (json.length >= TRACK_FROM && typeof XMLHttpRequest !== "undefined") return sendTracked(url, json, body, timeout);
   let res, data;
   try {
     res = await fetch(url, {
@@ -56,7 +109,7 @@ async function send(url, { body, timeout = TIMEOUT_MS } = {}) {
       credentials: "same-origin",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body ?? {}),
+      body: json,
       signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(timeout) : undefined,
     });
   } catch (e) {
@@ -158,23 +211,32 @@ export function mutate(path, params, fn) {
 
 /* ---- uploads -------------------------------------------------------------
    XHR, because fetch has no upload progress. The upload routes answer plain
-   JSON (not the envelope); it is returned as-is. */
-export function upload(path, formData, { timeout = 120000, onProgress } = {}) {
+   JSON (not the envelope); it is returned as-is. `signal` cancels it (the
+   Cancel link under the progress bar). */
+export const UPLOAD_CANCELLED = "Upload cancelled.";
+export function upload(path, formData, { timeout = 120000, onProgress, signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new ApiError(UPLOAD_CANCELLED, { status: 0 })); return; }
     const xhr = new XMLHttpRequest();
     xhr.open("POST", BASE + path);
     xhr.timeout = timeout;
     xhr.withCredentials = true;
     if (onProgress) xhr.upload.onprogress = (e) => { try { onProgress(e.loaded || 0, e.total || 0); } catch (_) {} };
+    const onAbort = () => xhr.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const done = () => signal?.removeEventListener("abort", onAbort);
     xhr.onload = () => {
+      done();
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch (_) {}
       if (xhr.status === 401) fireSignedOut();
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else if (xhr.status === 413) reject(new ApiError("File too large — max 50 MB per file. Add a Drive or GitHub link instead.", { status: 413, data }));
       else reject(new ApiError(data?.error || data?.message || OFFLINE, { status: xhr.status, data }));
     };
-    xhr.onerror = () => reject(new ApiError(OFFLINE, { status: 0 }));
-    xhr.ontimeout = () => reject(new ApiError("The upload took too long.", { status: 0 }));
+    xhr.onerror = () => { done(); reject(new ApiError(OFFLINE, { status: 0 })); };
+    xhr.ontimeout = () => { done(); reject(new ApiError("The upload took too long.", { status: 0 })); };
+    xhr.onabort = () => { done(); reject(new ApiError(UPLOAD_CANCELLED, { status: 0 })); };
     xhr.send(formData);
   });
 }

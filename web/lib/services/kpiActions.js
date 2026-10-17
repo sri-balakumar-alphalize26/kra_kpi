@@ -2,7 +2,7 @@
    services/kpiActions.js onto the web proxy. Same route names, same params,
    same task shape (/kra_kpi/tasks/get map_rec), so the two boards agree.
    Mock mode and getConnection() are gone: the server is always configured. */
-import { rpc, read, callKw, assertOk, upload } from "@/lib/api";
+import { rpc, read, callKw, assertOk, upload, serverNow } from "@/lib/api";
 import { createLogger } from "@/lib/log";
 
 const log = createLogger("ActionBoard");
@@ -54,6 +54,15 @@ export function isWithinFreshWindow(task, nowMs) {
   const created = parseServerTs(task && task.create_date);
   if (created == null) return true;
   return (nowMs - created) < FRESH_MAX_AGE_MS;
+}
+/* A NEW task: the solid red card, sorted to the top of its lane. Odoo's
+   isFreshTask: still in the Regular / Important / Urgent lane, never worked
+   (no time logged, so starting it clears the red at once), and created within
+   FRESH_MAX_AGE_MS. */
+const FRESH_LANES = ["regular", "important", "urgent"];
+export function isFreshTask(task, nowMs) {
+  return !!task && FRESH_LANES.includes(laneForTask(task))
+    && !((task.timer_total_seconds || 0) > 0) && isWithinFreshWindow(task, nowMs);
 }
 
 /* ---- search ----------------------------------------------------------------- */
@@ -133,6 +142,13 @@ export function groupIntoLanes(tasks) {
     if (isTodayTask(t)) buckets.today.push(t);
   }
   for (const l of LANES) if (l.key !== "today") buckets[l.key].sort(byRecency);
+  /* New (red) tasks first in Regular / Important / Urgent, as Odoo's _filterLane
+     does; the order within each group is left as it was. */
+  const now = serverNow();
+  for (const k of FRESH_LANES) {
+    const lane = buckets[k] || [];
+    buckets[k] = [...lane.filter((t) => isFreshTask(t, now)), ...lane.filter((t) => !isFreshTask(t, now))];
+  }
   buckets.today.sort((a, b) => (b.today_seconds || 0) - (a.today_seconds || 0));
   return buckets;
 }
@@ -252,7 +268,7 @@ export const createProgress = (kpiId, summary, links) =>
 /* With files: ONE multipart post (`file` repeated — the route reads getlist('file')),
    so an update cannot half-land. Without: the JSON create route. The upload route
    answers plain JSON {status, id, file_count}; assertOk is left to the caller. */
-export async function submitProgress(kpiId, { summary, links, files } = {}, onProgress) {
+export async function submitProgress(kpiId, { summary, links, files } = {}, onProgress, signal) {
   const picked = files || [];
   if (!picked.length) return createProgress(kpiId, summary, links || []);
   const big = picked.find((f) => f.size > MAX_PROGRESS_BYTES);
@@ -264,7 +280,7 @@ export async function submitProgress(kpiId, { summary, links, files } = {}, onPr
   fd.append("related_links", JSON.stringify(links || []));
   for (const f of picked) fd.append("file", f, f.name);
   log.info("progress upload →", { kpiId, files: picked.length });
-  return upload("/kpi/progress/upload_file", fd, { timeout: 180000, onProgress });
+  return upload("/kpi/progress/upload_file", fd, { timeout: 180000, onProgress, signal });
 }
 /* Only keys present are written server-side; summary can't be blank. clearFile
    drops the entry's first file (the next one is promoted). */
@@ -291,7 +307,7 @@ export function parseLinks(raw) {
 /* User manuals: PDF / DOC / DOCX, 25 MB each (the route re-checks both). */
 export const MANUAL_EXTENSIONS = [".pdf", ".doc", ".docx"];
 export const MAX_MANUAL_BYTES = 25 * 1024 * 1024;
-export async function uploadManual(kpiId, { files, description, links } = {}, onProgress) {
+export async function uploadManual(kpiId, { files, description, links } = {}, onProgress, signal) {
   const picked = files || [];
   if (!picked.length) return { status: false, message: "Pick a file." };
   const bad = picked.find((f) => !MANUAL_EXTENSIONS.some((x) => f.name.toLowerCase().endsWith(x)));
@@ -303,7 +319,7 @@ export async function uploadManual(kpiId, { files, description, links } = {}, on
   for (const f of picked) fd.append("file", f, f.name);
   fd.append("description", description || "");
   fd.append("related_links", JSON.stringify(links || []));
-  return upload("/kpi/manual/upload_file", fd, { timeout: 180000, onProgress });
+  return upload("/kpi/manual/upload_file", fd, { timeout: 180000, onProgress, signal });
 }
 /* The list route carries `can_edit` per manual; task details doesn't. */
 export async function listManuals(kpiId) {
@@ -311,6 +327,19 @@ export async function listManuals(kpiId) {
   return res?.status ? res.manuals || [] : [];
 }
 export const deleteManual = (manualId) => action("/kpi/manual/delete", { manual_id: manualId });
+/* Take ONE file off a progress update or a manual: the second half of "Replace"
+   when a same-named file is uploaded again. attachmentId 0 = the entry's own
+   file. Uploader or admin only (the route's rule); a manual left with no file is
+   deleted, a progress update keeps its note. */
+/* Every file on the task, whoever uploaded it: names and times only, never the
+   bytes. The duplicate check reads this rather than the panel's lists, because a
+   developer's own lists hold only their own updates (record rule "Employee: Own
+   Progress Updates"), so an admin's file would never be flagged. can_edit says
+   whether the CALLER may Replace that file.
+   → {status, files: [{kind, entry_id, attachment_id, file_name, uploaded_at, who, can_edit}]} */
+export const fetchTaskFilesIndex = (kpiId) => rpc("/kpi/task/files_index", { kpi_id: kpiId });
+export const removeEntryFile = (kind, entryId, attachmentId = 0) =>
+  action("/kpi/file/remove", { kind, entry_id: entryId, attachment_id: attachmentId || 0 });
 
 /* GitHub: the server requires a branch and a github.com URL. */
 export const addGithubLink = (kpiId, githubUrl, branchName) => action("/kpi/github/add", { kpi_id: kpiId, github_url: githubUrl || "", branch_name: branchName || "" });

@@ -145,6 +145,9 @@ export async function odooRaw(path, { method = "GET", session, headers: extra = 
   try {
     return await fetch(ODOO_URL + path, {
       method, headers: odooHeaders({ Accept: "*/*", ...extra }, session), body,
+      /* A streamed body (an upload passed straight through) needs duplex:'half'
+         in Node's fetch; a buffer or no body must not carry it. */
+      ...(body && typeof body.getReader === "function" ? { duplex: "half" } : {}),
       cache: "no-store", redirect: "manual", signal: AbortSignal.timeout(timeout),
     });
   } catch (e) {

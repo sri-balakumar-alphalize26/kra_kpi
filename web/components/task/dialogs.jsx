@@ -92,7 +92,7 @@ function ResumeReasonDialog({ task, busy, onClose, onConfirm }) {
     <Modal open onClose={onClose} title={<Title task={task}>Respond &amp; resume</Title>} width={500}
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="ok" icon="play" busy={busy} disabled={!reason.trim()} onClick={() => onConfirm({ reason: reason.trim() })}>Resume</Button></>}>
       {task.self_review_note && <Box tone="warn"><b>{task.self_review_by || "Admin"}</b> sent this back:<div style={{ fontStyle: "italic", marginTop: 4, whiteSpace: "pre-wrap" }}>“{task.self_review_note}”</div></Box>}
-      <Field label="What did you change / your response? (required)" hint="The admin will see this on the card.">
+      <Field label="What did you change / your response?" required hint="The admin will see this on the card.">
         <span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus placeholder="Describe what you fixed…" style={TA} /></span>
       </Field>
     </Modal>
@@ -151,8 +151,8 @@ function PauseDialog({ task, extra, busy, onClose, onConfirm, all }) {
         </>
       )}
       {S.baseNoteRequired(code) && (
-        <Field label={code === "meeting" ? "What is it about?" : "Reason (required)"} className="reveal">
-          <span className="input ta" style={{ height: 64 }}><textarea value={note} onChange={(e) => { setNote(e.target.value.slice(0, S.PAUSE_NOTE_MAX)); setErr(""); }} maxLength={S.PAUSE_NOTE_MAX} placeholder={code === "meeting" ? "Short — e.g. sprint planning" : "Why? (required)"} style={TA} /></span>
+        <Field label={code === "meeting" ? "What is it about?" : "Reason"} required={code !== "meeting"} className="reveal">
+          <span className="input ta" style={{ height: 64 }}><textarea value={note} onChange={(e) => { setNote(e.target.value.slice(0, S.PAUSE_NOTE_MAX)); setErr(""); }} maxLength={S.PAUSE_NOTE_MAX} placeholder={code === "meeting" ? "Short — e.g. sprint planning" : "Why?"} style={TA} /></span>
           <small className="mini" style={{ color: "var(--danger)" }}>Keep it short (max {S.PAUSE_NOTE_MAX}) — this shows on your Workday Map. {note.length}/{S.PAUSE_NOTE_MAX}</small>
         </Field>
       )}
@@ -195,7 +195,7 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
           <label key={c.key} className="chk"><input type="checkbox" checked={!!checks[c.key]} onChange={(e) => setChecks((s) => ({ ...s, [c.key]: e.target.checked }))} style={CHK} />{c.label}{inferred.includes(c.key) && <span className="mini"> (ticked from what's attached)</span>}</label>
         ))}
       </div>
-      <Field label={task.progress_count > 0 ? "Progress note (optional — the task already has updates)" : "Progress note (required)"}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
+      <Field label={task.progress_count > 0 ? "Progress note (optional — the task already has updates)" : "Progress note"} required={!(task.progress_count > 0)}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
       <label className="chk"><input type="checkbox" checked={!partial} disabled={!anyDone} onChange={(e) => setPartial(!e.target.checked)} style={CHK} />Mark fully complete{!anyDone && <span className="mini"> (tick at least one item first)</span>}</label>
       <p className="mini" style={{ margin: 0 }}>Time spent: {fmtHM(spentOf(task))}</p>
     </Modal>
@@ -251,7 +251,7 @@ function RejectDialog({ task, busy, onClose, onConfirm }) {
           <li>Keep the timer stopped until they resume</li>
         </ul>
       </Box>
-      <Field label="Reason for rejection (required)" error={short ? "Please give a more detailed reason (at least 10 characters)." : null} hint="This will be shown to the developer.">
+      <Field label="Reason for rejection" required error={short ? "Please give a more detailed reason (at least 10 characters)." : null} hint="This will be shown to the developer.">
         <span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus placeholder="What needs to be improved or corrected…" style={TA} /></span>
       </Field>
     </Modal>
@@ -265,7 +265,7 @@ function ReasonDialog({ task, busy, onClose, onConfirm, title, label, text, conf
     <Modal open onClose={onClose} title={<Title task={task}>{title}</Title>} width={480}
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind={danger ? "danger" : "primary"} busy={busy} disabled={!noReason && !reason.trim()} onClick={() => onConfirm({ reason: reason.trim() })}>{confirm}</Button></>}>
       {text && <p className="note" style={{ margin: 0 }}>{text}</p>}
-      {!noReason && <Field label={label}><span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus style={TA} /></span></Field>}
+      {!noReason && <Field label={label} required><span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus style={TA} /></span></Field>}
     </Modal>
   );
 }
@@ -276,7 +276,7 @@ function SendBackDialog({ task, busy, onClose, onConfirm }) {
     <Modal open onClose={onClose} title={<Title task={task}>Send back to {task.user_name || "developer"}</Title>} width={480}
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="danger" busy={busy} onClick={() => onConfirm({ note: note.trim(), discard: true })}>Discard task</Button><Button kind="primary" busy={busy} disabled={!note.trim()} onClick={() => onConfirm({ note: note.trim(), discard: false })}>Send back</Button></>}>
       {task.self_resume_note && <Box><b>{task.self_resume_by || "Developer"}</b> replied: <span style={{ whiteSpace: "pre-wrap" }}>{task.self_resume_note}</span></Box>}
-      <Field label="Note to the developer"><span className="input ta"><textarea value={note} onChange={(e) => setNote(e.target.value)} autoFocus style={TA} /></span></Field>
+      <Field label="Note to the developer" required><span className="input ta"><textarea value={note} onChange={(e) => setNote(e.target.value)} autoFocus style={TA} /></span></Field>
       <p className="mini" style={{ margin: 0 }}>Send back keeps it in Pending review with your note on the card; Discard removes it.</p>
     </Modal>
   );
@@ -303,7 +303,7 @@ function AddTimeDialog({ task, busy, onClose, onConfirm }) {
       <p className="note" style={{ margin: 0 }}>This is <b>added</b> to the estimate, not a new total.</p>
       <div className="grid2"><Field label="Hours"><Input type="number" min="0" value={h} onChange={(e) => setH(e.target.value)} /></Field><Field label="Minutes"><Input type="number" min="0" max="59" value={m} onChange={(e) => setM(e.target.value)} /></Field></div>
       <span style={{ fontWeight: 700, fontSize: 13, color: live[1] }}>{live[0]}</span>
-      <Field label="Reason (required)" hint="The reason shows on the task card, so write it for whoever reads the board."><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. client added two more screens" /></Field>
+      <Field label="Reason" required hint="The reason shows on the task card, so write it for whoever reads the board."><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. client added two more screens" /></Field>
     </Modal>
   );
 }
@@ -322,6 +322,8 @@ function ReassignDialog({ task, busy, onClose, onConfirm }) {
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="primary" icon="swap" busy={busy} disabled={!uid || reason.trim().length < 10} onClick={() => onConfirm({ userId: uid, reason: reason.trim() })}>Confirm reassignment</Button></>}>
       <Box tone="warn"><b>Important:</b> reassigning resets the task to <b>{S.priorityLabel(task.priority)}</b> and clears the timer. All progress is recorded in history.</Box>
       <Facts rows={[["Task", task.name], ["Current assignee", task.user_name || "Not assigned"], ["Current state", task.task_state], ["Time spent", fmtHM(spentOf(task))]]} />
+      {/* Not a <Field>: that is a <label>, and a list of radios can't sit inside one. */}
+      <div className="field"><span>Select new assignee<span className="req" aria-hidden="true"> *</span></span></div>
       {list.length > 8 && <Input icon="search" value={uq} onChange={(e) => setUq(e.target.value)} placeholder="Search people…" />}
       <div className="people">
         {shown.map((u) => (
@@ -330,7 +332,7 @@ function ReassignDialog({ task, busy, onClose, onConfirm }) {
         {!shown.length && <span className="mini" style={{ padding: 8 }}>{users.loading ? "Loading…" : "No users"}</span>}
       </div>
       <span className="mini">You can reassign to the same person to reset the task.</span>
-      <Field label="Reason for reassignment (required)" error={short ? "Please give a bit more detail (at least 10 characters)." : null}>
+      <Field label="Reason for reassignment" required error={short ? "Please give a bit more detail (at least 10 characters)." : null}>
         <span className="input ta" style={{ height: 64 }}><textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. workload balancing, availability, skill match" style={TA} /></span>
       </Field>
     </Modal>
@@ -485,14 +487,14 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="primary" busy={busy} onClick={submit}>{mode === "done" ? "Add done task" : "Create task"}</Button></>}>
       {admin && <Tabs items={[{ key: "new", label: "New task" }, { key: "done", label: "Already done" }]} value={mode} onChange={setMode} />}
       <div className="grid2">
-        <Field label="Client"><span className="input"><Select value={client} onChange={(e) => setClient(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">{clients ? "Choose a client" : "Loading…"}</option>{(clients || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></span></Field>
-        <Field label="Project / version"><span className="input"><Select value={kra} onChange={(e) => setKra(e.target.value)} disabled={!projects.length} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}>{projects.map((p) => <option key={p.id} value={p.id}>{p.display}</option>)}</Select></span></Field>
+        <Field label="Client" required><span className="input"><Select value={client} onChange={(e) => setClient(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">{clients ? "Choose a client" : "Loading…"}</option>{(clients || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></span></Field>
+        <Field label="Project / version" required><span className="input"><Select value={kra} onChange={(e) => setKra(e.target.value)} disabled={!projects.length} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}>{projects.map((p) => <option key={p.id} value={p.id}>{p.display}</option>)}</Select></span></Field>
       </div>
-      <Field label="Task name"><Input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder={mode === "done" ? "What was done?" : "What needs doing?"} /></Field>
+      <Field label="Task name" required><Input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder={mode === "done" ? "What was done?" : "What needs doing?"} /></Field>
       {matches.length > 0 && <div className="callout" style={{ background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)", color: "var(--lz-paused)", padding: "8px 12px" }}><span>Already used in this project: {matches.slice(0, 3).map((x) => `${x.external_ref || ""} ${x.name || x}${x.assignee ? ` (${x.assignee})` : ""}`.trim()).join(" · ")}</span></div>}
       <div className="fit-row">
         {mode === "new" && <Field label="Type" hint="What you think it is — the admin makes the final call on Accept."><Tabs items={[{ key: "requirement", label: "REQ" }, { key: "update", label: "UPT" }, { key: "bug", label: "BUG" }]} value={docType} onChange={setDocType} /></Field>}
-        <Field label="Module / App / EXE (tick one or more)">
+        <Field label="Module / App / EXE (tick one or more)" required>
           <span className="chips" style={{ margin: 0 }}>
             {S.DELIVERABLES.map((d) => <label key={d.code} className="chk" style={{ marginRight: 10 }}><input type="checkbox" checked={deliv.includes(d.code)} onChange={() => toggleDeliv(d.code)} style={CHK} />{d.label}</label>)}
           </span>
@@ -500,13 +502,13 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
         <Field label="Priority"><Tabs items={S.PRIORITIES.map((p) => ({ key: p.code, label: p.label }))} value={pri} onChange={setPri} /></Field>
       </div>
       <div className="fit-row">
-        {mode === "done" && <Field label="Time worked" className="grow"><span style={{ display: "flex", gap: 6 }}><Input type="number" min="0" value={wh} onChange={(e) => setWh(e.target.value)} right={<span className="ph">h</span>} /><Input type="number" min="0" max="59" value={wm} onChange={(e) => setWm(e.target.value)} right={<span className="ph">m</span>} /></span></Field>}
+        {mode === "done" && <Field label="Time worked" required className="grow"><span style={{ display: "flex", gap: 6 }}><Input type="number" min="0" value={wh} onChange={(e) => setWh(e.target.value)} right={<span className="ph">h</span>} /><Input type="number" min="0" max="59" value={wm} onChange={(e) => setWm(e.target.value)} right={<span className="ph">m</span>} /></span></Field>}
         <Field label={mode === "done" ? "Estimate" : "Estimate (optional)"} className="grow" hint={mode === "done" ? "Fills in from the time worked and the type: 20–40% more, at most +2h for a Module or EXE, +3h if App is ticked. It must stay above the time worked." : "The admin can set or correct it when accepting."}><span style={{ display: "flex", gap: 6 }}><Input type="number" min="0" value={h} onChange={(e) => { setEstTouched(true); setH(e.target.value); }} right={<span className="ph">h</span>} /><Input type="number" min="0" max="59" value={m} onChange={(e) => { setEstTouched(true); setM(e.target.value); }} right={<span className="ph">m</span>} /></span></Field>
       </div>
       {admin && (
         <div className="grid2">
           <Field label="Developer" hint={mode === "done" ? "Who did the work. The time is recorded against them." : "Who this task is for. Defaults to you."}><span className="input"><Select value={userId} onChange={(e) => setUserId(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value={0}>Me ({me.name})</option>{userList.filter((u) => u.id !== me.uid).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
-          {mode === "done" && <Field label="Work date" hint="The day the work was done — today or earlier."><Input type="date" value={workDate} max={S.localDay(Date.now())} onChange={(e) => setWorkDate(e.target.value)} /></Field>}
+          {mode === "done" && <Field label="Work date" required hint="The day the work was done — today or earlier."><Input type="date" value={workDate} max={S.localDay(Date.now())} onChange={(e) => setWorkDate(e.target.value)} /></Field>}
         </div>
       )}
       <Field label="Description (optional)"><span className="input ta"><textarea value={desc} onChange={(e) => setDesc(e.target.value)} style={TA} /></span></Field>

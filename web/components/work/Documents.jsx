@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Avatar, Button, ErrorState, Icon, Lozenge, PageHeader, Skeleton, Select } from "@/components/ui";
+import CopyLink from "@/components/ui/CopyLink";
 import { useResource } from "@/lib/useFetch";
 import { href } from "@/lib/api";
 import * as M from "@/lib/services/more";
@@ -121,6 +122,7 @@ function DocLine({ icon = "doc", badge, title, sub, note, viewUrl, downloadUrl, 
         {sub && <div className="mini">{sub}</div>}
       </div>
       <span style={{ display: "inline-flex", gap: 6, flex: "none" }}>
+        {external && viewUrl && <CopyLink url={viewUrl} />}
         {viewUrl && <a className="btn" style={{ height: 26, fontSize: 12 }} href={viewUrl} target="_blank" rel="noreferrer"><Icon n={external ? "link" : "eye"} size={14} />{external ? "Open" : "View"}</a>}
         {downloadUrl && <a className="btn" style={{ height: 26, fontSize: 12 }} href={downloadUrl}><Icon n="download" size={14} />Download</a>}
       </span>

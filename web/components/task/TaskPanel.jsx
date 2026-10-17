@@ -8,7 +8,10 @@ import { liveFromAnchor, fmtClock, secsSince, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
 import { actionsFor } from "./actions";
 import { useTaskActions } from "./TaskActions";
-import { EditHeadingDialog, FilesTab, HistoryTab, ProgressComposer, ProgressList } from "./TaskExtras";
+import { ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList } from "./TaskExtras";
+
+/* Odoo's has_started states (kra_api.py /kpi_action/details). */
+const STARTED_STATES = ["in_progress", "paused", "partially_completed", "awaiting_client", "completed"];
 
 /* The Jira-style side panel for one task: everything /kra_kpi/task/details
    returns, plus the same actions as the card. */
@@ -66,6 +69,14 @@ export default function TaskPanel({ id, onClose }) {
   const changed = acts.refreshAll;
   const late = t ? S.deadlinePassed(t, now) : false;
   const fileCount = (d?.files?.length || 0) + (d?.github?.length || 0) + (d?.manuals?.length || 0) + (d?.links?.length || 0);
+  /* Updates, files, manuals and GitHub links are added only once the task has
+     been started, as on the Odoo board. /kpi_action/details says so (has_started:
+     the task's STATE only, for everyone, admins included. Time logged earlier
+     does not count, so a Rework / On Hold task back in the Regular, Important or
+     Urgent lane stays closed until it is started again). Until that has loaded,
+     the same rule from the task row. */
+  const started = t ? (typeof info?.has_started === "boolean" ? info.has_started
+    : STARTED_STATES.includes(t.task_state)) : false;
 
   return (
     <>
@@ -108,8 +119,12 @@ export default function TaskPanel({ id, onClose }) {
               <div className="actions">
                 {actions.map((a) => <Button key={a.key} kind={a.kind} size="sm" icon={a.icon} disabled={a.disabled} title={a.reason || a.label} onClick={() => acts.run(a, t)}>{a.label}</Button>)}
               </div>
+              {/* A greyed-out Start reads as broken unless it says why; the reason
+                  used to live only in the hover title. */}
+              {(() => { const off = actions.find((a) => a.disabled && a.reason); return off ? <span className="mini" style={{ display: "flex", alignItems: "center", gap: 5, marginTop: -4 }}><Icon n="info" size={13} />{off.reason}</span> : null; })()}
 
               {t.description && <div className="sec"><h3>Description</h3><p style={{ whiteSpace: "pre-wrap" }}>{t.description}</p></div>}
+              <ClientWording key={`cw${id}`} kpiId={id} />
               {String(meta.guidelines || "").trim() && <div className="sec"><h3>Guidelines</h3><p style={{ whiteSpace: "pre-wrap" }}>{meta.guidelines}</p></div>}
 
               <dl className="details">
@@ -143,12 +158,15 @@ export default function TaskPanel({ id, onClose }) {
 
               {tab === "updates" && (
                 <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {lane !== "completed" && <ProgressComposer kpiId={id} onChanged={changed} />}
+                  {lane !== "completed" && (started ? <ProgressComposer kpiId={id} d={d} onChanged={changed} /> : <NotStartedNote />)}
+                  {/* Questions go to the manager, never the client: the assignee (and
+                      admins) can ask; everyone on the task sees the answers. */}
+                  <ManagerQuestions key={`mq${id}`} kpiId={id} canAsk={!!(meta.is_assignee || meta.is_manager) && lane !== "completed"} />
                   <ProgressList progress={d.progress || []} onChanged={changed} />
                   {!d.progress?.length && <span className="mini">No updates yet.</span>}
                 </div>
               )}
-              {tab === "files" && <FilesTab kpiId={id} d={d} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
+              {tab === "files" && <FilesTab kpiId={id} d={d} canAdd={started} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
               {tab === "history" && <HistoryTab key={id} kpiId={id} d={d} />}
             </>
           )}
