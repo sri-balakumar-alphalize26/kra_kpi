@@ -73,7 +73,7 @@ export default function Meetings() {
                   return (
                     <tr key={m.id} onClick={() => setOpenId(m.id)} style={{ cursor: "pointer" }}>
                       <td>{m.scheduled_start ? when(m.scheduled_start) : <span className="mini" title={m.requested_text || ""}>Asked: {m.requested_text || "no time yet"}</span>}</td>
-                      <td style={{ whiteSpace: "normal", maxWidth: 320 }}><b>{m.name}</b>{m.kpi_id && <div className="mini">{m2o(m.kpi_id)}</div>}</td>
+                      <td style={{ whiteSpace: "normal", maxWidth: 320 }}><b>{m.name}</b>{m.is_internal && <Lozenge tone="neutral" style={{ marginLeft: 6, textTransform: "none" }} title="A developer and the manager only — no client">Internal</Lozenge>}{m.kpi_id && <div className="mini">{m2o(m.kpi_id)}</div>}</td>
                       <td>{m2o(m.client_kra_id) || "—"}</td>
                       <td>{m.organizer_id ? <><Avatar name={m2o(m.organizer_id)} id={m.organizer_id[0]} size={22} /> {m2o(m.organizer_id)}</> : <span className="mini" style={{ color: "var(--pri-important)", fontWeight: 700 }}>Nobody yet</span>}</td>
                       <td>{m.requested_by_name || "—"}</td>
@@ -258,7 +258,7 @@ function MeetingDialog({ id, canEdit, onClose, onChanged }) {
 
           {st === "done" && (
             <>
-              <Field label="Summary" hint={m.summary_posted ? "Sent to the client." : "What was agreed. This is what gets sent to the client."}>
+              <Field label="Summary" required hint={m.summary_posted ? "Sent to the client." : "What was agreed. This is what gets sent to the client."}>
                 <span className="input ta" style={{ height: "auto" }}><textarea rows={4} value={draft.summary} readOnly={!canEdit} onChange={set("summary")} style={TA} /></span>
               </Field>
               <Field label="Next steps">

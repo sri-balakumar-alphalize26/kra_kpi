@@ -25,7 +25,7 @@ export const FILTERS = [
 ];
 
 const LIST_FIELDS = ["name", "kpi_id", "client_kra_id", "scheduled_start", "duration_minutes", "local_when", "requested_text",
-  "organizer_id", "requested_by_name", "state", "actual_minutes", "participant_summary"];
+  "organizer_id", "requested_by_name", "state", "actual_minutes", "participant_summary", "is_internal"];
 const FORM_FIELDS = [...LIST_FIELDS, "client_db_id", "attendee_user_ids", "requested_by_number", "provider", "join_url", "room_name",
   "confirmed_by_id", "confirmed_at", "reminder_sent_at", "link_posted_at", "opened_at", "ended_at", "cancel_reason",
   "summary", "action_items", "summary_posted", "notes"];

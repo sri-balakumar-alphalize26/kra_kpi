@@ -40,6 +40,8 @@ export const WORK_MENU = [
     { key: "attendance", label: "Attendance", href: "/people/attendance" }, /* web only */
   ] },
   { key: "clients", group: "Clients", icon: "inbox", roles: ADMIN, items: [
+    /* badge: the Sidebar shows the number waiting on a manager (Shell.jsx). */
+    { key: "approvals", label: "Approvals", href: "/approvals", badge: "approvals" },
     { key: "queue", label: "Client Task Queue", href: "/queue" },
     { key: "files", label: "Generate Client Files", href: "/intake/files" },
   ] },

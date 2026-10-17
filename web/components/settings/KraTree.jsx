@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Avatar, Button, ErrorState, Field, Icon, IconButton, Input, Lozenge, Modal, PageHeader, Skeleton, stateTone, useDialogs, useFlags, Select } from "@/components/ui";
 import * as S from "@/lib/services/settings";
+import * as P from "@/lib/services/approvals";
 import { getIntakeUsers } from "@/lib/services/admin";
 import { href } from "@/lib/api";
 import { PRIORITIES, DELIVERABLES, TASK_TYPES } from "@/lib/services/kpiActions";
@@ -24,8 +25,12 @@ export default function KraTree() {
   const [q, setQ] = useState("");
   const [dialog, setDialog] = useState(null); /* {kind:'kra'|'kpi'|'rename'|'clients', node, parent} */
   const [busy, setBusy] = useState(false);
+  /* Who manages each client (kra.master.manager_user_id): the person who
+     approves for that client. Read alongside the tree, which doesn't carry it. */
+  const [mgr, setMgr] = useState({});
+  const loadManagers = () => P.clientManagers().then((rows) => setMgr(Object.fromEntries((rows || []).map((r) => [r.id, r])))).catch(() => {});
   /* Everything starts closed; rows open only when clicked, and any number can be open at once. */
-  const load = () => S.fetchKraTree().then((t) => { setTree(t); setErr(""); }).catch((e) => setErr(e.message));
+  const load = () => { loadManagers(); return S.fetchKraTree().then((t) => { setTree(t); setErr(""); }).catch((e) => setErr(e.message)); };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stats = useMemo(() => {
@@ -74,15 +79,19 @@ export default function KraTree() {
         {err && <ErrorState error={{ message: err }} onRetry={load} />}
         <div className="cardbox" style={{ padding: "10px 8px" }}>
           {!tree && !err && <div style={{ padding: 8 }}><Skeleton rows={6} /></div>}
-          {tree && <div className="tree">{tree.filter(matches).map((n) => <Node key={n.id} n={n} depth={0} open={open} toggle={toggle} onAdd={(node, kind) => setDialog({ kind, parent: node })} onRename={(node, isKpi) => setDialog({ kind: "rename", node, isKpi })} onDelete={del} onClients={(node) => setDialog({ kind: "clients", node })} onOpenTask={(id) => acts.openTask(id)} onManual={openManual} q={q} />)}{!tree.length && <div className="empty">No KRAs yet. Create the first client above.</div>}</div>}
+          {tree && <div className="tree">{tree.filter(matches).map((n) => <Node key={n.id} n={n} depth={0} open={open} toggle={toggle} onAdd={(node, kind) => setDialog({ kind, parent: node })} onRename={(node, isKpi) => setDialog({ kind: "rename", node, isKpi })} onDelete={del} onClients={(node) => setDialog({ kind: "clients", node })} onManager={(node) => setDialog({ kind: "manager", node })} mgr={mgr} onOpenTask={(id) => acts.openTask(id)} onManual={openManual} q={q} />)}{!tree.length && <div className="empty">No KRAs yet. Create the first client above.</div>}</div>}
         </div>
       </div>
-      {dialog && (dialog.kind === "clients" ? <ClientsDialog node={dialog.node} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); load(); }} flags={flags} /> : <EditDialog d={dialog} busy={busy} onClose={() => setDialog(null)} onRun={run} />)}
+      {dialog && (dialog.kind === "clients" ? <ClientsDialog node={dialog.node} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); load(); }} flags={flags} />
+        : dialog.kind === "manager" ? <ManagerDialog node={dialog.node} current={mgr[dialog.node.id]} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); loadManagers(); }} flags={flags} />
+        : <EditDialog d={dialog} busy={busy} onClose={() => setDialog(null)} onRun={run} />)}
     </>
   );
 }
 
-function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, onOpenTask, onManual, q }) {
+function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, onManager, mgr = {}, onOpenTask, onManual, q }) {
+  const m = depth === 0 ? mgr[n.id] : null;
+  const manager = m && Array.isArray(m.manager_user_id) ? m.manager_user_id[1] : "";
   const isOpen = open.has(n.id) || !!q;
   const kids = (n.child_ids || []);
   const kpis = (n.kpi_ids || []).filter((k) => !q || kpiHit(k, q.toLowerCase()) || n.name.toLowerCase().includes(q.toLowerCase()));
@@ -96,16 +105,20 @@ function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, on
           <b style={{ fontWeight: depth === 0 ? 800 : 600 }}>{n.name}</b>
         </span>
         {n.is_client && <Lozenge tone="progress" style={{ textTransform: "none" }}>Client · {(n.client_user_ids || []).length} user{(n.client_user_ids || []).length === 1 ? "" : "s"}</Lozenge>}
+        {depth === 0 && m && (manager
+          ? <Lozenge tone={m.manager_ready ? "done" : "paused"} style={{ textTransform: "none" }} title={m.manager_ready ? "Approves for this client" : "Approves for this client, but has no WhatsApp number to reach them on"}>Manager · {manager}</Lozenge>
+          : <Lozenge tone="paused" style={{ textTransform: "none" }} title="Approvals for this client go to every coordinator">No manager</Lozenge>)}
         <span className="cnt">{kids.length ? `${kids.length} sub · ` : ""}{count(n)} KPIs</span>
         <span className="act">
           {depth === 0 && <IconButton icon="people" label="Client users" size={15} onClick={() => onClients(n)} />}
+          {depth === 0 && <IconButton icon="user" label="Manager (approves for this client)" size={15} onClick={() => onManager(n)} />}
           <IconButton icon="plus" label="Add sub-KRA" size={15} onClick={() => onAdd(n, "kra")} />
           <IconButton icon="board" label="Add KPI" size={15} onClick={() => onAdd(n, "kpi")} />
           <IconButton icon="pen" label="Rename" size={15} onClick={() => onRename(n, false)} />
           <IconButton icon="trash" label="Delete" size={15} onClick={() => onDelete(n, false)} />
         </span>
       </div>
-      {isOpen && kids.map((c) => <Node key={c.id} n={c} depth={depth + 1} open={open} toggle={toggle} onAdd={onAdd} onRename={onRename} onDelete={onDelete} onClients={onClients} onOpenTask={onOpenTask} onManual={onManual} q={q} />)}
+      {isOpen && kids.map((c) => <Node key={c.id} n={c} depth={depth + 1} open={open} toggle={toggle} onAdd={onAdd} onRename={onRename} onDelete={onDelete} onClients={onClients} onManager={onManager} mgr={mgr} onOpenTask={onOpenTask} onManual={onManual} q={q} />)}
       {isOpen && kpis.map((k) => (
         <div key={`k${k.id}`} className={`tr d${Math.min(depth + 1, 3)}`} style={{ fontWeight: 500 }}>
           <span className="ref" style={{ cursor: "pointer" }} onClick={() => onOpenTask(k.id)}>{k.external_ref || `#${k.id}`}</span>
@@ -117,6 +130,28 @@ function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, on
         </div>
       ))}
     </>
+  );
+}
+
+/* Who approves for this client: Odoo accepts only a coordinator, owner or
+   System user, so only they are offered; anything else it refuses is shown. */
+function ManagerDialog({ node, current, onClose, onSaved, flags }) {
+  const [users, setUsers] = useState(null);
+  const [pick, setPick] = useState(current && Array.isArray(current.manager_user_id) ? String(current.manager_user_id[0]) : "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { P.coordinators().then(setUsers).catch((e) => { flags.err(e.message); setUsers([]); }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const save = async () => {
+    setBusy(true);
+    try { await P.setManager(node.id, pick ? Number(pick) : false); flags.ok(pick ? "Manager set." : "Manager removed."); onSaved(); }
+    catch (e) { flags.err(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open onClose={onClose} title={`Manager for ${node.name}`} width={460}
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="primary" busy={busy} disabled={!users} onClick={save}>Save</Button></>}>
+      <p className="note" style={{ margin: 0 }}>The manager approves everything for this client — new requests, databases, switch-offs, meetings and finished work — and is the only one who talks to the client. With nobody set, it goes to every coordinator.</p>
+      <Field label="Manager"><span className="input"><Select value={pick} onChange={(e) => setPick(e.target.value)} style={SEL} placeholder={users ? "— none —" : "Loading…"}><option value="">— none —</option>{(users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
+      <span className="mini">Only coordinators, owners and System admins can manage a client.</span>
+    </Modal>
   );
 }
 
@@ -146,7 +181,7 @@ function NameDialog({ d, busy, onClose, onRun }) {
   const tick = (id, on) => setPicked((s) => { const n = new Set(s); on ? n.add(id) : n.delete(id); return n; });
   return (
     <Modal open onClose={onClose} title={title} width={root ? 540 : 460} footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="primary" busy={busy} disabled={!name.trim()} onClick={go}>{d.kind === "rename" ? "Save" : "Create"}</Button></>}>
-      <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} autoFocus onKeyDown={(e) => { if (e.key === "Enter") go(); }} /></Field>
+      <Field label="Name" required><Input value={name} onChange={(e) => setName(e.target.value)} autoFocus onKeyDown={(e) => { if (e.key === "Enter") go(); }} /></Field>
       {root && <>
         <p className="mini" style={{ margin: 0 }}>A root KRA is a client. Tick the portal users who should see it and its tasks. Projects and versions go underneath; sub-KRAs take their client's users.</p>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -195,14 +230,14 @@ function KpiDialog({ parent, busy, onClose, onRun }) {
   const num = (k, max) => <Input type="number" min="0" max={max} value={f[k]} onChange={(e) => set(k, e.target.value)} />;
   return (
     <Modal open onClose={onClose} title={`New KPI under ${parent.name}`} width={720} footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="primary" busy={busy} disabled={!f.name.trim()} onClick={go}>Create</Button></>}>
-      <Field label="KPI name *"><Input value={f.name} autoFocus onChange={(e) => set("name", e.target.value)} /></Field>
+      <Field label="KPI name" required><Input value={f.name} autoFocus onChange={(e) => set("name", e.target.value)} /></Field>
       <div className="grid3">
-        <Field label="Estimate *"><span style={{ display: "flex", gap: 6 }}><Input type="number" min="0" value={f.estimateHours} onChange={(e) => set("estimateHours", e.target.value)} right={<span className="ph">h</span>} /><Input type="number" min="0" max="59" value={f.estimateMinutes} onChange={(e) => set("estimateMinutes", e.target.value)} right={<span className="ph">m</span>} /></span></Field>
+        <Field label="Estimate" required><span style={{ display: "flex", gap: 6 }}><Input type="number" min="0" value={f.estimateHours} onChange={(e) => set("estimateHours", e.target.value)} right={<span className="ph">h</span>} /><Input type="number" min="0" max="59" value={f.estimateMinutes} onChange={(e) => set("estimateMinutes", e.target.value)} right={<span className="ph">m</span>} /></span></Field>
         <Field label="Priority"><span className="input"><Select value={f.priority} onChange={(e) => set("priority", e.target.value)} style={SEL}>{PRIORITIES.map((p) => <option key={p.code} value={p.code}>{p.label}</option>)}</Select></span></Field>
-        <Field label="Assignee *"><span className="input"><Select value={f.userId} onChange={(e) => set("userId", e.target.value)} style={SEL} placeholder="Choose a person"><option value="">Choose a person</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
+        <Field label="Assignee" required><span className="input"><Select value={f.userId} onChange={(e) => set("userId", e.target.value)} style={SEL} placeholder="Choose a person"><option value="">Choose a person</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
       </div>
       <div className="grid3">
-        <div className="field">Type *<span className="pillset">{DELIVERABLES.map((d) => <button key={d.code} type="button" className={`pill ${f.deliverable.includes(d.code) ? "on" : ""}`} aria-pressed={f.deliverable.includes(d.code)} onClick={() => toggleDeliv(d.code)}>{d.label}</button>)}</span><small className="mini">Module, App and/or EXE</small></div>
+        <div className="field"><span>Type<span className="req" aria-hidden="true"> *</span></span><span className="pillset">{DELIVERABLES.map((d) => <button key={d.code} type="button" className={`pill ${f.deliverable.includes(d.code) ? "on" : ""}`} aria-pressed={f.deliverable.includes(d.code)} onClick={() => toggleDeliv(d.code)}>{d.label}</button>)}</span><small className="mini">Module, App and/or EXE</small></div>
         <Field label="Request type" hint="Gives it a REQ / UPT / BUG ref"><span className="input"><Select value={f.docType} onChange={(e) => set("docType", e.target.value)} style={SEL}><option value="">None</option>{TASK_TYPES.map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}</Select></span></Field>
         <Field label="Deadline"><Input type="date" value={f.deadline} onChange={(e) => set("deadline", e.target.value)} /></Field>
       </div>
@@ -263,8 +298,8 @@ function ClientsDialog({ node, onClose, onSaved, flags }) {
       {!adding ? <Button size="sm" icon="plus" style={{ alignSelf: "flex-start" }} onClick={() => { setCreated(null); setAdding(true); }}>New client login</Button> : (
         <div className="cardbox" style={{ boxShadow: "none", padding: 12, gap: 10 }}>
           <div className="grid2">
-            <Field label="Name"><Input value={nu.name} autoFocus onChange={(e) => setNu({ ...nu, name: e.target.value })} /></Field>
-            <Field label="Login"><Input value={nu.login} placeholder="e.g. name@client.com" onChange={(e) => setNu({ ...nu, login: e.target.value })} /></Field>
+            <Field label="Name" required><Input value={nu.name} autoFocus onChange={(e) => setNu({ ...nu, name: e.target.value })} /></Field>
+            <Field label="Login" required><Input value={nu.login} placeholder="e.g. name@client.com" onChange={(e) => setNu({ ...nu, login: e.target.value })} /></Field>
             <Field label="WhatsApp phone (optional)" hint="Digits with country code, no +"><Input value={nu.phone} inputMode="tel" onChange={(e) => setNu({ ...nu, phone: e.target.value })} /></Field>
             <Field label="Password (optional)" hint="Blank → a 6-digit one is generated"><Input value={nu.password} type="text" autoComplete="new-password" onChange={(e) => setNu({ ...nu, password: e.target.value })} /></Field>
           </div>

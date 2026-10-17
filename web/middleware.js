@@ -15,7 +15,7 @@ import { SESSION_COOKIE, ROLE_COOKIE, roleHome } from "@/lib/cookies";
      /login/**    public
    "/" goes to the role's home. */
 const PUBLIC = ["/login"];
-const ADMIN_ONLY = ["/settings", "/people", "/queue", "/intake", "/dashboards", "/reports"];
+const ADMIN_ONLY = ["/settings", "/people", "/queue", "/approvals", "/intake", "/dashboards", "/reports"];
 const under = (path, p) => path === p || path.startsWith(p + "/");
 
 export function middleware(req) {
