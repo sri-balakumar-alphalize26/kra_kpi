@@ -80,7 +80,11 @@ function canAddTime(task, mine, admin) {
 }
 
 /* Drag-and-drop: which lanes a card may be dropped on, and what that means.
-   Returns { [laneKey]: { action, dialog? } } for the allowed targets only. */
+   Returns { [laneKey]: { action, dialog?, hint } } for the allowed targets only.
+   A drop never moves a card by itself: it runs the same action (and opens the
+   same dialog, with its required fields) as the button would. `hint` is what
+   the lane shows while the card is dragged over the board. */
+const PRI_LABEL = { regular: "Regular", important: "Important", urgent: "Urgent" };
 export function dropTargets(task, me, { workdayLocked = false } = {}) {
   const from = laneForTask(task);
   const admin = canManage(me);
@@ -89,29 +93,62 @@ export function dropTargets(task, me, { workdayLocked = false } = {}) {
   const t = {};
   if (workdayLocked && !admin) return t;
   const own = task.priority === "urgent" ? "urgent" : task.priority === "important" ? "important" : "regular";
+  const complete = { action: "complete", dialog: "complete", hint: "Complete: checklist and progress note needed" };
+  const undo = { action: "undo_start", dialog: "undo_start", hint: "Undo start" };
 
+  /* No dragging between Regular / Important / Urgent: priority changes only
+     through the task's Priority button, so a stray drag can't escalate a task. */
   if (["regular", "important", "urgent"].includes(from)) {
-    if (actor && task.can_start !== false) t.in_progress = { action: "start", dialog: "start" };
-    if (admin) for (const p of PRIORITY_LANES) if (p !== from) t[p] = { action: "priority", priority: p };
+    if (actor && task.can_start !== false) t.in_progress = { action: "start", dialog: "start", hint: "Start this task" };
   }
   if (from === "pending_review" && admin) {
-    for (const p of PRIORITY_LANES) t[p] = { action: "accept_self", dialog: "accept", priority: p };
+    for (const p of PRIORITY_LANES) t[p] = { action: "accept_self", dialog: "accept", priority: p, hint: `Accept as ${PRI_LABEL[p]}` };
   }
   if (from === "in_progress") {
     if (actor) {
-      t.paused = { action: "pause", dialog: "pause" };
-      t.approvals = { action: "complete", dialog: "complete" };
+      t.paused = { action: "pause", dialog: "pause", hint: "Pause: pick a reason" };
+      t.approvals = complete;
     }
-    if ((mine || admin) && task.can_undo_start) t[own] = { action: "undo_start", dialog: "undo_start" };
+    if ((mine || admin) && task.can_undo_start) t[own] = undo;
   }
   if (from === "paused" || (from === "pending_review" && task.task_state === "paused")) {
-    if (actor && task.can_start !== false) t.in_progress = { action: "resume", dialog: task.self_needs_resume_reason ? "resume_reason" : "resume" };
-    if (actor) t.approvals = { action: "complete", dialog: "complete" };
-    if ((mine || admin) && task.can_undo_start) t[own] = { action: "undo_start", dialog: "undo_start" };
+    if (actor && task.can_start !== false) t.in_progress = task.self_needs_resume_reason
+      ? { action: "resume", dialog: "resume_reason", hint: "Resume: say what you changed" }
+      : { action: "resume", dialog: "resume", hint: "Resume this task" };
+    if (actor) t.approvals = complete;
+    if ((mine || admin) && task.can_undo_start) t[own] = undo;
   }
   if (from === "approvals" && admin) {
-    t.completed = { action: "approve", dialog: "approve" };
-    t[own] = { action: "reject", dialog: "reject" };
+    t.completed = { action: "approve", dialog: "approve", hint: "Approve: review checklist needed" };
+    t[own] = { action: "reject", dialog: "reject", hint: "Send back: reason needed" };
   }
   return t;
+}
+
+/* Why a card can't go to lane `to` (only asked when dropTargets has no entry
+   for it), so a refused drop says what to do instead of just "not allowed". */
+export function dropBlockedReason(task, me, to, { workdayLocked = false } = {}) {
+  const from = laneForTask(task);
+  const st = task.task_state;
+  const admin = canManage(me);
+  const actor = isMine(task, me) || !task.user_id || admin;
+  if (workdayLocked && !admin) return "Start your workday first.";
+  if (to === "completed") return "Only an admin approval moves a task to Completed.";
+  if (to === "awaiting_client") return "A task goes to Awaiting client by itself once the admin approves it.";
+  if (to === "pending_review") return "Pending review only holds new self-created tasks.";
+  if (!actor && ["in_progress", "paused", "approvals"].includes(to)) return "Only the assignee or an admin can move this task.";
+  if (to === "approvals") return "Start the task first. Only a running or paused task can be sent for approval.";
+  if (to === "paused") return "Only a running task can be paused.";
+  if (to === "in_progress") {
+    if (task.can_start === false) return `${gateLabel(task) || "This task can't be started yet"}.`;
+    if (["approvals", "awaiting_client", "completed"].includes(from)) return "This task is already finished. An admin can send it back from Pending approvals.";
+    return "That move isn't allowed from here.";
+  }
+  if (PRIORITY_LANES.includes(to)) {
+    if (PRIORITY_LANES.includes(from)) return admin ? "Priority can't be changed by dragging. Open the task and use Priority." : "Only an admin can change a task's priority.";
+    if (!admin) return "Only an admin can change a task's priority.";
+    if (st === "in_progress" || st === "paused") return "A started task keeps its priority. Use Undo start to move it back.";
+    if (from === "approvals") return `To send it back, drop it on its own lane, ${PRI_LABEL[task.priority] || "Regular"}.`;
+  }
+  return "That move isn't allowed from here.";
 }

@@ -1,7 +1,7 @@
 "use client";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, DragOverlay, MeasuringStrategy, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { Avatar, Button, ErrorState, Icon, IconButton, Lozenge, PageHeader, Select, Skeleton, StaleBar, useFlags, useOutside } from "@/components/ui";
 import { useMe } from "@/lib/me";
 import { useResource } from "@/lib/useFetch";
@@ -10,7 +10,7 @@ import * as S from "@/lib/services/kpiActions";
 import { useNow, fmtClock, fmtHMS, liveFromAnchor, presenceLive, productiveLive } from "@/lib/liveTime";
 import TaskCard from "@/components/task/TaskCard";
 import LiveTick from "@/components/task/LiveTick";
-import { actionsFor, dropTargets } from "@/components/task/actions";
+import { actionsFor, dropBlockedReason, dropTargets } from "@/components/task/actions";
 import { useTaskActions } from "@/components/task/TaskActions";
 import { useFitHeight } from "@/lib/useFitHeight";
 import { NowStrip } from "@/components/work/IdleFlow";
@@ -20,6 +20,8 @@ const PAID_PATH = "/kra_kpi/tasks/paid";
 const SEL = { border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" };
 const EMPTY = [];
 const LANE_PAGE = 50; /* cards per lane before "Show more" */
+/* Lanes open and stretch when a drag starts (Lane), so drop zones are re-measured during the drag. */
+const MEASURE = { droppable: { strategy: MeasuringStrategy.Always } };
 
 /* Plan → Do → Check: the lanes grouped under one arrow header per phase, each
    phase on its own tint. Lanes keep their own order inside a phase; a phase
@@ -153,7 +155,7 @@ export default function Board() {
     const to = e.over?.id;
     if (!task || !to) return;
     const tg = dropTargets(task, me, { workdayLocked: acts.workdayLocked })[to];
-    if (!tg) { if (to !== S.laneForTask(task) && to !== "today") flags.warn(to === "completed" ? "Only an admin approval moves a task to Completed." : "That move isn't allowed from here."); return; }
+    if (!tg) { if (to !== S.laneForTask(task) && to !== "today") flags.warn(dropBlockedReason(task, me, to, { workdayLocked: acts.workdayLocked })); return; }
     try {
       if (tg.dialog) await acts.openDialog(tg.dialog, task, { priority: tg.priority });
       else await acts.perform(tg.action, task, tg.priority ? { priority: tg.priority } : {});
@@ -226,8 +228,8 @@ export default function Board() {
       {board.stale && <StaleBar error={board.error} onRetry={board.refresh} />}
       {board.loading && !board.data && <div className="board">{[1, 2, 3, 4].map((i) => <section key={i} className="col"><header className="col-h">&nbsp;</header><div className="col-b" style={{ padding: 12 }}><Skeleton rows={4} /></div></section>)}</div>}
       {board.data && (
-        <DndContext sensors={sensors} onDragStart={(e) => setDragging(tasks.find((t) => t.id === e.active.id) || null)} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
-          <div className="board pdc" ref={boardRef}>
+        <DndContext sensors={sensors} measuring={MEASURE} onDragStart={(e) => setDragging(tasks.find((t) => t.id === e.active.id) || null)} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
+          <div className={`board pdc ${dragging ? "is-dragging" : ""}`} ref={boardRef}>
             {PHASES.map((ph) => {
               const own = laneList.filter((l) => ph.lanes.includes(l.key));
               const paidHere = ph.key === "check" && showPaid && !status;
@@ -239,7 +241,7 @@ export default function Board() {
                   <div className="pdc-head">{ph.label}<small>{n} task{n === 1 ? "" : "s"}</small></div>
                   <div className="pdc-cols">
                     {own.map((l) => (
-                      <Lane key={l.key} lane={l} items={lanes[l.key]} dragging={dragging} allowed={targets[l.key] != null} selectedId={+sp.get("task")} onOpen={onOpen} onAction={onAction} workdayLocked={acts.workdayLocked} />
+                      <Lane key={l.key} lane={l} items={lanes[l.key]} dragging={dragging} allowed={targets[l.key] != null} hint={targets[l.key]?.hint} blocked={dragging && !targets[l.key] ? dropBlockedReason(dragging, me, l.key, { workdayLocked: acts.workdayLocked }) : null} selectedId={+sp.get("task")} onOpen={onOpen} onAction={onAction} workdayLocked={acts.workdayLocked} />
                     ))}
                     {paidHere && <PaidLane res={paid} />}
                   </div>
@@ -371,17 +373,19 @@ function PeopleFilter({ people, value, onChange }) {
   );
 }
 
-const Lane = memo(function Lane({ lane, items, dragging, allowed, selectedId, onOpen, onAction, workdayLocked }) {
+const Lane = memo(function Lane({ lane, items, dragging, allowed, hint, blocked, selectedId, onOpen, onAction, workdayLocked }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane.key });
   /* Odoo style: "auto" folds the lane into a thin strip while it has no cards;
-     "open" / "folded" are the user's own choice and stick until changed. */
+     "open" / "folded" are the user's own choice and stick until changed.
+     While a card is dragged, every lane it may drop on opens, so it is easy to hit. */
   const [mode, setMode] = useState("auto");
-  const narrow = mode === "folded" || (mode === "auto" && items.length === 0);
+  const home = dragging && (S.laneForTask(dragging) === lane.key || lane.key === "today");
+  const narrow = !(dragging && allowed) && (mode === "folded" || (mode === "auto" && items.length === 0));
   /* A long lane draws LANE_PAGE cards, then "Show more". */
   const [limit, setLimit] = useState(LANE_PAGE);
   const shown = items.length > limit ? items.slice(0, limit) : items;
   const hidden = items.length - shown.length;
-  const cls = ["col", narrow ? "narrow" : "", dragging ? (allowed ? "drop-ok" : S.laneForTask(dragging) === lane.key || lane.key === "today" ? "" : "drop-no") : "", isOver && allowed ? "over" : ""].join(" ");
+  const cls = ["col", narrow ? "narrow" : "", dragging ? (allowed ? "drop-ok" : home ? "" : "drop-no") : "", isOver && dragging && !home ? "over" : ""].join(" ");
   return (
     <section ref={setNodeRef} className={cls}>
       <header className="col-h" onClick={narrow ? () => setMode("open") : undefined} onDoubleClick={narrow ? undefined : () => setMode("folded")} title={narrow ? "Click to open" : "Double-click to fold"}>
@@ -390,6 +394,8 @@ const Lane = memo(function Lane({ lane, items, dragging, allowed, selectedId, on
         {narrow && <IconButton className="collapse" icon="cright" label="Open lane" size={14} onClick={(e) => { e.stopPropagation(); setMode("open"); }} />}
       </header>
       <div className="col-b">
+        {dragging && allowed && hint && <div className="drop-hint" role="note"><Icon n="check" size={13} />{hint}</div>}
+        {dragging && !allowed && !home && isOver && blocked && <div className="drop-hint no" role="note"><Icon n="x" size={13} />{blocked}</div>}
         {shown.map((t) => <DraggableCard key={`${lane.key}-${t.id}`} task={t} selected={selectedId === t.id} onOpen={onOpen} onAction={onAction} workdayLocked={workdayLocked} isDragging={dragging?.id === t.id} />)}
         {hidden > 0 && <div style={{ display: "flex", justifyContent: "center", padding: "4px 0 8px" }}><Button size="sm" kind="ghost" onClick={() => setLimit((n) => n + LANE_PAGE)}>Show {Math.min(LANE_PAGE, hidden)} more</Button></div>}
         {!items.length && <div className="empty">{lane.key === "today" ? "Nothing worked on yet today" : "No tasks"}</div>}

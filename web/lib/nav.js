@@ -12,7 +12,7 @@ export const TOP_NAV = [
   { key: "yourwork", label: "Your work", href: "/your-work", roles: ["developer", "admin"] },
   { key: "projects", label: "Projects", href: "/projects", roles: ["developer", "admin"] },
   { key: "filters", label: "Filters", href: "/list", roles: ["developer", "admin"] },
-  { key: "dashboards", label: "Dashboards", href: "/dashboards", roles: ["admin"], owner: true },
+  { key: "dashboards", label: "Dashboards", href: "/dashboards", roles: ["admin"] },
   { key: "people", label: "People", href: "/people", roles: ["admin"] },
 ];
 
@@ -36,7 +36,9 @@ export const WORK_MENU = [
   ] },
   { key: "tracking", group: "Tracking", icon: "live", roles: ADMIN, items: [
     { key: "live", label: "Live Tracking", href: "/people" },
-    { key: "owner", label: "Owner Dashboard", href: "/dashboards", owner: true },
+    /* Every admin on the web (the server's _is_owner_admin allows them); Odoo's
+       own menu still limits it to Owners and System. */
+    { key: "owner", label: "Owner Dashboard", href: "/dashboards" },
     { key: "attendance", label: "Attendance", href: "/people/attendance" }, /* web only */
   ] },
   { key: "clients", group: "Clients", icon: "inbox", roles: ADMIN, items: [
