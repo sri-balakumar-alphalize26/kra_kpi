@@ -4,14 +4,16 @@ import { useRouter } from "next/navigation";
 import { Button, ErrorState, Field, Icon, Input, Lozenge, Modal, PageHeader, Select, Skeleton, useFlags } from "@/components/ui";
 import { useResource } from "@/lib/useFetch";
 import * as A from "@/lib/services/admin";
+import AiAssistant from "./AiAssistant";
 
 /* One card per client: certified / awaiting / in progress, actual vs quoted
    hours, last invoice, and the per-project breakdown with "Invoice this
    project". "Certified tasks" popup (filter, hours totals, Generate invoice)
-   and "Create invoice". Owners and System only (dashboards/layout.jsx). */
+   and "Create invoice", plus the 369 AI Assistant. Admins only (dashboards/layout.jsx). */
 export default function OwnerDashboard() {
   const flags = useFlags();
   const router = useRouter();
+  const [aiOpen, setAiOpen] = useState(false); /* the 369 AI Assistant drawer */
   const dash = useResource(A.CERTIFIED_PATH, {}, { ttl: 30000 });
   /* {status:false, message} (not authorized) is a failure, not "no clients". */
   const refused = dash.data?.status === false ? { message: dash.data.message || dash.data.error || "Could not load the dashboard." } : null;
@@ -50,6 +52,7 @@ export default function OwnerDashboard() {
     <>
       <PageHeader crumbs={[{ label: "Dashboards" }, { label: "Owner dashboard" }]} title="Owner dashboard">
         {clients.length > 1 && <span className="input" style={{ height: 32, minWidth: 200 }}><Icon n="filter" size={14} /><Select value={only} onChange={(e) => setOnly(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">All clients ({clients.length})</option>{clients.map((c) => <option key={c.client_id} value={c.client_id}>{c.client_name}</option>)}</Select></span>}
+        <Button icon="bolt" onClick={() => setAiOpen(true)} title="Open the 369 AI Assistant (Ctrl+J)">Ask AI</Button>
         <Button icon="swap" kind="ghost" onClick={dash.refresh}>Refresh</Button>
         <Button onClick={() => router.push("/reports/invoices")}>All invoices</Button>
       </PageHeader>
@@ -62,6 +65,7 @@ export default function OwnerDashboard() {
           <div className="stat"><small>Hours</small><b>{data ? `${Math.round(sum("total_actual_hours"))}h` : "…"}</b><span>actual · quoted {data ? `${Math.round(sum("total_quoted_hours"))}h` : ""}</span></div>
         </div>
         {(refused || (dash.error && !dash.data)) && <ErrorState error={refused || dash.error} onRetry={dash.refresh} />}
+        <AiAssistant open={aiOpen} onOpenChange={setAiOpen} />
         {!dash.data && !dash.error && <div className="stats">{[1, 2, 3, 4].map((i) => <div key={i} className="cardbox"><Skeleton rows={4} /></div>)}</div>}
         <div className="stats">
           {shownClients.map((c) => {

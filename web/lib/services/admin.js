@@ -113,6 +113,23 @@ export const getSubKras = (clientKraId) => read("/kpi_completion_cert/get_sub_kr
    [{id, name}]; {users} is accepted too. */
 export const getIntakeUsers = () => read("/kra_kpi/get_users", {}, { ttl: 300000 }).then((r) => (Array.isArray(r) ? r : r?.users || []));
 export const peekNextRef = (docType) => rpc("/kpi_requirements/peek_next_ref", { doc_type: docType }).then((r) => (r?.status === false ? { prefix: REF_PREFIX[docType] || "REQ", next_number: 1 } : r));
+/* 369 AI Assistant (Owner Dashboard): a question about the team's work, answered
+   from live data by rules on the server (an AI only adds a summary when a key is
+   set). `context` is the previous answer's, for follow-ups like "and last week?". */
+export const askAssistant = ({ question, period, context, chatId }) =>
+  rpc("/kra_kpi/ai_assistant/ask", { question: String(question || "").slice(0, 1000), period, context: context || {}, chat_id: chatId || null }, { timeout: 60000 });
+/* The same answer with every table row (the drawer shows 50), for a PDF / Word
+   download. Not saved to the chat. */
+export const exportAssistantAnswer = ({ question, period, context }) =>
+  rpc("/kra_kpi/ai_assistant/export", { question: String(question || "").slice(0, 1000), period, context: context || {} }, { timeout: 60000 })
+    .then((r) => assertOk(r, "Could not prepare the download."));
+/* "Find a task" in the assistant: tasks by name or reference, any state
+   (recently updated ones for an empty query). */
+export const findAssistantTasks = (query) => rpc("/kra_kpi/ai_assistant/find_tasks", { query: String(query || "").slice(0, 100), limit: 8 }).then((r) => assertOk(r, "Could not search tasks.").tasks || []);
+/* Saved chats (one per conversation, the caller's own): list, open, delete. */
+export const listAssistantChats = () => rpc("/kra_kpi/ai_assistant/chats", { limit: 100 }).then((r) => assertOk(r, "Could not load your chats.").chats || []);
+export const getAssistantChat = (chatId) => rpc("/kra_kpi/ai_assistant/chat", { chat_id: Number(chatId) }).then((r) => assertOk(r, "Could not open that chat."));
+export const deleteAssistantChat = (chatId) => rpc("/kra_kpi/ai_assistant/chat_delete", { chat_id: Number(chatId) }).then((r) => assertOk(r, "Could not delete that chat."));
 export const suggestTasks = (text, docType) => rpc("/kpi_requirements/suggest_tasks", { text: String(text || "").slice(0, 16000), doc_type: docType }, { timeout: 90000 });
 export const parseFile = ({ fileData, fileName, docType }) => rpc("/kpi_requirements/parse_file", { file_data: fileData, file_name: fileName, doc_type: docType }, { timeout: 60000 });
 /* `deliverableType` is the batch default: a row left blank takes it on the server.
