@@ -3492,6 +3492,333 @@ class KpiReportsAPI(http.Controller):
             logging.getLogger(__name__).error(f"owner_certified_by_client: {str(e)}")
             return {'status': False, 'message': str(e), 'clients': []}
 
+    @http.route('/kra_kpi/dashboard/overview', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_dashboard_overview(self, **params):
+        """The Dashboard page (web /dashboard): every count its right side shows
+        that Live Tracking (/kpi_owner/live_tracking: presence, what each person is
+        doing now) and Client Billing (/kpi_owner/certified_by_client: per-client
+        hours and invoices) don't already return. Counts only, plus the next few
+        meetings. Task states are bucketed like the 369 AI Assistant's digest, so
+        the cards and the assistant's answers agree. Each area is read on its own:
+        one that fails (e.g. WhatsApp not installed) comes back None and the rest
+        still loads. Owner / Coordinator / System only."""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        import logging
+        import pytz
+        from datetime import datetime as _dt, time as _time
+        _log = logging.getLogger(__name__)
+        env = request.env
+        user = env.user
+        Kpi = env['kra.kpi'].sudo()
+        tz = pytz.timezone(user.tz or 'Asia/Kolkata')
+        now = fields.Datetime.now()
+        today = fields.Date.context_today(user)
+        week_from = today - timedelta(days=6)  # "this week" = the last 7 days, today included
+
+        def utc_start(d):
+            """Local midnight of day `d` as naive UTC, to compare with stored datetimes."""
+            return tz.localize(_dt.combine(d, _time.min)).astimezone(pytz.UTC).replace(tzinfo=None)
+
+        def local(dt):
+            return pytz.UTC.localize(dt).astimezone(tz) if dt else None
+
+        def safe(name, fn):
+            try:
+                return fn()
+            except Exception as e:
+                _log.warning("kpi_dashboard_overview: %s failed: %s", name, e)
+                return None
+
+        out = {'status': True, 'today': str(today), 'as_of': _to_user_tz_str(now, user, '%H:%M')}
+
+        # ---- tasks completed per local day, last 28 days ----
+        # approval_date is set when a task reaches `completed`; older rows without
+        # it fall back to write_date (what the assistant's digest uses).
+        def completed():
+            d0 = today - timedelta(days=27)
+            since = utc_start(d0)
+            rows = Kpi.search_read([
+                ('task_state', '=', 'completed'),
+                '|', ('approval_date', '>=', since),
+                '&', ('approval_date', '=', False), ('write_date', '>=', since),
+            ], ['approval_date', 'write_date', 'user_id'])
+            per_day = {d0 + timedelta(days=i): 0 for i in range(28)}
+            by_user = {}
+            for r in rows:
+                day = local(r['approval_date'] or r['write_date']).date()
+                if day not in per_day:
+                    continue
+                per_day[day] += 1
+                if day >= week_from and r['user_id']:
+                    by_user[r['user_id'][0]] = by_user.get(r['user_id'][0], 0) + 1
+            days = [{'date': str(d), 'count': per_day[d]} for d in sorted(per_day)]
+
+            def done_between(a, b):
+                lo, hi = utc_start(a), utc_start(b)
+                return Kpi.search_count([
+                    ('task_state', '=', 'completed'),
+                    '|', '&', ('approval_date', '>=', lo), ('approval_date', '<', hi),
+                    '&', '&', ('approval_date', '=', False), ('write_date', '>=', lo), ('write_date', '<', hi)])
+            month_start = today.replace(day=1)
+            prev_start = (month_start - timedelta(days=1)).replace(day=1)
+            return {
+                'days': days,
+                'today': days[-1]['count'],
+                'week': sum(d['count'] for d in days[-7:]),
+                'prev_week': sum(d['count'] for d in days[-14:-7]),
+                'month': done_between(month_start, today + timedelta(days=1)),
+                'prev_month': done_between(prev_start, month_start),
+                'by_user': by_user,
+            }
+        done = safe('completed', completed) or {}
+        done_by_user = done.pop('by_user', {}) if done else {}
+        out['completed'] = done or None
+
+        # ---- where every task stands, overall and per person ----
+        BUCKET = {
+            'assigned': 'not_started', 'urgent': 'not_started', 'important': 'not_started',
+            'regular': 'not_started', 'pre_approval_approved': 'not_started',
+            'in_progress': 'running', 'paused': 'paused',
+            'hold': 'on_hold', 'rework': 'on_hold',
+            'partially_completed': 'pending_approval', 'awaiting_client': 'awaiting_client',
+        }
+
+        def pipeline():
+            totals = dict.fromkeys(('not_started', 'running', 'paused', 'on_hold',
+                                    'pending_approval', 'awaiting_client'), 0)
+            people = {}
+            for uid, state, count in Kpi._read_group(
+                    [('task_state', 'in', list(BUCKET))], ['user_id', 'task_state'], ['__count']):
+                b = BUCKET[state]
+                totals[b] += count
+                if uid:
+                    p = people.setdefault(uid.id, dict.fromkeys(totals, 0))
+                    p[b] += count
+            month_start = utc_start(today.replace(day=1))
+            totals['completed_month'] = Kpi.search_count([
+                ('task_state', '=', 'completed'),
+                '|', ('approval_date', '>=', month_start),
+                '&', ('approval_date', '=', False), ('write_date', '>=', month_start)])
+            # Open work per person: estimated hours vs time spent so far.
+            for uid, est, secs in Kpi._read_group(
+                    [('task_state', 'in', list(BUCKET)), ('user_id', '!=', False)],
+                    ['user_id'], ['estimate:sum', 'timer_total_seconds:sum']):
+                p = people.setdefault(uid.id, dict.fromkeys(totals, 0))
+                p['est_hours'] = round(est or 0, 1)
+                p['spent_hours'] = round((secs or 0) / 3600.0, 1)
+            return totals, people
+        pipe = safe('pipeline', pipeline)
+        out['pipeline'] = pipe[0] if pipe else None
+        people = pipe[1] if pipe else {}
+
+        # ---- finished work waiting for the admin's OK, by age ----
+        def approvals():
+            tasks = Kpi.search([('task_state', '=', 'partially_completed'), ('admin_approved', '=', False)])
+            ages = [0, 0, 0, 0, 0]  # today, 1, 2, 3, 4+ days
+            oldest = None
+            for t in tasks:
+                since = t.completion_date or t.write_date
+                days = max(0, (today - local(since).date()).days) if since else 0
+                ages[min(days, 4)] += 1
+                if since and (oldest is None or since < oldest[0]):
+                    oldest = (since, t, days)
+            return {
+                'count': len(tasks), 'by_age': ages,
+                'oldest_days': oldest[2] if oldest else 0,
+                'oldest_ref': (oldest[1].external_ref or oldest[1].name or '') if oldest else '',
+            }
+        out['approvals'] = safe('approvals', approvals)
+
+        # ---- paused work: how long, and with whom ----
+        def paused():
+            rows = Kpi.search_read([('task_state', '=', 'paused')], ['write_date', 'user_id'])
+            old = sum(1 for r in rows if r['write_date'] and (now - r['write_date']).days >= 2)
+            per = {}
+            for r in rows:
+                if r['user_id']:
+                    per[r['user_id'][1]] = per.get(r['user_id'][1], 0) + 1
+            top = max(per.items(), key=lambda kv: kv[1]) if per else ('', 0)
+            return {'count': len(rows), 'two_days': old, 'top_person': top[0], 'top_count': top[1]}
+        out['paused'] = safe('paused', paused)
+
+        # ---- clients ----
+        def clients():
+            return {
+                'signoff_waiting': Kpi.search_count([('task_state', '=', 'awaiting_client')]),
+                'certified': Kpi.search_count([('client_final_approved', '=', True)]),
+                # Client Task Queue: submitted by a client (or unassigned) and not published yet.
+                'queue': Kpi.search_count([('published', '=', False), '|',
+                                           ('client_submitted', '=', True), ('user_id', '=', False)]),
+                # Estimate sent, the client hasn't answered.
+                'pre_approvals': Kpi.search_count([('user_id', '!=', False), ('task_state', 'in',
+                                                   ('pre_approval_pending', 'pre_approval_partial'))]),
+                'certificates_week': Kpi.search_count([('client_final_approved', '=', True),
+                                                       ('client_signed_datetime', '>=', utc_start(week_from))]),
+            }
+        out['clients'] = safe('clients', clients)
+
+        # ---- billing: this month's invoices and what is unpaid, per currency ----
+        def billing():
+            Inv = env['kpi.client.invoice'].sudo()
+            month_start = today.replace(day=1)
+            next_month = (month_start + timedelta(days=32)).replace(day=1)
+
+            # Most invoices carry no currency of their own: they are in the
+            # company's (INR), so they show "₹80", not a bare "80".
+            company_cur = env.company.currency_id
+
+            def by_currency(domain):
+                merged = {}
+                for cur, count, total in Inv._read_group(domain, ['currency_id'], ['__count', 'total_amount:sum']):
+                    cur = cur or company_cur
+                    row = merged.setdefault(cur.id, {'currency': cur.name or '', 'symbol': cur.symbol or '', 'count': 0, 'amount': 0.0})
+                    row['count'] += count
+                    row['amount'] = round(row['amount'] + (total or 0), 2)
+                return list(merged.values())
+            issued = [('state', 'in', ('finalized', 'sent'))]
+            prev_start = (month_start - timedelta(days=1)).replace(day=1)
+            unpaid_rows = []
+            for inv in Inv.search(issued + [('payment_status', '=', 'unpaid')], order='invoice_date asc, id asc', limit=6):
+                unpaid_rows.append({
+                    'id': inv.id, 'name': inv.name or '', 'client': inv.client_kra_id.name or '',
+                    'amount': round(inv.total_amount or 0, 2), 'symbol': (inv.currency_id or company_cur).symbol or '',
+                    'date': str(inv.invoice_date) if inv.invoice_date else '',
+                    'days': (today - inv.invoice_date).days if inv.invoice_date else 0,
+                })
+            return {
+                'month': by_currency(issued + [('invoice_date', '>=', month_start), ('invoice_date', '<', next_month)]),
+                'prev_month': by_currency(issued + [('invoice_date', '>=', prev_start), ('invoice_date', '<', month_start)]),
+                'unpaid': by_currency(issued + [('payment_status', '=', 'unpaid')]),
+                'unpaid_rows': unpaid_rows,
+            }
+        out['billing'] = safe('billing', billing)
+
+        # ---- deadlines: overdue, due in the next 7 days, urgent not started ----
+        NOT_STARTED = ('assigned', 'urgent', 'important', 'regular', 'pre_approval_approved')
+
+        def task_row(t, **extra):
+            return {'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '',
+                    'person': t.user_id.name if t.user_id else 'Unassigned', **extra}
+
+        def deadlines():
+            open_dom = [('task_state', 'not in', ('completed', 'awaiting_client')), ('deadline', '!=', False)]
+            late = Kpi.search(open_dom + [('deadline', '<', today)], order='deadline asc, id asc')
+            soon = Kpi.search(open_dom + [('deadline', '>=', today), ('deadline', '<=', today + timedelta(days=6))],
+                              order='deadline asc, id asc')
+            urgent = Kpi.search([('priority', '=', 'urgent'), ('task_state', 'in', NOT_STARTED)],
+                                order='create_date asc, id asc')
+            return {
+                'overdue': {'count': len(late), 'rows': [task_row(t, days=(today - t.deadline).days) for t in late[:5]]},
+                'due_week': {'count': len(soon), 'rows': [task_row(t, due=str(t.deadline)) for t in soon[:5]]},
+                'urgent': {'count': len(urgent), 'rows': [task_row(t, days=(now - t.create_date).days if t.create_date else 0)
+                                                          for t in urgent[:5]]},
+            }
+        out['deadlines'] = safe('deadlines', deadlines)
+
+        # ---- waiting on clients: newest queue requests, estimates awaiting a reply ----
+        def waiting_on_clients():
+            queue = Kpi.search([('published', '=', False), '|', ('client_submitted', '=', True), ('user_id', '=', False)],
+                               order='create_date desc, id desc', limit=4)
+            pre = Kpi.search([('user_id', '!=', False), ('task_state', 'in', ('pre_approval_pending', 'pre_approval_partial'))],
+                             order='pre_approval_deadline_at asc, id asc', limit=5)
+            return {
+                'queue': [{'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '', 'client': t.client_kra_id.name or '',
+                           'date': str(local(t.create_date).date()) if t.create_date else ''} for t in queue],
+                'pre_approvals': [{'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '', 'client': t.client_kra_id.name or '',
+                                   'reply_by': str(local(t.pre_approval_deadline_at).date()) if t.pre_approval_deadline_at else '',
+                                   'overdue': bool(t.pre_approval_deadline_at and t.pre_approval_deadline_at < now)} for t in pre],
+            }
+        out['waiting_on_clients'] = safe('waiting_on_clients', waiting_on_clients)
+
+        # ---- developers' questions to a manager with no answer yet (the sidebar badge) ----
+        out['doubts_open'] = safe('doubts', lambda: env['kpi.doubt'].sudo().search_count([('state', '=', 'open')]))
+
+        # ---- meetings: today's count and the next few ----
+        def meetings():
+            M = env['kpi.meeting'].sudo()
+            open_states = ('requested', 'confirmed', 'live')
+            start = utc_start(today)
+            today_count = M.search_count([('scheduled_start', '>=', start),
+                                          ('scheduled_start', '<', utc_start(today + timedelta(days=1))),
+                                          ('state', 'in', open_states)])
+            rows = []
+            for m in M.search([('scheduled_start', '>=', start), ('state', 'in', open_states)],
+                              order='scheduled_start asc', limit=4):
+                at = local(m.scheduled_start)
+                rows.append({
+                    'id': m.id, 'name': m.name or '', 'state': m.state,
+                    'date': str(at.date()), 'time': at.strftime('%I:%M %p').lstrip('0'),
+                    'people': [u.name for u in (m.organizer_id | m.attendee_user_ids)][:3],
+                })
+            return {'today': today_count, 'upcoming': rows}
+        out['meetings'] = safe('meetings', meetings)
+
+        # ---- reminders due today, documents and certificates this week ----
+        out['reminders_today'] = safe('reminders', lambda: env['kpi.reminder'].sudo().search_count([
+            ('enabled', '=', True), ('next_trigger', '>=', utc_start(today)),
+            ('next_trigger', '<', utc_start(today + timedelta(days=1)))]))
+
+        def documents():
+            since = utc_start(week_from)
+            return (env['kpi.progress'].sudo().search_count([('uploaded_file', '!=', False), ('create_date', '>=', since)])
+                    + env['kpi.file.attachment'].sudo().search_count([('create_date', '>=', since)]))
+        out['documents_week'] = safe('documents', documents)
+
+        # ---- WhatsApp (separate module, may be absent) ----
+        def whatsapp():
+            connected = None
+            if 'whatsapp.session' in env:
+                connected = bool(env['whatsapp.session'].sudo().search_count([('status', '=', 'connected')], limit=1))
+            groups = env['kpi.wa.group'].sudo().search_count([
+                ('active', '=', True), ('is_staff_group', '=', False), ('kra_id', '!=', False)])
+            return {'connected': connected, 'client_groups': groups}
+        out['whatsapp'] = safe('whatsapp', whatsapp)
+
+        # ---- hours: today live from the open sessions, earlier days from snapshots ----
+        def hours():
+            Session = env['kpi.work.session'].sudo()
+            per = {}
+            prod_today = pres_today = 0.0
+            for s in Session.search([('session_date', '=', today)]):
+                if not s.user_id:
+                    continue
+                prod_today += s.productive_seconds or 0
+                pres_today += s.presence_seconds or 0
+                per[s.user_id.id] = per.get(s.user_id.id, 0) + (s.productive_seconds or 0)
+            snaps = env['kpi.workday.snapshot'].sudo().search_read(
+                [('session_date', '>=', week_from), ('session_date', '<', today)],
+                ['user_id', 'productive_seconds', 'presence_seconds'])
+            week = dict(per)
+            for r in snaps:
+                if r['user_id']:
+                    week[r['user_id'][0]] = week.get(r['user_id'][0], 0) + (r['productive_seconds'] or 0)
+            return {
+                'today_productive': round(prod_today), 'today_presence': round(pres_today),
+                'week_productive': round(prod_today + sum(r['productive_seconds'] or 0 for r in snaps)),
+                'week_presence': round(pres_today + sum(r['presence_seconds'] or 0 for r in snaps)),
+            }, per, week
+        hrs = safe('hours', hours)
+        out['hours'] = hrs[0] if hrs else None
+        today_secs = hrs[1] if hrs else {}
+        week_secs = hrs[2] if hrs else {}
+
+        # ---- per person (merged with Live Tracking's rows by user_id on the page) ----
+        uids = set(people) | set(done_by_user) | set(today_secs) | set(week_secs)
+        out['people'] = [{
+            'productive_week': round(week_secs.get(uid, 0)),
+            'user_id': uid,
+            'running': people.get(uid, {}).get('running', 0),
+            'paused': people.get(uid, {}).get('paused', 0) + people.get(uid, {}).get('on_hold', 0),
+            'todo': people.get(uid, {}).get('not_started', 0),
+            'approval': people.get(uid, {}).get('pending_approval', 0),
+            'done_week': done_by_user.get(uid, 0),
+            'productive_today': round(today_secs.get(uid, 0)),
+            'est_hours': people.get(uid, {}).get('est_hours', 0),
+            'spent_hours': people.get(uid, {}).get('spent_hours', 0),
+        } for uid in sorted(uids)]
+        return out
+
     @http.route('/kpi_owner/client_certified_tasks', type='json', auth='user', methods=['POST'], csrf=False)
     def owner_client_certified_tasks(self, **params):
         """List the actual signed-off tasks for one client (drill-down from the dashboard)."""

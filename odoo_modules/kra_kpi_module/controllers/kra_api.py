@@ -6006,6 +6006,17 @@ class KraKpiAPI(http.Controller):
             end_datetime = fields.Datetime.to_datetime(end_date).replace(hour=23, minute=59, second=59)
             
             KPI = request.env['kra.kpi'].sudo()
+            # Completed in the period = approved in it (approval_date, set when the
+            # task reaches completed); older rows without one fall back to
+            # write_date. The same rule as the Dashboard
+            # (/kra_kpi/dashboard/overview), so the assistant and the cards agree:
+            # write_date alone moved a task into "today" whenever anyone touched it.
+            completed_domain = [
+                ('task_state', '=', 'completed'),
+                '|', '&', ('approval_date', '>=', start_datetime), ('approval_date', '<=', end_datetime),
+                '&', '&', ('approval_date', '=', False),
+                ('write_date', '>=', start_datetime), ('write_date', '<=', end_datetime),
+            ]
             
             # ==========================================
             # GET TASKS BASED ON PERIOD
@@ -6013,11 +6024,7 @@ class KraKpiAPI(http.Controller):
             
             # For past periods (last_month, last_week), ONLY show completed tasks in that period
             if period in ['last_month', 'last_week']:
-                completed_tasks = KPI.search([
-                    ('task_state', '=', 'completed'),
-                    ('write_date', '>=', start_datetime),
-                    ('write_date', '<=', end_datetime),
-                ])
+                completed_tasks = KPI.search(completed_domain)
                 in_progress_tasks = KPI.browse([])  # Empty
                 paused_tasks = KPI.browse([])  # Empty
                 not_started_tasks = KPI.browse([])  # Empty
@@ -6028,11 +6035,7 @@ class KraKpiAPI(http.Controller):
                 # Show completed in period + ALL current active tasks
                 
                 # Completed tasks: ONLY those completed in the period
-                completed_tasks = KPI.search([
-                    ('task_state', '=', 'completed'),
-                    ('write_date', '>=', start_datetime),
-                    ('write_date', '<=', end_datetime),
-                ])
+                completed_tasks = KPI.search(completed_domain)
                 
                 # In Progress tasks: ALL current in-progress tasks
                 in_progress_tasks = KPI.search([
