@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.6.3",
+    "version": "19.0.6.8",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -80,6 +80,8 @@
         # Same rule — its menuitem hangs off menu_grp_my_work.
         "views/kpi_reminder_views.xml",
         "views/res_users_views.xml",
+        # After menu.xml: its menuitem hangs off menu_kpi_settings.
+        "views/kpi_ai_chat_views.xml",
     ],
 
     "assets": {
@@ -125,6 +127,9 @@
             "kra_kpi_module/static/src/components/kpi_project_completion/kpi_project_completion.js",
             "kra_kpi_module/static/src/components/kpi_client_workspace/kpi_client_workspace.js",
             "kra_kpi_module/static/src/components/kpi_client_dashboard/kpi_client_dashboard.js",
+            # The 369 AI Assistant drawer, mounted by the Owner Dashboard below.
+            "kra_kpi_module/static/src/components/kpi_ai_assistant/kpi_ai_assistant.js",
+            "kra_kpi_module/static/src/components/kpi_ai_assistant/kpi_ai_assistant.css",
             "kra_kpi_module/static/src/components/kpi_owner_dashboard/kpi_owner_dashboard.js",
             "kra_kpi_module/static/src/components/kpi_client_completions/kpi_client_completions.js",
             "kra_kpi_module/static/src/components/kpi_pending_queue/kpi_pending_queue.js",

@@ -6114,6 +6114,7 @@ class KraKpiAPI(http.Controller):
                 
                 return {
                     'id': task.id,
+                    'ref': task.external_ref or '',
                     'name': task.name,
                     'status': task.task_state,
                     'priority': task.priority or 'regular',
@@ -6302,6 +6303,133 @@ class KraKpiAPI(http.Controller):
                 json.dumps({'status': False, 'message': str(e)}),
                 headers=[('Content-Type', 'application/json')]
             )
+
+    _ASSISTANT_PERIODS = ('today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month')
+
+    @http.route('/kra_kpi/ai_assistant/ask', type='json', auth='user', methods=['POST'], csrf=False)
+    def ai_assistant_ask(self, question='', period='today', context=None, chat_id=None, **kw):
+        """369 AI Assistant on the web Owner Dashboard.
+
+        Answers a typed question about the team's work from the same data as
+        /kra_kpi/ai_digest: the period named in the question wins over the
+        dashboard's period chip. Rule-based (kpi.ai.assistant); an AI only adds
+        a summary paragraph when a key is configured. Admin-only, like the digest.
+
+        Returns {status, title, blocks, suggestions, context, intent, ai, source,
+        period, date_range}.
+        """
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        question = (question or '').strip()
+        if not question:
+            return {'status': False, 'message': 'Type a question first.'}
+        if len(question) > 1000:
+            return {'status': False, 'message': 'Please keep the question under 1000 characters.'}
+        try:
+            from odoo.addons.kra_kpi_module.models.kpi_ai_assistant_engine import detect_period
+            period = detect_period(question) or (period if period in self._ASSISTANT_PERIODS else 'today')
+            digest = self.get_ai_digest_data(period=period)
+            if not digest.get('status'):
+                return {'status': False, 'message': digest.get('message') or 'Could not load the data.'}
+            res = request.env['kpi.ai.assistant'].answer(
+                question, digest, period, context if isinstance(context, dict) else {})
+            res.update({'status': True, 'period': period, 'date_range': digest.get('date_range'),
+                        'generated_at': digest.get('generated_at')})
+            res['chat_id'] = self._ai_chat_save(chat_id, question, period, res)
+            return res
+        except Exception as e:
+            _logger.exception('AI assistant failed for %r', question)
+            return {'status': False, 'message': 'The assistant hit an error: %s' % e}
+
+    def _ai_chat(self, chat_id):
+        """The caller's own saved chat, or an empty recordset."""
+        try:
+            cid = int(chat_id or 0)
+        except (TypeError, ValueError):
+            cid = 0
+        Chat = request.env['kpi.ai.chat'].sudo()
+        return Chat.search([('id', '=', cid), ('user_id', '=', request.env.user.id)], limit=1) if cid else Chat
+
+    def _ai_chat_save(self, chat_id, question, period, res):
+        """Append the question and its answer to the caller's chat (a new one
+        when there is none). Saving must never cost the user the answer."""
+        try:
+            chat = self._ai_chat(chat_id)
+            if not chat:
+                chat = request.env['kpi.ai.chat'].sudo().create({
+                    'name': question[:80], 'user_id': request.env.user.id})
+            payload = {k: v for k, v in res.items() if k not in ('status', 'chat_id')}
+            request.env['kpi.ai.chat.message'].sudo().create([
+                {'chat_id': chat.id, 'role': 'user', 'text': question},
+                {'chat_id': chat.id, 'role': 'bot', 'text': res.get('title') or '',
+                 'payload_json': json.dumps(payload, default=str)},
+            ])
+            chat.write({'period': period, 'context_json': json.dumps(res.get('context') or {}, default=str)})
+            return chat.id
+        except Exception:
+            _logger.exception('AI assistant: could not save the chat')
+            return chat_id or False
+
+    @http.route('/kra_kpi/ai_assistant/export', type='json', auth='user', methods=['POST'], csrf=False)
+    def ai_assistant_export(self, question='', period='today', context=None, **kw):
+        """The same answer as /ai_assistant/ask with EVERY table row (the drawer
+        shows 50), for a PDF / Word download. Not saved to the chat."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        question = (question or '').strip()[:1000]
+        if not question:
+            return {'status': False, 'message': 'Nothing to export.'}
+        try:
+            from odoo.addons.kra_kpi_module.models.kpi_ai_assistant_engine import detect_period
+            period = detect_period(question) or (period if period in self._ASSISTANT_PERIODS else 'today')
+            digest = self.get_ai_digest_data(period=period)
+            if not digest.get('status'):
+                return {'status': False, 'message': digest.get('message') or 'Could not load the data.'}
+            res = request.env['kpi.ai.assistant'].answer(
+                question, digest, period, context if isinstance(context, dict) else {}, max_rows=2000)
+            res.update({'status': True, 'period': period, 'date_range': digest.get('date_range'),
+                        'generated_at': digest.get('generated_at')})
+            return res
+        except Exception as e:
+            _logger.exception('AI assistant export failed for %r', question)
+            return {'status': False, 'message': 'Could not prepare the download: %s' % e}
+
+    @http.route('/kra_kpi/ai_assistant/find_tasks', type='json', auth='user', methods=['POST'], csrf=False)
+    def ai_assistant_find_tasks(self, query='', limit=8, **kw):
+        """The assistant's "Find a task" search: tasks by name or reference
+        (recently updated ones for an empty query) -> [{id, ref, name, person, status}]."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        rows = request.env['kpi.ai.assistant']._find_tasks(str(query or '')[:100], limit=max(1, min(int(limit or 8), 20)))
+        return {'status': True, 'tasks': [{k: r[k] for k in ('id', 'ref', 'name', 'person', 'status')} for r in rows]}
+
+    @http.route('/kra_kpi/ai_assistant/chats', type='json', auth='user', methods=['POST'], csrf=False)
+    def ai_assistant_chats(self, limit=50, **kw):
+        """The caller's saved chats, newest first: [{id, title, period, updated, count}]."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        chats = request.env['kpi.ai.chat'].sudo().search(
+            [('user_id', '=', request.env.user.id)], limit=max(1, min(int(limit or 50), 200)))
+        return {'status': True, 'chats': [c._as_dict() for c in chats]}
+
+    @http.route('/kra_kpi/ai_assistant/chat', type='json', auth='user', methods=['POST'], csrf=False)
+    def ai_assistant_chat(self, chat_id=None, **kw):
+        """One saved chat with its messages and follow-up context."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        chat = self._ai_chat(chat_id)
+        if not chat:
+            return {'status': False, 'message': 'That chat no longer exists.'}
+        return dict(chat._as_dict(with_messages=True), status=True)
+
+    @http.route('/kra_kpi/ai_assistant/chat_delete', type='json', auth='user', methods=['POST'], csrf=False)
+    def ai_assistant_chat_delete(self, chat_id=None, **kw):
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        chat = self._ai_chat(chat_id)
+        if chat:
+            chat.unlink()
+        return {'status': True}
 
     # =========================================================
     # REMINDER AND DEADLINE NOTIFICATION ENDPOINTS

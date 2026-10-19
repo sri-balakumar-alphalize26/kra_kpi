@@ -44,6 +44,7 @@ from . import kpi_wa_inbound_hook
 from . import kpi_file_attachment
 from . import kpi_report_download
 from . import kpi_ai
+from . import kpi_ai_assistant
 from . import kpi_wa_group_intake
 from . import kpi_server
 from . import kpi_install_preset

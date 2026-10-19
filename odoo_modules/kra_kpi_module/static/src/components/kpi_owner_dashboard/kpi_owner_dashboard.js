@@ -2,6 +2,7 @@
 import { Component, xml, useState, onWillStart } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { rpc } from "@web/core/network/rpc";
+import { KpiAiAssistant } from "@kra_kpi_module/components/kpi_ai_assistant/kpi_ai_assistant";
 
 /**
  * Owner Dashboard — business / financial role.
@@ -9,6 +10,7 @@ import { rpc } from "@web/core/network/rpc";
  * total hours. Click into a row to see the individual tasks and jump to Invoices.
  */
 export class KpiOwnerDashboard extends Component {
+    static components = { KpiAiAssistant };
     static template = xml/* xml */`
     <div class="o_kpi_owner_dashboard p-4">
 
@@ -21,6 +23,10 @@ export class KpiOwnerDashboard extends Component {
                 <i class="fa fa-refresh me-1"/> Refresh
             </button>
         </div>
+
+        <!-- 369 AI Assistant: the "Ask AI" pill bottom-right and its drawer
+             (same backend and chat history as the web dashboard's). -->
+        <KpiAiAssistant/>
 
         <!-- Project filter (narrows visible cards) -->
         <div t-if="state.clients.length > 1" class="card p-2 mb-3 shadow-sm bg-light">

@@ -197,4 +197,34 @@
         <field name="perm_create" eval="True"/>
         <field name="perm_unlink" eval="True"/>
     </record>
+
+    <!-- 369 AI Assistant chat history (KRA / KPI › Settings › AI Assistant Chats).
+         Admins (coordinators) see their own chats; Owners and System see everyone's,
+         for review. Group rules OR together, so an owner — also an admin — sees all.
+         The web drawer's History is separate and always lists only the caller's
+         own chats (its routes filter by user under sudo). -->
+    <record id="kpi_ai_chat_own_rule" model="ir.rule">
+        <field name="name">AI Assistant: admins see their own chats</field>
+        <field name="model_id" ref="model_kpi_ai_chat"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_admin'))]"/>
+    </record>
+    <record id="kpi_ai_chat_message_own_rule" model="ir.rule">
+        <field name="name">AI Assistant: admins see their own chat messages</field>
+        <field name="model_id" ref="model_kpi_ai_chat_message"/>
+        <field name="domain_force">[('chat_id.user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_admin'))]"/>
+    </record>
+    <record id="kpi_ai_chat_all_rule" model="ir.rule">
+        <field name="name">AI Assistant: owners and system see all chats</field>
+        <field name="model_id" ref="model_kpi_ai_chat"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_owner')), (4, ref('base.group_system'))]"/>
+    </record>
+    <record id="kpi_ai_chat_message_all_rule" model="ir.rule">
+        <field name="name">AI Assistant: owners and system see all chat messages</field>
+        <field name="model_id" ref="model_kpi_ai_chat_message"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_kra_owner')), (4, ref('base.group_system'))]"/>
+    </record>
 </odoo>

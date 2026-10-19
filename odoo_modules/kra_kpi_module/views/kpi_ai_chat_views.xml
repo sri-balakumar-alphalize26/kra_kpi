@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- 369 AI Assistant chat history (kpi.ai.chat), the same chats the web
+         drawer's History lists. Read-only screens: chats are written by
+         /kra_kpi/ai_assistant/ask. Who sees which chats: kpi_ai_chat_*_rule
+         (admins their own, owners and system everyone's). -->
+    <record id="kpi_ai_chat_list_view" model="ir.ui.view">
+        <field name="name">kpi.ai.chat.list</field>
+        <field name="model">kpi.ai.chat</field>
+        <field name="arch" type="xml">
+            <list string="AI Assistant Chats" create="0" edit="0" default_order="write_date desc">
+                <field name="name" string="Chat (first question)"/>
+                <field name="user_id" widget="many2one_avatar_user"/>
+                <field name="question_count"/>
+                <field name="period" optional="hide"/>
+                <field name="create_date" string="Started" optional="show"/>
+                <field name="write_date" string="Last question"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="kpi_ai_chat_form_view" model="ir.ui.view">
+        <field name="name">kpi.ai.chat.form</field>
+        <field name="model">kpi.ai.chat</field>
+        <field name="arch" type="xml">
+            <form string="AI Assistant Chat" create="0" edit="0">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="user_id" readonly="1" widget="many2one_avatar_user"/>
+                            <field name="question_count"/>
+                        </group>
+                        <group>
+                            <field name="create_date" string="Started"/>
+                            <field name="write_date" string="Last question"/>
+                        </group>
+                    </group>
+                    <separator string="Conversation"/>
+                    <field name="message_ids" readonly="1" nolabel="1">
+                        <list string="Conversation" default_order="id">
+                            <field name="role" string="Who"/>
+                            <field name="text" string="Question / answer title"/>
+                            <field name="create_date" string="Time" optional="show"/>
+                        </list>
+                        <form string="Message">
+                            <group>
+                                <field name="role" string="Who"/>
+                                <field name="text" string="Question / answer title"/>
+                                <field name="create_date" string="Time"/>
+                            </group>
+                            <field name="answer_html" readonly="1" nolabel="1" invisible="role != 'bot'"/>
+                        </form>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="kpi_ai_chat_search_view" model="ir.ui.view">
+        <field name="name">kpi.ai.chat.search</field>
+        <field name="model">kpi.ai.chat</field>
+        <field name="arch" type="xml">
+            <search string="AI Assistant Chats">
+                <field name="name" string="Chat"/>
+                <field name="user_id"/>
+                <field name="message_ids" string="Question or answer" filter_domain="[('message_ids.text', 'ilike', self)]"/>
+                <filter name="mine" string="My chats" domain="[('user_id', '=', uid)]"/>
+                <filter name="today" string="Today" domain="[('write_date', '&gt;=', context_today().strftime('%Y-%m-%d'))]"/>
+                <separator/>
+                <filter name="group_user" string="User" context="{'group_by': 'user_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_kpi_ai_chat" model="ir.actions.act_window">
+        <field name="name">AI Assistant Chats</field>
+        <field name="res_model">kpi.ai.chat</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="kpi_ai_chat_search_view"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No assistant chats yet</p>
+            <p>Questions asked to the 369 AI Assistant on the Owner Dashboard are saved here, one chat per conversation.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_kpi_ai_chats"
+              name="AI Assistant Chats"
+              parent="menu_kpi_settings"
+              action="action_kpi_ai_chat"
+              sequence="90"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+</odoo>
