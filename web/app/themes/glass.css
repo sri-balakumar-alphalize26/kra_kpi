@@ -1,0 +1,162 @@
+/* ---- glass — "Liquid glass" skin ----------------------------------------------
+   Frosted translucent panels over a drifting gradient wallpaper, with bright
+   rim highlights and pill-shaped controls. Imported last (globals.css) so its
+   rules win over ui.css / shell.css / board.css.
+
+   The blur sits on a ::before layer behind each panel, not on the panel itself:
+   backdrop-filter on an element makes it the containing block for its
+   position:fixed children, and <Modal> renders inline (its fixed overlay can
+   live inside the top bar or a cardbox). The sidebar scrolls, so it is the one
+   panel that takes backdrop-filter directly. */
+
+:root[data-theme="glass"] {
+  --canvas:#E9EEFB;
+  --sunken:rgba(255,255,255,.34);
+  --surface:rgba(255,255,255,.58);
+  --raised:rgba(255,255,255,.74);
+  --border:rgba(20,24,40,.11);
+  --text:#14161B;
+  --subtle:#2D3340;
+  --subtlest:#5B6272;
+  --brand:#2563EB;
+  --on-brand:#FFFFFF;
+  --sel-bg:rgba(37,99,235,.14);
+  --sel-text:#1D4ED8;
+  --nav-bg:rgba(255,255,255,.5);
+  --nav-text:#2D3340;
+  --nav-border:rgba(255,255,255,.6);
+  --side-bg:rgba(255,255,255,.42);
+  --side-text:#2D3340;
+  --hover:rgba(255,255,255,.52);
+  --input:rgba(255,255,255,.55);
+  --navy:#0F1B3D;
+  --r:12px;
+  --r-card:18px;
+  --fs:14px;
+  --h1w:700;
+  --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --shadow:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 1px rgba(255,255,255,.45),0 10px 30px -14px rgba(20,30,60,.28);
+  --shadow-lg:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 1px rgba(255,255,255,.4),0 24px 60px -18px rgba(20,30,60,.42);
+  /* skin-local */
+  --rim:rgba(255,255,255,.62);
+  --hi:rgba(255,255,255,.8);
+  --glass-blur:24px;
+  --glass-sat:180%;
+  --base:#E6ECFA; --b1:#9DB8FF; --b2:#C9B8FF; --b3:#8FDDF5;
+  --blob-blend:normal; --blob-alpha:.55;
+}
+
+/* Dark: smoky glass over a deep aurora. Beats the generic [data-mode="dark"]
+   block on specificity; status (--lz-*) and tint colours come from it. */
+:root[data-theme="glass"][data-mode="dark"] {
+  --canvas:#0B0F22;
+  --sunken:rgba(255,255,255,.04);
+  --surface:rgba(30,32,42,.46);
+  --raised:rgba(52,56,72,.52);
+  --border:rgba(255,255,255,.1);
+  --text:#F3F5F9;
+  --subtle:rgba(232,238,250,.8);
+  --subtlest:rgba(232,238,250,.58);
+  --brand:#3478F6;
+  --on-brand:#FFFFFF;
+  --sel-bg:rgba(59,130,246,.24);
+  --sel-text:#A8C8FF;
+  --nav-bg:rgba(20,22,32,.5);
+  --nav-text:rgba(232,238,250,.8);
+  --nav-border:rgba(255,255,255,.08);
+  --side-bg:rgba(20,22,32,.42);
+  --side-text:rgba(232,238,250,.8);
+  --hover:rgba(255,255,255,.08);
+  --input:rgba(255,255,255,.06);
+  --navy:#F3F5F9;
+  --shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 0 1px rgba(255,255,255,.06),0 14px 40px -14px rgba(0,0,0,.55);
+  --shadow-lg:inset 0 1px 0 rgba(255,255,255,.16),inset 0 0 0 1px rgba(255,255,255,.07),0 24px 60px -16px rgba(0,0,0,.7);
+  --rim:rgba(255,255,255,.09);
+  --hi:rgba(255,255,255,.14);
+  --base:#0B0F22; --b1:#2747C9; --b2:#6D28D9; --b3:#0E7490;
+  --blob-blend:screen; --blob-alpha:.6;
+}
+
+/* ---- wallpaper: gradients on body + two drifting blobs behind everything ---- */
+:root[data-theme="glass"] body {
+  background:
+    radial-gradient(1200px 800px at 15% 0%, color-mix(in srgb, var(--b1) 70%, transparent), transparent 60%),
+    radial-gradient(900px 700px at 100% 40%, color-mix(in srgb, var(--b2) 70%, transparent), transparent 60%),
+    radial-gradient(1000px 700px at 40% 110%, color-mix(in srgb, var(--b3) 60%, transparent), transparent 60%),
+    var(--base);
+  background-attachment: fixed;
+}
+:root[data-theme="glass"] body::before,
+:root[data-theme="glass"] body::after {
+  content: ""; position: fixed; z-index: -1; pointer-events: none; border-radius: 50%;
+  filter: blur(70px); opacity: var(--blob-alpha); mix-blend-mode: var(--blob-blend);
+}
+:root[data-theme="glass"] body::before { width: 46vw; height: 46vw; left: -8vw; top: -10vw; background: var(--b1); animation: gl-drift1 26s ease-in-out infinite alternate; }
+:root[data-theme="glass"] body::after { width: 40vw; height: 40vw; right: -6vw; top: 30vh; background: var(--b2); animation: gl-drift2 32s ease-in-out infinite alternate; }
+@keyframes gl-drift1 { to { transform: translate(18vw, 14vh) scale(1.15); } }
+@keyframes gl-drift2 { to { transform: translate(-22vw, -10vh) scale(.9); } }
+:root[data-theme="glass"] .k-app,
+:root[data-theme="glass"] .k-gate,
+:root[data-theme="glass"] .k-login { background: transparent; }
+/* Sign-in: auth.css paints a solid dark card and hero.css a solid wave strip. */
+:root[data-theme="glass"] .k-login form.cardbox { background: var(--surface); border-color: var(--rim); box-shadow: var(--shadow-lg); }
+:root[data-theme="glass"] .k-hero .bottom { display: none; }
+
+/* ---- the glass material ---- */
+:root[data-theme="glass"] :is(.top, .cardbox, .stat, .col, .panel, .sheet, .modal, .menu, .flag, .sel-pop)::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+:root[data-theme="glass"] :is(.cardbox, .col, .modal) { position: relative; }
+:root[data-theme="glass"] .k-app .flags .flag { position: relative; }
+:root[data-theme="glass"] :is(.cardbox, .stat, .menu, .sel-pop) { border-color: var(--rim); }
+:root[data-theme="glass"] :is(.modal, .flag, .sel-pop) { background: var(--raised); }
+:root[data-theme="glass"] .k-app .menu { background: var(--raised); }
+:root[data-theme="glass"] .col { background: var(--sunken); box-shadow: inset 0 1px 0 var(--hi), inset 0 0 0 1px var(--rim); }
+/* Keep board.css's drag-and-drop lane colours, which the line above would hide. */
+:root[data-theme="glass"] .col.drop-ok { background: var(--sel-bg); }
+:root[data-theme="glass"] .col.drop-ok.over { background: color-mix(in srgb, var(--brand) 18%, transparent); }
+:root[data-theme="glass"] .panel, :root[data-theme="glass"] .sheet { border-left: 1px solid var(--rim); }
+:root[data-theme="glass"] .overlay { background: rgba(15,23,42,.28); }
+
+/* Top bar: a glass strip. Sidebar: a floating glass panel. */
+:root[data-theme="glass"] .top { border-bottom: 1px solid var(--rim); box-shadow: inset 0 -1px 0 var(--hi), 0 8px 24px -18px rgba(0,0,0,.4); }
+:root[data-theme="glass"] .k-app .side {
+  margin: 12px 0 12px 12px; top: 68px; height: calc(100vh - 80px); border-right: 0; border-radius: 22px;
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+:root[data-theme="glass"] .side-foot { border-top-color: var(--rim); }
+:root[data-theme="glass"] .side-item.on { box-shadow: inset 0 1px 0 var(--hi); }
+
+/* ---- controls: pills with a specular top edge; no blur (there can be hundreds) ---- */
+:root[data-theme="glass"] .k-app :is(.btn, .pill, .search, .seg, .seg span, .chip) { border-radius: 999px; }
+:root[data-theme="glass"] .k-app .btn:not(.btn-primary) { background: var(--hover); box-shadow: inset 0 1px 0 var(--hi), inset 0 0 0 1px var(--rim); }
+:root[data-theme="glass"] .k-app .btn-primary { box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 8px 22px -8px var(--brand); }
+:root[data-theme="glass"] .k-app .pill { box-shadow: inset 0 1px 0 var(--hi), inset 0 0 0 1px var(--rim); }
+:root[data-theme="glass"] .search { border: 1px solid var(--rim); box-shadow: inset 0 1px 2px rgba(0,0,0,.06); }
+:root[data-theme="glass"] .seg span.on { background: var(--raised); box-shadow: inset 0 1px 0 var(--hi), 0 2px 8px rgba(0,0,0,.12); }
+:root[data-theme="glass"] .k-app .card:hover { box-shadow: var(--shadow-lg); }
+:root[data-theme="glass"] .card.fresh { background: rgba(255,170,170,.78); }
+:root[data-theme="glass"][data-mode="dark"] .card.fresh { background: rgba(93,31,26,.78); }
+:root[data-theme="glass"] .k-app .head h1 { letter-spacing: -.02em; }
+
+/* ---- phones: the sidebar is the slide-in drawer from shell.css ---- */
+@media (max-width: 900px) {
+  :root[data-theme="glass"] .k-app .side { margin: 0; top: 56px; height: calc(100vh - 56px); border-radius: 0 22px 22px 0; }
+}
+
+/* ---- no backdrop-filter, or the viewer asked for less transparency: near-solid ---- */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-theme="glass"] { --surface:rgba(255,255,255,.92); --raised:#FFFFFF; --sunken:rgba(255,255,255,.66); --nav-bg:rgba(255,255,255,.94); --side-bg:rgba(255,255,255,.92); }
+  :root[data-theme="glass"][data-mode="dark"] { --surface:rgba(30,32,42,.94); --raised:#2A2E3B; --sunken:rgba(30,32,42,.7); --nav-bg:rgba(20,22,32,.95); --side-bg:rgba(20,22,32,.94); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme="glass"] { --surface:rgba(255,255,255,.94); --raised:#FFFFFF; --sunken:rgba(255,255,255,.7); --nav-bg:rgba(255,255,255,.96); --side-bg:rgba(255,255,255,.94); }
+  :root[data-theme="glass"][data-mode="dark"] { --surface:rgba(30,32,42,.96); --raised:#2A2E3B; --sunken:rgba(30,32,42,.75); --nav-bg:rgba(20,22,32,.97); --side-bg:rgba(20,22,32,.96); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="glass"] body::before, :root[data-theme="glass"] body::after { animation: none; }
+}

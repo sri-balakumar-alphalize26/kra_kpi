@@ -31,8 +31,9 @@ or with an Odoo login on the second tab.
 - `lib/api.js` — browser side: `rpc`, `read` (15 s cache), `upload`, `href`,
   `serverNow`. `lib/useFetch.js` — `useResource` (polling, keep-last) and `useAction`.
 - `components/shell` — Gate (who am I), Shell (top nav, sidebar, avatar menu, flags).
-- `app/themes/tokens.css` — the five looks as CSS variables; `data-theme` on `<html>`.
+- `app/themes/tokens.css` — the skins as CSS variables; `data-theme` on `<html>`.
   Exported from the design canvas; the component classes in `components/ui/ui.css` too.
+- `app/themes/glass.css` — the "Liquid glass" skin (frosted panels over a wallpaper).
 
 ## Adding a screen
 

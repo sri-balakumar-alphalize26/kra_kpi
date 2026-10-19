@@ -7,6 +7,7 @@
 @import "../components/board/board.css";
 @import "../components/auth/auth.css";
 @import "../components/auth/hero.css";
+@import "./themes/glass.css";
 
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; height: 100%; }

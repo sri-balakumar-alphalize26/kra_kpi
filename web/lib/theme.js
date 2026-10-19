@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 
 /* Two independent choices, both on <html> before the first paint (PRE_PAINT):
-     data-theme = the SKIN   (krakpi | jira | family369 | dense)   colours + shape
+     data-theme = the SKIN   (krakpi | jira | family369 | dense | glass)   colours + shape
      data-mode  = the MODE   (light | dark)                         resolved from
                   the stored mode (light | dark | system) + prefers-color-scheme
    Dark mode is one dark palette (app/themes/tokens.css [data-mode="dark"])
@@ -12,6 +12,7 @@ export const SKINS = [
   { key: "jira", label: "Jira classic", swatch: ["#0052CC", "#FFFFFF", "#172B4D"] },
   { key: "family369", label: "369 family", swatch: ["#0a78ab", "#0b3c58", "#f7931e"] },
   { key: "dense", label: "Dense warm", swatch: ["#0F766E", "#F6F4F0", "#262320"] },
+  { key: "glass", label: "Liquid glass", swatch: ["#2563EB", "#E6ECFA", "#6D28D9"] }, /* app/themes/glass.css */
 ];
 export const THEMES = SKINS; /* older imports */
 export const MODES = [{ key: "light", label: "Light" }, { key: "dark", label: "Dark" }, { key: "system", label: "System" }];
