@@ -12,7 +12,7 @@ export const TOP_NAV = [
   { key: "yourwork", label: "Your work", href: "/your-work", roles: ["developer", "admin"] },
   { key: "projects", label: "Projects", href: "/projects", roles: ["developer", "admin"] },
   { key: "filters", label: "Filters", href: "/list", roles: ["developer", "admin"] },
-  { key: "dashboards", label: "Dashboards", href: "/dashboards", roles: ["admin"] },
+  { key: "dashboard", label: "Dashboard", href: "/dashboard", roles: ["admin"] },
   { key: "people", label: "People", href: "/people", roles: ["admin"] },
 ];
 
@@ -35,10 +35,13 @@ export const WORK_MENU = [
     { key: "manual", label: "User Manual", href: "/manual" }, /* web only */
   ] },
   { key: "tracking", group: "Tracking", icon: "live", roles: ADMIN, items: [
+    /* The CEO's one page: the 369 AI Assistant docked left, every area summarised right. */
+    { key: "dashboard", label: "Dashboard", href: "/dashboard" },
     { key: "live", label: "Live Tracking", href: "/people" },
-    /* Every admin on the web (the server's _is_owner_admin allows them); Odoo's
-       own menu still limits it to Owners and System. */
-    { key: "owner", label: "Owner Dashboard", href: "/dashboards" },
+    /* Formerly "Owner Dashboard": certified tasks per client and invoicing. Every
+       admin on the web (the server's _is_owner_admin allows them); Odoo's own
+       menu still limits it to Owners and System. */
+    { key: "owner", label: "Client Billing", href: "/dashboards" },
     { key: "attendance", label: "Attendance", href: "/people/attendance" }, /* web only */
   ] },
   { key: "clients", group: "Clients", icon: "inbox", roles: ADMIN, items: [

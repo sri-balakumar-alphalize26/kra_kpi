@@ -8,6 +8,7 @@
 @import "../components/auth/auth.css";
 @import "../components/auth/hero.css";
 @import "../components/admin/assistant.css";
+@import "../components/admin/dashboard.css";
 @import "./themes/glass.css";
 
 *, *::before, *::after { box-sizing: border-box; }

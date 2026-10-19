@@ -1,0 +1,222 @@
+/* The Dashboard page (components/admin/Dashboard.jsx): the 369 AI Assistant
+   docked left (sticky, see .ai-panel in assistant.css), every area summarised
+   right in plain words. Colours are the skin's tokens (app/themes/tokens.css);
+   the status colours below are the app's lozenge / priority tokens, so each
+   skin and dark mode come along. Classes are db-* because .bar, .chip, .pulse
+   and .prog are already taken by the board and the UI kit. */
+.k-app .db-wrap {
+  --db-todo: var(--subtlest); --db-run: var(--lz-prog); --db-pause: var(--pri-important); --db-hold: var(--danger);
+  --db-review: var(--lz-review); --db-client: #0891B2; --db-done: var(--pri-regular);
+  --db-track: var(--hover); --db-ease: cubic-bezier(.65, 0, .25, 1);
+  display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 20px; align-items: start; padding-bottom: 8px;
+}
+.k-app .db-ic { flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.k-app .db-muted { color: var(--subtlest); font-size: 12.5px; margin: 0; }
+.k-app .db-err { color: var(--danger); font-size: 11.5px; padding: 4px 10px; }
+.k-app .db-intro { margin: 4px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--subtlest); }
+.k-app .db-say { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--subtle); }
+.k-app .db-retry { border: 0; background: none; padding: 0; font: inherit; font-weight: 700; color: var(--brand); cursor: pointer; }
+.k-app .db-more { display: block; margin-top: 6px; font-size: 11.5px; color: var(--subtlest); }
+
+/* ---- details column ---- */
+.k-app .db-det { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.k-app .db-greet { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.k-app .db-greet h1 { margin: 0; font-size: 25px; line-height: 30px; font-weight: 800; color: var(--navy); letter-spacing: -.4px; text-wrap: balance; }
+.k-app .db-presence { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 12.5px; color: var(--subtlest); }
+.k-app .db-asof { margin-right: 4px; }
+.k-app .db-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.k-app .db-tag i { width: 6px; height: 6px; border-radius: 50%; }
+.k-app .db-tag.in { background: var(--lz-done-bg); color: var(--lz-done); } .k-app .db-tag.in i { background: var(--pri-regular); }
+.k-app .db-tag.out { background: var(--lz-todo-bg); color: var(--lz-todo); } .k-app .db-tag.out i { background: var(--subtlest); }
+.k-app .db-tag.late { background: var(--lz-paused-bg); color: var(--lz-paused); } .k-app .db-tag.late i { background: var(--pri-important); }
+.k-app .db-gbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+.k-app .db-gbtns .btn { gap: 7px; }
+
+.k-app .db-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow); position: relative; min-width: 0; padding: 14px;
+  animation: db-rise .6s var(--db-ease) both; }
+.k-app [data-lit] { animation: db-lit 1.6s var(--db-ease); }
+.k-app .db-kpis[data-lit] { animation: none; }
+.k-app .db-kpis[data-lit] > .db-card { animation: db-lit 1.6s var(--db-ease); }
+.k-app .db-ttlrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.k-app .db-ttl { font-size: 14.5px; font-weight: 800; color: var(--navy); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.k-app .db-ttl small { font-size: 11.5px; font-weight: 500; color: var(--subtlest); }
+.k-app .db-link { font-size: 12px; font-weight: 600; color: var(--brand); text-decoration: none; white-space: nowrap; }
+.k-app .db-link:hover { text-decoration: underline; }
+
+/* ---- headline cards: number, sentence, labelled chart ---- */
+.k-app .db-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.k-app .db-stat { display: flex; flex-direction: column; min-height: 200px; }
+.k-app .db-lbl { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--subtlest); }
+.k-app .db-val { font-size: 28px; line-height: 34px; font-weight: 800; color: var(--navy); margin-top: 4px; letter-spacing: -.4px; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; }
+.k-app .db-val em { font-style: normal; font-size: 12px; color: var(--subtlest); font-weight: 500; letter-spacing: 0; }
+.k-app .db-delta { font-size: 11.5px; font-weight: 700; color: var(--pri-regular); letter-spacing: 0; }
+.k-app .db-delta.down { color: var(--danger); }
+.k-app .db-stat .db-say { margin-bottom: 10px; }
+.k-app .db-spark { margin-top: auto; height: 46px; display: flex; align-items: flex-end; gap: 2px; }
+.k-app .db-spark i { flex: 1; border-radius: 1px; background: var(--db-track); transition: height .8s var(--db-ease); }
+.k-app .db-spark i.hi { background: color-mix(in srgb, var(--brand) 45%, var(--surface)); }
+.k-app .db-spark i.today { background: var(--brand); }
+.k-app .db-bar2 { margin-top: auto; height: 14px; border-radius: 7px; background: var(--db-track); overflow: hidden; display: flex; }
+.k-app .db-bar2 i { display: block; height: 100%; transition: width 1.2s var(--db-ease); }
+.k-app .db-bar2 i.ok { background: var(--pri-regular); border-radius: 7px; }
+.k-app .db-bar2 i.brand { background: var(--brand); border-radius: 7px; }
+.k-app .db-bar2.stack i + i { box-shadow: inset 2px 0 0 var(--surface); }
+.k-app .a0 { --age: var(--lz-review); } .k-app .a1 { --age: color-mix(in srgb, var(--lz-review) 72%, var(--surface)); }
+.k-app .a2 { --age: color-mix(in srgb, var(--lz-review) 48%, var(--surface)); } .k-app .a3 { --age: var(--pri-important); } .k-app .a4 { --age: var(--danger); }
+.k-app .db-bar2.stack i { background: var(--age); }
+.k-app .db-cap { margin-top: 6px; font-size: 11px; color: var(--subtlest); }
+.k-app .db-cap.split { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+.k-app .db-cap.ages { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.k-app .db-cap.ages span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.k-app .db-cap.ages i { width: 8px; height: 8px; border-radius: 2px; background: var(--age); }
+.k-app .db-cap.ages b { color: var(--text); font-weight: 700; }
+
+/* ---- every area at a glance ---- */
+.k-app .db-akey { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.k-app .db-pill { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; white-space: nowrap; flex: none; }
+.k-app .db-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.k-app .db-pill.ok { background: var(--lz-done-bg); color: var(--lz-done); }
+.k-app .db-pill.warn { background: var(--lz-paused-bg); color: var(--lz-paused); }
+.k-app .db-pill.bad { background: var(--over-bg); color: var(--over); }
+.k-app .db-agrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
+.k-app .db-area { display: flex; flex-direction: column; gap: 4px; padding: 11px 12px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--border);
+  text-decoration: none; color: inherit; transition: border-color .2s, background .2s; }
+.k-app .db-area:hover { border-color: var(--brand); background: var(--surface); }
+.k-app .db-ahead { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--subtle); }
+.k-app .db-aname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-app .db-aic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; flex: none; color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+[data-mode="dark"] .k-app .db-aic { color: color-mix(in srgb, var(--c) 55%, #ffffff); background: color-mix(in srgb, var(--c) 22%, transparent); }
+.k-app .db-anumrow { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+.k-app .db-anum { font-size: 20px; font-weight: 800; color: var(--navy); letter-spacing: -.3px; font-variant-numeric: tabular-nums; line-height: 1.2; overflow-wrap: anywhere; }
+.k-app .db-anum em { font-style: normal; font-size: 11.5px; font-weight: 500; color: var(--subtlest); margin-left: 5px; letter-spacing: 0; }
+.k-app .db-atxt { font-size: 12px; color: var(--subtle); line-height: 1.45; }
+
+/* ---- trend + pipeline ---- */
+.k-app .db-row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.k-app .db-row3 { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; }
+.k-app .db-weekly, .k-app .db-pipe { height: 290px; }
+.k-app .db-pipe { display: flex; flex-direction: column; }
+.k-app .db-seg2 { display: inline-flex; padding: 2px; border-radius: 999px; background: var(--sunken); border: 1px solid var(--border); }
+.k-app .db-seg2 button { height: 24px; padding: 0 10px; border: 0; border-radius: 999px; background: none; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--subtlest); cursor: pointer; }
+.k-app .db-seg2 button.on { background: var(--surface); color: var(--brand); box-shadow: var(--shadow); }
+.k-app .db-sub { font-size: 20px; font-weight: 800; color: var(--text); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.k-app .db-sub em { font-style: normal; font-size: 12px; color: var(--subtlest); font-weight: 500; margin-left: 6px; }
+.k-app .db-chart { position: absolute; left: 14px; right: 14px; top: 96px; bottom: 12px; }
+.k-app .db-ylab { position: absolute; left: 0; top: 0; bottom: 18px; width: 24px; display: flex; flex-direction: column; justify-content: space-between; font-size: 9px; color: var(--subtlest); font-variant-numeric: tabular-nums; }
+.k-app .db-bars { position: absolute; left: 30px; right: 0; top: 4px; bottom: 18px; display: flex; align-items: flex-end; gap: 12px;
+  background: linear-gradient(var(--border), var(--border)) 0 0 / 100% 1px no-repeat, linear-gradient(var(--border), var(--border)) 0 50% / 100% 1px no-repeat; }
+.k-app .db-bars.wide { gap: 3px; }
+.k-app .db-bar { flex: 1; min-width: 0; position: relative; height: 100%; display: flex; align-items: flex-end; cursor: pointer; border: 0; padding: 0; background: none; font: inherit; color: inherit; }
+.k-app .db-bar:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
+.k-app .db-bar b { position: relative; width: 100%; min-height: 3px; border-radius: 6px 6px 3px 3px; border-top: 2px solid color-mix(in srgb, var(--brand) 30%, var(--surface));
+  background: var(--db-track); transition: height 1s var(--db-ease); }
+.k-app .db-bars.wide .db-bar b { border-radius: 3px 3px 1px 1px; }
+.k-app .db-bar.act b { background: linear-gradient(to bottom, color-mix(in srgb, var(--brand) 25%, var(--surface)), var(--brand)); border-top-color: var(--brand); }
+.k-app .db-bar em { position: absolute; bottom: -17px; left: -20px; right: -20px; text-align: center; font-style: normal; font-size: 9.5px; color: var(--subtlest); white-space: nowrap; }
+.k-app .db-bar.act em { color: var(--text); font-weight: 700; }
+.k-app .db-tip { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); background: var(--brand); color: var(--on-brand); font-size: 10px; font-weight: 600;
+  padding: 4px 9px; border-radius: 9px; white-space: nowrap; pointer-events: none; z-index: 2; box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent); }
+.k-app .db-tip.end { left: auto; right: -4px; transform: none; } .k-app .db-tip.start { left: -4px; transform: none; }
+.k-app .db-tip.end::after { left: auto; right: 10px; } .k-app .db-tip.start::after { left: 13px; }
+.k-app .db-tip::after { content: ""; position: absolute; left: 50%; bottom: -3px; width: 6px; height: 6px; margin-left: -3px; background: var(--brand); transform: rotate(45deg); }
+.k-app .db-pbody { flex: 1; display: flex; align-items: center; gap: 14px; min-height: 0; margin-top: 6px; }
+.k-app .db-donut { position: relative; width: 140px; height: 140px; flex: none; }
+.k-app .db-donut svg { width: 100%; height: 100%; display: block; }
+.k-app .db-seg { fill: none; stroke-width: 30; stroke-linecap: round; stroke-dasharray: 1 1; transition: stroke-dashoffset 1.1s var(--db-ease); }
+.k-app .db-center { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+.k-app .db-center small { font-size: 10.5px; color: var(--subtlest); font-weight: 600; }
+.k-app .db-center div { font-size: 26px; line-height: 1.1; font-weight: 800; color: var(--navy); font-variant-numeric: tabular-nums; }
+.k-app .db-plist { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.k-app .db-plist div { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text); white-space: nowrap; min-width: 0; }
+.k-app .db-plist b { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.k-app .db-plist i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.k-app .db-plist span { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* ---- deadlines ---- */
+.k-app .db-dgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.k-app .db-dcol { min-width: 0; padding: 10px 12px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--border); }
+.k-app .db-dhead { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; font-weight: 700; color: var(--subtle); }
+.k-app .db-dhead b { font-size: 22px; font-weight: 800; color: var(--navy); font-variant-numeric: tabular-nums; }
+.k-app .db-dhead.bad b { color: var(--danger); } .k-app .db-dhead.warn b { color: var(--pri-important); }
+.k-app .db-dcol .db-say { margin: 2px 0 6px; }
+.k-app .db-trow { display: block; padding: 6px 0; border-top: 1px solid var(--border); text-decoration: none; color: var(--text); }
+.k-app .db-trow:hover .db-tname { color: var(--brand); }
+.k-app .db-tname { display: block; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-app .db-trow small { font-size: 11px; color: var(--subtlest); }
+
+/* ---- tables (employees, clients) on the app's .table ---- */
+.k-app .db-tablewrap { overflow-x: auto; margin-top: 8px; }
+.k-app .db-grid { min-width: 780px; font-size: 12.5px; }
+.k-app .db-cgrid { min-width: 520px; }
+.k-app .db-grid th { font-size: 10.5px; padding: 7px 8px; white-space: normal; vertical-align: bottom; line-height: 1.3; }
+.k-app .db-grid td { padding: 8px; }
+.k-app .db-grid tbody tr:hover td { background: var(--hover); }
+.k-app .db-grid tr:last-child td { border-bottom: 0; }
+.k-app .db-grid td.db-tasks { white-space: normal; min-width: 170px; }
+.k-app .db-tasks .db-lz { margin: 1px 3px 1px 0; }
+.k-app .db-person { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+.k-app .db-person small { display: block; font-size: 10.5px; color: var(--subtlest); font-weight: 500; }
+.k-app .db-cname { min-width: 0; max-width: 200px; }
+.k-app .db-cname > span { display: block; overflow: hidden; text-overflow: ellipsis; }
+.k-app .db-cgrid { min-width: 460px; }
+.k-app .db-ini { position: relative; display: inline-flex; flex: none; }
+.k-app .db-pd { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--surface); }
+.k-app .db-pd.in { background: var(--pri-regular); } .k-app .db-pd.late { background: var(--pri-important); } .k-app .db-pd.out { background: var(--subtlest); }
+.k-app .db-now { min-width: 190px; max-width: 240px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--subtle); line-height: 1.4; }
+.k-app .db-now b { color: var(--lz-prog); font-weight: 600; }
+.k-app .db-now b.pause { color: var(--lz-paused); }
+.k-app .db-lz { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 5px; margin-right: 3px; font-variant-numeric: tabular-nums; }
+.k-app .db-lz.run { background: var(--lz-prog-bg); color: var(--lz-prog); } .k-app .db-lz.pause { background: var(--lz-paused-bg); color: var(--lz-paused); }
+.k-app .db-lz.todo { background: var(--lz-todo-bg); color: var(--lz-todo); } .k-app .db-lz.done { background: var(--lz-done-bg); color: var(--lz-done); }
+.k-app .db-lz.appr { background: var(--lz-review-bg); color: var(--lz-review); }
+.k-app .db-hb { display: inline-block; width: 56px; height: 6px; border-radius: 4px; background: var(--db-track); vertical-align: middle; margin-left: 6px; overflow: hidden; }
+.k-app .db-hb i { display: block; height: 100%; border-radius: 4px; background: var(--brand); transition: width 1.1s var(--db-ease); }
+.k-app .db-over { color: var(--danger) !important; font-weight: 700 !important; }
+.k-app .db-est small { display: block; font-size: 11.5px; color: inherit; }
+.k-app .db-legend { margin: 10px 0 0; font-size: 11px; line-height: 2; color: var(--subtlest); }
+.k-app .db-legend .db-lz { margin: 0 2px 0 0; }
+
+/* ---- attention + meetings ---- */
+.k-app .db-att { display: flex; flex-direction: column; gap: 10px; }
+.k-app .db-alist { display: flex; flex-direction: column; gap: 8px; }
+.k-app .db-al { display: block; padding: 9px 10px; border-radius: 10px; background: var(--sunken); border-left: 3px solid var(--st, var(--lz-review)); font-size: 12.5px; line-height: 1.4; text-decoration: none; color: var(--text); }
+.k-app .db-al:hover { background: var(--hover); }
+.k-app .db-al.bad { --st: var(--danger); } .k-app .db-al.warn { --st: var(--pri-important); } .k-app .db-al.rev { --st: var(--lz-review); }
+.k-app .db-al b { font-weight: 700; display: block; }
+.k-app .db-al small { display: block; color: var(--subtlest); font-size: 11px; margin-top: 1px; }
+.k-app .db-act { display: inline-block; margin-top: 4px; font-size: 11.5px; font-weight: 700; color: var(--brand); }
+.k-app .db-meet { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 24px; background: var(--sunken); text-decoration: none; color: var(--text); }
+.k-app .db-meet:hover { background: var(--hover); }
+.k-app .db-ci { width: 30px; height: 30px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; color: var(--brand); flex: none; border: 1px solid var(--border); }
+.k-app .db-meet h4 { margin: 0; font-size: 12.5px; font-weight: 600; }
+.k-app .db-meet small { font-size: 11px; color: var(--subtlest); }
+
+/* ---- short lists (unpaid invoices, waiting on clients) ---- */
+.k-app .db-list { display: flex; flex-direction: column; margin-top: 6px; }
+.k-app .db-lrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); text-decoration: none; color: var(--text); }
+.k-app .db-lrow:first-child { border-top: 0; }
+.k-app .db-lrow:hover b { color: var(--brand); }
+.k-app .db-lrow > span { display: flex; flex-direction: column; min-width: 0; }
+.k-app .db-lrow b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-app .db-lrow small { font-size: 11px; color: var(--subtlest); }
+.k-app .db-lr { align-items: flex-end; text-align: right; flex: none; }
+.k-app .db-subh { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--subtlest); }
+
+/* ---- download menu ---- */
+.k-app .db-dlwrap { position: relative; display: inline-flex; }
+.k-app .db-dlmenu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 160px; display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  border-radius: 12px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-lg); }
+.k-app .db-dlmenu button { padding: 8px 10px; border: 0; border-radius: 8px; background: none; text-align: left; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
+.k-app .db-dlmenu button:hover:not(:disabled) { background: var(--hover); }
+
+@keyframes db-rise { from { opacity: 0; transform: translateY(10px); } }
+@keyframes db-lit { 0% { box-shadow: 0 0 0 0 transparent; } 30% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 30%, transparent); } 100% { box-shadow: var(--shadow); } }
+
+@media (max-width: 1640px) { .k-app .db-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1200px) { .k-app .db-wrap { grid-template-columns: 340px minmax(0, 1fr); } .k-app .db-row2, .k-app .db-row3 { grid-template-columns: minmax(0, 1fr); } .k-app .db-dgrid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .k-app .db-wrap { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+@media (max-width: 520px) { .k-app .db-kpis { grid-template-columns: minmax(0, 1fr); } .k-app .db-pbody { flex-direction: column; } .k-app .db-greet h1 { font-size: 21px; } .k-app .db-pipe { height: auto; } }
+@media (prefers-reduced-motion: reduce) {
+  .k-app .db-card, .k-app [data-lit] { animation: none !important; }
+  .k-app .db-spark i, .k-app .db-bar2 i, .k-app .db-bar b, .k-app .db-seg, .k-app .db-hb i { transition: none !important; }
+}

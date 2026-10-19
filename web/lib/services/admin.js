@@ -76,6 +76,12 @@ export const fetchClientCertifiedTasks = (clientKraId) => rpc("/kpi_owner/client
 export const createInvoice = ({ clientKraId, subKraIds = [], fromDate, toDate }) =>
   rpc("/kpi_client_invoice/create", { client_kra_id: Number(clientKraId), from_date: fromDate || "2000-01-01", to_date: toDate || "2099-12-31", filter_sub_kra_ids: (subKraIds || []).map(Number) }, { timeout: 60000 });
 
+/* ---- Dashboard (the CEO's page): every count beside Live Tracking and
+   Client Billing in one read — completed per day, task pipeline, approvals by
+   age, paused, clients, billing, meetings, reminders, documents, WhatsApp,
+   hours and per-person task counts. NEW on 19.0.6.9. ---- */
+export const DASHBOARD_PATH = "/kra_kpi/dashboard/overview";
+
 /* ---- client task queue ---- */
 export const QUEUE_PATH = "/kpi_pending_queue/list";
 export const fetchQueue = () => read(QUEUE_PATH, {}, { ttl: 10000, timeout: 45000 });

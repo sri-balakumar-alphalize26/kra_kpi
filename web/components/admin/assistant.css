@@ -62,6 +62,11 @@
   -webkit-backdrop-filter: var(--ai-blur); backdrop-filter: var(--ai-blur); border: 1px solid var(--ai-border); box-shadow: var(--ai-shadow);
   transform: translateX(calc(100% + 24px)); opacity: 0; pointer-events: none; transition: transform .45s var(--ai-ease), opacity .3s; }
 .k-app .ai-drawer.open { transform: none; opacity: 1; pointer-events: auto; }
+/* Docked on the Dashboard (variant="panel"): sticks under the top bar like the
+   sidebar does, so it stays put while the details beside it scroll the page. */
+.k-app .ai-drawer.ai-panel { position: sticky; top: 72px; right: auto; bottom: auto; z-index: 1; width: auto; height: calc(100vh - 88px); min-height: 460px;
+  transform: none; transition: none; box-shadow: var(--shadow); }
+@media (max-width: 900px) { .k-app .ai-drawer.ai-panel { position: relative; top: 0; height: 540px; min-height: 0; } }
 
 .k-app .ai-head { display: flex; align-items: center; gap: 10px; padding: 14px 14px 12px 16px; border-bottom: 1px solid var(--ai-line); }
 .k-app .ai-headtxt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }

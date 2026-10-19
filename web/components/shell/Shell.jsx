@@ -52,16 +52,26 @@ function Frame({ variant, children }) {
   const [collapsed, setCollapsed] = useState(false); /* desktop sidebar */
   useEffect(() => { setCollapsed(!!getPref("sideCollapsed", me?.uid, false)); }, [me?.uid]);
   useEffect(() => { setOpen(false); }, [pathname]);
-  const toggleCollapsed = () => { setCollapsed((c) => { setPref("sideCollapsed", me?.uid, !c); return !c; }); };
+  /* The Dashboard needs the width (AI panel + details): it opens with the
+     sidebar folded, without touching the saved choice. Expanding it there
+     lasts until you leave the page. */
+  const autoFold = pathname === "/dashboard";
+  const [unfolded, setUnfolded] = useState(false);
+  useEffect(() => { setUnfolded(false); }, [pathname]);
+  const isCollapsed = autoFold ? !unfolded : collapsed;
+  const toggleCollapsed = () => {
+    if (autoFold) { setUnfolded((u) => !u); return; }
+    setCollapsed((c) => { setPref("sideCollapsed", me?.uid, !c); return !c; });
+  };
   useDesktopNotifications(me);
 
-  const cls = ["k-app", variant === "work" && collapsed ? "side-collapsed" : "", open ? "side-open" : ""].join(" ");
+  const cls = ["k-app", variant === "work" && isCollapsed ? "side-collapsed" : "", open ? "side-open" : ""].join(" ");
   const inner = (
     <>
       <DesktopAlertsBar />
       <TopNav variant={variant} onBurger={() => setOpen((o) => !o)} />
       <div className="body">
-        {variant === "work" && <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} />}
+        {variant === "work" && <Sidebar collapsed={isCollapsed} onToggle={toggleCollapsed} />}
         {open && <div className="scrim" onClick={() => setOpen(false)} />}
         <main className="main">
           {/* Keyed by page so each new page eases in (see .page-in in shell.css). */}

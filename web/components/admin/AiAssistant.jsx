@@ -15,7 +15,10 @@ import { useOutside } from "@/components/ui";
    answers with numbers, tables and task links (/kra_kpi/ai_assistant/ask);
    questions mean "today" unless they name a period ("…this week"). With no AI
    key it is all rules: nothing is made up and no data leaves the server. Every
-   chat is saved (kpi.ai.chat) and listed under History. */
+   chat is saved (kpi.ai.chat) and listed under History.
+   variant="panel": docked on the Dashboard page (Dashboard.jsx), always open,
+   no launcher or close; Ctrl/⌘+J puts the cursor in the box. Same chat as the
+   drawer. `onAnswer(res, question)` hears every answer (to highlight a card). */
 const KEY = "kpi.assistant.chat";
 const SOURCE = { rules: "Data answer", "ai-gemini": "Gemini", "ai-groq": "Groq", "ai-claude": "Claude" };
 const P = { chart: "M7 17v-4M12 17V8M17 17v-6", spark: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z",
@@ -43,10 +46,11 @@ const fmtWhen = (s) => {
 const Svg = ({ d, className = "ai-ic" }) => <svg className={className} viewBox="0 0 24 24" aria-hidden="true"><path d={d} /></svg>;
 const Orb = ({ small }) => <span className={`ai-orb ${small ? "sm" : ""}`} aria-hidden="true"><svg viewBox="0 0 24 24"><path d={P.chart} /></svg></span>;
 
-export default function AiAssistant({ open: openProp, onOpenChange }) {
+export default function AiAssistant({ open: openProp, onOpenChange, variant = "drawer", onAnswer }) {
   const { me } = useMe();
+  const docked = variant === "panel";
   const [openSelf, setOpenSelf] = useState(false);
-  const open = openProp ?? openSelf;
+  const open = docked || (openProp ?? openSelf);
   const setOpen = useCallback((v) => (onOpenChange ? onOpenChange(v) : setOpenSelf(v)), [onOpenChange]);
   const [msgs, setMsgs] = useState([]); /* {role:"user",text} | {role:"bot",res} | {role:"err",text,q} | {role:"note",text} */
   const [ctx, setCtx] = useState({});
@@ -72,25 +76,25 @@ export default function AiAssistant({ open: openProp, onOpenChange }) {
   useEffect(() => { save({ msgs: msgs.slice(-30), ctx, chatId }); }, [msgs, ctx, chatId]);
   useEffect(() => { if (open && !people.length) A.getIntakeUsers().then((u) => setPeople(u || [])).catch(() => {}); }, [open, people.length]);
   useEffect(() => { const el = bodyRef.current; if (el && view === "chat") el.scrollTop = el.scrollHeight; }, [msgs, busy, open, view]);
-  useEffect(() => { if (open) { const t = setTimeout(() => inputRef.current?.focus(), 250); return () => clearTimeout(t); } }, [open]);
+  useEffect(() => { if (open && !docked) { const t = setTimeout(() => inputRef.current?.focus(), 250); return () => clearTimeout(t); } }, [open, docked]);
   /* Sit 12px under the app's top bar, wherever it ends (the desktop-alerts bar
      above it pushes it down). */
   const [top, setTop] = useState(null);
   useEffect(() => {
-    if (!open) return;
+    if (!open || docked) return;
     const place = () => { const bar = document.querySelector(".k-app .top"); const b = bar ? bar.getBoundingClientRect().bottom : 56; setTop(Math.max(8, Math.round(b) + 12)); };
     place();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, [open]);
+  }, [open, docked]);
   useEffect(() => {
     const onKey = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") { e.preventDefault(); setOpen(!open); }
-      else if (e.key === "Escape" && open) setOpen(false);
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") { e.preventDefault(); if (docked) inputRef.current?.focus(); else setOpen(!open); }
+      else if (e.key === "Escape" && open && !docked) setOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, setOpen]);
+  }, [open, setOpen, docked]);
 
   const typeAhead = useMemo(() => (q.trim().length >= 2 && !busy ? suggest(q, people, 5) : []), [q, people, busy]);
   useEffect(() => setHi(-1), [q]);
@@ -108,6 +112,7 @@ export default function AiAssistant({ open: openProp, onOpenChange }) {
       setMsgs((m) => [...m, { role: "bot", res: r, q: question, ctxIn: ctx }]); /* q + ctxIn: to rebuild it in full for a download */
       setCtx(r.context || {});
       if (r.chat_id) { setChatId(r.chat_id); setChats(null); }
+      onAnswer?.(r, question);
     } catch (e) {
       if (mine === seq.current) setMsgs((m) => [...m, { role: "err", text: e.message || "Something went wrong.", q: question }]);
     } finally { if (mine === seq.current) setBusy(false); }
@@ -181,8 +186,8 @@ export default function AiAssistant({ open: openProp, onOpenChange }) {
           <Orb small /> <span>Ask AI</span>
         </button>
       )}
-      <div className={`ai-scrim ${open ? "open" : ""}`} onClick={() => setOpen(false)} />
-      <aside className={`ai-drawer ${open ? "open" : ""}`} style={top != null ? { top } : undefined} aria-label="369 AI Assistant" aria-hidden={!open} inert={!open}>
+      {!docked && <div className={`ai-scrim ${open ? "open" : ""}`} onClick={() => setOpen(false)} />}
+      <aside className={`ai-drawer ${docked ? "ai-panel" : ""} ${open ? "open" : ""}`} style={top != null && !docked ? { top } : undefined} aria-label="369 AI Assistant" aria-hidden={!open} inert={!open}>
         <header className="ai-head">
           <Orb small />
           <div className="ai-headtxt">
@@ -195,7 +200,7 @@ export default function AiAssistant({ open: openProp, onOpenChange }) {
           )}
           <button type="button" className={`ai-iconbtn ${view === "history" ? "on" : ""}`} onClick={showHistory} title="Chat history" aria-label="Chat history" aria-pressed={view === "history"}><Svg d={P.history} /></button>
           <button type="button" className="ai-iconbtn" onClick={newChat} title="New chat" aria-label="New chat"><Svg d={P.plus} /></button>
-          <button type="button" className="ai-iconbtn" onClick={() => setOpen(false)} title="Close (Esc)" aria-label="Close"><Svg d={P.x} /></button>
+          {!docked && <button type="button" className="ai-iconbtn" onClick={() => setOpen(false)} title="Close (Esc)" aria-label="Close"><Svg d={P.x} /></button>}
         </header>
 
         {view === "history" ? (
