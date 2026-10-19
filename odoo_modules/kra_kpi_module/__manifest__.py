@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.6.8",
+    "version": "19.0.6.9",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -127,9 +127,11 @@
             "kra_kpi_module/static/src/components/kpi_project_completion/kpi_project_completion.js",
             "kra_kpi_module/static/src/components/kpi_client_workspace/kpi_client_workspace.js",
             "kra_kpi_module/static/src/components/kpi_client_dashboard/kpi_client_dashboard.js",
-            # The 369 AI Assistant drawer, mounted by the Owner Dashboard below.
+            # The 369 AI Assistant, docked on the Dashboard below.
             "kra_kpi_module/static/src/components/kpi_ai_assistant/kpi_ai_assistant.js",
             "kra_kpi_module/static/src/components/kpi_ai_assistant/kpi_ai_assistant.css",
+            "kra_kpi_module/static/src/components/kpi_dashboard/kpi_dashboard.js",
+            "kra_kpi_module/static/src/components/kpi_dashboard/kpi_dashboard.css",
             "kra_kpi_module/static/src/components/kpi_owner_dashboard/kpi_owner_dashboard.js",
             "kra_kpi_module/static/src/components/kpi_client_completions/kpi_client_completions.js",
             "kra_kpi_module/static/src/components/kpi_pending_queue/kpi_pending_queue.js",

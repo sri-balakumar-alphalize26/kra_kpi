@@ -13,7 +13,10 @@ import { user } from "@web/core/user";
  *   /kra_kpi/ai_assistant/find_tasks live "Find a task"
  *   /kra_kpi/get_users               the People list
  * An "Ask AI" pill opens a drawer on the right (Ctrl/⌘+J toggles, Esc closes).
- * Questions mean "today" unless they name a period. Mounted by the Owner Dashboard.
+ * Questions mean "today" unless they name a period.
+ * docked: on the Dashboard (kpi_dashboard.js) it sits in the page's left column,
+ * always open, with no pill and no close; Ctrl/⌘+J puts the cursor in the box. Same
+ * chats as the drawer. onAnswer(res, question) hears every answer (to highlight a card).
  * Keep the FAQ lists in step with web/components/admin/aiFaq.js.
  */
 
@@ -66,16 +69,16 @@ const pdfText = (s) => String(s ?? "").replace(/[·•]/g, "-").replace(/[–—
     .replace(/[“”]/g, '"').replace(/₹/g, "Rs ").replace(/[✓✔]/g, "").replace(/[^\x00-\xFF]/g, "?");
 const cellText = (v) => (v === "" || v == null ? "-" : String(v));
 const isWide = (sections) => sections.some((s) => (s.res.blocks || []).some((b) => b.type === "table" && (b.columns || []).length >= 7));
-const stamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${p(d.getDate())}${p(d.getMonth() + 1)}${p(d.getFullYear() % 100)}_${p(d.getHours())}${p(d.getMinutes())}`; };
-const slug = (s) => String(s || "answer").replace(/[\\/:*?"<>|]+/g, " ").replace(/[^\w\s.-]+/g, "").trim().replace(/\s+/g, "-").slice(0, 60) || "answer";
+export const stamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${p(d.getDate())}${p(d.getMonth() + 1)}${p(d.getFullYear() % 100)}_${p(d.getHours())}${p(d.getMinutes())}`; };
+export const slug = (s) => String(s || "answer").replace(/[\\/:*?"<>|]+/g, " ").replace(/[^\w\s.-]+/g, "").trim().replace(/\s+/g, "-").slice(0, 60) || "answer";
 const nowText = () => new Date().toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
-function saveBlob(blob, name) {
+export function saveBlob(blob, name) {
     const url = URL.createObjectURL(blob), a = document.createElement("a");
     a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-function buildPdf(sections, meta) {
+export function buildPdf(sections, meta) {
     if (!window.jspdf?.jsPDF) throw new Error("The PDF library did not load. Refresh the page and try again.");
     const doc = new window.jspdf.jsPDF({ orientation: isWide(sections) ? "landscape" : "portrait", unit: "pt", format: "a4" });
     if (typeof doc.autoTable !== "function") throw new Error("The PDF table library did not load. Refresh the page and try again.");
@@ -136,7 +139,7 @@ const wtable = (head, rows, { rightCols = [], light, boldBody } = {}) =>
     rows.map((r, ri) => `<w:tr>${r.map((v, ci) => wcell(v, { fill: ri % 2 ? "F5F7FB" : undefined, right: rightCols.includes(ci), bold: boldBody })).join("")}</w:tr>`).join("") +
     "</w:tbl>" + wpara("", { after: 120 });
 
-async function buildDocx(sections, meta) {
+export async function buildDocx(sections, meta) {
     const JSZip = window.JSZip;
     if (typeof JSZip !== "function") throw new Error("The Word library did not load. Refresh the page and try again.");
     const body = [wpara(wrun("369 AI Assistant", { b: true, sz: 34, color: "1E40AF" }), { after: 40 }),
@@ -172,14 +175,17 @@ async function buildDocx(sections, meta) {
 
 /* ------------------------------------------------------------------ component */
 export class KpiAiAssistant extends Component {
-    static props = {};
+    static props = {
+        docked: { type: Boolean, optional: true },
+        onAnswer: { type: Function, optional: true },
+    };
     static template = xml/* xml */`
-    <div class="o_kpi_ai">
-        <button t-if="!state.open" type="button" class="o_kpi_ai_launcher" t-on-click="() => this.setOpen(true)" title="Ask AI (Ctrl+J)">
+    <div t-attf-class="o_kpi_ai {{ props.docked ? 'docked' : '' }}">
+        <button t-if="!state.open and !props.docked" type="button" class="o_kpi_ai_launcher" t-on-click="() => this.setOpen(true)" title="Ask AI (Ctrl+J)">
             <span class="o_kpi_ai_orb sm"><i class="fa fa-bar-chart"/></span> <span>Ask AI</span>
         </button>
-        <div t-attf-class="o_kpi_ai_scrim {{ state.open ? 'open' : '' }}" t-on-click="() => this.setOpen(false)"/>
-        <aside t-attf-class="o_kpi_ai_drawer {{ state.open ? 'open' : '' }}" t-att-style="state.top ? 'top:' + state.top + 'px' : ''">
+        <div t-if="!props.docked" t-attf-class="o_kpi_ai_scrim {{ state.open ? 'open' : '' }}" t-on-click="() => this.setOpen(false)"/>
+        <aside t-attf-class="o_kpi_ai_drawer {{ props.docked ? 'o_kpi_ai_panel' : '' }} {{ state.open ? 'open' : '' }}" t-att-style="state.top and !props.docked ? 'top:' + state.top + 'px' : ''">
             <header class="o_kpi_ai_head">
                 <span class="o_kpi_ai_orb sm"><i class="fa fa-bar-chart"/></span>
                 <div class="o_kpi_ai_headtxt">
@@ -198,7 +204,7 @@ export class KpiAiAssistant extends Component {
                 </span>
                 <button type="button" t-attf-class="o_kpi_ai_iconbtn {{ state.view === 'history' ? 'on' : '' }}" title="Chat history" t-on-click="showHistory"><i class="fa fa-history"/></button>
                 <button type="button" class="o_kpi_ai_iconbtn" title="New chat" t-on-click="newChat"><i class="fa fa-plus"/></button>
-                <button type="button" class="o_kpi_ai_iconbtn" title="Close (Esc)" t-on-click="() => this.setOpen(false)"><i class="fa fa-times"/></button>
+                <button t-if="!props.docked" type="button" class="o_kpi_ai_iconbtn" title="Close (Esc)" t-on-click="() => this.setOpen(false)"><i class="fa fa-times"/></button>
             </header>
 
             <t t-if="state.view === 'history'">
@@ -353,18 +359,21 @@ export class KpiAiAssistant extends Component {
         this.inputRef = useRef("input");
         this.seq = 0;
         this.state = useState({
-            open: false, view: "chat", msgs: [], ctx: {}, q: "", busy: false, chatId: null,
+            open: !!this.props.docked, view: "chat", msgs: [], ctx: {}, q: "", busy: false, chatId: null,
             chats: null, histErr: "", people: [], tab: "today", person: null, peopleFind: "",
             findText: "", findRows: null, hi: -1, dlOpen: null, dlBusy: "", dlErr: "", top: null,
         });
         this.onKey = (e) => {
-            if ((e.metaKey || e.ctrlKey) && (e.key || "").toLowerCase() === "j") { e.preventDefault(); this.setOpen(!this.state.open); }
-            else if (e.key === "Escape" && this.state.open) this.setOpen(false);
+            if ((e.metaKey || e.ctrlKey) && (e.key || "").toLowerCase() === "j") {
+                e.preventDefault();
+                if (this.props.docked) { if (this.inputRef.el) this.inputRef.el.focus(); } else this.setOpen(!this.state.open);
+            } else if (e.key === "Escape" && this.state.open && !this.props.docked) this.setOpen(false);
         };
         this.onResize = () => this.place();
         onMounted(() => {
             window.addEventListener("keydown", this.onKey);
             window.addEventListener("resize", this.onResize);
+            if (this.props.docked) this.loadPeople();
             try { const id = Number(sessionStorage.getItem(KEY)); if (id) this.loadChat(id, true); } catch (_) { /* storage blocked */ }
         });
         onWillUnmount(() => { window.removeEventListener("keydown", this.onKey); window.removeEventListener("resize", this.onResize); });
@@ -393,10 +402,13 @@ export class KpiAiAssistant extends Component {
         this.state.dlOpen = null;
         if (v) {
             this.place();
-            if (!this.state.people.length) rpc("/kra_kpi/get_users", {}).then((r) => { this.state.people = Array.isArray(r) ? r : (r && r.users) || []; }).catch(() => {});
+            this.loadPeople();
             setTimeout(() => this.inputRef.el && this.inputRef.el.focus(), 250);
             this.scrollDown();
         }
+    }
+    loadPeople() {
+        if (!this.state.people.length) rpc("/kra_kpi/get_users", {}).then((r) => { this.state.people = Array.isArray(r) ? r : (r && r.users) || []; }).catch(() => {});
     }
     setView(v) { this.state.view = v; this.state.dlOpen = null; if (v === "chat") this.scrollDown(); }
     setTab(k) { this.state.tab = k; this.state.person = null; if (k === "find" && this.state.findRows === null) this.searchTasks(); }
@@ -419,6 +431,7 @@ export class KpiAiAssistant extends Component {
             this.state.msgs.push({ role: "bot", res: r, q: question, ctxIn });
             this.state.ctx = r.context || {};
             if (r.chat_id) { this.state.chatId = r.chat_id; this.state.chats = null; this.remember(); }
+            if (this.props.onAnswer) { try { this.props.onAnswer(r, question); } catch (_) { /* a page hook must not break the chat */ } }
         } catch (e) {
             if (mine === this.seq) this.state.msgs.push({ role: "err", text: (e && (e.data?.message || e.message)) || "Something went wrong.", q: question });
         } finally {
@@ -444,7 +457,7 @@ export class KpiAiAssistant extends Component {
         }
     }
     openTask(id) {
-        this.setOpen(false);
+        if (!this.props.docked) this.setOpen(false);
         this.action.doAction({ type: "ir.actions.act_window", res_model: "kra.kpi", res_id: id, views: [[false, "form"]], target: "current" });
     }
 

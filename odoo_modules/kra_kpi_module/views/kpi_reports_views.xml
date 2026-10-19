@@ -285,14 +285,29 @@
               sequence="20"
               groups="kra_kpi_module.group_kra_admin,base.group_system"/>
 
-    <!-- Owner Dashboard — per-client certified tasks + invoice gateway (Owner role) -->
+    <!-- Dashboard — the owner's one page: the 369 AI Assistant docked left, every
+         area summarised right (kpi_dashboard.js; the web /dashboard twin). -->
+    <record id="action_kpi_dashboard" model="ir.actions.client">
+        <field name="name">Dashboard</field>
+        <field name="tag">kpi_dashboard</field>
+    </record>
+
+    <menuitem id="menu_kpi_dashboard"
+              name="Dashboard"
+              parent="menu_grp_tracking"
+              action="action_kpi_dashboard"
+              sequence="15"
+              groups="kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    <!-- Client Billing (formerly "Owner Dashboard") — per-client certified tasks +
+         invoice gateway (Owner role). XML ids kept so existing links keep working. -->
     <record id="action_kpi_owner_dashboard" model="ir.actions.client">
-        <field name="name">Owner Dashboard</field>
+        <field name="name">Client Billing</field>
         <field name="tag">kpi_owner_dashboard</field>
     </record>
 
     <menuitem id="menu_kpi_owner_dashboard"
-              name="Owner Dashboard"
+              name="Client Billing"
               parent="menu_grp_tracking"
               action="action_kpi_owner_dashboard"
               sequence="20"

@@ -20,6 +20,11 @@
     box-shadow: 0 24px 50px -20px rgba(30, 41, 59, .35); transform: translateX(calc(100% + 24px)); opacity: 0; pointer-events: none;
     transition: transform .45s var(--ai-ease), opacity .3s; }
 .o_kpi_ai_drawer.open { transform: none; opacity: 1; pointer-events: auto; }
+/* Docked on the Dashboard (docked prop): fills the page's left column, which
+   stays put while the details beside it scroll. */
+.o_kpi_ai.docked { height: 100%; min-height: 0; }
+.o_kpi_ai_drawer.o_kpi_ai_panel { position: relative; top: auto; right: auto; bottom: auto; z-index: auto; width: auto; height: 100%;
+    transform: none; transition: none; box-shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 6px 18px -10px rgba(30, 41, 59, .18); }
 
 .o_kpi_ai_head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--ai-line); }
 .o_kpi_ai_headtxt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
@@ -125,4 +130,4 @@
 .o_kpi_ai_orb.sm { width: 28px; height: 28px; margin: 0; font-size: 12px; box-shadow: 0 0 10px 1px rgba(30, 64, 175, .25); }
 @keyframes o_kpi_ai_spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .o_kpi_ai_orb, .o_kpi_ai_orb .fa, .o_kpi_ai_dots i, .o_kpi_ai_user, .o_kpi_ai_ai { animation: none; } .o_kpi_ai_drawer { transition: opacity .2s; } }
-@media (max-width: 768px) { .o_kpi_ai_drawer { right: 8px; bottom: 8px; width: calc(100vw - 16px); } .o_kpi_ai_launcher { right: 16px; bottom: 16px; } }
+@media (max-width: 768px) { .o_kpi_ai_drawer:not(.o_kpi_ai_panel) { right: 8px; bottom: 8px; width: calc(100vw - 16px); } .o_kpi_ai_launcher { right: 16px; bottom: 16px; } }
