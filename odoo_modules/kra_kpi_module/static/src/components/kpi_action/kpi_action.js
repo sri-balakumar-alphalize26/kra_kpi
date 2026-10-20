@@ -2912,6 +2912,7 @@ export class KpiAction extends Component {
         { key: 'all',     label: 'All activity',      icon: 'fa-history' },
         { key: 'pause',   label: 'Pause log',         icon: 'fa-pause-circle' },
         { key: 'heading', label: 'Heading change log', icon: 'fa-pencil' },
+        { key: 'time',    label: 'Time log',           icon: 'fa-clock-o' },
     ];
     get activityKinds() { return this.constructor.ACTIVITY_KINDS; }
     activityKindLabel() {

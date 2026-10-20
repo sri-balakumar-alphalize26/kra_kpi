@@ -283,12 +283,14 @@ class KpiWaStaffTask(models.AbstractModel):
             'entry_del': self._fl_entry_del, 'time': self._fl_time,
             'pause_code': self._fl_pause_code, 'pause_note': self._fl_pause_note,
             'meet_who': self._fl_meet_who, 'meet_note': self._fl_meet_note,
+            'meet_menu': self._fl_meet_menu, 'meet_client': self._fl_meet_client,
         }.get(at)
         if not handler:
             state._reset()
             return False
         task = state.staff_kpi_id
-        needs_task = not (at in ('meet_who', 'meet_note') and d.get('purpose') == 'nontask')
+        needs_task = not (at in ('meet_menu', 'meet_client')
+                          or (at in ('meet_who', 'meet_note') and d.get('purpose') == 'nontask'))
         if needs_task and (not task or not task.exists()):
             state._reset()
             return False
@@ -1264,62 +1266,182 @@ class KpiWaStaffTask(models.AbstractModel):
         return True
 
     # ================================================================== #
+    # 📅 Meeting -- one menu row, then: manager / client / developer / team #
+    # ================================================================== #
+    MEET_MENU = ['🧑‍💼 Meeting with manager', '🤝 Meeting with client',
+                 '👨‍💻 Meeting with developer', '👥 Team meeting', BACK]
+
+    def _meeting_menu(self, message, state, user):
+        return self._fask(message, state, {'at': 'meet_menu'}, _('📅 Meeting with whom?'),
+                          self.MEET_MENU)
+
+    def _day_open_or_say(self, message, state, user):
+        _s, is_open, _e = self._workday(user)
+        if not is_open:
+            state._reset()
+            self._text(message, _('Start your day first — a meeting is recorded inside your workday.'))
+        return is_open
+
+    def _fl_meet_menu(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        if i == 0:
+            # The existing request flow: pick the task, say what about, and it
+            # goes to the manager (kpi.doubt kind meet_admin).
+            state._touch(step='staff_menu', staff_action='meet_admin', staff_draft=False)
+            return self._staff_offer_tasks(message, state, user, 'meet_admin')
+        if i == 1:
+            return self._meet_client_pick(message, state, user)
+        if i == 2:
+            if not self._day_open_or_say(message, state, user):
+                return True
+            return self._meet_begin(message, state, user, purpose='nontask', devs_only=True)
+        if i == 3:
+            if not self._day_open_or_say(message, state, user):
+                return True
+            return self._meet_done(message, state, user, None, 'nontask', [], TEAM_MEETING_LABEL)
+        state._reset()
+        return self._show_staff_menu(message, state, user)
+
+    def _client_tasks(self, user):
+        """{client: tasks} over this person's open tasks. A client meeting is
+        always ABOUT a task (kpi.doubt needs one), so the clients offered are
+        the ones they have work for."""
+        out = {}
+        for t in self._my_tasks(user):
+            c = t.client_kra_id
+            if not c:
+                c = t.kra_id
+                while c and c.parent_id:
+                    c = c.parent_id
+            if c:
+                out.setdefault(c, self.env['kra.kpi'])
+                out[c] |= t
+        return out
+
+    def _meet_client_pick(self, message, state, user):
+        groups = self._client_tasks(user)
+        if not groups:
+            state._reset()
+            self._text(message, _('You have no open task for any client, so there is nothing to '
+                                  'meet a client about yet.'))
+            return True
+        clients = sorted(groups, key=lambda c: (c.name or '').lower())[:9]
+        if len(clients) == 1:
+            return self._meet_client_tasks(message, state, user, groups[clients[0]])
+        d = {'at': 'meet_client', 'ids': [c.id for c in clients]}
+        return self._fask(message, state, d, _('🤝 Which client?'),
+                          ['🏢 %s' % (c.name or '')[:80] for c in clients] + [BACK])
+
+    def _fl_meet_client(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        ids = d.get('ids') or []
+        if i >= len(ids):
+            return self._meeting_menu(message, state, user)
+        groups = self._client_tasks(user)
+        client = self.env['kra.master'].sudo().browse(ids[i])
+        tasks = groups.get(client) or self.env['kra.kpi']
+        if not tasks:
+            state._reset()
+            self._text(message, _('You have no open task for %s.') % (client.name or ''))
+            return True
+        return self._meet_client_tasks(message, state, user, tasks)
+
+    def _meet_client_tasks(self, message, state, user, tasks):
+        """Then the existing client-meeting flow, on that client's tasks only."""
+        if len(tasks) == 1:
+            state._touch(staff_action='meet_client', staff_draft=False)
+            return self._staff_begin(message, state, user, tasks[0], 'meet_client')
+        labels = dict(tasks._fields['task_state'].selection)
+        opts = ['%s — %s · %s' % (self._ref(t), (t.name or '')[:30], labels.get(t.task_state, t.task_state))
+                for t in tasks[:10]]
+        state._touch(step='staff_pick_task', staff_action='meet_client', staff_draft=False,
+                     menu_csv=','.join(str(t.id) for t in tasks[:10]))
+        self._poll(message, _('Which task is the client meeting about?'), opts)
+        return True
+
+    # ================================================================== #
     # Meeting: who it is with, and what about                             #
     # ================================================================== #
-    def _people(self, user):
+    def _people(self, user, devs_only=False):
         """/kra_kpi/get_people: everyone a meeting can be with."""
-        return self.env['res.users'].sudo().search([
+        people = self.env['res.users'].sudo().search([
             ('active', '=', True), ('share', '=', False), ('id', '!=', 1),
             ('id', '!=', user.id)]).sorted('name')
+        if devs_only:
+            people = people.filtered(lambda u: u.has_group('kra_kpi_module.group_kra_developer'))
+        return people
 
-    def _meet_begin(self, message, state, user, purpose, picked=None, page=0, only=None, note=''):
+    def _meet_begin(self, message, state, user, purpose, picked=None, page=0, only=None, note='',
+                    devs_only=False):
         picked = list(picked or [])
-        people = self._people(user)
+        people = self._people(user, devs_only)
         rest = only if only is not None else people.filtered(lambda u: u.id not in picked)
         pages = max(1, (len(rest) + PEOPLE_PAGE - 1) // PEOPLE_PAGE)
         page = page % pages
         chunk = rest[page * PEOPLE_PAGE:(page + 1) * PEOPLE_PAGE]
         names = self.env['res.users'].sudo().browse(picked).mapped('name')
-        q = ((note + '\n\n') if note else '') + _(
-            '👥 Who is the meeting with? Tap each person (or type a name), then Done.\n'
-            'Or pick Team meeting — the whole team, no names or note needed.\n\nPicked: %s') % (
-            ', '.join(names) or _('nobody yet'))
-        opts = ['👥 Team meeting'] + ['👤 %s' % (u.name or '')[:60] for u in chunk]
+        # devs_only = "Meeting with developer": developers only, at least one,
+        # and no Team row (Team meeting is its own choice in the Meeting menu).
+        if devs_only:
+            q = _('👨‍💻 Which developer? Tap each one (or type a name), then Done.\n\nPicked: %s')
+        else:
+            q = _('👥 Who is the meeting with? Tap each person (or type a name), then Done.\n'
+                  'Or pick Team meeting — the whole team, no names or note needed.\n\nPicked: %s')
+        q = ((note + '\n\n') if note else '') + q % (', '.join(names) or _('nobody yet'))
+        opts, kinds = [], []
+        if not devs_only:
+            opts.append('👥 Team meeting'); kinds.append('team')
+        for u in chunk:
+            opts.append('👤 %s' % (u.name or '')[:60]); kinds.append('u%d' % u.id)
         if pages > 1 and only is None:
-            opts.append('➡️ More people')
-        opts.append(_('✅ Done — %d picked') % len(picked) if picked else '⏭️ Nobody to name')
+            opts.append('➡️ More people'); kinds.append('more')
+        if picked:
+            opts.append(_('✅ Done — %d picked') % len(picked)); kinds.append('done')
+        elif not devs_only:
+            opts.append('⏭️ Nobody to name'); kinds.append('done')
+        if len(opts) < 2:
+            opts.append(BACK); kinds.append('back')
         d = {'at': 'meet_who', 'purpose': purpose, 'picked': picked, 'page': page,
-             'ids': chunk.ids}
+             'kinds': kinds, 'devs_only': devs_only}
         return self._fask(message, state, d, q, opts)
 
     def _fl_meet_who(self, message, state, user, d, task, tapped, low, body):
         i = self._fchoice(d, tapped, low, allow_number=False)
-        opts = d.get('opts') or []
         picked, purpose = d.get('picked') or [], d.get('purpose')
+        devs_only = bool(d.get('devs_only'))
         if i is None:
             q = (body or '').strip().lower()
             if not q:
                 return False
-            hits = self._people(user).filtered(lambda u: q in (u.name or '').lower() and u.id not in picked)
+            hits = self._people(user, devs_only).filtered(
+                lambda u: q in (u.name or '').lower() and u.id not in picked)
             if not hits:
                 return self._meet_begin(message, state, user, purpose, picked, d.get('page', 0),
-                                        note=_('No one matches "%s".') % body.strip())
+                                        note=_('No one matches "%s".') % body.strip(), devs_only=devs_only)
             if len(hits) == 1:
                 return self._meet_begin(message, state, user, purpose, picked + hits.ids, 0,
-                                        note=_('Added %s.') % hits.name)
-            return self._meet_begin(message, state, user, purpose, picked, 0, only=hits[:PEOPLE_PAGE])
-        label = opts[i]
-        if i == 0:                                   # Team meeting
+                                        note=_('Added %s.') % hits.name, devs_only=devs_only)
+            return self._meet_begin(message, state, user, purpose, picked, 0, only=hits[:PEOPLE_PAGE],
+                                    devs_only=devs_only)
+        kind = (d.get('kinds') or [])[i] if i < len(d.get('kinds') or []) else ''
+        if kind == 'team':
             return self._meet_done(message, state, user, task, purpose, [], TEAM_MEETING_LABEL)
-        if label.startswith('➡️'):
-            return self._meet_begin(message, state, user, purpose, picked, d.get('page', 0) + 1)
-        if label.startswith('✅') or label.startswith('⏭️'):
+        if kind == 'more':
+            return self._meet_begin(message, state, user, purpose, picked, d.get('page', 0) + 1,
+                                    devs_only=devs_only)
+        if kind == 'back':
+            return self._meeting_menu(message, state, user)
+        if kind == 'done':
             self._fsave(state, {'at': 'meet_note', 'purpose': purpose, 'picked': picked})
             self._text(message, _('What is the meeting about? Short — e.g. sprint planning.'))
             return True
-        ids = d.get('ids') or []
-        if 1 <= i <= len(ids):
-            return self._meet_begin(message, state, user, purpose, picked + [ids[i - 1]], d.get('page', 0))
+        if kind.startswith('u'):
+            return self._meet_begin(message, state, user, purpose, picked + [int(kind[1:])],
+                                    d.get('page', 0), devs_only=devs_only)
         return False
 
     def _fl_meet_note(self, message, state, user, d, task, tapped, low, body):
