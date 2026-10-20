@@ -839,7 +839,7 @@ function Github({ kpiId, github, linkIdx, canAdd = true, canDelete, onChanged })
 }
 
 /* ---- history ---- */
-const KINDS = [{ key: "all", label: "All" }, { key: "pause", label: "Pause / resume" }, { key: "heading", label: "Heading" }];
+const KINDS = [{ key: "all", label: "All" }, { key: "pause", label: "Pause / resume" }, { key: "heading", label: "Heading" }, { key: "time", label: "Time" }];
 const SHOWN = 20;
 function eventIcon(ev) {
   if (/pause/.test(ev)) return "pause";
@@ -862,6 +862,7 @@ function describe(a) {
     if (p.kra_from !== p.kra_to) out.push(`project ${p.kra_from || "—"} → ${p.kra_to || "—"}`);
     return out.join(" · ");
   }
+  if (a.event === "time_reduced") return `${p.date}: ${p.from} → ${p.to} (−${p.reduced})${p.reason ? ` — ${p.reason}` : ""}`;
   if (p.from != null && p.to != null && typeof p.from !== "object") return `${p.from} → ${p.to}${p.reason ? ` — ${p.reason}` : ""}`;
   return p.reason || p.note || p.message || p.error || "";
 }

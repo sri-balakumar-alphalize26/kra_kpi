@@ -58,8 +58,10 @@ STAFF_DAY_END = ('day_end', '🌙 End my day')
 STAFF_BREAK_ROWS = [
     ('nt_break', '☕ On a break'),
     ('nt_lunch', '🍽️ Lunch'),
-    ('nt_meeting', '👥 In a meeting'),
 ]
+# "In a meeting" now lives under 📅 Meeting (with a developer / team meeting).
+# Kept addressable so a poll sent before this change still resolves.
+STAFF_NT_MEETING = ('nt_meeting', '👥 In a meeting')
 STAFF_BACK = ('nt_end', '🔙 Back to work')
 # Offered only while a room is actually open, so there is a way to finish a
 # meeting from the same place it was started. Without it the only end was the
@@ -86,11 +88,13 @@ STAFF_ROWS = [
     # right now, as the KPI Actions live strip shows it.
     ('status', '📍 Current status'),
     ('doubt', '❓ Doubt / clarification'),
-    ('meet_admin', '📅 Meeting with manager'),
-    ('meet_client', '📅 Meeting with client'),
+    # ONE row; the next poll asks with whom (kpi_wa_staff_task._meeting_menu).
+    ('meeting', '📅 Meeting'),
 ]
 STAFF_BY_ID = dict(STAFF_ROWS + [STAFF_DAY_START, STAFF_DAY_END, STAFF_BACK,
-                                 STAFF_MEET_END] + STAFF_BREAK_ROWS)
+                                 STAFF_MEET_END, STAFF_NT_MEETING] + STAFF_BREAK_ROWS
+                   + [('meet_admin', '📅 Meeting with manager'),
+                      ('meet_client', '📅 Meeting with client')])
 
 # What can be done to a task, given where it is. Everything here is a tap.
 # 'in_progress' is the only state that can be paused; 'paused' and 'hold' are
@@ -294,11 +298,11 @@ class KpiWaStaffRouter(models.AbstractModel):
         Built from the state of their day rather than fixed, so nothing is
         ever offered that would only be refused.
 
-        The longest version is TEN rows: End my day, Finish the meeting, the
-        five STAFF_ROWS and the three break rows. On a break it is eight,
+        The longest version is EIGHT rows: End my day, Finish the meeting, the
+        four STAFF_ROWS and the two break rows. On a break it is seven,
         because the break rows are replaced by one Back to work. Ten is the
-        ceiling Evolution allows -- the next row added here needs one taken
-        away, or the menu silently turns back into text.
+        ceiling Evolution allows -- past it the menu silently turns back into
+        text.
         """
         sess, is_open, ended = self._workday(user)
         live = self._live_meeting(user)
@@ -520,6 +524,8 @@ class KpiWaStaffRouter(models.AbstractModel):
             return self._staff_finish_meeting(message, state, user)
         if choice == 'status':
             return self._staff_status(message, state, user)
+        if choice == 'meeting':
+            return self._meeting_menu(message, state, user)
 
         # 'mytasks' is not a verb: pick the task, then be shown what can be
         # done to it. It used to print a plain text list, which is the one
