@@ -49,6 +49,7 @@ export const WORK_MENU = [
     { key: "approvals", label: "Approvals", href: "/approvals", badge: "approvals" },
     { key: "queue", label: "Client Task Queue", href: "/queue" },
     { key: "files", label: "Generate Client Files", href: "/intake/files" },
+    { key: "live-dbs", label: "Live Databases", href: "/settings/setup/live-databases" },
   ] },
   { key: "uploads", group: "Uploads", icon: "upload", roles: ADMIN, items: [
     { key: "up-req", label: "Upload Requirements", href: "/intake/requirement" },
@@ -59,7 +60,16 @@ export const WORK_MENU = [
     { key: "kra-master", label: "KRA / KPI Master", href: "/settings/kra-tree" },
     /* kpi.config.screen is System/Manager-only in Odoo's access rules. */
     { key: "kpi-config", label: "KPI Configuration", href: "/settings/kpi-config", system: true },
+    /* Restarts Odoo onto another database: System only, as in Odoo. */
+    { key: "wa-database", label: "WhatsApp Database", href: "/settings/setup/wa-database", system: true },
     { key: "whatsapp", label: "WhatsApp Connect", href: "/settings/whatsapp" },
+    { key: "wa-groups", label: "WhatsApp Groups", href: "/settings/setup/wa-groups" },
+    { key: "servers", label: "Servers", href: "/settings/setup/servers" },
+    { key: "decline-reasons", label: "Decline Reasons", href: "/settings/setup/decline-reasons" },
+    { key: "install-packages", label: "Install Packages", href: "/settings/setup/install-packages" },
+    { key: "databases", label: "Databases", href: "/settings/setup/databases" },
+    { key: "db-terms", label: "Database Terms", href: "/settings/setup/db-terms" },
+    { key: "disconnect-reasons", label: "Disconnect Reasons", href: "/settings/setup/disconnect-reasons" },
   ] },
   { key: "reports", group: "KPI Reports", icon: "chart", roles: ADMIN, items: [
     { key: "salary", label: "Employee Salary Master", href: "/reports/performance?tab=salary" },
@@ -78,6 +88,7 @@ export const WORK_MENU = [
   ] },
   { key: "settings", group: "Settings", icon: "gear", roles: ADMIN, items: [
     { key: "configuration", label: "Configuration", href: "/settings/configuration" },
+    { key: "ai-config", label: "AI & Transcription", href: "/settings/ai" },
     { key: "branding", label: "Company Branding", href: "/settings/branding" },
     /* Multi-task settings live inside the Configuration page on the web. */
     { key: "multitask", label: "Multi-task Settings", href: "/settings/configuration?section=multitask" },
@@ -90,6 +101,9 @@ export const WORK_MENU = [
     { key: "cleanup", label: "Data Cleanup", href: "/settings/cleanup", system: true },
     { key: "reassignments", label: "Reassignment History", href: "/reports/reassignments" },
     { key: "pre-approvals", label: "Client Pre-Approvals", href: "/settings/pre-approvals" },
+    /* Everyone's chats: Odoo's record rules give Owners and System all of
+       them; a coordinator sees only their own (the AI drawer already does). */
+    { key: "ai-chats", label: "AI Assistant Chats", href: "/settings/ai-chats", owner: true },
   ] },
 ];
 
@@ -119,6 +133,7 @@ export const PORTAL_TABS = [
 export const SETTINGS_NAV = [
   { key: "kra-tree", label: "KRA / KPI master", href: "/settings/kra-tree" },
   { key: "configuration", label: "Configuration", href: "/settings/configuration" },
+  { key: "ai-config", label: "AI & transcription", href: "/settings/ai" },
   { key: "pre-approvals", label: "Pre-approvals", href: "/settings/pre-approvals" },
   { key: "users", label: "Users", href: "/settings/users" },
   { key: "login", label: "Login management", href: "/settings/login" },
