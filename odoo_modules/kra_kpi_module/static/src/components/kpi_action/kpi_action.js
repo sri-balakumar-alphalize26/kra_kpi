@@ -338,7 +338,17 @@ export class KpiAction extends Component {
                         </div>
                         <div t-if="state.dlg.footNote" class="small text-muted mb-2"
                              t-esc="state.dlg.footNote"/>
-                        <div t-if="state.dlg.input" class="mb-2">
+                        <!-- Optional pick-one list (Reduce yesterday's reasons). -->
+                        <div t-if="(state.dlg.choices || []).length" class="list-group mb-2">
+                            <label t-foreach="state.dlg.choices" t-as="ch" t-key="ch.key"
+                                   class="list-group-item d-flex gap-2 align-items-center mb-0" style="cursor:pointer;">
+                                <input type="radio" class="form-check-input mt-0" name="kpiDlgChoice"
+                                       t-att-checked="state.dlg.choiceVal === ch.key"
+                                       t-on-change="() => this.dlgChoose(ch.key)"/>
+                                <span t-esc="ch.label"/>
+                            </label>
+                        </div>
+                        <div t-if="dlgShowInput()" class="mb-2">
                             <label class="form-label fw-bold">
                                 <t t-esc="state.dlg.inputLabel"/>
                                 <span t-if="state.dlg.required" class="text-danger">*</span>
@@ -2528,6 +2538,14 @@ export class KpiAction extends Component {
                                                                 t-on-click="() => this.addTimePrompt(task)">
                                                             <i class="fa fa-hourglass-half"></i> Add time
                                                         </button>
+                                                        <!-- Admin: forgotten time off YESTERDAY (decrease only).
+                                                             prev_day_seconds is only sent to an admin. -->
+                                                        <button t-if="state.isAdmin and task.prev_day_seconds > 0" type="button"
+                                                                class="btn btn-sm btn-outline-danger"
+                                                                title="Take forgotten time off yesterday (laptop stuck, power cut…)"
+                                                                t-on-click="() => this.reducePrevDayPrompt(task)">
+                                                            <i class="fa fa-history"></i> Reduce yesterday
+                                                        </button>
                                                         <!-- Admin: remove a task nobody has worked on. can_admin_delete
                                                              is the SERVER's answer (kra.kpi._may_admin_delete), never
                                                              re-derived here, so the button can't offer what the route
@@ -2949,6 +2967,9 @@ export class KpiAction extends Component {
         if (ev.event === 'estimate_extended') {
             return `${p.from} → ${p.to}` + (p.reason ? ` · "${p.reason}"` : '');
         }
+        if (ev.event === 'time_reduced') {
+            return `${p.date}: ${p.from} → ${p.to} (−${p.reduced})` + (p.reason ? ` · "${p.reason}"` : '');
+        }
         if (ev.event === 'meta_updated') {
             // A meta edit can move the project without touching the name, so say
             // whichever actually changed rather than printing "X → X".
@@ -2966,6 +2987,16 @@ export class KpiAction extends Component {
     dlgLiveNote() {
         const c = this.state.dlg.ctx;
         if (!c) return { text: '', cls: '' };
+        if (c.kind === 'reduce') {
+            const cut = ((this.state.dlg.numVals.hours || 0) * 60) + (this.state.dlg.numVals.minutes || 0);
+            if (cut <= 0) return { text: 'Enter how much to take off.', cls: 'text-muted' };
+            if (cut > c.prevMin) {
+                return { text: `Yesterday has only ${this._humanMins(c.prevMin)} — you can take off at most that.`,
+                         cls: 'text-danger' };
+            }
+            return { text: `Yesterday becomes ${this._humanMins(c.prevMin - cut)} (was ${this._humanMins(c.prevMin)})`,
+                     cls: 'text-success' };
+        }
         const added = ((this.state.dlg.numVals.hours || 0) * 60)
                     + (this.state.dlg.numVals.minutes || 0);
         const newEst = c.estMin + added;
@@ -3006,6 +3037,51 @@ export class KpiAction extends Component {
         });
         if (!r || !r.status) {
             this._toast((r && r.message) || 'Could not add time.', 'danger');
+            return;
+        }
+        this._toast(r.message, 'success');
+        await this.refresh();
+    }
+    // Admin: take forgotten time off YESTERDAY (decrease only). The server
+    // (kra.kpi.action_reduce_prev_day) enforces every rule; this only asks.
+    async reducePrevDayPrompt(task) {
+        let info;
+        try {
+            info = await rpc('/kra_kpi/task/prev_day_time', { kpi_id: task.id });
+        } catch (e) { info = null; }
+        if (!info || !info.status) {
+            this._toast((info && info.message) || "Couldn't load yesterday's time.", 'danger');
+            return;
+        }
+        const prevMin = Math.round((info.seconds || 0) / 60);
+        const people = (info.people || []).map((p) => `${p.name} ${p.display}`).join(', ');
+        const spans = (info.intervals || []).map((i) => `   ${i.start} → ${i.end}   ${i.display}`
+                                                      + ((info.people || []).length > 1 ? `  (${i.who})` : '')).join('\n');
+        const days = (info.day_totals || []).map((d) => `${d.name}: ${d.display} on ${d.tasks} task(s)`).join('\n');
+        const vals = await this._dialog({
+            title: `Reduce yesterday's time — ${task.name}`,
+            message: `${info.date_display} — this task: ${info.display}`
+                   + (people ? ` (${people})` : '')
+                   + (spans ? `\n${spans}` : '')
+                   + (days ? `\n\nWhole day worked yesterday:\n${days}` : '')
+                   + `\nTask total so far: ${info.task_total_display || '—'}`
+                   + '\n\nTakes the forgotten time off the END of yesterday. Only yesterday, only less — it cannot add time.',
+            nums: [{ key: 'hours', label: 'Hours', value: 0 },
+                   { key: 'minutes', label: 'Minutes', value: 0 }],
+            ctx: { kind: 'reduce', prevMin },
+            choices: info.reasons || [],
+            input: true, inputWhen: 'other', inputLabel: 'Reason', required: true,
+            placeholder: 'What happened?',
+            footNote: 'The reason is saved in the task log.',
+            okLabel: 'Reduce time', okClass: 'btn-danger',
+        });
+        if (!vals) return;
+        const r = await rpc('/kra_kpi/task/reduce_prev_day', {
+            kpi_id: task.id, hours: vals.hours || 0, minutes: vals.minutes || 0,
+            reason_code: vals.choice || '', reason_text: vals.choice === 'other' ? (vals.text || '') : '',
+        });
+        if (!r || !r.status) {
+            this._toast((r && r.message) || 'Could not reduce the time.', 'danger');
             return;
         }
         this._toast(r.message, 'success');
@@ -8770,10 +8846,12 @@ export class KpiAction extends Component {
     // altLabel adds a third button between Cancel and OK; clicking it resolves 'alt'.
     // checks = [{key, label, sub, checked, disabled, note}] adds a tick list; then OK
     // and alt resolve {action: 'ok' | 'alt', checks: {key: bool}} instead.
+    // choices = [{key, label}] adds a pick-one list; with inputWhen set, the text box
+    // only shows (and is only required) while that choice is picked — "Other".
     _dialog({ title, message = '', okLabel = 'OK', okClass = 'btn-primary',
               altLabel = '', altClass = 'btn-outline-primary', checks = [],
               input = false, inputLabel = '', placeholder = '', required = false,
-              nums = [], footNote = '', ctx = null }) {
+              nums = [], footNote = '', ctx = null, choices = [], inputWhen = '' }) {
         const numVals = {};
         for (const n of nums) numVals[n.key] = n.value !== undefined ? n.value : 0;
         const checkVals = {};
@@ -8782,7 +8860,7 @@ export class KpiAction extends Component {
             open: true, title, message, okLabel, okClass, altLabel, altClass,
             checks, checkVals,
             input, inputLabel, placeholder, required, value: '', error: '',
-            nums, numVals, footNote, ctx,
+            nums, numVals, footNote, ctx, choices, choiceVal: '', inputWhen,
         });
         return new Promise((resolve) => { this.state.dlg.resolve = resolve; });
     }
@@ -8813,18 +8891,27 @@ export class KpiAction extends Component {
     dlgCheckAll(on) {
         for (const c of this.state.dlg.checks) if (!c.disabled) this.state.dlg.checkVals[c.key] = on;
     }
+    dlgChoose(key) { this.state.dlg.choiceVal = key; this.state.dlg.error = ''; }
+    dlgShowInput() {
+        const d = this.state.dlg;
+        return d.input && (!d.inputWhen || d.choiceVal === d.inputWhen);
+    }
     dlgOk() {
         const d = this.state.dlg;
         // Stated rather than enforced by disabling OK, so a click that does nothing
         // always says why.
-        if (d.input && d.required && !String(d.value || '').trim()) {
+        if ((d.choices || []).length && !d.choiceVal) {
+            d.error = 'Pick a reason.';
+            return;
+        }
+        if (this.dlgShowInput() && d.required && !String(d.value || '').trim()) {
             d.error = (d.inputLabel || 'This') + ' is required.';
             return;
         }
         // With numbers present the caller wants the whole set, not just the text;
         // with a tick list, which rows are ticked.
         const val = d.checks.length ? { action: 'ok', checks: { ...d.checkVals } }
-                  : d.nums.length ? { ...d.numVals, text: d.value }
+                  : d.nums.length ? { ...d.numVals, text: d.value, choice: d.choiceVal }
                   : (d.input ? d.value : true);
         const r = d.resolve;
         d.open = false; d.resolve = null;

@@ -60,6 +60,11 @@ export function actionsFor(task, me, { workdayLocked = false } = {}) {
   if (canAddTime(task, mine, admin)) {
     add({ key: "add_time", label: "Add time", kind: "ghost", icon: "clock", dialog: "add_time" });
   }
+  /* Admin only, and only when the task has time recorded YESTERDAY (the
+     server sends prev_day_seconds to admins alone). Decrease only. */
+  if (admin && (task.prev_day_seconds || 0) > 0) {
+    add({ key: "reduce_prev", label: "Reduce yesterday", kind: "ghost", icon: "clock", dialog: "reduce_prev" });
+  }
   if (admin && st !== "completed") {
     add({ key: "reassign", label: "Reassign", kind: "ghost", icon: "people", dialog: "reassign" });
     if (PRIORITY_LANES.includes(lane)) add({ key: "priority", label: "Priority", kind: "ghost", icon: "flag", dialog: "priority" });

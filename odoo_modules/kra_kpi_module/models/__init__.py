@@ -74,3 +74,4 @@ from . import kpi_doubt
 # AFTER kpi_wa_group_intake: it inherits that router and imports _strip_emoji.
 from . import kpi_wa_staff_menu
 from . import kpi_reminder
+from . import kpi_time_adjust

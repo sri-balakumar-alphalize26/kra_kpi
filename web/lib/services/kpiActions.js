@@ -236,6 +236,9 @@ export const resumeTaskWithReason = (kpiId, reason) => action("/kra_kpi/task/res
 export const undoTaskStart = (kpiId) => action("/kra_kpi/task/undo_start", { kpi_id: kpiId });
 export const addTaskTime = (kpiId, hours, minutes, reason) =>
   action("/kra_kpi/task/add_time", { kpi_id: kpiId, hours: hours || 0, minutes: minutes || 0, reason: reason || "" });
+/* Admin: take forgotten time off YESTERDAY only (decrease only, reason required). */
+export const reducePrevDay = (kpiId, hours, minutes, reasonCode, reasonText) =>
+  action("/kra_kpi/task/reduce_prev_day", { kpi_id: kpiId, hours: hours || 0, minutes: minutes || 0, reason_code: reasonCode || "", reason_text: reasonText || "" });
 export const pauseTask = (kpiId, reason, reasonCode, meetingWithIds) =>
   action("/kra_kpi/task/pause", { kpi_id: kpiId, reason: reason || "", reason_code: reasonCode || false, meeting_with_ids: meetingWithIds || [] });
 export const pauseAllTasks = (reason, reasonCode, meetingWithIds) =>
