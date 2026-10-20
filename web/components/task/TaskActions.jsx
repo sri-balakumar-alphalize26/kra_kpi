@@ -118,6 +118,7 @@ export function TaskActionsProvider({ children }) {
       case "delete": return S.adminDeleteTask(task.id, p.reason);
       case "undo_start": return S.undoTaskStart(task.id);
       case "add_time": return S.addTaskTime(task.id, p.hours, p.minutes, p.reason);
+      case "reduce_prev": return S.reducePrevDay(task.id, p.hours, p.minutes, p.reasonCode, p.reasonText);
       case "reassign": return S.reassignTask(task.id, p.userId, p.reason);
       case "switch": return S.switchTask(p.toId, task.id, p.note);
       case "accept_self": return S.acceptSelfCreated(task.id, p.docType, p.priority);
@@ -130,7 +131,7 @@ export function TaskActionsProvider({ children }) {
 
   const DONE = {
     start: "Started.", resume: "Resumed.", pause: "Paused.", complete: "Sent for review.", approve: "Approved.", reject: "Sent back.",
-    revert_signoff: "Sign-off reverted.", delete: "Task deleted.", undo_start: "Start undone.", add_time: "Estimate extended.",
+    revert_signoff: "Sign-off reverted.", delete: "Task deleted.", undo_start: "Start undone.", add_time: "Estimate extended.", reduce_prev: "Yesterday's time reduced.",
     reassign: "Reassigned.", switch: "Switched.", accept_self: "Accepted.", sendback_self: "Sent back.", priority: "Priority changed.",
     pause_all: "Paused all running tasks.",
   };
@@ -154,7 +155,7 @@ export function TaskActionsProvider({ children }) {
 
   /* Dialog → perform. The action key for a dialog name. */
   const ACTION_FOR_DIALOG = { start: "start", resume: "resume", pause: "pause", complete: "complete", approve: "approve", reject: "reject", revert: "revert_signoff", delete: "delete",
-    resume_reason: "resume", sendback: "sendback_self", undo_start: "undo_start", add_time: "add_time", reassign: "reassign", switch: "switch", accept: "accept_self", priority: "priority", pause_all: "pause_all" };
+    resume_reason: "resume", sendback: "sendback_self", undo_start: "undo_start", add_time: "add_time", reduce_prev: "reduce_prev", reassign: "reassign", switch: "switch", accept: "accept_self", priority: "priority", pause_all: "pause_all" };
   const openDialog = useCallback((name, task, extra) => new Promise((resolve) => setDialog({ dialog: name, task, extra, resolve })), []);
   const onConfirm = async (payload) => {
     const d = dialog;

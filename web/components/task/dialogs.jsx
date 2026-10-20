@@ -28,6 +28,7 @@ export default function TaskDialog({ dialog, task, extra, busy, onClose, onConfi
     case "sendback": return <SendBackDialog {...props} />;
     case "undo_start": return <ReasonDialog {...props} title="Undo today's start?" text={`${task.external_ref || "The task"} goes back to how it was before today's first start and today's time on it is removed.`} confirm="Undo start" noReason />;
     case "add_time": return <AddTimeDialog {...props} />;
+    case "reduce_prev": return <ReducePrevDialog {...props} />;
     case "reassign": return <ReassignDialog {...props} />;
     case "switch": return <SwitchDialog {...props} />;
     case "accept": return <AcceptDialog {...props} />;
@@ -304,6 +305,57 @@ function AddTimeDialog({ task, busy, onClose, onConfirm }) {
       <div className="grid2"><Field label="Hours"><Input type="number" min="0" value={h} onChange={(e) => setH(e.target.value)} /></Field><Field label="Minutes"><Input type="number" min="0" max="59" value={m} onChange={(e) => setM(e.target.value)} /></Field></div>
       <span style={{ fontWeight: 700, fontSize: 13, color: live[1] }}>{live[0]}</span>
       <Field label="Reason" required hint="The reason shows on the task card, so write it for whoever reads the board."><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. client added two more screens" /></Field>
+    </Modal>
+  );
+}
+
+/* ---- reduce yesterday: admin takes forgotten time off the previous day ---- */
+function ReducePrevDialog({ task, busy, onClose, onConfirm }) {
+  const info = useResource("/kra_kpi/task/prev_day_time", { kpi_id: task.id });
+  const d = info.data;
+  const [h, setH] = useState("0"); const [m, setM] = useState("0");
+  const [code, setCode] = useState(""); const [text, setText] = useState("");
+  const prevMin = Math.round((d?.seconds || 0) / 60);
+  const cut = Math.max(0, parseInt(h, 10) || 0) * 60 + Math.max(0, parseInt(m, 10) || 0);
+  const live = cut <= 0 ? ["Enter how much to take off.", "var(--subtlest)"]
+    : cut > prevMin ? [`Yesterday has only ${human(prevMin)} — you can take off at most that.`, "var(--danger)"]
+      : [`Yesterday becomes ${human(prevMin - cut)} (was ${human(prevMin)})`, "var(--pri-regular)"];
+  const ok = d?.status && cut > 0 && cut <= prevMin && code && (code !== "other" || text.trim());
+  const people = (d?.people || []).map((p) => `${p.name} ${p.display}`).join(", ");
+  return (
+    <Modal open onClose={onClose} title={<Title task={task}>Reduce yesterday&apos;s time</Title>} width={500}
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="danger" busy={busy} disabled={!ok} onClick={() => onConfirm({ hours: parseInt(h, 10) || 0, minutes: parseInt(m, 10) || 0, reasonCode: code, reasonText: code === "other" ? text.trim() : "" })}>Reduce time</Button></>}>
+      {!d ? <p className="note" style={{ margin: 0 }}>Loading yesterday&apos;s time…</p>
+        : d.status === false ? <Box tone="danger">{d.message}</Box> : (
+          <>
+            <Facts rows={[["Day", d.date_display], ["This task", people ? `${d.display} (${people})` : d.display],
+              ...(d.day_totals || []).map((x) => [`${x.name} — whole day`, `${x.display} on ${x.tasks} task(s)`]),
+              ["Task total so far", d.task_total_display]]} />
+            {(d.intervals || []).length > 0 && (
+              <div style={{ display: "grid", gap: 2, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+                {d.intervals.map((i, n) => (
+                  <div key={n} style={{ display: "flex", gap: 10 }}>
+                    <span style={{ minWidth: 170 }}>{i.start} → {i.end}</span><b>{i.display}</b>
+                    {(d.people || []).length > 1 && <span className="mini">{i.who}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="note" style={{ margin: 0 }}>Takes the forgotten time off the <b>end</b> of yesterday. Only yesterday, only less — it cannot add time.</p>
+            <div className="grid2"><Field label="Hours"><Input type="number" min="0" value={h} onChange={(e) => setH(e.target.value)} /></Field><Field label="Minutes"><Input type="number" min="0" max="59" value={m} onChange={(e) => setM(e.target.value)} /></Field></div>
+            <span style={{ fontWeight: 700, fontSize: 13, color: live[1] }}>{live[0]}</span>
+            <Field label="Reason" required hint="Saved in the task log.">
+              <div style={{ display: "grid", gap: 6 }}>
+                {(d.reasons || []).map((r) => (
+                  <label key={r.key} style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+                    <input type="radio" name="reduce-reason" style={CHK} checked={code === r.key} onChange={() => setCode(r.key)} />{r.label}
+                  </label>
+                ))}
+              </div>
+            </Field>
+            {code === "other" && <Field label="What happened?" required><Input value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. system restarted for updates" /></Field>}
+          </>
+        )}
     </Modal>
   );
 }

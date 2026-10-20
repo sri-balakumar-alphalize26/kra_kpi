@@ -765,6 +765,38 @@ class KraKpiAPI(http.Controller):
             _logger.error("task_add_time: %s", e)
             return {'status': False, 'message': str(e)}
 
+    @http.route('/kra_kpi/task/prev_day_time', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_prev_day_time(self, **params):
+        """Yesterday's recorded time on a task, for the Reduce dialog. Admin only."""
+        try:
+            if not self._is_kra_admin(request.env.user):
+                return {'status': False, 'message': 'Admin only.'}
+            rec = request.env['kra.kpi'].sudo().browse(int(params.get('kpi_id') or 0))
+            if not rec.exists():
+                return {'status': False, 'message': 'Task not found.'}
+            return rec.with_user(request.env.user).sudo().prev_day_time_info()
+        except Exception as e:
+            _logger.error("task_prev_day_time: %s", e)
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kra_kpi/task/reduce_prev_day', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_reduce_prev_day(self, **params):
+        """Take forgotten time off YESTERDAY only, decrease only, with a reason.
+        Every rule lives in kra.kpi.action_reduce_prev_day; this only resolves the
+        task and passes the admin through as the acting user."""
+        try:
+            rec = request.env['kra.kpi'].sudo().browse(int(params.get('kpi_id') or 0))
+            if not rec.exists():
+                return {'status': False, 'message': 'Task not found.'}
+            minutes = int(params.get('hours') or 0) * 60 + int(params.get('minutes') or 0)
+            return rec.with_user(request.env.user).sudo().action_reduce_prev_day(
+                minutes, params.get('reason_code') or '', params.get('reason_text') or '')
+        except UserError as e:
+            return {'status': False, 'message': str(e.args[0] if e.args else e)}
+        except Exception as e:
+            _logger.error("task_reduce_prev_day: %s", e)
+            return {'status': False, 'message': str(e)}
+
     @http.route('/kra_kpi/task/resume', type='json', auth='user', methods=['POST'], csrf=False)
     def task_resume(self, **params):
         """Resume the timer. Same error contract as /task/start — resume_task
@@ -1226,6 +1258,10 @@ class KraKpiAPI(http.Controller):
         _undo_today = fields.Date.context_today(_undo_me)
         _undo_admin = self._is_kra_admin(_undo_me)
         _state_labels = dict(request.env['kra.kpi']._fields['task_state'].selection)
+        # Yesterday's time per task, for the admin's "Reduce yesterday" button --
+        # one grouped query for the whole board, and only for an admin.
+        prev_day_map = (request.env['kra.kpi'].prev_day_seconds_map(kpis.ids)
+                        if _undo_admin and kpis.ids else {})
 
         def map_rec(k):
             # For in_progress tasks, include timer_start_datetime for real-time calculation
@@ -1356,6 +1392,9 @@ class KraKpiAPI(http.Controller):
                 # from a hand-maintained list of states.
                 'can_admin_delete': (
                     is_manager_or_admin and k._may_admin_delete(logged_ids)[0]),
+                # Seconds on this task YESTERDAY; >0 shows the admin's
+                # "Reduce yesterday" button (kpi_time_adjust.py has the rules).
+                'prev_day_seconds': prev_day_map.get(k.id, 0.0),
                 # Per-developer time (survives reassign); current holder flagged.
                 'time_by_user': _time_by_user(k),
             }
@@ -1549,6 +1588,8 @@ class KraKpiAPI(http.Controller):
             # there is no batch to amortise.
             'can_admin_delete': (self._is_kra_admin(request.env.user)
                                  and k._may_admin_delete()[0]),
+            'prev_day_seconds': (k.prev_day_seconds_map([k.id]).get(k.id, 0.0)
+                                 if self._is_kra_admin(request.env.user) else 0.0),
             'time_by_user': self._task_time_by_user(k),
         }
 
@@ -3151,19 +3192,15 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kpi_multitask/set_wa', type='json', auth='user', methods=['POST'], csrf=False)
     def multitask_set_wa(self, **params):
-        """Set a developer's WhatsApp number (Configuration screen)."""
+        """RETIRED as an editor: the WhatsApp number now always equals the login
+        mobile (res.users._kpi_sync_wa_number), which is changed in Login
+        Management only. Kept so older app builds get a clear answer instead
+        of a 404."""
         user = request.env.user
         if not self._is_kra_admin(user):
             return {'status': False, 'message': 'Not authorized'}
-        if not params.get('user_id'):
-            return {'status': False, 'message': 'user_id missing'}
-        dev = request.env['res.users'].sudo().browse(int(params['user_id']))
-        # Normalize with the DEVELOPER's own country dial/length (falls back to
-        # the company default when they have no per-person country).
-        dial, length = dev._kpi_user_mobile_cfg()
-        num = normalize_wa(params.get('wa_number') or '', dial, length) or False
-        dev.kpi_wa_number = num
-        return {'status': True, 'wa_number': num or '', 'dial': dial, 'mobile_length': length}
+        return {'status': False,
+                'message': 'The WhatsApp number follows the login mobile. Change it in Login Management.'}
 
     # ---- Global config: Away-after-minutes + Urgent recipients (Configuration screen) ---- #
     @http.route('/kpi_config/get', type='json', auth='user', methods=['POST'], csrf=False)
@@ -3764,6 +3801,7 @@ class KraKpiAPI(http.Controller):
         'meta_updated': 'Renamed',
         'priority_changed': 'Priority changed',
         'start_undone': 'Start undone',
+        'time_reduced': "Yesterday's time reduced",
     }
 
     def _activity_log(self, kpi, kind='all'):
