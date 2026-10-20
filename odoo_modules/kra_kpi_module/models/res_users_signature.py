@@ -162,6 +162,38 @@ class ResUsers(models.Model):
             cmds = [(3, g.id) for g in role_groups] + [(4, target.id)]
             u.sudo().write({'group_ids': cmds})
 
+    # ---- One number per person: WhatsApp follows the login mobile -------- #
+    # The WhatsApp number (approvals, alerts, nudges, group identity) used to
+    # be a second field edited on the Configuration screen, and it drifted from
+    # the login mobile in Login Management — one person's WhatsApp was another
+    # person's login number. Now the login mobile is the only number anyone
+    # edits; kpi_wa_number is kept equal to it, with the person's dial code.
+    _KPI_MIRROR_KEYS = ('kpi_mobile_number', 'kpi_mobile_country_id', 'kpi_mobile_length')
+
+    def _kpi_sync_wa_number(self):
+        for u in self:
+            digits = ''.join(ch for ch in (u.kpi_mobile_number or '') if ch.isdigit())
+            dial, _length = u._kpi_user_mobile_cfg()
+            dial = ''.join(ch for ch in str(dial or '') if ch.isdigit())
+            # The login mobile is always stored as LOCAL digits (set_mobile
+            # strips the country code), so the dial code is always added — a
+            # "starts with 91" test would skip it for an Indian 91xxxxxxxx.
+            wa = (dial + digits) if (digits and dial) else (digits or False)
+            if (u.kpi_wa_number or False) != wa:
+                super(ResUsers, u.sudo()).write({'kpi_wa_number': wa})
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        users = super().create(vals_list)
+        users.filtered(lambda u: u.kpi_mobile_number or u.kpi_wa_number)._kpi_sync_wa_number()
+        return users
+
+    def write(self, vals):
+        res = super().write(vals)
+        if any(k in vals for k in self._KPI_MIRROR_KEYS):
+            self._kpi_sync_wa_number()
+        return res
+
     # ---- Per-person mobile dial code + length ---------------------------- #
     def _kpi_user_mobile_cfg(self):
         """(dial_digits, local_length) for THIS user's mobile/WhatsApp numbers.

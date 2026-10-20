@@ -97,7 +97,7 @@ export default function Configuration() {
                 <div className="kv"><span className="lbl">Report downloads</span><span className="val">Keep generated KRA report files for (0 = forever)</span><span className="right"><Ret k="dl" number={c.download_retention_number} unit={c.download_retention_unit} onSave={(n, u) => save("dl", () => S.cfgSet.downloadRetention(n, u))} /></span></div>
                 <h2 id="multitask" style={{ marginTop: 10, scrollMarginTop: 72 }}>Developers · multitask &amp; WhatsApp</h2>
                 {(devs.data?.developers || []).map((d) => (
-                  <div key={d.id} className="kv" style={{ padding: "7px 0" }}><Avatar name={d.name} uid={d.id} size={24} /><span className="val">{d.name}</span><span className="right"><WaField d={d} onSave={(v) => save(`wa${d.id}`, () => S.cfgSet.devWa(d.id, v))} /><Toggle k={`mt${d.id}`} on={d.allow_multitask} onChange={(v) => save(`mt${d.id}`, () => S.cfgSet.multitask(d.id, v))} /></span></div>
+                  <div key={d.id} className="kv" style={{ padding: "7px 0" }}><Avatar name={d.name} uid={d.id} size={24} /><span className="val">{d.name}</span><span className="right"><WaField d={d} /><Toggle k={`mt${d.id}`} on={d.allow_multitask} onChange={(v) => save(`mt${d.id}`, () => S.cfgSet.multitask(d.id, v))} /></span></div>
                 ))}
                 {devs.data && !(devs.data.developers || []).length && <span className="mini">No developers.</span>}
               </div>
@@ -276,9 +276,17 @@ function localWa(num, dial, len) {
   const n = String(num || "").replace(/\D/g, ""), dc = String(dial || "").replace(/\D/g, "") || "91";
   return n.startsWith(dc) && n.length === dc.length + (Number(len) || 10) ? n.slice(dc.length) : n;
 }
-function WaField({ d, onSave }) {
+/* Read-only: the WhatsApp number always equals the login mobile (Odoo keeps
+   them the same, 19.0.7.11), and that is changed in Login Management only. */
+function WaField({ d }) {
   const shown = localWa(d.wa_number, d.dial, d.mobile_length);
-  const [v, setV] = useState(shown);
-  useEffect(() => { setV(shown); }, [shown]);
-  return <span className="input" style={{ height: 30, width: 170 }}><span className="ph">+{String(d.dial || "").replace(/\D/g, "") || "91"}</span><input value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v !== shown) onSave(v); }} placeholder="WhatsApp number" style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }} /></span>;
+  const dial = String(d.dial || "").replace(/\D/g, "") || "91";
+  return (
+    <a href="/settings/login" className="input" title="Same as the login mobile — change it in Login Management"
+      style={{ height: 30, width: 190, textDecoration: "none", color: "inherit", gap: 6 }}>
+      <span className="ph">+{dial}</span>
+      <span style={{ flex: 1, color: shown ? "var(--text)" : "var(--subtlest)" }}>{shown || "no login mobile"}</span>
+      <span className="mini" style={{ color: "var(--brand)" }}>edit ›</span>
+    </a>
+  );
 }
