@@ -300,15 +300,25 @@ class KpiWaGroupReport(models.AbstractModel):
                          tasks_touched=0, tasks_completed=None, note='',
                          snapshot=None):
         """The end-of-day message and the day's Workday Snapshot image, sent
-        PRIVATELY to the developer's own WhatsApp number and to the configured
-        Workday Report Numbers (e.g. the CEO) -- not to the group.
+        PRIVATELY to the developer's own WhatsApp number and to every admin's
+        (Owner / Coordinator / System) -- not to the group. Called once, from
+        action_end_day, i.e. only when the developer ends the day themself.
         """
-        own = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
+        def digits(u):
+            return ''.join(ch for ch in (u.kpi_wa_number or '') if ch.isdigit())
+        own = digits(user)
         if not own:
             _logger.info("workday end: %s has no WhatsApp number", user.login)
-        extra = [n for n in (self.env.company.sudo().kpi_workday_report_numbers or '').split(',')
-                 if n.strip() and n.strip() != own]
-        targets = ([own] if own else []) + [n.strip() for n in extra]
+        # Admins as kra.kpi._user_is_kpi_admin defines them, each on their own
+        # login-mobile WhatsApp. The developer never gets two copies.
+        admins = self.env['res.users'].sudo().search([
+            ('active', '=', True), ('share', '=', False), ('id', '!=', user.id)])
+        Kpi = self.env['kra.kpi'].sudo()
+        targets = [own] if own else []
+        for a in admins:
+            n = digits(a)
+            if n and n not in targets and Kpi._user_is_kpi_admin(a):
+                targets.append(n)
         if not targets:
             return False
         # In the developer's timezone: this message is theirs now.
