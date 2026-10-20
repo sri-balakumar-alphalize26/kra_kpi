@@ -18,6 +18,10 @@ export function statusOf(p) {
   return "absent";
 }
 
+/* "Reason: emergency outing · at 7:29 PM" for a paused task (the same reason
+   the task card in the app shows). */
+export const pauseWhy = (t) => [t?.reason ? `Reason: ${t.reason}` : "", t?.at ? `at ${clock(t.at)}` : ""].filter(Boolean).join(" · ");
+
 /* [headline, detail] for the coloured strip. */
 export function cardText(p, s = statusOf(p)) {
   const t = p.active_tasks?.[0];
@@ -25,15 +29,43 @@ export function cardText(p, s = statusOf(p)) {
     if (t) return [`Working on ${t.ref || t.name} · ${hm(t.elapsed_seconds)}`, t.start ? `Started ${clock(t.start)}` : t.name];
     if (p.activity_kind === "meeting") return [`In a meeting · ${mins(p.elapsed_seconds)}`, p.activity_note || ""];
     if (p.activity_kind === "no_tasks") return ["No task to work on", p.activity_note || ""];
+    const pt = p.paused_task;
+    if (pt) return [`Idle · paused ${pt.ref || pt.name}`, pauseWhy(pt) || (p.active ? "At the desk" : "Away from the desk")];
     return ["Idle · no task running", p.active ? "At the desk" : "Away from the desk"];
   }
   if (s === "break" || s === "lunch") {
     const head = `${s === "lunch" ? "At lunch" : "On break"} · ${mins(p.elapsed_seconds)}`;
     const pt = p.paused_task;
-    return [head, pt ? `Paused ${pt.ref || pt.name}${p.break_start ? ` at ${clock(p.break_start)}` : ""}` : p.activity_note || ""];
+    const at = p.break_start || pt?.at;
+    return [head, pt ? `Paused ${pt.ref || pt.name}${at ? ` at ${clock(at)}` : ""}${pt.reason ? ` — ${pt.reason}` : ""}` : p.activity_note || ""];
   }
   if (p.day_done) return ["Workday ended", p.arrival ? `Was in from ${clock(p.arrival)}` : ""];
   return ["Absent", p.attendance === "pending" ? "Not checked in yet" : "No workday started today"];
 }
 
-export const since = (p) => (p.arrival ? `${p.attendance === "late" ? "late, " : ""}in ${clock(p.arrival)}` : "not checked in");
+/* Order on the dashboard: who is working first, then breaks, lunch, absent. */
+export const STATUS_ORDER = { working: 0, break: 1, lunch: 2, absent: 3 };
+
+/* Live timers: the row's elapsed seconds were true when the poll arrived;
+   add the time since then so break / lunch / task durations count up between
+   polls (the dashboard re-renders every minute). */
+export function liveRow(p, sinceMs) {
+  const extra = Math.max(0, Math.floor(sinceMs / 1000));
+  if (!extra) return p;
+  return {
+    ...p,
+    elapsed_seconds: (p.elapsed_seconds || 0) + (p.started ? extra : 0),
+    active_tasks: (p.active_tasks || []).map((t) => ({ ...t, elapsed_seconds: (t.elapsed_seconds || 0) + extra })),
+  };
+}
+
+/* Amber past 15 min break / 45 min lunch, red past 30 / 60. */
+const LIMITS = { break: [15, 30], lunch: [45, 60] };
+export function timerLevel(p, s = statusOf(p)) {
+  const lim = LIMITS[s];
+  if (!lim) return "";
+  const m = (p.elapsed_seconds || 0) / 60;
+  return m >= lim[1] ? "late" : m >= lim[0] ? "warn" : "";
+}
+
+export const since =(p) => (p.arrival ? `${p.attendance === "late" ? "late, " : ""}in ${clock(p.arrival)}` : "not checked in");
