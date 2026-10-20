@@ -6,19 +6,24 @@ import { createPortal } from "react-dom";
 import Icon from "./Icon";
 import ServerDown from "./ServerDown";
 import { initials, avatarColor } from "@/lib/me";
+import { usePhoto } from "@/lib/photos";
 
 export { Icon };
 
 /* ---- buttons ---- */
-export function Button({ kind = "default", size, icon, children, className = "", busy, ...rest }) {
+/* `spinAt="end"`: the busy spinner sits in the button's right-hand corner
+   and the label stays centred (full-width form buttons). */
+export function Button({ kind = "default", size, icon, children, className = "", busy, spinAt, ...rest }) {
   const k = { primary: "btn-primary", danger: "btn-danger", ok: "btn-ok", ghost: "btn-ghost", default: "" }[kind] || "";
   const s = size === "sm" ? { height: 28, fontSize: 12.5 } : size === "lg" ? { height: 46, fontSize: 15, fontWeight: 800, borderRadius: 12 } : undefined;
+  const end = spinAt === "end";
   return (
     /* rest first, then disabled: a caller's own disabled={false} must not
        re-enable a button whose request is still running. */
-    <button className={`btn ${k} ${className}`} style={s} {...rest} disabled={busy || rest.disabled}>
-      {busy ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : icon ? <Icon n={icon} size={16} /> : null}
+    <button className={`btn ${k} ${end ? "spin-end" : ""} ${className}`} style={s} {...rest} disabled={busy || rest.disabled}>
+      {busy && !end ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : icon ? <Icon n={icon} size={16} /> : null}
       {children}
+      {busy && end && <span className="spin" aria-label="Loading" />}
     </button>
   );
 }
@@ -54,11 +59,17 @@ export function stateTone(state) {
   }
 }
 
-/* ---- avatar ---- */
-export function Avatar({ name, id, size = 28, src, className = "", style }) {
-  const bg = avatarColor(id ?? name);
+/* ---- avatar ----
+   `uid`: a res.users id — shows that person's profile photo (lib/photos.js,
+   batched + cached) and falls back to coloured initials. `id` only picks the
+   initials' colour (clients, projects…). `src` wins over both. */
+export function Avatar({ name, id, uid, size = 28, src, className = "", style }) {
+  const photo = usePhoto(src ? 0 : uid);
+  const [broken, setBroken] = useState(false);
+  const bg = avatarColor(uid ?? id ?? name);
   const s = { width: size, height: size, fontSize: Math.round(size * 0.38), background: bg, ...style };
-  if (src) return <img className={`avatar ${className}`} src={src} alt={name || ""} style={{ ...s, objectFit: "cover" }} />;
+  const img = src || (!broken && photo);
+  if (img) return <img className={`avatar ${className}`} src={img} alt={name || ""} title={name} onError={() => setBroken(true)} style={{ ...s, objectFit: "cover" }} />;
   return <span className={`avatar ${className}`} style={s} aria-label={name} title={name}>{initials(name)}</span>;
 }
 

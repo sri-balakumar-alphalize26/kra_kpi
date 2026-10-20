@@ -98,7 +98,7 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
           const over = est > 0 && spent > est;
           return <span className={`time ${over ? "over" : ""}`} title={`${fmtHM(spent)} spent of ${fmtHM(est)} estimated`}>{fmtHM(spent)} / {fmtHM(est)}</span>;
         }} />
-        {t.user_name ? <Avatar name={t.user_name} id={t.user_id} size={24} /> : <span className="avatar" style={{ width: 24, height: 24, background: "var(--border)", color: "var(--subtlest)", fontSize: 10 }} title="Unassigned">—</span>}
+        {t.user_name ? <Avatar name={t.user_name} uid={t.user_id} size={24} /> : <span className="avatar" style={{ width: 24, height: 24, background: "var(--border)", color: "var(--subtlest)", fontSize: 10 }} title="Unassigned">—</span>}
       </div>
       {actions?.length > 0 && (
         /* The main buttons, inline like the Odoo board. They swallow the click

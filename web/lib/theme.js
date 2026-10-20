@@ -40,8 +40,15 @@ export const resolveMode = (m) => (m === "system" ? (systemDark() ? "dark" : "li
 /* ---- the switch animation ----------------------------------------------
    A circular reveal of the new look, spreading from where the click happened
    (View Transitions API). Browsers without it, and people who asked for
-   reduced motion, get a short colour cross-fade instead. */
+   reduced motion (Windows "Animation effects" off counts), switch at once.
+
+   There used to be a fallback cross-fade that put a colour transition on
+   EVERY element (html.theme-fading *). On a full board that is thousands of
+   simultaneous transitions plus a whole-page style recalculation, and the
+   page hung for seconds — on exactly the machines that had asked for less
+   motion. An instant switch is what reduced motion means anyway. */
 const reduced = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+let running = null; /* the view transition in flight, if any */
 function originOf(ev) {
   if (ev && typeof ev.clientX === "number" && (ev.clientX || ev.clientY)) return { x: ev.clientX, y: ev.clientY };
   const el = ev?.currentTarget || ev?.target;
@@ -50,18 +57,24 @@ function originOf(ev) {
 }
 function withTransition(apply, ev) {
   const d = document.documentElement;
-  if (reduced() || !document.startViewTransition) {
-    d.classList.add("theme-fading");
-    apply();
-    setTimeout(() => d.classList.remove("theme-fading"), 450);
-    return;
-  }
+  /* Instant: no API, reduced motion, a hidden tab (nothing to see, and the
+     snapshot would stall), or a click while the last switch is still
+     animating — skip that one to its end instead of stacking another. */
+  if (reduced() || !document.startViewTransition || document.hidden) { apply(); return; }
+  if (running) { running.skipTransition(); apply(); return; }
   const { x, y } = originOf(ev);
   const r = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
   d.style.setProperty("--vt-x", `${x}px`); d.style.setProperty("--vt-y", `${y}px`); d.style.setProperty("--vt-r", `${r}px`);
   d.classList.add("theme-switching");
-  const t = document.startViewTransition(() => apply());
-  t.finished.finally(() => d.classList.remove("theme-switching"));
+  const done = () => { d.classList.remove("theme-switching"); running = null; };
+  try {
+    running = document.startViewTransition(() => apply());
+  } catch (e) { apply(); done(); return; }
+  /* ready rejects when the transition is skipped or aborted; an unhandled
+     rejection there left the class stuck. A timer is the last word. */
+  running.ready.catch(() => {});
+  running.finished.then(done, done);
+  setTimeout(() => { if (d.classList.contains("theme-switching")) done(); }, 1500);
 }
 
 export function readSkin() { const v = typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") : null; return SKIN_KEYS.has(v) ? v : DEFAULT_SKIN; }

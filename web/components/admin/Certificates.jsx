@@ -178,7 +178,7 @@ function RolesDialog({ k, users, flags, onClose, onSaved }) {
         {ROLE_FIELDS.map(([f, l]) => <span key={f} role="tab" tabIndex={0} aria-selected={tab === f} className={tab === f ? "on" : ""} onClick={() => setTab(f)} onKeyDown={(e) => { if (e.key === "Enter") setTab(f); }} style={{ cursor: "pointer" }}>{l}<em>{vals[f].size}</em></span>)}
       </div>
       <div className="people" style={{ maxHeight: 320, overflow: "auto" }}>
-        {users.map((u) => <label key={u.id}><input type="checkbox" checked={vals[tab].has(u.id)} onChange={(e) => setVals((v) => { const n = new Set(v[tab]); e.target.checked ? n.add(u.id) : n.delete(u.id); return { ...v, [tab]: n }; })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={u.name} id={u.id} size={22} />{u.name}<span className="mini" style={{ marginLeft: "auto" }}>{u.login}</span></label>)}
+        {users.map((u) => <label key={u.id}><input type="checkbox" checked={vals[tab].has(u.id)} onChange={(e) => setVals((v) => { const n = new Set(v[tab]); e.target.checked ? n.add(u.id) : n.delete(u.id); return { ...v, [tab]: n }; })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={u.name} uid={u.id} size={22} />{u.name}<span className="mini" style={{ marginLeft: "auto" }}>{u.login}</span></label>)}
         {!users.length && <span className="mini" style={{ padding: 8 }}>Loading people…</span>}
       </div>
     </Modal>

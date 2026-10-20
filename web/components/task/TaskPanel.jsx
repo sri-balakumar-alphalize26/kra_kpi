@@ -128,7 +128,7 @@ export default function TaskPanel({ id, onClose }) {
               {String(meta.guidelines || "").trim() && <div className="sec"><h3>Guidelines</h3><p style={{ whiteSpace: "pre-wrap" }}>{meta.guidelines}</p></div>}
 
               <dl className="details">
-                <dt>Assignee</dt><dd>{t.user_name ? <><Avatar name={t.user_name} id={t.user_id} size={20} />{t.user_name}</> : <span className="mini">Unassigned</span>}</dd>
+                <dt>Assignee</dt><dd>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={20} />{t.user_name}</> : <span className="mini">Unassigned</span>}</dd>
                 <dt>Client</dt><dd>{t.client_name || "—"}</dd>
                 <dt>Project</dt><dd>{meta.kra || t.project_name || "—"}</dd>
                 <dt>Type</dt><dd>{meta.kind || refPrefix(t.external_ref) || "Task"}{t.deliverable_type ? ` · ${S.deliverableLabel(t.deliverable_type)}` : ""}{t.is_self_created && !t.admin_accepted && t.requested_doc_type ? <span className="mini"> (asked: {t.requested_doc_type})</span> : null}</dd>

@@ -38,7 +38,7 @@ export default function EmployeeTracker() {
   return (
     <>
       <PageHeader crumbs={[{ label: "People" }, { label: "Employee Tracker" }]} title="Employee Tracker">
-        <span className="input" style={{ height: 32 }}>{who && <Avatar name={who.name} id={who.id} size={20} />}<Select value={userId} onChange={(e) => setUserId(+e.target.value)} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit" }}><option value={0}>All developers</option>{employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></span>
+        <span className="input" style={{ height: 32 }}>{who && <Avatar name={who.name} uid={who.id} size={20} />}<Select value={userId} onChange={(e) => setUserId(+e.target.value)} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit" }}><option value={0}>All developers</option>{employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></span>
         <Tabs items={A.TIME_FRAMES} value={frame} onChange={setFrame} />
         <span className="input" style={{ height: 32 }}><Icon n="cal" size={16} /><input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit", width: 130 }} /><span className="mini">to</span><input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit", width: 130 }} /></span>
       </PageHeader>
@@ -82,7 +82,7 @@ function PeriodRows({ p, all, multiDay, isOpen, onToggle }) {
       <tr className={isOpen ? "sel" : ""} style={{ cursor: "pointer" }} onClick={onToggle}>
         <td><Icon n={isOpen ? "chev" : "cright"} size={14} /></td>
         <td><b>{p.label || p.period_key}</b>{sp.autoClosed > 0 && <> <Lozenge tone="paused">{multiDay && sp.autoClosed > 1 ? `${sp.autoClosed} auto-closed` : "Auto-closed"}</Lozenge></>}</td>
-        {all && <td>{p.user_name ? <><Avatar name={p.user_name} id={p.user_id} size={20} /> {p.user_name}</> : "—"}</td>}
+        {all && <td>{p.user_name ? <><Avatar name={p.user_name} uid={p.user_id} size={20} /> {p.user_name}</> : "—"}</td>}
         <td>{clock(sp.in, multiDay) || "—"}</td><td>{sp.open ? <span className="mini">still in</span> : clock(sp.out, multiDay) || "—"}</td>
         <td className="num">{fmtHM(p.presence_seconds)}</td><td className="num"><b>{fmtHM(p.productive_seconds)}</b></td><td className="num">{fmtHM(p.paused_seconds)}</td><td className="num">{p.task_count ?? (p.tasks || []).length}</td>
         <td><span className="prog" style={{ width: 90 }}><i style={{ width: `${p.presence_seconds ? Math.min(100, ((p.productive_seconds || 0) / p.presence_seconds) * 100) : 0}%` }} /></span></td>

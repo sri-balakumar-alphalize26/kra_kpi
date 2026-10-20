@@ -54,7 +54,7 @@ export default function Attendance() {
               <tbody>
                 {rows.map((r, i) => (
                   <tr key={r.user_id || r.date || i}>
-                    <td>{tab === "team" ? <><Avatar name={r.name} id={r.user_id} size={22} /> <b>{r.name}</b></> : <b>{r.label || r.date}</b>}</td>
+                    <td>{tab === "team" ? <><Avatar name={r.name} uid={r.user_id} size={22} /> <b>{r.name}</b></> : <b>{r.label || r.date}</b>}</td>
                     <td>{r.check_in_office_time || "—"}{r.late_minutes_display && <span className="mini"> · {r.late_minutes_display} late</span>}</td>
                     <td>{r.check_out_office_time || (r.open ? <span className="mini">still in</span> : "—")}</td>
                     <td><span title={r.status_display || ""}><Lozenge tone={TONE[r.status] || "todo"}>{r.status_label || r.status || "—"}</Lozenge></span>{r.is_wfh && <span className="mini"> · WFH</span>}</td>

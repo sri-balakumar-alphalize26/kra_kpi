@@ -107,7 +107,7 @@ function GroupRows({ group, limit, onOpen, selected }) {
             <td><b>{t.name}</b>{t.self_needs_resume_reason ? <> <Lozenge tone="danger">Sent back</Lozenge></> : null}</td>
             <td><Lozenge tone={tone}>{label}</Lozenge></td>
             <td style={{ color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)", fontWeight: 800 }}>{t.priority === "urgent" ? "▲▲ Urgent" : t.priority === "important" ? "▲ Important" : "– Regular"}</td>
-            <td>{t.user_name ? <><Avatar name={t.user_name} id={t.user_id} size={22} /> {t.user_name}</> : <span className="mini">Unassigned</span>}</td>
+            <td>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={22} /> {t.user_name}</> : <span className="mini">Unassigned</span>}</td>
             <td>{t.client_name || "—"}{t.project_name ? ` · ${t.project_name}` : ""}</td>
             <td className="num">{fmtHM(estimate)}</td>
             <td className="num" style={over ? { color: "var(--over)", fontWeight: 800 } : undefined}>{fmtHM(spent)}</td>

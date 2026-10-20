@@ -103,7 +103,7 @@ function MeetingPicker({ team, setTeam, picked, setPicked, busy, onStart }) {
       {!team && (
         <div className="people" style={{ maxHeight: 180, overflowY: "auto" }}>
           {list.map((p) => (
-            <label key={p.id}><input type="checkbox" checked={picked.includes(p.id)} onChange={(e) => setPicked((s) => (e.target.checked ? [...s, p.id] : s.filter((x) => x !== p.id)))} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={p.name} id={p.id} size={22} />{p.name}</label>
+            <label key={p.id}><input type="checkbox" checked={picked.includes(p.id)} onChange={(e) => setPicked((s) => (e.target.checked ? [...s, p.id] : s.filter((x) => x !== p.id)))} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={p.name} uid={p.id} size={22} />{p.name}</label>
           ))}
           {!list.length && <span className="mini" style={{ padding: 8 }}>{people.loading ? "Loading people…" : "No people found"}</span>}
         </div>

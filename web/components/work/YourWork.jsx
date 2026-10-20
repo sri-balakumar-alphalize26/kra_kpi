@@ -99,7 +99,7 @@ export default function YourWork() {
                   return (
                     <tr key={t.id} style={{ cursor: "pointer" }} onClick={() => acts.openTask(t.id)}>
                       <td><span className="ref">{t.external_ref || `#${t.id}`}</span></td><td><b>{t.name}</b></td><td>{t.client_name || "—"}</td>
-                      {admin && <td><Avatar name={t.user_name} id={t.user_id} size={22} /> {t.user_name}</td>}
+                      {admin && <td><Avatar name={t.user_name} uid={t.user_id} size={22} /> {t.user_name}</td>}
                       <td className="num">{t.task_state === "in_progress" && t.timer_start_datetime ? <LiveTick fn={(n) => fmtHM((t.today_seconds || 0) + secsSince(t.timer_start_datetime, n))} /> : fmtHM(t.today_seconds)}</td>
                       <td><Lozenge tone={tone}>{t.task_state === "in_progress" ? "Running" : label}</Lozenge></td>
                     </tr>

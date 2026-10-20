@@ -123,7 +123,7 @@ function ClientPicker({ task, flags, onClose, onSaved }) {
         {list.data?.status === false && <span className="mini" style={{ padding: 8, color: "var(--danger)" }}>{list.data.message}</span>}
         {!list.data && !list.error && <span className="mini" style={{ padding: 8 }}>Loading…</span>}
         {list.error && <span className="mini" style={{ padding: 8, color: "var(--danger)" }}>{list.error.message}</span>}
-        {shown.map((u) => <label key={u.id}><input type="checkbox" checked={picked.has(u.id)} onChange={(e) => setPicked((s) => { const n = new Set(s); e.target.checked ? n.add(u.id) : n.delete(u.id); return n; })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={u.name} id={u.id} size={22} />{u.name}<span className="mini" style={{ marginLeft: "auto" }}>{u.phone || u.login}</span></label>)}
+        {shown.map((u) => <label key={u.id}><input type="checkbox" checked={picked.has(u.id)} onChange={(e) => setPicked((s) => { const n = new Set(s); e.target.checked ? n.add(u.id) : n.delete(u.id); return n; })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={u.name} uid={u.id} size={22} />{u.name}<span className="mini" style={{ marginLeft: "auto" }}>{u.phone || u.login}</span></label>)}
         {list.data && !shown.length && list.data.status !== false && <span className="mini" style={{ padding: 8 }}>No client users{q ? " match" : " yet"}.</span>}
       </div>
     </Modal>

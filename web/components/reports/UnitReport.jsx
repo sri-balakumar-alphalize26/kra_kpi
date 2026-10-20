@@ -52,7 +52,7 @@ export default function UnitReport() {
               <tbody>
                 {list.map((r, i) => (
                   <tr key={r.employee_id} style={{ cursor: "pointer" }} onClick={() => showTasks(r)}>
-                    <td>{i + 1}</td><td><Avatar name={r.employee_name} id={r.employee_id} size={22} /> <b>{r.employee_name}</b></td>
+                    <td>{i + 1}</td><td><Avatar name={r.employee_name} uid={r.employee_id} size={22} /> <b>{r.employee_name}</b></td>
                     <td className="num"><b>{r.no_of_tasks}</b></td><td className="num">{r.estimate_total_display}</td><td className="num">{(r.estimate_unit || 0).toFixed(2)}</td><td className="num">{r.duration_display}</td>
                   </tr>
                 ))}

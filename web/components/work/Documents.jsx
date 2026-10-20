@@ -159,7 +159,7 @@ function Row({ t, open, onToggle, onOpenTask }) {
           {!t.has_attachments && <> <Lozenge tone="danger">No attachments</Lozenge></>}
           {onOpenTask && <button className="btn" style={{ height: 24, fontSize: 11.5, marginLeft: 8 }} onClick={(e) => { e.stopPropagation(); onOpenTask(); }}>Open task</button>}
         </td>
-        <td>{t.assignee_id ? <><Avatar name={t.assignee} id={t.assignee_id} size={22} /> {t.assignee}</> : (t.assignee || "Unassigned")}</td>
+        <td>{t.assignee_id ? <><Avatar name={t.assignee} uid={t.assignee_id} size={22} /> {t.assignee}</> : (t.assignee || "Unassigned")}</td>
         <td className="num">{t.doc_count || 0}</td><td className="num">{t.link_count || 0}</td><td className="num">{t.drive_count || 0}</td><td className="num">{t.github_count || 0}</td><td className="num">{t.manual_count || 0}</td><td className="num">{t.task_doc_count || 0}</td>
       </tr>
       {open && (
