@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Avatar, Button, ErrorState, Icon, Input, Lozenge, PageHeader, Skeleton, useDialogs, useFlags, Select } from "@/components/ui";
 import { useResource } from "@/lib/useFetch";
 import * as S from "@/lib/services/settings";
+import { paymentTerm } from "@/lib/services/admin";
 import SettingsNav from "./SettingsNav";
 
 /* Company switches, each saved on change (the app auto-saves too). */
@@ -15,6 +16,9 @@ export default function Configuration() {
   const [samples, setSamples] = useState({});
   const [saving, setSaving] = useState("");
   useEffect(() => { S.fetchGroupEvents().then((r) => { setEvents(r?.events || []); setSamples(r?.samples || {}); }).catch(() => setEvents([])); }, []);
+  /* Days after the invoice date that an unpaid invoice is due (the Dashboard's billing tile). */
+  const [term, setTerm] = useState(null);
+  useEffect(() => { paymentTerm().then((r) => r?.status && setTerm(r.days)).catch(() => {}); }, []);
   /* The sidebar's "Multi-task Settings" opens this page with ?section=multitask. */
   const hasDevs = !!devs.data;
   useEffect(() => {
@@ -77,6 +81,7 @@ export default function Configuration() {
                   <Num k="b3" value={c.meeting_alert_minutes} width={78} onSave={(v) => save("b3", () => S.cfgSet.breakAlerts({ break_alert_minutes: c.break_alert_minutes, lunch_alert_minutes: c.lunch_alert_minutes, meeting_alert_minutes: v, break_budget_minutes: c.break_budget_minutes }))} />
                   <Num k="b4" value={c.break_budget_minutes} width={78} onSave={(v) => save("b4", () => S.cfgSet.breakAlerts({ break_alert_minutes: c.break_alert_minutes, lunch_alert_minutes: c.lunch_alert_minutes, meeting_alert_minutes: c.meeting_alert_minutes, break_budget_minutes: v }))} /></span></div>
                 <div className="kv"><span className="lbl">Standard workday</span><span className="val">Hours a full day should have</span><span className="right"><Num k="sh" value={c.standard_workday_hours} suffix="h" onSave={(v) => save("sh", () => S.cfgSet.standardHours(v))} /></span></div>
+                {term != null && <div className="kv"><span className="lbl">Invoice payment term</span><span className="val">An unpaid invoice is due this many days after its date (Dashboard › Billing)</span><span className="right"><Num k="pt" value={term} suffix="days" width={110} onSave={(v) => save("pt", async () => { const r = await paymentTerm(v); if (r?.status) setTerm(r.days); return r; })} /></span></div>}
                 <div className="kv"><span className="lbl">Country / dial code</span><span className="val">+{c.country_dial_code || c.phone_code || "91"} · {c.mobile_length || 10} digits</span><span className="right"><span className="input" style={{ height: 30 }}><Select value={c.country_id || ""} onChange={(e) => save("co", () => S.cfgSet.country(+e.target.value))} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit" }}>{(c.countries || []).map((x) => <option key={x.id} value={x.id}>{x.name} (+{x.phone_code})</option>)}</Select></span></span></div>
                 {/* Only a server with the attendance bridge module sends attendance_available. */}
                 {c.attendance_available && <div className="kv" style={{ border: 0 }}><span className="lbl">Attendance in app</span><span className="val">Start Workday marks attendance</span><span className="right"><Toggle k="att" on={c.attendance_in_app} onChange={(v) => save("att", () => S.cfgSet.attendanceInApp(v))} /></span></div>}
@@ -92,7 +97,7 @@ export default function Configuration() {
                 <div className="kv"><span className="lbl">Report downloads</span><span className="val">Keep generated KRA report files for (0 = forever)</span><span className="right"><Ret k="dl" number={c.download_retention_number} unit={c.download_retention_unit} onSave={(n, u) => save("dl", () => S.cfgSet.downloadRetention(n, u))} /></span></div>
                 <h2 id="multitask" style={{ marginTop: 10, scrollMarginTop: 72 }}>Developers · multitask &amp; WhatsApp</h2>
                 {(devs.data?.developers || []).map((d) => (
-                  <div key={d.id} className="kv" style={{ padding: "7px 0" }}><Avatar name={d.name} id={d.id} size={24} /><span className="val">{d.name}</span><span className="right"><WaField d={d} onSave={(v) => save(`wa${d.id}`, () => S.cfgSet.devWa(d.id, v))} /><Toggle k={`mt${d.id}`} on={d.allow_multitask} onChange={(v) => save(`mt${d.id}`, () => S.cfgSet.multitask(d.id, v))} /></span></div>
+                  <div key={d.id} className="kv" style={{ padding: "7px 0" }}><Avatar name={d.name} uid={d.id} size={24} /><span className="val">{d.name}</span><span className="right"><WaField d={d} onSave={(v) => save(`wa${d.id}`, () => S.cfgSet.devWa(d.id, v))} /><Toggle k={`mt${d.id}`} on={d.allow_multitask} onChange={(v) => save(`mt${d.id}`, () => S.cfgSet.multitask(d.id, v))} /></span></div>
                 ))}
                 {devs.data && !(devs.data.developers || []).length && <span className="mini">No developers.</span>}
               </div>

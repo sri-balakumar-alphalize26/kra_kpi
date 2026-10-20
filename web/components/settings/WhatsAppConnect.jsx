@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, ErrorState, Field, Icon, Input, Lozenge, Modal, PageHeader, Skeleton, useDialogs, useFlags } from "@/components/ui";
 import * as S from "@/lib/services/settings";
 import SettingsNav from "./SettingsNav";
+import SetupScreen from "./SetupScreen";
 
 /* Setup › WhatsApp Connect: the whatsapp.session form from the whatsapp_neonize
    addon (Odoo's menu opens that addon's own action). Connect shows a QR to
@@ -144,6 +145,13 @@ export default function WhatsAppConnect() {
             </div>
           </div>
         )}
+        {/* Odoo's full session form: add or edit a session (server, instance,
+            send delay), and its repair buttons — Fix Incoming Messages
+            (re-register the webhook), Resolve LIDs, Capture Phone. */}
+        <details className="cardbox" style={{ marginTop: 14 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 800, color: "var(--navy)" }}>Manage sessions <span className="mini" style={{ fontWeight: 400 }}>· add, edit, webhook repair</span></summary>
+          <SetupScreen name="wa-sessions" embedded />
+        </details>
       </div>
       <Modal open={!!send} onClose={() => setSend(null)} title="Send a WhatsApp message" width={480}
         footer={<><Button kind="ghost" onClick={() => setSend(null)}>Cancel</Button><Button kind="primary" busy={busy === "send"} disabled={!send?.phone.replace(/\D/g, "") || !send?.message.trim()} onClick={doSend}>Send</Button></>}>
