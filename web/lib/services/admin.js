@@ -70,6 +70,18 @@ export const summaryParams = ({ timeFrame = "daily", userId = null, fromDate = n
   ({ time_frame: timeFrame, user_id: userId || null, from_date: fromDate || null, to_date: toDate || null });
 
 /* ---- owner dashboard ---- */
+/* Dashboard › Client details: one client for a period (no dates = this month
+   to date). 19.0.7.6. */
+export const fetchClientSummary = (clientId, from, to) =>
+  rpc("/kpi_owner/client_summary", { client_kra_id: clientId, ...(from && to ? { from_date: from, to_date: to } : {}) });
+/* Dashboard › employee popup: contact, open workload, questions, meetings
+   today and 30-day attendance in one call. 19.0.7.8. */
+export const fetchEmployeeProfile = (userId) => rpc("/kpi_owner/employee_profile", { user_id: Number(userId) });
+/* Dashboard › Client details: the rows behind one tile (kind: open |
+   in_progress | waiting | certified | hours | billing). 19.0.7.9. */
+export const fetchClientItems = (clientId, kind, from, to) =>
+  rpc("/kpi_owner/client_summary_items", { client_kra_id: clientId, kind, ...(from && to ? { from_date: from, to_date: to } : {}) });
+export const paymentTerm = (days) => rpc("/kpi_owner/payment_term", days == null ? {} : { days });
 export const CERTIFIED_PATH = "/kpi_owner/certified_by_client";
 export const fetchCertifiedByClient = () => read(CERTIFIED_PATH, {}, { ttl: 30000, timeout: 60000 });
 export const fetchClientCertifiedTasks = (clientKraId) => rpc("/kpi_owner/client_certified_tasks", { client_kra_id: Number(clientKraId) }, { timeout: 60000 });
