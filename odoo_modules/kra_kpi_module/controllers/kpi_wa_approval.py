@@ -28,8 +28,11 @@ def _render(template_xmlid, ctx):
     """
     html = request.env['ir.qweb']._render(template_xmlid, ctx)
     body = (html if isinstance(html, str) else html.decode('utf-8'))
+    # ''.join, not '+': the render is a Markup, and plain-str + Markup escapes
+    # the plain side -- the doctype came out as "&lt;!DOCTYPE html&gt;" text
+    # at the top of every page.
     return request.make_response(
-        '<!DOCTYPE html>\n' + body,
+        ''.join(['<!DOCTYPE html>\n', body]),
         headers=[
             ('Content-Type', 'text/html; charset=utf-8'),
             ('Cache-Control', 'no-store'),
