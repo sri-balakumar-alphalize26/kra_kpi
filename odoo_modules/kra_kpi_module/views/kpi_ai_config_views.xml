@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <record id="view_kpi_ai_config_form" model="ir.ui.view">
+            <field name="name">kpi.ai.config.form</field>
+            <field name="model">kpi.ai.config</field>
+            <field name="arch" type="xml">
+                <form string="AI &amp; Transcription">
+                    <sheet>
+                        <div class="oe_title">
+                            <h1>AI &amp; Transcription</h1>
+                        </div>
+
+                        <field name="status_html" nolabel="1" readonly="1"/>
+
+                        <notebook>
+
+                            <page string="Meeting Server" name="meetserver">
+                                <field name="meet_server_html" nolabel="1"
+                                       readonly="1"/>
+                                <group string="8x8 (hosted Jitsi)">
+                                    <field name="jaas_app_id"
+                                           placeholder="vpaas-magic-cookie-… (the ID part only)"/>
+                                    <field name="jaas_api_key_id"
+                                           placeholder="the key id shown beside your generated key"/>
+                                    <field name="jaas_private_key"
+                                           password="True"
+                                           placeholder="-----BEGIN PRIVATE KEY-----&#10;…&#10;-----END PRIVATE KEY-----"/>
+                                </group>
+                                <group string="Or your own Jitsi">
+                                    <field name="meet_base_url"
+                                           placeholder="https://meet.yourdomain.com"/>
+                                </group>
+                                <div class="alert alert-info" role="status">
+                                    All three 8x8 values are needed together.
+                                    With them, every meeting link carries a
+                                    short-lived token: clients join without
+                                    logging in, and the recorder is admitted
+                                    as moderator so it can start the call on
+                                    its own. The token is signed here and
+                                    never stored in a link.
+                                </div>
+                            </page>
+
+                            <page string="Summaries" name="summaries">
+                                <div class="alert alert-info" role="alert">
+                                    Providers are tried in order and the first
+                                    one that answers is used. You only need
+                                    one. <b>Groq is the most useful single
+                                    key</b>, because it also does the
+                                    speech-to-text on the next tab.
+                                </div>
+
+                                <group string="Custom Endpoint (tried first)">
+                                    <field name="custom_api_url"
+                                           placeholder="https://my-model.local/v1"/>
+                                    <!-- Masking is set here, on the view
+                                         node. `password=True` as a FIELD
+                                         parameter is not valid in Odoo 19:
+                                         it only logs a warning and masks
+                                         nothing. -->
+                                    <field name="custom_api_key"
+                                           password="True"
+                                           placeholder="leave empty if not needed"/>
+                                    <field name="custom_model"
+                                           placeholder="e.g. llama-3.3-70b"/>
+                                </group>
+
+                                <group string="Google Gemini">
+                                    <field name="gemini_api_key" password="True"/>
+                                    <field name="gemini_model"/>
+                                </group>
+
+                                <group string="Groq">
+                                    <field name="groq_api_key" password="True"/>
+                                    <field name="groq_model"/>
+                                </group>
+
+                                <group string="Anthropic">
+                                    <field name="anthropic_api_key" password="True"/>
+                                    <field name="anthropic_model"/>
+                                </group>
+                            </page>
+
+                            <page string="Speech To Text" name="speech">
+                                <div class="alert alert-info" role="alert">
+                                    Meetings here move between Tamil, Malayalam
+                                    and English inside one sentence, so no
+                                    language is forced on the transcript: it is
+                                    kept <b>as spoken</b>, and the summary is
+                                    written in English from it. Nothing is
+                                    translated on the way in, because a
+                                    mistranslated requirement would become the
+                                    permanent record of what a client asked
+                                    for.
+                                </div>
+                                <group>
+                                    <field name="transcribe_provider"/>
+                                    <field name="whisper_model"/>
+                                    <field name="openai_api_key" password="True" invisible="transcribe_provider != 'openai'"/>
+                                </group>
+                            </page>
+
+                            <page string="Recording" name="recording">
+                                <div class="alert alert-info" role="alert">
+                                    Recording is switched on per meeting, on
+                                    the meeting itself. Nothing here turns it
+                                    on for everything: whether a particular
+                                    call is recorded is a decision about that
+                                    call.
+                                </div>
+                                <group string="Audio">
+                                    <field name="segment_minutes"/>
+                                    <field name="record_keep_days"/>
+                                </group>
+                                <group string="Ending A Meeting">
+                                    <field name="bot_alone_seconds"/>
+                                    <field name="idle_seconds"/>
+                                </group>
+                                <group string="Summary">
+                                    <field name="auto_summary"/>
+                                    <field name="auto_post_summary"/>
+                                </group>
+                            </page>
+
+                        </notebook>
+                    </sheet>
+                    <footer>
+                        <button name="action_save" type="object"
+                                string="Save" class="btn-primary"/>
+                        <button name="action_test_meeting_server" type="object"
+                                string="Test Meeting Server"
+                                class="btn-secondary"/>
+                        <button name="action_test_summary" type="object"
+                                string="Test Summaries" class="btn-secondary"/>
+                        <button name="action_test_transcribe" type="object"
+                                string="Test Speech To Text"
+                                class="btn-secondary"/>
+                        <button string="Close" class="btn-secondary"
+                                special="cancel"/>
+                    </footer>
+                </form>
+            </field>
+        </record>
+
+        <record id="action_kpi_ai_config" model="ir.actions.act_window">
+            <field name="name">AI &amp; Transcription</field>
+            <field name="res_model">kpi.ai.config</field>
+            <field name="view_mode">form</field>
+            <field name="target">new</field>
+            <field name="view_id" ref="view_kpi_ai_config_form"/>
+        </record>
+
+        <menuitem id="menu_kpi_ai_config"
+                  name="AI &amp; Transcription"
+                  parent="menu_kpi_settings"
+                  sequence="6"
+                  action="action_kpi_ai_config"
+                  groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+
+    </data>
+</odoo>

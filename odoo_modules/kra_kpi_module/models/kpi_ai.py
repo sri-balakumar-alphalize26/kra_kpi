@@ -36,6 +36,21 @@ PARAM_GEMINI = 'kra_kpi.gemini_api_key'
 PARAM_GROQ = 'kra_kpi.groq_api_key'
 PARAM_ANTHROPIC = 'kra_kpi.anthropic_api_key'
 
+# A fourth, deliberately generic provider: any OpenAI-compatible
+# /chat/completions endpoint -- a self-hosted model, OpenRouter, Azure. It is
+# tried FIRST when a URL is set, because somebody who went to the trouble of
+# configuring an endpoint means it to be used, ahead of a key left over from
+# an earlier experiment.
+PARAM_CUSTOM_URL = 'kra_kpi.custom_api_url'
+PARAM_CUSTOM_KEY = 'kra_kpi.custom_api_key'
+PARAM_CUSTOM_MODEL = 'kra_kpi.custom_model'
+
+# Transcription. One Groq key covers this and the summaries, which is why
+# Groq is the default of the four.
+PARAM_OPENAI_KEY = 'kra_kpi.openai_api_key'
+PARAM_WHISPER_MODEL = 'kra_kpi.whisper_model'
+PARAM_TRANSCRIBE_PROVIDER = 'kra_kpi.transcribe_provider'
+
 # Model names are config, not constants.
 #
 # Providers retire models without warning and the call then 404s silently
@@ -48,9 +63,33 @@ PARAM_GEMINI_MODEL = 'kra_kpi.gemini_model'
 PARAM_GROQ_MODEL = 'kra_kpi.groq_model'
 PARAM_ANTHROPIC_MODEL = 'kra_kpi.anthropic_model'
 
-DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash'
-DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
+# Checked against the live provider APIs on 19 Oct 2026 with this install's
+# own keys. The previous defaults were BOTH dead:
+#   llama-3.1-8b-instant -> HTTP 404 model_not_found
+#   gemini-2.0-flash     -> HTTP 404 "no longer available"
+# which is exactly the rot the comment above predicted. The key was fine in
+# both cases; only the model name had expired, and the cascade swallowed it
+# as "provider failed".
+#
+# 'gemini-flash-latest' is an alias Google moves forward, chosen over a
+# pinned version so this particular failure does not come back.
+DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
+DEFAULT_GROQ_MODEL = 'openai/gpt-oss-120b'
 DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001'
+
+# A FLOOR on the token budget, for every provider.
+#
+# Current models spend tokens thinking before they emit anything. Ask
+# gpt-oss-120b for a one-line JSON object in 60 tokens and the reasoning uses
+# the whole budget: the reply comes back empty, _loads returns None, and the
+# cascade reports "no provider answered" for a key and model that are both
+# perfectly fine. Measured here: the same call failed at 60 tokens and
+# succeeded at 900. Gemini failed at 300 and succeeded at 1500.
+#
+# The floor costs nothing in practice -- the prompts ask for a few sentences,
+# so the models stop long before it -- and it removes a failure that looks
+# exactly like a bad key.
+MIN_COMPLETION_TOKENS = 2000
 
 # The cascade order, and each provider's key / model parameter, default model
 # and `source` tag. Configuration > 369 AI Assistant edits these parameters.
@@ -90,12 +129,67 @@ class KpiAi(models.AbstractModel):
                 p.get_param(PARAM_ANTHROPIC, ''))
 
     @api.model
+    def _custom_endpoint(self):
+        """-> (url, key, model). A URL with no key is valid: a model on the
+        local network often needs no authentication.
+
+        NOT named `_custom`. That is a reserved BaseModel attribute -- the
+        boolean marking a model created through the UI -- and
+        _add_manual_models deletes every registry entry whose `_custom` is
+        truthy. A method by that name is truthy, so naming it `_custom` made
+        kpi.ai delete ITSELF from the registry during setup, surfacing much
+        later as `KeyError: 'kpi.ai'` on the next module upgrade. Same family
+        of trap as `display_name` on kpi.meeting.participant.
+        """
+        p = self.env['ir.config_parameter'].sudo()
+        return ((p.get_param(PARAM_CUSTOM_URL, '') or '').strip(),
+                (p.get_param(PARAM_CUSTOM_KEY, '') or '').strip(),
+                (p.get_param(PARAM_CUSTOM_MODEL, '') or '').strip())
+
+    @api.model
     def _model(self, param, default):
         return self.env['ir.config_parameter'].sudo().get_param(param, default) or default
 
     @api.model
     def is_available(self):
-        return any(self._keys())
+        return bool(self._custom_endpoint()[0]) or any(self._keys())
+
+    @api.model
+    def providers_configured(self):
+        """Which providers could answer, in the order they are tried.
+
+        Used by the settings screen and by anything that wants to say what it
+        will do before doing it.
+        """
+        gemini, groq, anthropic = self._keys()
+        url, _k, _m = self._custom_endpoint()
+        return [name for name, on in (('custom', bool(url)),
+                                      ('gemini', bool(gemini)),
+                                      ('groq', bool(groq)),
+                                      ('anthropic', bool(anthropic))) if on]
+
+    @api.model
+    def transcribe(self, audio_bytes, mimetype=None, hint=None):
+        """Speech to text. -> {'text', 'language', 'duration', 'error'}.
+
+        One entry point over the Whisper client in whatsapp_neonize, which
+        already carries the quality gates worth keeping: a minimum size, a
+        hallucination-phrase blacklist, and Whisper's own per-segment
+        no_speech_prob and avg_logprob. Never raises.
+        """
+        try:
+            from odoo.addons.whatsapp_neonize.models import voice_utils
+        except Exception as exc:
+            _logger.warning('kpi.ai: transcription unavailable: %s', exc)
+            return {'text': '', 'language': 'unknown', 'duration': 0.0,
+                    'error': 'Transcription module unavailable: %s' % exc}
+        try:
+            return voice_utils.transcribe_audio(
+                audio_bytes, env=self.env, mimetype=mimetype, hint=hint)
+        except Exception as exc:
+            _logger.warning('kpi.ai: transcription failed: %s', exc)
+            return {'text': '', 'language': 'unknown', 'duration': 0.0,
+                    'error': str(exc)}
 
     @api.model
     def _post(self, url, payload, headers, timeout=None):
@@ -105,8 +199,35 @@ class KpiAi(models.AbstractModel):
         req.add_header('User-Agent', _UA)
         for k, v in (headers or {}).items():
             req.add_header(k, v)
-        with urllib.request.urlopen(req, timeout=timeout or _TIMEOUT) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or _TIMEOUT) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            # Carry the provider's own words into the exception. Bare
+            # "HTTP Error 400: Bad Request" is what the log used to say, and
+            # it hid a one-line cause: these APIs refuse a JSON response
+            # format unless the prompt contains the word "json", and they say
+            # so plainly in the body nobody was reading.
+            try:
+                detail = exc.read().decode('utf-8', 'replace')[:400]
+            except Exception:
+                detail = ''
+            raise RuntimeError('HTTP %s: %s' % (exc.code, detail)) from None
+
+    @api.model
+    def _chat_url(self, base):
+        """Accept whatever form of the endpoint somebody pasted.
+
+        People paste the host, the /v1 root, or the full completions path.
+        Rejecting two of the three would be the single most likely reason
+        this screen appears not to work.
+        """
+        url = (base or '').strip().rstrip('/')
+        if url.endswith('/chat/completions'):
+            return url
+        if url.endswith('/v1'):
+            return url + '/chat/completions'
+        return url + '/v1/chat/completions'
 
     @staticmethod
     def _turns(messages):
@@ -132,6 +253,24 @@ class KpiAi(models.AbstractModel):
     @api.model
     def _call(self, provider, key, system_prompt, turns, max_tokens, timeout=None):
         """One provider, one request -> the model's raw reply text. Raises."""
+        # See MIN_COMPLETION_TOKENS: too small a budget is spent on reasoning
+        # and returns an empty answer, which is indistinguishable from a bad
+        # key at the call site.
+        max_tokens = max(int(max_tokens or 0), MIN_COMPLETION_TOKENS)
+        if provider == 'custom':
+            url, custom_key, custom_model = self._custom_endpoint()
+            headers = {}
+            if custom_key:
+                headers['Authorization'] = 'Bearer %s' % custom_key
+            out = self._post(
+                self._chat_url(url),
+                {'model': custom_model or 'gpt-4o-mini',
+                 'response_format': {'type': 'json_object'},
+                 'max_tokens': max_tokens,
+                 'messages': [{'role': 'system', 'content': system_prompt}]
+                             + [{'role': t['role'], 'content': t['text']} for t in turns]},
+                headers, timeout)
+            return out['choices'][0]['message']['content']
         if provider == 'gemini':
             out = self._post(
                 'https://generativelanguage.googleapis.com/v1beta/models/'
@@ -169,18 +308,32 @@ class KpiAi(models.AbstractModel):
 
         `messages` is [{role: 'user'|'assistant', text}], oldest first, ending
         with the question to answer. Providers are tried in the fixed order
-        Gemini, Groq, Claude; `only` limits it to one of them (Test button)."""
+        custom endpoint (when a URL is set), Gemini, Groq, Claude; `only`
+        limits it to one of them (Test button)."""
         turns = self._turns(messages)
         if not turns:
             return None, 'none'
-        for provider, key in zip(PROVIDERS, self._keys()):
+        # OpenAI-compatible endpoints refuse a json_object response format
+        # unless the word "json" appears somewhere in the messages, and the
+        # refusal is a 400 that reads like an authentication problem. Every
+        # prompt in this module happens to say "JSON object", but a future
+        # caller that does not would hit a baffling failure, so make it
+        # true rather than hope.
+        if 'json' not in (system_prompt or '').lower() \
+                and not any('json' in t['text'].lower() for t in turns):
+            system_prompt = (system_prompt or '') + '\nReply with json.'
+        url = self._custom_endpoint()[0]
+        cascade = [('custom', url)] + list(zip(PROVIDERS, self._keys()))
+        for provider, key in cascade:
             if not key or (only and provider != only):
                 continue
             try:
                 data = self._loads(self._call(provider, key, system_prompt, turns, max_tokens, timeout))
                 if data is not None:
-                    return data, SOURCE[provider]
+                    return data, SOURCE.get(provider, 'ai-custom')
             except Exception as exc:
+                # Never log the key, and never log the body: a failing
+                # endpoint often echoes the request back.
                 _logger.warning('kpi.ai %s failed: %s', provider, exc)
         return None, 'none'
 
