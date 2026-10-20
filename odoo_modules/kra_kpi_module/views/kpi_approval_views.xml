@@ -146,6 +146,16 @@
         </field>
     </record>
 
+    <!-- The Approvals MENU opens this: the list above, preceded by a sticky
+         warning when a client has no manager or the manager has no WhatsApp
+         number (the same check as the web Approvals banner). -->
+    <record id="action_kpi_approval_open" model="ir.actions.server">
+        <field name="name">Approvals</field>
+        <field name="model_id" ref="model_kpi_approval"/>
+        <field name="state">code</field>
+        <field name="code">action = model.action_open_desk()</field>
+    </record>
+
     <!-- ============================================================
          THE DIALOG
          One form for both buttons and all six kinds. It shows only

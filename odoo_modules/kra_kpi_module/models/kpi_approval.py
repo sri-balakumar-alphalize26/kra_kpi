@@ -303,6 +303,34 @@ SELECT (%s + k.id), 'qa'::varchar, 'kra.kpi'::varchar, k.id,
             raise UserError(_('Only an admin can approve or refuse these.'))
 
     # ------------------------------------------------------------------
+    @api.model
+    def action_open_desk(self):
+        """The Approvals menu: the list, preceded by the same warning the web
+        Approvals page shows when managers are missing or unreachable.
+
+        A list view has no banner slot in Odoo 19, so the warning is a sticky
+        notification that then opens the list (`next`). With nothing wrong it
+        is just the list, as before."""
+        act = self.env['ir.actions.act_window']._for_xml_id('kra_kpi_module.action_kpi_approval')
+        try:
+            msg = self.env['kra.master'].manager_coverage_message()
+        except Exception as exc:
+            _logger.warning('approvals: manager coverage check failed: %s', exc)
+            msg = ''
+        if not msg:
+            return act
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _('Approval requests may not reach a manager'),
+                'message': msg + ' ' + _('Set managers in Setup › KRA / KPI Master.'),
+                'type': 'warning',
+                'sticky': True,
+                'next': act,
+            },
+        }
+
     def action_open(self):
         """Open the real record, for when the one line here is not enough."""
         self.ensure_one()
