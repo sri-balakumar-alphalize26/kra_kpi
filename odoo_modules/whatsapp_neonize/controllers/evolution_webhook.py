@@ -395,6 +395,12 @@ class EvolutionWebhook(http.Controller):
     @staticmethod
     def _quoted_id(data):
         msg = data.get('message') or {}
+        # A poll vote points at the poll it answers. Recorded here so a group
+        # bot can tell WHOSE poll was tapped -- everybody in a group sees every
+        # poll, and a vote on someone else's menu must not act as your own.
+        poll_key = ((msg.get('pollUpdateMessage') or {}).get('pollCreationMessageKey') or {})
+        if poll_key.get('id'):
+            return poll_key['id']
         for value in msg.values():
             if isinstance(value, dict):
                 ctx = value.get('contextInfo') or {}

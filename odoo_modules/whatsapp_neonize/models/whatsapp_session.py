@@ -850,7 +850,9 @@ class WhatsAppSession(models.Model):
         wa_id = ((res or {}).get('key') or {}).get('id')
         self._log_outgoing(target, '[Poll] %s' % question, 'sent',
                            wa_id=wa_id, message_type='poll')
-        return True
+        # The poll's message id when known (callers that only test truthiness
+        # are unaffected), so a vote can later be matched to this poll.
+        return wa_id or True
 
     def send_odoo_report(self, phone, report_xmlid, record, caption=''):
         self.ensure_one()
