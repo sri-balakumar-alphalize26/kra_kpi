@@ -42,7 +42,7 @@ import pytz
 from odoo import _, fields, models
 
 from .kpi_wa_group_intake import _strip_emoji
-from .kpi_wa_staff_menu import ESTIMATE_LOCKED_STATES, STARTED_STATES
+from .kpi_wa_staff_menu import ESTIMATE_LOCKED_STATES, STARTED_STATES, _kpi_actions_for
 
 _logger = logging.getLogger(__name__)
 
@@ -73,7 +73,9 @@ PAUSE_CODES = [
     ('priority_task', '🔀 Moved to another task'),
     ('break', '☕ Break'),
     ('lunch', '🍽️ Lunch'),
-    ('meeting', '👥 Meeting'),
+    # No 'meeting' here: a meeting is started from 📅 Meeting, which pauses the
+    # running task itself (_meet_done), so offering it twice would be two
+    # roads to the same place.
     ('day_end', '🌙 Day End'),
     ('awaiting_approval', '⏳ Waiting for Approval'),
     ('technical_issue', '🛠️ Technical Issue'),
@@ -284,12 +286,18 @@ class KpiWaStaffTask(models.AbstractModel):
             'pause_code': self._fl_pause_code, 'pause_note': self._fl_pause_note,
             'meet_who': self._fl_meet_who, 'meet_note': self._fl_meet_note,
             'meet_menu': self._fl_meet_menu, 'meet_client': self._fl_meet_client,
+            'kpi_menu': self._fl_kpi_menu,
+            'guide': self._fl_guide, 'resume_reason': self._fl_resume_reason,
+            'undo': self._fl_undo, 'files': self._fl_files, 'logs': self._fl_logs,
+            'c_name': self._fl_c_name, 'c_proj': self._fl_c_proj, 'c_type': self._fl_c_type,
+            'c_deliv': self._fl_c_deliv, 'c_prio': self._fl_c_prio, 'c_est': self._fl_c_est,
+            'c_confirm': self._fl_c_confirm,
         }.get(at)
         if not handler:
             state._reset()
             return False
         task = state.staff_kpi_id
-        needs_task = not (at in ('meet_menu', 'meet_client')
+        needs_task = not (at in ('meet_menu', 'meet_client') or (at or '').startswith('c_')
                           or (at in ('meet_who', 'meet_note') and d.get('purpose') == 'nontask'))
         if needs_task and (not task or not task.exists()):
             state._reset()
@@ -1025,7 +1033,7 @@ class KpiWaStaffTask(models.AbstractModel):
     # ================================================================== #
     # Task details                                                        #
     # ================================================================== #
-    def _info_show(self, message, state, user, task):
+    def _info_show(self, message, state, user, task, then_menu=True):
         labels = dict(task._fields['task_state'].selection)
         prio = dict(task._fields['priority'].selection or []).get(task.priority, task.priority or '—')
         path, cur = [], task.kra_id
@@ -1067,7 +1075,420 @@ class KpiWaStaffTask(models.AbstractModel):
                 'documentation': 'docs', 'tested_code': 'tested'}[k]]]
             lines += ['', _('Your checklist: %s') % (', '.join(ticks) or '—')]
         self._text(message, '\n'.join(lines))
+        if not then_menu:
+            return True
         return self._back_to_task(message, state, task)
+
+    def _kpi_details(self, message, state, user, task):
+        """📋 KPI details: the details first, then a poll with Completed and
+        the update rows (Add update, My updates & files, Add user manual)."""
+        self._info_show(message, state, user, task, then_menu=False)
+        rows = _kpi_actions_for(task)
+        if not rows:
+            return self._back_to_task(message, state, task)
+        d = {'at': 'kpi_menu', 'codes': [c for c, _l in rows] + ['back']}
+        return self._fask(message, state, d, _('📋 %s — what next?') % self._ref(task),
+                          [l for _c, l in rows] + [BACK])
+
+    def _fl_kpi_menu(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        code = (d.get('codes') or ['back'])[i] if i < len(d.get('codes') or []) else 'back'
+        if code == 'back':
+            return self._back_to_task(message, state, task)
+        return self._staff_begin(message, state, user, task, code)
+
+    # ================================================================== #
+    # Start with guidelines / resume with a reason / switch / undo start #
+    # ================================================================== #
+    def _guidelines_begin(self, message, state, user, task):
+        """The board's Start dialog: the task's guidelines, then agree."""
+        g = (task.guidelines or '').strip()
+        q = _('📌 Guidelines for %s — %s\n\n%s\n\nAgree to start the task.') % (
+            self._ref(task), task.name or '', g[:1500])
+        return self._fask(message, state, {'at': 'guide'}, q, ['✅ I agree — start', CANCEL])
+
+    def _fl_guide(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        if i == 0:
+            return self._staff_run(message, state, user, task, 'start')
+        return self._back_to_task(message, state, task)
+
+    def _resume_reason_begin(self, message, state, user, task):
+        self._fsave(state, {'at': 'resume_reason'})
+        self._text(message, _('↩️ %s was sent back by an admin%s.\nWhat did you change? '
+                              '(Required — type cancel to stop.)') % (
+            self._ref(task), (': "%s"' % task.self_review_note) if task.self_review_note else ''))
+        return True
+
+    def _fl_resume_reason(self, message, state, user, d, task, tapped, low, body):
+        """/kra_kpi/task/resume_with_reason, step for step."""
+        reason = (body or '').strip()
+        if not reason:
+            self._text(message, _('Please say what you changed before resuming.'))
+            return True
+        if task.user_id and task.user_id.id != user.id and not self._is_admin(user):
+            return self._back_to_task(message, state, task, _('Only the assigned developer can resume this task.'))
+        rec = task.with_user(user).sudo()
+        try:
+            rec._snapshot_before_start()
+            rec.write({'self_resume_note': reason, 'self_resume_by': user.name,
+                       'self_needs_resume_reason': False})
+            rec._arm_admin_accept_deadline(force=True)
+            rec.resume_task()
+        except Exception as exc:
+            state._reset()
+            self._text(message, _('%(ref)s: %(why)s') % {'ref': self._ref(task), 'why': str(exc).strip()[:300]})
+            self._menu_again(message, state, user)
+            return True
+        state._reset()
+        self._text(message, _('▶️ %(who)s is back on %(ref)s — changed: %(why)s') % {
+            'who': user.name, 'ref': self._ref(task), 'why': reason})
+        return True
+
+    def _switch_to(self, message, state, user, task):
+        """kra.kpi.switch_to_task: stop what runs, start this, in one step."""
+        try:
+            res = task.with_user(user).sudo().switch_to_task(from_kpi_id=None, note='')
+        except Exception as exc:
+            res = {'status': False, 'message': str(exc).strip()[:300]}
+        state._reset()
+        if not res or res.get('status') is False:
+            self._text(message, _('%(ref)s: %(why)s') % {
+                'ref': self._ref(task), 'why': (res or {}).get('message') or _('could not switch')})
+            self._menu_again(message, state, user)
+            return True
+        self._text(message, _('🔀 %(who)s switched to %(ref)s.') % {'who': user.name, 'ref': self._ref(task)})
+        return True
+
+    def _undo_begin(self, message, state, user, task):
+        q = _('↩️ Undo today\'s start of %s?\nIt goes back to how it was before today\'s first '
+              'start, and today\'s time on it is removed.') % self._ref(task)
+        return self._fask(message, state, {'at': 'undo'}, q, ['↩️ Yes, undo start', '❌ No, keep it'])
+
+    def _fl_undo(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        if i != 0:
+            return self._back_to_task(message, state, task)
+        try:
+            res = task.with_user(user).sudo().undo_today_start()
+        except Exception as exc:
+            res = {'status': False, 'message': str(exc).strip()[:300]}
+        if not res or res.get('status') is False:
+            return self._back_to_task(message, state, task, _('Could not undo: %s') % ((res or {}).get('message') or ''))
+        state._reset()
+        self._text(message, '↩️ ' + ((res or {}).get('message') or _('Start undone.')))
+        return True
+
+    # ================================================================== #
+    # 📎 Get a file -- sent privately                                     #
+    # ================================================================== #
+    def _files_begin(self, message, state, user, task):
+        files = self._task_files(task, user)[:9]
+        if not files:
+            return self._back_to_task(message, state, task, _('No files on %s yet.') % self._ref(task))
+        d = {'at': 'files', 'files': [[f['kind'], f['entry'], f['att'], f['name']] for f in files]}
+        return self._fask(message, state, d, _('📎 Which file? It is sent to you privately.'),
+                          ['📄 %s' % (f['name'] or _('file'))[:90] for f in files] + [BACK])
+
+    def _fl_files(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        files = d.get('files') or []
+        if i >= len(files):
+            return self._back_to_task(message, state, task)
+        kind, entry_id, att_id, name = files[i]
+        if att_id:
+            a = self.env['kpi.file.attachment'].sudo().browse(att_id).exists()
+            data, mime = (a.file, a.mimetype) if a else (False, '')
+        else:
+            model, field = (('kpi.progress', 'uploaded_file') if kind == 'progress'
+                            else ('kpi.user.manual', 'manual_file'))
+            e = self.env[model].sudo().browse(entry_id).exists()
+            data, mime = (e[field], '') if e else (False, '')
+        number = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
+        if not data:
+            return self._back_to_task(message, state, task, _('That file is no longer there.'))
+        if not number:
+            return self._back_to_task(message, state, task, _(
+                'I do not have your WhatsApp number — set your login mobile in Login Management.'))
+        b64 = data.decode('ascii') if isinstance(data, bytes) else data
+        mime = mime or mimetypes.guess_type(name or '')[0] or 'application/octet-stream'
+        try:
+            s = self._session(message).sudo()
+            caption = '%s — %s' % (self._ref(task), name)
+            if mime.startswith('image/'):
+                s.send_image(number, b64, caption=caption)
+            else:
+                s.send_document(number, b64, name or 'file', caption=caption, mimetype=mime)
+        except Exception as exc:
+            _logger.warning('private file send failed: %s', exc)
+            return self._back_to_task(message, state, task, _('Could not send the file: %s') % str(exc)[:150])
+        return self._back_to_task(message, state, task, _('📩 %s sent to you privately.') % name)
+
+    # ================================================================== #
+    # 🧾 Logs -- the details page's log dropdown                          #
+    # ================================================================== #
+    LOG_KINDS = [
+        ('pause', '⏸️ Pause log', ['pause', 'resume', 'start_undone']),
+        ('heading', '✏️ Heading log', ['meta_updated', 'priority_changed']),
+        ('time', '⏱️ Time log', ['estimate_extended', 'time_reduced']),
+        ('reassign', '🔁 Reassignments', None),
+    ]
+    LOG_LABELS = {'meta_updated': 'Renamed', 'priority_changed': 'Priority changed',
+                  'start_undone': 'Start undone', 'time_reduced': "Yesterday's time reduced",
+                  'estimate_extended': 'Estimate extended'}
+
+    def _logs_begin(self, message, state, user, task):
+        return self._fask(message, state, {'at': 'logs'}, _('🧾 Which log for %s?') % self._ref(task),
+                          [l for _k, l, _e in self.LOG_KINDS] + [BACK])
+
+    def _fl_logs(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        if i >= len(self.LOG_KINDS):
+            return self._back_to_task(message, state, task)
+        key, label, events = self.LOG_KINDS[i]
+        lines = ['%s — %s' % (label, self._ref(task))]
+        if key == 'reassign':
+            rows = self.env['kpi.reassignment.history'].sudo().search(
+                [('kpi_id', '=', task.id)], order='reassignment_date desc', limit=10)
+            for r in rows:
+                lines.append('• %s · %s → %s · by %s%s' % (
+                    self._when_short(user, r.reassignment_date), r.previous_assignee_name,
+                    r.new_assignee_name, r.reassigned_by_name,
+                    (' — "%s"' % r.reassignment_reason) if r.reassignment_reason else ''))
+        else:
+            rows = self.env['kpi.action.log'].sudo().search(
+                [('kpi_id', '=', task.id), ('event', 'in', events)], order='id desc', limit=10)
+            for r in rows:
+                try:
+                    p = json.loads(r.payload_json or '{}')
+                except (TypeError, ValueError):
+                    p = {}
+                if not isinstance(p, dict):
+                    p = {}
+                if r.event == 'meta_updated':
+                    detail = '"%s" → "%s"' % (p.get('name_from', ''), p.get('name_to', ''))
+                elif p.get('from') is not None and p.get('to') is not None:
+                    detail = '%s%s → %s' % (('%s: ' % p['date']) if p.get('date') else '', p['from'], p['to'])
+                    if p.get('reason'):
+                        detail += ' · "%s"' % p['reason']
+                else:
+                    detail = p.get('reason') or p.get('note') or ''
+                lines.append('• %s · %s · %s%s' % (
+                    self._when_short(user, r.create_date),
+                    self.LOG_LABELS.get(r.event) or (r.event or '').replace('_', ' ').capitalize(),
+                    r.actor_label or (r.actor_user_id.name or ''),
+                    (' — %s' % detail) if detail else ''))
+        if len(lines) == 1:
+            lines.append(_('Nothing logged yet.'))
+        self._text(message, '\n'.join(lines))
+        return self._back_to_task(message, state, task)
+
+    # ================================================================== #
+    # ➕ Create my own task -- kra.kpi.self_create_task                    #
+    # ================================================================== #
+    C_TYPES = [('requirement', '✨ Requirement'), ('update', '🔧 Update'), ('bug', '🐞 Bug')]
+    C_DELIV = [('module', '🧩 Module'), ('app', '📱 App'), ('exe', '💻 EXE')]
+    C_PRIO = [('regular', '⚪ Regular'), ('important', '🟡 Important'), ('urgent', '🔴 Urgent')]
+
+    def _create_begin(self, message, state, user):
+        if not self.env['kra.kpi'].with_user(user)._actor_workday_open():
+            state._reset()
+            self._text(message, _('Start your workday before creating a task.'))
+            return True
+        self._fsave(state, {'at': 'c_name', 'c': {}}, staff_kpi_id=False)
+        self._text(message, _('➕ New task — what is it? Type a short name. (Type cancel to stop.)'))
+        return True
+
+    def _fl_c_name(self, message, state, user, d, task, tapped, low, body):
+        name = (body or '').strip()
+        if not name:
+            self._text(message, _('Task name is required.'))
+            return True
+        d['c'] = {'name': name[:200]}
+        return self._c_proj_ask(message, state, user, d)
+
+    def _kra_path(self, k):
+        path, cur = [], k
+        while cur:
+            path.insert(0, cur.name or '')
+            cur = cur.parent_id
+        return ' › '.join(path)
+
+    def _c_proj_ask(self, message, state, user, d, only=None, note=''):
+        Kra = self.env['kra.master'].sudo()
+        if only is None:
+            # The projects this person works in first, then the rest.
+            mine = self.env['kra.kpi'].sudo().search([('user_id', '=', user.id)], order='id desc',
+                                                     limit=50).mapped('kra_id')
+            rest = Kra.search([('id', 'not in', mine.ids)], order='name')
+            only = (mine | rest)[:8]
+        d['at'] = 'c_proj'
+        d['proj_ids'] = only.ids
+        q = ((note + '\n\n') if note else '') + _('📁 Which project? Tap one, or type part of its name.')
+        return self._fask(message, state, d, q, ['📁 %s' % self._kra_path(k)[:90] for k in only] + [CANCEL])
+
+    def _fl_c_proj(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low, allow_number=False)
+        ids = d.get('proj_ids') or []
+        if i is None:
+            q = (body or '').strip()
+            if not q:
+                return False
+            hits = self.env['kra.master'].sudo().search([('name', 'ilike', q)], limit=8)
+            if len(hits) == 1:
+                d['c']['kra_id'] = hits.id
+                return self._c_type_ask(message, state, d)
+            return self._c_proj_ask(message, state, user, d, only=hits if hits else None,
+                                    note=_('No project matches "%s".') % q if not hits else '')
+        if i >= len(ids):
+            state._reset()
+            self._text(message, _('Cancelled — no task created.'))
+            return True
+        d['c']['kra_id'] = ids[i]
+        return self._c_type_ask(message, state, d)
+
+    def _c_type_ask(self, message, state, d):
+        d['at'] = 'c_type'
+        return self._fask(message, state, d, _('What kind of task is it?'), [l for _c, l in self.C_TYPES])
+
+    def _fl_c_type(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        d['c']['doc_type'] = self.C_TYPES[i][0]
+        d['c']['deliv'] = []
+        return self._c_deliv_ask(message, state, d)
+
+    def _c_deliv_ask(self, message, state, d):
+        """Module / App / EXE -- at least one, tick one at a time."""
+        d['at'] = 'c_deliv'
+        picked = d['c'].get('deliv') or []
+        labels = dict(self.C_DELIV)
+        opts = [l for c, l in self.C_DELIV if c not in picked]
+        if picked:
+            opts.append('➡️ Next')
+        q = _('What does it deliver? Tick at least one type — Module, App or EXE.\nTicked: %s') % (
+            ', '.join(labels[c] for c in picked) or _('nothing yet'))
+        if len(opts) < 2:
+            opts.append(CANCEL)
+        return self._fask(message, state, d, q, opts)
+
+    def _fl_c_deliv(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        label = d['opts'][i]
+        if label == CANCEL:
+            state._reset()
+            self._text(message, _('Cancelled — no task created.'))
+            return True
+        if label.startswith('➡️'):
+            d['at'] = 'c_prio'
+            return self._fask(message, state, d, _('Priority?'), [l for _c, l in self.C_PRIO])
+        code = {l: c for c, l in self.C_DELIV}.get(label)
+        if code and code not in d['c']['deliv']:
+            d['c']['deliv'].append(code)
+        return self._c_deliv_ask(message, state, d)
+
+    def _fl_c_prio(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        d['c']['priority'] = self.C_PRIO[i][0]
+        d['at'] = 'c_est'
+        return self._fask(message, state, d, _('⏱️ Estimate? Type it like *2h 30m*, or skip — the admin can '
+                                               'set it when accepting.'), ['⏭️ Skip', CANCEL])
+
+    def _fl_c_est(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low, allow_number=False)
+        if i == 1:
+            state._reset()
+            self._text(message, _('Cancelled — no task created.'))
+            return True
+        h = m = 0
+        if i != 0:
+            mt = re.match(r'^\s*(?:(\d{1,3})\s*h\w*)?\s*(?:(\d{1,2})\s*m\w*)?\s*$', body or '', re.I)
+            if not mt or not (mt.group(1) or mt.group(2)):
+                self._text(message, _('Type it like *2h 30m* or *45m*, or tap Skip.'))
+                return True
+            h, m = int(mt.group(1) or 0), int(mt.group(2) or 0)
+            if m > 59:
+                self._text(message, _('Minutes must be 0–59.'))
+                return True
+        d['c']['est_h'], d['c']['est_m'] = h, m
+        c = d['c']
+        kra = self.env['kra.master'].sudo().browse(c.get('kra_id'))
+        labels = dict(self.C_TYPES + self.C_DELIV + self.C_PRIO)
+        q = _('➕ Create this task?\n\nName: %s\nProject: %s\nType: %s\nDelivers: %s\nPriority: %s\n'
+              'Estimate: %s\n\nIt waits in Pending review until an admin accepts it.') % (
+            c['name'], self._kra_path(kra), labels[c['doc_type']],
+            ', '.join(labels[x] for x in c['deliv']), labels[c['priority']],
+            ('%dh %02dm' % (h, m)) if (h or m) else _('not set'))
+        d['at'] = 'c_confirm'
+        return self._fask(message, state, d, q, ['✅ Create task', CANCEL])
+
+    def _fl_c_confirm(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        if i != 0:
+            state._reset()
+            self._text(message, _('Cancelled — no task created.'))
+            return True
+        c = d['c']
+        res = self.env['kra.kpi'].with_user(user).self_create_task({
+            'name': c['name'], 'kra_id': c['kra_id'], 'doc_type': c['doc_type'],
+            'deliverable_type': c['deliv'], 'priority': c['priority'],
+            'estimate_hours': c.get('est_h') or 0, 'estimate_minutes': c.get('est_m') or 0,
+        })
+        state._reset()
+        if not res or not res.get('status'):
+            self._text(message, _('Could not create it: %s') % ((res or {}).get('message') or ''))
+            return True
+        self._text(message, _('✅ %(ref)s created — "%(name)s". It is in your Pending review lane; '
+                              'you can start it now, and an admin will accept it.') % {
+            'ref': res.get('external_ref') or '', 'name': c['name']})
+        return True
+
+    # ================================================================== #
+    # Pause / resume my day, No tasks                                     #
+    # ================================================================== #
+    def _staff_day_control(self, message, state, user, choice):
+        sess, is_open, _e = self._workday(user)
+        state._reset()
+        if not is_open or not sess:
+            self._text(message, _('Your day is not open.'))
+            return True
+        S = sess.with_user(user).sudo()
+        try:
+            if choice == 'day_pause':
+                res = S.action_pause_workday(note='')
+                ok = _('⏸️ Your day is paused, %s. Running tasks were paused too. Tap ▶️ Resume my day '
+                       'when you are back.') % (user.name or '')
+            elif choice == 'day_resume':
+                res = S.action_resume_workday()
+                ok = _('▶️ Your day is running again, %s. Your tasks stay paused — resume the one you '
+                       'are working on.') % (user.name or '')
+            else:
+                res = S._set_nontask_reason('no_tasks', note='')
+                ok = _('🙅 Noted, %s — you have no tasks. The admins have been told.') % (user.name or '')
+        except Exception as exc:
+            res = {'status': False, 'message': str(exc).strip()[:200]}
+        if isinstance(res, dict) and res.get('status') is False:
+            self._text(message, _('Could not do that: %s') % (res.get('message') or ''))
+        else:
+            self._text(message, ok)
+        return self._show_staff_menu(message, state, user)
 
     # ================================================================== #
     # Ask for more time                                                   #
@@ -1454,6 +1875,31 @@ class KpiWaStaffTask(models.AbstractModel):
     def _meet_done(self, message, state, user, task, purpose, picked, note):
         if purpose == 'pause':
             return self._pause_apply(message, state, user, task, 'meeting', note, picked)
+        # 📅 Meeting while a task is running: pause it with reason Meeting, as the
+        # board's pause does (pause_all_running -- every running timer, one shared
+        # reason, the attendees on the break). Nothing running: record the
+        # meeting as non-task time instead.
+        Log = self.env['kpi.time.log'].sudo()
+        running = Log.search([('user_id', '=', user.id), ('is_active', '=', True)]).mapped('kpi_id').filtered(
+            lambda k: k.task_state == 'in_progress')
+        if running:
+            try:
+                res = self.env['kra.kpi'].sudo().with_user(user).pause_all_running(
+                    reason=note, reason_code='meeting', meeting_with_ids=picked or [])
+            except Exception as exc:
+                res = {'status': False, 'message': str(exc).strip()[:200]}
+            state._reset()
+            if not res or res.get('status') is False:
+                self._text(message, _('Could not pause for the meeting: %s') % ((res or {}).get('message') or ''))
+                self._menu_again(message, state, user)
+                return True
+            who = ''
+            if picked:
+                who = _(' with %s') % ', '.join(self.env['res.users'].sudo().browse(picked).mapped('name'))
+            self._text(message, _('👥 Meeting%(who)s — %(note)s.\n⏸️ Paused %(tasks)s. Tap *Resume* on it '
+                                  'when you are back.') % {
+                'who': who, 'note': note, 'tasks': ', '.join(self._ref(k) for k in running)})
+            return True
         # "In a meeting" from the menu: the same _set_nontask_reason the board's
         # idle dialog uses, with the attendees.
         try:
