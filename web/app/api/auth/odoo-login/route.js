@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { odooRpc, clientIp } from "@/lib/odoo";
+import { odooRpc, odooTarget, clientIp } from "@/lib/odoo";
 import { finishSignIn } from "@/lib/auth";
 
 /* Odoo account (login + password) → /web/session/authenticate. For admins who
@@ -7,7 +7,7 @@ import { finishSignIn } from "@/lib/auth";
 export async function POST(req) {
   const { login, password, remember = true } = await req.json().catch(() => ({}));
   if (!login || !password) return NextResponse.json({ ok: false, error: "Enter your login and password.", field: !login ? "login" : "password" }, { status: 400 });
-  const db = (process.env.ODOO_DB || "").trim();
+  const { db } = await odooTarget();
   const r = await odooRpc("/web/session/authenticate", { db: db || undefined, login, password },
     { fresh: true, forwardFor: clientIp(req) });
   if (!r.ok) {

@@ -1,11 +1,14 @@
 /* Server-side only: the route handlers talk to Odoo through this. The browser
    never sees ODOO_URL or Odoo's session cookie.
 
-   Which Odoo and which database come from .env.local and nothing else:
+   Which Odoo and which database: the ones this browser was set up with
+   (/api/auth/setup: URL → database list → Odoo login, like the phone's
+   device setup), kept in httpOnly cookies. Until a browser is set up, the
+   defaults from .env.local:
      ODOO_URL=http://localhost:8069
      ODOO_DB=my_db
-   ODOO_DB travels as Odoo's X-Odoo-Database header, so one Odoo holding many
-   databases can serve this app without a --db-filter.
+   The database travels as Odoo's X-Odoo-Database header, so one Odoo holding
+   many databases can serve this app without a --db-filter.
 
    kra_kpi_module's routes are Odoo `type='json'` routes, i.e. JSON-RPC:
      request  { jsonrpc: "2.0", method: "call", id, params: {...} }
@@ -15,19 +18,45 @@
    wrapping and unwrapping; `classifyError` turns an Odoo error into the HTTP
    status the browser-side lib/api.js reads. */
 
-import { SESSION_COOKIE, ROLE_COOKIE } from "./cookies";
+import { cookies } from "next/headers";
+import { SESSION_COOKIE, ROLE_COOKIE, SETUP_UID_COOKIE, SETUP_NAME_COOKIE, ODOO_URL_COOKIE, ODOO_DB_COOKIE } from "./cookies";
 export { SESSION_COOKIE, ROLE_COOKIE };
 
-const ODOO_URL = (process.env.ODOO_URL || "").trim().replace(/\/$/, "");
-const ODOO_DB = (process.env.ODOO_DB || "").trim();
+const ENV_URL = (process.env.ODOO_URL || "").trim().replace(/\/$/, "");
+const ENV_DB = (process.env.ODOO_DB || "").trim();
 
-export const NOT_CONNECTED = "Server not connected. Set ODOO_URL in web/.env.local and restart.";
+export const NOT_CONNECTED = "This browser isn't connected to a server yet. Set it up from the login page.";
 export const OFFLINE = "Can't reach the server. Try again in a moment.";
-if (!ODOO_URL) console.error(`[kra-kpi-web] ${NOT_CONNECTED}`);
 
-function odooHeaders(base, session, forwardFor, device) {
+/* "192.168.1.5:8069" → "http://192.168.1.5:8069"; null when it isn't an
+   http(s) address. The same forgiving input the phone's Connect screen takes. */
+export function normalizeServerUrl(raw) {
+  let s = String(raw || "").trim().replace(/\/+$/, "");
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = "http://" + s;
+  try {
+    const u = new URL(s);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.origin + u.pathname.replace(/\/+$/, "");
+  } catch (e) {
+    return null;
+  }
+}
+
+/* The Odoo this request talks to: the browser's setup, else .env.local.
+   cookies() only exists inside a request; outside one, the defaults. */
+export async function odooTarget() {
+  try {
+    const jar = await cookies();
+    const url = decodeURIComponent(jar.get(ODOO_URL_COOKIE)?.value || "");
+    if (url) return { url, db: decodeURIComponent(jar.get(ODOO_DB_COOKIE)?.value || "") };
+  } catch (e) {}
+  return { url: ENV_URL, db: ENV_DB };
+}
+
+function odooHeaders(t, base, session, forwardFor, device) {
   const headers = { ...base };
-  if (ODOO_DB) headers["X-Odoo-Database"] = ODOO_DB;
+  if (t.db) headers["X-Odoo-Database"] = t.db;
   if (session) headers.Cookie = `session_id=${session}`;
   /* The browser's address, so Odoo's per-number lock-outs (5 wrong passwords)
      see each visitor rather than this one server. */
@@ -42,13 +71,13 @@ export function clientIp(req) {
   return fwd.split(",")[0].trim() || req.headers.get("x-real-ip") || "";
 }
 
-/* A brand-new Odoo session already tied to ODOO_DB. Sign-in needs one: a
+/* A brand-new Odoo session already tied to the database. Sign-in needs one: a
    header-only request is stateless in Odoo, so the session /kpi_app/login
    finalizes would never be saved. /web/login?db= is Odoo's own way to pick a
    database. Returns null when Odoo is unreachable or hands out no cookie. */
-async function freshSession() {
+async function freshSession(t) {
   try {
-    const r = await fetch(`${ODOO_URL}/web/login${ODOO_DB ? `?db=${encodeURIComponent(ODOO_DB)}` : ""}`, {
+    const r = await fetch(`${t.url}/web/login${t.db ? `?db=${encodeURIComponent(t.db)}` : ""}`, {
       cache: "no-store", redirect: "manual",
     });
     const m = (r.headers.get("set-cookie") || "").match(/session_id=([^;]+)/);
@@ -61,16 +90,24 @@ async function freshSession() {
 /* One JSON-RPC call. Resolves to
      { ok: true,  result, session, date }
      { ok: false, status, body, session, date }   -- already classified for the browser
-   `fresh`: start from a session bound to ODOO_DB (sign-in). `timeout` in ms. */
-export async function odooRpc(path, params = {}, { session, fresh, forwardFor, device, timeout = 60000 } = {}) {
-  if (!ODOO_URL) return { ok: false, status: 503, body: { ok: false, error: NOT_CONNECTED }, session: null };
+   `fresh`: start from a session bound to the database (sign-in). `timeout` in ms.
+   `target` ({url, db}): a server other than this browser's — setup, before
+   the browser has one. */
+export async function odooRpc(path, params = {}, { session, fresh, forwardFor, device, timeout = 60000, target } = {}) {
+  const t = target || await odooTarget();
+  if (!t.url) return { ok: false, status: 503, body: { ok: false, error: NOT_CONNECTED }, session: null };
   let started = null;
-  if (fresh && !session) started = await freshSession();
+  if (fresh && !session) started = await freshSession(t);
   const sent = session || started;
-  const headers = odooHeaders({ "Content-Type": "application/json", Accept: "application/json" }, sent, forwardFor, device);
+  /* A sign-in must not carry X-Odoo-Database. Odoo treats a request that names
+     its database in a header as stateless and never saves the session it
+     authenticates, so the next call comes back "Session Expired". The fresh
+     session is already tied to the database by /web/login?db=. */
+  const headers = odooHeaders(started ? { ...t, db: "" } : t,
+    { "Content-Type": "application/json", Accept: "application/json" }, sent, forwardFor, device);
   let r;
   try {
-    r = await fetch(ODOO_URL + path, {
+    r = await fetch(t.url + path, {
       method: "POST", headers,
       body: JSON.stringify({ jsonrpc: "2.0", method: "call", id: Date.now(), params }),
       cache: "no-store", redirect: "manual",
@@ -91,7 +128,7 @@ export async function odooRpc(path, params = {}, { session, fresh, forwardFor, d
       : { ok: false, status: 502, body: { ok: false, error: "The server is not configured for this app." }, session: newSession, date };
   }
   if (r.status === 403 && sent) {
-    /* The cookie belongs to another database than ODOO_DB. */
+    /* The cookie belongs to another database than this browser's. */
     return { ok: false, status: 401, body: { ok: false, error: "Please sign in again." }, session: newSession, date };
   }
   if (r.status >= 500) return { ok: false, status: 502, body: { ok: false, error: OFFLINE }, session: newSession, date };
@@ -128,6 +165,23 @@ export function clearSessionCookie() { return { ...sessionCookie(""), maxAge: 0 
 
 /* The role hint middleware.js reads to send people to their own area. Also
    httpOnly: nothing in the page needs it (the page asks /api/auth/me). */
+/* Browser setup: which server and database, and who the browser belongs to.
+   A year, and untouched by sign-out. */
+export function setupCookies({ url, db, uid, name }) {
+  const base = { httpOnly: true, sameSite: "lax", path: "/", secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 };
+  return [
+    { ...base, name: ODOO_URL_COOKIE, value: encodeURIComponent(url || "") },
+    { ...base, name: ODOO_DB_COOKIE, value: encodeURIComponent(db || "") },
+    { ...base, name: SETUP_UID_COOKIE, value: String(uid || "") },
+    { ...base, name: SETUP_NAME_COOKIE, value: encodeURIComponent(name || "") },
+  ];
+}
+
+/* The setup_uid to send with the number-login routes (0 = not set up). */
+export function setupUidFrom(cookieStore) {
+  return Number(cookieStore.get(SETUP_UID_COOKIE)?.value) || 0;
+}
+
 export function roleCookie(role, { remember } = {}) {
   return {
     name: ROLE_COOKIE, value: role || "",
@@ -141,10 +195,11 @@ export function clearRoleCookie() { return { ...roleCookie(""), maxAge: 0 }; }
 /* Same headers as odooRpc, but the raw Response: PDFs, images, ZIPs and the
    multipart uploads, which must not be parsed as JSON. */
 export async function odooRaw(path, { method = "GET", session, headers: extra = {}, body, timeout = 120000 } = {}) {
-  if (!ODOO_URL) return null; /* caller answers 503 */
+  const t = await odooTarget();
+  if (!t.url) return null; /* caller answers 503 */
   try {
-    return await fetch(ODOO_URL + path, {
-      method, headers: odooHeaders({ Accept: "*/*", ...extra }, session), body,
+    return await fetch(t.url + path, {
+      method, headers: odooHeaders(t, { Accept: "*/*", ...extra }, session), body,
       /* A streamed body (an upload passed straight through) needs duplex:'half'
          in Node's fetch; a buffer or no body must not carry it. */
       ...(body && typeof body.getReader === "function" ? { duplex: "half" } : {}),
@@ -160,15 +215,16 @@ export async function odooRaw(path, { method = "GET", session, headers: extra = 
 const PASSED = ["content-type", "content-length", "content-disposition", "cache-control", "etag", "last-modified"];
 
 export async function odooPassthrough(req, path, session) {
-  if (!ODOO_URL) return new Response(NOT_CONNECTED, { status: 503 });
-  const headers = odooHeaders({ Accept: req.headers.get("accept") || "*/*" }, session);
+  const t = await odooTarget();
+  if (!t.url) return new Response(NOT_CONNECTED, { status: 503 });
+  const headers = odooHeaders(t, { Accept: req.headers.get("accept") || "*/*" }, session);
   for (const h of ["if-none-match", "if-modified-since"]) {
     const v = req.headers.get(h);
     if (v) headers[h] = v;
   }
   let r;
   try {
-    r = await fetch(ODOO_URL + path + new URL(req.url).search, { headers, cache: "no-store", redirect: "manual" });
+    r = await fetch(t.url + path + new URL(req.url).search, { headers, cache: "no-store", redirect: "manual" });
   } catch (e) {
     return new Response(null, { status: 503 });
   }
