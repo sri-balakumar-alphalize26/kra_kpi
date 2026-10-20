@@ -131,6 +131,53 @@
                         Jitsi if that is not enough.
                     </div>
 
+                    <!-- Recording is decided BEFORE Confirm, because Confirm
+                         is when the client first gets the link, and the
+                         notice on that page is rendered from this box.
+
+                         The whole block carries ONE groups= that matches the
+                         groups= on the record_meeting field itself. An
+                         element outside it cannot use record_meeting in an
+                         invisible= expression: field-group stripping removes
+                         the field from the record for everyone else, and
+                         Odoo then reports an access-rights inconsistency on
+                         the whole view. Owner and System see this through
+                         implication, so they do not need naming here. -->
+                    <div groups="kra_kpi_module.group_kra_admin">
+                        <group string="Recording">
+                            <group>
+                                <field name="record_meeting"/>
+                                <field name="recording_state" readonly="1"
+                                       invisible="recording_state == 'off'"/>
+                                <field name="recording_detail" readonly="1"
+                                       invisible="not recording_detail"/>
+                            </group>
+                            <group>
+                                <field name="active_minutes" readonly="1"
+                                       invisible="not active_minutes"/>
+                            </group>
+                        </group>
+                        <div class="alert alert-warning" role="alert"
+                             invisible="not record_meeting">
+                            <b>Everyone in this call will be told it is being
+                            recorded.</b> A recorder joins the room from this
+                            server and appears in the participant list, and
+                            the meeting page says so above the video. Audio
+                            only — no video is kept.
+                            <br/>
+                            It cannot be switched on once the call has
+                            started: the people in it were already shown a
+                            page saying it is not being recorded.
+                        </div>
+                        <div class="alert alert-danger" role="alert"
+                             invisible="recording_state not in ['failed', 'no_audio']">
+                            <b>This meeting was not recorded.</b> The reason
+                            is in <b>Recorder</b> above. There will be no
+                            transcript, so any summary is built only from who
+                            joined and for how long.
+                        </div>
+                    </div>
+
                     <notebook>
                         <page string="Afterwards">
                             <group>
@@ -138,6 +185,7 @@
                                     <field name="opened_at" readonly="1"/>
                                     <field name="ended_at" readonly="1"/>
                                     <field name="actual_minutes" readonly="1"/>
+                                    <field name="active_minutes" readonly="1"/>
                                 </group>
                                 <group>
                                     <field name="summary_posted" readonly="1"/>
@@ -176,18 +224,18 @@
                                 <field name="action_items" nolabel="1"
                                        placeholder="Who does what, by when."/>
                             </group>
-                            <div class="alert alert-warning" role="status">
-                                <b>Nothing records the call automatically.</b> The
-                                meeting runs in people's browsers and this server
-                                cannot see it. Server-side recording needs Jitsi with
-                                <b>Jibri</b>, which is a separate deployment on its
-                                own machine; the public meet.jit.si will not hand a
-                                recording back.
+                            <div class="alert alert-info" role="status">
+                                <b>Ran For</b> is how long the room was open.
+                                <b>Active</b> is how much of that somebody was
+                                actually talking, and is only known for a
+                                recorded meeting. Neither is ever added to the
+                                task's work time, so neither reaches hourly
+                                invoicing.
                                 <br/>
-                                What is automatic is the <b>timing</b>: the clock
-                                starts when the link is posted and stops when you
-                                press <b>Finished</b>. Upload a recording here if
-                                somebody made one locally.
+                                Audio appears above by itself when
+                                <b>Record This Meeting</b> was ticked, in
+                                segments of a few minutes each. You can also
+                                upload a file somebody recorded locally.
                             </div>
                         </page>
                         <page string="Log">

@@ -56,5 +56,46 @@
             <field name="active" eval="True"/>
         </record>
 
+        <!-- Every minute: restart a recorder that should be running.
+
+             The recorder is normally launched the moment somebody joins, so
+             this is only for the case that path cannot cover: Odoo
+             restarting in the middle of a recorded meeting leaves bot_pid
+             pointing at a process that no longer exists, and nothing would
+             ever notice.
+
+             It only ever STARTS a recorder for a meeting that is live and
+             already ticked. It never ticks anything, and it never records a
+             meeting nobody asked to record.
+             See models/kpi_meeting.py _cron_recorder_watchdog. -->
+        <record id="ir_cron_kpi_meeting_recorder" model="ir.cron">
+            <field name="name">KRA/KPI: Keep meeting recorders running</field>
+            <field name="model_id" ref="model_kpi_meeting"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_recorder_watchdog()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <!-- Daily: delete audio that has already been written up.
+
+             Only the audio. The transcript and the summary stay. A recording
+             is kept until there IS a summary, so a transcription that failed
+             quietly cannot take the evidence with it.
+
+             Retention: ir.config_parameter kra_kpi.meet_record_keep_days
+             (default 180; 0 disables the purge entirely).
+             See models/kpi_meeting.py _cron_purge_old_recordings. -->
+        <record id="ir_cron_kpi_meeting_purge_audio" model="ir.cron">
+            <field name="name">KRA/KPI: Delete meeting audio already summarised</field>
+            <field name="model_id" ref="model_kpi_meeting"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_purge_old_recordings()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
+
     </data>
 </odoo>
