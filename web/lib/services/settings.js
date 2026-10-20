@@ -89,7 +89,7 @@ export const testWaGroup = (confirmJid) => rpc("/kpi_wa_group/test", { confirm_j
 /* ---- users + login management (same /kpi_user_access/get) ---- */
 export const ACCESS_PATH = "/kpi_user_access/get";
 export const fetchAccess = () => read(ACCESS_PATH, {}, { ttl: 10000 });
-export const ROLES = [{ code: "admin", label: "Admin" }, { code: "developer", label: "Developer" }, { code: "client", label: "Client" }];
+export const ROLES = [{ code: "admin", label: "Admin" }, { code: "coordinator", label: "Coordinator" }, { code: "developer", label: "Developer" }, { code: "client", label: "Client" }];
 export const createUser = ({ name, login, email, kra_role, mobile, active = true, password }) => rpc("/kpi_user_access/create", { name, login, email, kra_role, mobile, active, password });
 export const updateUser = (userId, { name, login, email, active }) => rpc("/kpi_user_access/update", { user_id: userId, name, login, email, active });
 export const setUserRole = (userId, role) => rpc("/kpi_user_access/set_role", { user_id: userId, role });

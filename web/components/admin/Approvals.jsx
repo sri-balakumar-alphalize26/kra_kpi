@@ -38,8 +38,10 @@ export default function Approvals() {
 
   const load = useCallback(async () => {
     try {
-      const [r, c, cov, nOpen] = await Promise.all([P.listApprovals(), P.waitingCounts(), P.coverage().catch(() => null), P.countOpenDoubts().catch(() => 0)]);
-      setRows(r || []); setCounts(c || {}); setCover(cov); setOpenDoubts(nOpen || 0); setErr(null);
+      /* The coverage warning comes worded by Odoo (kra.master.manager_coverage_message),
+         the same text its own Approvals menu shows. */
+      const [r, c, cov, nOpen] = await Promise.all([P.listApprovals(), P.waitingCounts(), P.coverageMessage().catch(() => ""), P.countOpenDoubts().catch(() => 0)]);
+      setRows(r || []); setCounts(c || {}); setCover(cov || ""); setOpenDoubts(nOpen || 0); setErr(null);
     } catch (e) { setErr(e); }
   }, []);
   const loadDoubts = useCallback(async () => {
@@ -67,7 +69,7 @@ export default function Approvals() {
     ...P.KINDS.map((k) => ({ key: k.key, label: k.tab, count: counts[k.key] || 0 })),
     { key: "questions", label: "Questions", count: openDoubts },
   ];
-  const noManager = cover && ((cover.clients_without_manager || 0) > 0 || (cover.clients_unreachable || 0) > 0);
+  const noManager = typeof cover === "string" && cover.trim().length > 0;
 
   return (
     <>
@@ -80,9 +82,8 @@ export default function Approvals() {
           <div className="callout" style={{ background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)", color: "var(--lz-paused)", alignItems: "flex-start" }}>
             <Icon n="warn" size={18} />
             <span style={{ flex: 1 }}>
-              {cover.clients_without_manager > 0 && <b>{cover.clients_without_manager} client{cover.clients_without_manager === 1 ? " has" : "s have"} no manager{(cover.names_without_manager || []).length ? `: ${cover.names_without_manager.join(", ")}` : ""}. </b>}
-              {cover.clients_unreachable > 0 && <span>{cover.clients_unreachable} manager{cover.clients_unreachable === 1 ? " has" : "s have"} no WhatsApp number to reach them on. </span>}
-              Their approvals fall back to every coordinator. <a href="/settings/kra-tree" style={{ color: "inherit", fontWeight: 700 }}>Set managers in Settings › KRA tree</a>.
+              {cover}{" "}
+              <a href="/settings/kra-tree" style={{ color: "inherit", fontWeight: 700 }}>Set managers in Settings › KRA tree</a> · <a href="/settings/login" style={{ color: "inherit", fontWeight: 700 }}>Login management</a>.
             </span>
           </div>
         )}

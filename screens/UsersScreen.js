@@ -28,10 +28,12 @@ const TOP = (RNStatusBar.currentHeight || 0) + 12;
 const ROLES = [
   { key: 'developer', label: 'User' },
   { key: 'client', label: 'Client' },
+  { key: 'coordinator', label: 'Coordinator' },
   { key: 'admin', label: 'Admin' },
 ];
 const ROLE_META = {
   admin:     { label: 'Admin',  bg: '#EDE9FE', fg: '#6D28D9', icon: 'shield-account' },
+  coordinator: { label: 'Coordinator', bg: '#FEF3C7', fg: '#B45309', icon: 'account-tie' },
   client:    { label: 'Client', bg: '#CFFAFE', fg: '#0E7490', icon: 'briefcase-account' },
   developer: { label: 'User',   bg: '#DBEAFE', fg: '#1D4ED8', icon: 'account' },
 };
