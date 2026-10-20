@@ -48,10 +48,12 @@ It never creates, confirms, reschedules or cancels anything.
 """
 
 import logging
+import os
 import secrets
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
+from odoo.tools import config
 
 _logger = logging.getLogger(__name__)
 
@@ -146,9 +148,48 @@ class KpiMeeting(models.Model):
     recording_ids = fields.Many2many(
         'ir.attachment', 'kpi_meeting_recording_rel', 'meeting_id',
         'attachment_id', string='Recordings',
-        help='Uploaded after the call. Odoo cannot record a browser call: '
-             'server-side recording needs Jitsi with Jibri, which is a '
-             'separate deployment.')
+        help='Audio of the call, in segments. Written by the recorder bot '
+             'when Record This Meeting is ticked, or uploaded by hand.')
+
+    # ---- recording ----------------------------------------------------- #
+    #
+    # A bot joins the room from this server and captures what it hears, so
+    # nobody has to click Allow and a meeting held entirely on phones records
+    # as well as one held at a desk. It is NOT Jibri: it is an ordinary
+    # participant, visible to everyone in the participant list, which is also
+    # how the people in the call are told they are being recorded.
+    #
+    # Only an admin may turn it on. `groups=` on the FIELD (not just the view)
+    # is the part that matters: ir.model.access grants developers write on
+    # kpi.meeting, so without this a developer could tick it through the JSON
+    # API.
+    record_meeting = fields.Boolean(
+        string='Record This Meeting', default=False, copy=False,
+        groups='kra_kpi_module.group_kra_admin',
+        help='A recorder joins the call and captures the audio, then writes '
+             'the summary from it. Everyone in the call can see it in the '
+             'participant list.')
+    recording_state = fields.Selection([
+        ('off', 'Not recording'),
+        ('starting', 'Starting'),
+        ('running', 'Recording'),
+        ('no_audio', 'Joined but heard nothing'),
+        ('failed', 'Could not record'),
+        ('stopped', 'Stopped'),
+    ], default='off', readonly=True, copy=False, string='Recorder')
+    # Why it failed, in words, on the record. A recording everyone BELIEVES
+    # happened is worse than one they know did not.
+    recording_detail = fields.Char(readonly=True, copy=False)
+    recording_started_at = fields.Datetime(readonly=True, copy=False)
+    recording_seconds = fields.Integer(readonly=True, copy=False, default=0)
+    bot_pid = fields.Integer(readonly=True, copy=False)
+    # A SECOND token, for the bot's page only. The client token circulates in
+    # WhatsApp groups; this one never leaves this server, and it is the only
+    # token the segment-upload route accepts.
+    bot_token = fields.Char(readonly=True, copy=False, index=True)
+
+    transcript = fields.Text(readonly=True, copy=False)
+    transcript_language = fields.Char(readonly=True, copy=False)
     summary = fields.Text()
     summary_source = fields.Char(readonly=True)
     action_items = fields.Text()
@@ -162,6 +203,19 @@ class KpiMeeting(models.Model):
     # kpi_nontask_block.py. It is shown beside the task as its own figure.
     actual_minutes = fields.Integer(
         string='Ran For (min)', compute='_compute_actual_minutes', store=True)
+    # Time somebody was actually talking, as opposed to the room being open.
+    # Deliberately a SEPARATE figure rather than a redefinition of
+    # actual_minutes: that one is stored and has already been written into
+    # task logs, and quietly changing what it counts would alter records
+    # already taken. 0 when nothing recorded the call.
+    active_minutes = fields.Integer(
+        string='Active (min)', readonly=True, copy=False, default=0,
+        help='Time with somebody speaking. Silence while the room sat open '
+             'is not counted. Only filled when the meeting was recorded.')
+    # Kept in seconds and shown in minutes: a five-minute meeting of which
+    # ninety seconds was speech rounds to 2 minutes, and rounding at every
+    # addition instead of at the end loses most of it.
+    active_seconds = fields.Integer(readonly=True, copy=False, default=0)
     log_ids = fields.Many2many(
         'kpi.action.log', string='Meeting Log',
         compute='_compute_log_ids')
@@ -186,11 +240,13 @@ class KpiMeeting(models.Model):
         help='The last thing we heard from inside the room. Used to close a '
              'meeting whose browser went away without saying goodbye.')
 
-    @api.depends('participant_ids.person_name')
+    @api.depends('participant_ids.person_name', 'participant_ids.is_recorder')
     def _compute_participant_summary(self):
         for rec in self:
+            # The recorder is not a person. Listing it here would put
+            # "Recorder" in the recap the client reads as if it had attended.
             names = [p.person_name for p in rec.participant_ids
-                     if p.person_name]
+                     if p.person_name and not p.is_recorder]
             rec.participant_summary = ', '.join(names) if names else ''
 
     # ------------------------------------------------------------------
@@ -200,6 +256,20 @@ class KpiMeeting(models.Model):
         if not self.access_token:
             self.sudo().write({'access_token': secrets.token_hex(16)})
         return self.access_token
+
+    def _ensure_bot_token(self):
+        """The recorder's own token.
+
+        Separate from access_token on purpose. The client's link gets
+        forwarded around WhatsApp groups; this one is handed to a local
+        process and nothing else, and it is the only token the segment-upload
+        route will accept. A leaked client link therefore cannot be used to
+        push audio at us.
+        """
+        self.ensure_one()
+        if not self.bot_token:
+            self.sudo().write({'bot_token': secrets.token_hex(24)})
+        return self.bot_token
 
     def page_url(self):
         """The link the client is actually sent.
@@ -233,6 +303,23 @@ class KpiMeeting(models.Model):
             return rec
         return self.browse()
 
+    @api.model
+    def _from_bot_token(self, token):
+        """Resolve the recorder's token, and ONLY the recorder's token.
+
+        A separate method rather than a second branch inside _from_token, so
+        that a client link can never reach the upload route by accident: the
+        two token spaces are checked by two callers that never swap.
+        """
+        token = (token or '').strip()
+        if not token or len(token) < 32:
+            return self.browse()
+        rec = self.sudo().search([('bot_token', '=', token)], limit=1)
+        import hmac
+        if rec and hmac.compare_digest(rec.bot_token or '', token):
+            return rec
+        return self.browse()
+
     def record_room_event(self, kind, pid=None, name=None):
         """One event from inside the room. Times are the SERVER's, always.
 
@@ -245,6 +332,7 @@ class KpiMeeting(models.Model):
         pid = (pid or '')[:64]
         name = (name or '').strip()[:120]
         vals = {'last_event_at': now}
+        close_now = False
 
         if kind in ('joined', 'peer_joined'):
             if self.state in ('requested', 'confirmed'):
@@ -272,13 +360,513 @@ class KpiMeeting(models.Model):
                                    ('left_at', '=', False)], limit=1)
                 if row:
                     row.write({'left_at': now})
+            # The recorder bot does not count towards the room being busy.
+            # While it sits in the call the room would never look empty, and
+            # a meeting everyone had left would stay 'live' until the stale
+            # cron noticed.
             still_in = Part.search_count([('meeting_id', '=', self.id),
-                                          ('left_at', '=', False)])
-            if not still_in and self.state == 'live':
-                vals.update({'state': 'done', 'ended_at': now})
+                                          ('left_at', '=', False),
+                                          ('is_recorder', '=', False)])
+            close_now = not still_in and self.state == 'live'
 
         self.sudo().write(vals)
+
+        # Somebody is in the room and this meeting is meant to be recorded:
+        # start the recorder. Guarded by bot_pid inside _start_recorder, so
+        # the second and third person joining do not each launch a browser.
+        if (kind in ('joined', 'peer_joined') and not close_now
+                and self.sudo().record_meeting and not self.sudo().bot_pid):
+            try:
+                self._start_recorder()
+            except Exception as exc:
+                # A recorder that will not start must never stop the meeting
+                # from being held.
+                _logger.warning('meeting %s: recorder did not start: %s',
+                                self.id, exc)
+
+        if close_now:
+            # Everybody has gone. Close through the ONE path that posts the
+            # recap and writes the task log. This used to set state='done'
+            # inline, which is why a meeting that simply emptied out left no
+            # trace in the group and no entry on the task -- it closed
+            # silently.
+            self.close_meeting(quiet=True, at=now)
         return True
+
+    # ------------------------------------------------------------------
+    # the recorder
+    # ------------------------------------------------------------------
+    # ---- which Jitsi, and how we are allowed in ------------------------ #
+    #
+    # The public meet.jit.si stopped letting anyone start a conference on
+    # 18-19 Oct 2026: 'The conference has not yet started because no
+    # moderators have yet arrived. If you'd like to become a moderator please
+    # log-in.' Verified on fresh rooms, headless AND windowed, from this
+    # server -- so it is not automation detection and no browser flag gets
+    # past it. It blocks clients and staff exactly as it blocks the recorder.
+    #
+    # The way in is a JWT, which is what 8x8's hosted Jitsi (JaaS) issues and
+    # what a self-hosted Jitsi with token auth accepts. With one, whoever
+    # presents it is admitted -- and can be admitted AS a moderator, which is
+    # how the recorder gets in without a human.
+    @api.model
+    def _jaas(self):
+        """-> (app_id, api_key_id, private_key_pem). Empty when unconfigured.
+
+        All three are needed; one or two set is a half-finished setup and is
+        treated as none, because a JWT signed with the wrong kid fails as a
+        blank page rather than an error anyone can read.
+        """
+        p = self.env['ir.config_parameter'].sudo()
+        app = (p.get_param('kra_kpi.jaas_app_id', '') or '').strip()
+        kid = (p.get_param('kra_kpi.jaas_api_key_id', '') or '').strip()
+        pem = (p.get_param('kra_kpi.jaas_private_key', '') or '').strip()
+        # The 8x8 console shows the App ID both bare and with the
+        # 'vpaas-magic-cookie-' prefix, depending where you look. Accept
+        # either: pasting the prefixed form and having this code add the
+        # prefix again produces a tenant that does not exist, and the only
+        # symptom is an empty meeting box.
+        if app.startswith('vpaas-magic-cookie-'):
+            app = app[len('vpaas-magic-cookie-'):]
+        # The key id is passed through to the JWT header exactly as given,
+        # because 8x8's own docs and their mirrors disagree about its shape.
+        # Whatever the console shows is what is correct.
+        return (app, kid, pem) if (app and kid and pem) else ('', '', '')
+
+    @api.model
+    def meet_domain(self):
+        """The Jitsi host, as a bare domain for the external API."""
+        if self._jaas()[0]:
+            return (self._param('jaas_domain', '8x8.vc') or '8x8.vc').strip()
+        base = (self._param('meet_base_url', DEFAULT_MEET_BASE)
+                or DEFAULT_MEET_BASE).strip().rstrip('/')
+        return base.split('://', 1)[-1] if '://' in base else base
+
+    @api.model
+    def meet_tenant(self):
+        """JaaS puts every room under a tenant; plain Jitsi has none."""
+        app = self._jaas()[0]
+        return ('vpaas-magic-cookie-%s' % app) if app else ''
+
+    def meet_room_path(self):
+        """The roomName the external API is given.
+
+        On JaaS this must carry the tenant -- '<tenant>/<room>'. Passing the
+        bare room name silently lands in somebody else's namespace and the
+        JWT is then rejected for a room it does not cover.
+        """
+        self.ensure_one()
+        tenant = self.meet_tenant()
+        room = self.room_name or ''
+        return '%s/%s' % (tenant, room) if tenant else room
+
+    def meet_api_js(self):
+        """URL of external_api.js. JaaS serves it under the tenant."""
+        self.ensure_one()
+        tenant = self.meet_tenant()
+        domain = self.meet_domain()
+        return ('https://%s/%s/external_api.js' % (domain, tenant)) if tenant \
+            else ('https://%s/external_api.js' % domain)
+
+    def meet_jwt(self, display_name, moderator=False, hours=6):
+        """A token that gets this person into this room. '' when not needed.
+
+        Minted per page load and short-lived, so a link that leaks stops
+        working on its own. `moderator` is what lets the recorder in with no
+        human present, and is never given to a client.
+        """
+        self.ensure_one()
+        app, kid, pem = self._jaas()
+        if not app:
+            return ''
+        try:
+            import time as _time
+
+            import jwt as _jwt
+            now = int(_time.time())
+            payload = {
+                'aud': 'jitsi',
+                'iss': 'chat',
+                'sub': 'vpaas-magic-cookie-%s' % app,
+                # Scoped to THIS room, not '*': a token for every room is a
+                # token worth stealing.
+                'room': self.room_name or '*',
+                'nbf': now - 10,
+                'exp': now + int(hours) * 3600,
+                'context': {
+                    'user': {
+                        'id': 'kpi-meeting-%s' % self.id,
+                        'name': (display_name or 'Guest')[:80],
+                        'avatar': '',
+                        'email': '',
+                        'moderator': 'true' if moderator else 'false',
+                    },
+                    'features': {
+                        # We record ourselves, by listening. Jitsi's own
+                        # recording is a different thing and stays off.
+                        'recording': 'false',
+                        'livestreaming': 'false',
+                        'transcription': 'false',
+                        'outbound-call': 'false',
+                    },
+                },
+            }
+            return _jwt.encode(payload, pem, algorithm='RS256',
+                               headers={'kid': kid})
+        except Exception as exc:
+            # Never let this raise into a page render: a meeting with no
+            # token still shows a readable message, where a traceback does
+            # not.
+            _logger.warning('meeting %s: could not mint a meeting token: %s',
+                            self.id, exc)
+            return ''
+
+    @api.model
+    def _recorder_display_name(self):
+        """What everyone in the call sees in the participant list.
+
+        This IS the consent notice for anyone who joined from the Jitsi app
+        rather than our page. Jitsi shows no REC badge for a capture like
+        ours -- that badge belongs to Jibri -- so if this name stops saying
+        what it says, the only people who know the call is being recorded are
+        the ones who happened to read our page.
+        """
+        return '🔴 Recorder — this call is being recorded'
+
+    _MAX_SEGMENT_BYTES = 32 * 1024 * 1024
+    _MAX_SEGMENTS = 500
+
+    def store_recording_segment(self, data, seq=None, mimetype=None,
+                                content_length=None):
+        """One finished audio segment from the recorder. -> bool.
+
+        Checks are cheapest-first, and every refusal looks identical to the
+        caller. The token is 48 hex characters and never leaves this server,
+        but these bound the damage if it ever did.
+        """
+        self.ensure_one()
+        me = self.sudo()
+
+        if not me.record_meeting:
+            return False
+        if me.state not in ('live', 'confirmed'):
+            # The room has to be open. The token does not expire by design,
+            # so this is what closes the window: it opens on the first join
+            # and shuts in close_meeting.
+            return False
+        # content_length is attacker-supplied, so check it to avoid reading a
+        # huge body AND check the real length afterwards.
+        if content_length and int(content_length) > self._MAX_SEGMENT_BYTES:
+            return False
+        if not data or len(data) > self._MAX_SEGMENT_BYTES:
+            return False
+        if me.recording_seconds and me.recording_seconds < 0:
+            return False
+        if len(me.recording_ids) >= self._MAX_SEGMENTS:
+            _logger.warning('meeting %s: segment cap reached', me.id)
+            return False
+
+        # Audio-shaped bytes only. Without this the route is general-purpose
+        # file storage; and storing something that a later route might serve
+        # inline is how a stored-XSS turns up on our own domain.
+        magic = data[:4]
+        if magic == b'\x1a\x45\xdf\xa3':
+            mime, ext = 'audio/webm', 'webm'
+        elif magic == b'OggS':
+            mime, ext = 'audio/ogg', 'ogg'
+        else:
+            _logger.warning('meeting %s: segment was not webm or ogg', me.id)
+            return False
+
+        try:
+            n = int(seq)
+        except (TypeError, ValueError):
+            n = len(me.recording_ids)
+
+        att = self.env['ir.attachment'].sudo().create({
+            'name': 'meeting-%s-%03d.%s' % (me.id, n, ext),
+            'raw': data,
+            # res_model/res_id are the important lines: they make
+            # /web/content apply kpi.meeting's own access rules. An
+            # attachment with neither is readable by any logged-in user who
+            # guesses the id.
+            'res_model': 'kpi.meeting',
+            'res_id': me.id,
+            'mimetype': mime,
+            'public': False,
+            'description': 'recording segment %d' % n,
+        })
+        me.write({
+            'recording_ids': [(4, att.id)],
+            'recording_seconds': me.recording_seconds + 0,
+        })
+
+        # Tell the group once, on the FIRST segment that actually arrives --
+        # not when the recorder launched. A bot that failed to capture
+        # anything must not announce a recording that does not exist.
+        if len(me.recording_ids) == 1:
+            try:
+                me._post(_(
+                    '🎙️ *This meeting is being recorded*\n'
+                    'The audio is saved to our system and used to write the '
+                    'summary.'))
+            except Exception as exc:
+                _logger.warning('meeting %s: could not announce recording: %s',
+                                me.id, exc)
+        return True
+
+    def record_bot_event(self, kind, pid=None, name=None, extra=None):
+        """One event from the recorder's page."""
+        self.ensure_one()
+        me = self.sudo()
+        extra = extra or {}
+        now = fields.Datetime.now()
+
+        if kind in ('peer_joined', 'peer_left', 'name'):
+            # Ordinary room bookkeeping, same as a human page reports.
+            return me.record_room_event(kind, pid=pid, name=name)
+
+        Part = self.env['kpi.meeting.participant'].sudo()
+        if kind == 'bot_joined':
+            row = Part.search([('meeting_id', '=', me.id),
+                               ('is_recorder', '=', True)], limit=1)
+            vals = {'jitsi_id': (pid or '')[:64], 'left_at': False}
+            if row:
+                row.write(vals)
+            else:
+                Part.create(dict(vals, meeting_id=me.id, is_recorder=True,
+                                 person_name=me._recorder_display_name(),
+                                 joined_at=now))
+            me.write({'last_event_at': now})
+
+        elif kind == 'rec_started':
+            me.write({'recording_state': 'running',
+                      'recording_started_at': now,
+                      'recording_detail': (extra.get('label') or '')[:200],
+                      'last_event_at': now})
+        elif kind == 'rec_stopped':
+            me.write({'recording_state': 'stopped',
+                      'recording_detail': (extra.get('reason') or '')[:200]})
+        elif kind == 'rec_failed':
+            # Loud, on the record. A meeting everyone believes was recorded
+            # is worse than one they know was not.
+            me.write({'recording_state': 'failed',
+                      'recording_detail': (extra.get('reason') or '')[:200]})
+            _logger.warning('meeting %s: recorder failed: %s',
+                            me.id, extra.get('reason'))
+        elif kind == 'rec_no_audio':
+            me.write({'recording_state': 'no_audio',
+                      'recording_detail': (extra.get('reason') or '')[:200]})
+            _logger.warning('meeting %s: recorder heard nothing: %s',
+                            me.id, extra.get('reason'))
+
+        elif kind == 'speaking':
+            try:
+                secs = max(0, min(int(extra.get('seconds') or 0), 3600))
+            except (TypeError, ValueError):
+                secs = 0
+            if secs:
+                row = Part.search([('meeting_id', '=', me.id),
+                                   ('jitsi_id', '=', (pid or '')[:64])],
+                                  limit=1)
+                if row:
+                    row.write({'talk_seconds': row.talk_seconds + secs})
+                total = me.active_seconds + secs
+                me.write({'active_seconds': total,
+                          'active_minutes': int(round(total / 60.0)),
+                          'last_event_at': now})
+
+        elif kind == 'idle':
+            # The room went quiet. Close as of the last thing that actually
+            # happened, never as of now -- inventing minutes here would feed
+            # straight into what people read when deciding what to bill.
+            me.write({'recording_state': 'stopped'})
+            me.close_meeting(quiet=True, at=me.last_event_at)
+
+        elif kind == 'bot_left':
+            row = Part.search([('meeting_id', '=', me.id),
+                               ('is_recorder', '=', True),
+                               ('left_at', '=', False)], limit=1)
+            if row:
+                row.write({'left_at': now})
+            me.write({'bot_pid': 0})
+        return True
+
+    # ------------------------------------------------------------------
+    def _start_recorder(self):
+        """Launch the recorder for this meeting, if it is wanted and absent.
+
+        Popen and return: the caller is an HTTP request reporting somebody
+        joining a call, and it must not wait for a browser to start.
+        """
+        self.ensure_one()
+        me = self.sudo()
+        if not me.record_meeting or me.bot_pid:
+            return False
+
+        import subprocess
+        import sys as _sys
+
+        base = 'http://127.0.0.1:%s' % (
+            self.env['ir.config_parameter'].sudo().get_param(
+                'kra_kpi.meet_bot_port') or config.get('http_port') or 8069)
+        script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'tools', 'meeting_recorder.py')
+        if not os.path.exists(script):
+            me.write({'recording_state': 'failed',
+                      'recording_detail': 'recorder script is missing'})
+            return False
+
+        args = [_sys.executable, '-u', script,
+                '--base', base,
+                '--token', me._ensure_bot_token(),
+                '--meeting', str(me.id),
+                '--alone-seconds', str(me._param('meet_bot_alone_seconds', 120)),
+                '--idle-seconds', str(me._param('meet_idle_seconds', 300))]
+        try:
+            flags = 0
+            if os.name == 'nt':
+                # Detached and windowless: Odoo runs as a service, and a
+                # console window here would either flash on someone's desktop
+                # or fail outright in session 0.
+                flags = (getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                         | getattr(subprocess, 'DETACHED_PROCESS', 0))
+            proc = subprocess.Popen(
+                args, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=flags, close_fds=True)
+        except Exception as exc:
+            _logger.warning('meeting %s: could not start the recorder: %s',
+                            me.id, exc)
+            me.write({'recording_state': 'failed',
+                      'recording_detail': str(exc)[:200]})
+            return False
+
+        me.write({'bot_pid': proc.pid, 'recording_state': 'starting',
+                  'recording_detail': ''})
+        _logger.info('meeting %s: recorder started, pid %s', me.id, proc.pid)
+        return True
+
+    def _stop_recorder(self, reason='stopped'):
+        """Kill the recorder process. Segments already stored are kept."""
+        self.ensure_one()
+        me = self.sudo()
+        pid = me.bot_pid
+        if not pid:
+            return False
+        try:
+            import psutil
+            proc = psutil.Process(pid)
+            proc.terminate()
+            try:
+                proc.wait(timeout=8)
+            except psutil.TimeoutExpired:
+                proc.kill()
+        except Exception as exc:
+            _logger.info('meeting %s: recorder pid %s already gone (%s)',
+                         me.id, pid, exc)
+        me.write({'bot_pid': 0,
+                  'recording_state': 'stopped',
+                  'recording_detail': reason[:200]})
+        return True
+
+    @api.model
+    def _recorder_pid_alive(self, pid):
+        if not pid:
+            return False
+        try:
+            import psutil
+            return psutil.pid_exists(pid)
+        except Exception:
+            return False
+
+    @api.model
+    def _cron_purge_old_recordings(self):
+        """Delete audio once it has been written up.
+
+        Nothing used to delete a recording, and at a meeting a day this grows
+        by tens of gigabytes a year. Only the AUDIO goes: the transcript and
+        the summary are the part worth keeping, and they stay on the record.
+
+        A recording is only removed once there is a summary to replace it --
+        otherwise a transcription that failed quietly would take the evidence
+        with it.
+        """
+        from datetime import timedelta
+        days = self._param('meet_record_keep_days', 180)
+        if days <= 0:
+            return True
+        cutoff = fields.Datetime.now() - timedelta(days=int(days))
+        done = self.sudo().search([('state', '=', 'done'),
+                                   ('ended_at', '<', cutoff),
+                                   ('recording_ids', '!=', False)])
+        removed = 0
+        for rec in done:
+            if not (rec.summary or '').strip():
+                continue
+            atts = rec.recording_ids
+            rec.write({'recording_ids': [(5, 0, 0)]})
+            removed += len(atts)
+            atts.unlink()
+            rec._log('meeting_recording_purged', {
+                'files': len(atts), 'kept_days': int(days)})
+        if removed:
+            _logger.info('purged %d meeting recordings older than %s days',
+                         removed, days)
+        return True
+
+    @api.model
+    def _cron_recorder_watchdog(self):
+        """Start a recorder that should be running and is not.
+
+        Covers the case the spawn-on-join path cannot: Odoo restarting in the
+        middle of a recorded meeting leaves bot_pid pointing at a process
+        that no longer exists.
+        """
+        live = self.sudo().search([('state', '=', 'live'),
+                                   ('record_meeting', '=', True)])
+        for rec in live:
+            if rec.bot_pid and not self._recorder_pid_alive(rec.bot_pid):
+                _logger.info('meeting %s: recorder pid %s is gone, restarting',
+                             rec.id, rec.bot_pid)
+                rec.write({'bot_pid': 0})
+                rec._start_recorder()
+            elif not rec.bot_pid and rec.recording_state in ('off', 'starting'):
+                rec._start_recorder()
+        return True
+
+    def write(self, vals):
+        """Guard the recording switch.
+
+        Turning recording ON once the call is live is refused: the notice on
+        the meeting page is rendered at page load and there is no way to
+        update a page that is already open, so flipping this on mid-call
+        would record people who read "not being recorded".
+
+        Turning it OFF mid-call is allowed and really stops it.
+        """
+        if 'record_meeting' in vals:
+            want = bool(vals['record_meeting'])
+            for rec in self:
+                if want and not rec.record_meeting and rec.state == 'live':
+                    raise UserError(_(
+                        'This meeting is already running, so recording '
+                        'cannot be switched on now: the people in the call '
+                        'were shown a page saying it is not being recorded, '
+                        'and that page cannot be changed underneath them.\n\n'
+                        'End this meeting and start another if it needs to '
+                        'be recorded.'))
+        res = super().write(vals)
+        if 'record_meeting' in vals and not vals['record_meeting']:
+            for rec in self:
+                if rec.bot_pid:
+                    rec._stop_recorder(
+                        'switched off by %s' % (self.env.user.name or ''))
+                    rec._log('meeting_recording_stopped', {
+                        'by': self.env.user.login,
+                        'segments_kept': len(rec.recording_ids)})
+        return res
 
     def _recap_body(self, closed_by=None, quiet=False):
         """What the room actually did: how long, and who was in it."""
@@ -296,10 +884,25 @@ class KpiMeeting(models.Model):
             _('⏱️ Ran for %s') % ran,
             _('👥 In the room: %s') % who,
         ]
+        if self.active_minutes:
+            lines.append(_('🗣️ Talking for %d min') % self.active_minutes)
         if self.opened_at:
             lines.append(_('▶️ Started %s') % tz.fmt(self.opened_at))
         if self.ended_at:
             lines.append(_('⏹️ Ended %s') % tz.fmt(self.ended_at))
+
+        # Say what was captured, and say so when nothing was. Silence here
+        # would let everyone assume a recording exists until somebody goes
+        # looking for it.
+        if self.sudo().record_meeting:
+            n = len(self.sudo().recording_ids)
+            if n:
+                lines.append(_('🎙️ Recorded — %d audio file(s)') % n)
+            else:
+                lines.append(_(
+                    '⚠️ This call was NOT recorded — %s')
+                    % (self.sudo().recording_detail
+                       or _('the recorder could not capture anything')))
         if quiet:
             lines.append('')
             lines.append(_('_Closed automatically — the room went quiet._'))
@@ -323,13 +926,50 @@ class KpiMeeting(models.Model):
         if self.state == 'done':
             return False
         end = at or (self.last_event_at if quiet else fields.Datetime.now())
-        self.sudo().write({'state': 'done', 'ended_at': end or fields.Datetime.now()})
+        end = end or fields.Datetime.now()
+        vals = {'state': 'done', 'ended_at': end}
+        if not self.opened_at:
+            # Finished without ever being opened -- somebody ran it outside
+            # the link. Fall back to the scheduled start so the duration is a
+            # real figure rather than zero. This used to live only in
+            # action_mark_done, which is why closing from the form and closing
+            # from WhatsApp produced different durations for the same meeting.
+            vals['opened_at'] = self.scheduled_start or end
+        self.sudo().write(vals)
         self.participant_ids.filtered(lambda p: not p.left_at).sudo().write(
             {'left_at': self.ended_at})
         # Recompute before reading them for the recap.
         self.invalidate_recordset(['actual_minutes', 'participant_summary'])
 
+        # The recorder has nothing left to listen to. Stop it before the
+        # recap so the recap can state what was actually captured.
+        if self.sudo().bot_pid:
+            try:
+                self.sudo()._stop_recorder('the meeting ended')
+            except Exception as exc:
+                _logger.warning('meeting %s: could not stop the recorder: %s',
+                                self.id, exc)
+
         self._post(self._recap_body(closed_by=closed_by, quiet=quiet))
+
+        # Write the summary, if a provider is configured and this is wanted.
+        # AFTER the recap, and never allowed to interfere with it: a meeting
+        # that cannot be summarised still has to end, post its recap and log
+        # its time. Transcription is a network call to a speech service and
+        # it can fail or be slow for reasons that have nothing to do with
+        # this meeting.
+        if self._param_bool('meet_auto_summary', True):
+            try:
+                ok, msg = self.draft_summary()
+                if ok and self._param_bool('meet_auto_post_summary', False):
+                    self.action_post_summary()
+                elif ok:
+                    _logger.info('meeting %s: summary drafted, not sent -- '
+                                 'somebody should read it first', self.id)
+            except Exception as exc:
+                _logger.warning('meeting %s: summary failed: %s',
+                                self.id, exc)
+
         # The task's own log, so the meeting shows on the task rather than
         # only inside the meeting record.
         self._log('meeting_finished', {
@@ -451,6 +1091,20 @@ class KpiMeeting(models.Model):
                 return default
         return raw
 
+    @api.model
+    def _param_bool(self, key, default):
+        """A yes/no parameter.
+
+        Separate from _param because `isinstance(True, int)` is True in
+        Python, so a boolean default comes back from _param as 1 or 0 and
+        every caller has to remember that.
+        """
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            'kra_kpi.%s' % key)
+        if raw in (None, False, ''):
+            return bool(default)
+        return str(raw).strip().lower() in ('1', 'true', 'yes', 'on')
+
     # ------------------------------------------------------------------
     # the link
     # ------------------------------------------------------------------
@@ -515,57 +1169,208 @@ class KpiMeeting(models.Model):
         return True
 
     def action_mark_done(self):
-        """The admin closing the meeting. This is what stops the clock.
+        """The admin closing the meeting from the form. This stops the clock.
 
         There is deliberately no cron that closes a meeting on its scheduled
         end: a call that overran would be recorded as having stopped while
         people were still in it, and the duration is the one number here that
         has to be true.
+
+        DELEGATES, rather than closing the meeting itself. It used to write
+        state and ended_at directly and log its own 'meeting_done', which
+        meant pressing Finished posted NO recap to the group, never stamped
+        left_at on whoever was still in the room, and never wrote
+        'meeting_finished' to the task log -- while the WhatsApp button and
+        the stale cron did all three. Anything hung on the end of a meeting
+        has to hang on one path or it silently does nothing.
         """
         for rec in self:
-            now = fields.Datetime.now()
-            vals = {'state': 'done', 'ended_at': now}
-            if not rec.opened_at:
-                # Finished without ever being opened -- somebody ran it
-                # outside the link. Fall back to the scheduled start so the
-                # duration is a real figure rather than zero.
-                vals['opened_at'] = rec.scheduled_start or now
-            rec.sudo().write(vals)
-            rec._log('meeting_done', {
-                'ran_for_minutes': rec.actual_minutes,
-                'opened_at': fields.Datetime.to_string(rec.opened_at),
-                'ended_at': fields.Datetime.to_string(rec.ended_at),
-                'attendees': (rec.organizer_id | rec.attendee_user_ids
-                              ).mapped('name'),
-                'recordings': len(rec.recording_ids)})
+            rec.close_meeting(closed_by=self.env.user)
         return True
 
-    def action_draft_summary(self):
-        """Draft the summary with the LLM, when one is configured.
+    # ------------------------------------------------------------------
+    # transcript and summary
+    # ------------------------------------------------------------------
+    _SUMMARY_PROMPT = (
+        "You write up a short internal meeting between a software team and "
+        "their client, from a transcript.\n"
+        "\n"
+        "THE TRANSCRIPT MIXES TAMIL, MALAYALAM AND ENGLISH, often inside one "
+        "sentence. That is normal here and is not an error. Read all three.\n"
+        "\n"
+        "WRITE THE SUMMARY IN ENGLISH. The tasks, invoices and records it "
+        "goes beside are in English.\n"
+        "\n"
+        "Return ONLY this JSON object:\n"
+        '{"summary": "<what was discussed and decided, 2-6 short sentences>",\n'
+        ' "action_items": "<one per line, \'who - what\'; empty string if '
+        'none were agreed>",\n'
+        ' "unclear": "<anything you could not make out; empty string if '
+        'nothing>"}\n'
+        "\n"
+        "RULES, and the first one matters most:\n"
+        "- Do NOT invent anything. If the transcript does not say it, it did "
+        "not happen. Where a stretch is marked [not captured], say nothing "
+        "about it rather than guessing what filled the gap.\n"
+        "- Do not attribute a statement to somebody unless the transcript "
+        "makes clear who said it.\n"
+        "- Keep the client's own product nouns and numbers exactly as spoken.\n"
+        "- No greetings, no filler, no 'in this meeting'. Start with the "
+        "substance.\n"
+        "- If the transcript is too thin to summarise, say so in `summary` "
+        "in one sentence and leave action_items empty."
+    )
 
-        Honest about what it has: with no transcript there is nothing to
-        summarise from except the meeting's own details, so this drafts a
-        skeleton for a person to correct, and says so. It never invents what
-        was discussed.
+    def _speaker_hint(self):
+        """Names for Whisper's decoder bias, so it mangles fewer of them."""
+        self.ensure_one()
+        names = [p.person_name for p in self.participant_ids
+                 if p.person_name and not p.is_recorder]
+        bits = ['Tamil, Malayalam and English.']
+        if names:
+            bits.append('Speakers: %s.' % ', '.join(names[:8]))
+        if self.kpi_id.name:
+            bits.append('Topic: %s.' % self.kpi_id.name[:120])
+        return ' '.join(bits)
+
+    def build_transcript(self):
+        """Transcribe every segment, in order. -> (text, language, problems).
+
+        Segments are transcribed separately and joined, which is the whole
+        reason they exist: each is a complete file, each is well under the
+        size the speech services accept, and one that fails leaves a marked
+        gap instead of losing the meeting.
+        """
+        self.ensure_one()
+        Ai = self.env['kpi.ai']
+        atts = self.sudo().recording_ids.sorted(key=lambda a: a.name or '')
+        if not atts:
+            return '', '', []
+
+        hint = self._speaker_hint()
+        parts, langs, problems = [], [], []
+        for att in atts:
+            raw = att.raw or b''
+            if not raw:
+                problems.append('%s: nothing stored' % att.name)
+                parts.append('[not captured]')
+                continue
+            res = Ai.transcribe(raw, mimetype=att.mimetype, hint=hint)
+            text = (res.get('text') or '').strip()
+            if text:
+                parts.append(text)
+                if res.get('language'):
+                    langs.append(res['language'])
+            else:
+                # A marked gap, never a silent one: the summary prompt is
+                # told not to guess what filled it.
+                problems.append('%s: %s' % (att.name,
+                                            res.get('error') or 'no words'))
+                parts.append('[not captured]')
+
+        text = '\n'.join(parts).strip()
+        lang = ', '.join(sorted(set(langs))) if langs else ''
+        self.sudo().write({'transcript': text, 'transcript_language': lang})
+        return text, lang, problems
+
+    def _facts_block(self):
+        """What is known without any audio at all."""
+        self.ensure_one()
+        tz = self.env['kpi.tz']
+        who = []
+        for p in self.participant_ids:
+            if p.is_recorder:
+                continue
+            bit = p.person_name or 'Guest'
+            if p.talk_seconds:
+                bit += ' (spoke about %d min)' % max(1, round(
+                    p.talk_seconds / 60.0))
+            who.append(bit)
+        lines = [
+            'Meeting: %s' % (self.name or ''),
+            'Task: %s %s' % (self.kpi_id.external_ref or '',
+                             self.kpi_id.name or ''),
+            'Started: %s' % (tz.fmt(self.opened_at) if self.opened_at else '?'),
+            'Room open for: %d min' % (self.actual_minutes or 0),
+        ]
+        if self.active_minutes:
+            lines.append('Somebody talking for: %d min' % self.active_minutes)
+        lines.append('In the room: %s' % (', '.join(who) or 'nobody we saw'))
+        if self.requested_by_name:
+            lines.append('Asked for by: %s' % self.requested_by_name)
+        if self.notes:
+            # Internal notes only, and this never leaves the summary draft
+            # that a person reads before anything is sent to a client.
+            lines.append('Internal note: %s' % self.notes[:500])
+        return '\n'.join(lines)
+
+    def draft_summary(self, raise_on_problem=False):
+        """Write the summary. -> (ok: bool, message: str). Never raises
+        unless asked to, because this runs from close_meeting and a meeting
+        that cannot be summarised must still end.
         """
         self.ensure_one()
         Ai = self.env['kpi.ai']
         if not Ai.is_available():
-            raise UserError(_(
-                'No AI key is set on this database, so there is nothing to '
-                'draft with. Add one under the kra_kpi.gemini_api_key, '
-                'kra_kpi.groq_api_key or kra_kpi.anthropic_api_key system '
-                'parameter — or just type the summary.'))
-        if not self.recording_ids:
-            raise UserError(_(
-                'Attach the recording or your notes first. Without a '
-                'transcript there is nothing to summarise, and a summary '
-                'invented from the meeting title is worse than a blank box.'))
-        raise UserError(_(
-            'Transcribing a recording is not wired up yet. The audio has to '
-            'be sent to a speech-to-text service first; the groundwork for '
-            'that exists in the WhatsApp module but is switched off. Type '
-            'the summary for now.'))
+            msg = _('No AI provider is configured, so there is nothing to '
+                    'summarise with. Settings → AI & Transcription.')
+            if raise_on_problem:
+                raise UserError(msg)
+            return False, msg
+
+        transcript, lang, problems = ('', '', [])
+        if self.sudo().recording_ids:
+            transcript, lang, problems = self.build_transcript()
+
+        facts = self._facts_block()
+        if transcript and transcript.replace('[not captured]', '').strip():
+            user_text = ('%s\n\nTRANSCRIPT (as spoken, mixed languages):\n%s'
+                         % (facts, transcript))
+            source = 'ai-transcript'
+        else:
+            # No audio, or none of it produced words. Summarise what IS
+            # known. Not a transcript, but true, and better than a blank box.
+            user_text = (
+                '%s\n\nTHERE IS NO TRANSCRIPT for this meeting. Write the '
+                'summary from the facts above only, state in one sentence '
+                'that no recording was available, and leave action_items '
+                'empty unless the facts themselves name one.' % facts)
+            source = 'ai-facts-only'
+
+        data, provider = Ai.complete_json(self._SUMMARY_PROMPT, user_text,
+                                          max_tokens=900)
+        if not isinstance(data, dict) or not (data.get('summary') or '').strip():
+            msg = _('The AI provider did not answer. Nothing was changed.')
+            if problems:
+                msg += '\n\n' + '\n'.join(problems[:5])
+            if raise_on_problem:
+                raise UserError(msg)
+            return False, msg
+
+        summary = str(data.get('summary') or '').strip()
+        unclear = str(data.get('unclear') or '').strip()
+        if source == 'ai-facts-only':
+            summary = _('(No recording — written from the meeting details '
+                        'only.)\n') + summary
+        if problems:
+            summary += _('\n\nNote: part of the audio could not be '
+                         'transcribed, so some of the call is missing from '
+                         'this summary.')
+        if unclear:
+            summary += _('\n\nNot clear from the recording: %s') % unclear
+
+        self.sudo().write({
+            'summary': summary,
+            'action_items': str(data.get('action_items') or '').strip(),
+            'summary_source': '%s/%s' % (source, provider),
+        })
+        return True, _('Summary written by %s.') % provider
+
+    def action_draft_summary(self):
+        """The button. Same work, but it tells you what happened."""
+        self.ensure_one()
+        ok, msg = self.draft_summary(raise_on_problem=True)
+        raise UserError(msg if ok else msg)
 
     def action_open_now(self):
         """Post the link immediately, whatever the clock says."""
@@ -1239,6 +2044,13 @@ class KpiMeetingParticipant(models.Model):
     joined_at = fields.Datetime(readonly=True)
     left_at = fields.Datetime(readonly=True)
     minutes = fields.Integer(compute='_compute_minutes', store=True)
+    # Our own recorder, not a person. It joins like anybody else, so without
+    # this flag it would be listed as an attendee in the recap sent to the
+    # client and would stop the room ever counting as empty.
+    is_recorder = fields.Boolean(readonly=True, default=False)
+    # Seconds this person was the dominant speaker. Summed from the bot's
+    # reports, so it is 0 for a meeting nobody recorded.
+    talk_seconds = fields.Integer(readonly=True, default=0)
 
     @api.depends('joined_at', 'left_at')
     def _compute_minutes(self):
