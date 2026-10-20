@@ -68,9 +68,7 @@ export const cfgSet = {
   reportRetention: (number, unit) => rpc("/kpi_config/set_report_retention", { number, unit }),
   /* unit: days | months | years; 0 = keep forever. */
   downloadRetention: (number, unit) => rpc("/kpi_config/set_download_retention", { number, unit }),
-  dailyReport: ({ enabled, hour, coverage }) => rpc("/kpi_config/set_daily_report", { enabled, hour, coverage }),
-  workdayReportNumbers: (numbers) => rpc("/kpi_config/set_workday_report_numbers", { numbers: numbers || "" }),
-  multitask: (user_id, allow) => rpc("/kpi_multitask/set", { user_id, allow }),
+  dailyReport: ({ enabled, hour, coverage }) => rpc("/kpi_config/set_daily_report", { enabled, hour, coverage }),  multitask: (user_id, allow) => rpc("/kpi_multitask/set", { user_id, allow }),
   devWa: (user_id, wa_number) => rpc("/kpi_multitask/set_wa", { user_id, wa_number }),
 };
 export const invalidateConfig = () => { invalidate("/kpi_config"); invalidate("/kpi_multitask"); };
