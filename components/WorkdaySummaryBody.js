@@ -62,9 +62,8 @@ export default function WorkdaySummaryBody({ summary, viewer = 'self', now = Dat
       ) : null}
 
       {/* Tasks worked today with no progress note. A day's hours with nothing
-          written about them is invisible to everyone downstream. It WARNS and
-          does not block — ending a day is one-way, and refusing it would strand
-          people. */}
+          written about them is invisible to everyone downstream. REQUIRED: the
+          End button stays locked and /kpi_workday/end refuses until each has one. */}
       {missing.length ? (
         <View style={st.missingBox}>
           <Text style={st.missingTitle}>
@@ -72,10 +71,10 @@ export default function WorkdaySummaryBody({ summary, viewer = 'self', now = Dat
               ? `1 task ${self ? 'you' : who} worked on today has no progress update`
               : `${missing.length} tasks ${self ? 'you' : who} worked on today have no progress update`}
           </Text>
-          <Text style={st.missingHint}>
+          <Text style={self ? st.missingHintRed : st.missingHint}>
             {self
-              ? 'Add one from the task, or end your day anyway — this will not stop you.'
-              : 'Worth asking them to add one before the day ends.'}
+              ? 'Add a summary for each task you worked on today (from the task) — the day ends only after that.'
+              : 'They must add one before the day can end.'}
           </Text>
           {missing.map((m) => (
             <Text key={m.id || m.name} style={st.missingRow} numberOfLines={2}>
@@ -277,6 +276,7 @@ const st = StyleSheet.create({
   },
   missingTitle: { fontSize: 13, fontWeight: '800', color: '#7a5200' },
   missingHint: { fontSize: 11.5, color: '#7a5200', marginTop: 2, marginBottom: 6 },
+  missingHintRed: { fontSize: 12, color: '#DC2626', fontWeight: '800', marginTop: 2, marginBottom: 6 },
   missingRow: { fontSize: 12, color: '#7a5200', marginTop: 3, lineHeight: 17 },
 
   // MUST WRAP: up to five tiles. flexBasis is the wrap threshold, not a fixed

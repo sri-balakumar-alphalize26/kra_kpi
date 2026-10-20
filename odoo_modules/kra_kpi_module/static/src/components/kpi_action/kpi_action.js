@@ -4560,8 +4560,8 @@ export class KpiAction extends Component {
             : '';
         // Tasks worked today with no progress note against them. A day's hours with
         // nothing written about them is invisible to everyone downstream, and by
-        // tomorrow nobody can reconstruct where they went — but this warns, it does
-        // not block: ending the day is one-way and refusing it would strand people.
+        // tomorrow nobody can reconstruct where they went. REQUIRED: End stays
+        // disabled until each has a summary, and /kpi_workday/end refuses too.
         // Links and files stay optional; only the summary is asked for.
         this._missingProgress = (data.missing_progress || []).slice();
         const missingProgressHTML = this._missingProgress.length ? `
@@ -4572,8 +4572,8 @@ export class KpiAction extends Component {
                         ? '1 task you worked on today has no progress update'
                         : `${this._missingProgress.length} tasks you worked on today have no progress update`}
                 </div>
-                <div class="small text-muted mb-2">
-                    Add one below, or end your day anyway — this will not stop you.
+                <div class="small text-danger fw-bold mb-2">
+                    Add a summary for each task you worked on today — the day ends only after that.
                 </div>
                 ${this._missingProgress.map((m, i) => `
                     <div class="mb-2" data-mp-row="${i}">
@@ -4743,7 +4743,8 @@ export class KpiAction extends Component {
                             <button type="button" class="btn btn-outline-secondary" id="continueWorkdayBtn">
                                 <i class="fa fa-arrow-left me-1"></i> Continue Working
                             </button>
-                            <button type="button" class="btn btn-danger" id="endWorkdayConfirmBtn">
+                            <button type="button" class="btn btn-danger" id="endWorkdayConfirmBtn"
+                                    ${this._missingProgress.length ? 'disabled="disabled" title="Add a summary for each task first"' : ''}>
                                 <i class="fa fa-sign-out me-1"></i> End Workday &amp; Send Summary
                             </button>
                         </div>
@@ -4787,6 +4788,12 @@ export class KpiAction extends Component {
                         msg.textContent = 'Saved.';
                         const row = document.querySelector(`[data-mp-row="${i}"]`);
                         if (row) row.style.opacity = '.6';
+                        // Every task has its summary now: End unlocks.
+                        m._saved = true;
+                        if ((this._missingProgress || []).every((x) => x._saved)) {
+                            const end = document.getElementById("endWorkdayConfirmBtn");
+                            if (end) { end.disabled = false; end.removeAttribute('title'); }
+                        }
                     } else {
                         btn.disabled = false;
                         msg.className = 'small mt-1 text-danger';

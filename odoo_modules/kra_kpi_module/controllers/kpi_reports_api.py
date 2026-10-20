@@ -4730,8 +4730,7 @@ class KpiReportsAPI(http.Controller):
             # payload rather than fetched separately because the End Workday modal
             # already waits on this call — the check costs nothing extra.
             #
-            # Advisory only. /kpi_workday/end must never refuse to close a day (see
-            # its docstring), so this warns and the developer may still go home.
+            # REQUIRED: /kpi_workday/end refuses while any of these has no summary.
             try:
                 payload['missing_progress'] = Session._tasks_missing_progress_today(user=user)
             except Exception as exc:
@@ -4882,6 +4881,20 @@ class KpiReportsAPI(http.Controller):
             # kpi_work_session.note is TEXT, so this is a sanity bound, not a limit
             # anyone types up against.
             note = (params.get('note') or '').strip()[:WORKDAY_NOTE_MAX]
+            # A summary for every task worked today is REQUIRED before the day
+            # ends (web, Odoo board, app and WhatsApp all ask for it; this is the
+            # rule they share). Only for a day still open -- re-ending a closed
+            # one stays idempotent -- and the midnight auto-close does not come
+            # through here, so a forgotten day is still closed.
+            if sess.state == 'open':
+                missing = Session._tasks_missing_progress_today(user=user)
+                if missing:
+                    return {
+                        'status': False, 'missing_progress': missing,
+                        'message': 'Add a summary for each task you worked on today — the day ends '
+                                   'only after that: %s' % ', '.join(
+                                       m.get('external_ref') or m.get('name') or '' for m in missing),
+                    }
             payload = sess.action_end_day(note=note)
             payload['status'] = True
             return payload

@@ -5307,7 +5307,11 @@ export default function KpiActionBoard({
               <TouchableOpacity style={s.footCancel} onPress={() => setEndSummary(null)}>
                 <Text style={s.footCancelTxt}>← Continue Working</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[s.footConfirm, { backgroundColor: COLORS.red, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }]} onPress={confirmEndWorkday} disabled={endBusy}>
+              {/* Locked while any task worked today has no summary — REQUIRED
+                  (the server refuses as well). Add it from the task, then reopen. */}
+              <TouchableOpacity style={[s.footConfirm, { backgroundColor: COLORS.red, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+                ((endSummary?.missing_progress || []).length > 0) && { opacity: 0.45 }]}
+                onPress={confirmEndWorkday} disabled={endBusy || (endSummary?.missing_progress || []).length > 0}>
                 {endBusy ? <ActivityIndicator color="#fff" size="small" /> : (
                   <>
                     <Ionicons name="log-out-outline" size={17} color="#fff" />

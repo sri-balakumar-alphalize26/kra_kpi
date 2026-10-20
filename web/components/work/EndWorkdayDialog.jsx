@@ -19,6 +19,10 @@ export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened,
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  /* Tasks worked today still without a summary. REQUIRED: End stays disabled
+     until it is 0 (and /kpi_workday/end refuses as well). */
+  const [left, setLeft] = useState(null);
+  const blocked = (left ?? (d?.missing_progress || []).length) > 0;
 
   useEffect(() => {
     S.getTodaySummary()
@@ -43,7 +47,7 @@ export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened,
 
   return (
     <Modal open onClose={busy ? undefined : onClose} title={`End workday${d?.dev ? ` — ${d.dev}` : ""}`} width={780}
-      footer={<><Button kind="ghost" onClick={onClose} disabled={busy}>Continue working</Button>{!paused && onPaused && <Button icon="pause" disabled={busy} onClick={pause} title="Stop for now and resume later today — the day stays open">Pause workday</Button>}<Button kind="danger" icon="logout" busy={busy} disabled={!d} onClick={end}>End workday &amp; send summary</Button></>}>
+      footer={<><Button kind="ghost" onClick={onClose} disabled={busy}>Continue working</Button>{!paused && onPaused && <Button icon="pause" disabled={busy} onClick={pause} title="Stop for now and resume later today — the day stays open">Pause workday</Button>}<Button kind="danger" icon="logout" busy={busy} disabled={!d || blocked} title={blocked ? "Add a summary for each task first" : undefined} onClick={end}>End workday &amp; send summary</Button></>}>
       {!d && !err && <Skeleton rows={6} />}
       {err && <div className="callout" style={{ background: "var(--over-bg)", borderColor: "var(--danger)", color: "var(--over)" }}>{err}</div>}
       {reopened && (
@@ -51,7 +55,7 @@ export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened,
           <span><b>↺ Reopened workday.</b> {reopened.by ? `Reopened by ${reopened.by}` : "This day was reopened"}{reopened.reason ? ` — "${reopened.reason}"` : ""}. Ending it sends an updated summary.</span>
         </div>
       )}
-      {d && <Summary d={d} />}
+      {d && <Summary d={d} onLeft={setLeft} />}
       {d && (
         <label className="field">
           What did you work on today? (optional)
@@ -71,7 +75,7 @@ export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened,
 
 /* Also used read-only by Live Tracking (an admin looking at someone's day):
    then the missing-progress list is shown, not the inputs to fill it in. */
-export function Summary({ d, readOnly = false }) {
+export function Summary({ d, readOnly = false, onLeft }) {
   const away = AWAY.filter(([k]) => (d[`${k}_seconds`] || 0) > 0);
   const tasks = d.tasks || [];
   const multi = d.allow_multitask || tasks.some((t) => t.concurrent);
@@ -81,7 +85,7 @@ export function Summary({ d, readOnly = false }) {
 
       {(d.missing_progress || []).length > 0 && (readOnly
         ? <section className="ewd-box warn"><h3>{d.missing_progress.length} task(s) worked today have no progress update</h3>{d.missing_progress.map((m) => <div key={m.kpi_id} className="mini"><span className="ref">{m.external_ref || `#${m.kpi_id}`}</span> {m.name}</div>)}</section>
-        : <MissingProgress items={d.missing_progress} />)}
+        : <MissingProgress items={d.missing_progress} onLeft={onLeft} />)}
 
       <div className="ewd-stats">
         <div className="stat"><small>Login</small><b>{hhmm(d.login_at)}</b><span>{d.session_date || ""}</span></div>
@@ -135,12 +139,14 @@ export function Summary({ d, readOnly = false }) {
   );
 }
 
-/* Tasks worked on today with no progress note: add one here, or end anyway. */
-function MissingProgress({ items }) {
+/* Tasks worked on today with no progress note: a summary for each is REQUIRED
+   before the day ends. Reports how many are left so End can stay disabled. */
+function MissingProgress({ items, onLeft }) {
   const [text, setText] = useState({});
   const [saved, setSaved] = useState({});
   const [busy, setBusy] = useState(null);
   const [err, setErr] = useState("");
+  useEffect(() => { onLeft?.(items.filter((m) => !saved[m.kpi_id]).length); }, [items, saved, onLeft]);
   const save = async (m) => {
     const v = (text[m.kpi_id] || "").trim();
     if (!v) return;
@@ -152,7 +158,7 @@ function MissingProgress({ items }) {
   return (
     <section className="ewd-box warn">
       <h3>{left ? `${left} task${left === 1 ? "" : "s"} you worked on today ${left === 1 ? "has" : "have"} no progress update` : "Progress updates added ✓"}</h3>
-      <p className="mini" style={{ margin: "0 0 8px" }}>Add one here, or end your day anyway — this will not stop you.</p>
+      {left > 0 && <p className="mini" style={{ margin: "0 0 8px", color: "var(--danger)", fontWeight: 700 }}>Add a summary for each task you worked on today — the day ends only after that.</p>}
       {items.map((m) => (
         <div key={m.kpi_id} className="ewd-prog">
           <span className="ewd-prog-name"><span className="ref">{m.external_ref || `#${m.kpi_id}`}</span> {m.name}</span>
