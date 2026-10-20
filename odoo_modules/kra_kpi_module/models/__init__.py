@@ -76,4 +76,5 @@ from . import kpi_wa_staff_menu
 from . import kpi_wa_staff_task
 from . import kpi_time_adjust
 from . import kpi_self_create
+from . import kpi_user_color
 from . import kpi_reminder
