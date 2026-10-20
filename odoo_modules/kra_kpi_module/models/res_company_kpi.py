@@ -146,6 +146,14 @@ class ResCompany(models.Model):
         string='WhatsApp Report Group Name', readonly=True,
         help="Cached for display; the JID above is what is actually used.")
 
+    # Who else gets every developer's end-of-day snapshot + message on WhatsApp
+    # (e.g. the CEO), besides the developer themself. Bare digits with the
+    # country code, comma-separated. Empty = only the developer.
+    kpi_workday_report_numbers = fields.Char(
+        string='Workday Report Numbers',
+        help="WhatsApp numbers (with country code, comma-separated) that receive "
+             "each developer's End Workday snapshot and message, e.g. the CEO.")
+
     standard_workday_hours = fields.Float(
         string='Standard Workday (hours)',
         default=9.0,

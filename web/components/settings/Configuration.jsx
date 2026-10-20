@@ -92,6 +92,7 @@ export default function Configuration() {
                   <TimeBox value={toTime(c.daily_report_hour)} onSave={(t) => daily({ hour: toHour(t) })} />
                   <span className="input" style={{ height: 30 }}><Select value={c.daily_report_coverage || "yesterday"} aria-label="Report covers" onChange={(e) => daily({ coverage: e.target.value })} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit" }}><option value="yesterday">Previous day</option><option value="today">Same day</option></Select></span>
                 </span></div>}
+                <div className="kv"><span className="lbl">Workday report to</span><span className="val">When a developer ends the day, their snapshot and message also go to these WhatsApp numbers (e.g. the CEO). With country code, comma-separated.</span><span className="right"><NumbersBox value={c.workday_report_numbers} busy={saving === "wr"} onSave={(v) => save("wr", () => S.cfgSet.workdayReportNumbers(v))} /></span></div>
                 <div className="kv"><span className="lbl">Workday snapshots</span><span className="val">Keep end-of-day images for</span><span className="right"><Ret k="sr" number={c.snapshot_retention_number} unit={c.snapshot_retention_unit} onSave={(n, u) => save("sr", () => S.cfgSet.snapshotRetention(n, u))} /></span></div>
                 <div className="kv"><span className="lbl">Daily reports</span><span className="val">Keep PDFs for</span><span className="right"><Ret k="rr" number={c.report_retention_number} unit={c.report_retention_unit} onSave={(n, u) => save("rr", () => S.cfgSet.reportRetention(n, u))} /></span></div>
                 <div className="kv"><span className="lbl">Report downloads</span><span className="val">Keep generated KRA report files for (0 = forever)</span><span className="right"><Ret k="dl" number={c.download_retention_number} unit={c.download_retention_unit} onSave={(n, u) => save("dl", () => S.cfgSet.downloadRetention(n, u))} /></span></div>
@@ -260,6 +261,15 @@ function waPreview(tpl, samples) {
     lines.push(filled);
   }
   return lines.join("\n").trim().split(/(\*[^*\n]+\*)/g).map((part, i) => (/^\*[^*\n]+\*$/.test(part) ? <b key={i}>{part.slice(1, -1)}</b> : part));
+}
+
+/* Comma-separated WhatsApp numbers, saved when the box loses focus. Shown
+   with a space after each comma so a list of numbers stays readable. */
+function NumbersBox({ value, busy, onSave }) {
+  const shown = String(value || "").split(",").filter(Boolean).join(", ");
+  const [v, setV] = useState(shown);
+  useEffect(() => { setV(shown); }, [shown]);
+  return <span className="input" style={{ height: 30, width: 260 }}><input type="text" inputMode="tel" value={v} placeholder="e.g. 919876543210" aria-label="Workday report numbers" onChange={(e) => setV(e.target.value)} onBlur={() => { if (v.trim() !== shown) onSave(v.trim()); }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }} />{busy && <span className="spin" style={{ width: 12, height: 12, borderWidth: 2 }} />}</span>;
 }
 
 /* HH:MM, saved when changed. */

@@ -3260,6 +3260,8 @@ class KraKpiAPI(http.Controller):
                 # destination without the phone being connected.
                 'wa_group_jid': c.kpi_wa_group_jid or '',
                 'wa_group_name': c.kpi_wa_group_name or '',
+                # Extra End Workday recipients (CEO etc.), comma-separated digits.
+                'workday_report_numbers': c.kpi_workday_report_numbers or '',
                 'countries': [
                     {'id': co.id, 'name': co.name, 'code': co.code or '',
                      'phone_code': co.phone_code}
@@ -3555,6 +3557,38 @@ class KraKpiAPI(http.Controller):
             'coverage': c.kpi_daily_report_coverage,
         }
 
+    @http.route('/kpi_config/set_workday_report_numbers', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_workday_report_numbers(self, **params):
+        """Who else gets each End Workday snapshot + message (e.g. the CEO).
+
+        Accepts numbers separated by commas, spaces or new lines. A number typed
+        without its country code (exactly the company's mobile length) gets the
+        company dial code; anything else must already carry one. Stored as
+        bare digits, comma-separated. Empty clears it."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        c = request.env.company.sudo()
+        dial, length = c._kpi_mobile_cfg()
+        dial = ''.join(ch for ch in str(dial or '') if ch.isdigit())
+        out, bad = [], []
+        for tok in re.split(r'[,;\s]+', params.get('numbers') or ''):
+            if not tok.strip():
+                continue
+            digits = ''.join(ch for ch in tok if ch.isdigit())
+            if length and len(digits) == int(length) and not tok.strip().startswith('+'):
+                digits = dial + digits
+            if not 8 <= len(digits) <= 15:
+                bad.append(tok.strip())
+                continue
+            if digits not in out:
+                out.append(digits)
+        if bad:
+            return {'status': False,
+                    'message': 'Not a valid WhatsApp number: %s. Use the full number with the '
+                               'country code, e.g. 91 98765 43210.' % ', '.join(bad)}
+        c.kpi_workday_report_numbers = ','.join(out) or False
+        return {'status': True, 'numbers': c.kpi_workday_report_numbers or ''}
+
     # NOTE: /kpi_config/set_urgent (ad-hoc Urgent-pause WhatsApp numbers) was
     # removed. Those numbers had no user account, so they became unreachable once
     # task WhatsApp was switched off; urgent_pause now notifies owner+coordinator
@@ -3794,6 +3828,8 @@ class KraKpiAPI(http.Controller):
     ACTIVITY_KINDS = {
         'pause':   ['pause', 'resume', 'start_undone'],
         'heading': ['meta_updated', 'priority_changed'],
+        # Every change to a task's time: estimate extended, yesterday reduced.
+        'time':    ['estimate_extended', 'time_reduced'],
     }
 
     # Events whose raw key does not read well once underscores are stripped.
