@@ -7,10 +7,10 @@
    = Auto (this month to date, live), on = Week / Month / Custom dates.
    Employees today reads the rows the page already polls (live tracking merged
    with the overview's per-person numbers), so it updates with them. */
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Avatar, Select, Skeleton } from "@/components/ui";
 import * as A from "@/lib/services/admin";
-import { pad, hm, ST, TS, statusOf, cardText, since } from "./employeeStatus";
+import { pad, hm, ST, TS, statusOf, cardText, pauseWhy, since, liveRow, timerLevel, STATUS_ORDER } from "./employeeStatus";
 import EmployeePopup from "./EmployeePopup";
 import ClientTilePopup from "./ClientTilePopup";
 
@@ -162,9 +162,20 @@ function EmployeesToday({ people, onChanged }) {
   const [f, setF] = useState(() => load("kpi.db.emp", { emp: "all", status: "all" }));
   const [openId, setOpenId] = useState(null); /* the person whose popup is open */
   const setFilter = (n) => { setF(n); save("kpi.db.emp", n); };
-  const rows = useMemo(() => (people || []).map((p) => ({ ...p, _s: statusOf(p) })), [people]);
+  /* Live timers: re-render every minute and add the time since the poll. */
+  const arrived = useMemo(() => Date.now(), [people]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(id); }, []);
+  const rows = useMemo(() => (people || [])
+    .map((p) => { const r = liveRow(p, now - arrived); const s = statusOf(r); return { ...r, _s: s, _lvl: timerLevel(r, s) }; })
+    .sort((a, b) => STATUS_ORDER[a._s] - STATUS_ORDER[b._s] || (a.name || "").localeCompare(b.name || "")), [people, now, arrived]);
   const counts = useMemo(() => rows.reduce((c, p) => ({ ...c, [p._s]: (c[p._s] || 0) + 1 }), { all: rows.length }), [rows]);
   const shown = rows.filter((p) => (f.emp === "all" || p.user_id === f.emp) && (f.status === "all" || p._s === f.status));
+  /* Three or more absent: one compact row of faces instead of full cards. */
+  const absentees = shown.filter((p) => p._s === "absent");
+  const compact = absentees.length >= 3;
+  const cards = compact ? shown.filter((p) => p._s !== "absent") : shown;
+  const open = (id) => setOpenId(id);
 
   return (
     <section className="d3-card" aria-labelledby="d3-emp-h">
@@ -175,12 +186,12 @@ function EmployeesToday({ people, onChanged }) {
       {!people ? <Skeleton rows={5} /> : (
         <div className="d3-ebody">
           <div className="d3-egrid">
-            {shown.map((p) => {
+            {cards.map((p) => {
               const [line, sub] = cardText(p, p._s);
               return (
-                <article key={p.user_id} className={`d3-emp s-${p._s}`} role="button" tabIndex={0} aria-label={`Open ${p.name}'s details`}
-                  onClick={() => setOpenId(p.user_id)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenId(p.user_id); } }}>
+                <article key={p.user_id} className={`d3-emp s-${p._s} ${p._lvl ? `t-${p._lvl}` : ""}`} role="button" tabIndex={0} aria-label={`Open ${p.name}'s details`}
+                  onClick={() => open(p.user_id)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(p.user_id); } }}>
                   <div className="d3-etop">
                     <span className="d3-av"><Avatar name={p.name} uid={p.user_id} size={38} /><i /></span>
                     <div style={{ minWidth: 0 }}><div className="d3-ename">{p.name}</div><div className="d3-erole">{p.role || "Developer"} · {since(p)}</div></div>
@@ -189,7 +200,10 @@ function EmployeesToday({ people, onChanged }) {
                   <div className="d3-strip"><b>{line}</b>{sub && <small>{sub}</small>}</div>
                   <div className="d3-tasks">
                     {(p.top_tasks || []).map((t) => (
-                      <div key={t.id} className="d3-task"><span className="code">{t.ref || `#${t.id}`}</span><span className="ttl" title={t.name}>{t.name}</span><span className={`st t-${t.state}`}>{TS[t.state] || t.state}</span></div>
+                      <Fragment key={t.id}>
+                        <div className="d3-task"><span className="code">{t.ref || `#${t.id}`}</span><span className="ttl" title={t.name}>{t.name}</span><span className={`st t-${t.state}`}>{TS[t.state] || t.state}</span></div>
+                        {t.state === "paused" && pauseWhy(t) && <div className="d3-task-why" title={pauseWhy(t)}>⏸ {pauseWhy(t)}</div>}
+                      </Fragment>
                     ))}
                     {!(p.top_tasks || []).length && <div className="d3-task none">No open tasks</div>}
                   </div>
@@ -201,6 +215,18 @@ function EmployeesToday({ people, onChanged }) {
                 </article>
               );
             })}
+            {compact && (
+              <div className="d3-absent" aria-label={`${absentees.length} absent`}>
+                <span className="d3-absent-h">Absent <em>{absentees.length}</em></span>
+                <div className="d3-absent-list">
+                  {absentees.map((p) => (
+                    <button key={p.user_id} type="button" className="d3-absent-p" title={`${p.name} · ${p.day_done ? "workday ended" : p.attendance === "pending" ? "not checked in yet" : "no workday started"}`} onClick={() => open(p.user_id)}>
+                      <Avatar name={p.name} uid={p.user_id} size={26} /><span>{p.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {!shown.length && <div className="d3-empty">No employees match this filter.</div>}
           </div>
           <aside className="d3-filter" aria-label="Employee filter">

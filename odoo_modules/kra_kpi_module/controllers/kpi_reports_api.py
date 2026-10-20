@@ -5472,12 +5472,27 @@ class KpiReportsAPI(http.Controller):
             week_from_utc = tz.localize(_dt.combine(today - _td(days=today.weekday()), _time.min)) \
                 .astimezone(pytz.UTC).replace(tzinfo=None)
 
+            code_sel = dict(Kpi._fields['pause_reason_code'].selection or [])
+            TimeLog = request.env['kpi.time.log'].sudo()
+
+            def _pause_info(t):
+                """Why and when a paused task stopped -- what the task card in
+                the app shows. The typed reason wins over the picked code; the
+                time is the end of the task's last timer interval."""
+                reason = (t.paused_reason or '').strip() or code_sel.get(t.pause_reason_code, '')
+                last = TimeLog.search([('kpi_id', '=', t.id), ('end_time', '!=', False)],
+                                      order='end_time desc', limit=1)
+                at = pytz.UTC.localize(last.end_time).astimezone(tz).strftime('%H:%M') if last else ''
+                return {'reason': reason, 'at': at}
+
             def _top_tasks(u):
                 rows_ = Kpi.search([('user_id', '=', u.id), ('task_state', 'in', list(RANK))],
                                    order='write_date desc', limit=30)
                 picked = sorted(rows_, key=lambda t: RANK[t.task_state][0])[:3]
-                out = [{'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '',
-                        'state': RANK[t.task_state][1]} for t in picked]
+                out = [dict({'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '',
+                             'state': RANK[t.task_state][1]},
+                            **(_pause_info(t) if t.task_state == 'paused' else {}))
+                       for t in picked]
                 if len(out) < 3:
                     done = Kpi.search([('user_id', '=', u.id), ('task_state', '=', 'completed'),
                                        ('write_date', '>=', week_from_utc)],
@@ -5554,9 +5569,10 @@ class KpiReportsAPI(http.Controller):
                             break_start = pytz.UTC.localize(brk.start_time).astimezone(tz).strftime('%H:%M')
                         # "Paused REQ-148 at 3:18 PM": the task the break stopped.
                         if brk.source_task_id:
-                            paused_task = {'id': brk.source_task_id.id,
-                                           'ref': brk.source_task_id.external_ref or '',
-                                           'name': brk.source_task_id.name or ''}
+                            paused_task = dict({'id': brk.source_task_id.id,
+                                                'ref': brk.source_task_id.external_ref or '',
+                                                'name': brk.source_task_id.name or ''},
+                                               **_pause_info(brk.source_task_id))
                     elif s.nontask_started_at:
                         r = s.nontask_reason or 'no_tasks'
                         activity_kind = r if r in ('break', 'lunch', 'meeting', 'no_tasks') else 'no_tasks'
@@ -5565,6 +5581,15 @@ class KpiReportsAPI(http.Controller):
                         elapsed = max(0, int((now - s.nontask_started_at).total_seconds()))
                     else:
                         activity_kind, activity_label = 'idle', 'Idle'
+                        # Idle right after pausing a task: say which one and why,
+                        # the same as the break case above.
+                        last_paused = Kpi.search([('user_id', '=', u.id), ('task_state', '=', 'paused')],
+                                                 order='write_date desc', limit=1)
+                        if last_paused:
+                            paused_task = dict({'id': last_paused.id,
+                                                'ref': last_paused.external_ref or '',
+                                                'name': last_paused.name or ''},
+                                               **_pause_info(last_paused))
 
                 rows.append({
                     'user_id': u.id,
@@ -5763,7 +5788,9 @@ class KpiReportsAPI(http.Controller):
                 'last_app_login': local(u.kpi_last_app_login, '%d %b %Y, %H:%M') if u.kpi_last_app_login else '',
                 'last_device': u.kpi_last_device or '',
                 'allow_multitask': bool(u.kpi_allow_multitask),
-                'pin_default': bool(u.kpi_app_must_change_password),
+                # Whether the app PIN is still the default — a flag only. The
+                # value itself never leaves the server.
+                'pin_is_default': bool(u.kpi_app_must_change_password),
             }
 
             # ---- workload ----
@@ -5849,6 +5876,27 @@ class KpiReportsAPI(http.Controller):
                 d = s.session_date
                 if d not in first or s.login_at < first[d]:
                     first[d] = s.login_at
+            # Only WORKING days can be absent: the company's working week (its
+            # resource calendar, Mon–Fri when there is none), minus company
+            # holidays (global calendar leaves), and only from the day the
+            # person joined (their user was created — there is no HR module).
+            # A day they did work still counts, weekend or not.
+            cal = request.env.company.resource_calendar_id
+            workdays = set(int(a.dayofweek) for a in cal.attendance_ids) if cal else set()
+            workdays = workdays or {0, 1, 2, 3, 4}
+            holidays = set()
+            if 'resource.calendar.leaves' in request.env:
+                span_lo = utc_start(today - _td(days=29))
+                for lv in request.env['resource.calendar.leaves'].sudo().search(
+                        [('resource_id', '=', False), ('date_to', '>=', span_lo),
+                         '|', ('calendar_id', '=', False), ('calendar_id', '=', cal.id if cal else False)]):
+                    a = pytz.UTC.localize(lv.date_from).astimezone(tz).date()
+                    b = pytz.UTC.localize(lv.date_to).astimezone(tz).date()
+                    while a <= b:
+                        holidays.add(a)
+                        a += _td(days=1)
+            joined = pytz.UTC.localize(u.create_date).astimezone(tz).date() if u.create_date else None
+
             days = []
             for i in range(29, -1, -1):
                 d = today - _td(days=i)
@@ -5856,18 +5904,24 @@ class KpiReportsAPI(http.Controller):
                 fl = first.get(d)
                 if fl:
                     status = 'late' if fl > cutoff else 'on_time'
-                elif d.weekday() == 6:
+                elif joined and d < joined:
+                    status = 'before_join'
+                elif d in holidays:
+                    status = 'holiday'
+                elif d.weekday() not in workdays:
                     status = 'off'
                 elif d == today and now <= cutoff:
                     status = 'pending'
                 else:
                     status = 'absent'
                 days.append({'date': str(d), 'status': status, 'first_login': local(fl) if fl else ''})
-            att = {s: sum(1 for x in days if x['status'] == s) for s in ('on_time', 'late', 'absent', 'off')}
+            att = {s: sum(1 for x in days if x['status'] == s)
+                   for s in ('on_time', 'late', 'absent', 'off', 'holiday', 'before_join')}
+            att['working_days'] = att['on_time'] + att['late'] + att['absent']
 
             return {'status': True, 'user_id': u.id, 'contact': contact, 'workload': workload,
                     'questions': questions, 'meetings_today': meetings,
-                    'attendance': {'days': days, 'totals': att,
+                    'attendance': {'days': days, 'totals': att, 'joined': str(joined) if joined else '',
                                    'cutoff': '%02d:%02d' % (min(ch, 23), min(cm, 59))}}
         except Exception as e:
             import logging

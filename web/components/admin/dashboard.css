@@ -296,6 +296,7 @@
 .d3-task .st.t-paused{background:var(--lz-paused-bg);color:var(--lz-paused)}
 .d3-task .st.t-done{background:var(--lz-done-bg);color:var(--lz-done)}
 .d3-task .st.t-approval{background:var(--lz-review-bg);color:var(--lz-review)}
+.d3-task-why{margin:-3px 0 0 2px;font-size:11px;color:var(--lz-paused);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .d3-efoot{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--subtlest);border-top:1px solid var(--border);padding-top:8px}
 .d3-efoot .d3-bar{flex:1;margin:0}
 .d3-efoot .d3-bar i{background:var(--brand)}
@@ -387,3 +388,39 @@
 .d3-more{font-size:16px;line-height:1;color:var(--subtlest);transition:transform .15s ease,color .15s ease}
 .d3-tile.is-link:hover .d3-more{color:var(--brand);transform:translateX(2px)}
 @media (prefers-reduced-motion:reduce){.d3-tile.is-link,.d3-more{transition:none}.d3-tile.is-link:hover{transform:none}}
+
+/* ---- Popup & dashboard review fixes ---- */
+/* Popup: title bar with ✕, fixed body height so tabs don't jump. */
+.ep-titlebar{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;width:100%}
+.ep-x{flex:none;width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:50%;background:transparent;color:var(--subtle);cursor:pointer}
+.ep-x:hover{background:var(--hover);color:var(--text)}
+.ep-x:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.ep-body{min-height:480px;display:flex;flex-direction:column}
+/* One outline icon style for every action. */
+.ep-ic{flex:none;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.ep-act{display:inline-flex;align-items:center;gap:7px;text-decoration:none}
+.ep-act.sm{height:26px;padding:0 9px;font-size:12px}
+.ep-pin{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.ep-amber{color:var(--lz-paused);font-weight:700}
+/* Overview + Client details: three columns, no empty slots. */
+.ep-tiles,.d3-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media (max-width:640px){.ep-tiles,.d3-tiles{grid-template-columns:minmax(0,1fr)}}
+/* Workload chips at 0 step back. */
+.ep-chips .ep-zero{opacity:.55}
+/* Empty state with a next step (no coloured callout). */
+.ep-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:40px 16px;text-align:center;color:var(--subtle)}
+.ep-empty b{font-size:16px;color:var(--navy)}
+.ep-empty .btn{margin-top:6px}
+/* Live timers: amber / red past the break or lunch limit. */
+.d3-emp.t-warn,.ep-head.t-warn{--st:var(--lz-paused);--st-bg:var(--lz-paused-bg)}
+.d3-emp.t-late,.ep-head.t-late{--st:var(--danger);--st-bg:var(--over-bg)}
+.d3-emp.t-warn{border-color:var(--lz-paused)}
+.d3-emp.t-late{border-color:var(--danger)}
+/* Three or more absent: one compact row. */
+.d3-absent{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:var(--surface)}
+.d3-absent-h{font-size:12px;font-weight:700;color:var(--subtlest);text-transform:uppercase;letter-spacing:.04em}
+.d3-absent-h em{font-style:normal;margin-left:4px;padding:1px 7px;border-radius:999px;background:var(--lz-todo-bg);color:var(--lz-todo)}
+.d3-absent-list{display:flex;flex-wrap:wrap;gap:6px}
+.d3-absent-p{display:inline-flex;align-items:center;gap:6px;padding:3px 10px 3px 3px;border:1px solid var(--border);border-radius:999px;background:var(--sunken);color:var(--text);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.d3-absent-p:hover{border-color:var(--brand)}
+.d3-absent-p:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
