@@ -199,4 +199,39 @@ class KraMasterManagerHelpers(models.Model):
             'coordinators_without_number': len(
                 coordinators.filtered(lambda u: not u._kpi_wa_target())),
             'names_without_manager': no_manager.mapped('name')[:10],
+            # "Sri Balakumar (Nexgennpos)" — who to fix, not just how many.
+            'names_unreachable': [
+                '%s (%s)' % (', '.join(c.resolve_manager().mapped('name')), c.name)
+                for c in unreachable[:10]],
         }
+
+    @api.model
+    def manager_coverage_message(self):
+        """The coverage problems in plain words, or '' when there are none.
+
+        One wording for both screens: the web Approvals banner and the
+        notification Odoo's Approvals menu shows (kpi.approval.action_open_desk).
+
+        The two cases are NOT the same and must not be described alike:
+          * no manager at all -> _manager_users falls back to every
+            Coordinator (then Owner), so the request does reach people;
+          * a manager who cannot be messaged -> that manager IS the answer,
+            _manager_wa_targets drops them for want of a number, and nothing
+            reaches anybody's phone. It only waits on the Approvals desk.
+        """
+        cov = self.manager_coverage()
+        parts = []
+        if cov['clients_without_manager']:
+            n = cov['clients_without_manager']
+            names = ', '.join(cov['names_without_manager'])
+            parts.append(_('%(n)s client%(s)s no manager%(names)s: approval requests go to every coordinator.') % {
+                'n': n, 's': ' has' if n == 1 else 's have',
+                'names': (' (%s)' % names) if names else ''})
+        if cov['clients_unreachable']:
+            n = cov['clients_unreachable']
+            names = '; '.join(cov['names_unreachable'])
+            parts.append(_('%(n)s manager%(s)s no WhatsApp number%(names)s: approval requests wait on the '
+                           'Approvals desk but reach nobody\'s phone. Add a mobile in Login Management.') % {
+                'n': n, 's': ' has' if n == 1 else 's have',
+                'names': (' (%s)' % names) if names else ''})
+        return ' '.join(parts)

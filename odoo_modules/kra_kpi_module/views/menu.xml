@@ -49,7 +49,7 @@
     <menuitem id="menu_kpi_approvals"
               name="Approvals"
               parent="menu_kra_root"
-              action="action_kpi_approval"
+              action="action_kpi_approval_open"
               sequence="3"
               groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
 
