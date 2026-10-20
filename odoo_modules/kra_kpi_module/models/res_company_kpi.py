@@ -1,7 +1,8 @@
 from odoo import api, fields, models
 
 # Typical local mobile-number length per ISO country code (excluding the dial
-# code). Auto-fills the length when a country is chosen; still editable.
+# code). The country's entry here wins over the stored kpi_mobile_length, which
+# only applies to a country not listed.
 # Adapted from pos_loyalty_card's COUNTRY_MOBILE_LENGTH.
 COUNTRY_MOBILE_LENGTH = {
     'IN': 10, 'US': 10, 'CA': 10, 'GB': 10, 'IE': 9, 'AU': 9, 'NZ': 9,
@@ -266,8 +267,17 @@ class ResCompany(models.Model):
                 self.kpi_country_id.code, self.kpi_mobile_length or 10)
 
     def _kpi_mobile_cfg(self):
-        """Return (dial_digits, local_length) for this company's KPI numbers."""
+        """Return (dial_digits, local_length) for this company's KPI numbers.
+
+        Both come from the stored country. The length used to be read from
+        kpi_mobile_length alone, which only follows the country when an admin
+        changes it (onchange / set_country) — a company that got Oman by default
+        at install kept the field's default 10, so the login showed +968 and
+        took 10 digits. The stored length now only covers countries missing
+        from COUNTRY_MOBILE_LENGTH.
+        """
         self.ensure_one()
         dial = ''.join(filter(str.isdigit, self.kpi_country_dial_code or '')) or (
             str(self.country_id.phone_code) if self.country_id else '91')
-        return dial, (self.kpi_mobile_length or 10)
+        code = self.kpi_country_id.code if self.kpi_country_id else None
+        return dial, (COUNTRY_MOBILE_LENGTH.get(code) or self.kpi_mobile_length or 10)

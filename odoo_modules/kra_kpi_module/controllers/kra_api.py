@@ -207,7 +207,10 @@ class KraKpiAPI(http.Controller):
             ('id', '!=', 1),                       # OdooBot is not in meetings
         ])
         me = request.env.user.id
-        return [{'id': u.id, 'name': u.name, 'role': u.kpi_role or 'developer'}
+        # The pickers know admin | developer | client; a coordinator is staff
+        # with admin rights, so it is listed as admin.
+        return [{'id': u.id, 'name': u.name,
+                 'role': 'admin' if u.kpi_role == 'coordinator' else (u.kpi_role or 'developer')}
                 for u in users.sorted('name') if u.id != me]
     
     @http.route('/kra_kpi/task/reassign', type='json', auth='user', methods=['POST'], csrf=False)
@@ -2227,11 +2230,17 @@ class KraKpiAPI(http.Controller):
 
     def _kra_role_of(self, user):
         """The user's app-role for the Login Management dropdown:
-        'admin' (system / owner / coordinator) | 'client' | 'developer'."""
+        'admin' (system / owner) | 'coordinator' | 'client' | 'developer'.
+
+        Coordinator is its own entry so it can be assigned here: a client's
+        Manager must be one, and coordinators approve, reject and assign on
+        WhatsApp. The session role (res.users.kpi_role) still treats them as
+        admin for the app screens."""
         if (user.has_group('base.group_system')
-                or user.has_group('kra_kpi_module.group_kra_owner')
-                or user.has_group('kra_kpi_module.group_kra_admin')):
+                or user.has_group('kra_kpi_module.group_kra_owner')):
             return 'admin'
+        if user.has_group('kra_kpi_module.group_kra_admin'):
+            return 'coordinator'
         if user.has_group('kra_kpi_module.group_kra_client'):
             return 'client'
         return 'developer'
@@ -2243,6 +2252,9 @@ class KraKpiAPI(http.Controller):
         uid = int(params.get('user_id'))
         mobile = re.sub(r'\D', '', params.get('mobile') or '') or False
         if mobile:
+            mobile, problem = self._valid_mobile_for(request.env['res.users'].sudo().browse(uid), mobile)
+            if problem:
+                return {'status': False, 'message': problem}
             # One number, one account. A duplicate is how a login on search
             # order signs one person into another's account (_find_app_user now
             # refuses a collision; this stops it being created).
@@ -2254,6 +2266,48 @@ class KraKpiAPI(http.Controller):
                         'message': f"That number is already the app login of {clash.name or clash.login}."}
         request.env['res.users'].sudo().browse(uid).kpi_mobile_number = mobile
         return {'status': True, 'mobile': mobile or ''}
+
+    # Plain-words rules for the countries this install deals with; any other
+    # country gets "e.g. <example>" from the same library.
+    _MOBILE_RULES = {
+        'IN': "10 digits starting with 6, 7, 8 or 9",
+        'OM': "8 digits starting with 7 or 9",
+    }
+
+    @classmethod
+    def _valid_mobile_for(cls, user, digits):
+        """-> (national_digits, None) or (digits, problem message).
+
+        Google's libphonenumber (the `phonenumbers` package Odoo ships) decides,
+        for the user's own country (Login Management) or the company's: a real
+        mobile number of that country, not just the right count of digits. A
+        number typed with its country code in front is accepted and stored
+        without it, as the other numbers are."""
+        try:
+            import phonenumbers
+            from phonenumbers import PhoneNumberType as T
+        except ImportError:
+            return digits, None   # library missing: keep the old behaviour
+        dial, _length = user._kpi_user_mobile_cfg()
+        region = phonenumbers.region_code_for_country_code(int(dial or 91)) or 'IN'
+        candidates = [digits]
+        if digits.startswith(str(dial)) and len(digits) > len(str(dial)):
+            candidates.append('+' + digits)
+        for cand in candidates:
+            try:
+                num = phonenumbers.parse(cand, region)
+            except phonenumbers.NumberParseException:
+                continue
+            if (num.country_code == int(dial or 91) and phonenumbers.is_valid_number(num)
+                    and phonenumbers.number_type(num) in (T.MOBILE, T.FIXED_LINE_OR_MOBILE)):
+                return str(num.national_number), None
+        country = user.env['res.country'].sudo().search([('code', '=', region)], limit=1)
+        name = country.name or region
+        rule = cls._MOBILE_RULES.get(region)
+        if not rule:
+            ex = phonenumbers.example_number_for_type(region, T.MOBILE)
+            rule = f"e.g. {ex.national_number}" if ex else "a mobile number of that country"
+        return digits, f"Not a valid {name} mobile number (+{dial}): {rule}."
 
     @http.route('/kpi_user_access/set_country', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_set_country(self, **params):
@@ -2300,7 +2354,8 @@ class KraKpiAPI(http.Controller):
     @http.route('/kpi_user_access/set_role', type='json', auth='user', methods=['POST'], csrf=False)
     def user_access_set_role(self, **params):
         """Set a user's KRA app-role by moving them between the role groups:
-        'admin' → Owner (full access), 'developer' → Developer, 'client' → Client.
+        'admin' → Owner (full access), 'coordinator' → Coordinator,
+        'developer' → Developer, 'client' → Client.
         Only the KRA role groups are touched; the base super-admin is never re-roled."""
         if not self._is_kra_admin(request.env.user):
             return {'status': False, 'message': 'Not authorized'}
@@ -2312,8 +2367,9 @@ class KraKpiAPI(http.Controller):
         role = params.get('role')
         ref = request.env.ref
         target = {
-            'admin':     'kra_kpi_module.group_kra_owner',
-            'developer': 'kra_kpi_module.group_kra_developer',
+            'admin':       'kra_kpi_module.group_kra_owner',
+            'coordinator': 'kra_kpi_module.group_kra_admin',
+            'developer':   'kra_kpi_module.group_kra_developer',
             'client':    'kra_kpi_module.group_kra_client',
         }.get(role)
         if not target:
@@ -2396,8 +2452,9 @@ class KraKpiAPI(http.Controller):
         if Users.with_context(active_test=False).search_count([('login', '=ilike', login)]):
             return {'status': False, 'message': 'That login is already taken.'}
         role_group = {
-            'admin':     'kra_kpi_module.group_kra_owner',
-            'developer': 'kra_kpi_module.group_kra_developer',
+            'admin':       'kra_kpi_module.group_kra_owner',
+            'coordinator': 'kra_kpi_module.group_kra_admin',
+            'developer':   'kra_kpi_module.group_kra_developer',
             'client':    'kra_kpi_module.group_kra_client',
         }.get(role, 'kra_kpi_module.group_kra_developer')
         ref = request.env.ref
@@ -3386,7 +3443,23 @@ class KraKpiAPI(http.Controller):
     @http.route('/kra_kpi/kpi/name_matches', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_name_matches(self, **params):
         """Tasks already using this name under this KRA. A hint, never a refusal —
-        see kra.kpi.create_kpi."""
+        see kra.kpi.create_kpi.
+
+        AUTHORISATION: find_name_matches searches under sudo() and returns
+        task names, references, states and assignee names. With no check,
+        any signed-in user -- a client portal user included -- could walk
+        kra_id values and read other clients' task lists out of a route
+        meant to prevent a duplicate name on a form only staff ever open.
+
+        Staff only, therefore. group_kra_developer is the floor of the
+        hierarchy (system -> owner -> coordinator -> developer), so every
+        member of the team passes and a client does not. A client gets the
+        same empty answer the hint already returns when it fails, so nothing
+        breaks for them.
+        """
+        if not request.env.user.has_group(
+                'kra_kpi_module.group_kra_developer'):
+            return {'status': True, 'matches': []}
         try:
             matches = request.env['kra.kpi'].find_name_matches(
                 params.get('name') or '', params.get('kra_id'))

@@ -105,12 +105,16 @@ class ResUsers(models.Model):
     # base "Role: User / Administrator". It just maps to the KRA/KPI groups:
     #   User  -> group_kra_developer   (gets & creates own tasks)
     #   Client-> group_kra_client      (sees only their own project data)
+    #   Coordinator -> group_kra_admin (approves/assigns, can be a client's Manager)
     #   Admin -> group_kra_owner        (full KRA/KPI access)
     # Same mapping the Login Management dropdown uses, so both stay consistent.
+    # The apps' session role still reports a coordinator as 'admin' (see
+    # /kpi_reports/user/info): every admin screen there checks role == 'admin'.
     kpi_role = fields.Selection(
         selection=[
             ('developer', 'User'),
             ('client', 'Client'),
+            ('coordinator', 'Coordinator'),
             ('admin', 'Admin'),
         ],
         string='KRA / KPI Role',
@@ -124,9 +128,10 @@ class ResUsers(models.Model):
     def _compute_kpi_role(self):
         for u in self:
             if (u.has_group('base.group_system')
-                    or u.has_group('kra_kpi_module.group_kra_owner')
-                    or u.has_group('kra_kpi_module.group_kra_admin')):
+                    or u.has_group('kra_kpi_module.group_kra_owner')):
                 u.kpi_role = 'admin'
+            elif u.has_group('kra_kpi_module.group_kra_admin'):
+                u.kpi_role = 'coordinator'
             elif u.has_group('kra_kpi_module.group_kra_client'):
                 u.kpi_role = 'client'
             else:
@@ -141,8 +146,10 @@ class ResUsers(models.Model):
                 role_groups |= grp
         dev = self.env.ref('kra_kpi_module.group_kra_developer', raise_if_not_found=False)
         client = self.env.ref('kra_kpi_module.group_kra_client', raise_if_not_found=False)
+        coordinator = self.env.ref('kra_kpi_module.group_kra_admin', raise_if_not_found=False)
         owner = self.env.ref('kra_kpi_module.group_kra_owner', raise_if_not_found=False)
-        target_by_role = {'developer': dev, 'client': client, 'admin': owner}
+        target_by_role = {'developer': dev, 'client': client,
+                          'coordinator': coordinator, 'admin': owner}
         for u in self:
             # Never re-role the base super-admin from here.
             if u.has_group('base.group_system'):
@@ -169,8 +176,10 @@ class ResUsers(models.Model):
         if country:
             from .res_company_kpi import COUNTRY_MOBILE_LENGTH
             dial = ''.join(filter(str.isdigit, str(country.phone_code or ''))) or '91'
-            length = self.kpi_mobile_length or COUNTRY_MOBILE_LENGTH.get(
-                country.code, self.env.company.kpi_mobile_length or 10)
+            # The country decides, as for the company; the stored length only
+            # covers a country the map doesn't know.
+            length = (COUNTRY_MOBILE_LENGTH.get(country.code) or self.kpi_mobile_length
+                      or self.env.company.kpi_mobile_length or 10)
             return dial, length
         return self.env.company._kpi_mobile_cfg()
 
@@ -199,10 +208,22 @@ class ResUsers(models.Model):
         back to a channel that works.
         """
         self.ensure_one()
+        # A number stored without its country code (the login mobile always is:
+        # Login Management keeps the local digits and the person's country
+        # separately) is completed with THIS person's dial code when it is
+        # exactly that country's local length. Without this, a manager whose
+        # only number was their login mobile counted as unreachable even though
+        # we know both halves of the number.
+        dial, length = self._kpi_user_mobile_cfg()
+        dial = ''.join(ch for ch in str(dial or '') if ch.isdigit())
         for raw in (self.kpi_wa_number, self.kpi_mobile_number,
                     getattr(self.partner_id, 'mobile', None),
                     self.partner_id.phone):
             digits = ''.join(ch for ch in (raw or '') if ch.isdigit())
+            if dial and length and len(digits) == length:
+                digits = dial + digits
+            elif dial and length and len(digits) == length + 1 and digits.startswith('0'):
+                digits = dial + digits[1:]          # trunk 0 + local number
             if len(digits) >= self._MIN_INTL_DIGITS:
                 return digits
         return ''
@@ -241,7 +262,8 @@ class ResUsers(models.Model):
 
     # ---- Password hashing (reuses Odoo's own passlib crypt context) ------ #
     def _set_app_password(self, raw):
-        """Hash + store the app PIN; clears the must-change flag.
+        """Hash + store the app PIN; clears the must-change flag unless the new
+        PIN is the default 1111 itself.
 
         The app PIN and the Odoo login password are SEPARATE credentials and this
         deliberately does not touch `password`.
@@ -261,7 +283,9 @@ class ResUsers(models.Model):
         hashed = self._crypt_context().hash(raw)
         self.sudo().write({
             'kpi_app_password_hash': hashed,
-            'kpi_app_must_change_password': False,
+            # A PIN set to the default 1111 is still the default, however it got
+            # there: keep the red "change it" reminder on (login page + Profile).
+            'kpi_app_must_change_password': raw == _DEFAULT_APP_PASSWORD,
         })
 
     def _check_app_password(self, raw):
