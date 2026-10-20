@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- WhatsApp "📋 KPI details": one task's page, like the web app's task
+             panel. Reuses wa_task_layout (web look). Saves go through
+             kpi.wa.group.router.page_save / page_complete. -->
+        <template id="wa_task_page" name="WA Task Page">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="t['ref']"/>
+                <style>
+                    .chip { display:inline-block; padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:800;
+                            background:#E0ECFF; color:#1E40AF; margin-right:6px; }
+                    .chip.pri { background:#FEF3C7; color:#B45309; }
+                    .sec { border-top:1px solid var(--border); padding:16px 20px; }
+                    .sec h3 { margin:0 0 10px; font-size:14px; font-weight:800; }
+                    dl { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; margin:0; font-size:13.5px; }
+                    dt { color:var(--subtlest); font-weight:600; }
+                    dd { margin:0; overflow-wrap:anywhere; }
+                    .item { border:1px solid var(--border); border-radius:var(--r); padding:10px 12px; margin-bottom:8px; }
+                    .item .meta { font-size:12px; color:var(--subtlest); margin-bottom:4px; }
+                    .item .txt { white-space:pre-wrap; }
+                    .item a { color:var(--brand); overflow-wrap:anywhere; }
+                    .files a { display:inline-block; margin:6px 8px 0 0; padding:3px 9px; border-radius:6px;
+                               background:var(--input); border:1px solid var(--border); font-size:12.5px; text-decoration:none; }
+                    details.act { border:1px solid var(--border); border-radius:var(--r); margin-bottom:10px; }
+                    details.act > summary { padding:11px 14px; font-weight:800; cursor:pointer; list-style:none; }
+                    details.act[open] > summary { border-bottom:1px solid var(--border); }
+                    details.act .in { padding:14px; display:flex; flex-direction:column; gap:12px; }
+                    .flash { margin:12px 20px 0; padding:10px 12px; border-radius:var(--r); font-weight:700; font-size:13px; }
+                    .flash.ok { background:var(--ok-bg); color:var(--ok); }
+                    .flash.err { background:#FEE2E2; color:var(--danger); }
+                    .log { font-size:12.5px; padding:4px 0; border-bottom:1px dashed var(--border); }
+                </style>
+                <div class="hd"><t t-esc="t['ref']"/> — <t t-esc="t['name']"/>
+                    <small><span class="chip" t-esc="t['state'].upper()"/><span class="chip pri" t-esc="t['priority']"/>
+                        For <t t-esc="user_name"/> · link valid 2 hours</small></div>
+                <div t-if="ok" class="flash ok">✅ <t t-esc="ok"/></div>
+                <div t-if="err" class="flash err">⚠ <t t-esc="err"/></div>
+
+                <div class="sec">
+                    <h3>Details</h3>
+                    <dl>
+                        <dt>Project</dt><dd t-esc="t['project'] or '—'"/>
+                        <dt>Status</dt><dd><t t-esc="t['state']"/><t t-if="t['paused_reason']"> — <t t-esc="t['paused_reason']"/></t></dd>
+                        <dt>Deadline</dt><dd t-esc="t['deadline']"/>
+                        <dt>Estimate</dt><dd t-esc="t['estimate']"/>
+                        <dt>Time spent</dt><dd t-esc="t['spent']"/>
+                    </dl>
+                    <div t-if="t['description']" class="item" style="margin-top:12px;"><div class="txt" t-esc="t['description']"/></div>
+                </div>
+
+                <div class="sec">
+                    <t t-if="can_add">
+                        <details class="act">
+                            <summary>📝 Add update</summary>
+                            <form class="in" method="post" enctype="multipart/form-data"
+                                  t-att-action="'/kpi/wa/task/%s/update' % token">
+                                <div class="field"><span class="lbl">What did you do? <span class="req">*</span></span>
+                                    <textarea name="summary" placeholder="This is what your manager reads."/></div>
+                                <div class="field"><span class="lbl">Links (Drive, docs…)</span>
+                                    <input class="input" name="links" placeholder="Paste one or more links, separated by spaces"/></div>
+                                <div class="grid2">
+                                    <div class="field"><span class="lbl">GitHub repo URL</span>
+                                        <input class="input" name="gh_url" placeholder="https://github.com/org/repo"/></div>
+                                    <div class="field"><span class="lbl">Branch</span>
+                                        <input class="input" name="gh_branch" placeholder="main"/></div>
+                                </div>
+                                <div class="field"><span class="lbl">Files (PDF, docs, screenshots — up to 50 MB each)</span>
+                                    <input class="input" type="file" name="files" multiple="multiple"/></div>
+                                <label class="chks"><label><input type="checkbox" name="replace_same" value="1"/>
+                                    Replace my files that have the same name (otherwise both are kept)</label></label>
+                                <button type="submit" class="btn primary">Save update</button>
+                            </form>
+                        </details>
+                        <details class="act">
+                            <summary>📘 Add user manual</summary>
+                            <form class="in" method="post" enctype="multipart/form-data"
+                                  t-att-action="'/kpi/wa/task/%s/manual' % token">
+                                <div class="field"><span class="lbl">Manual file(s) — PDF, DOC or DOCX, up to 25 MB <span class="req">*</span></span>
+                                    <input class="input" type="file" name="files" multiple="multiple" accept=".pdf,.doc,.docx"/></div>
+                                <div class="field"><span class="lbl">Description</span><textarea name="description"/></div>
+                                <div class="field"><span class="lbl">Related links</span>
+                                    <input class="input" name="links" placeholder="Optional"/></div>
+                                <label class="chks"><label><input type="checkbox" name="replace_same" value="1"/>
+                                    Replace my files that have the same name</label></label>
+                                <button type="submit" class="btn primary">Save manual</button>
+                            </form>
+                        </details>
+                    </t>
+                    <p t-else="" class="mini">Updates, files, manuals and GitHub links are added once the task has been started.</p>
+                    <details t-if="can_complete" class="act">
+                        <summary>✅ Completed</summary>
+                        <form class="in" method="post" t-att-action="'/kpi/wa/task/%s/complete' % token">
+                            <span class="lbl">Tick what you have done (one is enough). It goes to your manager for approval.</span>
+                            <span class="chks" style="flex-direction:column; gap:8px;">
+                                <t t-foreach="checklist" t-as="c">
+                                    <label><input type="checkbox" name="check" t-att-value="c[0]"/> <t t-esc="c[1]"/></label>
+                                </t>
+                            </span>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button type="submit" name="mode" value="full" class="btn primary">Submit for approval</button>
+                                <button type="submit" name="mode" value="partial" class="btn ghost">🏁 Partial finish — summary only</button>
+                            </div>
+                            <span class="hint">A progress update must exist first. Partial finish sends it as-is with the summary.</span>
+                        </form>
+                    </details>
+                </div>
+
+                <div class="sec">
+                    <h3>Updates (<t t-esc="len(updates)"/>)</h3>
+                    <p t-if="not updates" class="mini">No updates yet.</p>
+                    <div t-foreach="updates" t-as="u" class="item">
+                        <div class="meta"><t t-esc="u['who']"/> · <t t-esc="u['when']"/></div>
+                        <div class="txt" t-esc="u['text']"/>
+                        <div class="files"><a t-foreach="u['files']" t-as="f" t-att-href="f['url']" target="_blank">📎 <t t-esc="f['name']"/></a></div>
+                        <div t-foreach="u['links']" t-as="l"><a t-att-href="l" target="_blank" rel="noopener">🔗 <t t-esc="l"/></a></div>
+                    </div>
+                </div>
+
+                <div class="sec">
+                    <h3>GitHub (<t t-esc="len(github)"/>)</h3>
+                    <p t-if="not github" class="mini">No GitHub links yet.</p>
+                    <div t-foreach="github" t-as="g" class="item">
+                        <a t-att-href="g['url']" target="_blank" rel="noopener" t-esc="g['url']"/>
+                        <div class="meta">branch <b t-esc="g['branch']"/> · <t t-esc="g['who']"/> · <t t-esc="g['when']"/></div>
+                    </div>
+                </div>
+
+                <div class="sec">
+                    <h3>User manuals (<t t-esc="len(manuals)"/>)</h3>
+                    <p t-if="not manuals" class="mini">No user manuals yet.</p>
+                    <div t-foreach="manuals" t-as="u" class="item">
+                        <div class="meta"><t t-esc="u['who']"/> · <t t-esc="u['when']"/></div>
+                        <div t-if="u['text']" class="txt" t-esc="u['text']"/>
+                        <div class="files"><a t-foreach="u['files']" t-as="f" t-att-href="f['url']" target="_blank">📄 <t t-esc="f['name']"/></a></div>
+                        <div t-foreach="u['links']" t-as="l"><a t-att-href="l" target="_blank" rel="noopener">🔗 <t t-esc="l"/></a></div>
+                    </div>
+                </div>
+
+                <div class="sec">
+                    <h3>Logs</h3>
+                    <details t-foreach="logs" t-as="lg" class="act">
+                        <summary><t t-esc="lg['label']"/> (<t t-esc="len(lg['rows'])"/>)</summary>
+                        <div class="in" style="gap:0;">
+                            <div t-foreach="lg['rows']" t-as="r" class="log" t-esc="r"/>
+                            <span t-if="not lg['rows']" class="mini">Nothing logged yet.</span>
+                        </div>
+                    </details>
+                </div>
+            </t>
+        </template>
+    </data>
+</odoo>
