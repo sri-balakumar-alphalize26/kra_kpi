@@ -55,7 +55,7 @@ export default function AttentionReport() {
                 {shown.map((r, i) => (
                   <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => acts.openTask(r.id)}>
                     <td>{i + 1}</td><td><span className="ref">#{r.seq_no}</span></td><td><b>{r.name}</b>{r.kra_name && <div className="mini">{r.kra_name}</div>}</td>
-                    <td>{r.employee_id ? <><Avatar name={r.employee_name} id={r.employee_id} size={22} /> {r.employee_name}</> : <span className="mini">{r.employee_name}</span>}</td>
+                    <td>{r.employee_id ? <><Avatar name={r.employee_name} uid={r.employee_id} size={22} /> {r.employee_name}</> : <span className="mini">{r.employee_name}</span>}</td>
                     <td>{r.paused_date || "—"}</td><td>{r.paused_time || "—"}</td><td style={{ whiteSpace: "normal" }}>{r.paused_reason}</td>
                     <td><Lozenge tone={PRI[r.priority] || "neutral"}>{r.priority}</Lozenge>{r.deadline && <div className="mini">due {r.deadline}</div>}</td>
                   </tr>

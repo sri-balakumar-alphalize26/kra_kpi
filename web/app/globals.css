@@ -24,16 +24,19 @@ input, textarea, select { font: inherit; color: inherit; }
 /* ---- theme switch animation ------------------------------------------------
    1) View Transitions: the new look is revealed as a circle growing from the
       click (--vt-x/--vt-y set by lib/theme.js), the old look stays underneath.
-   2) Fallback / reduced motion: a short cross-fade of colours. */
+   2) No View Transitions / reduced motion: an instant switch (lib/theme.js
+      explains why the old all-elements cross-fade was removed). */
 html.theme-switching::view-transition-old(root),
 html.theme-switching::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 html.theme-switching::view-transition-old(root) { z-index: 1; }
-html.theme-switching::view-transition-new(root) { z-index: 2; animation: kpi-reveal .62s cubic-bezier(.22, .61, .36, 1) both; }
+html.theme-switching::view-transition-new(root) { z-index: 2; animation: kpi-reveal .42s cubic-bezier(.22, .61, .36, 1) both; }
 @keyframes kpi-reveal {
   from { clip-path: circle(0 at var(--vt-x, 50%) var(--vt-y, 50%)); }
   to   { clip-path: circle(var(--vt-r, 150vmax) at var(--vt-x, 50%) var(--vt-y, 50%)); }
 }
-html.theme-fading, html.theme-fading * { transition: background-color .4s ease, color .4s ease, border-color .4s ease, fill .4s ease, stroke .4s ease, box-shadow .4s ease !important; }
+/* Nothing here may target `html.theme-switching *`: toggling the class would
+   then restyle the whole page twice per switch — the kind of cost that made
+   the old cross-fade hang. */
 
 /* The sun / moon button: the two icons cross-rotate, with a little spring. */
 .k-app .mode-btn { position: relative; overflow: hidden; }

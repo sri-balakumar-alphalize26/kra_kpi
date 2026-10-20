@@ -73,7 +73,7 @@ export default function EmployeeReport() {
             <div key={e.employee_id} className="cardbox" style={{ padding: 0 }}>
               <div style={{ padding: "12px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", cursor: "pointer" }} onClick={() => toggle(e.employee_id)}>
                 <Icon n={isOpen ? "chev" : "cright"} size={14} />
-                <Avatar name={e.employee_name} id={e.employee_id} size={30} />
+                <Avatar name={e.employee_name} uid={e.employee_id} size={30} />
                 <span style={{ display: "flex", flexDirection: "column" }}><b style={{ color: "var(--navy)" }}>{e.employee_name}</b>{e.employee_email && <span className="mini">{e.employee_email}</span>}</span>
                 <span className="pillset" style={{ marginLeft: "auto" }}>
                   <Lozenge tone="todo">{e.total_tasks} tasks</Lozenge><Lozenge tone="done">{e.completed_tasks} done</Lozenge><Lozenge tone="progress">{e.in_progress_tasks} in progress</Lozenge><Lozenge tone="neutral">{e.pending_tasks} pending</Lozenge>

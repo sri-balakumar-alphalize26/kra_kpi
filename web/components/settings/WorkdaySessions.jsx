@@ -86,7 +86,7 @@ function Sessions() {
                 {rows.map((s) => (
                   <tr key={s.id}>
                     <td>{s.session_date}</td>
-                    <td><Avatar name={X.m2o(s.user_id)} id={s.user_id?.[0]} size={22} /> <b>{X.m2o(s.user_id)}</b></td>
+                    <td><Avatar name={X.m2o(s.user_id)} uid={s.user_id?.[0]} size={22} /> <b>{X.m2o(s.user_id)}</b></td>
                     <td>{X.local(s.login_at)}</td>
                     <td>{s.logout_at ? X.local(s.logout_at) : s.state === "open" ? <span className="mini">still working</span> : "—"}</td>
                     <td style={{ whiteSpace: "normal" }}>

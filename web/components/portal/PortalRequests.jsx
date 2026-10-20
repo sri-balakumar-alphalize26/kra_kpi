@@ -136,7 +136,7 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
                       <td><span className="ref">{k.external_ref || `#${k.id}`}</span></td>
                       <td><b>{k.name}</b></td><td>{k.project_name || "—"}</td>
                       <td><Lozenge tone={tone}>{lbl}</Lozenge></td>
-                      <td>{k.primary_assignee ? <><Avatar name={k.primary_assignee} id={k.primary_assignee_id} size={22} /> {k.primary_assignee}</> : <span className="mini">to be assigned</span>}</td>
+                      <td>{k.primary_assignee ? <><Avatar name={k.primary_assignee} uid={k.primary_assignee_id} size={22} /> {k.primary_assignee}</> : <span className="mini">to be assigned</span>}</td>
                       <td><span className="prog"><i style={{ width: `${pct}%`, background: k.task_state === "completed" ? "var(--pri-regular)" : isSign ? "var(--tint-violet)" : "var(--brand)" }} /></span></td>
                       <td>{k.deadline || "—"}</td>
                       <td>{(isSign || isPre) ? <Button size="sm" kind="primary" onClick={(e) => { e.stopPropagation(); open(k); }}>{isSign ? "Review" : "Approve"}</Button> : k.has_signed_certificate ? <a className="btn" style={{ height: 28, fontSize: 12, textDecoration: "none" }} href={P.certificateHref(k.id)} onClick={(e) => e.stopPropagation()}>Certificate</a> : <Button size="sm" onClick={(e) => { e.stopPropagation(); open(k); }}>Open</Button>}</td>

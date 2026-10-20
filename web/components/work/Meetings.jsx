@@ -75,7 +75,7 @@ export default function Meetings() {
                       <td>{m.scheduled_start ? when(m.scheduled_start) : <span className="mini" title={m.requested_text || ""}>Asked: {m.requested_text || "no time yet"}</span>}</td>
                       <td style={{ whiteSpace: "normal", maxWidth: 320 }}><b>{m.name}</b>{m.is_internal && <Lozenge tone="neutral" style={{ marginLeft: 6, textTransform: "none" }} title="A developer and the manager only — no client">Internal</Lozenge>}{m.kpi_id && <div className="mini">{m2o(m.kpi_id)}</div>}</td>
                       <td>{m2o(m.client_kra_id) || "—"}</td>
-                      <td>{m.organizer_id ? <><Avatar name={m2o(m.organizer_id)} id={m.organizer_id[0]} size={22} /> {m2o(m.organizer_id)}</> : <span className="mini" style={{ color: "var(--pri-important)", fontWeight: 700 }}>Nobody yet</span>}</td>
+                      <td>{m.organizer_id ? <><Avatar name={m2o(m.organizer_id)} uid={m.organizer_id[0]} size={22} /> {m2o(m.organizer_id)}</> : <span className="mini" style={{ color: "var(--pri-important)", fontWeight: 700 }}>Nobody yet</span>}</td>
                       <td>{m.requested_by_name || "—"}</td>
                       <td><Lozenge tone={tone}>{label}</Lozenge></td>
                       <td className="num">{m.actual_minutes ? `${m.actual_minutes} min` : "—"}</td>

@@ -342,7 +342,7 @@ function PeopleFilter({ people, value, onChange }) {
   const rest = people.filter((p) => !shown.includes(p));
   const chip = (p, extra = {}) => (
     <button key={p.id} className={`who-chip ${value === p.id ? "on" : ""}`} title={`${p.name} · ${p.n} tasks`} aria-pressed={value === p.id} onClick={() => onChange(value === p.id ? null : p.id)} {...extra}>
-      <Avatar name={p.name} id={p.id} size={20} />{p.label}<em>{p.n}</em>
+      <Avatar name={p.name} uid={p.id} size={20} />{p.label}<em>{p.n}</em>
     </button>
   );
 
@@ -362,7 +362,7 @@ function PeopleFilter({ people, value, onChange }) {
             <div className="menu" role="menu" style={{ maxHeight: 340, overflowY: "auto" }}>
               {rest.map((p) => (
                 <button key={p.id} className="mi" role="menuitem" title={p.name} onClick={() => { onChange(p.id); setOpen(false); }}>
-                  <Avatar name={p.name} id={p.id} size={22} /><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span><span className="mini">{p.n}</span>
+                  <Avatar name={p.name} uid={p.id} size={22} /><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span><span className="mini">{p.n}</span>
                 </button>
               ))}
             </div>

@@ -37,7 +37,7 @@ export default function PaidWork() {
             <table className="table">
               <thead><tr><th>Ref</th><th>Task</th><th>Developer</th><th>Client / project</th><th className="num">Estimate</th><th className="num">Spent</th><th>Invoice</th><th>Paid on</th></tr></thead>
               <tbody>{tasks.map((t) => (
-                <tr key={t.id}><td><span className="ref">{t.external_ref || `#${t.id}`}</span></td><td><b>{t.name}</b></td><td>{t.user_name ? <><Avatar name={t.user_name} id={t.user_id} size={22} /> {t.user_name}</> : "—"}</td><td>{t.client_name || "—"}{t.project_name ? ` · ${t.project_name}` : ""}</td><td className="num">{fmtHM(estimateSeconds(t))}</td><td className="num">{fmtHM(t.timer_total_seconds)}</td><td><b>{t.invoice_name || t.invoice || "—"}</b></td><td>{t.paid_on || t.payment_date || "—"}</td></tr>
+                <tr key={t.id}><td><span className="ref">{t.external_ref || `#${t.id}`}</span></td><td><b>{t.name}</b></td><td>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={22} /> {t.user_name}</> : "—"}</td><td>{t.client_name || "—"}{t.project_name ? ` · ${t.project_name}` : ""}</td><td className="num">{fmtHM(estimateSeconds(t))}</td><td className="num">{fmtHM(t.timer_total_seconds)}</td><td><b>{t.invoice_name || t.invoice || "—"}</b></td><td>{t.paid_on || t.payment_date || "—"}</td></tr>
               ))}{paid.data && !tasks.length && <tr><td colSpan={8} className="empty">No paid work yet.</td></tr>}</tbody>
             </table>
           )}

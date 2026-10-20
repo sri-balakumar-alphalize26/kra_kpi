@@ -141,7 +141,7 @@ function PauseDialog({ task, extra, busy, onClose, onConfirm, all }) {
               <Input icon="search" value={pq} onChange={(e) => setPq(e.target.value)} placeholder="Search people…" />
               <div className="people">
                 {shown.map((p) => (
-                  <label key={p.id}><input type="checkbox" checked={picked.includes(p.id)} onChange={(e) => setPicked((s) => e.target.checked ? [...s, p.id] : s.filter((x) => x !== p.id))} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={p.name} id={p.id} size={22} />{p.name}<span className="mini" style={{ marginLeft: "auto" }}>{p.role}</span></label>
+                  <label key={p.id}><input type="checkbox" checked={picked.includes(p.id)} onChange={(e) => setPicked((s) => e.target.checked ? [...s, p.id] : s.filter((x) => x !== p.id))} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={p.name} uid={p.id} size={22} />{p.name}<span className="mini" style={{ marginLeft: "auto" }}>{p.role}</span></label>
                 ))}
                 {!shown.length && <span className="mini" style={{ padding: 8 }}>{people.loading ? "Loading people…" : pq.trim() ? "Nobody matches" : "No people found"}</span>}
               </div>
@@ -327,7 +327,7 @@ function ReassignDialog({ task, busy, onClose, onConfirm }) {
       {list.length > 8 && <Input icon="search" value={uq} onChange={(e) => setUq(e.target.value)} placeholder="Search people…" />}
       <div className="people">
         {shown.map((u) => (
-          <label key={u.id}><input type="radio" name="assignee" checked={uid === u.id} onChange={() => setUid(u.id)} style={{ accentColor: "var(--brand)" }} /><Avatar name={u.name} id={u.id} size={22} />{u.name}{u.id === task.user_id && <span className="mini" style={{ marginLeft: "auto" }}>current</span>}</label>
+          <label key={u.id}><input type="radio" name="assignee" checked={uid === u.id} onChange={() => setUid(u.id)} style={{ accentColor: "var(--brand)" }} /><Avatar name={u.name} uid={u.id} size={22} />{u.name}{u.id === task.user_id && <span className="mini" style={{ marginLeft: "auto" }}>current</span>}</label>
         ))}
         {!shown.length && <span className="mini" style={{ padding: 8 }}>{users.loading ? "Loading…" : "No users"}</span>}
       </div>

@@ -125,7 +125,7 @@ function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, on
           <span style={{ cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} onClick={() => onOpenTask(k.id)}>{k.name}</span>
           {k.task_state && (() => { const [tone, label] = stateTone(k.task_state); return <Lozenge tone={tone}>{label === k.task_state ? k.task_state.replace(/_/g, " ") : label}</Lozenge>; })()}
           {k.has_user_manual && <button type="button" onClick={() => onManual(k)} title={`Open the user manual${k.manual_count > 1 ? ` (${k.manual_count})` : ""}`} style={{ border: 0, background: "none", padding: 0, cursor: "pointer" }}><Lozenge tone="neutral" style={{ textTransform: "none" }}><Icon n="book" size={12} /> manual{k.manual_count > 1 ? ` · ${k.manual_count}` : ""}</Lozenge></button>}
-          <span className="cnt">{k.user_name ? <><Avatar name={k.user_name} id={k.user_id} size={18} /> {k.user_name}</> : k.task_state ? <span className="mini">unassigned</span> : ""}</span>
+          <span className="cnt">{k.user_name ? <><Avatar name={k.user_name} uid={k.user_id} size={18} /> {k.user_name}</> : k.task_state ? <span className="mini">unassigned</span> : ""}</span>
           <span className="act"><IconButton icon="pen" label="Rename" size={15} onClick={() => onRename(k, true)} /><IconButton icon="trash" label="Delete" size={15} onClick={() => onDelete(k, true)} /></span>
         </div>
       ))}
@@ -191,7 +191,7 @@ function NameDialog({ d, busy, onClose, onRun }) {
         </div>
         <div className="people" style={{ maxHeight: 220, overflowY: "auto" }}>
           {!users && <span className="mini" style={{ padding: 8 }}>Loading…</span>}
-          {(users || []).map((u) => <label key={u.id}><input type="checkbox" checked={picked.has(u.id)} onChange={(e) => tick(u.id, e.target.checked)} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={u.name} id={u.id} size={22} />{u.name}<span className="mini" style={{ marginLeft: "auto" }}>{u.login || u.email || ""}</span></label>)}
+          {(users || []).map((u) => <label key={u.id}><input type="checkbox" checked={picked.has(u.id)} onChange={(e) => tick(u.id, e.target.checked)} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={u.name} uid={u.id} size={22} />{u.name}<span className="mini" style={{ marginLeft: "auto" }}>{u.login || u.email || ""}</span></label>)}
           {users && !users.length && <span className="mini" style={{ padding: 8 }}>No client portal users yet. Create one with "Client users" on the tree after saving.</span>}
         </div>
       </>}
@@ -311,7 +311,7 @@ function ClientsDialog({ node, onClose, onSaved, flags }) {
       )}
       <div className="people">
         {!users && <span className="mini" style={{ padding: 8 }}>Loading…</span>}
-        {(users || []).map((u) => <label key={u.id}><input type="checkbox" checked={picked.has(u.id)} onChange={(e) => setPicked((s) => { const n = new Set(s); e.target.checked ? n.add(u.id) : n.delete(u.id); return n; })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={u.name} id={u.id} size={22} />{u.name}<span className="mini" style={{ marginLeft: "auto" }}>{u.login || u.email || ""}</span></label>)}
+        {(users || []).map((u) => <label key={u.id}><input type="checkbox" checked={picked.has(u.id)} onChange={(e) => setPicked((s) => { const n = new Set(s); e.target.checked ? n.add(u.id) : n.delete(u.id); return n; })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} /><Avatar name={u.name} uid={u.id} size={22} />{u.name}<span className="mini" style={{ marginLeft: "auto" }}>{u.login || u.email || ""}</span></label>)}
         {users && !users.length && <span className="mini" style={{ padding: 8 }}>No client accounts yet.</span>}
       </div>
     </Modal>

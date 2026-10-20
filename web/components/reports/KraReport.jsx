@@ -452,7 +452,7 @@ export default function KraReport() {
                               <td>{r.sub_kra && r.sub_kra !== "-" ? <Lozenge tone="neutral">{r.sub_kra}</Lozenge> : <span className="mini">-</span>}</td>
                               <td style={{ whiteSpace: "normal" }}><b>{r.kpi_name}</b>{r.is_local && <Lozenge tone="paused" style={{ marginLeft: 6 }}>report only</Lozenge>}</td>
                               <td>
-                                {r.employee_id ? <Avatar name={displayName(r)} id={r.employee_id} size={22} /> : null} {displayName(r) || "—"}
+                                {r.employee_id ? <Avatar name={displayName(r)} uid={r.employee_id} size={22} /> : null} {displayName(r) || "—"}
                                 {overrides[r.employee_id] && <span title={`Renamed for this report only — really ${r.employee_name}`}><Lozenge tone="progress" style={{ marginLeft: 6 }}>renamed</Lozenge></span>}
                                 {isAdmin && r.employee_id ? <button type="button" className="btn btn-ghost" style={{ height: 22, padding: "0 4px", fontSize: 12, marginLeft: 4 }} title="Rename this person" onClick={() => beginRename(r)}>✎</button> : null}
                                 {(r.user_breakdown || []).length > 1 && <span className="mini"> +{r.user_breakdown.length - 1}</span>}

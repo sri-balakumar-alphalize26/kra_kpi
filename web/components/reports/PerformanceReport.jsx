@@ -201,7 +201,7 @@ function Report({ staff, onConfigure }) {
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.employee_id} style={{ cursor: "pointer", background: rowBg(r) }} onClick={() => openDetail(r)}>
-                  <td>{i + 1}</td><td><Avatar name={r.employee_name} id={r.employee_id} size={22} /> <b>{r.employee_name}</b>{r.department && <div className="mini">{r.department}</div>}</td>
+                  <td>{i + 1}</td><td><Avatar name={r.employee_name} uid={r.employee_id} size={22} /> <b>{r.employee_name}</b>{r.department && <div className="mini">{r.department}</div>}</td>
                   <td className="num">{n2(r.salary)}</td><td className="num">{r.working_days}</td><td className="num">{hm(r.estimated_hours)}</td><td className="num">{n2(r.estimated_units)}</td>
                   <td className="num">{hm(r.actual_hours)}</td><td className="num">{n2(r.productivity_units)}</td><td className="num" style={{ color: devColor(r.performance_deviation), fontWeight: 800 }}>{n2(r.performance_deviation)}</td>
                   <td className="num">{n2(r.available_units)}</td><td className="num">{Number(r.unit_cost || 0).toFixed(4)}</td><td className="num">{n2(r.productivity_cost)}</td><td className="num">{n2(r.productivity_cost_pct)}%</td>
@@ -334,7 +334,7 @@ function SalaryMaster({ staff, prefill, onPrefillUsed }) {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td><Avatar name={r.employee_id?.[1]} id={r.employee_id?.[0]} size={22} /> <b>{r.employee_id?.[1] || "—"}</b></td>
+                  <td><Avatar name={r.employee_id?.[1]} uid={r.employee_id?.[0]} size={22} /> <b>{r.employee_id?.[1] || "—"}</b></td>
                   <td className="num">{n2(r.salary)}</td><td className="num">{r.working_days}</td><td className="num">{n2(r.attendance_hours_per_day)}</td>
                   <td className="num">{n2(r.available_hours)}</td><td className="num">{n2(r.available_units)}</td><td className="num">{Number(r.unit_cost || 0).toFixed(4)}</td>
                   <td className="mini">{r.last_updated || "—"}</td>

@@ -94,7 +94,7 @@ export default function ActionLog() {
                         <td className="mini" title={e.when}>{local(e)}</td>
                         <td><b>{pretty(e.event)}</b></td>
                         <td style={{ whiteSpace: "normal", maxWidth: 320 }}>{e.kpi_id ? <><span className="ref">{e.task_ref}</span> <a href={`/board?task=${e.kpi_id}`} onClick={(ev) => { ev.preventDefault(); acts.openTask(e.kpi_id); }}>{e.task_name}</a></> : <span className="mini">—</span>}</td>
-                        <td>{e.actor ? <>{e.actor_user_id && <Avatar name={e.actor} id={e.actor_user_id} size={22} />} {e.actor}</> : <span className="mini">system</span>}</td>
+                        <td>{e.actor ? <>{e.actor_user_id && <Avatar name={e.actor} uid={e.actor_user_id} size={22} />} {e.actor}</> : <span className="mini">system</span>}</td>
                         <td className="mini">{e.source_label || "—"}</td>
                         <td>{e.success ? <Lozenge tone="done">OK</Lozenge> : <Lozenge tone="danger">Failed</Lozenge>}</td>
                         <td className="mini">{e.device_ip || "—"}</td>

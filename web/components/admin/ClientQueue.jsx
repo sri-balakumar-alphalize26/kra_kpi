@@ -181,7 +181,7 @@ function GroupRows({ g, users, edit, setEdit, onSave, onDiscard, onDecline, busy
             <td>{t.priority ? <span style={{ fontWeight: 800, color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)" }}>{t.priority}</span> : <span className="mini">—</span>}</td>
             <td>{KIND_LABEL[t.kind] || "—"}</td>
             <td>{t.deliverable_type || <span className="mini">—</span>}</td>
-            <td>{t.user_name ? <><Avatar name={t.user_name} id={t.user_id} size={22} /> {t.user_name}</> : <span className="mini">unassigned</span>}</td>
+            <td>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={22} /> {t.user_name}</> : <span className="mini">unassigned</span>}</td>
             <td><span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}><Button size="sm" onClick={() => setEdit({ ...t })}>Edit</Button><Button size="sm" kind="ghost" title="Decline it or re-type it, with a reason the client is told" onClick={() => onDecline(t)}>Decline / re-type</Button><Button size="sm" kind="ghost" onClick={() => onDiscard(t)}>Discard</Button></span></td>
           </tr>
         );

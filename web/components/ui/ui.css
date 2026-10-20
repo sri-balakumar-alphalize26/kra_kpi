@@ -315,3 +315,43 @@
 /* Refresh icons spin while their data reloads (useSpin). k-spin: shell.css. */
 .is-spinning{animation:k-spin .8s linear infinite;transform-origin:50% 50%}
 @media (prefers-reduced-motion:reduce){.is-spinning{animation-duration:2.4s!important}}
+
+/* Busy spinner inside a Button. `.spin` was only styled under .k-gate, so a
+   busy button showed an empty span: nothing turned. Uses the button's own text
+   colour, so it reads on primary, danger and ghost alike. */
+.btn .spin{display:inline-block;flex:none;border-radius:50%;border:2px solid color-mix(in srgb,currentColor 30%,transparent);border-top-color:currentColor;animation:btn-spin .7s linear infinite}
+.btn.spin-end{position:relative}
+.btn.spin-end .spin{position:absolute;right:16px;top:50%;margin-top:-9px;width:18px!important;height:18px!important}
+@keyframes btn-spin{to{transform:rotate(360deg)}}
+
+/* Login management: the WhatsApp side panel (UltraViewer-style). The users
+   table takes the width; a tab on the right edge slides the panel in. */
+.lm-wrap{display:grid;grid-template-columns:minmax(0,1fr) 30px 0;column-gap:10px;flex:1;min-height:0;transition:grid-template-columns .25s ease}
+.lm-wrap.open{grid-template-columns:minmax(0,1fr) 30px minmax(320px,380px)}
+.lm-panel{display:flex;flex-direction:column;gap:14px;min-width:0;overflow:hidden auto;opacity:0;transition:opacity .2s ease}
+.lm-wrap.open .lm-panel{opacity:1}
+.lm-tab{align-self:start;position:sticky;top:12px;display:flex;flex-direction:column;align-items:center;gap:8px;width:30px;padding:12px 0;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--brand);box-shadow:var(--shadow);cursor:pointer;font:inherit;transition:transform .15s ease,background .15s ease}
+.lm-tab:hover{background:var(--hover);transform:translateX(-2px)}
+.lm-tab:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.lm-tab .lm-arrow{font-size:11px;line-height:1}
+.lm-tab .lm-label{writing-mode:vertical-rl;transform:rotate(180deg);font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--subtle)}
+.lm-dot{width:9px;height:9px;border-radius:50%;background:var(--subtlest)}
+.lm-dot.on{background:var(--lz-done)}
+.lm-dot.wait{background:var(--lz-paused)}
+.lm-backdrop{display:none}
+@media (max-width:900px){
+  .lm-wrap,.lm-wrap.open{grid-template-columns:minmax(0,1fr) 30px}
+  .lm-panel{position:fixed;top:0;right:0;bottom:0;z-index:70;width:min(380px,92vw);padding:14px;background:var(--canvas);box-shadow:var(--shadow-lg);transform:translateX(100%);opacity:1;transition:transform .25s ease}
+  .lm-wrap.open .lm-panel{transform:none}
+  .lm-wrap.open .lm-backdrop{display:block;position:fixed;inset:0;z-index:69;background:rgba(15,23,42,.35)}
+}
+@media (prefers-reduced-motion:reduce){.lm-wrap,.lm-panel,.lm-tab{transition:none}}
+
+/* RecordScreen (settings/RecordScreen.jsx): the generic Setup list + form. */
+.rs-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;align-items:start}
+.rs-form .rs-wide,.rs-form .rs-section,.rs-form .rs-html{grid-column:1/-1}
+.rs-form .rs-bool{align-self:end;min-height:38px}
+.rs-section{margin:6px 0 0;font-size:13px;font-weight:800;color:var(--subtle);text-transform:uppercase;letter-spacing:.04em;grid-column:1/-1}
+.rs-ro{display:block;padding:8px 0;color:var(--subtle);word-break:break-word}
+.rs-html{grid-column:1/-1;font-size:13px;line-height:19px;color:var(--text)}
+@media (max-width:640px){.rs-form{grid-template-columns:minmax(0,1fr)}}

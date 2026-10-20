@@ -3,7 +3,7 @@ import { useCallback, useContext, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MeContext } from "@/lib/me";
 import { roleHome } from "@/lib/cookies";
-import { Button } from "@/components/ui";
+import { Button, Confirm } from "@/components/ui";
 import KraLoader from "@/components/ui/KraLoader";
 import ServerDown from "@/components/ui/ServerDown";
 
@@ -74,19 +74,31 @@ function RootGate({ allow, need, redirect, children }) {
     return () => window.removeEventListener("kpi:signedout", onOut);
   }, [toLogin]);
 
-  const signOut = useCallback(async () => {
+  /* Every Sign out button goes through here, so one confirmation covers the
+     avatar menu, Profile and the server-down / not-allowed cards alike. */
+  const [askOut, setAskOut] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const signOut = useCallback(() => setAskOut(true), []);
+  const doSignOut = useCallback(async () => {
+    setLeaving(true);
     try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch (e) {}
     location.href = "/login";
   }, []);
+  const confirmOut = (
+    <Confirm open={askOut} title="Sign out?" text="You'll need to sign in again to continue."
+      confirmLabel="Sign out" danger busy={leaving}
+      onClose={() => { if (!leaving) setAskOut(false); }} onConfirm={doSignOut} />
+  );
 
   if (phase === "ok") {
-    return <MeContext.Provider value={{ me, refresh: load, signOut }}>{children}</MeContext.Provider>;
+    return <MeContext.Provider value={{ me, refresh: load, signOut }}>{children}{confirmOut}</MeContext.Provider>;
   }
   if (phase === "checking") return <KraLoader />;
   return (
     <div className="k-gate">
       {phase === "down" && <ServerDown message={error} onRetry={load} onSignOut={signOut} />}
       {phase === "forbidden" && <ForbiddenCard me={me} signOut={signOut} />}
+      {confirmOut}
     </div>
   );
 }
