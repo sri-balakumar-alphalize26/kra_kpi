@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, ErrorState, Field, Icon, Input, Lozenge, Modal, PageHeader, Select, Skeleton, useFlags } from "@/components/ui";
+import { Button, ErrorState, Field, Icon, Input, Lozenge, Modal, PageHeader, Select, Skeleton, useFlags, useSpin } from "@/components/ui";
 import { useResource } from "@/lib/useFetch";
 import * as A from "@/lib/services/admin";
 
@@ -25,6 +25,7 @@ export default function OwnerDashboard() {
   const [tq, setTq] = useState("");
   const [range, setRange] = useState({ from: "", to: "" });
   const [busy, setBusy] = useState(false);
+  const [spinning, spin] = useSpin();
   const sum = (k) => clients.reduce((s, c) => s + (c[k] || 0), 0);
 
   const showTasks = async (c) => {
@@ -51,7 +52,7 @@ export default function OwnerDashboard() {
     <>
       <PageHeader crumbs={[{ label: "Tracking" }, { label: "Client billing" }]} title="Client billing">
         {clients.length > 1 && <span className="input" style={{ height: 32, minWidth: 200 }}><Icon n="filter" size={14} /><Select value={only} onChange={(e) => setOnly(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">All clients ({clients.length})</option>{clients.map((c) => <option key={c.client_id} value={c.client_id}>{c.client_name}</option>)}</Select></span>}
-        <Button icon="swap" kind="ghost" onClick={dash.refresh}>Refresh</Button>
+        <Button kind="ghost" onClick={() => spin(dash.refresh)} aria-busy={spinning || undefined}><Icon n="refresh" size={16} className={spinning ? "is-spinning" : ""} />Refresh</Button>
         <Button onClick={() => router.push("/reports/invoices")}>All invoices</Button>
       </PageHeader>
       <div className="page">

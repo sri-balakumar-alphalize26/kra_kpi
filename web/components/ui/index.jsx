@@ -331,6 +331,24 @@ export function useOutside(onClose) {
   return ref;
 }
 
+/* ---- refresh spinner ---- */
+/* [spinning, run]: run(...loaders) calls every loader (each returns a
+   promise), keeps `spinning` true until all have settled, and for at least
+   `min` ms so a fast reload still shows. A click while spinning is ignored.
+   Put className="is-spinning" on the refresh icon while `spinning`. */
+export function useSpin(min = 500) {
+  const [spinning, setSpinning] = useState(false);
+  const busy = useRef(false);
+  const run = useCallback(async (...loaders) => {
+    if (busy.current) return;
+    busy.current = true; setSpinning(true);
+    const t0 = Date.now();
+    await Promise.allSettled(loaders.map((f) => Promise.resolve().then(f)));
+    setTimeout(() => { busy.current = false; setSpinning(false); }, Math.max(0, min - (Date.now() - t0)));
+  }, [min]);
+  return [spinning, run];
+}
+
 /* ---- form field ---- */
 /* `required` adds Odoo's red asterisk after the label, so a mandatory field
    says so before Save is pressed rather than after. */

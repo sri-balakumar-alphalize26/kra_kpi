@@ -6,10 +6,15 @@ it here. This model adds today's workday sessions and the developer roster,
 then lets kpi_ai_assistant_engine read the question and build the answer from
 that data. No AI is involved by default.
 
-When an AI key is configured (kpi.ai.is_available()), the AI is asked ONLY to
-write a one-paragraph summary of the answer the rules already computed — the
-tables and numbers always come from the data. Any AI failure leaves the
-rule-based answer untouched. With no key, nothing leaves the server.
+When an AI key is configured (kpi.ai.is_available(); Configuration > 369 AI
+Assistant), two things change:
+  - a question the rules understood gets a short AI summary on top of the
+    rule-built answer (the tables and numbers always come from the data);
+  - a question the rules did NOT understand goes to the AI with a compact copy
+    of the live data, and the AI answers it in plain words.
+Both see the chat's last few turns (`history`), so follow-ups read naturally.
+Any AI failure leaves the rule-based answer untouched. With no key, nothing
+leaves the server.
 """
 import json
 import logging
@@ -30,6 +35,25 @@ _AI_SYSTEM = (
     "Never invent names, numbers or tasks. If the data is empty, say so. "
     'Reply as JSON: {"text": "..."}'
 )
+
+# For questions the rules don't know: the AI answers from the live data itself.
+_AI_CHAT_SYSTEM = (
+    "You are 369 AI Assistant, the assistant inside a team's KRA/KPI task board. You chat "
+    "with the owner or an admin the way ChatGPT or Claude would: friendly, direct, plain "
+    "English. The latest message carries LIVE DATA from the board (one period: a summary, "
+    "each person's tasks and counts, alerts, and today's workday sessions) and then the "
+    "QUESTION. Earlier messages are the conversation so far; use them to understand "
+    "follow-ups like 'and him?' or 'only the urgent ones'.\n"
+    "Rules: names, numbers, tasks and dates come ONLY from the LIVE DATA. Never invent "
+    "them. If the data cannot answer the question, say so plainly and say what it does "
+    "show. General questions (how to use the board, advice on running the team, drafting "
+    "a short message) you may answer from general knowledge. Hours are decimal hours. "
+    "Keep it short: 1-6 sentences, or a few lines starting with '- ' for a list.\n"
+    'Reply as JSON only: {"text": "...", "suggestions": ["up to 3 short follow-up questions"]}'
+)
+_HISTORY_TURNS = 6          # questions + answers of the chat the AI gets to see
+_HISTORY_CHARS = 600        # per turn
+_AI_TIMEOUT = 25            # seconds per provider, so the cascade fits the web's wait
 
 
 class KpiAiChat(models.Model):
@@ -217,8 +241,10 @@ class KpiAiAssistant(models.AbstractModel):
 
     # ---------------------------------------------------------------- answer
     @api.model
-    def answer(self, question, digest, period, context=None, max_rows=engine.MAX_ROWS):
-        """`max_rows` caps table rows: the drawer shows 50; a download asks for all."""
+    def answer(self, question, digest, period, context=None, max_rows=engine.MAX_ROWS, history=None):
+        """`max_rows` caps table rows: the drawer shows 50; a download asks for all.
+        `history` is the chat so far, [{role: 'user'|'assistant', text}], oldest
+        first (see history_of); only the AI uses it."""
         # "Status of REQ-146" / "find task login": look the task up in ALL tasks,
         # not only the period's digest (an old completed task is not in it).
         search = engine.extract_search(question)
@@ -237,16 +263,101 @@ class KpiAiAssistant(models.AbstractModel):
         res.update({'ai': False, 'source': 'rules'})
 
         ai = self.env['kpi.ai']
-        if res.get('intent') not in ('help', 'unknown', 'smalltalk') and ai.is_available():
-            data, source = ai.complete_json(
+        if not ai.is_available():
+            return res
+        intent = res.get('intent')
+        history = (history or [])[-_HISTORY_TURNS:]
+        if intent == 'help':
+            for b in res.get('blocks') or []:
+                if b.get('type') == 'text' and 'AI is off' in (b.get('text') or ''):
+                    b['text'] = ('AI is on: ask anything about the team in your own words, and '
+                                 'follow up the way you would in a chat. Names and numbers always '
+                                 'come from the live board.')
+        elif intent == 'unknown':
+            # The rules don't know this question: the AI answers it from the data.
+            data, source = ai.complete_chat_json(
+                _AI_CHAT_SYSTEM,
+                history + [{'role': 'user', 'text': 'LIVE DATA:\n%s\n\nQUESTION: %s' % (
+                    self._compact_digest(digest, workday, period), question)}],
+                max_tokens=700, timeout=_AI_TIMEOUT)
+            text = (data or {}).get('text') if isinstance(data, dict) else None
+            if text:
+                sugg = data.get('suggestions') if isinstance(data.get('suggestions'), list) else []
+                res.update({
+                    'title': '', 'intent': 'ai', 'ai': True, 'source': source,
+                    'blocks': [{'type': 'text', 'text': str(text).strip()}],
+                    'suggestions': [str(s).strip()[:80] for s in sugg if str(s).strip()][:3] or res.get('suggestions') or [],
+                })
+        elif intent != 'smalltalk':
+            data, source = ai.complete_chat_json(
                 _AI_SYSTEM,
-                'QUESTION: %s\n\nANSWER DATA:\n%s' % (question, self._compact(res)),
-                max_tokens=400)
+                history + [{'role': 'user', 'text': 'QUESTION: %s\n\nANSWER DATA:\n%s' % (question, self._compact(res))}],
+                max_tokens=400, timeout=_AI_TIMEOUT)
             text = (data or {}).get('text') if isinstance(data, dict) else None
             if text:
                 res['blocks'] = [{'type': 'text', 'text': str(text).strip()}] + res['blocks']
                 res.update({'ai': True, 'source': source})
         return res
+
+    @api.model
+    def history_of(self, chat):
+        """A saved kpi.ai.chat as AI turns: the questions, and each answer's
+        title and text paragraphs (tables are summed up by their title)."""
+        if not chat:
+            return []
+        msgs = chat.message_ids.sorted('id')[-_HISTORY_TURNS * 2:]
+        out = []
+        for m in msgs:
+            if m.role == 'user':
+                text = m.text or ''
+            else:
+                try:
+                    res = json.loads(m.payload_json or '{}')
+                except Exception:
+                    res = {}
+                parts = [res.get('title') or m.text or '']
+                parts += [b.get('text') or '' for b in res.get('blocks') or [] if b.get('type') == 'text']
+                parts += [b.get('title') or '' for b in res.get('blocks') or [] if b.get('type') == 'list']
+                text = '\n'.join(p for p in parts if p)
+            text = text.strip()
+            if text:
+                out.append({'role': 'user' if m.role == 'user' else 'assistant', 'text': text[:_HISTORY_CHARS]})
+        return out
+
+    @api.model
+    def _compact_digest(self, digest, workday, period):
+        """The period's live data as small JSON for the AI: the summary, each
+        person with counts and a trimmed task list, alerts and today's workday.
+        Shrinks the per-person task lists until it fits."""
+        keep = ('ref', 'name', 'status', 'priority', 'deadline', 'estimated_hours', 'actual_hours',
+                'days_paused', 'days_not_started', 'paused_reason', 'completed_date')
+        base = {
+            'today': str(fields.Date.context_today(self)),
+            'period': period, 'date_range': digest.get('date_range'),
+            'note': 'last_week / last_month list completed tasks only' if period in ('last_week', 'last_month') else '',
+            'summary': digest.get('summary'),
+            'alerts': [{k: a.get(k) for k in ('type', 'employee', 'task_name', 'days', 'reason') if a.get(k) not in (None, '')}
+                       for a in (digest.get('alerts') or [])[:30]],
+            'workday_today': workday,
+        }
+        for per_person in (40, 15, 6, 0):
+            people = []
+            for e in digest.get('employees') or []:
+                people.append({
+                    'name': e.get('name'),
+                    'completed': e.get('completed_count'), 'in_progress': e.get('in_progress_count'),
+                    'paused': e.get('paused_count'), 'not_started': e.get('not_started_count'),
+                    'pending_approval': e.get('pending_approval_count'),
+                    'estimated_hours': e.get('total_estimated_hours'), 'actual_hours': e.get('total_actual_hours'),
+                    'performance': e.get('overall_performance'),
+                    'tasks': [{k: t.get(k) for k in keep if t.get(k) not in (None, '', 0)}
+                              for t in (e.get('tasks') or [])[:per_person]],
+                    'tasks_not_listed': max(0, len(e.get('tasks') or []) - per_person),
+                })
+            text = json.dumps(dict(base, people=people), default=str)
+            if len(text) <= 14000:
+                return text
+        return text[:14000]
 
     @api.model
     def _compact(self, res):

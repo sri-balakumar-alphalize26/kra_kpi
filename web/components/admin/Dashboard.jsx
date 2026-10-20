@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMe } from "@/lib/me";
 import { useResource } from "@/lib/useFetch";
 import * as A from "@/lib/services/admin";
-import { Avatar, Button, ErrorState, Skeleton, useOutside } from "@/components/ui";
+import { Avatar, Button, ErrorState, Skeleton, useOutside, useSpin } from "@/components/ui";
 import AiAssistant from "./AiAssistant";
 import { downloadSections } from "./aiExport";
 
@@ -27,7 +27,7 @@ const P = {
   chart: "M4 20V10M10 20V4M16 20v-7M22 20H2", chat: "M21 12a8 8 0 01-12 7l-6 2 2-5.5A8 8 0 1121 12z",
   refresh: "M3 12a9 9 0 0115-6.7L21 8M21 3v5h-5", download: "M12 3v12M7 10l5 5 5-5M5 21h14",
 };
-const Svg = ({ d, size = 16 }) => <svg className="db-ic" viewBox="0 0 24 24" width={size} height={size} aria-hidden="true"><path d={d} /></svg>;
+const Svg = ({ d, size = 16, className = "" }) => <svg className={`db-ic ${className}`} viewBox="0 0 24 24" width={size} height={size} aria-hidden="true"><path d={d} /></svg>;
 
 const reduceMotion = () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const n0 = (v) => Number(v || 0).toLocaleString("en-IN");
@@ -95,7 +95,8 @@ export default function Dashboard() {
   const ov = useResource(A.DASHBOARD_PATH, {}, { ttl: 30000, pollMs: 60000 });
   const live = useResource(A.LIVE_TRACKING_PATH, {}, { ttl: 5000, pollMs: 30000 });
   const cert = useResource(A.CERTIFIED_PATH, {}, { ttl: 30000 });
-  const refreshAll = () => { ov.refresh(); live.refresh(); cert.refresh(); };
+  const [spinning, spin] = useSpin();
+  const refreshAll = () => spin(ov.refresh, live.refresh, cert.refresh);
 
   const o = ov.data?.status ? ov.data : null;
   const lt = live.data?.status ? live.data : null;
@@ -153,7 +154,7 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="db-gbtns">
-            <Button kind="ghost" onClick={refreshAll}><Svg d={P.refresh} size={14} /> Refresh</Button>
+            <Button kind="ghost" onClick={refreshAll} aria-busy={spinning || undefined}><Svg d={P.refresh} size={14} className={spinning ? "is-spinning" : ""} /> Refresh</Button>
             <ReportMenu onPick={report} disabled={!o} />
           </div>
         </div>

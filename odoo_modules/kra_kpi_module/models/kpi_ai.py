@@ -21,6 +21,8 @@ The User-Agent spoof is not decoration: Groq/Cloudflare 403s a bare
 import json
 import logging
 import re
+import time
+import urllib.error
 import urllib.request
 
 from odoo import api, models
@@ -49,6 +51,14 @@ PARAM_ANTHROPIC_MODEL = 'kra_kpi.anthropic_model'
 DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash'
 DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
 DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001'
+
+# The cascade order, and each provider's key / model parameter, default model
+# and `source` tag. Configuration > 369 AI Assistant edits these parameters.
+PROVIDERS = ('gemini', 'groq', 'anthropic')
+SOURCE = {'gemini': 'ai-gemini', 'groq': 'ai-groq', 'anthropic': 'ai-claude'}
+KEY_PARAM = {'gemini': PARAM_GEMINI, 'groq': PARAM_GROQ, 'anthropic': PARAM_ANTHROPIC}
+MODEL_PARAM = {'gemini': PARAM_GEMINI_MODEL, 'groq': PARAM_GROQ_MODEL, 'anthropic': PARAM_ANTHROPIC_MODEL}
+DEFAULT_MODEL = {'gemini': DEFAULT_GEMINI_MODEL, 'groq': DEFAULT_GROQ_MODEL, 'anthropic': DEFAULT_ANTHROPIC_MODEL}
 
 # Areas offered in the WhatsApp picker. Kept here so the prompt and the menu
 # cannot disagree about what a valid area is.
@@ -88,69 +98,119 @@ class KpiAi(models.AbstractModel):
         return any(self._keys())
 
     @api.model
-    def _post(self, url, payload, headers):
+    def _post(self, url, payload, headers, timeout=None):
         req = urllib.request.Request(
             url, data=json.dumps(payload).encode('utf-8'), method='POST')
         req.add_header('Content-Type', 'application/json')
         req.add_header('User-Agent', _UA)
         for k, v in (headers or {}).items():
             req.add_header(k, v)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or _TIMEOUT) as resp:
             return json.loads(resp.read().decode('utf-8'))
+
+    @staticmethod
+    def _turns(messages):
+        """Normalise [{role: user|assistant, text}] for every provider: drop
+        empty turns, merge two turns in a row from the same side, and make the
+        list start and end with the user (Anthropic rejects anything else)."""
+        out = []
+        for m in messages or []:
+            role = 'assistant' if (m.get('role') in ('assistant', 'bot', 'model')) else 'user'
+            text = (m.get('text') or '').strip()
+            if not text:
+                continue
+            if out and out[-1]['role'] == role:
+                out[-1]['text'] += '\n\n' + text
+            else:
+                out.append({'role': role, 'text': text})
+        while out and out[0]['role'] != 'user':
+            out.pop(0)
+        while out and out[-1]['role'] != 'user':
+            out.pop()
+        return out
+
+    @api.model
+    def _call(self, provider, key, system_prompt, turns, max_tokens, timeout=None):
+        """One provider, one request -> the model's raw reply text. Raises."""
+        if provider == 'gemini':
+            out = self._post(
+                'https://generativelanguage.googleapis.com/v1beta/models/'
+                '%s:generateContent?key=%s' % (self._model(PARAM_GEMINI_MODEL, DEFAULT_GEMINI_MODEL), key),
+                {'contents': [{'role': 'model' if t['role'] == 'assistant' else 'user',
+                               'parts': [{'text': t['text']}]} for t in turns],
+                 'systemInstruction': {'parts': [{'text': system_prompt}]},
+                 'generationConfig': {'responseMimeType': 'application/json',
+                                      'maxOutputTokens': max_tokens}}, {}, timeout)
+            return out['candidates'][0]['content']['parts'][0]['text']
+        if provider == 'groq':
+            out = self._post(
+                'https://api.groq.com/openai/v1/chat/completions',
+                {'model': self._model(PARAM_GROQ_MODEL, DEFAULT_GROQ_MODEL),
+                 'response_format': {'type': 'json_object'},
+                 'max_tokens': max_tokens,
+                 'messages': [{'role': 'system', 'content': system_prompt}]
+                             + [{'role': t['role'], 'content': t['text']} for t in turns]},
+                {'Authorization': 'Bearer %s' % key}, timeout)
+            return out['choices'][0]['message']['content']
+        if provider == 'anthropic':
+            out = self._post(
+                'https://api.anthropic.com/v1/messages',
+                {'model': self._model(PARAM_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_MODEL),
+                 'max_tokens': max_tokens,
+                 'system': system_prompt,
+                 'messages': [{'role': t['role'], 'content': t['text']} for t in turns]},
+                {'x-api-key': key, 'anthropic-version': '2023-06-01'}, timeout)
+            return out['content'][0]['text']
+        raise ValueError('Unknown provider %r' % provider)
+
+    @api.model
+    def complete_chat_json(self, system_prompt, messages, max_tokens=800, timeout=None, only=None):
+        """A conversation -> (data: dict|None, source: str). Never raises.
+
+        `messages` is [{role: 'user'|'assistant', text}], oldest first, ending
+        with the question to answer. Providers are tried in the fixed order
+        Gemini, Groq, Claude; `only` limits it to one of them (Test button)."""
+        turns = self._turns(messages)
+        if not turns:
+            return None, 'none'
+        for provider, key in zip(PROVIDERS, self._keys()):
+            if not key or (only and provider != only):
+                continue
+            try:
+                data = self._loads(self._call(provider, key, system_prompt, turns, max_tokens, timeout))
+                if data is not None:
+                    return data, SOURCE[provider]
+            except Exception as exc:
+                _logger.warning('kpi.ai %s failed: %s', provider, exc)
+        return None, 'none'
 
     @api.model
     def complete_json(self, system_prompt, user_text, max_tokens=800):
         """-> (data: dict|None, source: str). Never raises."""
-        gemini, groq, anthropic = self._keys()
+        return self.complete_chat_json(system_prompt, [{'role': 'user', 'text': user_text}], max_tokens)
 
-        if gemini:
+    @api.model
+    def test_provider(self, provider):
+        """Configuration > Test: one tiny request to one provider.
+        -> {status, source, ms} or {status: False, message}."""
+        key = dict(zip(PROVIDERS, self._keys())).get(provider)
+        if not key:
+            return {'status': False, 'message': 'No key saved for this provider.'}
+        t0 = time.time()
+        try:
+            text = self._call(provider, key, 'Reply as JSON only.',
+                              [{'role': 'user', 'text': 'Reply with {"ok": true}'}], 50, 20)
+        except urllib.error.HTTPError as exc:
             try:
-                out = self._post(
-                    'https://generativelanguage.googleapis.com/v1beta/models/'
-                    '%s:generateContent?key=%s' % (self._model(PARAM_GEMINI_MODEL, DEFAULT_GEMINI_MODEL), gemini),
-                    {'contents': [{'parts': [{'text': user_text}]}],
-                     'systemInstruction': {'parts': [{'text': system_prompt}]},
-                     'generationConfig': {'responseMimeType': 'application/json',
-                                          'maxOutputTokens': max_tokens}}, {})
-                txt = out['candidates'][0]['content']['parts'][0]['text']
-                data = self._loads(txt)
-                if data is not None:
-                    return data, 'ai-gemini'
-            except Exception as exc:
-                _logger.warning('kpi.ai gemini failed: %s', exc)
-
-        if groq:
-            try:
-                out = self._post(
-                    'https://api.groq.com/openai/v1/chat/completions',
-                    {'model': self._model(PARAM_GROQ_MODEL, DEFAULT_GROQ_MODEL),
-                     'response_format': {'type': 'json_object'},
-                     'max_tokens': max_tokens,
-                     'messages': [{'role': 'system', 'content': system_prompt},
-                                  {'role': 'user', 'content': user_text}]},
-                    {'Authorization': 'Bearer %s' % groq})
-                data = self._loads(out['choices'][0]['message']['content'])
-                if data is not None:
-                    return data, 'ai-groq'
-            except Exception as exc:
-                _logger.warning('kpi.ai groq failed: %s', exc)
-
-        if anthropic:
-            try:
-                out = self._post(
-                    'https://api.anthropic.com/v1/messages',
-                    {'model': self._model(PARAM_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_MODEL),
-                     'max_tokens': max_tokens,
-                     'system': system_prompt,
-                     'messages': [{'role': 'user', 'content': user_text}]},
-                    {'x-api-key': anthropic, 'anthropic-version': '2023-06-01'})
-                data = self._loads(out['content'][0]['text'])
-                if data is not None:
-                    return data, 'ai-claude'
-            except Exception as exc:
-                _logger.warning('kpi.ai anthropic failed: %s', exc)
-
-        return None, 'none'
+                body = exc.read().decode('utf-8', 'replace')[:300]
+            except Exception:
+                body = ''
+            return {'status': False, 'message': 'HTTP %s: %s' % (exc.code, body or exc.reason)}
+        except Exception as exc:
+            return {'status': False, 'message': str(exc)[:300]}
+        if self._loads(text) is None:
+            return {'status': False, 'message': 'The provider answered, but not with JSON: %s' % (text or '')[:200]}
+        return {'status': True, 'source': SOURCE[provider], 'ms': int((time.time() - t0) * 1000)}
 
     @api.model
     def _loads(self, text):

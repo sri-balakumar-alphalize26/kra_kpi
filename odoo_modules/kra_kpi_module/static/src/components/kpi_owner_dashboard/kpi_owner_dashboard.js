@@ -17,8 +17,8 @@ export class KpiOwnerDashboard extends Component {
                 <i class="fa fa-briefcase me-2 text-primary"/> Client Billing
                 <span class="text-muted small ms-2">Certified tasks ready to invoice</span>
             </h2>
-            <button class="btn btn-outline-primary" t-on-click="refresh">
-                <i class="fa fa-refresh me-1"/> Refresh
+            <button class="btn btn-outline-primary" t-att-aria-busy="state.refreshing ? 'true' : undefined" t-on-click="onRefresh">
+                <i t-attf-class="fa fa-refresh me-1 {{ state.refreshing ? 'fa-spin' : '' }}"/> Refresh
             </button>
         </div>
 
@@ -266,12 +266,22 @@ export class KpiOwnerDashboard extends Component {
             projectFilter: '',
             drilldown: { open: false, client_id: null, client_name: '', tasks: [], textFilter: '' },
             expandedProjects: {},   // {client_id: bool}
+            refreshing: false,      // the Refresh icon spins while true
         });
         onWillStart(async () => { await this.refresh(); });
     }
 
     toggleProjects(client_id) {
         this.state.expandedProjects[client_id] = !this.state.expandedProjects[client_id];
+    }
+
+    /* Refresh button: spin the icon until the reload is back (at least 500 ms). */
+    async onRefresh() {
+        if (this.state.refreshing) return;
+        this.state.refreshing = true;
+        const t0 = Date.now();
+        try { await this.refresh(); } catch (_) { /* rpc shows its own error */ }
+        setTimeout(() => { this.state.refreshing = false; }, Math.max(0, 500 - (Date.now() - t0)));
     }
 
     async refresh() {

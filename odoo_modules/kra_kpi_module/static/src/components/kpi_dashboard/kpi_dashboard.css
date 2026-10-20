@@ -235,6 +235,9 @@
 .o_kpi_db .db-dlmenu button { padding: 8px 10px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 13px; color: var(--db-text); cursor: pointer; }
 .o_kpi_db .db-dlmenu button:hover:not(:disabled) { background: var(--db-hover); }
 
+/* Refresh: the icon spins while the page reloads (state.refreshing). */
+.o_kpi_db .db-spin .db-ic { animation: db-spin .8s linear infinite; transform-origin: 50% 50%; }
+@keyframes db-spin { to { transform: rotate(360deg); } }
 @keyframes db-rise { from { opacity: 0; transform: translateY(10px); } }
 @keyframes db-lit { 0% { box-shadow: 0 0 0 0 transparent; } 30% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--db-brand) 30%, transparent); } 100% { box-shadow: var(--db-shadow); } }
 @keyframes db-shimmer { to { background-position: -200% 0; } }
@@ -256,5 +259,6 @@
 }
 @media (prefers-reduced-motion: reduce) {
     .o_kpi_db .db-card, .o_kpi_db .is-lit, .o_kpi_db .db-skel i { animation: none !important; }
+    .o_kpi_db .db-spin .db-ic { animation-duration: 2.4s; }
     .o_kpi_db .db-spark i, .o_kpi_db .db-bar2 i, .o_kpi_db .db-bar b, .o_kpi_db .db-seg, .o_kpi_db .db-hb i { transition: none !important; }
 }

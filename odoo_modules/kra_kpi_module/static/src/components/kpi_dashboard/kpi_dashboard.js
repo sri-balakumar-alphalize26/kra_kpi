@@ -155,7 +155,7 @@ export class KpiDashboard extends Component {
                     </div>
                 </div>
                 <div class="db-gbtns">
-                    <button type="button" class="btn btn-secondary" t-on-click="refreshAll"><DbIcon d="P.refresh" size="14"/> Refresh</button>
+                    <button type="button" class="btn btn-secondary" t-att-class="{ 'db-spin': state.refreshing }" t-att-aria-busy="state.refreshing ? 'true' : undefined" t-on-click="refreshAll"><DbIcon d="P.refresh" size="14"/> Refresh</button>
                     <span class="db-dlwrap" t-ref="dl">
                         <button type="button" class="btn btn-primary" t-att-disabled="!state.ov" t-att-aria-expanded="state.dlOpen ? 'true' : 'false'" t-on-click="toggleDl">
                             <DbIcon d="P.download" size="14"/> Download report
@@ -440,7 +440,7 @@ export class KpiDashboard extends Component {
         this.P = P; this.ACT = ACT; this.STATUS_WORD = STATUS_WORD;
         this.action = useService("action");
         this.notification = useService("notification");
-        this.state = useState({ ov: null, live: null, clients: null, ovErr: "", grown: false, liveGrown: false, range: 7, act: null, lit: null, dlOpen: false, dlBusy: "", dlErr: "" });
+        this.state = useState({ ov: null, live: null, clients: null, ovErr: "", grown: false, liveGrown: false, range: 7, act: null, lit: null, dlOpen: false, dlBusy: "", dlErr: "", refreshing: false });
         this.refs = Object.fromEntries(["kpis", "k3", "pipe", "deadlines", "emp", "clients", "att", "money"].map((k) => [k, useRef(k)]));
         this.dlRef = useRef("dl");
 
@@ -499,7 +499,15 @@ export class KpiDashboard extends Component {
             if (r && r.status) this.state.clients = r.clients || [];
         } catch (_) { /* the rest of the page still shows */ }
     }
-    refreshAll() { this.loadOv(); this.loadLive(); this.loadClients(); }
+    /* The icon spins until all three reads are back (at least 500 ms, so a
+       fast reload still shows); a click while it spins is ignored. */
+    async refreshAll() {
+        if (this.state.refreshing) return;
+        this.state.refreshing = true;
+        const t0 = Date.now();
+        await Promise.allSettled([this.loadOv(), this.loadLive(), this.loadClients()]);
+        setTimeout(() => { this.state.refreshing = false; }, Math.max(0, 500 - (Date.now() - t0)));
+    }
     toggleDl() { this.state.dlOpen = !this.state.dlOpen; this.state.dlErr = ""; }
     setRange(n) { this.state.range = n; this.state.act = null; }
 

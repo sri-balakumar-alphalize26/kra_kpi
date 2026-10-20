@@ -63,6 +63,18 @@ const fmtWhen = (s) => {
     return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }) + `, ${time}`;
 };
 const exportable = (res) => res && res.intent !== "smalltalk" && (res.blocks || []).length > 0;
+/* Typed-out answers: about 25 ms a word, never longer than ~4 s in all. */
+const TYPE_MS = 25;
+const TYPE_TICKS = 160;
+const wordCount = (s) => (String(s || "").match(/\S+/g) || []).length;
+const firstWords = (s, n) => {
+    if (n <= 0) return "";
+    const re = /\S+/g; let m; let k = 0; let end = 0;
+    while ((m = re.exec(s)) && k < n) { end = m.index + m[0].length; k++; }
+    return s.slice(0, end);
+};
+const textWords = (res) => (res.blocks || []).reduce((s, b) => s + (b.type !== "stats" && b.type !== "list" && b.type !== "table" ? wordCount(b.text) : 0), 0);
+const reduceMotion = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
 /* ------------------------------------------------ PDF / Word (window.jspdf, window.JSZip from the bundle's CDN scripts) */
 const pdfText = (s) => String(s ?? "").replace(/[·•]/g, "-").replace(/[–—]/g, "-").replace(/…/g, "...").replace(/[‘’]/g, "'")
@@ -190,7 +202,7 @@ export class KpiAiAssistant extends Component {
                 <span class="o_kpi_ai_orb sm"><i class="fa fa-bar-chart"/></span>
                 <div class="o_kpi_ai_headtxt">
                     <strong>369 AI Assistant</strong>
-                    <span><i class="o_kpi_ai_live"/> Reading your dashboard · live data</span>
+                    <span><i class="o_kpi_ai_live"/> <t t-esc="lastAi ? 'AI on · reading your dashboard' : 'Reading your dashboard · live data'"/></span>
                 </div>
                 <button type="button" t-attf-class="o_kpi_ai_iconbtn {{ state.view === 'faq' ? 'on' : '' }}" title="Questions you can ask" t-on-click="() => this.setView(state.view === 'faq' ? 'chat' : 'faq')"><i class="fa fa-question-circle-o"/></button>
                 <span t-if="botIdx.length and state.view === 'chat'" class="o_kpi_ai_dlwrap head">
@@ -280,14 +292,14 @@ export class KpiAiAssistant extends Component {
                                     <t t-if="m.role === 'bot'">
                                         <p t-if="m.res.title"><strong t-esc="m.res.title"/></p>
                                         <t t-foreach="m.res.blocks || []" t-as="b" t-key="b_index">
-                                            <div t-if="b.type === 'stats'" class="o_kpi_ai_stats">
+                                            <div t-if="b.type === 'stats' and full(m)" t-attf-class="o_kpi_ai_stats {{ m_last ? 'o_kpi_ai_fadein' : '' }}">
                                                 <div t-foreach="b.items" t-as="it" t-key="it_index" class="o_kpi_ai_stat"><b t-esc="it.value"/><small t-esc="it.label"/></div>
                                             </div>
-                                            <t t-elif="b.type === 'list'">
+                                            <div t-elif="b.type === 'list' and full(m)" t-att-class="m_last ? 'o_kpi_ai_fadein' : ''">
                                                 <p t-if="b.title" class="o_kpi_ai_sub" t-esc="b.title"/>
                                                 <ul><li t-foreach="b.items" t-as="li" t-key="li_index" t-esc="li"/></ul>
-                                            </t>
-                                            <div t-elif="b.type === 'table'" class="o_kpi_ai_table">
+                                            </div>
+                                            <div t-elif="b.type === 'table' and full(m)" t-attf-class="o_kpi_ai_table {{ m_last ? 'o_kpi_ai_fadein' : '' }}">
                                                 <div class="o_kpi_ai_tablescroll">
                                                     <table>
                                                         <thead><tr><th t-foreach="b.columns" t-as="c" t-key="c.key" t-att-class="c.kind === 'num' ? 'num' : ''" t-esc="c.label"/></tr></thead>
@@ -304,9 +316,12 @@ export class KpiAiAssistant extends Component {
                                                 </div>
                                                 <p t-if="b.more" class="o_kpi_ai_meta">+<t t-esc="b.more"/> more not shown. Narrow it down, e.g. by person or priority (downloads include every row).</p>
                                             </div>
-                                            <p t-elif="b.text" t-esc="b.text"/>
+                                            <t t-elif="b.text and b.type !== 'stats' and b.type !== 'list' and b.type !== 'table'">
+                                                <p t-if="textView(m, b_index) !== null" class="o_kpi_ai_p"><t t-esc="textView(m, b_index)"/><span t-if="caretAt(m, b_index)" class="o_kpi_ai_caret"/></p>
+                                            </t>
                                         </t>
-                                        <div t-if="m.res.intent !== 'smalltalk'" class="o_kpi_ai_metarow">
+                                        <p t-if="m.stopped" class="o_kpi_ai_meta">Stopped.</p>
+                                        <div t-if="m.res.intent !== 'smalltalk' and !m.typing" class="o_kpi_ai_metarow">
                                             <span class="o_kpi_ai_meta"><t t-esc="SOURCE[m.res.source] || m.res.source"/><t t-if="m.res.date_range"> · <t t-esc="fmtRange(m.res.date_range)"/></t></span>
                                             <span t-if="exportable(m.res)" class="o_kpi_ai_dlwrap">
                                                 <button type="button" class="o_kpi_ai_dl" t-on-click="() => this.toggleDl(m_index)"><i class="fa fa-download"/> Download</button>
@@ -317,13 +332,13 @@ export class KpiAiAssistant extends Component {
                                                 </span>
                                             </span>
                                         </div>
-                                        <div t-if="m_last and (m.res.suggestions || []).length" class="o_kpi_ai_chips o_kpi_ai_chiprow">
-                                            <button t-foreach="m.res.suggestions" t-as="s" t-key="s" type="button" class="o_kpi_ai_chip sm" t-att-disabled="state.busy" t-on-click="() => this.ask(s)"><i class="fa fa-magic"/> <t t-esc="s"/></button>
+                                        <div t-if="m_last and full(m) and (m.res.suggestions || []).length" class="o_kpi_ai_chips o_kpi_ai_chiprow">
+                                            <button t-foreach="m.res.suggestions" t-as="s" t-key="s" type="button" class="o_kpi_ai_chip sm" t-att-disabled="working" t-on-click="() => this.ask(s)"><i class="fa fa-magic"/> <t t-esc="s"/></button>
                                         </div>
                                     </t>
                                     <t t-elif="m.role === 'err'">
                                         <p class="o_kpi_ai_err" t-esc="m.text"/>
-                                        <button type="button" class="o_kpi_ai_chip sm" t-att-disabled="state.busy" t-on-click="() => this.ask(m.q)">Try again</button>
+                                        <button type="button" class="o_kpi_ai_chip sm" t-att-disabled="working" t-on-click="() => this.ask(m.q)">Try again</button>
                                     </t>
                                     <p t-else="" class="o_kpi_ai_meta" t-esc="m.text"/>
                                 </div>
@@ -335,7 +350,7 @@ export class KpiAiAssistant extends Component {
 
                 <div t-if="state.msgs.length and state.view === 'chat' and !typeAhead.length" class="o_kpi_ai_quick">
                     <button type="button" class="o_kpi_ai_qchip faq" t-on-click="() => this.setView('faq')"><i class="fa fa-question-circle-o"/> All questions</button>
-                    <button t-foreach="QUICK" t-as="qk" t-key="qk[0]" type="button" class="o_kpi_ai_qchip" t-att-disabled="state.busy" t-att-title="qk[1]" t-on-click="() => this.ask(qk[1])" t-esc="qk[0]"/>
+                    <button t-foreach="QUICK" t-as="qk" t-key="qk[0]" type="button" class="o_kpi_ai_qchip" t-att-disabled="working" t-att-title="qk[1]" t-on-click="() => this.ask(qk[1])" t-esc="qk[0]"/>
                 </div>
                 <div class="o_kpi_ai_composerwrap">
                     <ul t-if="typeAhead.length" class="o_kpi_ai_suggest">
@@ -343,7 +358,7 @@ export class KpiAiAssistant extends Component {
                     </ul>
                     <form class="o_kpi_ai_composer" t-on-submit.prevent="() => this.ask()">
                         <textarea t-ref="input" rows="1" maxlength="1000" placeholder="Ask anything about your team's work…" t-model="state.q" t-on-keydown="onKeyDown"/>
-                        <button t-if="state.busy" type="button" class="o_kpi_ai_send stop" title="Stop" t-on-click="stop"><span/></button>
+                        <button t-if="working" type="button" class="o_kpi_ai_send stop" title="Stop" t-on-click="stop"><span/></button>
                         <button t-else="" type="submit" class="o_kpi_ai_send" title="Send" t-att-disabled="!state.q.trim()"><i class="fa fa-arrow-up"/></button>
                     </form>
                 </div>
@@ -358,6 +373,8 @@ export class KpiAiAssistant extends Component {
         this.bodyRef = useRef("body");
         this.inputRef = useRef("input");
         this.seq = 0;
+        this.stoppedSeq = -1; /* the question Stop dropped: its late reply still names the chat it was saved in */
+        this.typeTimer = null;
         this.state = useState({
             open: !!this.props.docked, view: "chat", msgs: [], ctx: {}, q: "", busy: false, chatId: null,
             chats: null, histErr: "", people: [], tab: "today", person: null, peopleFind: "",
@@ -376,7 +393,7 @@ export class KpiAiAssistant extends Component {
             if (this.props.docked) this.loadPeople();
             try { const id = Number(sessionStorage.getItem(KEY)); if (id) this.loadChat(id, true); } catch (_) { /* storage blocked */ }
         });
-        onWillUnmount(() => { window.removeEventListener("keydown", this.onKey); window.removeEventListener("resize", this.onResize); });
+        onWillUnmount(() => { window.removeEventListener("keydown", this.onKey); window.removeEventListener("resize", this.onResize); clearInterval(this.typeTimer); });
     }
 
     /* ---------------- derived */
@@ -386,7 +403,28 @@ export class KpiAiAssistant extends Component {
         const f = this.state.peopleFind.trim().toLowerCase();
         return this.state.people.filter((p) => !f || (p.name || "").toLowerCase().includes(f));
     }
-    get typeAhead() { return this.state.q.trim().length >= 2 && !this.state.busy ? suggest(this.state.q, this.state.people, 5) : []; }
+    get typing() { return this.state.msgs.some((m) => m.typing); }
+    get working() { return this.state.busy || this.typing; } /* waiting for an answer, or typing one out */
+    get lastAi() { const b = [...this.state.msgs].reverse().find((m) => m.role === "bot"); return !!(b && b.res && b.res.ai); }
+    get typeAhead() { return this.state.q.trim().length >= 2 && !this.working ? suggest(this.state.q, this.state.people, 5) : []; }
+    /* Typing: m.shown words of the answer's text are visible; tables and tiles wait for the end. */
+    full(m) { return !m.typing && !m.stopped; }
+    _wordsBefore(m, bi) {
+        let n = 0;
+        (m.res.blocks || []).slice(0, bi).forEach((b) => { if (b.type !== "stats" && b.type !== "list" && b.type !== "table") n += wordCount(b.text); });
+        return n;
+    }
+    textView(m, bi) {
+        const b = m.res.blocks[bi];
+        if (this.full(m)) return b.text;
+        const left = (m.shown || 0) - this._wordsBefore(m, bi);
+        return left <= 0 ? null : firstWords(b.text, left);
+    }
+    caretAt(m, bi) {
+        if (!m.typing) return false;
+        const before = this._wordsBefore(m, bi);
+        return (m.shown || 0) > before && (m.shown || 0) <= before + wordCount(m.res.blocks[bi].text);
+    }
     get botIdx() { return this.state.msgs.map((m, i) => (m.role === "bot" && exportable(m.res) ? i : -1)).filter((i) => i >= 0); }
     get firstName() { return ((user && user.name) || "").trim().split(" ")[0] || "there"; }
     get initial() { return ((user && user.name) || "?").trim().charAt(0).toUpperCase(); }
@@ -418,7 +456,7 @@ export class KpiAiAssistant extends Component {
     /* ---------------- asking */
     async ask(text) {
         const question = String(text ?? this.state.q).trim();
-        if (!question || this.state.busy) return;
+        if (!question || this.working) return;
         const mine = ++this.seq;
         const ctxIn = this.state.ctx;
         this.state.q = ""; this.state.view = "chat"; this.state.hi = -1; this.state.dlOpen = null;
@@ -426,9 +464,15 @@ export class KpiAiAssistant extends Component {
         this.state.busy = true; this.scrollDown();
         try {
             const r = await rpc("/kra_kpi/ai_assistant/ask", { question: question.slice(0, 1000), period: "today", context: ctxIn || {}, chat_id: this.state.chatId || null });
-            if (mine !== this.seq) return;
+            if (mine !== this.seq) {
+                /* Stopped: the answer is dropped, but it was saved to a chat. Keep
+                   using that chat, so the next question doesn't start another one. */
+                if (this.stoppedSeq === mine && r && r.chat_id && !this.state.chatId) { this.state.chatId = r.chat_id; this.remember(); }
+                return;
+            }
             if (!r || r.status === false) throw new Error((r && r.message) || "The assistant couldn't answer that.");
-            this.state.msgs.push({ role: "bot", res: r, q: question, ctxIn });
+            this.state.msgs.push({ role: "bot", res: r, q: question, ctxIn, typing: false, stopped: false, shown: 0 });
+            this.typeOut(this.state.msgs[this.state.msgs.length - 1]);
             this.state.ctx = r.context || {};
             if (r.chat_id) { this.state.chatId = r.chat_id; this.state.chats = null; this.remember(); }
             if (this.props.onAnswer) { try { this.props.onAnswer(r, question); } catch (_) { /* a page hook must not break the chat */ } }
@@ -438,8 +482,36 @@ export class KpiAiAssistant extends Component {
             if (mine === this.seq) { this.state.busy = false; this.scrollDown(); }
         }
     }
-    stop() { this.seq++; this.state.busy = false; this.state.msgs.push({ role: "note", text: "Stopped." }); }
+    /* Reveal the answer's text word by word; `m` is the reactive message. */
+    typeOut(m) {
+        clearInterval(this.typeTimer);
+        const total = textWords(m.res);
+        if (!total || reduceMotion()) return;
+        const step = Math.max(1, Math.ceil(total / TYPE_TICKS));
+        m.shown = 0; m.typing = true;
+        this.typeTimer = setInterval(() => {
+            m.shown = Math.min(total, m.shown + step);
+            this.follow();
+            if (m.shown >= total) { clearInterval(this.typeTimer); m.typing = false; this.scrollDown(); }
+        }, TYPE_MS);
+    }
+    /* Keep the newest words in view while typing, unless the user scrolled up. */
+    follow() {
+        const el = this.bodyRef.el;
+        if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 120) el.scrollTop = el.scrollHeight;
+    }
+    /* Stop: while waiting, drop the answer; while typing, freeze it where it is. */
+    stop() {
+        if (this.state.busy) {
+            this.stoppedSeq = this.seq++;
+            this.state.busy = false; this.state.msgs.push({ role: "note", text: "Stopped." });
+            return;
+        }
+        clearInterval(this.typeTimer);
+        for (const m of this.state.msgs) if (m.typing) { m.typing = false; m.stopped = true; }
+    }
     newChat() {
+        clearInterval(this.typeTimer);
         this.seq++; this.state.busy = false; this.state.msgs.splice(0); this.state.ctx = {}; this.state.q = "";
         this.state.chatId = null; this.state.view = "chat"; this.remember();
         this.inputRef.el && this.inputRef.el.focus();
@@ -488,6 +560,7 @@ export class KpiAiAssistant extends Component {
         try {
             const c = await rpc("/kra_kpi/ai_assistant/chat", { chat_id: Number(id) });
             if (!c || c.status === false) throw new Error((c && c.message) || "Could not open that chat.");
+            clearInterval(this.typeTimer);
             this.seq++; this.state.busy = false;
             this.state.msgs.splice(0, this.state.msgs.length, ...(c.messages || []));
             this.state.ctx = c.context || {}; this.state.chatId = c.id; this.state.view = "chat"; this.remember(); this.scrollDown();

@@ -106,6 +106,13 @@
 .o_kpi_ai_dots i { width: 6px; height: 6px; border-radius: 50%; background: #8FA8E0; animation: o_kpi_ai_bounce 1s infinite; }
 .o_kpi_ai_dots i:nth-child(2) { animation-delay: .15s; } .o_kpi_ai_dots i:nth-child(3) { animation-delay: .3s; }
 @keyframes o_kpi_ai_bounce { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+/* Typed-out answers: AI text keeps its line breaks; a caret blinks at the end
+   while it types; tables and tiles fade in once the text is done. */
+.o_kpi_ai_text .o_kpi_ai_p { white-space: pre-line; }
+.o_kpi_ai_caret { display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: text-bottom; border-radius: 1px; background: var(--ai-ink); animation: o_kpi_ai_blink .9s steps(1) infinite; }
+@keyframes o_kpi_ai_blink { 50% { opacity: 0; } }
+.o_kpi_ai_fadein { animation: o_kpi_ai_fadein .3s ease-out both; }
+@keyframes o_kpi_ai_fadein { from { opacity: 0; transform: translateY(4px); } }
 
 .o_kpi_ai_quick { display: flex; gap: 6px; padding: 6px 12px 0; overflow-x: auto; flex: none; }
 .o_kpi_ai_qchip { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--ai-hint); background: var(--ai-chip); color: var(--ai-chip-ink); font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
@@ -129,5 +136,5 @@
 .o_kpi_ai_orb .fa { animation: o_kpi_ai_spin 10s linear infinite reverse; }
 .o_kpi_ai_orb.sm { width: 28px; height: 28px; margin: 0; font-size: 12px; box-shadow: 0 0 10px 1px rgba(30, 64, 175, .25); }
 @keyframes o_kpi_ai_spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .o_kpi_ai_orb, .o_kpi_ai_orb .fa, .o_kpi_ai_dots i, .o_kpi_ai_user, .o_kpi_ai_ai { animation: none; } .o_kpi_ai_drawer { transition: opacity .2s; } }
+@media (prefers-reduced-motion: reduce) { .o_kpi_ai_orb, .o_kpi_ai_orb .fa, .o_kpi_ai_dots i, .o_kpi_ai_user, .o_kpi_ai_ai, .o_kpi_ai_caret, .o_kpi_ai_fadein { animation: none; } .o_kpi_ai_drawer { transition: opacity .2s; } }
 @media (max-width: 768px) { .o_kpi_ai_drawer:not(.o_kpi_ai_panel) { right: 8px; bottom: 8px; width: calc(100vw - 16px); } .o_kpi_ai_launcher { right: 16px; bottom: 16px; } }

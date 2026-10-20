@@ -127,7 +127,10 @@ async function handle(req, ctx) {
 
   /* ---- JSON-RPC ---- */
   const params = (await req.json().catch(() => null)) ?? {};
-  const r = await odooRpc(target, params, { session });
+  /* The 369 AI Assistant may wait on up to three AI providers in turn (25 s
+     each), so its questions get longer than the usual 60 s. */
+  const slow = target.startsWith("/kra_kpi/ai_assistant/ask") || target.startsWith("/kra_kpi/ai_assistant/export");
+  const r = await odooRpc(target, params, { session, ...(slow ? { timeout: 100000 } : {}) });
   const res = NextResponse.json(r.ok ? r.result ?? null : r.body, { status: r.ok ? 200 : r.status });
   /* Never let a shared cache hold an answer that was fetched as this person. */
   res.headers.set("Cache-Control", "no-store");

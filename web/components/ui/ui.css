@@ -312,3 +312,6 @@
 @keyframes mo-drop{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
 .sel-opt.hi{transform:translateX(2px)}
 @media (prefers-reduced-motion:reduce){.pill,.who-chip,.idle-opt,.tabs span,.seg span,.btn,.sel-opt,.overlay,.modal,.sel-pop,.menu,.reveal,.pill.on .emo{animation:none!important;transition:none!important;transform:none!important}}
+/* Refresh icons spin while their data reloads (useSpin). k-spin: shell.css. */
+.is-spinning{animation:k-spin .8s linear infinite;transform-origin:50% 50%}
+@media (prefers-reduced-motion:reduce){.is-spinning{animation-duration:2.4s!important}}

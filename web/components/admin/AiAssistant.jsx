@@ -18,7 +18,11 @@ import { useOutside } from "@/components/ui";
    chat is saved (kpi.ai.chat) and listed under History.
    variant="panel": docked on the Dashboard page (Dashboard.jsx), always open,
    no launcher or close; Ctrl/⌘+J puts the cursor in the box. Same chat as the
-   drawer. `onAnswer(res, question)` hears every answer (to highlight a card). */
+   drawer. `onAnswer(res, question)` hears every answer (to highlight a card).
+   With an AI key (Odoo > Configuration > 369 AI Assistant) the server also
+   answers questions the rules don't know, and reads the chat so far.
+   A new answer is typed out word by word (tables follow once the text is
+   done); Stop freezes it where it is, or drops an answer still on its way. */
 const KEY = "kpi.assistant.chat";
 const SOURCE = { rules: "Data answer", "ai-gemini": "Gemini", "ai-groq": "Groq", "ai-claude": "Claude" };
 const P = { chart: "M7 17v-4M12 17V8M17 17v-6", spark: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z",
@@ -27,6 +31,19 @@ const P = { chart: "M7 17v-4M12 17V8M17 17v-6", spark: "M12 3l1.8 5.2L19 10l-5.2
   download: "M12 3v12M7 10l5 5 5-5M5 21h14", pdf: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4",
   trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3", faq: "M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z",
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3", user: "M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10z" };
+
+const reduceMotion = () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+/* Typing: about 25 ms a word, but never longer than ~4 s for the whole answer. */
+const TYPE_MS = 25;
+const TYPE_TICKS = 160;
+const wordCount = (s) => (String(s || "").match(/\S+/g) || []).length;
+/* The first `n` words of `s`, keeping its spacing and line breaks. */
+const firstWords = (s, n) => {
+  if (n <= 0) return "";
+  const re = /\S+/g; let m; let k = 0; let end = 0;
+  while ((m = re.exec(s)) && k < n) { end = m.index + m[0].length; k++; }
+  return s.slice(0, end);
+};
 
 const load = () => { try { return JSON.parse(sessionStorage.getItem(KEY) || "null"); } catch (_) { return null; } };
 const save = (v) => { try { sessionStorage.setItem(KEY, JSON.stringify(v)); } catch (_) {} };
@@ -52,11 +69,14 @@ export default function AiAssistant({ open: openProp, onOpenChange, variant = "d
   const [openSelf, setOpenSelf] = useState(false);
   const open = docked || (openProp ?? openSelf);
   const setOpen = useCallback((v) => (onOpenChange ? onOpenChange(v) : setOpenSelf(v)), [onOpenChange]);
-  const [msgs, setMsgs] = useState([]); /* {role:"user",text} | {role:"bot",res} | {role:"err",text,q} | {role:"note",text} */
+  /* {role:"user",text} | {role:"bot",res,typing?,stopped?,shownWords?} | {role:"err",text,q} | {role:"note",text} */
+  const [msgs, setMsgs] = useState([]);
   const [ctx, setCtx] = useState({});
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const seq = useRef(0); /* bumps on Stop / New chat: a late answer to an older question is dropped */
+  const stoppedSeq = useRef(-1); /* the question Stop dropped: its late reply still names the chat it was saved in */
+  const typedRef = useRef(0); /* words shown so far of the answer being typed (read by Stop) */
   const bodyRef = useRef(null);
   const inputRef = useRef(null);
   const [chatId, setChatId] = useState(null);
@@ -73,7 +93,8 @@ export default function AiAssistant({ open: openProp, onOpenChange, variant = "d
     /* The tab's copy shows at once; the saved chat on the server is the truth. */
     if (s.chatId) A.getAssistantChat(s.chatId).then((c) => { setMsgs(c.messages || []); setCtx(c.context || {}); }).catch(() => setChatId(null));
   }, []);
-  useEffect(() => { save({ msgs: msgs.slice(-30), ctx, chatId }); }, [msgs, ctx, chatId]);
+  /* Saved without the typing flag: a reload shows the answer at once. */
+  useEffect(() => { save({ msgs: msgs.slice(-30).map((m) => (m.typing ? { ...m, typing: false } : m)), ctx, chatId }); }, [msgs, ctx, chatId]);
   useEffect(() => { if (open && !people.length) A.getIntakeUsers().then((u) => setPeople(u || [])).catch(() => {}); }, [open, people.length]);
   useEffect(() => { const el = bodyRef.current; if (el && view === "chat") el.scrollTop = el.scrollHeight; }, [msgs, busy, open, view]);
   useEffect(() => { if (open && !docked) { const t = setTimeout(() => inputRef.current?.focus(), 250); return () => clearTimeout(t); } }, [open, docked]);
@@ -96,20 +117,28 @@ export default function AiAssistant({ open: openProp, onOpenChange, variant = "d
     return () => window.removeEventListener("keydown", onKey);
   }, [open, setOpen, docked]);
 
-  const typeAhead = useMemo(() => (q.trim().length >= 2 && !busy ? suggest(q, people, 5) : []), [q, people, busy]);
+  const typing = msgs.some((m) => m.typing);
+  const working = busy || typing; /* waiting for an answer, or typing one out */
+  const typeAhead = useMemo(() => (q.trim().length >= 2 && !working ? suggest(q, people, 5) : []), [q, people, working]);
   useEffect(() => setHi(-1), [q]);
 
   const ask = async (text) => {
     const question = String(text ?? q).trim();
-    if (!question || busy) return;
+    if (!question || working) return;
     const mine = ++seq.current;
     setQ(""); setView("chat");
     setMsgs((m) => [...m, { role: "user", text: question }]);
     setBusy(true);
     try {
       const r = A.assertOk(await A.askAssistant({ question, period: "today", context: ctx, chatId }), "The assistant couldn't answer that.");
-      if (mine !== seq.current) return;
-      setMsgs((m) => [...m, { role: "bot", res: r, q: question, ctxIn: ctx }]); /* q + ctxIn: to rebuild it in full for a download */
+      if (mine !== seq.current) {
+        /* Stopped: the answer is dropped, but it was saved to a chat. Keep
+           using that chat, so the next question doesn't start another one. */
+        if (stoppedSeq.current === mine && r.chat_id) setChatId((c) => c ?? r.chat_id);
+        return;
+      }
+      typedRef.current = 0;
+      setMsgs((m) => [...m, { role: "bot", res: r, q: question, ctxIn: ctx, typing: true }]); /* q + ctxIn: to rebuild it in full for a download */
       setCtx(r.context || {});
       if (r.chat_id) { setChatId(r.chat_id); setChats(null); }
       onAnswer?.(r, question);
@@ -123,7 +152,21 @@ export default function AiAssistant({ open: openProp, onOpenChange, variant = "d
     setView("chat"); setQ(item.fill);
     setTimeout(() => { const el = inputRef.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 50);
   };
-  const stop = () => { seq.current++; setBusy(false); setMsgs((m) => [...m, { role: "note", text: "Stopped." }]); };
+  /* Stop: while waiting, drop the answer; while typing, freeze it where it is. */
+  const stop = () => {
+    if (busy) {
+      stoppedSeq.current = seq.current++;
+      setBusy(false); setMsgs((m) => [...m, { role: "note", text: "Stopped." }]);
+      return;
+    }
+    setMsgs((m) => m.map((x) => (x.typing ? { ...x, typing: false, stopped: true, shownWords: typedRef.current } : x)));
+  };
+  const typed = useCallback((i) => setMsgs((m) => m.map((x, j) => (j === i && x.typing ? { ...x, typing: false } : x))), []);
+  /* Keep the newest words in view while typing, unless the user scrolled up. */
+  const follow = useCallback(() => {
+    const el = bodyRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 120) el.scrollTop = el.scrollHeight;
+  }, []);
   const newChat = () => { seq.current++; setBusy(false); setMsgs([]); setCtx({}); setQ(""); setChatId(null); setView("chat"); inputRef.current?.focus(); };
   const showHistory = async () => {
     if (view === "history") { setView("chat"); return; }
@@ -246,8 +289,9 @@ export default function AiAssistant({ open: openProp, onOpenChange, variant = "d
                 <div key={i} className="ai-ai">
                   <Orb small />
                   <div className={`ai-text ${m.role === "err" ? "err" : ""}`}>
-                    {m.role === "bot" ? <Answer res={m.res} onAsk={ask} busy={busy} last={i === msgs.length - 1} onDownload={exportable(m.res) ? (kind) => downloadOne(kind, i) : null} />
-                      : m.role === "err" ? <><p>{m.text}</p><button type="button" className="ai-chip sm" onClick={() => ask(m.q)} disabled={busy}>Try again</button></>
+                    {m.role === "bot" ? <Answer res={m.res} onAsk={ask} busy={working} last={i === msgs.length - 1} onDownload={exportable(m.res) ? (kind) => downloadOne(kind, i) : null}
+                        typing={!!m.typing} frozenAt={m.stopped ? m.shownWords ?? 0 : null} onTyped={() => typed(i)} progressRef={typedRef} onTick={follow} />
+                      : m.role === "err" ? <><p>{m.text}</p><button type="button" className="ai-chip sm" onClick={() => ask(m.q)} disabled={working}>Try again</button></>
                       : <p className="ai-meta">{m.text}</p>}
                   </div>
                 </div>
@@ -258,7 +302,7 @@ export default function AiAssistant({ open: openProp, onOpenChange, variant = "d
             {msgs.length > 0 && view === "chat" && !typeAhead.length && (
               <div className="ai-quick" aria-label="Quick questions">
                 <button type="button" className="ai-qchip faq" onClick={() => setView("faq")}><Svg d={P.faq} /> All questions</button>
-                {QUICK.map(([label, question]) => <button key={label} type="button" className="ai-qchip" disabled={busy} onClick={() => ask(question)} title={question}>{label}</button>)}
+                {QUICK.map(([label, question]) => <button key={label} type="button" className="ai-qchip" disabled={working} onClick={() => ask(question)} title={question}>{label}</button>)}
               </div>
             )}
 
@@ -274,8 +318,8 @@ export default function AiAssistant({ open: openProp, onOpenChange, variant = "d
               )}
               <form className="ai-composer" onSubmit={(e) => { e.preventDefault(); ask(); }}>
                 <textarea ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} rows={1} maxLength={1000} placeholder="Ask anything about your team's work…" aria-label="Ask the assistant" onKeyDown={onKeyDown} />
-                {busy
-                  ? <button type="button" className="ai-send stop" onClick={stop} aria-label="Stop"><span /></button>
+                {working
+                  ? <button type="button" className="ai-send stop" onClick={stop} aria-label="Stop" title="Stop"><span /></button>
                   : <button type="submit" className="ai-send" disabled={!q.trim()} aria-label="Send"><Svg d={P.send} /></button>}
               </form>
             </div>
@@ -390,36 +434,81 @@ function DownloadMenu({ onPick, label = "Download", icon, title }) {
   );
 }
 
-function Answer({ res, onAsk, busy, last, onDownload }) {
+/* Types out the answer's text: `n` words shown so far (all of them when not
+   typing). Calls onDone once at the end; reduced motion shows it at once. */
+function useTyping(total, typing, { onDone, progressRef, onTick }) {
+  const [n, setN] = useState(typing ? 0 : total);
+  const cb = useRef({ onDone, onTick });
+  cb.current = { onDone, onTick };
+  useEffect(() => {
+    if (!typing) return undefined;
+    if (!total || reduceMotion()) { setN(total); cb.current.onDone?.(); return undefined; }
+    const step = Math.max(1, Math.ceil(total / TYPE_TICKS));
+    let k = 0;
+    const t = setInterval(() => {
+      k = Math.min(total, k + step);
+      if (progressRef) progressRef.current = k;
+      setN(k); cb.current.onTick?.();
+      if (k >= total) { clearInterval(t); cb.current.onDone?.(); }
+    }, TYPE_MS);
+    return () => clearInterval(t);
+  }, [typing, total, progressRef]);
+  return typing ? n : total;
+}
+
+function Answer({ res, onAsk, busy, last, onDownload, typing = false, frozenAt = null, onTyped, progressRef, onTick }) {
   const chat = res.intent === "smalltalk";
+  const blocks = res.blocks || [];
+  const total = useMemo(() => blocks.reduce((s, b) => s + (b.type === "text" ? wordCount(b.text) : 0), 0), [blocks]);
+  const typed = useTyping(total, typing, { onDone: onTyped, progressRef, onTick });
+  const stopped = frozenAt != null;
+  const shown = stopped ? Math.min(frozenAt, total) : typed;
+  const writing = typing || stopped; /* the text is (or stopped) part-way: the rest waits */
+  let left = shown;
+  const parts = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type === "text") {
+      if (writing && left <= 0) break;
+      const words = wordCount(b.text);
+      const text = writing && left < words ? firstWords(b.text, left) : b.text;
+      left -= words;
+      parts.push(<Block key={i} b={{ ...b, text }} caret={typing && left <= 0} onAsk={onAsk} busy={busy} />);
+    } else if (!writing) {
+      parts.push(<Block key={i} b={b} onAsk={onAsk} busy={busy} fresh={last} />);
+    }
+  }
+  const done = !typing;
   return (
     <>
       {res.title && <p><strong>{res.title}</strong></p>}
-      {(res.blocks || []).map((b, i) => <Block key={i} b={b} onAsk={onAsk} busy={busy} />)}
-      {!chat && (
+      {parts}
+      {stopped && <p className="ai-meta">Stopped.</p>}
+      {!chat && done && (
         <div className="ai-metarow">
           <p className="ai-meta">{SOURCE[res.source] || res.source}{res.date_range ? ` · ${fmtRange(res.date_range)}` : ""}</p>
           {onDownload && <DownloadMenu onPick={onDownload} />}
         </div>
       )}
-      {last && res.suggestions?.length > 0 && (
+      {last && done && !stopped && res.suggestions?.length > 0 && (
         <div className="ai-chips row">{res.suggestions.map((s) => <button key={s} type="button" className="ai-chip sm" disabled={busy} onClick={() => onAsk(s)}><Svg d={P.spark} /> {s}</button>)}</div>
       )}
     </>
   );
 }
 
-function Block({ b, onAsk, busy }) {
+function Block({ b, onAsk, busy, caret, fresh }) {
+  const fade = fresh ? " ai-fadein" : "";
   if (b.type === "stats") {
-    return <div className="ai-stats">{(b.items || []).map((it) => <div key={it.label} className="ai-stat"><b>{it.value}</b><small>{it.label}</small></div>)}</div>;
+    return <div className={`ai-stats${fade}`}>{(b.items || []).map((it) => <div key={it.label} className="ai-stat"><b>{it.value}</b><small>{it.label}</small></div>)}</div>;
   }
   if (b.type === "list") {
-    return <>{b.title && <p className="ai-sub">{b.title}</p>}<ul>{(b.items || []).map((t, i) => <li key={i}>{t}</li>)}</ul></>;
+    return <div className={fade.trim() || undefined}>{b.title && <p className="ai-sub">{b.title}</p>}<ul>{(b.items || []).map((t, i) => <li key={i}>{t}</li>)}</ul></div>;
   }
   if (b.type === "table") {
     const cols = b.columns || [];
     return (
-      <div className="ai-table">
+      <div className={`ai-table${fade}`}>
         <div className="table-scroll">
           <table className="table">
             <thead><tr>{cols.map((c) => <th key={c.key} className={c.kind === "num" ? "num" : undefined}>{c.label}</th>)}</tr></thead>
@@ -442,5 +531,5 @@ function Block({ b, onAsk, busy }) {
       </div>
     );
   }
-  return <p>{b.text}</p>;
+  return <p className="ai-p">{b.text}{caret && <span className="ai-caret" aria-hidden="true" />}</p>;
 }

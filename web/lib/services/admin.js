@@ -119,15 +119,17 @@ export const getSubKras = (clientKraId) => read("/kpi_completion_cert/get_sub_kr
    [{id, name}]; {users} is accepted too. */
 export const getIntakeUsers = () => read("/kra_kpi/get_users", {}, { ttl: 300000 }).then((r) => (Array.isArray(r) ? r : r?.users || []));
 export const peekNextRef = (docType) => rpc("/kpi_requirements/peek_next_ref", { doc_type: docType }).then((r) => (r?.status === false ? { prefix: REF_PREFIX[docType] || "REQ", next_number: 1 } : r));
-/* 369 AI Assistant (Owner Dashboard): a question about the team's work, answered
-   from live data by rules on the server (an AI only adds a summary when a key is
-   set). `context` is the previous answer's, for follow-ups like "and last week?". */
+/* 369 AI Assistant (Dashboard): a question about the team's work, answered from
+   live data by rules on the server; with an AI key the AI also answers what the
+   rules don't know and reads the chat so far (chat_id). `context` is the
+   previous answer's filters, for follow-ups like "and last week?". The wait
+   covers the AI providers being tried in turn (the proxy allows 100 s). */
 export const askAssistant = ({ question, period, context, chatId }) =>
-  rpc("/kra_kpi/ai_assistant/ask", { question: String(question || "").slice(0, 1000), period, context: context || {}, chat_id: chatId || null }, { timeout: 60000 });
+  rpc("/kra_kpi/ai_assistant/ask", { question: String(question || "").slice(0, 1000), period, context: context || {}, chat_id: chatId || null }, { timeout: 105000 });
 /* The same answer with every table row (the drawer shows 50), for a PDF / Word
    download. Not saved to the chat. */
 export const exportAssistantAnswer = ({ question, period, context }) =>
-  rpc("/kra_kpi/ai_assistant/export", { question: String(question || "").slice(0, 1000), period, context: context || {} }, { timeout: 60000 })
+  rpc("/kra_kpi/ai_assistant/export", { question: String(question || "").slice(0, 1000), period, context: context || {} }, { timeout: 105000 })
     .then((r) => assertOk(r, "Could not prepare the download."));
 /* "Find a task" in the assistant: tasks by name or reference, any state
    (recently updated ones for an empty query). */

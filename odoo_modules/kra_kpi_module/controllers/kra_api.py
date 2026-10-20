@@ -3171,6 +3171,57 @@ class KraKpiAPI(http.Controller):
                      'phone_code': co.phone_code}
                     for co in countries]}
 
+    # ---- 369 AI Assistant keys (Configuration > 369 AI Assistant) ---- #
+    # Stored as the ir.config_parameter keys kpi.ai already reads, so the
+    # assistant, meetings and WhatsApp intake all pick a key up at once. A key
+    # is write-only: these routes say whether one is saved, never what it is.
+    def _ai_config(self):
+        from ..models.kpi_ai import PROVIDERS, KEY_PARAM, MODEL_PARAM, DEFAULT_MODEL
+        p = request.env['ir.config_parameter'].sudo()
+        return {'status': True, 'providers': [{
+            'provider': pr,
+            'key_set': bool(p.get_param(KEY_PARAM[pr], '')),
+            'model': p.get_param(MODEL_PARAM[pr], '') or '',
+            'default_model': DEFAULT_MODEL[pr],
+        } for pr in PROVIDERS]}
+
+    @http.route('/kpi_config/ai_get', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_ai_get(self, **params):
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        return self._ai_config()
+
+    @http.route('/kpi_config/set_ai', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_ai(self, provider=None, key=None, model=None, **params):
+        """key: None leaves it, '' clears it, text saves it. model: None leaves
+        it, '' goes back to the default, text overrides it."""
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        from ..models.kpi_ai import PROVIDERS, KEY_PARAM, MODEL_PARAM
+        if provider not in PROVIDERS:
+            return {'status': False, 'message': 'Unknown AI provider.'}
+        p = request.env['ir.config_parameter'].sudo()
+        if key is not None:
+            key = str(key).strip()
+            if len(key) > 400 or any(ch.isspace() for ch in key):
+                return {'status': False, 'message': 'That does not look like an API key.'}
+            p.set_param(KEY_PARAM[provider], key or False)   # False deletes the parameter
+        if model is not None:
+            model = str(model).strip()
+            if len(model) > 100:
+                return {'status': False, 'message': 'The model name is too long.'}
+            p.set_param(MODEL_PARAM[provider], model or False)
+        return self._ai_config()
+
+    @http.route('/kpi_config/test_ai', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_test_ai(self, provider=None, **params):
+        if not self._is_kra_admin(request.env.user):
+            return {'status': False, 'message': 'Not authorized'}
+        from ..models.kpi_ai import PROVIDERS
+        if provider not in PROVIDERS:
+            return {'status': False, 'message': 'Unknown AI provider.'}
+        return request.env['kpi.ai'].test_provider(provider)
+
     @http.route('/kpi_config/set_country', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_set_country(self, **params):
         user = request.env.user
@@ -6334,8 +6385,11 @@ class KraKpiAPI(http.Controller):
             digest = self.get_ai_digest_data(period=period)
             if not digest.get('status'):
                 return {'status': False, 'message': digest.get('message') or 'Could not load the data.'}
-            res = request.env['kpi.ai.assistant'].answer(
-                question, digest, period, context if isinstance(context, dict) else {})
+            Assistant = request.env['kpi.ai.assistant']
+            # The chat so far, so the AI can follow up ("and last week?", "only him").
+            history = Assistant.history_of(self._ai_chat(chat_id)) if chat_id else []
+            res = Assistant.answer(
+                question, digest, period, context if isinstance(context, dict) else {}, history=history)
             res.update({'status': True, 'period': period, 'date_range': digest.get('date_range'),
                         'generated_at': digest.get('generated_at')})
             res['chat_id'] = self._ai_chat_save(chat_id, question, period, res)
@@ -6364,7 +6418,10 @@ class KraKpiAPI(http.Controller):
             payload = {k: v for k, v in res.items() if k not in ('status', 'chat_id')}
             request.env['kpi.ai.chat.message'].sudo().create([
                 {'chat_id': chat.id, 'role': 'user', 'text': question},
-                {'chat_id': chat.id, 'role': 'bot', 'text': res.get('title') or '',
+                {'chat_id': chat.id, 'role': 'bot',
+                 # an AI answer has no title: its first words stand in for it
+                 'text': res.get('title') or next((b.get('text') or '' for b in res.get('blocks') or []
+                                                    if b.get('type') == 'text'), '')[:120],
                  'payload_json': json.dumps(payload, default=str)},
             ])
             chat.write({'period': period, 'context_json': json.dumps(res.get('context') or {}, default=str)})

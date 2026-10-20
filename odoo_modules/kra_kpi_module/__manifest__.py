@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.6.9",
+    "version": "19.0.7.0",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
