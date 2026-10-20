@@ -274,10 +274,19 @@ class KpiWaGroupReport(models.AbstractModel):
 
     @api.private
     def post_workday_end(self, user, when_label, worked_seconds,
-                         tasks_touched=0, tasks_completed=None, note=''):
-        if not self._group_jid():
+                         tasks_touched=0, tasks_completed=None, note='',
+                         snapshot=None):
+        """The end-of-day message and the day's Workday Snapshot image, sent
+        PRIVATELY to the developer's own WhatsApp number -- not to the group.
+        A day's record is that person's business; the group no longer gets it.
+        """
+        number = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
+        if not number:
+            _logger.info("workday end: %s has no WhatsApp number, nothing sent", user.login)
             return False
-        time_s, date_s = self._clock()
+        # In the developer's timezone: this message is theirs now.
+        from .kpi_wa_staff_task import kpi_tz_name
+        time_s, date_s = self.with_context(tz=kpi_tz_name(self.env, user))._clock()
         # {tasks} is the whole phrase, not a bare count, so that a day with
         # nothing recorded leaves an empty token and the line disappears — the
         # behaviour this had before it was templated. "0 task(s) touched" reads
@@ -288,12 +297,34 @@ class KpiWaGroupReport(models.AbstractModel):
             tasks_phrase = "%d task(s) touched" % tasks_touched
             if tasks_completed is not None:
                 tasks_phrase += " · %d completed" % tasks_completed
+        # The person's name, not an @mention: a mention means nothing in a
+        # private chat.
         text = self._render_event('workday_end', {
-            'dev': self._mention(user),
+            'dev': user.name or user.login or '',
             'time': time_s,
             'date': date_s,
             'hours': self._hm(worked_seconds),
             'tasks': tasks_phrase,
             'note': (note or '').strip()[:400],
-        })
-        return self._post(text) if text else False
+        }) or ("🌙 %s ended the workday at %s · %s\nWorked %s%s" % (
+            user.name or '', time_s, date_s, self._hm(worked_seconds),
+            ('\n' + tasks_phrase) if tasks_phrase else ''))
+        session = self._session()
+        if not session:
+            _logger.info("workday end: no connected WhatsApp session")
+            return False
+        # The frozen snapshot image with the message as its caption; the plain
+        # message when there is no image or the image send fails.
+        if snapshot and snapshot.image:
+            try:
+                img = snapshot.image
+                img = img.decode('ascii') if isinstance(img, bytes) else img
+                if session.send_image(number, img, caption=text):
+                    return True
+            except Exception as e:
+                _logger.warning("workday snapshot private send failed: %s", e)
+        try:
+            return bool(session.send_message(number, text))
+        except Exception as e:
+            _logger.error("workday end private message failed: %s", e)
+            return False

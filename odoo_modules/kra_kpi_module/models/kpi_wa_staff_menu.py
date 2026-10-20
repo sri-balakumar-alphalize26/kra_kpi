@@ -82,6 +82,9 @@ MAX_MENU_ROWS = 10
 
 STAFF_ROWS = [
     ('mytasks', '📋 My tasks — take, pause, finish'),
+    # Sent to the person's own number, not the group: what they are doing
+    # right now, as the KPI Actions live strip shows it.
+    ('status', '📍 Current status'),
     ('doubt', '❓ Doubt / clarification'),
     ('meet_admin', '📅 Meeting with manager'),
     ('meet_client', '📅 Meeting with client'),
@@ -101,9 +104,28 @@ ACTIONS_ALWAYS = [('doubt', '❓ Doubt / clarification'),
                   ('meet_admin', '📅 Meeting with manager'),
                   ('meet_client', '📅 Meeting with client')]
 
+# The task-details page, row for row (kpi_wa_staff_task.py does the work).
+# Updates, files, manuals and GitHub links only once the task has STARTED --
+# the same has_started rule /kpi_action/details hands the board, so nothing is
+# offered here that the details page would hide.
+ACT_UPDATE = ('update', '📝 Add update')
+ACT_MINE = ('mine', '🗂️ My updates & files')
+ACT_MANUAL = ('manual', '📘 Add user manual')
+ACT_INFO = ('info', 'ℹ️ Task details')
+ACT_TIME = ('time', '⏱️ Ask for more time')
+STARTED_STATES = ('in_progress', 'paused', 'partially_completed',
+                  'awaiting_client', 'completed')
+# add_time refuses these: the estimate is what the client signed off against.
+ESTIMATE_LOCKED_STATES = ('awaiting_client', 'completed')
+
 
 def _actions_for(task):
-    """The verbs that make sense for this task, in the order they are used."""
+    """The verbs that make sense for this task, in the order they are used.
+
+    At most TEN rows (the poll limit): a running or paused task is exactly
+    ten -- Pause/Resume, Completed, the three update rows, details, more
+    time and the three always-rows.
+    """
     state = task.task_state
     if state == 'in_progress':
         rows = list(ACTIONS_RUNNING)
@@ -113,6 +135,15 @@ def _actions_for(task):
         rows = []                       # finished; waiting on a manager
     else:
         rows = list(ACTIONS_FRESH)
+    if state in STARTED_STATES:
+        rows += [ACT_UPDATE, ACT_MINE, ACT_MANUAL]
+    elif task.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id)]):
+        # Rework / hold: nothing new until it is started again, but what was
+        # already added can still be corrected -- the history is shown there.
+        rows.append(ACT_MINE)
+    rows.append(ACT_INFO)
+    if state not in ESTIMATE_LOCKED_STATES:
+        rows.append(ACT_TIME)
     return rows + list(ACTIONS_ALWAYS)
 
 # How many of a person's tasks to offer at once. Ten leaves room inside the
@@ -199,6 +230,8 @@ class KpiWaStaffRouter(models.AbstractModel):
             return self._staff_do_text(message, state, user, body)
         if step == 'staff_day_note':
             return self._staff_do_day_end(message, state, user, body)
+        if step == 'staff_flow':
+            return self._flow(message, state, user, tapped, low, body)
         return False
 
     # ------------------------------------------------------------------
@@ -211,10 +244,19 @@ class KpiWaStaffRouter(models.AbstractModel):
                                   ('state', '=', 'open')], limit=1)
         if openrow:
             return openrow, True, False
+        # "Ended" means what the board means by it (_ended_session_today): a
+        # day the developer ended themselves and nobody reopened. A REVERTED
+        # (reopened by an admin) or auto-closed session does not end the day --
+        # reading every closed row as ended told a reopened developer "your day
+        # is finished" and hid Start my day from their menu.
+        from .kpi_wa_staff_task import kpi_tz_name
+        ended = Session.with_context(tz=kpi_tz_name(self.env, user))._ended_session_today(user=user)
+        if ended:
+            return ended, False, True
         closed = Session.search([('user_id', '=', user.id),
                                  ('session_date', '=', today),
                                  ('state', '=', 'closed')], limit=1)
-        return closed, False, bool(closed)
+        return closed, False, False
 
     def _live_meeting(self, user):
         """A room this person is in, open right now. Newest first.
@@ -252,11 +294,11 @@ class KpiWaStaffRouter(models.AbstractModel):
         Built from the state of their day rather than fixed, so nothing is
         ever offered that would only be refused.
 
-        The longest version is EIGHT rows: End my day, the four task rows and
-        the three break rows. On a break it is six, because the break rows
-        are replaced by one Back to work. Both are inside the ten Evolution
-        allows, with room to add one more thing later without the menu
-        silently turning back into text.
+        The longest version is TEN rows: End my day, Finish the meeting, the
+        five STAFF_ROWS and the three break rows. On a break it is eight,
+        because the break rows are replaced by one Back to work. Ten is the
+        ceiling Evolution allows -- the next row added here needs one taken
+        away, or the menu silently turns back into text.
         """
         sess, is_open, ended = self._workday(user)
         live = self._live_meeting(user)
@@ -368,6 +410,10 @@ class KpiWaStaffRouter(models.AbstractModel):
             state._reset()
             self._text(message, _('Start your day first.'))
             return True
+        if reason == 'meeting':
+            # Who it is with and what it is about, like the board's
+            # "In a meeting" picker. Recorded once both are known.
+            return self._meet_begin(message, state, user, purpose='nontask')
         Session = self.env['kpi.work.session'].sudo()
         try:
             sess = Session.with_user(user).sudo()._get_or_open_today(user=user)
@@ -472,6 +518,8 @@ class KpiWaStaffRouter(models.AbstractModel):
             return self._staff_nontask_end(message, state, user)
         if choice == 'meet_end':
             return self._staff_finish_meeting(message, state, user)
+        if choice == 'status':
+            return self._staff_status(message, state, user)
 
         # 'mytasks' is not a verb: pick the task, then be shown what can be
         # done to it. It used to print a plain text list, which is the one
@@ -555,11 +603,14 @@ class KpiWaStaffRouter(models.AbstractModel):
                 'now.') % {'ref': ref,
                            'state': labels.get(task.task_state, '')})
             return True
-        state._touch(step='staff_task_actions',
+        state._touch(step='staff_task_actions', staff_kpi_id=task.id,
+                     staff_draft=False,
                      menu_csv=','.join(c for c, _l in rows))
+        status = labels.get(task.task_state, '')
+        if task.task_state == 'paused' and (task.paused_reason or '').strip():
+            status += ' — %s' % task.paused_reason.strip()
         self._poll(message, _('%(ref)s — %(title)s\n%(state)s') % {
-            'ref': ref, 'title': task.name or '',
-            'state': labels.get(task.task_state, '')},
+            'ref': ref, 'title': task.name or '', 'state': status},
             [l for _c, l in rows])
         return True
 
@@ -588,17 +639,29 @@ class KpiWaStaffRouter(models.AbstractModel):
 
     def _staff_begin(self, message, state, user, task, action):
         """One place every verb goes through, however it was reached."""
+        # Every flow below reads the task back from the state on the next
+        # message, so it is pinned here rather than trusted to each caller.
+        state._touch(staff_kpi_id=task.id)
         if action == 'take':
             return self._staff_run(message, state, user, task, 'start')
         if action == 'resume':
             return self._staff_run(message, state, user, task, 'resume')
+        # Completed asks for the summary and the checklist first, as the board
+        # does; Pause asks for the reason type (and who, for a meeting).
         if action == 'done':
-            return self._staff_run(message, state, user, task, 'complete')
+            return self._done_begin(message, state, user, task)
         if action == 'pause':
-            state._touch(step='staff_pause_reason', staff_kpi_id=task.id)
-            self._text(message, _('Why are you pausing %s? One line.')
-                       % (task.external_ref or task.id))
-            return True
+            return self._pause_begin(message, state, user, task)
+        if action == 'update':
+            return self._upd_begin(message, state, user, task, mode='progress')
+        if action == 'manual':
+            return self._upd_begin(message, state, user, task, mode='manual')
+        if action == 'mine':
+            return self._mine_begin(message, state, user, task)
+        if action == 'info':
+            return self._info_show(message, state, user, task)
+        if action == 'time':
+            return self._time_begin(message, state, user, task)
         # doubt / meet_admin / meet_client all want words next.
         state._touch(step='staff_text', staff_kpi_id=task.id)
         prompt = {
@@ -611,7 +674,8 @@ class KpiWaStaffRouter(models.AbstractModel):
         return True
 
     # ------------------------------------------------------------------
-    def _staff_run(self, message, state, user, kpi, verb):
+    def _staff_run(self, message, state, user, kpi, verb, checklist=None,
+                   partial=False):
         """Call the REAL workflow method, as the developer, and relay it.
 
         with_user(user).sudo(), in that order: with_user() returns an env with
@@ -632,9 +696,14 @@ class KpiWaStaffRouter(models.AbstractModel):
                 msg = _('▶️ %(who)s is back on %(ref)s.') % {
                     'who': user.name, 'ref': ref}
             else:
-                rec.complete_task()
-                msg = _('✅ %(who)s finished %(ref)s. It is with a manager to '
-                        'check.') % {'who': user.name, 'ref': ref}
+                # The checklist the developer ticked, saved on the task for
+                # the manager to review -- the same flags the board stores.
+                rec.complete_task(employee_checklist=checklist or {})
+                msg = (_('🏁 %(who)s finished %(ref)s as a partial finish — '
+                         'sent for review with the summary.')
+                       if partial else
+                       _('✅ %(who)s finished %(ref)s. It is with a manager to '
+                         'check.')) % {'who': user.name, 'ref': ref}
         except Exception as exc:
             # The existing guards already explain themselves properly --
             # "Start your workday before working on X" and the rest -- so the
@@ -642,10 +711,24 @@ class KpiWaStaffRouter(models.AbstractModel):
             state._reset()
             self._text(message, _('%(ref)s: %(why)s') % {
                 'ref': ref, 'why': str(exc).strip()[:300]})
+            self._menu_again(message, state, user)
             return True
         state._reset()
         self._text(message, msg)
         return True
+
+    def _menu_again(self, message, state, user):
+        """After a refused action, put the menu straight back.
+
+        A refusal used to end the conversation: "Start your workday before
+        working on REQ-002", and then nothing -- the person had to send "hi"
+        again to get the poll that has "Start my day" on it, which is the
+        very thing the warning told them to do. The menu follows the warning
+        now. Never allowed to swallow the warning itself."""
+        try:
+            self._show_staff_menu(message, state, user)
+        except Exception as exc:
+            _logger.warning('staff menu: could not re-show the menu: %s', exc)
 
     def _staff_do_pause(self, message, state, user, body):
         kpi = state.staff_kpi_id
@@ -660,6 +743,7 @@ class KpiWaStaffRouter(models.AbstractModel):
             state._reset()
             self._text(message, _('%(ref)s: %(why)s') % {
                 'ref': ref, 'why': str(exc).strip()[:300]})
+            self._menu_again(message, state, user)
             return True
         state._reset()
         self._text(message, _('⏸️ %(ref)s paused — %(why)s') % {
@@ -700,4 +784,4 @@ from .kpi_wa_group_intake import _strip_emoji          # noqa: E402
 
 _STAFF_STEPS = ('idle', 'staff_menu', 'staff_pick_task',
                 'staff_task_actions', 'staff_pause_reason', 'staff_text',
-                'staff_day_note')
+                'staff_day_note', 'staff_flow')

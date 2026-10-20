@@ -1208,7 +1208,8 @@ class KpiWorkSession(models.Model):
                     self, fields.Datetime.now()).strftime('%I:%M %p · %a %d %b'),
                 payload.get('productive_seconds') or 0,
                 tasks_touched=payload.get('task_count') or 0,
-                note=payload.get('note') or '')
+                note=payload.get('note') or '',
+                snapshot=snap)
         except Exception as exc:
             _logger.warning("wa group end report failed for session %s: %s", self.id, exc)
         return payload
