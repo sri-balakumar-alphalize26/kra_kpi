@@ -107,6 +107,7 @@ export class KpiUserAccess extends Component {
                                 t-on-change="(ev) => this.setRoleFilter(ev)">
                             <option value="all" t-att-selected="state.roleFilter === 'all'">All roles</option>
                             <option value="admin" t-att-selected="state.roleFilter === 'admin'">Admin</option>
+                            <option value="coordinator" t-att-selected="state.roleFilter === 'coordinator'">Coordinator</option>
                             <option value="developer" t-att-selected="state.roleFilter === 'developer'">User</option>
                             <option value="client" t-att-selected="state.roleFilter === 'client'">Client</option>
                         </select>
@@ -134,6 +135,7 @@ export class KpiUserAccess extends Component {
                                         <select class="form-select form-select-sm" t-att-disabled="u.is_system"
                                                 t-on-change="(ev) => this.saveRole(u, ev)">
                                             <option value="admin" t-att-selected="u.role === 'admin'">Admin</option>
+                                            <option value="coordinator" t-att-selected="u.role === 'coordinator'">Coordinator</option>
                                             <option value="developer" t-att-selected="u.role === 'developer'">User</option>
                                             <option value="client" t-att-selected="u.role === 'client'">Client</option>
                                         </select>
