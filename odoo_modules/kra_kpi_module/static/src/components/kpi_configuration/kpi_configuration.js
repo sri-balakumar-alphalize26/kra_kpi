@@ -171,6 +171,20 @@ export class KpiConfiguration extends Component {
 
                         <hr class="my-4"/>
 
+                        <label class="form-label fw-semibold">Workday report to (WhatsApp)</label>
+                        <div class="d-flex align-items-center gap-2">
+                            <input type="text" inputmode="tel" class="form-control" style="max-width:360px;"
+                                   placeholder="e.g. 919876543210, 96891234567"
+                                   t-model="state.workday_report_numbers"
+                                   t-on-change="() => this.saveWorkdayReportNumbers()"/>
+                            <span t-if="state.savedWorkdayReport" class="text-success small">✓ Saved</span>
+                        </div>
+                        <small class="text-muted d-block mt-1">When a developer ends the day, their workday snapshot and
+                            message also go to these numbers (e.g. the CEO). Full number with country code; separate
+                            several with commas. The developer always gets their own copy.</small>
+
+                        <hr class="my-4"/>
+
                         <label class="form-label fw-semibold">Keep workday snapshot images for</label>
                         <div class="input-group" style="max-width:280px;">
                             <input type="number" min="0" class="form-control"
@@ -531,6 +545,8 @@ export class KpiConfiguration extends Component {
             daily_report_time: "10:00",
             daily_report_coverage: "yesterday",
             savedDailyReport: false,
+            workday_report_numbers: "",
+            savedWorkdayReport: false,
             snapshot_retention_number: 3,
             snapshot_retention_unit: "months",
             savedSnapRetention: false,
@@ -569,6 +585,7 @@ export class KpiConfiguration extends Component {
                     if (cfg.daily_report_enabled != null) this.state.daily_report_enabled = !!cfg.daily_report_enabled;
                     if (cfg.daily_report_hour != null) this.state.daily_report_time = this.hourToTime(cfg.daily_report_hour);
                     if (cfg.daily_report_coverage) this.state.daily_report_coverage = cfg.daily_report_coverage;
+                    this.state.workday_report_numbers = (cfg.workday_report_numbers || "").split(",").filter(Boolean).join(", ");
                     if (cfg.snapshot_retention_number != null) this.state.snapshot_retention_number = cfg.snapshot_retention_number;
                     if (cfg.snapshot_retention_unit) this.state.snapshot_retention_unit = cfg.snapshot_retention_unit;
                     if (cfg.report_retention_number != null) this.state.report_retention_number = cfg.report_retention_number;
@@ -824,6 +841,16 @@ export class KpiConfiguration extends Component {
                 coverage: this.state.daily_report_coverage,
             });
             this._flash(this.state, "savedDailyReport");
+        } catch (e) { alert(e?.data?.message || "Failed to save."); }
+    }
+    async saveWorkdayReportNumbers() {
+        try {
+            const r = await rpc("/kpi_config/set_workday_report_numbers", {
+                numbers: this.state.workday_report_numbers || "",
+            });
+            if (!r?.status) { alert(r?.message || "Failed to save."); return; }
+            this.state.workday_report_numbers = (r.numbers || "").split(",").filter(Boolean).join(", ");
+            this._flash(this.state, "savedWorkdayReport");
         } catch (e) { alert(e?.data?.message || "Failed to save."); }
     }
     toggleDailyReport() {

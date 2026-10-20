@@ -1345,6 +1345,12 @@ class KpiWorkSession(models.Model):
             self._fire_workday_reverted(reason)
         except Exception as exc:
             _logger.warning("workday_reverted notification failed: %s", exc)
+        # And privately on WhatsApp, to the developer's own number.
+        try:
+            self.env['kpi.wa.group.report'].post_workday_reopened(
+                self.user_id, self.env.user, reason)
+        except Exception as exc:
+            _logger.warning("workday_reverted WhatsApp message failed: %s", exc)
 
         return {'status': True,
                 'session_id': self.id,

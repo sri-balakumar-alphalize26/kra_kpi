@@ -17,7 +17,7 @@ person's name otherwise rather than printing a broken @12345.
 
 import logging
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 
 _logger = logging.getLogger(__name__)
 
@@ -273,16 +273,43 @@ class KpiWaGroupReport(models.AbstractModel):
     # check-in is created.
 
     @api.private
+    def send_private(self, user, text):
+        """Text to a person's own WhatsApp number (their login mobile). Never raises."""
+        number = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
+        session = self._session()
+        if not number or not session or not text:
+            _logger.info("private message to %s skipped (number=%s, session=%s)",
+                         user.login, bool(number), bool(session))
+            return False
+        try:
+            return bool(session.send_message(number, text))
+        except Exception as e:
+            _logger.error("private message to %s failed: %s", user.login, e)
+            return False
+
+    def post_workday_reopened(self, user, admin, reason=''):
+        """The developer hears, privately, that their ended day was reopened."""
+        return self.send_private(user, _(
+            "🔁 *Workday reopened*\n%(admin)s reopened your workday for today.%(why)s\n\n"
+            "Your timer is NOT running — press Start on the board, or send *hi* in the "
+            "group and tap 🌅 Start my day, when you are back.") % {
+                'admin': admin.name or admin.login or _('An admin'),
+                'why': ('\nReason: %s' % reason.strip()) if (reason or '').strip() else ''})
+
     def post_workday_end(self, user, when_label, worked_seconds,
                          tasks_touched=0, tasks_completed=None, note='',
                          snapshot=None):
         """The end-of-day message and the day's Workday Snapshot image, sent
-        PRIVATELY to the developer's own WhatsApp number -- not to the group.
-        A day's record is that person's business; the group no longer gets it.
+        PRIVATELY to the developer's own WhatsApp number and to the configured
+        Workday Report Numbers (e.g. the CEO) -- not to the group.
         """
-        number = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
-        if not number:
-            _logger.info("workday end: %s has no WhatsApp number, nothing sent", user.login)
+        own = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
+        if not own:
+            _logger.info("workday end: %s has no WhatsApp number", user.login)
+        extra = [n for n in (self.env.company.sudo().kpi_workday_report_numbers or '').split(',')
+                 if n.strip() and n.strip() != own]
+        targets = ([own] if own else []) + [n.strip() for n in extra]
+        if not targets:
             return False
         # In the developer's timezone: this message is theirs now.
         from .kpi_wa_staff_task import kpi_tz_name
@@ -314,17 +341,22 @@ class KpiWaGroupReport(models.AbstractModel):
             _logger.info("workday end: no connected WhatsApp session")
             return False
         # The frozen snapshot image with the message as its caption; the plain
-        # message when there is no image or the image send fails.
+        # message when there is no image or the image send fails. Each number
+        # on its own, so one bad number never stops the rest.
+        img = None
         if snapshot and snapshot.image:
+            img = snapshot.image
+            img = img.decode('ascii') if isinstance(img, bytes) else img
+        sent = False
+        for number in targets:
             try:
-                img = snapshot.image
-                img = img.decode('ascii') if isinstance(img, bytes) else img
-                if session.send_image(number, img, caption=text):
-                    return True
+                if img and session.send_image(number, img, caption=text):
+                    sent = True
+                    continue
             except Exception as e:
-                _logger.warning("workday snapshot private send failed: %s", e)
-        try:
-            return bool(session.send_message(number, text))
-        except Exception as e:
-            _logger.error("workday end private message failed: %s", e)
-            return False
+                _logger.warning("workday snapshot send to %s failed: %s", number, e)
+            try:
+                sent = bool(session.send_message(number, text)) or sent
+            except Exception as e:
+                _logger.error("workday end message to %s failed: %s", number, e)
+        return sent
