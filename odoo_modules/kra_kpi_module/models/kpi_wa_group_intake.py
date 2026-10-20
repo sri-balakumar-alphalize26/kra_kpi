@@ -295,6 +295,20 @@ class KpiWaGroupIntake(models.Model):
         help='take / pause / done / doubt / meet_admin / meet_client')
     staff_kpi_id = fields.Many2one(
         'kra.kpi', string='Task the developer picked', ondelete='set null')
+    # The private one-use link to the New Task page (/kpi/wa/newtask/<token>).
+    staff_form_token = fields.Char(index=True, copy=False)
+    staff_form_expires = fields.Datetime(copy=False)
+    # The private link to one task's page (/kpi/wa/task/<token>), 2 hours.
+    staff_page_token = fields.Char(index=True, copy=False)
+    staff_page_kpi_id = fields.Many2one('kra.kpi', ondelete='set null', copy=False)
+    staff_page_expires = fields.Datetime(copy=False)
+    # The private link to the End Workday page (/kpi/wa/endday/<token>), 2 hours.
+    staff_end_token = fields.Char(index=True, copy=False)
+    staff_end_expires = fields.Datetime(copy=False)
+    staff_poll_ids = fields.Char(
+        string='Polls sent to this person',
+        help='WhatsApp ids of the last polls the bot sent this person in the '
+             'internal group. A vote on a poll that is not theirs is not acted on.')
     staff_draft = fields.Text(
         string='Staff flow scratch (JSON)',
         help='Where a staff_flow conversation is (sub-step) and what has been '
@@ -1638,6 +1652,10 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             [('status', '=', 'connected')], limit=1)
 
     def _text(self, message, text):
+        # Replies to a staff member carry their colour too (see _poll).
+        mark = self.env.context.get('kpi_wa_owner_mark')
+        if mark and text and not text.startswith(mark):
+            text = '%s %s' % (mark, text)
         try:
             s = self._session(message)
             if s:
@@ -1717,8 +1735,21 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         #
         # The text version is still the FALLBACK -- but only when the poll is
         # actually refused, which whatsapp.session.send_poll handles itself.
+        # The internal group: every poll names whose it is, and its id is kept
+        # on that person's state so a vote can be checked against its owner.
+        owner_state = self.env['kpi.wa.group.intake'].sudo().browse(
+            self.env.context.get('kpi_wa_state_id') or 0).exists()
+        owner_name = self.env.context.get('kpi_wa_owner_name')
+        if owner_name:
+            # The person's own colour (🟦 / 🟩 / …, kpi_user_color.py) so each
+            # menu in the group is recognisably theirs.
+            mark = self.env.context.get('kpi_wa_owner_mark') or '👤'
+            question = '%s %s — %s' % (mark, owner_name, question)
         try:
-            s.sudo().send_poll(message.phone, question, options, selectable=1)
+            sent = s.sudo().send_poll(message.phone, question, options, selectable=1)
+            if owner_state and isinstance(sent, str):
+                ids = [i for i in (owner_state.staff_poll_ids or '').split(',') if i][-19:]
+                owner_state.sudo().write({'staff_poll_ids': ','.join(ids + [sent])})
         except Exception as exc:
             _logger.warning('group poll failed, sending text instead: %s', exc)
             try:
