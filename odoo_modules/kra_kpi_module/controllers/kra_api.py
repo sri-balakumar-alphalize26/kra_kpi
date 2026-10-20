@@ -2752,115 +2752,11 @@ class KraKpiAPI(http.Controller):
         (is_self_created=True, admin_accepted=False): assigned to the creator and
         immediately workable (timer runs), but kept OUT of the official flow
         (no client pre-approval) until an admin Accepts it.
+
+        The rules and the record live in kra.kpi.self_create_task
+        (models/kpi_self_create.py), shared with WhatsApp's "Create my own task".
         """
-        user = request.env.user
-        if not (user.has_group('kra_kpi_module.group_kra_developer')
-                or user.has_group('base.group_system')):
-            return {'status': False, 'message': 'Only developers can create their own tasks.'}
-
-        is_admin = (user.has_group('kra_kpi_module.group_kra_admin')
-                    or user.has_group('base.group_system'))
-
-        # Creating a task is work, so it needs an open workday — the same gate
-        # every Start already passes through. The board hides the button, but a
-        # hidden button is a courtesy; this is the actual rule. _actor_workday_open
-        # exempts admins itself (they file work for other people rather than
-        # keeping a developer's day), so the rule stays in one place.
-        if not request.env['kra.kpi']._actor_workday_open():
-            return {'status': False,
-                    'message': 'Start your workday before creating a task.'}
-
-        # Who the task is for. Admins may pick anyone assignable; a developer is
-        # always the assignee of their own task, whatever the client sent.
-        assignee = user
-        if is_admin and params.get('user_id'):
-            try:
-                candidate = request.env['res.users'].sudo().browse(int(params['user_id']))
-            except (TypeError, ValueError):
-                candidate = request.env['res.users']
-            # Mirrors /kra_kpi/get_users, which populates the picker — a client or
-            # portal account cannot open the board, so it cannot own a task.
-            if (not candidate.exists() or not candidate.active
-                    or candidate.share or candidate.id == 1
-                    or candidate.kpi_role == 'client'):
-                return {'status': False, 'message': 'Please choose a valid developer.'}
-            assignee = candidate
-
-        name = (params.get('name') or '').strip()
-        kra_id = params.get('kra_id')
-        try:
-            est_h = int(params.get('estimate_hours') or 0)
-            est_m = int(params.get('estimate_minutes') or 0)
-        except (TypeError, ValueError):
-            est_h, est_m = 0, 0
-        priority = params.get('priority') or 'regular'
-        # The developer's view of the type. Unknown values fall back to
-        # 'requirement' rather than being stored raw — this feeds a Selection.
-        req_doc_type = params.get('doc_type')
-        if req_doc_type not in ('requirement', 'update', 'bug'):
-            req_doc_type = 'requirement'
-        description = (params.get('description') or '').strip()
-        deliverable, deliverable_err = clean_deliverable_type(params.get('deliverable_type'))
-        if deliverable_err:
-            return {'status': False, 'message': deliverable_err}
-
-        if not name:
-            return {'status': False, 'message': 'Task name is required.'}
-        if not kra_id:
-            return {'status': False, 'message': 'Please choose a project (KRA).'}
-        kra = request.env['kra.master'].sudo().browse(int(kra_id))
-        if not kra.exists():
-            return {'status': False, 'message': 'Selected project not found.'}
-        # Estimate is OPTIONAL, matching the requirements-upload path
-        # (/kpi_requirements/create_bulk_tasks), which has never demanded one.
-        # A developer raising a task often does not yet know how long it takes,
-        # and forcing a number just produced invented ones. The admin sets or
-        # corrects the estimate when they accept it.
-
-        # Provisional ref — a "+ New Task" gets TASK-### until an admin accepts it
-        # and picks the real type (REQ/UPT/BUG), which re-numbers it.
-        task_ref_n = request.env['kra.kpi']._next_ref_for_prefix('TASK')
-        rec = request.env['kra.kpi'].sudo().create({
-            'name': name,
-            'kra_id': int(kra_id),
-            'estimate_hours': est_h,
-            'estimate_minutes': est_m,
-            'priority': priority,
-            # Record what the developer ASKED for as well as what is in force.
-            # They start equal; the admin may change `priority` on Accept, and
-            # keeping the request means they can see what they are overruling
-            # instead of deciding blind.
-            'requested_priority': priority,
-            # The developer's view of what this is (REQ / UPT / BUG). Unlike
-            # priority this has no live counterpart to seed — the type only
-            # becomes real when the admin picks it on Accept and the ref is
-            # numbered — so it is stored purely as the request.
-            'requested_doc_type': req_doc_type,
-            'deliverable_type': deliverable,
-            'description': description,
-            'task_state': 'assigned',
-            'published': True,
-            # Who will do the work — the caller, unless an admin picked someone.
-            'user_id': assignee.id,
-            'is_self_created': True,
-            'admin_accepted': False,
-            # Who ASKED for it stays the actual caller either way, so an
-            # admin-filed task still shows who raised it.
-            'requested_by_id': user.id,
-            'external_ref': 'TASK-%03d' % task_ref_n,
-        })
-
-        # Notify owner + coordinator that a task is waiting for review.
-        try:
-            rec._notify('self_task_submitted',
-                        title=rec.name, dev=user.name, project=kra.name,
-                        estimate=(f"{est_h}h {est_m}m" if (est_h or est_m) else 'not set'),
-                        priority=priority)
-        except Exception as exc:
-            _logger.warning("self_task_submitted notify failed: %s", exc)
-
-        return {'status': True, 'id': rec.id, 'external_ref': rec.external_ref,
-                'message': 'Task created in your Pending Review lane.'}
+        return request.env['kra.kpi'].self_create_task(params)
 
     @http.route('/kra_kpi/task/admin_create_done', type='json', auth='user', methods=['POST'], csrf=False)
     def admin_create_done_task(self, **params):
