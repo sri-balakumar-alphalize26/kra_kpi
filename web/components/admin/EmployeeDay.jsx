@@ -48,7 +48,8 @@ export default function EmployeeDay({ person, onClose, onOpenTask }) {
   );
 }
 
-function DaySummary({ d, onOpenTask }) {
+/* Also used by the Dashboard's employee popup (EmployeePopup.jsx). */
+export function DaySummary({ d, onOpenTask }) {
   const away = AWAY.filter(([k]) => (d[`${k}_seconds`] || 0) > 0);
   const tasks = d.tasks || [];
   const multi = d.allow_multitask || tasks.some((t) => t.concurrent);
