@@ -71,6 +71,8 @@ export async function coordinators() {
 
 /* ---- who manages each client ---- */
 export const coverage = () => kw("kra.master", "manager_coverage", []);
+/* The same warning in words Odoo's Approvals menu shows ('' = all set up). */
+export const coverageMessage = () => kw("kra.master", "manager_coverage_message", []);
 export const clientManagers = () =>
   kw("kra.master", "search_read", [[["parent_id", "=", false]]], { fields: ["name", "manager_user_id", "manager_ready"] });
 export const setManager = (kraId, userId) => kw("kra.master", "write", [[kraId], { manager_user_id: userId || false }]);

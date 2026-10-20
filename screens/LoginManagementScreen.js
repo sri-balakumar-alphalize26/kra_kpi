@@ -25,6 +25,7 @@ const TOP = (RNStatusBar.currentHeight || 0) + 12;
 
 const ROLES = [
   { key: 'admin', label: 'Admin' },
+  { key: 'coordinator', label: 'Coordinator' },
   { key: 'developer', label: 'User' },
   { key: 'client', label: 'Client' },
 ];

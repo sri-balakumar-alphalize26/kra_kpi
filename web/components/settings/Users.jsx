@@ -63,7 +63,7 @@ export default function Users() {
               <tbody>
                 {rows.map((u) => (
                   <tr key={u.id} className={edit?.id === u.id ? "sel" : ""} style={u.active === false ? { opacity: 0.7 } : undefined}>
-                    <td><Avatar name={u.name} id={u.id} size={24} /> <b>{u.name}</b>{u.is_system && <> <Lozenge tone="paused">System</Lozenge></>}{u.active === false && <> <Lozenge tone="todo">Archived</Lozenge></>}</td>
+                    <td><Avatar name={u.name} uid={u.id} size={24} /> <b>{u.name}</b>{u.is_system && <> <Lozenge tone="paused">System</Lozenge></>}{u.active === false && <> <Lozenge tone="todo">Archived</Lozenge></>}</td>
                     <td>{u.login}</td><td>{u.email || "—"}</td>
                     <td><Lozenge tone={roleTone(u.role)}>{S.ROLES.find((r) => r.code === u.role)?.label || u.role}</Lozenge></td>
                     <td>{u.mobile ? `+${u.dial || "91"} ${u.mobile}` : <span className="mini">—</span>}</td>
