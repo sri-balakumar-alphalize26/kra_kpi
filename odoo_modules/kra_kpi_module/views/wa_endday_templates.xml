@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- WhatsApp "🌙 End my day": the web's End Workday dialog as a page.
+             A summary for each task worked today is REQUIRED before End. -->
+        <template id="wa_endday_page" name="WA End Workday">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'End workday'"/>
+                <style>
+                    .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; }
+                    .stat { border:1px solid var(--border); border-radius:var(--r); padding:10px 12px; }
+                    .stat small { display:block; color:var(--subtlest); font-size:12px; }
+                    .stat b { font-size:18px; }
+                    .sec { border-top:1px solid var(--border); padding:16px 20px; }
+                    .sec h3 { margin:0 0 10px; font-size:14px; font-weight:800; }
+                    .row { display:flex; justify-content:space-between; gap:10px; padding:6px 0;
+                           border-bottom:1px dashed var(--border); font-size:13.5px; }
+                    .warn { border:1px solid #FCA5A5; background:#FEF2F2; border-radius:var(--r); padding:12px; }
+                    .warn .redline { color:var(--danger); font-weight:800; margin:0 0 10px; }
+                    .mp { margin-bottom:10px; }
+                    .mp form { display:flex; gap:6px; margin-top:6px; }
+                    .flash { margin:12px 20px 0; padding:10px 12px; border-radius:var(--r); font-weight:700; font-size:13px; }
+                    .flash.ok { background:var(--ok-bg); color:var(--ok); }
+                    .flash.err { background:#FEE2E2; color:var(--danger); }
+                    .ref { font-weight:800; color:var(--brand); margin-right:6px; }
+                    .btn.danger { background:var(--danger); color:#fff; }
+                    .btn[disabled] { opacity:.45; cursor:not-allowed; }
+                </style>
+                <div class="hd">End workday — <t t-esc="d.get('dev') or user_name"/>
+                    <small>Link valid 2 hours</small></div>
+                <div t-if="ok" class="flash ok">✅ <t t-esc="ok"/></div>
+                <div t-if="err" class="flash err">⚠ <t t-esc="err"/></div>
+
+                <div class="sec">
+                    <div class="stats">
+                        <div class="stat"><small>Login</small><b t-esc="(d.get('login_at') or '—')[11:16] or '—'"/></div>
+                        <div class="stat"><small>Productive</small><b t-esc="d.get('productive_display') or '0h 0m'"/></div>
+                        <div class="stat"><small>Presence</small>
+                            <b t-att-style="'color:%s' % ('#15803D' if d.get('met_standard') else '#DC2626')"
+                               t-esc="d.get('presence_display') or '0h 0m'"/></div>
+                        <div class="stat"><small>Accounted</small><b t-esc="d.get('accounted_display') or '0h 0m'"/></div>
+                    </div>
+                </div>
+
+                <div class="sec" t-if="missing">
+                    <div class="warn">
+                        <h3><t t-esc="len(missing)"/> task(s) you worked on today have no summary</h3>
+                        <p class="redline">Add a summary for each task you worked on today — the day ends only after that.</p>
+                        <div t-foreach="missing" t-as="m" class="mp">
+                            <span class="ref" t-esc="m.get('external_ref') or ('#%s' % m['kpi_id'])"/><t t-esc="m.get('name')"/>
+                            <form method="post" t-att-action="'/kpi/wa/endday/%s/summary' % token">
+                                <input type="hidden" name="kpi_id" t-att-value="m['kpi_id']"/>
+                                <input class="input" name="summary" maxlength="500" placeholder="What did you do on this today?"/>
+                                <button type="submit" class="btn primary">Save</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sec">
+                    <h3>Tasks worked today (<t t-esc="d.get('task_count') or len(d.get('tasks') or [])"/>)</h3>
+                    <div t-foreach="d.get('tasks') or []" t-as="tk" class="row">
+                        <span><span class="ref" t-esc="tk.get('ref') or ''"/><t t-esc="tk.get('name')"/></span>
+                        <b t-esc="tk.get('duration_display') or ''"/>
+                    </div>
+                    <p t-if="not d.get('tasks')" class="mini">No task time logged today.</p>
+                </div>
+
+                <form method="post" t-att-action="'/kpi/wa/endday/%s/end' % token">
+                    <div class="sec">
+                        <div class="field">
+                            <span class="lbl">What did you work on today? (optional)</span>
+                            <textarea name="note" maxlength="2000"
+                                      placeholder="e.g. Finished the login screen, fixed the invoice total bug, started on reports."/>
+                            <span class="hint">Saved with your workday snapshot and sent in the daily summary.</span>
+                        </div>
+                    </div>
+                    <div class="ft">
+                        <button type="submit" class="btn danger" t-att-disabled="'disabled' if missing else None">
+                            End workday &amp; send summary</button>
+                    </div>
+                </form>
+            </t>
+        </template>
+
+        <template id="wa_endday_done" name="WA End Workday Done">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'Workday'"/>
+                <div class="done">
+                    <div style="font-size:20px; font-weight:800;" t-esc="title"/>
+                    <p t-if="sub" class="mini" style="margin-top:12px;" t-esc="sub"/>
+                </div>
+            </t>
+        </template>
+    </data>
+</odoo>
