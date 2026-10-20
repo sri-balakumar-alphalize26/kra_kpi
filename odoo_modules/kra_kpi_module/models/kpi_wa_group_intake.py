@@ -90,6 +90,11 @@ _STEPS = [
     ('staff_pause_reason', 'Staff: saying why they paused'),
     ('staff_text', 'Staff: typing a question or a meeting request'),
     ('staff_day_note', 'Staff: what they got done today'),
+    # The task-details page over WhatsApp (kpi_wa_staff_task.py): add an
+    # update, finish with the checklist, edit what they added, pause with a
+    # reason, say who a meeting is with. ONE step, with the sub-step kept in
+    # staff_draft, so a new screen there never needs a new selection value.
+    ('staff_flow', 'Staff: working on a task (update / finish / edit)'),
     # New database
     ('pick_server', 'Picking a server'),
     ('type_server', 'Typing a server name'),
@@ -290,6 +295,11 @@ class KpiWaGroupIntake(models.Model):
         help='take / pause / done / doubt / meet_admin / meet_client')
     staff_kpi_id = fields.Many2one(
         'kra.kpi', string='Task the developer picked', ondelete='set null')
+    staff_draft = fields.Text(
+        string='Staff flow scratch (JSON)',
+        help='Where a staff_flow conversation is (sub-step) and what has been '
+             'collected so far: the summary, links, GitHub links, files waiting '
+             'to be saved, checklist ticks, meeting attendees.')
 
     pending_decline_kpi_id = fields.Many2one(
         'kra.kpi', ondelete='set null',
@@ -374,7 +384,12 @@ class KpiWaGroupIntake(models.Model):
                            # left behind attaches the NEXT action to the
                            # PREVIOUS conversation's task.
                            'staff_action': False, 'staff_kpi_id': False,
+                           'staff_draft': False,
                            'last_activity': fields.Datetime.now()})
+        # Files a developer sent mid-update are parked as attachments on this
+        # row until they press Save. A reset means they were never saved.
+        self.env['ir.attachment'].sudo().search([
+            ('res_model', '=', self._name), ('res_id', 'in', self.ids)]).unlink()
 
     def _touch(self, **vals):
         vals['last_activity'] = fields.Datetime.now()
