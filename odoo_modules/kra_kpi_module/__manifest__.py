@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.7.0",
+    "version": "19.0.7.9",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -82,6 +82,8 @@
         "views/res_users_views.xml",
         # After menu.xml: its menuitem hangs off menu_kpi_settings.
         "views/kpi_ai_chat_views.xml",
+        # Same rule — Settings > AI & Transcription hangs off menu_kpi_settings.
+        "views/kpi_ai_config_views.xml",
     ],
 
     "assets": {

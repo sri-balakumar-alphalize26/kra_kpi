@@ -670,18 +670,33 @@ class KpiReportsAPI(http.Controller):
         
     @http.route('/kpi_reports/task/details', type='json', auth='user', methods=['POST'], csrf=False)
     def get_task_details(self, **params):
-        """Get detailed information about a specific KPI task"""
+        """Get detailed information about a specific KPI task.
+
+        AUTHORISATION: this route reads any task by id under sudo() and
+        returns its description, checklist, guidelines, estimate and
+        assignee. It had no check of any kind, so any signed-in user --
+        a client portal user included -- could walk the ids and read every
+        task on the system, including other clients' work.
+
+        The rule is the same one the screens around it use: the admin
+        screens this serves are for coordinator/owner/system, and a
+        developer may read a task that is their own.
+        """
         try:
             task_id = params.get('task_id')
-            
+
             if not task_id:
                 return {'status': False, 'message': 'task_id is required'}
-            
+
             task = request.env['kra.kpi'].sudo().browse(int(task_id))
-            
+
             if not task.exists():
                 return {'status': False, 'message': 'Task not found'}
-            
+
+            if not (self._is_owner_admin()
+                    or (task.user_id and task.user_id.id == request.env.uid)):
+                return {'status': False, 'message': 'Not authorized.'}
+
             estimate = (task.estimate_hours or 0) + ((task.estimate_minutes or 0) / 60.0)
             
             return {
@@ -3370,7 +3385,12 @@ class KpiReportsAPI(http.Controller):
                 # can't drift the way a hand-rolled combination of flags can.
                 # NB: the selection's third value is 'developer' (shown as "User"
                 # in the UI) — not 'user'.
-                'kpi_role': user.kpi_role or 'developer',
+                # A coordinator reports as 'admin' here: the apps gate every
+                # admin screen on kpi_role == 'admin', and a coordinator has
+                # always had those screens. 'coordinator' is a Login
+                # Management / user-form distinction only.
+                'kpi_role': ('admin' if user.kpi_role == 'coordinator'
+                             else user.kpi_role or 'developer'),
                 # True while the app password is still the default 1111 (admin reset
                 # / freshly created) — drives the red "change your password" nag on
                 # Profile until they set their own via Forgot Password.
@@ -3491,6 +3511,235 @@ class KpiReportsAPI(http.Controller):
             import logging
             logging.getLogger(__name__).error(f"owner_certified_by_client: {str(e)}")
             return {'status': False, 'message': str(e), 'clients': []}
+
+    @http.route('/kpi_owner/payment_term', type='json', auth='user', methods=['POST'], csrf=False)
+    def owner_payment_term(self, **params):
+        """Read or set the invoice payment term in days (kra_kpi.payment_term_days,
+        default 15): the Dashboard's billing tile shows "due on" = the oldest
+        unpaid invoice's date + this. Pass `days` to set it."""
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        P = request.env['ir.config_parameter'].sudo()
+        if params.get('days') is not None:
+            try:
+                days = int(params.get('days'))
+            except (TypeError, ValueError):
+                return {'status': False, 'message': 'Enter a number of days.'}
+            if not 0 <= days <= 365:
+                return {'status': False, 'message': 'Between 0 and 365 days.'}
+            P.set_param('kra_kpi.payment_term_days', str(days))
+        try:
+            days = int(P.get_param('kra_kpi.payment_term_days', 15))
+        except (TypeError, ValueError):
+            days = 15
+        return {'status': True, 'days': days}
+
+    def _client_scope(self, params):
+        """The client (with every project under it) and the period that both
+        Client-details routes work on. None when the client does not exist.
+        No dates = "Auto": this month to date. Days are the admin's local days;
+        lo/hi are their naive-UTC bounds, hi exclusive."""
+        import pytz
+        from datetime import datetime as _dt, time as _time, timedelta as _td
+        user = request.env.user
+        Kra = request.env['kra.master'].sudo()
+        client = Kra.browse(int(params.get('client_kra_id') or 0)).exists()
+        if not client:
+            return None
+        tz = pytz.timezone(user.tz or 'Asia/Kolkata')
+        today = fields.Date.context_today(user)
+        auto = not (params.get('from_date') and params.get('to_date'))
+        if auto:
+            d_from, d_to = today.replace(day=1), today
+        else:
+            d_from = fields.Date.from_string(params['from_date'])
+            d_to = fields.Date.from_string(params['to_date'])
+            if d_to < d_from:
+                d_from, d_to = d_to, d_from
+
+        def utc_start(d):
+            return tz.localize(_dt.combine(d, _time.min)).astimezone(pytz.UTC).replace(tzinfo=None)
+        ids, frontier = [client.id], [client.id]
+        while frontier:
+            frontier = Kra.search([('parent_id', 'in', frontier)]).ids
+            ids.extend(frontier)
+        return {'client': client, 'ids': ids, 'lo': utc_start(d_from), 'hi': utc_start(d_to + _td(days=1)),
+                'from': d_from, 'to': d_to, 'auto': auto, 'today': today, 'tz': tz}
+
+    @staticmethod
+    def _client_domains(ids, lo, hi):
+        """What each Client-details tile counts — one definition, so the number
+        on a tile and the list in its popup can never disagree."""
+        sub = [('kra_id', 'in', ids)]
+        return {
+            'open': sub + [('task_state', '!=', 'completed')],
+            'new': sub + [('published', '=', False), '|', ('client_submitted', '=', True), ('user_id', '=', False)],
+            'in_progress': sub + [('task_state', 'in', ('in_progress', 'paused'))],
+            'waiting': sub + [('task_state', '=', 'awaiting_client')],
+            'certified': sub + [('client_final_approved', '=', True),
+                                ('client_signed_datetime', '>=', lo), ('client_signed_datetime', '<', hi)],
+        }
+
+    @http.route('/kpi_owner/client_summary_items', type='json', auth='user', methods=['POST'], csrf=False)
+    def owner_client_summary_items(self, **params):
+        """The rows behind one Client-details tile, for its popup.
+
+        params: client_kra_id, kind (open | in_progress | waiting | certified |
+        hours | billing), from_date / to_date as /kpi_owner/client_summary.
+        Tasks: ref, name, project, assignee, state, deadline, dates. Hours: time
+        logged in the period per task and person. Billing: the client's invoices.
+        """
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            kind = params.get('kind') or 'open'
+            scope = self._client_scope(params)
+            if not scope:
+                return {'status': False, 'message': 'Client not found.'}
+            ids, lo, hi, tz = scope['ids'], scope['lo'], scope['hi'], scope['tz']
+            Kpi = request.env['kra.kpi'].sudo()
+            state_label = dict(Kpi._fields['task_state'].selection)
+
+            def local(dt, fmt='%d %b %Y'):
+                import pytz
+                return pytz.UTC.localize(dt).astimezone(tz).strftime(fmt) if dt else ''
+
+            def task_row(t):
+                return {'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '',
+                        'project': t.kra_id.name or '', 'assignee': t.user_id.name or '',
+                        'assignee_id': t.user_id.id or False,
+                        'state': t.task_state, 'state_label': state_label.get(t.task_state, t.task_state or ''),
+                        'deadline': str(t.deadline) if t.deadline else '',
+                        'created': local(t.create_date),
+                        'signed': local(t.client_signed_datetime) if t.client_signed_datetime else '',
+                        'is_new': bool(not t.published and (t.client_submitted or not t.user_id)),
+                        'quoted_h': round(t.client_quoted or 0, 1)}
+
+            if kind in ('open', 'in_progress', 'waiting', 'certified'):
+                D = self._client_domains(ids, lo, hi)
+                order = 'client_signed_datetime desc' if kind == 'certified' else 'create_date desc'
+                tasks = Kpi.search(D[kind], order=order, limit=300)
+                return {'status': True, 'kind': kind, 'rows': [task_row(t) for t in tasks]}
+
+            if kind == 'hours':
+                now = fields.Datetime.now()
+                per = {}
+                for lg in request.env['kpi.time.log'].sudo().search(
+                        [('kpi_id.kra_id', 'in', ids), ('start_time', '>=', lo), ('start_time', '<', hi)]):
+                    secs = max(0, (now - lg.start_time).total_seconds()) if (lg.is_active and lg.start_time) else (lg.duration_seconds or 0)
+                    key = (lg.kpi_id.id, lg.user_id.id)
+                    r = per.setdefault(key, {'task': lg.kpi_id, 'user': lg.user_id, 'secs': 0.0})
+                    r['secs'] += secs
+                rows = [{'id': v['task'].id, 'ref': v['task'].external_ref or '', 'name': v['task'].name or '',
+                         'project': v['task'].kra_id.name or '', 'person': v['user'].name or '',
+                         'person_id': v['user'].id or False,
+                         'hours': round(v['secs'] / 3600.0, 2), 'quoted_h': round(v['task'].client_quoted or 0, 1)}
+                        for v in per.values()]
+                rows.sort(key=lambda r: -r['hours'])
+                return {'status': True, 'kind': kind, 'rows': rows}
+
+            if kind == 'billing':
+                Inv = request.env['kpi.client.invoice'].sudo()
+                rows = [{'id': i.id, 'name': i.name or '', 'date': str(i.invoice_date) if i.invoice_date else '',
+                         'state': i.state, 'payment_status': i.payment_status,
+                         'amount': round(i.total_amount or 0, 2),
+                         'currency': (i.currency_id.symbol or i.currency_id.name) if i.currency_id else ''}
+                        for i in Inv.search([('client_kra_id', 'in', ids)], order='invoice_date desc, id desc', limit=100)]
+                return {'status': True, 'kind': kind, 'rows': rows}
+
+            return {'status': False, 'message': 'Unknown list.'}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("owner_client_summary_items: %s", e)
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_owner/client_summary', type='json', auth='user', methods=['POST'], csrf=False)
+    def owner_client_summary(self, **params):
+        """The Dashboard's "Client details" box: one client (and every project
+        under it) for a period.
+
+        params: client_kra_id; from_date / to_date ('YYYY-MM-DD', local days,
+        to_date inclusive). Without dates it is "Auto": this month to date.
+
+        Snapshot counts (open, in progress, waiting sign-off, new) are as of
+        now — a period does not change what is open today. Period counts are
+        certified (signed off by the client in the period) and hours (time
+        logged in the period against the quote of the tasks worked on).
+        Billing: the latest invoice, and what is still unpaid. Invoices carry
+        no due date, so it is the oldest unpaid invoice's date plus the payment
+        term (ir.config_parameter kra_kpi.payment_term_days, default 15).
+        """
+        import pytz
+        from datetime import datetime as _dt, time as _time, timedelta as _td
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            scope = self._client_scope(params)
+            if not scope:
+                return {'status': False, 'message': 'Client not found.'}
+            client, ids, lo, hi, d_from, d_to, auto, today = (
+                scope['client'], scope['ids'], scope['lo'], scope['hi'],
+                scope['from'], scope['to'], scope['auto'], scope['today'])
+            Kpi = request.env['kra.kpi'].sudo().with_context(active_test=True)
+            Log = request.env['kpi.time.log'].sudo()
+            Inv = request.env['kpi.client.invoice'].sudo()
+            D = self._client_domains(ids, lo, hi)
+
+            open_count = Kpi.search_count(D['open'])
+            new_count = Kpi.search_count(D['new'])
+            in_progress = Kpi.search_count(D['in_progress'])
+            waiting = Kpi.search_count(D['waiting'])
+            certified = Kpi.search_count(D['certified'])
+
+            logs = Log.search([('kpi_id.kra_id', 'in', ids),
+                               ('start_time', '>=', lo), ('start_time', '<', hi)])
+            used_secs = 0.0
+            now = fields.Datetime.now()
+            for lg in logs:
+                if lg.is_active and lg.start_time:
+                    used_secs += max(0, (now - lg.start_time).total_seconds())
+                else:
+                    used_secs += lg.duration_seconds or 0
+            worked = logs.mapped('kpi_id')
+            quoted = sum(worked.mapped('client_quoted') or [0])
+
+            last = Inv.search([('client_kra_id', 'in', ids)], order='invoice_date desc, id desc', limit=1)
+            unpaid = Inv.search([('client_kra_id', 'in', ids), ('state', 'in', ('finalized', 'sent')),
+                                 ('payment_status', '=', 'unpaid')], order='invoice_date asc, id asc')
+            try:
+                term = max(0, int(request.env['ir.config_parameter'].sudo().get_param('kra_kpi.payment_term_days', 15)))
+            except (TypeError, ValueError):
+                term = 15
+            due_date = (unpaid[0].invoice_date + _td(days=term)) if unpaid and unpaid[0].invoice_date else False
+            cur = (last.currency_id or client.currency_id) if last else client.currency_id
+
+            initials = ''.join(w[0] for w in (client.name or '?').split()[:2]).upper()
+            return {
+                'status': True,
+                'client': {'id': client.id, 'name': client.name or '', 'initials': initials},
+                'period': {'auto': auto, 'from': str(d_from), 'to': str(d_to)},
+                'open': open_count,
+                'new_need_estimate': new_count,
+                'in_progress': in_progress,
+                'waiting_signoff': waiting,
+                'certified': certified,
+                'hours_used': round(used_secs / 3600.0, 1),
+                'hours_quoted': round(quoted, 1),
+                'last_invoice': {
+                    'name': last.name, 'state': last.state, 'payment_status': last.payment_status,
+                    'date': str(last.invoice_date) if last.invoice_date else '',
+                } if last else None,
+                'amount_due': round(sum(unpaid.mapped('total_amount') or [0]), 2),
+                'unpaid_count': len(unpaid),
+                'due_date': str(due_date) if due_date else '',
+                'overdue': bool(due_date and due_date < today),
+                'currency': {'name': cur.name, 'symbol': cur.symbol} if cur else None,
+                'payment_term_days': term,
+            }
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("owner_client_summary: %s", e)
+            return {'status': False, 'message': str(e)}
 
     @http.route('/kra_kpi/dashboard/overview', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_dashboard_overview(self, **params):
@@ -5210,6 +5459,33 @@ class KpiReportsAPI(http.Controller):
             ]).mapped('user_id')
             devs |= recent.filtered(lambda u: u.active and not u.share and u.id != 1)
 
+            ROLE_LABEL = {'developer': 'Developer', 'coordinator': 'Coordinator',
+                          'admin': 'Admin', 'client': 'Client'}
+            Kpi = request.env['kra.kpi'].sudo()
+            # Up to three of a person's tasks for their card, most pressing
+            # first: running, paused, to do, waiting approval, then done this week.
+            RANK = {'in_progress': (0, 'running'), 'paused': (1, 'paused'),
+                    'rework': (2, 'todo'), 'hold': (2, 'todo'), 'assigned': (2, 'todo'),
+                    'urgent': (2, 'todo'), 'important': (2, 'todo'), 'regular': (2, 'todo'),
+                    'pre_approval_approved': (2, 'todo'),
+                    'partially_completed': (3, 'approval'), 'awaiting_client': (3, 'approval')}
+            week_from_utc = tz.localize(_dt.combine(today - _td(days=today.weekday()), _time.min)) \
+                .astimezone(pytz.UTC).replace(tzinfo=None)
+
+            def _top_tasks(u):
+                rows_ = Kpi.search([('user_id', '=', u.id), ('task_state', 'in', list(RANK))],
+                                   order='write_date desc', limit=30)
+                picked = sorted(rows_, key=lambda t: RANK[t.task_state][0])[:3]
+                out = [{'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '',
+                        'state': RANK[t.task_state][1]} for t in picked]
+                if len(out) < 3:
+                    done = Kpi.search([('user_id', '=', u.id), ('task_state', '=', 'completed'),
+                                       ('write_date', '>=', week_from_utc)],
+                                      order='write_date desc', limit=3 - len(out))
+                    out += [{'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '', 'state': 'done'}
+                            for t in done]
+                return out
+
             rows = []
             for u in devs.sorted(lambda x: (x.name or x.login or '').lower()):
                 sessions = Session.search(
@@ -5235,6 +5511,7 @@ class KpiReportsAPI(http.Controller):
                 # wants before deciding whether to chase someone.
                 activity_note = ''
                 active_tasks = []
+                paused_task, break_start = None, ''
                 if open_sess:
                     s = open_sess
                     active_flag = bool(s.last_heartbeat and s.last_heartbeat >= stale_cutoff)
@@ -5259,6 +5536,10 @@ class KpiReportsAPI(http.Controller):
                                 'name': t.name or (t.external_ref or ("#%s" % t.id)),
                                 'elapsed_seconds': secs,
                                 'elapsed_display': _fmt_hms(secs) if secs else '',
+                                # The Dashboard's employee card: "Working on REQ-068
+                                # · 1h 20m / Started 2:10 PM".
+                                'ref': t.external_ref or '',
+                                'start': pytz.UTC.localize(lg.start_time).astimezone(tz).strftime('%H:%M') if lg.start_time else '',
                             })
                         activity_kind = 'task'
                         activity_label = active_tasks[0]['name']
@@ -5270,6 +5551,12 @@ class KpiReportsAPI(http.Controller):
                         activity_note = (brk.reason_note or '').strip()
                         if brk.start_time:
                             elapsed = max(0, int((now - brk.start_time).total_seconds()))
+                            break_start = pytz.UTC.localize(brk.start_time).astimezone(tz).strftime('%H:%M')
+                        # "Paused REQ-148 at 3:18 PM": the task the break stopped.
+                        if brk.source_task_id:
+                            paused_task = {'id': brk.source_task_id.id,
+                                           'ref': brk.source_task_id.external_ref or '',
+                                           'name': brk.source_task_id.name or ''}
                     elif s.nontask_started_at:
                         r = s.nontask_reason or 'no_tasks'
                         activity_kind = r if r in ('break', 'lunch', 'meeting', 'no_tasks') else 'no_tasks'
@@ -5326,6 +5613,11 @@ class KpiReportsAPI(http.Controller):
                     # render exactly as before.
                     'active_tasks': active_tasks,
                     'active_task_count': len(active_tasks),
+                    # Dashboard employee cards (older screens ignore these).
+                    'paused_task': paused_task,
+                    'break_start': break_start,
+                    'role': ROLE_LABEL.get(u.kpi_role or 'developer', 'Developer'),
+                    'top_tasks': _top_tasks(u),
                 })
 
             return {
@@ -5419,6 +5711,167 @@ class KpiReportsAPI(http.Controller):
                     'message': 'Nudged %s.' % (target.name or 'them')}
         except Exception as e:
             logging.getLogger(__name__).error(f"kpi_owner_nudge_user: {e}")
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_owner/employee_profile', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_owner_employee_profile(self, **params):
+        """The Dashboard's employee popup, everything that is not "one day"
+        (that is /kpi_owner/employee_day): who they are and how to reach them,
+        their whole open workload, what they finished, questions they are
+        waiting on, today's meetings and the last 30 days of attendance.
+
+        params: user_id. Owner / Coordinator / System only. Read-only.
+        Attendance uses the same rule as Live Tracking: the first start of the
+        day against company.attendance_cutoff_hour (default 10:40), Sundays off.
+        """
+        import pytz
+        from datetime import datetime as _dt, time as _time, timedelta as _td
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            uid = int(params.get('user_id') or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        u = request.env['res.users'].sudo().browse(uid).exists()
+        if not u:
+            return {'status': False, 'message': 'Employee not found.'}
+        try:
+            me = request.env.user
+            tz = pytz.timezone(me.tz or 'Asia/Kolkata')
+            today = fields.Date.context_today(me)
+            now = fields.Datetime.now()
+
+            def utc_start(d):
+                return tz.localize(_dt.combine(d, _time.min)).astimezone(pytz.UTC).replace(tzinfo=None)
+
+            def local(dt, fmt='%H:%M'):
+                return pytz.UTC.localize(dt).astimezone(tz).strftime(fmt) if dt else ''
+
+            # ---- who they are ----
+            dial, _len = u._kpi_user_mobile_cfg()
+            roles = {'developer': 'Developer', 'coordinator': 'Coordinator', 'admin': 'Admin', 'client': 'Client'}
+            contact = {
+                'name': u.name or u.login,
+                'login': u.login,
+                'role': roles.get(u.kpi_role or 'developer', 'Developer'),
+                'mobile': u.kpi_mobile_number or '',
+                'dial': dial or '',
+                'country': (u.kpi_mobile_country_id.name if u.kpi_mobile_country_id
+                            else request.env.company.kpi_country_id.name or ''),
+                'whatsapp': u._kpi_wa_target() or '',
+                'app_login_enabled': bool(u.kpi_app_login_enabled),
+                'last_app_login': local(u.kpi_last_app_login, '%d %b %Y, %H:%M') if u.kpi_last_app_login else '',
+                'last_device': u.kpi_last_device or '',
+                'allow_multitask': bool(u.kpi_allow_multitask),
+                'pin_default': bool(u.kpi_app_must_change_password),
+            }
+
+            # ---- workload ----
+            Kpi = request.env['kra.kpi'].sudo()
+            BUCKET = {'in_progress': 'running', 'paused': 'paused', 'hold': 'hold', 'rework': 'todo',
+                      'assigned': 'todo', 'urgent': 'todo', 'important': 'todo', 'regular': 'todo',
+                      'queue_waiting': 'todo', 'pre_approval_pending': 'todo', 'pre_approval_approved': 'todo',
+                      'pre_approval_partial': 'todo', 'partially_completed': 'approval',
+                      'awaiting_client': 'approval'}
+            ORDER = {'running': 0, 'paused': 1, 'todo': 2, 'hold': 3, 'approval': 4}
+            week_end = today + _td(days=6 - today.weekday())
+            open_tasks = Kpi.search([('user_id', '=', u.id), ('task_state', 'in', list(BUCKET))])
+            rows = []
+            for t in open_tasks:
+                b = BUCKET[t.task_state]
+                rows.append({
+                    'id': t.id, 'ref': t.external_ref or '', 'name': t.name or '',
+                    'client': t.client_kra_id.name or '', 'state': b,
+                    'state_label': dict(Kpi._fields['task_state'].selection).get(t.task_state, t.task_state),
+                    'deadline': str(t.deadline) if t.deadline else '',
+                    'overdue': bool(t.deadline and t.deadline < today and b != 'approval'),
+                    'due_week': bool(t.deadline and today <= t.deadline <= week_end),
+                    'estimate_h': round(t.estimate or 0, 1),
+                    'spent_h': round((t.timer_total_seconds or 0) / 3600.0, 1),
+                })
+            rows.sort(key=lambda r: (ORDER[r['state']], r['deadline'] or '9999', r['id']))
+
+            def done_since(d):
+                lo = utc_start(d)
+                return Kpi.search_count([
+                    ('user_id', '=', u.id), ('task_state', '=', 'completed'),
+                    '|', ('approval_date', '>=', lo),
+                    '&', ('approval_date', '=', False), ('write_date', '>=', lo)])
+            counts = {s: sum(1 for r in rows if r['state'] == s) for s in ORDER}
+            workload = {
+                'tasks': rows,
+                'counts': counts,
+                'open': len(rows),
+                'overdue': sum(1 for r in rows if r['overdue']),
+                'due_week': sum(1 for r in rows if r['due_week']),
+                'est_total': round(sum(r['estimate_h'] for r in rows), 1),
+                'spent_total': round(sum(r['spent_h'] for r in rows), 1),
+                'done_today': done_since(today),
+                'done_week': done_since(today - _td(days=today.weekday())),
+                'done_month': done_since(today.replace(day=1)),
+            }
+
+            # ---- questions they are waiting on ----
+            questions = []
+            if 'kpi.doubt' in request.env:
+                for q in request.env['kpi.doubt'].sudo().search(
+                        [('raised_by_id', '=', u.id), ('state', '=', 'open')], order='create_date desc', limit=20):
+                    questions.append({
+                        'id': q.id, 'ref': q.kpi_id.external_ref or '', 'task': q.kpi_id.name or '',
+                        'question': (q.question or '')[:240],
+                        'days': max(0, (now - q.create_date).days) if q.create_date else 0,
+                    })
+
+            # ---- today's meetings ----
+            meetings = []
+            if 'kpi.meeting' in request.env:
+                Meet = request.env['kpi.meeting'].sudo()
+                for m in Meet.search(['|', ('organizer_id', '=', u.id), ('attendee_user_ids', 'in', u.id),
+                                      ('scheduled_start', '>=', utc_start(today)),
+                                      ('scheduled_start', '<', utc_start(today + _td(days=1)))],
+                                     order='scheduled_start asc'):
+                    meetings.append({'id': m.id, 'time': local(m.scheduled_start), 'name': m.name or '',
+                                     'state': dict(Meet._fields['state'].selection).get(m.state, m.state),
+                                     'join_url': m.join_url or ''})
+
+            # ---- attendance, last 30 days ----
+            try:
+                cut = float(request.env.company.attendance_cutoff_hour or 10.667)
+            except Exception:
+                cut = 10.667
+            ch, cm = int(cut), int(round((cut - int(cut)) * 60))
+            if cm >= 60:
+                ch, cm = ch + 1, 0
+            first = {}
+            Session = request.env['kpi.work.session'].sudo()
+            for s in Session.search([('user_id', '=', u.id), ('session_date', '>=', today - _td(days=29)),
+                                     ('login_at', '!=', False)]):
+                d = s.session_date
+                if d not in first or s.login_at < first[d]:
+                    first[d] = s.login_at
+            days = []
+            for i in range(29, -1, -1):
+                d = today - _td(days=i)
+                cutoff = tz.localize(_dt.combine(d, _time(min(ch, 23), min(cm, 59)))).astimezone(pytz.UTC).replace(tzinfo=None)
+                fl = first.get(d)
+                if fl:
+                    status = 'late' if fl > cutoff else 'on_time'
+                elif d.weekday() == 6:
+                    status = 'off'
+                elif d == today and now <= cutoff:
+                    status = 'pending'
+                else:
+                    status = 'absent'
+                days.append({'date': str(d), 'status': status, 'first_login': local(fl) if fl else ''})
+            att = {s: sum(1 for x in days if x['status'] == s) for s in ('on_time', 'late', 'absent', 'off')}
+
+            return {'status': True, 'user_id': u.id, 'contact': contact, 'workload': workload,
+                    'questions': questions, 'meetings_today': meetings,
+                    'attendance': {'days': days, 'totals': att,
+                                   'cutoff': '%02d:%02d' % (min(ch, 23), min(cm, 59))}}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("kpi_owner_employee_profile: %s", e)
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_owner/employee_day', type='json', auth='user', methods=['POST'], csrf=False)
