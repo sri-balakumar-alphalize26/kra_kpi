@@ -3,7 +3,7 @@ import { memo } from "react";
 import { Avatar, Button, Icon, Lozenge } from "@/components/ui";
 import { useMe } from "@/lib/me";
 import { serverNow } from "@/lib/api";
-import { deadlinePassed, deliverableLabel, estimateSeconds, fmtHM, isFreshTask, laneForTask, PAUSED_STATES, priorityLabel, refPrefix, sinceResume, TYPE_TILE } from "@/lib/services/kpiActions";
+import { deadlinePassed, estimateSeconds, fmtHM, isFreshTask, laneForTask, PAUSED_STATES, priorityLabel, refPrefix, sinceResume, taskDeliverableLabel, TYPE_TILE } from "@/lib/services/kpiActions";
 import { liveFromAnchor, fmtClock, secsSince, gateLabel, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
 
@@ -49,7 +49,7 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
       {t.description && <span className="cd-desc" title={t.description}>{t.description}</span>}
       <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
         {t.client_name && <Lozenge tone="todo">{t.client_name}</Lozenge>}
-        {t.deliverable_type && <Lozenge tone="neutral" style={{ textTransform: "none" }}>{deliverableLabel(t.deliverable_type)}</Lozenge>}
+        {t.deliverable_type && <Lozenge tone="neutral" style={{ textTransform: "none" }}>{taskDeliverableLabel(t)}</Lozenge>}
         {running && <span className="timer"><span className="pulse" /><LiveTick fn={(n) => fmtClock(secsSince(t.timer_start_datetime, n))} />{resume ? ` ${resume.label}` : " running"}</span>}
         {/* A reason can be a sentence ("🔴 CLIENT REJECTED — …"). The lozenge's fixed
             16px height cut its second line in half: up to two whole lines here,

@@ -6,6 +6,8 @@ import { Button, Field, Icon, Input, PageHeader, useFlags, Select } from "@/comp
 import * as P from "@/lib/services/portal";
 import { fileToBase64, humanSize } from "@/lib/services/admin";
 import { ymd } from "@/lib/services/reports";
+import { DELIVERABLES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue } from "@/lib/services/kpiActions";
+import OtherTypeInput from "@/components/task/OtherTypeInput";
 
 /* Raise one request (requirement / update / bug) with needed-by date and
    attachments → /kpi_client_portal/add_task. Bulk upload lives in Intake. */
@@ -19,8 +21,10 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
   const [projects, setProjects] = useState([]); const [project, setProject] = useState("");
   const [name, setName] = useState(""); const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState("regular"); const [needed, setNeeded] = useState("");
-  /* What is being built — Module / App / EXE. Required, no default (as in Odoo). */
+  /* What is being built — Module / App / EXE / Other. Required, no default (as in Odoo).
+     Other needs a short name of what it is (deliverableOther). */
   const [deliverable, setDeliverable] = useState("");
+  const [deliverableOther, setDeliverableOther] = useState("");
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(null); /* {name, neededBy, files} after a successful submit */
@@ -32,13 +36,15 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
     e.preventDefault();
     if (!name.trim()) { flags.err("Give the request a title."); return; }
     if (!project) { flags.err("Pick a project."); return; }
-    if (!deliverable) { flags.err("Please choose a type — Module, App or EXE."); return; }
+    if (!deliverable) { flags.err("Please choose a type — Module, App, EXE or Other."); return; }
+    const otherText = deliverableOtherValue(deliverable, deliverableOther);
+    if (deliverable === "other" && !otherText) { flags.err(DELIVERABLE_OTHER_REQUIRED); return; }
     if (total > MAX_TOTAL) { flags.err("Attachments must be under 25 MB in total."); return; }
     setBusy(true);
     try {
       const attachments = [];
       for (const f of files) attachments.push({ name: f.name, data_b64: await fileToBase64(f), mimetype: f.type || "application/octet-stream" });
-      const r = await P.addClientTask({ subKraId: +project, kind, name: name.trim(), description: desc.trim(), priority, deliverableType: deliverable, neededBy: needed, attachments });
+      const r = await P.addClientTask({ subKraId: +project, kind, name: name.trim(), description: desc.trim(), priority, deliverableType: deliverable, deliverableOther: otherText, neededBy: needed, attachments });
       P.assertOk(r, "Could not send the request.");
       /* add_task answers {kpi_id, name, needed_by, attachment_count}. The new task
          is not admin-accepted yet, and the portal lists only accepted tasks, so
@@ -47,7 +53,7 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
       setSent({ name: r.name || name.trim(), neededBy: r.needed_by || "", files: r.attachment_count || 0 });
     } catch (ex) { flags.err(ex.message); } finally { setBusy(false); }
   };
-  const another = () => { setSent(null); setName(""); setDesc(""); setNeeded(""); setFiles([]); setPriority("regular"); setDeliverable(""); };
+  const another = () => { setSent(null); setName(""); setDesc(""); setNeeded(""); setFiles([]); setPriority("regular"); setDeliverable(""); setDeliverableOther(""); };
 
   if (sent) return (
     <>
@@ -57,7 +63,7 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
           <span className="icbox" style={{ background: "var(--tint-green-bg)", color: "var(--tint-green)" }}><Icon n="check" size={18} /></span>
           <b style={{ color: "var(--navy)", fontSize: 16 }}>{sent.name}</b>
           <span className="mini">{sent.neededBy ? `Needed by ${sent.neededBy}` : "No needed-by date"}{sent.files ? ` · ${sent.files} file${sent.files === 1 ? "" : "s"} attached` : ""}</span>
-          <p className="note" style={{ margin: 0 }}>Your request is with the team. It waits for an admin to accept it, and it appears under Requests once accepted. You'll then be asked to approve the developer and estimate.</p>
+          <p className="note" style={{ margin: 0 }}>Your request is with the team. It waits for an admin to accept it, and it appears under Requests once accepted. You'll then be asked to approve the estimate.</p>
           <div className="row" style={{ flexWrap: "wrap" }}><Button kind="primary" onClick={another}>Send another request</Button><Button kind="ghost" onClick={() => router.push("/portal")}>Back to home</Button></div>
         </div>
       </div>
@@ -80,8 +86,9 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
           </div>
           <div className="grid2" style={{ gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)" }}>
             <Field label="Title" required><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === "bug" ? "What is broken" : "What you need"} autoFocus /></Field>
-            <Field label="Type (Module / App / EXE)" required error={!deliverable && name.trim() ? "Choose one" : undefined}><span className="input"><Select value={deliverable} onChange={(e) => setDeliverable(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">— choose —</option><option value="module">Module</option><option value="app">App</option><option value="exe">EXE</option></Select></span></Field>
+            <Field label="Type (Module / App / EXE / Other)" required error={!deliverable && name.trim() ? "Choose one" : undefined}><span className="input"><Select value={deliverable} onChange={(e) => setDeliverable(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">— choose —</option>{DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)}</Select></span></Field>
           </div>
+          {deliverable === "other" && <OtherTypeInput value={deliverableOther} onChange={setDeliverableOther} autoFocus />}
           <Field label="Describe it"><span className="input ta" style={{ height: 120 }}><textarea value={desc} onChange={(e) => setDesc(e.target.value)} placeholder={kind === "bug" ? "What you did, what happened, what you expected" : "As much detail as you can — screens, rules, examples"} style={{ border: 0, background: "none", outline: 0, resize: "none", width: "100%", height: "100%", font: "inherit", color: "inherit" }} /></span></Field>
           <div className="grid2">
             <Field label="Needed by (optional)"><Input type="date" min={ymd(new Date())} value={needed} onChange={(e) => setNeeded(e.target.value)} /></Field>

@@ -29,7 +29,7 @@ export const KPI_FLAGS = [
 export const createKpi = (t) => {
   const v = {
     name: (t.name || "").trim(), kra_id: Number(t.kraId), estimate_hours: Number(t.estimateHours) || 0, estimate_minutes: Number(t.estimateMinutes) || 0, priority: t.priority || "regular",
-    user_id: t.userId ? Number(t.userId) : false, deliverable_type: Array.isArray(t.deliverable) ? t.deliverable.join(",") : t.deliverable || "",
+    user_id: t.userId ? Number(t.userId) : false, deliverable_type: Array.isArray(t.deliverable) ? t.deliverable.join(",") : t.deliverable || "", deliverable_other: t.deliverableOther || "",
     deadline: t.deadline || false, reminder_days: Number(t.reminderDays) || 0, reminder_hours: Number(t.reminderHours) || 0, reminder_minutes: Number(t.reminderMinutes) || 0,
     description: t.description || "", checklist: t.checklist || "", guidelines: t.guidelines || "", points: Number(t.points) || 0,
   };

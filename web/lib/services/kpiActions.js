@@ -431,8 +431,27 @@ export const PRIORITIES = [
   { code: "regular", label: "Regular" }, { code: "important", label: "Important" }, { code: "urgent", label: "Urgent" },
 ];
 export const DELIVERABLES = [
-  { code: "module", label: "Module" }, { code: "app", label: "App" }, { code: "exe", label: "EXE" },
+  { code: "module", label: "Module" }, { code: "app", label: "App" }, { code: "exe", label: "EXE" }, { code: "other", label: "Other" },
 ];
+/* "Other" carries a short typed name (deliverable_other), required while Other is picked. */
+export const DELIVERABLE_OTHER_MAX = 40;
+export const DELIVERABLE_OTHER_PLACEHOLDER = "What is it? e.g. Plugin, Website";
+export const DELIVERABLE_OTHER_REQUIRED = "Type what the Other type is (e.g. Plugin, Website).";
+/* `t` is the comma-joined codes or an array of them. */
+export const hasOtherDeliverable = (t) => (Array.isArray(t) ? t : String(t || "").split(",")).includes("other");
+/* A Module / App task needs a GitHub link before a full Complete (server rule). */
+export const needsGithub = (t) => (Array.isArray(t) ? t : String(t || "").split(",")).some((c) => c === "module" || c === "app");
+/* What a full Complete still lacks, in the "What did we miss?" popup's words. */
+export function completeMissing({ hasSummary, hasManual, githubRequired, hasGithub, anyTicked } = {}) {
+  const miss = [];
+  if (!hasSummary) miss.push("A progress summary");
+  if (!hasManual) miss.push("The user manual (PDF, DOC or DOCX)");
+  if (githubRequired && !hasGithub) miss.push("The GitHub link + branch (this is a Module / App task)");
+  if (!anyTicked) miss.push("At least one ticked checkbox");
+  return miss;
+}
+/* The text to send: blank unless Other is picked. */
+export const deliverableOtherValue = (t, other) => (hasOtherDeliverable(t) ? String(other || "").trim().slice(0, DELIVERABLE_OTHER_MAX) : "");
 export const IDLE_REASONS = [
   { code: "meeting", label: "In a meeting", emoji: "👥", note: "Recorded on your Workday Map. Admins are not notified." },
   { code: "break", label: "On a break", emoji: "☕", note: "Recorded on your Workday Map. Admins are not notified." },
@@ -451,8 +470,10 @@ export const STATUS_FILTERS = [
   { key: "approvals", label: "Pending approvals" }, { key: "awaiting_client", label: "Awaiting client" }, { key: "completed", label: "Completed" },
 ];
 export const priorityLabel = (p) => (PRIORITIES.find((x) => x.code === p)?.label || p || "Regular");
-/* 'module,app' → "Module, App". */
-export const deliverableLabel = (t) => String(t || "").split(",").filter(Boolean).map((c) => DELIVERABLES.find((d) => d.code === c)?.label || c).join(", ");
+/* 'module,app' → "Module, App"; 'module,other' + "Plugin" → "Module, Plugin". */
+export const deliverableLabel = (t, other) => String(t || "").split(",").filter(Boolean).map((c) => (c === "other" ? String(other || "").trim() || "Other" : DELIVERABLES.find((d) => d.code === c)?.label || c)).join(", ");
+/* What a task card / panel shows: the server's label first. */
+export const taskDeliverableLabel = (task) => task?.deliverable_label || deliverableLabel(task?.deliverable_type, task?.deliverable_other);
 
 /* Pause-reason rules (utils/meetingPick.js). */
 export const TEAM_MEETING_LABEL = "Team meeting";
@@ -480,15 +501,16 @@ export const endNonTask = () => action("/kpi_workday/end_nontask", {});
 /* ---- create ------------------------------------------------------------------ */
 /* docType: what the creator thinks it is (requirement | update | bug). Stored as
    requested_doc_type and shown to the admin on Accept, who makes the final call. */
-export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, priority, description, userId, deliverableType, docType }) =>
+export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, priority, description, userId, deliverableType, deliverableOther, docType }) =>
   action("/kra_kpi/task/self_create", {
     name: name || "", kra_id: kraId, estimate_hours: estimateHours || 0, estimate_minutes: estimateMinutes || 0,
     priority: priority || "regular", doc_type: docType || "requirement", description: description || "", user_id: userId || 0, deliverable_type: deliverableType || "",
+    deliverable_other: deliverableOther || "",
   });
-export const adminCreateDoneTask = ({ name, kraId, userId, workedSeconds, workDate, estimateHours, estimateMinutes, deliverableType, priority, description }) =>
+export const adminCreateDoneTask = ({ name, kraId, userId, workedSeconds, workDate, estimateHours, estimateMinutes, deliverableType, deliverableOther, priority, description }) =>
   action("/kra_kpi/task/admin_create_done", {
     name: name || "", kra_id: kraId, user_id: userId || 0, worked_seconds: workedSeconds || 0, work_date: workDate || "",
-    estimate_hours: estimateHours || 0, estimate_minutes: estimateMinutes || 0, deliverable_type: deliverableType || "",
+    estimate_hours: estimateHours || 0, estimate_minutes: estimateMinutes || 0, deliverable_type: deliverableType || "", deliverable_other: deliverableOther || "",
     priority: priority || "regular", description: description || "",
   });
 /* Odoo's _estimateFromWorked (Add Done Task): a random 20–40% over the time
@@ -513,6 +535,6 @@ export function fmtHM(sec) {
   if (!h && !m) return s ? "<1m" : "0m";
   return h ? `${h}h${m ? ` ${m}m` : ""}` : `${m}m`;
 }
-/* REQ-012 → "REQ"; TASK-014 → "TASK". */
-export function refPrefix(ref) { return String(ref || "").split("-")[0].toUpperCase(); }
+/* REQ-012 → "REQ"; TASK-014 → "TASK"; BUG001-REQ-012 (a bug raised under a requirement) → "BUG". */
+export function refPrefix(ref) { return (String(ref || "").match(/^\s*([A-Za-z]+)/) || ["", ""])[1].toUpperCase(); }
 export const TYPE_TILE = { REQ: ["R", "#2563EB"], UPT: ["U", "#16A34A"], BUG: ["B", "#DC2626"], TASK: ["T", "#6B7280"] };

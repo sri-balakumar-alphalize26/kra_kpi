@@ -5,8 +5,9 @@ import * as S from "@/lib/services/settings";
 import * as P from "@/lib/services/approvals";
 import { getIntakeUsers } from "@/lib/services/admin";
 import { href } from "@/lib/api";
-import { PRIORITIES, DELIVERABLES, TASK_TYPES } from "@/lib/services/kpiActions";
+import { PRIORITIES, DELIVERABLES, TASK_TYPES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue } from "@/lib/services/kpiActions";
 import { useTaskActions } from "@/components/task/TaskActions";
+import OtherTypeInput from "@/components/task/OtherTypeInput";
 import SettingsNav from "./SettingsNav";
 
 /* The KRA / KPI master: Clients (root KRAs) › projects › versions › KPIs.
@@ -205,7 +206,7 @@ function NameDialog({ d, busy, onClose, onRun }) {
 function KpiDialog({ parent, busy, onClose, onRun }) {
   const flags = useFlags();
   const [f, setF] = useState({
-    name: "", estimateHours: "1", estimateMinutes: "0", priority: "regular", docType: "", deliverable: [], userId: "", deadline: "",
+    name: "", estimateHours: "1", estimateMinutes: "0", priority: "regular", docType: "", deliverable: [], deliverableOther: "", userId: "", deadline: "",
     reminderDays: "0", reminderHours: "0", reminderMinutes: "0", description: "", checklist: "", guidelines: "", points: "0", flags: {},
   });
   const [users, setUsers] = useState([]);
@@ -221,11 +222,15 @@ function KpiDialog({ parent, busy, onClose, onRun }) {
   const h = Math.max(0, Math.floor(+f.estimateHours || 0)), m = Math.floor(+f.estimateMinutes || 0);
   const go = () => {
     if (!f.name.trim()) return flags.warn("KPI name is required.");
-    if (!f.deliverable.length) return flags.warn("Please choose a type: Module, App or EXE.");
+    if (!f.deliverable.length) return flags.warn("Please choose a type: Module, App, EXE or Other.");
+    const deliverableOther = deliverableOtherValue(f.deliverable, f.deliverableOther);
+    if (f.deliverable.includes("other") && !deliverableOther) return flags.warn(DELIVERABLE_OTHER_REQUIRED);
     if (!f.userId) return flags.warn("Assignee is required.");
     if (m < 0 || m > 59) return flags.warn("Minutes must be between 0 and 59.");
     if (!h && !m) return flags.warn("Estimate time is required. Enter hours and/or minutes.");
-    onRun(() => S.createKpi({ ...f, kraId: parent.id, estimateHours: h, estimateMinutes: m }), "KPI created.");
+    /* Canonical order module,app,exe,other, whatever order the pills were tapped in. */
+    const deliverable = DELIVERABLES.map((d) => d.code).filter((c) => f.deliverable.includes(c));
+    onRun(() => S.createKpi({ ...f, deliverable, deliverableOther, kraId: parent.id, estimateHours: h, estimateMinutes: m }), "KPI created.");
   };
   const num = (k, max) => <Input type="number" min="0" max={max} value={f[k]} onChange={(e) => set(k, e.target.value)} />;
   return (
@@ -237,7 +242,7 @@ function KpiDialog({ parent, busy, onClose, onRun }) {
         <Field label="Assignee" required><span className="input"><Select value={f.userId} onChange={(e) => set("userId", e.target.value)} style={SEL} placeholder="Choose a person"><option value="">Choose a person</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
       </div>
       <div className="grid3">
-        <div className="field"><span>Type<span className="req" aria-hidden="true"> *</span></span><span className="pillset">{DELIVERABLES.map((d) => <button key={d.code} type="button" className={`pill ${f.deliverable.includes(d.code) ? "on" : ""}`} aria-pressed={f.deliverable.includes(d.code)} onClick={() => toggleDeliv(d.code)}>{d.label}</button>)}</span><small className="mini">Module, App and/or EXE</small></div>
+        <div className="field"><span>Type<span className="req" aria-hidden="true"> *</span></span><span className="pillset">{DELIVERABLES.map((d) => <button key={d.code} type="button" className={`pill ${f.deliverable.includes(d.code) ? "on" : ""}`} aria-pressed={f.deliverable.includes(d.code)} onClick={() => toggleDeliv(d.code)}>{d.label}</button>)}</span>{f.deliverable.includes("other") ? <OtherTypeInput bare value={f.deliverableOther} onChange={(v) => set("deliverableOther", v)} autoFocus /> : <small className="mini">Module, App, EXE and/or Other</small>}</div>
         <Field label="Request type" hint="Gives it a REQ / UPT / BUG ref"><span className="input"><Select value={f.docType} onChange={(e) => set("docType", e.target.value)} style={SEL}><option value="">None</option>{TASK_TYPES.map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}</Select></span></Field>
         <Field label="Deadline"><Input type="date" value={f.deadline} onChange={(e) => set("deadline", e.target.value)} /></Field>
       </div>

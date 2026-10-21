@@ -39,7 +39,7 @@ import { createKpi, logManualTime, findNameMatches } from '../services/kraKpi';
 import {
   validateNewTask, toSeconds, DOC_TYPES, prefixForDocType,
 } from '../utils/newTaskValidation';
-import { DELIVERABLE_TYPES } from '../utils/deliverableType';
+import { DELIVERABLE_TYPES, needsOtherText, DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER } from '../utils/deliverableType';
 import * as H from '../utils/haptics';
 import { createLogger } from '../api/logger';
 
@@ -639,9 +639,10 @@ export default function KraReport({ onBack }) {
     setNt({
       name: '', kra_id: kraIds.length === 1 ? kraIds[0] : '', user_id: '',
       doc_type: 'requirement', priority: 'regular',
-      // Module / App / EXE. Starts blank on purpose — unlike doc_type and
+      // Module / App / EXE / Other. Starts blank on purpose — unlike doc_type and
       // priority there is no sensible default, so validateNewTask asks for it.
-      deliverable_type: '',
+      // Other also needs its text (deliverable_other).
+      deliverable_type: '', deliverable_other: '',
       estimate_hours: '', estimate_minutes: '', worked_hours: '', worked_minutes: '',
       deadline: '', description: '', error: '',
     });
@@ -714,6 +715,7 @@ export default function KraReport({ onBack }) {
           kraId: nt.kra_id,
           docType: nt.doc_type,
           deliverableType: nt.deliverable_type,
+          deliverableOther: needsOtherText(nt.deliverable_type) ? nt.deliverable_other.trim() : '',
           estimateHours: nt.estimate_hours,
           estimateMinutes: nt.estimate_minutes,
           priority: nt.priority,
@@ -1298,7 +1300,7 @@ export default function KraReport({ onBack }) {
 
                 {/* What the task builds — a second axis, separate from the
                     REQ/UPT/BUG Type below. */}
-                <Text style={s.ntLabel}>Type (Module / App / EXE) <Text style={s.ntReq}>*</Text></Text>
+                <Text style={s.ntLabel}>Type (Module / App / EXE / Other) <Text style={s.ntReq}>*</Text></Text>
                 <View style={s.dlRow}>
                   {DELIVERABLE_TYPES.map((d) => (
                     <TouchableOpacity
@@ -1313,6 +1315,16 @@ export default function KraReport({ onBack }) {
                     </TouchableOpacity>
                   ))}
                 </View>
+                {needsOtherText(nt?.deliverable_type) && (
+                  <TextInput
+                    style={[s.ntInput, { marginTop: 8 }]}
+                    placeholder={DELIVERABLE_OTHER_PLACEHOLDER}
+                    placeholderTextColor={COLORS.faint}
+                    maxLength={DELIVERABLE_OTHER_MAX}
+                    value={nt?.deliverable_other || ''}
+                    onChangeText={(v) => setNt((p) => ({ ...p, deliverable_other: v, error: '' }))}
+                  />
+                )}
 
                 {/* Type mints the REQ/UPT/BUG reference, which is what this
                     report's own Type filter matches on. */}

@@ -5,7 +5,8 @@ import { Button, Field, Icon, Input, PageHeader, Tabs, useFlags, Select } from "
 import { useMe } from "@/lib/me";
 import * as A from "@/lib/services/admin";
 import IntakeNav from "./IntakeNav";
-import { PRIORITIES, DELIVERABLES } from "@/lib/services/kpiActions";
+import { PRIORITIES, DELIVERABLES, DELIVERABLE_OTHER_REQUIRED, deliverableLabel, deliverableOtherValue } from "@/lib/services/kpiActions";
+import OtherTypeInput from "@/components/task/OtherTypeInput";
 
 /* Upload requirements / updates / bug reports (Odoo's kpi_requirements_upload):
    destination → source (a source document attached to every task, plus an
@@ -30,6 +31,7 @@ export default function Intake({ docType = "requirement", portal = false }) {
   const [kras, setKras] = useState([]); const [kra, setKra] = useState("");
   const [users, setUsers] = useState([]);
   const [defUser, setDefUser] = useState(""); const [defPri, setDefPri] = useState("regular"); const [defDeliv, setDefDeliv] = useState("");
+  const [defDelivOther, setDefDelivOther] = useState(""); /* the default's "Other" text */
   const [version, setVersion] = useState("");
   const [text, setText] = useState("");
   const [source, setSource] = useState(null); /* { name, b64 }: attached to every created task */
@@ -43,7 +45,10 @@ export default function Intake({ docType = "requirement", portal = false }) {
   useEffect(() => { if (!client) { setKras([]); return; } A.getSubKras(+client).then((k) => { setKras(k); setKra(k[0] ? String(k[0].id) : ""); }).catch(() => setKras([])); }, [client]);
   useEffect(() => { A.peekNextRef(type).then(setNextRef).catch(() => {}); }, [type]);
 
-  const blank = () => ({ name: "", external_ref: "", related_req_ref: "", estimate_hours: staff ? 1 : 0, estimate_minutes: 0, priority: defPri, deliverable_type: defDeliv, primary_user_id: defUser, description: "" });
+  const blank = () => ({ name: "", external_ref: "", related_req_ref: "", estimate_hours: staff ? 1 : 0, estimate_minutes: 0, priority: defPri, deliverable_type: defDeliv, deliverable_other: "", primary_user_id: defUser, description: "" });
+  /* A row's own "Other" text, else the default's when the default is Other too. */
+  const rowOther = (r) => deliverableOtherValue(r.deliverable_type || defDeliv, (r.deliverable_other || "").trim() || (defDeliv === "other" ? defDelivOther : ""));
+  const defOther = deliverableOtherValue(defDeliv, defDelivOther);
   /* Merge imported / suggested rows; skip ones already in the table (same ref, or same name). */
   const addRows = (items) => setRows((r) => {
     const refs = new Set(r.map((x) => (x.external_ref || "").toLowerCase()).filter(Boolean));
@@ -89,11 +94,14 @@ export default function Intake({ docType = "requirement", portal = false }) {
     if (!valid.length) { flags.err("Add at least one task."); return; }
     /* A blank row takes the default on the server, so only a row with neither is untyped. */
     const untyped = valid.filter((r) => !r.deliverable_type && !defDeliv);
-    if (untyped.length) { flags.err(`Choose a type (Module, App or EXE) for: ${untyped.map((r) => r.name.trim()).join(", ")}`); return; }
+    if (untyped.length) { flags.err(`Choose a type (Module, App, EXE or Other) for: ${untyped.map((r) => r.name.trim()).join(", ")}`); return; }
+    if (defDeliv === "other" && !defOther) { flags.err(DELIVERABLE_OTHER_REQUIRED); return; }
+    const noOther = valid.filter((r) => (r.deliverable_type || defDeliv) === "other" && !rowOther(r));
+    if (noOther.length) { flags.err(`${DELIVERABLE_OTHER_REQUIRED} Missing for: ${noOther.map((r) => r.name.trim()).join(", ")}`); return; }
     setBusy("create");
     try {
-      const tasks = valid.map((r) => (staff ? A.buildTaskRow(r) : { ...A.buildTaskRow(r), estimate_hours: 0, estimate_minutes: 0, priority: "regular", primary_user_id: false }));
-      const r = await A.createBulkTasks({ subKraId: +kra, docType: type, tasks, deliverableType: defDeliv, fileData: source?.b64 || "", fileName: source?.name || "", requirementVersion: version });
+      const tasks = valid.map((r) => { const row = { ...r, deliverable_other: rowOther(r) }; return staff ? A.buildTaskRow(row) : { ...A.buildTaskRow(row), estimate_hours: 0, estimate_minutes: 0, priority: "regular", primary_user_id: false }; });
+      const r = await A.createBulkTasks({ subKraId: +kra, docType: type, tasks, deliverableType: defDeliv, deliverableOther: defOther, fileData: source?.b64 || "", fileName: source?.name || "", requirementVersion: version });
       A.assertOk(r, "Task creation failed.");
       flags.ok(`${r.created_count || valid.length} task${(r.created_count || valid.length) === 1 ? "" : "s"} created.`);
       setRows([]); setSource(null); setListName("");
@@ -125,7 +133,8 @@ export default function Intake({ docType = "requirement", portal = false }) {
               <Field label="Version (optional)"><Input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="v2.3" /></Field>
               <Field label="Next ref"><span className="input" style={{ color: "var(--brand)", fontWeight: 800 }}>{refOf(0)}</span></Field>
             </div>
-            <Field label={staff ? "Default type (Module / App / EXE)" : "Type for every row (or choose per row)"}><span className="input"><Select value={defDeliv} onChange={(e) => setDefDeliv(e.target.value)} style={SEL}><option value="">Choose…</option>{DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)}</Select></span></Field>
+            <Field label={staff ? "Default type (Module / App / EXE / Other)" : "Type for every row (or choose per row)"}><span className="input"><Select value={defDeliv} onChange={(e) => setDefDeliv(e.target.value)} style={SEL}><option value="">Choose…</option>{DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)}</Select></span></Field>
+            {defDeliv === "other" && <OtherTypeInput label="Default Other type" value={defDelivOther} onChange={setDefDelivOther} />}
             {staff && <div className="grid2">
               <Field label="Default developer"><span className="input"><Select value={defUser} onChange={(e) => setDefUser(e.target.value)} style={SEL}><option value="">Unassigned</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
               <Field label="Default priority"><span className="input"><Select value={defPri} onChange={(e) => setDefPri(e.target.value)} style={SEL}>{PRIORITIES.map((p) => <option key={p.code} value={p.code}>{p.label}</option>)}</Select></span></Field>
@@ -159,7 +168,8 @@ export default function Intake({ docType = "requirement", portal = false }) {
                       <td><span className="input" style={{ height: 32, width: 60 }}><input type="number" min="0" max="59" value={r.estimate_minutes} onChange={(e) => upd(i, { estimate_minutes: e.target.value })} style={CELL} /></span></td>
                       <td><span className="input" style={{ height: 32 }}><Select value={r.priority} onChange={(e) => upd(i, { priority: e.target.value })} style={SEL}>{PRIORITIES.map((p) => <option key={p.code} value={p.code}>{p.label}</option>)}</Select></span></td>
                     </>}
-                    <td><span className="input" style={{ height: 32, borderColor: r.name?.trim() && !r.deliverable_type && !defDeliv ? "var(--danger)" : undefined }}><Select value={r.deliverable_type || ""} onChange={(e) => upd(i, { deliverable_type: e.target.value })} style={SEL}><option value="">{defDeliv ? `Default (${DELIVERABLES.find((d) => d.code === defDeliv)?.label})` : "Choose…"}</option>{DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)}</Select></span></td>
+                    <td><span className="input" style={{ height: 32, borderColor: r.name?.trim() && !r.deliverable_type && !defDeliv ? "var(--danger)" : undefined }}><Select value={r.deliverable_type || ""} onChange={(e) => upd(i, { deliverable_type: e.target.value })} style={SEL}><option value="">{defDeliv ? `Default (${deliverableLabel(defDeliv, defOther)})` : "Choose…"}</option>{DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)}</Select></span>
+                      {r.deliverable_type === "other" && <OtherTypeInput bare value={r.deliverable_other} onChange={(v) => upd(i, { deliverable_other: v })} style={{ height: 32, marginTop: 4, minWidth: 140, ...(r.name?.trim() && !rowOther(r) ? { borderColor: "var(--danger)" } : null) }} />}</td>
                     {staff && <td><span className="input" style={{ height: 32 }}><Select value={r.primary_user_id || ""} onChange={(e) => upd(i, { primary_user_id: e.target.value })} style={SEL}><option value="">—</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></td>}
                     <td><button className="icon-btn" aria-label="Remove" style={{ width: 26, height: 26 }} onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}><Icon n="x" size={14} /></button></td>
                   </tr>

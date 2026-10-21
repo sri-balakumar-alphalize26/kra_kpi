@@ -54,7 +54,7 @@ export const setCertRoles = (kpiId, roles) => rpc("/kpi_completion_cert/set_role
 export const createTaskFromDoc = (t) => rpc("/kpi_completion_cert/create_task_from_doc", {
   client_kra_id: Number(t.clientKraId), sub_kra_id: Number(t.subKraId), task_name: (t.taskName || "").trim(), requirement_version: t.requirementVersion || "",
   estimate_hours: Number(t.estimateHours) || 0, estimate_minutes: Number(t.estimateMinutes) || 0, primary_user_id: t.primaryUserId ? Number(t.primaryUserId) : false,
-  deliverable_type: t.deliverableType || "", file_data: t.fileData || "", file_name: t.fileName || "",
+  deliverable_type: t.deliverableType || "", deliverable_other: t.deliverableOther || "", file_data: t.fileData || "", file_name: t.fileName || "",
 }, { timeout: 120000 });
 /* type='http' GET: doc_type 'requirement' | 'updates' | 'signed'. */
 export const certDocHref = (kpiId, docType) => href(`/kpi_completion_cert/download_doc?kpi_id=${Number(kpiId)}&doc_type=${encodeURIComponent(docType)}`);
@@ -100,7 +100,7 @@ export const fetchQueue = () => read(QUEUE_PATH, {}, { ttl: 10000, timeout: 4500
 export const saveQueueTask = (t) => rpc("/kpi_pending_queue/update", {
   kpi_id: t.id, name: t.name || "", description: t.description || "", external_ref: t.external_ref || "", related_req_ref: t.related_req_ref || "",
   priority: t.priority || "regular", estimate_hours: Number(t.estimate_hours) || 0, estimate_minutes: Number(t.estimate_minutes) || 0,
-  user_id: t.user_id ? Number(t.user_id) : false, deliverable_type: t.deliverable_type || "",
+  user_id: t.user_id ? Number(t.user_id) : false, deliverable_type: t.deliverable_type || "", deliverable_other: t.deliverable_other || "",
 }, { timeout: 45000 });
 export const publishQueueTask = (kpiId) => rpc("/kpi_pending_queue/publish", { kpi_id: kpiId }, { timeout: 45000 });
 export const discardQueueTask = (kpiId, reason) => rpc("/kpi_pending_queue/delete", { kpi_id: kpiId, reason: reason || "" }, { timeout: 45000 });
@@ -154,12 +154,12 @@ export const suggestTasks = (text, docType) => rpc("/kpi_requirements/suggest_ta
 export const parseFile = ({ fileData, fileName, docType }) => rpc("/kpi_requirements/parse_file", { file_data: fileData, file_name: fileName, doc_type: docType }, { timeout: 60000 });
 /* `deliverableType` is the batch default: a row left blank takes it on the server.
    The answer carries kpi_ids in the order of `tasks`. */
-export const createBulkTasks = ({ subKraId, docType, tasks, fileData, fileName, requirementVersion, deliverableType }) =>
-  rpc("/kpi_requirements/create_bulk_tasks", { sub_kra_id: subKraId, doc_type: docType, tasks, deliverable_type: deliverableType || "", file_data: fileData || "", file_name: fileName || "", requirement_version: requirementVersion || "" }, { timeout: 90000 });
+export const createBulkTasks = ({ subKraId, docType, tasks, fileData, fileName, requirementVersion, deliverableType, deliverableOther }) =>
+  rpc("/kpi_requirements/create_bulk_tasks", { sub_kra_id: subKraId, doc_type: docType, tasks, deliverable_type: deliverableType || "", deliverable_other: deliverableOther || "", file_data: fileData || "", file_name: fileName || "", requirement_version: requirementVersion || "" }, { timeout: 90000 });
 export const buildTaskRow = (row) => ({
   name: (row.name || "").trim(), external_ref: row.external_ref || "", related_req_ref: row.related_req_ref || "", description: row.description || "",
   estimate_hours: Number(row.estimate_hours) || 0, estimate_minutes: Number(row.estimate_minutes) || 0, priority: row.priority || "regular",
-  primary_user_id: row.primary_user_id ? Number(row.primary_user_id) : false, deliverable_type: row.deliverable_type || "",
+  primary_user_id: row.primary_user_id ? Number(row.primary_user_id) : false, deliverable_type: row.deliverable_type || "", deliverable_other: row.deliverable_other || "",
 });
 /* The blank XLSX template and the client-files ZIP are type='http' GETs: plain links through the proxy. */
 const TEMPLATE_NAME = { requirement: "requirement", update: "update", bug: "bug_report" };

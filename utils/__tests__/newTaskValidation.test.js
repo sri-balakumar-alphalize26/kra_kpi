@@ -45,12 +45,20 @@ describe('validateNewTask', () => {
     expect(validateNewTask({ ...OK, worked_hours: 0, worked_minutes: 15 })).toBe('');
   });
 
-  test('Module / App / EXE is required, and checked last', () => {
-    expect(validateNewTask({ ...OK, deliverable_type: '' })).toBe('Pick a type — Module, App or EXE.');
+  test('Module / App / EXE / Other is required, and checked last', () => {
+    expect(validateNewTask({ ...OK, deliverable_type: '' })).toBe('Pick a type — Module, App, EXE or Other.');
     // Everything blank still complains about the name first.
     expect(validateNewTask({})).toBe('Task name is required.');
     expect(validateNewTask({ ...OK, user_id: '', deliverable_type: '' }))
       .toBe('Pick an assignee — time worked is recorded against a person.');
+  });
+
+  test('Other needs its text', () => {
+    expect(validateNewTask({ ...OK, deliverable_type: 'other' }))
+      .toBe('Type what the Other type is (e.g. Plugin, Website).');
+    expect(validateNewTask({ ...OK, deliverable_type: 'module,other', deliverable_other: '  ' }))
+      .toBe('Type what the Other type is (e.g. Plugin, Website).');
+    expect(validateNewTask({ ...OK, deliverable_type: 'other', deliverable_other: 'Plugin' })).toBe('');
   });
 
   test('Priority and Type are never validated', () => {

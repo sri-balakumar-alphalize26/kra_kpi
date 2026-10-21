@@ -16,10 +16,11 @@
 // asterisk on the web and neither is ever checked — they always hold a value, so
 // the star is decorative. Do not add validation the web does not have.
 //
-// The Module / App / EXE type IS checked, last, on both: it starts blank, so the
-// star is not decorative there.
+// The Module / App / EXE / Other type IS checked, last, on both: it starts blank,
+// so the star is not decorative there. Other also needs its text — the server
+// refuses Other with none.
 
-import { DELIVERABLE_REQUIRED_MSG } from './deliverableType';
+import { DELIVERABLE_REQUIRED_MSG, DELIVERABLE_OTHER_REQUIRED_MSG, missingOtherText } from './deliverableType';
 
 // hours + minutes as one figure, forgiving of '' and of text the way parseInt is.
 export function toSeconds(hours, minutes) {
@@ -40,6 +41,7 @@ export function validateNewTask(t = {}) {
   }
   if (!t.user_id) return 'Pick an assignee — time worked is recorded against a person.';
   if (!t.deliverable_type) return DELIVERABLE_REQUIRED_MSG;
+  if (missingOtherText(t.deliverable_type, t.deliverable_other)) return DELIVERABLE_OTHER_REQUIRED_MSG;
   return '';
 }
 

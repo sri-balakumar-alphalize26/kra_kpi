@@ -52,10 +52,10 @@ export const removeSignature = () => rpc("/kpi_client_portal/upload_signature", 
 export const certificateHref =(kpiId) => href(`/kpi_client_portal/download_cert?kpi_id=${kpiId}`);
 
 /* One request from the portal. needed_by / attachments are new on 19.0.5.7. */
-export const addClientTask = ({ subKraId, kind, name, description, priority, deliverableType, neededBy, attachments }) =>
+export const addClientTask = ({ subKraId, kind, name, description, priority, deliverableType, deliverableOther, neededBy, attachments }) =>
   rpc("/kpi_client_portal/add_task", {
     sub_kra_id: subKraId, kind: kind || "requirement", name: name || "", description: description || "", priority: priority || "regular",
-    deliverable_type: deliverableType || "", needed_by: neededBy || "", attachments: attachments || [],
+    deliverable_type: deliverableType || "", deliverable_other: deliverableOther || "", needed_by: neededBy || "", attachments: attachments || [],
   }, { timeout: 120000 });
 
 /* Invoices (client view). */

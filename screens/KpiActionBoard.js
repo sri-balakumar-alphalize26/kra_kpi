@@ -20,7 +20,7 @@ import AppDialog from '../components/AppDialog';
 import {
   LANES, groupIntoLanes, byRecency, laneForTask, isTodayTask, isWithinFreshWindow, taskMatchesQuery, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, resumeTaskWithReason, completeTask, reassignTask, adminDeleteTask, createProgress,
-  undoTaskStart,
+  undoTaskStart, fetchTaskDetails,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists, markReviewStarted,
   CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
@@ -47,10 +47,14 @@ import { validateWorkdayNote, NOTE_MAX } from '../utils/workdayNote';
 import { gateLabel } from '../utils/taskGate';
 import MeetingPicker from '../components/MeetingPicker';
 import WorkdaySummaryBody from '../components/WorkdaySummaryBody';
-import { DELIVERABLE_TYPES, deliverableLabel, hasDeliverable, toggleDeliverable } from '../utils/deliverableType';
+import {
+  DELIVERABLE_TYPES, deliverableLabel, taskDeliverableLabel, hasDeliverable, toggleDeliverable, needsOtherText, missingOtherText,
+  DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER, DELIVERABLE_OTHER_REQUIRED_MSG,
+} from '../utils/deliverableType';
 import { estimateFromWorked } from '../utils/doneTaskEstimate';
 import DateGridModal from '../components/DateGridModal';
 import { fmtYMD } from '../utils/dateGrid';
+import { completeMissing } from '../utils/completeMissing';
 import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
 import { noteRequired, pauseReasonText, meetingIds, idleMeetingNote } from '../utils/meetingPick';
 import useBackHandler from '../components/useBackHandler';
@@ -298,22 +302,30 @@ function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
 // both views behave identically — same button set, same runAction wiring, same
 // busy spinner. Reassign stays gated behind isAdmin, so role behavior is preserved.
 
-// Module / App / EXE as checkboxes — a task can build more than one. `value` is
-// the 'module,app' string the server stores. Used by New Task and Done Task.
-function DeliverableChecks({ value, onToggle }) {
+// Module / App / EXE / Other as checkboxes — a task can build more than one.
+// `value` is the 'module,app' string the server stores. Ticking Other opens a
+// box for what it is (`other`), required while Other stays ticked. Used by New
+// Task and Done Task.
+function DeliverableChecks({ value, onToggle, other, onOther }) {
   return (
-    <View style={s.segFull}>
-      {DELIVERABLE_TYPES.map((d) => {
-        const on = hasDeliverable(value, d.code);
-        return (
-          <TouchableOpacity key={d.code} style={[s.segFullItem, s.checkItem, on && s.segFullItemOn]}
-            onPress={() => { H.select(); onToggle(d.code); }} activeOpacity={0.8}>
-            <Ionicons name={on ? 'checkbox' : 'square-outline'} size={16} color={on ? '#fff' : COLORS.muted} />
-            <Text style={[s.segFullTxt, on && { color: '#fff' }]}>{d.label}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
+    <>
+      <View style={s.segFull}>
+        {DELIVERABLE_TYPES.map((d) => {
+          const on = hasDeliverable(value, d.code);
+          return (
+            <TouchableOpacity key={d.code} style={[s.segFullItem, s.checkItem, on && s.segFullItemOn]}
+              onPress={() => { H.select(); onToggle(d.code); }} activeOpacity={0.8}>
+              <Ionicons name={on ? 'checkbox' : 'square-outline'} size={16} color={on ? '#fff' : COLORS.muted} />
+              <Text style={[s.segFullTxt, on && { color: '#fff' }]} numberOfLines={1} adjustsFontSizeToFit>{d.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      {needsOtherText(value) && (
+        <TextInput style={[s.textInput, { marginTop: 8 }, !String(other || '').trim() && s.inputErr]} value={other || ''} onChangeText={onOther}
+          maxLength={DELIVERABLE_OTHER_MAX} placeholder={DELIVERABLE_OTHER_PLACEHOLDER} placeholderTextColor={COLORS.muted} />
+      )}
+    </>
   );
 }
 
@@ -754,9 +766,9 @@ function TaskListRowBase({ task, expanded, rowKey: myRowKey, onToggle, onAction,
               <View style={[s.pillDot, { backgroundColor: p.fg }]} />
               <Text style={[s.pillTxt, { color: p.fg }]}>{p.label}</Text>
             </View>
-            {!!deliverableLabel(task.deliverable_type) && (
+            {!!taskDeliverableLabel(task) && (
               <View style={[s.refPill, s.listPill]}>
-                <Text style={s.refPillTxt} numberOfLines={1}>{deliverableLabel(task.deliverable_type)}</Text>
+                <Text style={s.refPillTxt} numberOfLines={1}>{taskDeliverableLabel(task)}</Text>
               </View>
             )}
           </View>
@@ -849,10 +861,10 @@ function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, f
               <Text style={s.refPillTxt} numberOfLines={1}>{task.external_ref}</Text>
             </View>
           )}
-          {/* Module / App / EXE — what is being built. */}
-          {!!deliverableLabel(task.deliverable_type) && (
+          {/* Module / App / EXE / Other — what is being built. */}
+          {!!taskDeliverableLabel(task) && (
             <View style={s.refPill}>
-              <Text style={s.refPillTxt} numberOfLines={1}>{deliverableLabel(task.deliverable_type)}</Text>
+              <Text style={s.refPillTxt} numberOfLines={1}>{taskDeliverableLabel(task)}</Text>
             </View>
           )}
           {running && (
@@ -1141,6 +1153,9 @@ export default function KpiActionBoard({
   // Validation message shown inside the Finish dialog, so the complaint and the
   // field it is about are on the same screen.
   const [finishErr, setFinishErr] = useState('');
+  // When the error is a full Complete's missing-items list, the error box also
+  // offers a one-tap switch to Partial Finish (summary only).
+  const [finishOfferPartial, setFinishOfferPartial] = useState(false);
   const [checklist, setChecklist] = useState({});
 
   // "You haven't started your workday" — asked on every board entry while locked,
@@ -1521,7 +1536,8 @@ export default function KpiActionBoard({
   const [ntHours, setNtHours] = useState('1');
   const [ntMinutes, setNtMinutes] = useState('0');
   const [ntPriority, setNtPriority] = useState('regular');
-  const [ntDeliverable, setNtDeliverable] = useState('');   // Module / App / EXE, required
+  const [ntDeliverable, setNtDeliverable] = useState('');   // Module / App / EXE / Other, required
+  const [ntDeliverableOther, setNtDeliverableOther] = useState('');   // Other's text, required with Other
   const [ntDesc, setNtDesc] = useState('');
   const [projects, setProjects] = useState([]);
   const [ntProjectOpen, setNtProjectOpen] = useState(false);
@@ -2176,7 +2192,7 @@ export default function KpiActionBoard({
   // dropped, but the button is disabled={!ntValid}, so a blank estimate left
   // Create Task permanently dead with nothing on screen saying why. Half a rule
   // removed is worse than the whole rule — at least the Alert explained itself.
-  const ntValid = !!ntName.trim() && !!ntProject && !!ntDeliverable;
+  const ntValid = !!ntName.trim() && !!ntProject && !!ntDeliverable && !missingOtherText(ntDeliverable, ntDeliverableOther);
 
   // Distinct assignees present in the data, for the Assignee filter.
   const assigneeOptions = useMemo(() => {
@@ -2286,7 +2302,7 @@ export default function KpiActionBoard({
   function openNewTask() {
     setNewTaskOpen(true);
     setNtName(''); setNtProject(null); setNtHours('1'); setNtMinutes('0'); setNtPriority('regular'); setNtDesc('');
-    setNtDeliverable('');
+    setNtDeliverable(''); setNtDeliverableOther('');
     setNtProjectOpen(false); setNtClient(null); setNtClientOpen(false);
     if (clientTree.length === 0) fetchClientTree().then(setClientTree).catch(() => {});
     // Admins file work for other people, so they pick who it is for; a developer
@@ -2303,7 +2319,8 @@ export default function KpiActionBoard({
   async function submitNewTask() {
     if (!ntName.trim()) return say('Task name required', 'Enter a task name.', 'warn');
     if (!ntProject) return say('Project required', 'Choose a project (KRA).', 'warn');
-    if (!ntDeliverable) return say('Type required', 'Tick at least one — Module, App or EXE.', 'warn');
+    if (!ntDeliverable) return say('Type required', 'Tick at least one — Module, App, EXE or Other.', 'warn');
+    if (missingOtherText(ntDeliverable, ntDeliverableOther)) return say('Type required', DELIVERABLE_OTHER_REQUIRED_MSG, 'warn');
     const h = parseInt(ntHours, 10) || 0;
     const m = parseInt(ntMinutes, 10) || 0;
     // Estimate is OPTIONAL, matching the server and the web board. A developer
@@ -2316,6 +2333,7 @@ export default function KpiActionBoard({
       const res = await selfCreateTask({
         name: ntName.trim(), kraId: ntProject.id, estimateHours: h, estimateMinutes: m,
         priority: ntPriority, description: ntDesc.trim(), deliverableType: ntDeliverable,
+        deliverableOther: needsOtherText(ntDeliverable) ? ntDeliverableOther.trim() : '',
         // Admin-only; the route ignores it from anyone else and falls back to
         // the caller, so a developer's task can never be filed against someone.
         userId: isAdmin ? (ntUser?.id || 0) : 0,
@@ -2334,7 +2352,7 @@ export default function KpiActionBoard({
   // "Add Done Task".
   function openDoneTask() {
     setDoneTask({
-      name: '', client: null, project: null, user: null, deliverable: '',
+      name: '', client: null, project: null, user: null, deliverable: '', deliverableOther: '',
       workedH: '', workedM: '', workDate: fmtYMD(new Date()),
       estH: '', estM: '', estTouched: false,
       priority: 'regular', desc: '', open: null,
@@ -2375,7 +2393,8 @@ export default function KpiActionBoard({
     const worked = doneWorkedSecs(d);
     if (!d.name.trim()) return say('Task name required', 'Enter a task name.', 'warn');
     if (!d.project) return say('Project required', 'Choose a project (KRA).', 'warn');
-    if (!d.deliverable) return say('Type required', 'Tick at least one — Module, App or EXE.', 'warn');
+    if (!d.deliverable) return say('Type required', 'Tick at least one — Module, App, EXE or Other.', 'warn');
+    if (missingOtherText(d.deliverable, d.deliverableOther)) return say('Type required', DELIVERABLE_OTHER_REQUIRED_MSG, 'warn');
     if (worked <= 0) return say('Time worked required', 'Enter the hours and/or minutes already spent.', 'warn');
     if ((parseInt(d.workedM, 10) || 0) > 59) return say('Check the time', 'Minutes worked must be 0–59.', 'warn');
     if ((parseInt(d.estM, 10) || 0) > 59) return say('Check the estimate', 'Estimate minutes must be 0–59.', 'warn');
@@ -2391,7 +2410,8 @@ export default function KpiActionBoard({
         name: d.name.trim(), kraId: d.project.id, userId: d.user?.id || 0,
         workedSeconds: worked, workDate: d.workDate,
         estimateHours: Math.floor(est / 3600), estimateMinutes: Math.floor((est % 3600) / 60),
-        deliverableType: d.deliverable, priority: d.priority, description: d.desc.trim(),
+        deliverableType: d.deliverable, deliverableOther: needsOtherText(d.deliverable) ? (d.deliverableOther || '').trim() : '',
+        priority: d.priority, description: d.desc.trim(),
       });
       if (res && res.status === false) { say('Cannot add', res.message || 'Failed', 'warn'); return; }
       setDoneTask(null);
@@ -2764,15 +2784,31 @@ export default function KpiActionBoard({
     // than the mistake was. Stacking the board's own popup would be worse still:
     // two RN Modals at once are unreliable on Android. Same treatment the web's
     // Partial Finish dialog already uses.
-    if (!finishSummary.trim()) {
+    setFinishOfferPartial(false);
+    if (finishPartial && !finishSummary.trim()) {
       H.err();
       return setFinishErr('Describe what you did before finishing — this is what your manager reads.');
     }
     if (!finishPartial) {
-      const ticked = CHECKLIST_ITEMS.filter((c) => checklist[c.key]);
-      if (!ticked.length) {
+      // A full Complete needs a summary, a user manual, a GitHub link on a
+      // Module / App task and at least one tick (the server refuses each). All
+      // gaps are listed together, so nobody fixes one only to be told about the
+      // next. Asked BEFORE the summary is saved, so a refusal does not leave a
+      // stray progress note behind. A failed lookup leaves manual + GitHub to
+      // the server rather than blocking on a network blip.
+      const det = await fetchTaskDetails(task.id);
+      const known = !!det?.ok;
+      const missing = completeMissing({
+        hasSummary: !!finishSummary.trim(),
+        hasManual: !known || (det.manuals || []).length > 0,
+        githubRequired: known && !!det.task?.github_required,
+        hasGithub: !known || (det.github || []).length > 0,
+        anyTicked: CHECKLIST_ITEMS.some((c) => checklist[c.key]),
+      });
+      if (missing.length) {
         H.err();
-        return setFinishErr('Tick everything that applies — at least one — or use "Partial Finish" to submit a summary only.');
+        setFinishOfferPartial(true);
+        return setFinishErr(`Before completing, you still need:\n${missing.map((m) => `• ${m}`).join('\n')}`);
       }
     }
     setFinishErr('');
@@ -4076,7 +4112,20 @@ export default function KpiActionBoard({
                 {finishErr ? (
                   <View style={s.inlineErr}>
                     <Ionicons name="alert-circle" size={15} color={COLORS.red} />
-                    <Text style={s.inlineErrTxt}>{finishErr}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.inlineErrTxt, { flex: 0 }]}>{finishErr}</Text>
+                      {finishOfferPartial && !finishPartial ? (
+                        <TouchableOpacity
+                          onPress={() => { H.select(); setFinishPartial(true); setFinishErr(''); setFinishOfferPartial(false); }}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          style={{ marginTop: 8 }}
+                        >
+                          <Text style={[s.inlineErrTxt, { flex: 0, fontWeight: '800', textDecorationLine: 'underline' }]}>
+                            Switch to Partial Finish (summary only) →
+                          </Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
                   </View>
                 ) : null}
 
@@ -4225,10 +4274,11 @@ export default function KpiActionBoard({
                   </View>
                 </View>
 
-                <Text style={s.fieldLabel}>Type (Module / App / EXE) *</Text>
-                <DeliverableChecks value={ntDeliverable} onToggle={(code) => setNtDeliverable((v) => toggleDeliverable(v, code))} />
+                <Text style={s.fieldLabel}>Type (Module / App / EXE / Other) *</Text>
+                <DeliverableChecks value={ntDeliverable} onToggle={(code) => setNtDeliverable((v) => toggleDeliverable(v, code))}
+                  other={ntDeliverableOther} onOther={setNtDeliverableOther} />
                 <Text style={s.fieldHint}>
-                  {ntDeliverable ? deliverableLabel(ntDeliverable) : 'Required — tick one or more.'}
+                  {ntDeliverable ? deliverableLabel(ntDeliverable, ntDeliverableOther) : 'Required — tick one or more.'}
                 </Text>
 
                 <Text style={s.fieldLabel}>Priority</Text>
@@ -4354,11 +4404,12 @@ export default function KpiActionBoard({
                     </View>
                   )}
 
-                  <Text style={s.fieldLabel}>Type (Module / App / EXE) *</Text>
+                  <Text style={s.fieldLabel}>Type (Module / App / EXE / Other) *</Text>
                   <DeliverableChecks value={doneTask.deliverable}
-                    onToggle={(code) => patchDone({ deliverable: toggleDeliverable(doneTask.deliverable, code) })} />
+                    onToggle={(code) => patchDone({ deliverable: toggleDeliverable(doneTask.deliverable, code) })}
+                    other={doneTask.deliverableOther} onOther={(v) => patchDone({ deliverableOther: v })} />
                   <Text style={s.fieldHint}>
-                    {doneTask.deliverable ? deliverableLabel(doneTask.deliverable) : 'Required — tick one or more.'}
+                    {doneTask.deliverable ? deliverableLabel(doneTask.deliverable, doneTask.deliverableOther) : 'Required — tick one or more.'}
                   </Text>
 
                   <View style={s.twoCol}>
@@ -5921,7 +5972,7 @@ const s = StyleSheet.create({
   segFull: { flexDirection: 'row', gap: 8 },
   segFullItem: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   segFullItemOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
-  checkItem: { flexDirection: 'row', gap: 6 },
+  checkItem: { flexDirection: 'row', gap: 4, paddingHorizontal: 4 },
   segFullTxt: { fontSize: 13.5, fontWeight: '800', color: COLORS.ink },
 
   errorMsg: { fontSize: 14.5, color: COLORS.ink, lineHeight: 21, paddingVertical: 10 },
