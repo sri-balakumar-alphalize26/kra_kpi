@@ -16,8 +16,20 @@ from odoo.exceptions import ValidationError
 # the field holds a comma-separated list of codes, always in the order below —
 # 'module,app', never 'app,module'. A single code is the one-item case, so every
 # task saved before this, and every client that still sends one value, is valid.
-DELIVERABLE_TYPES = [('module', 'Module'), ('app', 'App'), ('exe', 'EXE')]
+#
+# 'other' is for anything the three do not name (a plugin, a website, a report…).
+# What was typed lives in deliverable_other, NOT in this list: the list stays
+# codes only, so the comma-join and the canonical order still hold.
+DELIVERABLE_TYPES = [('module', 'Module'), ('app', 'App'), ('exe', 'EXE'), ('other', 'Other')]
 DELIVERABLE_TYPE_CODES = tuple(c for c, _ in DELIVERABLE_TYPES)
+DELIVERABLE_OTHER_MAX = 40
+
+
+def ref_type(ref):
+    """The type letters of an external_ref: REQ-012 -> REQ, and BUG001-REQ-012
+    (a bug raised under a requirement) -> BUG. '' when there are none."""
+    m = re.match(r'\s*([A-Za-z]+)', ref or '')
+    return m.group(1).upper() if m else ''
 
 
 def clean_deliverable_type(raw):
@@ -36,13 +48,30 @@ def clean_deliverable_type(raw):
     if not codes:
         return False, None
     if not codes <= set(DELIVERABLE_TYPE_CODES):
-        return False, 'Type must be Module, App or EXE.'
+        return False, 'Type must be Module, App, EXE or Other.'
     return ','.join(c for c in DELIVERABLE_TYPE_CODES if c in codes), None
 
 
-def deliverable_type_label(value):
-    """'module,app' → 'Module + App'."""
-    labels = dict(DELIVERABLE_TYPES)
+def clean_deliverable(raw_type, raw_other=None):
+    """Type plus the typed "Other" name, cleaned together: ({vals}, error | None).
+
+    vals always carries BOTH keys, so a write also clears a stale Other name
+    when Other is no longer ticked. Other ticked → the name is required (spaces
+    collapsed, at most DELIVERABLE_OTHER_MAX characters)."""
+    dt, err = clean_deliverable_type(raw_type)
+    if err:
+        return {}, err
+    other = False
+    if dt and 'other' in dt.split(','):
+        other = ' '.join(str(raw_other or '').split())[:DELIVERABLE_OTHER_MAX]
+        if not other:
+            return {}, 'Type what the Other type is (e.g. Plugin, Website).'
+    return {'deliverable_type': dt, 'deliverable_other': other}, None
+
+
+def deliverable_type_label(value, other=''):
+    """'module,app' → 'Module + App'; 'module,other' + 'Plugin' → 'Module + Plugin'."""
+    labels = dict(DELIVERABLE_TYPES, other=(other or 'Other'))
     return ' + '.join(labels[c] for c in (value or '').split(',') if c in labels)
 
 
@@ -172,13 +201,17 @@ class KpiMaster(models.Model):
         help="What is being built: module, app, exe, or several separated by commas "
              "(e.g. module,app). Separate from the Requirement / Update / Bug "
              "classification.")
+    # What "Other" means for this task, as typed (only set while 'other' is in
+    # deliverable_type — clean_deliverable keeps the two in step).
+    deliverable_other = fields.Char(string='Other Type')
     deliverable_type_display = fields.Char(
         string='Type', compute='_compute_deliverable_type_display')
 
-    @api.depends('deliverable_type')
+    @api.depends('deliverable_type', 'deliverable_other')
     def _compute_deliverable_type_display(self):
         for rec in self:
-            rec.deliverable_type_display = deliverable_type_label(rec.deliverable_type)
+            rec.deliverable_type_display = deliverable_type_label(
+                rec.deliverable_type, rec.deliverable_other)
 
     @api.constrains('deliverable_type')
     def _check_deliverable_type(self):
@@ -189,7 +222,7 @@ class KpiMaster(models.Model):
                 clean, err = clean_deliverable_type(rec.deliverable_type)
                 if err or clean != rec.deliverable_type:
                     raise ValidationError(
-                        "Type must be module, app or exe — or several, comma-separated "
+                        "Type must be module, app, exe or other — or several, comma-separated "
                         "in that order (e.g. module,app).")
 
     user_group_id = fields.Many2one('res.groups', string='User Group')
@@ -1230,11 +1263,11 @@ class KpiMaster(models.Model):
                     NAME_PREFIX_FOR_DOC_TYPE.get(doc_type, '') + (rec_vals['name'] or ''))
                 rec_vals['requested_doc_type'] = doc_type
 
-        dt, err = clean_deliverable_type(vals.get('deliverable_type'))
+        dv, err = clean_deliverable(vals.get('deliverable_type'), vals.get('deliverable_other'))
         if err:
             raise ValidationError(err)
-        if dt:
-            rec_vals['deliverable_type'] = dt
+        if dv['deliverable_type']:
+            rec_vals.update(dv)
 
         rec = self.create(rec_vals)
         return rec.id

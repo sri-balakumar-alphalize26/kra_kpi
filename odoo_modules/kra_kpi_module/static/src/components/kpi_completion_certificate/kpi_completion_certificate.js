@@ -99,13 +99,18 @@ export class KpiCompletionCertificate extends Component {
                         </select>
                     </div>
                     <div class="col-md-2">
-                        <label class="form-label fw-bold">Type (Module / App / EXE) *</label>
+                        <label class="form-label fw-bold">Type (Module / App / EXE / Other) *</label>
                         <select class="form-select" t-model="state.newTask.deliverable_type">
                             <option value="">— choose —</option>
                             <option value="module">Module</option>
                             <option value="app">App</option>
                             <option value="exe">EXE</option>
+                            <option value="other">Other</option>
                         </select>
+                        <!-- Other: say what it is (required) -->
+                        <input t-if="state.newTask.deliverable_type === 'other'" type="text" class="form-control mt-2"
+                               maxlength="40" placeholder="What is it? e.g. Plugin, Website"
+                               t-model="state.newTask.deliverable_other"/>
                     </div>
                     <div class="col-md-2 d-flex align-items-end">
                         <button class="btn btn-success w-100" t-on-click="quickCreateTask">
@@ -321,7 +326,8 @@ export class KpiCompletionCertificate extends Component {
                 estimate_hours: 0,
                 estimate_minutes: 0,
                 primary_user_id: '',
-                deliverable_type: '',   // Module / App / EXE — required
+                deliverable_type: '',   // Module / App / EXE / Other — required
+                deliverable_other: '',  // text for type "Other"
                 file_data: '',
                 file_name: '',
             },
@@ -375,7 +381,11 @@ export class KpiCompletionCertificate extends Component {
             return;
         }
         if (!nt.deliverable_type) {
-            this._toast('Please choose a type — Module, App or EXE.', 'warning');
+            this._toast('Please choose a type — Module, App, EXE or Other.', 'warning');
+            return;
+        }
+        if (nt.deliverable_type === 'other' && !(nt.deliverable_other || '').trim()) {
+            this._toast('Type what the Other type is (e.g. Plugin, Website).', 'warning');
             return;
         }
         const r = await rpc('/kpi_completion_cert/create_task_from_doc', {
@@ -387,6 +397,7 @@ export class KpiCompletionCertificate extends Component {
             estimate_minutes: nt.estimate_minutes,
             primary_user_id: nt.primary_user_id,
             deliverable_type: nt.deliverable_type,
+            deliverable_other: nt.deliverable_type === 'other' ? (nt.deliverable_other || '').trim() : '',
             file_data: nt.file_data,
             file_name: nt.file_name,
         });
@@ -396,7 +407,7 @@ export class KpiCompletionCertificate extends Component {
         this.state.newTask = {
             client_kra_id: '', sub_kra_id: '', task_name: '',
             requirement_version: '', estimate_hours: 0, estimate_minutes: 0,
-            primary_user_id: '', deliverable_type: '', file_data: '', file_name: '',
+            primary_user_id: '', deliverable_type: '', deliverable_other: '', file_data: '', file_name: '',
         };
         this.state.subKras = [];
         await this.loadList();

@@ -101,7 +101,9 @@ class KpiWaTaskForm(http.Controller):
         elif not post.get('kra_id'):
             err = 'Please choose a client and project.'
         elif not deliverable:
-            err = 'Tick at least one type — Module, App or EXE.'
+            err = 'Tick at least one type — Module, App, EXE or Other.'
+        elif 'other' in deliverable and not (post.get('deliverable_other') or '').strip():
+            err = 'Type what the Other type is (e.g. Plugin, Website).'
         elif hours < 0 or not 0 <= minutes <= 59:
             err = 'Estimate: whole hours, and minutes 0–59.'
         res = None
@@ -113,6 +115,7 @@ class KpiWaTaskForm(http.Controller):
                 'doc_type': post.get('doc_type') or 'requirement',
                 'description': post.get('description') or '',
                 'deliverable_type': deliverable,
+                'deliverable_other': post.get('deliverable_other') or '',
             })
             if not res or not res.get('status'):
                 err = (res or {}).get('message') or 'Could not create the task.'

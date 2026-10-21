@@ -121,14 +121,19 @@
                         </div>
 
                         <div class="field">
-                            <span class="lbl">Module / App / EXE (tick one or more) <span class="req">*</span></span>
+                            <span class="lbl">Module / App / EXE / Other (tick one or more) <span class="req">*</span></span>
                             <span class="chks">
-                                <t t-foreach="[('module', 'Module'), ('app', 'App'), ('exe', 'EXE')]" t-as="dv">
+                                <t t-foreach="[('module', 'Module'), ('app', 'App'), ('exe', 'EXE'), ('other', 'Other')]" t-as="dv">
                                     <label><input type="checkbox" name="deliverable_type" t-att-value="dv[0]"
+                                                  t-att-id="'ntDeliv_%s' % dv[0]"
                                                   t-att-checked="'checked' if dv[0] in values.get('deliverable', []) else None"/>
                                         <t t-esc="dv[1]"/></label>
                                 </t>
                             </span>
+                            <!-- Shown while Other is ticked; what they type is saved as the type. -->
+                            <input class="input" id="ntDelivOther" name="deliverable_other" maxlength="40"
+                                   placeholder="What is it? e.g. Plugin, Website" t-att-value="values.get('deliverable_other') or ''"
+                                   t-att-style="None if 'other' in values.get('deliverable', []) else 'display:none'"/>
                         </div>
 
                         <div class="field">
@@ -183,6 +188,13 @@
                             if (!still) { k.value = first ? first.value : ''; }
                         }
                         c.addEventListener('change', filter); filter();
+                        var other = document.getElementById('ntDeliv_other'), otherText = document.getElementById('ntDelivOther');
+                        function showOther() {
+                            otherText.style.display = other.checked ? '' : 'none';
+                            otherText.required = other.checked;
+                            if (other.checked) { otherText.focus(); }
+                        }
+                        other.addEventListener('change', showOther);
                     })();
                 </script>
             </t>

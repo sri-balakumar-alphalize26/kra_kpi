@@ -48,7 +48,8 @@
                             <field name="name"/>
                             <field name="kra_id"/>
                             <field name="priority"/>
-                            <field name="deliverable_type" placeholder="module, app, exe — or e.g. module,app"/>
+                            <field name="deliverable_type" placeholder="module, app, exe, other — or e.g. module,app"/>
+                            <field name="deliverable_other" invisible="not deliverable_type or 'other' not in deliverable_type"/>
                             <label for="estimate_hours" string="Estimated Time"/>
                             <div class="o_row">
                                 <field name="estimate_hours" class="oe_inline" style="width: 60px;"/>

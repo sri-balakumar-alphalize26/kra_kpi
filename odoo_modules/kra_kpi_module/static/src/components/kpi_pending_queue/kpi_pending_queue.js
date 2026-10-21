@@ -154,13 +154,19 @@ export class KpiPendingQueue extends Component {
                                                         <!-- Module / App / EXE. Clients may leave it blank; the
                                                              admin fills it in here. Not required to publish. -->
                                                         <div class="col-md-2">
-                                                            <label class="form-label small fw-bold">Type (Module / App / EXE)</label>
+                                                            <label class="form-label small fw-bold">Type (Module / App / EXE / Other)</label>
                                                             <select class="form-select form-select-sm" t-model="q.deliverable_type">
                                                                 <option value="">— choose —</option>
                                                                 <option value="module">Module</option>
                                                                 <option value="app">App</option>
                                                                 <option value="exe">EXE</option>
+                                                                <option value="other">Other</option>
                                                             </select>
+                                                            <!-- Other: say what it is (required when Other) -->
+                                                            <input t-if="q.deliverable_type === 'other'" type="text"
+                                                                   class="form-control form-control-sm mt-1" maxlength="40"
+                                                                   placeholder="What is it? e.g. Plugin, Website"
+                                                                   t-model="q.deliverable_other"/>
                                                         </div>
                                                         <div class="col-md-4">
                                                             <label class="form-label small fw-bold">
@@ -339,10 +345,16 @@ export class KpiPendingQueue extends Component {
     async refresh() {
         const r = await rpc('/kpi_pending_queue/list', {});
         if (!r.status) { alert('Error: ' + (r.message || 'unknown')); return; }
-        this.state.queue = r.queue || [];
+        // Seed the Other text so its input binds to a real key.
+        this.state.queue = (r.queue || []).map((q) => ({ ...q, deliverable_other: q.deliverable_other || '' }));
     }
 
     async saveTask(q, silent = false) {
+        const other = q.deliverable_type === 'other' ? (q.deliverable_other || '').trim() : '';
+        if (q.deliverable_type === 'other' && !other) {
+            alert('Type what the Other type is (e.g. Plugin, Website).');
+            return false;
+        }
         const r = await rpc('/kpi_pending_queue/update', {
             kpi_id: q.id,
             name: q.name,
@@ -352,6 +364,7 @@ export class KpiPendingQueue extends Component {
             priority: q.priority,
             // Blank clears it on the server.
             deliverable_type: q.deliverable_type || '',
+            deliverable_other: other,
             estimate_hours: q.estimate_hours || 0,
             estimate_minutes: q.estimate_minutes || 0,
             user_id: q.user_id || false,

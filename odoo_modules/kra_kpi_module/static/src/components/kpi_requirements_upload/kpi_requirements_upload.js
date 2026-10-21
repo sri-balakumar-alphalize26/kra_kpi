@@ -197,7 +197,13 @@ const TEMPLATE = xml/* xml */`
                                 <option value="module">Module</option>
                                 <option value="app">App</option>
                                 <option value="exe">EXE</option>
+                                <option value="other">Other</option>
                             </select>
+                            <!-- Other: say what it is (required) -->
+                            <input t-if="t.deliverable_type === 'other'" type="text"
+                                   class="form-control form-control-sm mt-1" maxlength="40"
+                                   placeholder="What is it? e.g. Plugin, Website"
+                                   t-model="t.deliverable_other"/>
                         </td>
                         <td>
                             <button class="btn btn-sm btn-outline-danger"
@@ -387,13 +393,17 @@ const TEMPLATE = xml/* xml */`
                 </select>
             </div>
             <div class="col-md-3">
-                <label class="form-label fw-bold">Default Type (Module / App / EXE)</label>
+                <label class="form-label fw-bold">Default Type (Module / App / EXE / Other)</label>
                 <select class="form-select" t-model="state.def_deliverable">
                     <option value="">— choose —</option>
                     <option value="module">Module</option>
                     <option value="app">App</option>
                     <option value="exe">EXE</option>
+                    <option value="other">Other</option>
                 </select>
+                <input t-if="state.def_deliverable === 'other'" type="text" class="form-control mt-2"
+                       maxlength="40" placeholder="What is it? e.g. Plugin, Website"
+                       t-model="state.def_deliverable_other"/>
             </div>
         </div>
     </div>
@@ -441,7 +451,8 @@ class _BaseUpload extends Component {
             def_minutes: 0,
             def_priority: 'regular',
             def_user_id: '',
-            def_deliverable: '',     // Module / App / EXE — blank until chosen
+            def_deliverable: '',     // Module / App / EXE / Other — blank until chosen
+            def_deliverable_other: '', // text for default type "Other"
             suggesting: false,
             suggestionSource: '',
             suggestionMessage: '',
@@ -510,6 +521,7 @@ class _BaseUpload extends Component {
             priority: this.state.def_priority || 'regular',
             primary_user_id: this.state.def_user_id || '',
             deliverable_type: this.state.def_deliverable || '',
+            deliverable_other: this.state.def_deliverable === 'other' ? (this.state.def_deliverable_other || '') : '',
         };
     }
     addRow() {
@@ -727,6 +739,7 @@ class _BaseUpload extends Component {
                 priority: t.priority || 'regular',
                 primary_user_id: t.primary_user_id || false,
                 deliverable_type: t.deliverable_type || '',
+                deliverable_other: t.deliverable_type === 'other' ? (t.deliverable_other || '').trim() : '',
             }));
         if (!tasks.length) {
             alert('Add at least one task row.');
@@ -736,8 +749,20 @@ class _BaseUpload extends Component {
         // neither is missing its type.
         const untyped = tasks.filter(t => !t.deliverable_type && !this.state.def_deliverable);
         if (untyped.length) {
-            alert('Please choose a type — Module, App or EXE — for:\n\n'
+            alert('Please choose a type — Module, App, EXE or Other — for:\n\n'
                 + untyped.map(t => '•  ' + t.name).join('\n'));
+            return;
+        }
+        // Other needs its text — on the default, and on any row set to Other.
+        const defOther = (this.state.def_deliverable_other || '').trim();
+        if (this.state.def_deliverable === 'other' && !defOther) {
+            alert('Type what the Other type is (e.g. Plugin, Website) — Default Type.');
+            return;
+        }
+        const otherBlank = tasks.filter(t => t.deliverable_type === 'other' && !t.deliverable_other);
+        if (otherBlank.length) {
+            alert('Type what the Other type is (e.g. Plugin, Website) for:\n\n'
+                + otherBlank.map(t => '•  ' + t.name).join('\n'));
             return;
         }
         const r = await rpc('/kpi_requirements/create_bulk_tasks', {
@@ -745,6 +770,7 @@ class _BaseUpload extends Component {
             doc_type: this.docType,
             tasks: tasks,
             deliverable_type: this.state.def_deliverable || '',
+            deliverable_other: this.state.def_deliverable === 'other' ? defOther : '',
             file_data: this.state.file_data,
             file_name: this.state.file_name,
             requirement_version: this.state.requirement_version,
@@ -852,6 +878,7 @@ class _BaseUpload extends Component {
         this.state.def_priority = 'regular';
         this.state.def_user_id = '';
         this.state.def_deliverable = '';
+        this.state.def_deliverable_other = '';
         this.state.suggestionSource = '';
         this.state.suggestionMessage = '';
         this.state.import_status = '';
