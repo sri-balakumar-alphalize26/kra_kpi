@@ -1757,6 +1757,8 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             kpi._schedule_queue_nudge()
         except Exception as exc:
             _logger.warning('group intake notify failed: %s', exc)
+        # The admins' private decision link (kpi_wa_admin_link.py). Never raises.
+        kpi._wa_ask_admins()
         log = {'group': group.jid, 'participant': state.participant_key,
                'number': self._participant_number(state)}
         log.update(payload or {})

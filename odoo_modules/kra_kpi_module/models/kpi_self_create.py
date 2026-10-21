@@ -10,7 +10,7 @@ import logging
 
 from odoo import api, models
 
-from .kpi import clean_deliverable_type
+from .kpi import clean_deliverable
 
 _logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class KraKpiSelfCreate(models.Model):
         if req_doc_type not in ('requirement', 'update', 'bug'):
             req_doc_type = 'requirement'
         description = (params.get('description') or '').strip()
-        deliverable, deliverable_err = clean_deliverable_type(params.get('deliverable_type'))
+        dv, deliverable_err = clean_deliverable(params.get('deliverable_type'), params.get('deliverable_other'))
         if deliverable_err:
             return {'status': False, 'message': deliverable_err}
 
@@ -99,7 +99,8 @@ class KraKpiSelfCreate(models.Model):
             # may change `priority` on Accept and can see what they overrule.
             'requested_priority': priority,
             'requested_doc_type': req_doc_type,
-            'deliverable_type': deliverable,
+            'deliverable_type': dv['deliverable_type'],
+            'deliverable_other': dv['deliverable_other'],
             'description': description,
             'task_state': 'assigned',
             'published': True,
@@ -119,6 +120,8 @@ class KraKpiSelfCreate(models.Model):
                         priority=priority)
         except Exception as exc:
             _logger.warning("self_task_submitted notify failed: %s", exc)
+        # Accept / send back from WhatsApp too (kpi_wa_admin_link.py). Never raises.
+        rec._wa_ask_admins('self_task')
 
         return {'status': True, 'id': rec.id, 'external_ref': rec.external_ref,
                 'message': 'Task created in your Pending Review lane.'}

@@ -1635,12 +1635,50 @@ class KpiWorkflow(models.Model):
             rec._wrap_lifecycle('resume')
         return result
 
+    MANUAL_REQUIRED_MSG = ('Upload a user manual (PDF, DOC or DOCX) before completing this task '
+                           '— or use Partial Finish to send a summary only.')
+
+    def _manual_required_refusal(self):
+        """A full Complete needs a user manual on the task; Partial Finish does not.
+
+        One manual already uploaded is enough. Every Complete caller asks this
+        (the /kra_kpi/task/complete route the board, web and app use, and the
+        WhatsApp page and chat), so the rule reads the same everywhere. Returns
+        the message to show, or False."""
+        self.ensure_one()
+        if self.env['kpi.user.manual'].sudo().search_count([('kpi_id', '=', self.id)]):
+            return False
+        return self.MANUAL_REQUIRED_MSG
+
+    GITHUB_REQUIRED_MSG = ('This is a Module / App task — add the GitHub link (repository + branch) '
+                           'before completing, or use Partial Finish to send a summary only.')
+
+    def _github_required(self):
+        """Module or App among the task's types: the code has to be on GitHub."""
+        self.ensure_one()
+        return bool({'module', 'app'} & set((self.deliverable_type or '').split(',')))
+
+    def _github_required_refusal(self):
+        """A full Complete of a Module / App task needs a GitHub link on it (one
+        already added counts). Any other type: optional. Partial Finish never
+        asks. Returns the message to show, or False."""
+        self.ensure_one()
+        if not self._github_required():
+            return False
+        if self.env['kpi.github.link'].sudo().search_count([('kpi_id', '=', self.id)]):
+            return False
+        return self.GITHUB_REQUIRED_MSG
+
     def complete_task(self, employee_checklist=None):
         result = super().complete_task(employee_checklist=employee_checklist)
         # Completing also closes any open break/lunch.
         self.env['kpi.break.log'].stop_break(self.env.user.id)
         for rec in self:
             rec._wrap_lifecycle('complete')
+            # Finished work: the admins get a private link to approve or send
+            # it back (kpi_wa_admin_link.py). Never raises.
+            if rec.task_state == 'partially_completed' and not rec.admin_approved:
+                rec._wa_ask_admins('qa')
         return result
 
     def approve_task(self, manager_checklist=None):

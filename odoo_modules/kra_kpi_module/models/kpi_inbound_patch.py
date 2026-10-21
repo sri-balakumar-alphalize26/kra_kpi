@@ -773,6 +773,8 @@ def _create_task_from_conversation(env, conv):
         kpi._schedule_queue_nudge()
     except Exception as exc:
         _logger.warning("client_task_queued notify failed for kpi %s: %s", kpi.id, exc)
+    # The admins' private decision link (kpi_wa_admin_link.py). Never raises.
+    kpi._wa_ask_admins()
     return kpi
 
 

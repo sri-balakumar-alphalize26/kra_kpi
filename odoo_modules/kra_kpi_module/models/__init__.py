@@ -78,3 +78,5 @@ from . import kpi_time_adjust
 from . import kpi_self_create
 from . import kpi_user_color
 from . import kpi_reminder
+# AFTER kpi_manager (_manager_users) and kpi_wa_group_report (the 1:1 send).
+from . import kpi_wa_admin_link

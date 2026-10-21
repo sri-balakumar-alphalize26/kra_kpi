@@ -15,7 +15,7 @@ import re
 from ..models.kpi_work_session import IDLE_CHECK_MIN, NO_TASK_NUDGE_MIN, _fmt_hms, _to_user_tz_str
 from ..models.kpi_nontask_block import NOTE_MAX, NONTASK_REASON_CODES
 from ..models.kpi_client_invoice import PAYMENT_METHODS
-from ..models.kpi import clean_deliverable_type
+from ..models.kpi import clean_deliverable, deliverable_type_label, ref_type
 
 # End-of-day summary note. Distinct from NOTE_MAX above, which caps the short one-line
 # reason on a pause/break — this one holds a whole day's write-up (a real one runs ~400
@@ -1613,7 +1613,7 @@ class KpiReportsAPI(http.Controller):
                     # external_ref (REQ-004 → REQ). _populate filters on exactly this,
                     # so the picker needs it to show the same set the invoice will bill.
                     # Empty for a task with no reference.
-                    'task_type': (k.external_ref or '').split('-')[0].strip().upper(),
+                    'task_type': ref_type(k.external_ref),
                 })
             return {'status': True, 'users': users, 'kpis': kpi_list}
         except Exception as e:
@@ -2541,6 +2541,8 @@ class KpiReportsAPI(http.Controller):
                     'related_req_ref': k.related_req_ref or '',
                     'priority': k.priority or 'regular',
                     'deliverable_type': k.deliverable_type or '',
+                    'deliverable_other': k.deliverable_other or '',
+                    'deliverable_label': deliverable_type_label(k.deliverable_type, k.deliverable_other),
                     'description': k.description or '',
                     'estimate_hours': k.estimate_hours or 0,
                     'estimate_minutes': k.estimate_minutes or 0,
@@ -2601,10 +2603,10 @@ class KpiReportsAPI(http.Controller):
             if 'user_id' in params:
                 updates['user_id'] = int(params['user_id']) if params['user_id'] else False
             if 'deliverable_type' in params:
-                deliverable, err = clean_deliverable_type(params['deliverable_type'])
+                dv, err = clean_deliverable(params['deliverable_type'], params.get('deliverable_other'))
                 if err:
                     return {'status': False, 'message': err}
-                updates['deliverable_type'] = deliverable
+                updates.update(dv)
             if updates:
                 kpi.write(updates)
             return {'status': True}
@@ -3242,7 +3244,7 @@ class KpiReportsAPI(http.Controller):
             raw_name = (params.get('name') or '').strip()
             if not raw_name:
                 return {'status': False, 'message': 'Task name required.'}
-            deliverable, err = clean_deliverable_type(params.get('deliverable_type'))
+            dv, err = clean_deliverable(params.get('deliverable_type'), params.get('deliverable_other'))
             if err:
                 return {'status': False, 'message': err}
             needed_by = False
@@ -3271,8 +3273,8 @@ class KpiReportsAPI(http.Controller):
                 # This route is the client portal — always a client submission.
                 'client_submitted': True,
             }
-            if deliverable:
-                vals['deliverable_type'] = deliverable
+            if dv['deliverable_type']:
+                vals.update(dv)
             if needed_by:
                 vals['deadline'] = needed_by
             kpi = request.env['kra.kpi'].sudo().create(vals)
@@ -3285,6 +3287,8 @@ class KpiReportsAPI(http.Controller):
                                            ', '.join(f[0] for f in files))
                     if files else ''))
                 kpi._schedule_queue_nudge()
+                # And a private decision link on each admin's WhatsApp.
+                kpi._wa_ask_admins()
             except Exception as exc:
                 import logging
                 logging.getLogger(__name__).warning(
@@ -7303,18 +7307,19 @@ class KpiReportsAPI(http.Controller):
             # whole upload. Checked for EVERY row before any is created: the loop
             # below creates as it goes, so a bad row 5 found mid-loop would leave
             # rows 1-4 behind.
-            default_deliverable, err = clean_deliverable_type(params.get('deliverable_type'))
+            default_deliverable, err = clean_deliverable(params.get('deliverable_type'),
+                                                         params.get('deliverable_other'))
             if err:
                 return {'status': False, 'message': err}
             row_deliverable = {}
             for i, t in enumerate(tasks_in):
                 if not (t.get('name') or '').strip():
                     continue
-                dt, err = clean_deliverable_type(t.get('deliverable_type'))
+                dv, err = clean_deliverable(t.get('deliverable_type'), t.get('deliverable_other'))
                 if err:
                     return {'status': False,
                             'message': '%s (task %d: %s)' % (err, i + 1, (t.get('name') or '').strip())}
-                row_deliverable[i] = dt or default_deliverable
+                row_deliverable[i] = dv if dv['deliverable_type'] else default_deliverable
 
             # is_client was already computed above (used for authorization).
             # Clients use sudo() to bypass ACL on kra.kpi.create (mirroring
@@ -7350,8 +7355,8 @@ class KpiReportsAPI(http.Controller):
                     # Marks the client-only queue + auto-approve path.
                     'client_submitted': bool(is_client),
                 }
-                if row_deliverable.get(i):
-                    vals['deliverable_type'] = row_deliverable[i]
+                if (row_deliverable.get(i) or {}).get('deliverable_type'):
+                    vals.update(row_deliverable[i])
                 # Clients can't pre-assign developers — only admin/manager can.
                 if not is_client:
                     pu = t.get('primary_user_id')
@@ -7907,11 +7912,11 @@ class KpiReportsAPI(http.Controller):
                 vals['requirement_document_name'] = params.get('file_name') or 'requirement'
             if params.get('description'):
                 vals['description'] = params['description']
-            deliverable, err = clean_deliverable_type(params.get('deliverable_type'))
+            dv, err = clean_deliverable(params.get('deliverable_type'), params.get('deliverable_other'))
             if err:
                 return {'status': False, 'message': err}
-            if deliverable:
-                vals['deliverable_type'] = deliverable
+            if dv['deliverable_type']:
+                vals.update(dv)
             kpi = request.env['kra.kpi'].create(vals)
             return {'status': True, 'kpi_id': kpi.id, 'name': kpi.name}
         except Exception as e:
