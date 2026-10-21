@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Avatar, Button, ErrorState, Field, Icon, IconButton, Lozenge, PageHeader, Select, Skeleton, Tabs, useFlags } from "@/components/ui";
+import { Button, ErrorState, Field, Icon, IconButton, Lozenge, PageHeader, Select, Skeleton, Tabs, useFlags } from "@/components/ui";
 import { useResource } from "@/lib/useFetch";
 import { invalidate } from "@/lib/api";
 import { useMe } from "@/lib/me";
@@ -42,22 +42,16 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
     const have = new Set(base.map((k) => k.id));
     const extraSign = (d?.pending_approvals || []).filter((k) => !have.has(k.id));
     extraSign.forEach((k) => have.add(k.id));
-    const extraPre = preList.filter((p) => !have.has(p.id)).map((p) => ({ ...p, primary_assignee: p.developer }));
+    const extraPre = preList.filter((p) => !have.has(p.id));
     return [...base, ...extraSign, ...extraPre];
   }, [d, preList]);
   const needsMe = (k) => signIds.has(k.id) || preById.has(k.id);
-  /* Project / developer filters (Odoo's client dashboard): they narrow the list,
-     the tab counts and the REQ / UPT / BUG tiles alike. */
+  /* Project filter (Odoo's client dashboard): it narrows the list, the tab counts
+     and the REQ / UPT / BUG tiles alike. No developer filter: clients never see developer names. */
   const [projects, setProjects] = useState([]);
   const [projectFilter, setProjectFilter] = useState("");
-  const [userFilter, setUserFilter] = useState("");
   useEffect(() => { P.fetchClientProjects().then(setProjects).catch(() => setProjects([])); }, []);
-  const userOptions = useMemo(() => {
-    const seen = new Map();
-    for (const x of kpis) if (x.primary_assignee_id && !seen.has(x.primary_assignee_id)) seen.set(x.primary_assignee_id, x.primary_assignee || `User #${x.primary_assignee_id}`);
-    return [...seen].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [kpis]);
-  const scoped = useMemo(() => kpis.filter((k) => (!projectFilter || k.project_id === +projectFilter) && (!userFilter || k.primary_assignee_id === +userFilter)), [kpis, projectFilter, userFilter]);
+  const scoped = useMemo(() => kpis.filter((k) => !projectFilter || k.project_id === +projectFilter), [kpis, projectFilter]);
   const byType = useMemo(() => {
     const out = { requirement: { total: 0, done: 0, open: 0 }, update: { total: 0, done: 0, open: 0 }, bug: { total: 0, done: 0, open: 0 } };
     for (const k of scoped) { const b = out[k.kind] || out.requirement; b.total++; if (k.task_state === "completed") b.done++; else b.open++; }
@@ -94,9 +88,8 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
           {projects.length > 1 && (
             <span className="input" style={{ height: 32, minWidth: 200 }}><Select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} aria-label="Project" style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">All projects</option>{projects.map((p) => <option key={p.id} value={String(p.id)}>{p.display || p.name}</option>)}</Select></span>
           )}
-          <span className="input" style={{ height: 32, minWidth: 180 }}><Select value={userFilter} onChange={(e) => setUserFilter(e.target.value)} aria-label="Developer" style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">All developers</option>{userOptions.map((u) => <option key={u.id} value={String(u.id)}>{u.name}</option>)}</Select></span>
-          {(projectFilter || userFilter) && <Button size="sm" kind="ghost" onClick={() => { setProjectFilter(""); setUserFilter(""); }}>Clear</Button>}
-          {(projectFilter || userFilter) && <span className="mini">{rows.length} task(s){userFilter ? ` · ${userOptions.find((u) => String(u.id) === userFilter)?.name || ""}` : ""}{projectFilter ? ` · ${(projects.find((p) => String(p.id) === projectFilter) || {}).display || ""}` : ""}</span>}
+          {projectFilter && <Button size="sm" kind="ghost" onClick={() => setProjectFilter("")}>Clear</Button>}
+          {projectFilter && <span className="mini">{rows.length} task(s){projectFilter ? ` · ${(projects.find((p) => String(p.id) === projectFilter) || {}).display || ""}` : ""}</span>}
         </div>
         {d && (
           <div className="stats" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
@@ -122,7 +115,7 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
             <table className="table">
               <thead><tr>
                 <th style={{ width: 28 }}>{signableShown.length > 0 && <input type="checkbox" aria-label="Select all finished tasks shown" checked={allShownPicked} onChange={() => setPicked((s) => { const n = new Set(s); signableShown.forEach((k) => (allShownPicked ? n.delete(k.id) : n.add(k.id))); return n; })} />}</th>
-                <th>Ref</th><th style={{ width: "30%" }}>Request</th><th>Project</th><th>Status</th><th>Developer</th><th style={{ width: "14%" }}>Progress</th><th>Needed by</th><th></th>
+                <th>Ref</th><th style={{ width: "30%" }}>Request</th><th>Project</th><th>Status</th><th style={{ width: "14%" }}>Progress</th><th>Needed by</th><th></th>
               </tr></thead>
               <tbody>
                 {rows.map((k) => {
@@ -136,14 +129,13 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
                       <td><span className="ref">{k.external_ref || `#${k.id}`}</span></td>
                       <td><b>{k.name}</b></td><td>{k.project_name || "—"}</td>
                       <td><Lozenge tone={tone}>{lbl}</Lozenge></td>
-                      <td>{k.primary_assignee ? <><Avatar name={k.primary_assignee} uid={k.primary_assignee_id} size={22} /> {k.primary_assignee}</> : <span className="mini">to be assigned</span>}</td>
                       <td><span className="prog"><i style={{ width: `${pct}%`, background: k.task_state === "completed" ? "var(--pri-regular)" : isSign ? "var(--tint-violet)" : "var(--brand)" }} /></span></td>
                       <td>{k.deadline || "—"}</td>
                       <td>{(isSign || isPre) ? <Button size="sm" kind="primary" onClick={(e) => { e.stopPropagation(); open(k); }}>{isSign ? "Review" : "Approve"}</Button> : k.has_signed_certificate ? <a className="btn" style={{ height: 28, fontSize: 12, textDecoration: "none" }} href={P.certificateHref(k.id)} onClick={(e) => e.stopPropagation()}>Certificate</a> : <Button size="sm" onClick={(e) => { e.stopPropagation(); open(k); }}>Open</Button>}</td>
                     </tr>
                   );
                 })}
-                {d && !rows.length && <tr><td colSpan={9} className="empty">Nothing in this tab.</td></tr>}
+                {d && !rows.length && <tr><td colSpan={8} className="empty">Nothing in this tab.</td></tr>}
               </tbody>
             </table>
           )}
@@ -175,7 +167,6 @@ function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
         <dl className="details">
           <dt>Project</dt><dd>{k.project_name || "—"}{k.delivery_version ? ` · ${k.delivery_version}` : ""}</dd>
           <dt>Type</dt><dd>{(k.kind || "").toString().replace(/^\w/, (c) => c.toUpperCase()) || "Request"}</dd>
-          <dt>Developer</dt><dd>{k.primary_assignee || pre?.developer || <span className="mini">to be assigned</span>}</dd>
           <dt>Estimate</dt><dd>{k.estimate_hours ? `${k.estimate_hours}h` : "—"}{k.actual_hours || k.hours ? <span className="mini"> · {k.actual_hours || k.hours}h worked</span> : null}</dd>
           <dt>Priority</dt><dd>{k.priority || "regular"}</dd>
           {k.deadline && <><dt>Needed by</dt><dd>{k.deadline}</dd></>}
@@ -185,8 +176,8 @@ function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
 
         {pre && mode === "view" && (
           <div className="cardbox" style={{ background: "var(--lz-review-bg)", borderColor: "var(--tint-violet-border)", gap: 8 }}>
-            <b style={{ color: "var(--tint-violet-text)" }}>{pre.auto_released ? "Work started without your reply — you can still object" : "Approve the estimate and developer?"}</b>
-            <span className="mini">{pre.developer ? `Developer: ${pre.developer}` : ""}{pre.held ? " · on hold — the team will not start" : pre.auto_releases && pre.deadline_at ? ` · starts automatically after ${pre.deadline_at} (server time)` : ""}</span>
+            <b style={{ color: "var(--tint-violet-text)" }}>{pre.auto_released ? "Work started without your reply — you can still object" : "Approve the estimate?"}</b>
+            <span className="mini">{pre.held ? "On hold — the team will not start" : pre.auto_releases && pre.deadline_at ? `Starts automatically after ${pre.deadline_at} (server time)` : ""}</span>
             <div className="row" style={{ flexWrap: "wrap" }}>
               {!pre.auto_released && <Button kind="ok" busy={busy} onClick={() => run(() => P.decidePreApproval(k.id, "approve"), "Approved — work can start.")}>Approve</Button>}
               <Button kind="ghost" onClick={() => setMode("pre_reject")}>Not like this</Button>
