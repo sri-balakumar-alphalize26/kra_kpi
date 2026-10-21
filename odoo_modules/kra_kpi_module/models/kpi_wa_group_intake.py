@@ -31,6 +31,8 @@ cannot represent.
 """
 
 import logging
+import secrets
+from datetime import timedelta
 
 from odoo import _, api, fields, models
 
@@ -61,9 +63,39 @@ _TYPE_ROWS = [
     ('update', '🔧 Request an Update', 'Change something existing'),
     ('meeting', '📅 Request a Meeting', 'Call or Google Meet'),
     ('newdb', '🗄️ New Database', 'Set up a new DB for a shop'),
-    ('dbdisconnect', '🔌 Disconnect a Database',
-     'Switch off a database you no longer need'),
+    # The id stays 'dbdisconnect': menu_csv and in-flight rows store it.
+    ('dbdisconnect', '💥 Destroy a Database',
+     'Remove a database you no longer need'),
+    ('livedb', '📂 Live Databases', 'See your databases and their details'),
+    ('myreq', '📋 My Requests', 'Where each of your requests is'),
+    ('waiting', '✍️ Waiting for me', 'Approvals and sign-offs you need to give'),
 ]
+
+# 📋 My Requests: what the client is told about each task state. Mirrors the
+# web portal's wording (web/components/portal/PortalRequests.jsx). Never the
+# developer -- see _client_status.
+_CLIENT_STATUS = {
+    'pre_approval_pending': '✍️ Waiting for your approval',
+    'pre_approval_partial': '✍️ Waiting for your approval',
+    'pre_approval_approved': '⏳ Not started yet',
+    'assigned': '⏳ Not started yet', 'urgent': '⏳ Not started yet',
+    'important': '⏳ Not started yet', 'regular': '⏳ Not started yet',
+    'queue_waiting': '⏳ Not started yet',
+    'in_progress': '🔨 Being worked on', 'paused': '🔨 Being worked on',
+    'hold': '🔨 Being worked on', 'rework': '🔨 Being worked on',
+    'partially_completed': '🔍 Being checked',
+    'awaiting_client': '✍️ Your sign-off needed',
+    'completed': '✅ Done',
+}
+_MYREQ_PAGE_ROWS = 8
+
+# Types answered with a private one-use form link (/kpi/wa/client/<token>,
+# controllers/kpi_wa_client_form.py) instead of the poll conversation.
+_FORM_TYPES = ('requirement', 'bug', 'update', 'newdb', 'dbdisconnect')
+CLIENT_FORM_TTL_MINUTES = 30
+_LIVEDB_PAGE_ROWS = 8
+_LIVEDB_MORE_ID = '__more__'
+_LIVEDB_BACK_ID = '__back__'
 
 # The types that ask WHICH DATABASE the work is about before anything else.
 # A new database has no database to pick yet, and a disconnect has its own
@@ -120,6 +152,11 @@ _STEPS = [
     ('pick_disc_reason', 'Picking why'),
     ('type_disc_reason', 'Typing why'),
     ('confirm_disconnect', 'Confirming a disconnect'),
+    # Live Databases (read-only)
+    ('livedb_server', 'Live databases: picking a server'),
+    ('livedb_db', 'Live databases: picking a database'),
+    # My Requests (read-only)
+    ('myreq_pick', 'My requests: picking one'),
 ]
 _STEP_CODES = tuple(c for c, _l in _STEPS)
 
@@ -305,6 +342,15 @@ class KpiWaGroupIntake(models.Model):
     # The private link to the End Workday page (/kpi/wa/endday/<token>), 2 hours.
     staff_end_token = fields.Char(index=True, copy=False)
     staff_end_expires = fields.Datetime(copy=False)
+    # The client's private one-use form link (/kpi/wa/client/<token>), 30 min.
+    # NOT cleared by _reset(): the link outlives the 15-minute chat TTL, and
+    # it is used up (cleared) when the form is submitted.
+    client_form_token = fields.Char(index=True, copy=False)
+    client_form_kind = fields.Char(copy=False)
+    client_form_expires = fields.Datetime(copy=False)
+    # 📂 Live Databases: which server, and which page of its databases.
+    livedb_server_id = fields.Many2one('kpi.server', ondelete='set null', copy=False)
+    livedb_page = fields.Integer(default=0, copy=False)
     staff_poll_ids = fields.Char(
         string='Polls sent to this person',
         help='WhatsApp ids of the last polls the bot sent this person in the '
@@ -399,6 +445,7 @@ class KpiWaGroupIntake(models.Model):
                            # PREVIOUS conversation's task.
                            'staff_action': False, 'staff_kpi_id': False,
                            'staff_draft': False,
+                           'livedb_server_id': False, 'livedb_page': 0,
                            'last_activity': fields.Datetime.now()})
         # Files a developer sent mid-update are parked as attachments on this
         # row until they press Save. A reset means they were never saved.
@@ -513,6 +560,19 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                 if low in _GREETINGS:
                     return self._show_types(message, state, group)
                 return False
+            # Requirement / Bug / Update / New DB / Destroy: a private form
+            # link with dropdowns, media and a preview, instead of the polls.
+            if choice in _FORM_TYPES:
+                return self._client_form_begin(message, state, group, choice)
+            if choice == 'livedb':
+                return self._livedb_begin(message, state, group)
+            if choice == 'myreq':
+                state._touch(livedb_page=0)
+                return self._myreq_show(message, state, group)
+            if choice == 'waiting':
+                self._text(message, self._waiting_text(group))
+                state._reset()
+                return True
             if choice == 'newdb':
                 # Skip the area picker: a new database is unambiguously
                 # Server / Hosting. One less turn.
@@ -702,6 +762,51 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             state._touch(step='pick_area', db_other=body[:80],
                          client_db_id=False, db_is_common=False)
             return self._show_areas(message, state, group)
+
+        # ---- 📋 my requests (read-only) ---------------------------------- #
+        if step == 'myreq_pick':
+            pick = self._resolve_rows(tapped, low, self._myreq_options(state, group))
+            if not pick:
+                return False
+            if pick == _LIVEDB_MORE_ID:
+                state._touch(livedb_page=state.livedb_page + 1)
+                return self._myreq_show(message, state, group)
+            if pick == _LIVEDB_BACK_ID:
+                state._touch(livedb_page=max(0, state.livedb_page - 1))
+                return self._myreq_show(message, state, group)
+            task = self.env['kra.kpi'].sudo().browse(int(pick)).exists()
+            if not task or task.kra_id.id not in self._client_kra_ids(group):
+                return False
+            self._text(message, self._myreq_details(task))
+            state._reset()
+            return True
+
+        # ---- 📂 live databases (read-only) -------------------------------- #
+        if step == 'livedb_server':
+            pick = self._resolve_rows(tapped, low, self._livedb_server_options(group))
+            if not pick:
+                return False
+            state._touch(livedb_server_id=int(pick), livedb_page=0)
+            return self._livedb_show_dbs(message, state, group)
+
+        if step == 'livedb_db':
+            pick = self._resolve_rows(tapped, low, self._livedb_db_options(state, group))
+            if not pick:
+                return False
+            if pick == _LIVEDB_MORE_ID:
+                state._touch(livedb_page=state.livedb_page + 1)
+                return self._livedb_show_dbs(message, state, group)
+            if pick == _LIVEDB_BACK_ID:
+                if state.livedb_page > 0:
+                    state._touch(livedb_page=state.livedb_page - 1)
+                    return self._livedb_show_dbs(message, state, group)
+                return self._livedb_begin(message, state, group)
+            db = self.env['kpi.client.db'].sudo().browse(int(pick)).exists()
+            if not db or db.client_kra_id != group.kra_id:
+                return False
+            self._text(message, self._livedb_details(db))
+            state._reset()
+            return True
 
         # ---- disconnect -------------------------------------------------- #
         if step == 'pick_disc_db':
@@ -1004,7 +1109,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         """
         rows = list(_TYPE_ROWS)
         if not self._live_dbs(group):
-            rows = [r for r in rows if r[0] != 'dbdisconnect']
+            rows = [r for r in rows if r[0] not in ('dbdisconnect', 'livedb')]
         return rows
 
     def _show_types(self, message, state, group):
@@ -1534,10 +1639,6 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                 children = kra.child_ids.filtered('active')
                 target = children[0] if len(children) == 1 else kra
 
-            member = self.env['kpi.wa.group.member'].sudo().search([
-                ('group_id', '=', group.id),
-                '|', ('lid', '=', state.participant_key),
-                ('phone', '=', state.participant_key)], limit=1)
             # A New DB request is a Requirement with an orthogonal category --
             # never a new doc type, which _auto_admin_accept would silently
             # re-derive back to 'requirement' from the name prefix anyway. A
@@ -1605,10 +1706,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                         'note': state.db_note or '—',
                         'detail': state.install_text or '—'})
             kpi = Kpi.browse(Kpi.create_kpi(vals))
-            post = {'published': False, 'client_submitted': True,
-                    'submitted_by_uid': member.user_id.id
-                    if member and member.user_id else False,
-                    # create_kpi's whitelist does not accept these, so they go
+            post = {# create_kpi's whitelist does not accept these, so they go
                     # in the write that already follows -- the same route the
                     # provisioning fields take.
                     'client_db_id': db.id if db else False,
@@ -1624,27 +1722,351 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                     'provision_preset': state.install_preset or False,
                     'provision_modules': state.install_text or False,
                 })
-            kpi.write(post)
-            try:
-                kpi._notify('client_task_queued')
-                kpi._schedule_queue_nudge()
-            except Exception as exc:
-                _logger.warning('group intake notify failed: %s', exc)
-            kpi._log_action(
-                'wa_group_intake', source='whatsapp',
-                actor_label=state.participant_name or state.participant_key,
-                payload={'group': group.jid, 'participant': state.participant_key,
-                         'number': self._participant_number(state),
-                         'area': state.work_area, 'ai_source': state.ai_source,
-                         'db_scope': self._db_scope_label(state),
-                         'db_id': db.id if db else False,
-                         'common': bool(state.db_is_common),
-                         'db_typed': state.db_other or '',
-                         'raw_text': state.raw_text})
+            self._finish_client_ticket(kpi, group, state, post, {
+                'area': state.work_area, 'ai_source': state.ai_source,
+                'db_scope': self._db_scope_label(state),
+                'db_id': db.id if db else False,
+                'common': bool(state.db_is_common),
+                'db_typed': state.db_other or '',
+                'raw_text': state.raw_text})
             return kpi
         except Exception as exc:
             _logger.exception('Group intake could not create a ticket: %s', exc)
             return False
+
+    def _member_for(self, group, state):
+        return self.env['kpi.wa.group.member'].sudo().search([
+            ('group_id', '=', group.id),
+            '|', ('lid', '=', state.participant_key),
+            ('phone', '=', state.participant_key)], limit=1)
+
+    def _finish_client_ticket(self, kpi, group, state, post=None, payload=None,
+                              action='wa_group_intake'):
+        """Everything after create_kpi that makes a WhatsApp ticket a CLIENT
+        request: hidden until an admin accepts it, who sent it, queue notice,
+        audit log. Shared by the poll flow and the form link, so both file
+        tickets identically."""
+        member = self._member_for(group, state)
+        vals = {'published': False, 'client_submitted': True,
+                'submitted_by_uid': member.user_id.id
+                if member and member.user_id else False}
+        vals.update(post or {})
+        kpi.write(vals)
+        try:
+            kpi._notify('client_task_queued')
+            kpi._schedule_queue_nudge()
+        except Exception as exc:
+            _logger.warning('group intake notify failed: %s', exc)
+        log = {'group': group.jid, 'participant': state.participant_key,
+               'number': self._participant_number(state)}
+        log.update(payload or {})
+        kpi._log_action(
+            action, source='whatsapp',
+            actor_label=state.participant_name or state.participant_key,
+            payload=log)
+        return kpi
+
+    # ------------------------------------------------------------------
+    # the client form link (controllers/kpi_wa_client_form.py)
+    # ------------------------------------------------------------------
+    _FORM_INTRO = {
+        'requirement': '✨ New Requirement',
+        'bug': '🐞 Report a Bug',
+        'update': '🔧 Request an Update',
+        'newdb': '🗄️ New Database',
+        'dbdisconnect': '💥 Destroy a Database',
+    }
+
+    def _client_form_begin(self, message, state, group, kind):
+        """Post a private one-use link to the form for `kind` in the group.
+
+        Same shape as the staff ➕ Create my own task link: one person, one
+        use, 30 minutes. The form fills the dropdowns from this group's client
+        only, shows a preview and asks for confirmation before creating."""
+        token = secrets.token_urlsafe(24)
+        state._reset()
+        state.sudo().write({
+            'client_form_token': token, 'client_form_kind': kind,
+            'client_form_expires': fields.Datetime.now()
+            + timedelta(minutes=CLIENT_FORM_TTL_MINUTES)})
+        base = self.env['whatsapp.config'].sudo().get_config().get_kpi_public_base_url()
+        who = (state.participant_name or '').strip()
+        self._text(message, _(
+            '*%(kind)s*\n%(who)sfill it in here — only for you, works once, '
+            'for %(ttl)s minutes:\n%(url)s\n\n'
+            '_You will see a preview before it is sent._') % {
+                'kind': self._FORM_INTRO.get(kind, kind),
+                'who': ('%s, ' % who) if who else '',
+                'ttl': CLIENT_FORM_TTL_MINUTES,
+                'url': '%s/kpi/wa/client/%s' % (base, token)})
+        return True
+
+    # ------------------------------------------------------------------
+    # 📂 Live Databases -- polls only, read-only
+    # ------------------------------------------------------------------
+    def _livedb_server_options(self, group):
+        """[(id, 'server (N)')]: the servers this client has live DBs on."""
+        dbs = self._live_dbs(group)
+        opts = []
+        for srv in dbs.mapped('server_id').sorted(lambda s: (s.poll_label() or '').lower()):
+            n = len(dbs.filtered(lambda d, s=srv: d.server_id == s))
+            opts.append((str(srv.id), '%s (%d)' % (srv.poll_label(), n)))
+        return opts[:POLL_MAX_OPTIONS]
+
+    def _livedb_begin(self, message, state, group):
+        dbs = self._live_dbs(group)
+        if not dbs:
+            state._reset()
+            self._text(message, _('There are no live databases listed for you.'))
+            return True
+        if len(dbs) == 1:
+            # A one-option poll is refused by WhatsApp: just show it.
+            self._text(message, self._livedb_details(dbs))
+            state._reset()
+            return True
+        opts = self._livedb_server_options(group)
+        if len(opts) == 1:
+            state._touch(livedb_server_id=int(opts[0][0]), livedb_page=0,
+                         action_type='livedb')
+            return self._livedb_show_dbs(message, state, group)
+        state._touch(step='livedb_server', action_type='livedb',
+                     livedb_server_id=False, livedb_page=0,
+                     menu_csv=','.join(o for o, _l in opts))
+        self._poll(message, _('📂 Live Databases — which server?'),
+                   [l for _o, l in opts])
+        return True
+
+    def _livedb_rows(self, state, group):
+        return self.env['kpi.client.db'].sudo().search([
+            ('client_kra_id', '=', group.kra_id.id), ('state', '=', 'live'),
+            ('server_id', '=', state.livedb_server_id.id)], order='db_name')
+
+    def _livedb_db_options(self, state, group):
+        """One page of databases + ➡️ More / ⬅️ Back, at most 10 options."""
+        rows = self._livedb_rows(state, group)
+        pages = max(1, -(-len(rows) // _LIVEDB_PAGE_ROWS))
+        page = min(max(state.livedb_page, 0), pages - 1)
+        chunk = rows[page * _LIVEDB_PAGE_ROWS:(page + 1) * _LIVEDB_PAGE_ROWS]
+        opts = [(str(r.id), r.poll_label()) for r in chunk]
+        if page + 1 < pages:
+            opts.append((_LIVEDB_MORE_ID, _('➡️ More (page %d of %d)') % (page + 2, pages)))
+        multi_server = len(self._livedb_server_options(group)) > 1
+        if page > 0 or multi_server:
+            opts.append((_LIVEDB_BACK_ID, _('⬅️ Back')))
+        return opts
+
+    def _livedb_show_dbs(self, message, state, group):
+        opts = self._livedb_db_options(state, group)
+        if len(opts) == 1 and opts[0][0] not in (_LIVEDB_MORE_ID, _LIVEDB_BACK_ID):
+            db = self.env['kpi.client.db'].sudo().browse(int(opts[0][0]))
+            self._text(message, self._livedb_details(db))
+            state._reset()
+            return True
+        rows = self._livedb_rows(state, group)
+        pages = max(1, -(-len(rows) // _LIVEDB_PAGE_ROWS))
+        page = min(max(state.livedb_page, 0), pages - 1)
+        state._touch(step='livedb_db', livedb_page=page,
+                     menu_csv=','.join(o for o, _l in opts))
+        srv = state.livedb_server_id
+        self._poll(message, _('📂 %(srv)s — %(n)d database(s)%(pg)s. Which one?') % {
+            'srv': srv.poll_label() if srv else '', 'n': len(rows),
+            'pg': (_(' · page %d of %d') % (page + 1, pages)) if pages > 1 else ''},
+            [l for _o, l in opts])
+        return True
+
+    @api.model
+    def _livedb_details(self, db):
+        """The details message for one database."""
+        def d(value):
+            return value.strftime('%d-%m-%Y') if value else '—'
+        state_label = dict(db._fields['state'].selection).get(db.state, db.state or '—')
+        created = db.activated_on or (db.first_seen_at and db.first_seen_at.date())
+        lines = [
+            '🗄️ *%s*' % (db.db_name or ''),
+            _('🖥️ Server: %s') % (db.server_id.poll_label() or '—'),
+            _('🟢 Status: %s') % state_label,
+            _('📅 Created: %s') % d(created),
+        ]
+        if db.label and db.label != db.db_name:
+            lines.insert(1, _('🏷️ %s') % db.label)
+        if db.track_term and db.expires_on:
+            lines.append(_('⏳ Expires: %(d)s (%(n)s days left)') % {
+                'd': d(db.expires_on), 'n': db.days_left})
+        tasks = db.task_ids
+        done = len(tasks.filtered(lambda t: t.task_state == 'completed'))
+        lines.append(_('📋 Tasks: %(open)d open · %(done)d done') % {
+            'open': len(tasks) - done, 'done': done})
+        return '\n'.join(lines)
+
+    # ------------------------------------------------------------------
+    # 📋 My Requests / ✍️ Waiting for me -- read-only, no developer names
+    # ------------------------------------------------------------------
+    def _client_kra_ids(self, group):
+        """The client and everything under it -- the portal dashboard's scope
+        (/kpi_client_portal/dashboard), from the group's client record."""
+        return group.kra_id._get_descendant_ids() if group.kra_id else []
+
+    def _myreq_tasks(self, group):
+        """What the client's dashboard shows: accepted, active tasks."""
+        return self.env['kra.kpi'].sudo().search([
+            ('kra_id', 'in', self._client_kra_ids(group)), ('active', '=', True),
+            ('admin_accepted', '=', True)], order='create_date desc, id desc')
+
+    @api.model
+    def _client_status(self, task):
+        return _CLIENT_STATUS.get(task.task_state, '⏳ Not started yet')
+
+    @api.model
+    def _started_without_reply(self, task):
+        """Work began after the approval window with no answer from the client.
+        They can still object -- the web portal says exactly that."""
+        return bool(task.pre_approval_auto_released and not task.pre_approval_decision
+                    and task.task_state not in ('completed', 'awaiting_client'))
+
+    @api.model
+    def _needs_client(self, task):
+        return task.task_state in ('pre_approval_pending', 'pre_approval_partial',
+                                   'awaiting_client') \
+            or (task.task_state == 'partially_completed' and task.admin_approved) \
+            or self._started_without_reply(task)
+
+    def _myreq_open(self, group):
+        """Open requests, the ones needing the client first, newest next."""
+        tasks = self._myreq_tasks(group).filtered(lambda t: t.task_state != 'completed')
+        return tasks.sorted(lambda t: (0 if self._needs_client(t) else 1,
+                                       -(t.create_date.timestamp() if t.create_date else 0)))
+
+    @api.model
+    def _myreq_label(self, task):
+        name = ' '.join((task.name or '').split())
+        label = '%s %s' % (task.external_ref or '#%s' % task.id, name)
+        return label if len(label) <= 70 else label[:69] + '…'
+
+    def _myreq_options(self, state, group):
+        rows = self._myreq_open(group)
+        pages = max(1, -(-len(rows) // _MYREQ_PAGE_ROWS))
+        page = min(max(state.livedb_page, 0), pages - 1)
+        chunk = rows[page * _MYREQ_PAGE_ROWS:(page + 1) * _MYREQ_PAGE_ROWS]
+        opts = [(str(t.id), self._myreq_label(t)) for t in chunk]
+        if page + 1 < pages:
+            opts.append((_LIVEDB_MORE_ID, _('➡️ More (page %d of %d)') % (page + 2, pages)))
+        if page > 0:
+            opts.append((_LIVEDB_BACK_ID, _('⬅️ Back')))
+        return opts
+
+    def _myreq_show(self, message, state, group):
+        tasks = self._myreq_tasks(group)
+        open_ = self._myreq_open(group)
+        need = len(open_.filtered(self._needs_client))
+        done = len(tasks) - len(open_)
+        summary = _('📋 *My Requests* — %(client)s\n%(open)d open · %(need)d need you · %(done)d done') % {
+            'client': group.kra_id.name or '', 'open': len(open_), 'need': need, 'done': done}
+        if not open_:
+            state._reset()
+            self._text(message, summary + _('\n\nNothing open right now. Send *hi* to raise something new.'))
+            return True
+        if len(open_) == 1:
+            state._reset()
+            self._text(message, summary + '\n\n' + self._myreq_details(open_))
+            return True
+        opts = self._myreq_options(state, group)
+        pages = max(1, -(-len(open_) // _MYREQ_PAGE_ROWS))
+        page = min(max(state.livedb_page, 0), pages - 1)
+        state._touch(step='myreq_pick', action_type='myreq', livedb_page=page,
+                     menu_csv=','.join(o for o, _l in opts))
+        self._poll(message, summary + _('\n\nWhich one do you want to see?%s') % (
+            (_(' (page %d of %d)') % (page + 1, pages)) if pages > 1 else ''),
+            [l for _o, l in opts])
+        return True
+
+    @api.model
+    def _myreq_details(self, task):
+        def d(value):
+            return value.strftime('%d-%m-%Y') if value else '—'
+        lines = ['📌 *%s* — %s' % (task.external_ref or '#%s' % task.id, task.name or ''),
+                 _('Status: %s') % self._client_status(task),
+                 _('📅 Raised: %s') % d(task.create_date)]
+        if self._started_without_reply(task):
+            lines.insert(2, _('⚠️ Started without your reply — you can still object.'))
+        if task.deadline:
+            lines.append(_('🎯 Needed by: %s') % d(task.deadline))
+        if task.client_db_id:
+            lines.append(_('🗄️ %s (%s)') % (task.client_db_id.db_name or '',
+                                            task.client_db_id.server_id.poll_label() or ''))
+        if task.related_req_ref:
+            lines.append(_('🔗 About: %s') % task.related_req_ref)
+        if task.completion_date:
+            lines.append(_('🏁 Finished: %s') % d(task.completion_date))
+        lines.append(_('🕒 Last update: %s') % d(task.write_date))
+        if self._needs_client(task):
+            link = self._approval_link(task)
+            lines.append('\n' + (_('👉 Open to decide: %s') % link if link else
+                                 _('👉 Ask the team for a fresh approval link.')))
+        return '\n'.join(lines)
+
+    @api.model
+    def _approval_link(self, task):
+        """The task's existing approval / sign-off page (/kpi/wa/<token>).
+
+        Never mints a token or touches the task's state: request_client_pre_approval
+        would reset its clocks and re-notify. A valid unused token is simply
+        rebuilt; an EXPIRED unused one on a task that is still waiting only has
+        its expiry pushed out, so the old tap-to-send codes keep working too.
+        A used token means the decision was made -- no link."""
+        if not task.approval_token or task.approval_token_used:
+            return ''
+        if not self._needs_client(task):
+            return ''
+        now = fields.Datetime.now()
+        if task.approval_token_expires and task.approval_token_expires < now:
+            from .kpi_workflow import APPROVAL_TOKEN_TTL_HOURS
+            task.sudo().write({'approval_token_expires':
+                               now + timedelta(hours=APPROVAL_TOKEN_TTL_HOURS)})
+        try:
+            return task._build_approval_url()
+        except Exception as exc:
+            _logger.warning('approval link for %s failed: %s', task.id, exc)
+            return ''
+
+    def _waiting_text(self, group):
+        """✍️ Waiting for me: sign-offs and pre-approvals, each with its link."""
+        Kpi = self.env['kra.kpi'].sudo()
+        kra_ids = self._client_kra_ids(group)
+        signoff = Kpi.search([
+            ('kra_id', 'in', kra_ids), ('active', '=', True), '|',
+            ('task_state', '=', 'awaiting_client'),
+            '&', ('task_state', '=', 'partially_completed'), ('admin_approved', '=', True)],
+            order='completion_date desc')
+        pre = Kpi.search([
+            ('kra_id', 'in', kra_ids), ('active', '=', True), ('user_id', '!=', False),
+            '|', ('task_state', 'in', ('pre_approval_pending', 'pre_approval_partial')),
+            '&', '&', ('pre_approval_auto_released', '=', True),
+            ('pre_approval_decision', '=', False),
+            ('task_state', 'not in', ('completed', 'awaiting_client'))],
+            order='pre_approval_deadline_at asc, id desc')
+        pre -= signoff
+        if not signoff and not pre:
+            return _('✍️ *Waiting for me* — %s\n\nNothing is waiting for you 🎉') % (
+                group.kra_id.name or '')
+        lines = [_('✍️ *Waiting for me* — %(client)s · %(n)d item(s)') % {
+            'client': group.kra_id.name or '', 'n': len(signoff) + len(pre)}]
+
+        def block(title, tasks, what):
+            if not tasks:
+                return
+            lines.append('\n*%s*' % title)
+            for t in tasks[:15]:
+                link = self._approval_link(t)
+                lines.append('• *%s* — %s · %s\n  %s' % (
+                    t.external_ref or '#%s' % t.id, t.name or '',
+                    _('started without your reply — you can still object')
+                    if self._started_without_reply(t) else what,
+                    link or _('ask the team for a fresh link')))
+            if len(tasks) > 15:
+                lines.append(_('…and %d more — see 📋 My Requests.') % (len(tasks) - 15))
+        block(_('Finished work — your sign-off'), signoff, _('sign-off needed'))
+        block(_('New work — your go-ahead'), pre, _('approval needed'))
+        return '\n'.join(lines)
 
     # ---- transport helpers (always reply INTO the group) ------------------
     def _session(self, message):

@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- The client's WhatsApp menu as form pages (controllers/kpi_wa_client_form.py):
+             Requirement / Bug / Update / New Database / Destroy a Database. Opened
+             from a one-person, 30-minute link posted in the client's group. Same
+             look as the staff New Task page (wa_task_layout). Behaviour lives in
+             static/src/wa_client_form/form.js. -->
+        <template id="wa_client_form" name="WA Client Request Form">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="title"/>
+                <style>
+                    .hd .emo { margin-right:6px; }
+                    .req-list { display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto;
+                                border:1px solid var(--border); border-radius:var(--r); padding:6px; background:var(--input); }
+                    .req-list label { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border-radius:6px;
+                                      background:var(--surface); border:1px solid var(--border); cursor:pointer; }
+                    .req-list input { margin-top:3px; accent-color:var(--brand); }
+                    .req-list .ref { font-weight:800; color:var(--brand); margin-right:6px; }
+                    .req-list small { display:block; color:var(--subtlest); }
+                    .errs { margin:4px 0 0; padding-left:18px; color:var(--danger); font-size:12.5px; font-weight:600; }
+                    .ok { color:var(--ok); font-size:12.5px; font-weight:700; }
+                    .fix { margin-top:4px; font-size:12.5px; }
+                    .fix button { font:inherit; font-weight:800; color:var(--brand); background:none; border:0; padding:0;
+                                  cursor:pointer; text-decoration:underline; }
+                    .row { display:flex; gap:8px; }
+                    .row .input { flex:1; }
+                    .chips { display:flex; flex-wrap:wrap; gap:6px; }
+                    .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px;
+                            background:var(--sel-bg); color:var(--sel-text); font-size:12.5px; font-weight:700; }
+                    .chip button { border:0; background:none; color:inherit; font-weight:900; cursor:pointer; padding:0; }
+                    .chip .open { font-weight:700; text-decoration:underline; max-width:220px; overflow:hidden;
+                                  text-overflow:ellipsis; white-space:nowrap; }
+                    .viewer .box { max-width:860px; }
+                    .viewer .bd { align-items:center; }
+                    .viewer img, .viewer video { max-width:100%; max-height:70vh; border-radius:var(--r); background:#000; }
+                    .viewer audio { width:100%; }
+                    .viewer iframe { width:100%; height:70vh; border:1px solid var(--border); border-radius:var(--r); }
+                    .drop { display:block; padding:14px; border:1.5px dashed var(--border); border-radius:var(--r);
+                            text-align:center; color:var(--subtle); cursor:pointer; background:var(--input); }
+                    .drop input { display:none; }
+                    .capture { display:flex; gap:8px; flex-wrap:wrap; }
+                    .capture .btn { display:inline-flex; align-items:center; gap:6px; flex:1; justify-content:center; }
+                    .capture input { display:none; }
+                    .btn.rec { background:var(--danger); color:#fff; border-color:var(--danger); }
+                    .rec-box { max-width:480px; }
+                    .rec-live { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:999px;
+                                background:var(--input); border:1px solid var(--border); }
+                    .rec-live[hidden] { display:none; }
+                    .rec-dot { width:12px; height:12px; border-radius:50%; background:var(--danger); flex:none;
+                               animation:recblink 1s infinite; }
+                    .rec-dot.paused { animation:none; background:var(--subtlest); }
+                    @keyframes recblink { 50% { opacity:.25; } }
+                    .rec-time { font-weight:800; font-variant-numeric:tabular-nums; min-width:42px; }
+                    .rec-live canvas { flex:1; width:100%; height:40px; }
+                    .rec-box audio { width:100%; }
+                    .rec-ft { flex-wrap:wrap; }
+                    .rec-ft .btn[hidden] { display:none; }
+                    .pv { border:1px solid var(--border); border-radius:var(--r); background:var(--canvas); }
+                    .pv h4 { margin:0; padding:10px 12px; font-size:13px; border-bottom:1px solid var(--border); }
+                    .pv dl { margin:0; padding:8px 12px; display:grid; grid-template-columns:auto 1fr; gap:6px 12px; }
+                    .pv dt { font-size:12.5px; font-weight:700; color:var(--subtlest); }
+                    .pv dd { margin:0; white-space:pre-wrap; word-break:break-word; }
+                    .pv dd.empty { color:var(--danger); font-weight:700; }
+                    .note-ai { font-size:12px; color:var(--subtlest); }
+                    .modal { position:fixed; inset:0; background:rgba(16,24,40,.45); display:flex; align-items:center;
+                             justify-content:center; padding:16px; z-index:10; }
+                    .modal[hidden] { display:none; }
+                    .modal .box { background:var(--surface); border-radius:var(--r-card); width:100%; max-width:560px;
+                                  max-height:90vh; overflow-y:auto; box-shadow:0 18px 50px rgba(16,24,40,.25); }
+                    .btn[disabled] { opacity:.5; cursor:not-allowed; }
+                    .btn.danger { background:var(--danger); color:#fff; }
+                    .input:disabled { opacity:.6; }
+                </style>
+                <form id="kf" method="post" enctype="multipart/form-data"
+                      t-att-action="'/kpi/wa/client/%s/submit' % token">
+                    <div class="hd"><span class="emo" t-esc="emoji"/><t t-esc="title"/>
+                        <small><t t-esc="client"/><t t-if="who"> · for <t t-esc="who"/></t> · this link works once</small></div>
+                    <div class="bd">
+                        <div t-if="error" class="err" t-esc="error"/>
+
+                        <div class="grid2">
+                            <div class="field">
+                                <span class="lbl">Server <span class="req">*</span></span>
+                                <select id="kfServer" name="server_id"><option value="">Choose a server</option></select>
+                            </div>
+                            <div class="field" t-if="kind != 'newdb'">
+                                <span class="lbl">Database <span class="req">*</span></span>
+                                <select id="kfDb" name="db_id" disabled="disabled"><option value="">Choose the server first</option></select>
+                            </div>
+                        </div>
+
+                        <!-- New Requirement -->
+                        <div class="field" t-if="kind == 'requirement'">
+                            <span class="lbl">Task name <span class="req">*</span></span>
+                            <input class="input" id="kfName" name="name" maxlength="200" placeholder="What do you need?"/>
+                        </div>
+
+                        <!-- Bug / Update: about one existing requirement -->
+                        <div class="field" t-if="kind in ('bug', 'update')">
+                            <span class="lbl">Which task is it about? <span class="req">*</span></span>
+                            <div id="kfReqs" class="req-list"><span class="mini">Choose the server and database first.</span></div>
+                            <span class="hint">Pick one. The new request is numbered under it, e.g. <t t-esc="'BUG001' if kind == 'bug' else 'UPT001'"/>-REQ-012.</span>
+                        </div>
+
+                        <!-- New Database -->
+                        <t t-if="kind == 'newdb'">
+                            <div class="field">
+                                <span class="lbl">Database name <span class="req">*</span></span>
+                                <input class="input" id="kfDbName" name="db_name" maxlength="63" autocomplete="off"
+                                       autocapitalize="characters" spellcheck="false" t-att-placeholder="example"/>
+                                <span class="hint">Format: CAPITAL words joined by _ , no spaces — e.g. <b t-esc="example"/></span>
+                                <ul id="kfDbErrs" class="errs" hidden="hidden"></ul>
+                                <div id="kfDbFix" class="fix" hidden="hidden"></div>
+                                <span id="kfDbOk" class="ok" hidden="hidden">✓ Name is valid</span>
+                            </div>
+                            <div class="grid2">
+                                <div class="field">
+                                    <span class="lbl">Username <span class="req">*</span></span>
+                                    <input class="input" id="kfUser" name="username" maxlength="64" autocomplete="off" disabled="disabled"
+                                           placeholder="Valid name first"/>
+                                </div>
+                                <div class="field">
+                                    <span class="lbl">Password <span class="req">*</span></span>
+                                    <div class="row">
+                                        <input class="input" id="kfPass" name="password" maxlength="128" autocomplete="new-password"/>
+                                        <button type="button" class="btn ghost" id="kfGen" title="Make a random 6-digit password">🎲 Generate</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </t>
+
+                        <!-- Type: Requirement only (Bug / Update take it from the requirement). -->
+                        <div class="field" t-if="kind == 'requirement'">
+                            <span class="lbl">Type — tick one or more <span class="req">*</span></span>
+                            <span class="chks">
+                                <t t-foreach="deliverables" t-as="dv">
+                                    <label><input type="checkbox" name="deliverable_type" t-att-value="dv[0]"
+                                                  t-att-id="'kfDeliv_%s' % dv[0]"/> <t t-esc="dv[1]"/></label>
+                                </t>
+                            </span>
+                            <input class="input" id="kfDelivOther" name="deliverable_other" maxlength="40"
+                                   placeholder="What is it? e.g. Plugin, Website" style="display:none"/>
+                        </div>
+
+                        <!-- Urgency + Needed by: Requirement / Bug / Update, as on the web portal. -->
+                        <div class="grid2" t-if="kind in ('requirement', 'bug', 'update')">
+                            <div class="field">
+                                <span class="lbl">Urgency</span>
+                                <span class="tabs">
+                                    <t t-foreach="priorities" t-as="p">
+                                        <input type="radio" name="priority" t-att-id="'kfPrio_%s' % p[0]" t-att-value="p[0]"
+                                               t-att-checked="'checked' if p[0] == 'regular' else None"/>
+                                        <label t-att-for="'kfPrio_%s' % p[0]" t-esc="p[1]"/>
+                                    </t>
+                                </span>
+                            </div>
+                            <div class="field">
+                                <span class="lbl">Needed by <span class="hint">(optional)</span></span>
+                                <input class="input" type="date" id="kfNeeded" name="needed_by" t-att-min="today"/>
+                            </div>
+                        </div>
+
+                        <!-- Summary / description: every kind but New Database -->
+                        <div class="field" t-if="kind != 'newdb'">
+                            <span class="lbl"><t t-esc="'Why should it be destroyed?' if kind == 'dbdisconnect' else 'Summary / description'"/> <span class="req">*</span></span>
+                            <textarea id="kfDesc" name="description" maxlength="4000" rows="5"
+                                      placeholder="Write it in your own words — it is tidied up when you finish typing."></textarea>
+                            <span id="kfDescNote" class="note-ai"></span>
+                        </div>
+
+                        <!-- Media: Requirement / Bug / Update -->
+                        <div class="field" t-if="kind in ('requirement', 'bug', 'update')">
+                            <span class="lbl">Photos, videos, audio or files <span class="hint">(optional, up to 50 MB)</span></span>
+                            <label class="drop">📎 Tap to add files
+                                <input type="file" id="kfFiles" name="files" multiple="multiple"
+                                       accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"/>
+                            </label>
+                            <!-- The phone's own camera, and a voice note recorded right here.
+                                 Whatever they make joins the same list as the files. -->
+                            <div class="capture">
+                                <label class="btn ghost">📷 Photo
+                                    <input type="file" id="kfCamPhoto" accept="image/*" capture="environment"/></label>
+                                <label class="btn ghost">🎥 Video
+                                    <input type="file" id="kfCamVideo" accept="video/*" capture="environment"/></label>
+                                <button type="button" class="btn ghost" id="kfVoice">🎤 Voice note</button>
+                            </div>
+                            <span id="kfVoiceMsg" class="hint"></span>
+                            <div id="kfChips" class="chips"></div>
+                        </div>
+
+                        <!-- Live preview -->
+                        <div class="pv">
+                            <h4>Preview</h4>
+                            <dl id="kfPreview"></dl>
+                        </div>
+                        <div id="kfErr" class="err" hidden="hidden"></div>
+                    </div>
+                    <div class="ft">
+                        <button type="button" class="btn ghost" onclick="window.close(); history.back();">Cancel</button>
+                        <button type="button" id="kfCreate"
+                                t-att-class="'btn danger' if kind == 'dbdisconnect' else 'btn primary'">
+                            <t t-esc="'Request destroy' if kind == 'dbdisconnect' else 'Create'"/>
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Confirmation popup: the preview once more. -->
+                <div id="kfModal" class="modal" hidden="hidden" role="dialog" aria-modal="true">
+                    <div class="box">
+                        <div class="hd"><t t-esc="'Destroy this database?' if kind == 'dbdisconnect' else 'Send this request?'"/>
+                            <small>Check everything once more.</small></div>
+                        <div class="bd"><div class="pv"><dl id="kfModalPreview"></dl></div></div>
+                        <div class="ft">
+                            <button type="button" class="btn ghost" id="kfBack">Back</button>
+                            <button type="button" id="kfConfirm"
+                                    t-att-class="'btn danger' if kind == 'dbdisconnect' else 'btn primary'">Confirm</button>
+                        </div>
+                    </div>
+                </div>
+                <!-- 🎤 Voice recorder, WhatsApp style: record, pause to listen to it
+                     so far, resume to add more, then Delete or Attach. Nothing is
+                     attached until Attach is tapped. -->
+                <div id="kfRec" class="modal" hidden="hidden" role="dialog" aria-modal="true">
+                    <div class="box rec-box">
+                        <div class="hd">🎤 Voice note<small id="kfRecState">Recording…</small></div>
+                        <div class="bd">
+                            <div class="rec-live" id="kfRecLive">
+                                <span class="rec-dot" id="kfRecDot"></span>
+                                <span class="rec-time" id="kfRecTime">0:00</span>
+                                <canvas id="kfRecWave" width="600" height="48"></canvas>
+                            </div>
+                            <audio id="kfRecAudio" controls="controls" hidden="hidden"></audio>
+                        </div>
+                        <div class="ft rec-ft">
+                            <button type="button" class="btn ghost" id="kfRecDel" title="Delete">🗑</button>
+                            <button type="button" class="btn ghost" id="kfRecPause">⏸ Pause</button>
+                            <button type="button" class="btn primary" id="kfRecSend">➤ Attach</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 📷 / 🎥 What the camera took, before it is attached. -->
+                <div id="kfShot" class="modal viewer" hidden="hidden" role="dialog" aria-modal="true">
+                    <div class="box">
+                        <div class="hd"><span id="kfShotTitle">Preview</span><small id="kfShotMeta"></small></div>
+                        <div class="bd" id="kfShotBody"></div>
+                        <div class="ft">
+                            <button type="button" class="btn ghost" id="kfShotCancel">Cancel</button>
+                            <button type="button" class="btn ghost" id="kfShotRetake">🔁 Retake</button>
+                            <button type="button" class="btn primary" id="kfShotUse">➤ Attach</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Viewer: tap an attached file to see it before sending. -->
+                <div id="kfViewer" class="modal viewer" hidden="hidden" role="dialog" aria-modal="true">
+                    <div class="box">
+                        <div class="hd"><span id="kfViewerName"></span><small id="kfViewerMeta"></small></div>
+                        <div class="bd" id="kfViewerBody"></div>
+                        <div class="ft">
+                            <a class="btn ghost" id="kfViewerDl" download="" style="display:inline-flex;align-items:center;text-decoration:none;">Download</a>
+                            <button type="button" class="btn primary" id="kfViewerClose">Close</button>
+                        </div>
+                    </div>
+                </div>
+                <script>window.KF_BOOT = <t t-out="boot"/>;</script>
+                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=5"></script>
+            </t>
+        </template>
+
+        <template id="wa_client_form_done" name="WA Client Request Sent">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'Request sent'"/>
+                <div class="done">
+                    <div class="big">✅</div>
+                    <div style="font-size:18px; font-weight:800;"><t t-esc="title"/> — sent</div>
+                    <span class="ref"><t t-esc="ref"/><t t-if="ref"> — </t><t t-esc="name"/></span>
+                    <p style="margin-top:16px; font-weight:700;">Go back to WhatsApp — the details are posted in your group.</p>
+                    <p class="mini">The team reviews it next. This link no longer works.</p>
+                </div>
+            </t>
+        </template>
+    </data>
+</odoo>

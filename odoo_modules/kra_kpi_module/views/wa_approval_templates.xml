@@ -186,16 +186,15 @@
             <t t-call="kra_kpi_module.wa_approval_layout">
                 <t t-set="page_title" t-value="'Link Expired'"/>
                 <h1 class="wa-title">Link Expired</h1>
-                <p class="wa-meta">
-                    This approval link can no longer be used.
-                </p>
+                <!-- Shared by every WhatsApp link page: callers can say what kind
+                     of link it was (meta) and what to do next (hint). -->
+                <p class="wa-meta" t-esc="meta or 'This approval link can no longer be used.'"/>
                 <p t-if="reason" style="background:#f8f9fa; padding:12px; border-radius:10px;
                        border-left: 3px solid #dc3545; font-size:14px;">
                     <t t-esc="reason"/>
                 </p>
-                <p style="text-align:center; color:#6c757d; margin-top: 18px;">
-                    Please ask the team to send a fresh link.
-                </p>
+                <p style="text-align:center; color:#6c757d; margin-top: 18px;"
+                   t-esc="hint or 'Please ask the team to send a fresh link.'"/>
             </t>
         </template>
 
