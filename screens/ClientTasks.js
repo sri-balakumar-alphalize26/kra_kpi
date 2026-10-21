@@ -104,9 +104,6 @@ function TaskCard({ t, highlight, onPress, pulse, onLayout }) {
       {t.client_name ? <Text style={s.sub} numberOfLines={1}>🏢 {t.client_name}</Text> : null}
       {t.project_name && t.project_name !== t.client_name
         ? <Text style={s.sub} numberOfLines={1}>📁 {t.project_name}</Text> : null}
-      <Text style={s.sub} numberOfLines={1}>
-        👤 {t.primary_assignee || 'Unassigned'}
-      </Text>
     </TouchableOpacity>
   );
 }
@@ -209,7 +206,7 @@ function ApprovalCard({ t, busy, onApprove, onReject, onToggleHold, pulse, onLay
       </View>
       {t.project_name ? <Text style={s.sub} numberOfLines={1}>📁 {t.project_name}</Text> : null}
       {/* What was actually asked for. The client is being asked to approve this
-          task, and the card gave them a title and a developer name to decide on.
+          task, and the card gave them only a title to decide on.
           Already sent by /kpi_client_portal/dashboard; stripped the same way as
           the detail sheet below, because the field is rich text server-side. */}
       {t.description ? (
@@ -217,11 +214,6 @@ function ApprovalCard({ t, busy, onApprove, onReject, onToggleHold, pulse, onLay
           {String(t.description).replace(/<[^>]+>/g, '').trim()}
         </Text>
       ) : null}
-      {/* The developer IS the thing being approved — lead with it. */}
-      <View style={s.devRow}>
-        <Ionicons name="person-circle-outline" size={18} color={COLORS.primary} />
-        <Text style={s.devTxt}>Assigned to <Text style={s.devName}>{t.developer || 'Unassigned'}</Text></Text>
-      </View>
       <View style={s.cdRow}>
         <Countdown
           deadlineAt={t.deadline_at} serverNow={t.server_now}
@@ -447,7 +439,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
       // `late` = the window closed first, so the server had already auto-approved.
       flashToast(res?.late
         ? 'That task had already auto-approved.'
-        : (action === 'approve' ? 'Approved — the developer can start.' : 'Rejected — sent back to the team.'));
+        : (action === 'approve' ? 'Approved — the team can start.' : 'Rejected — sent back to the team.'));
       load();
     } catch (e) {
       log.error('decide failed', e?.message);
@@ -635,7 +627,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
             })}
           </View>
 
-          {/* Stage 1 — approve the developer the admin assigned. The only place
+          {/* Stage 1 — approve the assignment the admin made. The only place
               a client acts; auto-approves if they don't. */}
           {approvals.length > 0 ? (
             <CollapsibleSection
@@ -797,7 +789,6 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 {detail?.description ? (
                   <DRow label="Details" value={String(detail.description).replace(/<[^>]+>/g, '').trim()} />
                 ) : null}
-                <DRow label="Assigned to" value={detail?.primary_assignee || 'Not assigned yet'} />
                 <DRow label="Priority" value={PRIO_LABEL[detail?.priority] || '—'} />
                 {detail?.deadline ? <DRow label="Deadline" value={detail.deadline} /> : null}
                 {detail?.related_req_ref ? <DRow label="Linked to" value={detail.related_req_ref} /> : null}
@@ -1028,9 +1019,6 @@ const s = StyleSheet.create({
   // ── Approval needed ──────────────────────────────────────────────────────
   cardApprove: { borderColor: COLORS.primary, borderWidth: 1.5, backgroundColor: '#F7FAFF' },
   approveDesc: { fontSize: 12, color: COLORS.ink, lineHeight: 17, marginTop: 7 },
-  devRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
-  devTxt: { fontSize: 13, color: COLORS.ink },
-  devName: { fontWeight: '900', color: COLORS.navy },
   cdRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 },
   cd: { flex: 1, fontSize: 12, color: '#CA8A04', fontWeight: '700' },
   cdDue: { flex: 1, fontSize: 12, color: COLORS.muted, fontWeight: '700', fontStyle: 'italic' },

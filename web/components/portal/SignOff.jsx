@@ -120,7 +120,7 @@ export function CertificatePreview({ kpiId, signer, sig }) {
   const k = d.kpi || {};
   const rows = [
     ["Client", d.client_name], ["Project", d.project_name], ["Reference", k.external_ref], ["Delivered version", k.delivery_version],
-    ["Requirement version", k.requirement_version], ["Developer", k.primary_assignee], ["Assigned", k.assigned_date], ["Completed", k.completion_date],
+    ["Requirement version", k.requirement_version], ["Assigned", k.assigned_date], ["Completed", k.completion_date],
     ["Checked by", k.approved_by ? `${k.approved_by}${k.approval_date ? ` · ${k.approval_date}` : ""}` : ""],
   ].filter(([, v]) => v);
   return (
@@ -184,7 +184,7 @@ export function BulkSignOff({ tasks, defaultName, onClose, onDone }) {
       <div className="table-scroll" style={{ maxHeight: 220, border: "1px solid var(--border)", borderRadius: 8 }}>
         <table className="table"><tbody>{tasks.map((t) => (
           <tr key={t.id} className={preview === t.id ? "sel" : ""}>
-            <td><span className="ref">{t.external_ref || `#${t.id}`}</span> <b>{t.name}</b><div className="mini">{t.project_name}{t.primary_assignee ? ` · ${t.primary_assignee}` : ""}{t.completion_date ? ` · done ${t.completion_date}` : ""}</div></td>
+            <td><span className="ref">{t.external_ref || `#${t.id}`}</span> <b>{t.name}</b><div className="mini">{t.project_name}{t.completion_date ? ` · done ${t.completion_date}` : ""}</div></td>
             <td style={{ textAlign: "right" }}><Button size="sm" kind="ghost" onClick={() => setPreview(preview === t.id ? null : t.id)}>{preview === t.id ? "Hide" : "Preview"}</Button></td>
           </tr>
         ))}</tbody></table>

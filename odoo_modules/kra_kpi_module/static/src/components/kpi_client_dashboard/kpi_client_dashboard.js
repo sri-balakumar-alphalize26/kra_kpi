@@ -110,13 +110,18 @@ export class KpiClientDashboard extends Component {
                     </div>
                     <!-- What is being built. Separate from the Type above. -->
                     <div class="col-md-3">
-                        <label class="form-label fw-bold">Type (Module / App / EXE) <span class="text-danger">*</span></label>
+                        <label class="form-label fw-bold">Type (Module / App / EXE / Other) <span class="text-danger">*</span></label>
                         <select class="form-select" t-model="state.newTask.deliverable_type">
                             <option value="">— choose —</option>
                             <option value="module">Module</option>
                             <option value="app">App</option>
                             <option value="exe">EXE</option>
+                            <option value="other">Other</option>
                         </select>
+                        <!-- Other: say what it is (required) -->
+                        <input t-if="state.newTask.deliverable_type === 'other'" type="text" class="form-control mt-2"
+                               maxlength="40" placeholder="What is it? e.g. Plugin, Website"
+                               t-model="state.newTask.deliverable_other"/>
                     </div>
                     <div class="col-12">
                         <label class="form-label fw-bold">Description</label>
@@ -145,20 +150,9 @@ export class KpiClientDashboard extends Component {
                             </t>
                         </select>
                     </div>
-                    <div class="col-auto fw-bold small text-muted">
-                        <i class="fa fa-user me-1"/> User:
-                    </div>
-                    <div class="col-md-4">
-                        <select class="form-select form-select-sm" t-model="state.userFilter">
-                            <option value="">All users</option>
-                            <t t-foreach="userOptions" t-as="u" t-key="u.id">
-                                <option t-att-value="u.id" t-esc="u.name"/>
-                            </t>
-                        </select>
-                    </div>
-                    <div t-if="state.projectFilter or state.userFilter" class="col-auto">
+                    <div t-if="state.projectFilter" class="col-auto">
                         <button class="btn btn-sm btn-outline-secondary"
-                                t-on-click="() => { state.projectFilter = ''; state.userFilter = ''; }">
+                                t-on-click="() => { state.projectFilter = ''; }">
                             <i class="fa fa-times me-1"/> Clear
                         </button>
                     </div>
@@ -168,9 +162,6 @@ export class KpiClientDashboard extends Component {
                     <span class="badge bg-primary me-2">
                         <i class="fa fa-list me-1"/>
                         <t t-esc="filterSummary.taskCount"/> task(s)
-                    </span>
-                    <span t-if="state.userFilter" class="badge bg-info me-2">
-                        User: <t t-esc="this.userLabel(state.userFilter)"/>
                     </span>
                     <span t-if="state.projectFilter" class="badge bg-info">
                         Project: <t t-esc="this.projectLabel(state.projectFilter)"/>
@@ -280,7 +271,7 @@ export class KpiClientDashboard extends Component {
                 <table class="table table-sm align-middle mb-0">
                     <thead class="table-light">
                         <tr>
-                            <th>Ref</th><th>Task</th><th>Project</th><th>By</th><th>Submitted</th><th>&#160;</th>
+                            <th>Ref</th><th>Task</th><th>Project</th><th>Submitted</th><th>&#160;</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -289,7 +280,6 @@ export class KpiClientDashboard extends Component {
                                 <td><span class="badge bg-secondary" t-esc="p.external_ref or '—'"/></td>
                                 <td class="fw-bold" t-esc="p.name"/>
                                 <td t-esc="p.project_name"/>
-                                <td t-esc="p.primary_assignee"/>
                                 <td t-esc="p.completion_date"/>
                                 <td>
                                     <button class="btn btn-sm btn-warning"
@@ -357,9 +347,6 @@ export class KpiClientDashboard extends Component {
                                          style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;"
                                          t-att-title="k.description"
                                          t-esc="k.description"/>
-                                    <div t-if="k.primary_assignee" class="text-muted small fw-normal">
-                                        <i class="fa fa-user me-1"/>By: <t t-esc="k.primary_assignee"/>
-                                    </div>
                                 </td>
                                 <td t-esc="k.project_name"/>
                                 <td>
@@ -419,7 +406,6 @@ export class KpiClientDashboard extends Component {
                             <strong>Task:</strong> <t t-esc="state.approval.data.kpi.name"/><br/>
                             <strong>Client:</strong> <t t-esc="state.approval.data.client_name"/><br/>
                             <strong>Project:</strong> <t t-esc="state.approval.data.project_name"/><br/>
-                            <strong>Submitted by:</strong> <t t-esc="state.approval.data.kpi.primary_assignee"/><br/>
                             <strong>Submitted on:</strong> <t t-esc="state.approval.data.kpi.completion_date"/>
                         </div>
                         <div t-if="state.approval.data.kpi.description" class="border rounded p-2 bg-light mb-3 small">
@@ -532,10 +518,6 @@ export class KpiClientDashboard extends Component {
             const pid = parseInt(this.state.projectFilter, 10);
             out = out.filter(x => x.project_id === pid);
         }
-        if (this.state.userFilter) {
-            const uid = parseInt(this.state.userFilter, 10);
-            out = out.filter(x => x.primary_assignee_id === uid);
-        }
         return out;
     }
     get filteredPending() {
@@ -564,21 +546,8 @@ export class KpiClientDashboard extends Component {
         const base = this._applyFilters((this.state.dashboard && this.state.dashboard.kpis) || []);
         return base.filter(k => tab.states.includes(k.task_state));
     }
-    get userOptions() {
-        const seen = new Map();
-        const all = [
-            ...((this.state.dashboard && this.state.dashboard.kpis) || []),
-            ...((this.state.dashboard && this.state.dashboard.pending_approvals) || []),
-        ];
-        for (const x of all) {
-            if (x.primary_assignee_id && !seen.has(x.primary_assignee_id)) {
-                seen.set(x.primary_assignee_id, x.primary_assignee || ('User #' + x.primary_assignee_id));
-            }
-        }
-        return Array.from(seen, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-    }
     get filterSummary() {
-        const active = !!(this.state.projectFilter || this.state.userFilter);
+        const active = !!this.state.projectFilter;
         if (!active) return { show: false };
         const list = this.filteredKpis;
         const totalHours = list.reduce((s, k) => s + (k.actual_hours || 0), 0);
@@ -602,11 +571,6 @@ export class KpiClientDashboard extends Component {
         const p = (this.state.projects || []).find(p => p.id === pid);
         return p ? (p.display || p.name || '') : projectFilter;
     }
-    userLabel(userFilter) {
-        const uid = parseInt(userFilter, 10);
-        const u = this.userOptions.find(u => u.id === uid);
-        return u ? u.name : userFilter;
-    }
 
     setup() {
         this.state = useState({
@@ -623,13 +587,12 @@ export class KpiClientDashboard extends Component {
             projects: [],
             tab: 'pending',     // active tab: pending | in_progress | completed
             projectFilter: '',  // '' = all projects
-            userFilter: '',     // '' = all users
             showAdd: false,
             newTask: {
                 kind: 'requirement', sub_kra_id: '', name: '',
                 external_ref: '', related_req_ref: '',
                 description: '', priority: 'regular',
-                deliverable_type: '',
+                deliverable_type: '', deliverable_other: '',
             },
             approval: {
                 open: false,
@@ -687,17 +650,22 @@ export class KpiClientDashboard extends Component {
             return;
         }
         if (!t.deliverable_type) {
-            this._toast('Please choose a type — Module, App or EXE.', 'warning');
+            this._toast('Please choose a type — Module, App, EXE or Other.', 'warning');
             return;
         }
-        const r = await rpc('/kpi_client_portal/add_task', t);
+        const other = t.deliverable_type === 'other' ? (t.deliverable_other || '').trim() : '';
+        if (t.deliverable_type === 'other' && !other) {
+            this._toast('Type what the Other type is (e.g. Plugin, Website).', 'warning');
+            return;
+        }
+        const r = await rpc('/kpi_client_portal/add_task', { ...t, deliverable_other: other });
         if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
         this._toast(`Task submitted: ${r.name}. Your admin will review and assign it.`, 'warning');
         this.state.newTask = {
             kind: 'requirement', sub_kra_id: '', name: '',
             external_ref: '', related_req_ref: '',
             description: '', priority: 'regular',
-            deliverable_type: '',
+            deliverable_type: '', deliverable_other: '',
         };
         this.state.showAdd = false;
         await this.refresh();

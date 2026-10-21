@@ -238,7 +238,6 @@ _APP_TEMPLATES = {
     'pre_approval_request': (
         "A task needs your approval:\n"
         "📌 {title}\n"
-        "👤 Developer: {dev}\n"
         "🏷 Project: {project}\n\n"
         "Open My Tasks to Approve or Reject.\n"
         "If we don't hear from you within {window_minutes} min the team may "
@@ -310,7 +309,7 @@ _APP_TEMPLATES = {
         "⏳ We didn't hear back within {window_minutes} min, so the team has "
         "started work.\n"
         "📌 {title}\n"
-        "👤 Developer: {dev} • Project: {project}\n\n"
+        "🏷 Project: {project}\n\n"
         "You have not approved anything and nothing is billed yet. Open My Tasks "
         "to object or to approve."
     ),
@@ -445,7 +444,6 @@ _APP_TEMPLATES = {
     'internal_approved': (
         "✅ Work completed — your sign-off is needed:\n"
         "📌 {title}\n"
-        "👤 Developer: {dev}\n"
         "🏷 Project: {project} • ⏱ {elapsed}\n\n"
         "Open My Tasks to review and sign off."
     ),
@@ -490,7 +488,7 @@ _APP_TEMPLATES = {
         "⚠️ Reminder — this task still needs your approval.\n"
         "📌 {title}\n"
         "🏷 Project: {project} • Deadline: {deadline}\n"
-        "👤 Waiting on you before {dev} is confirmed.\n\n"
+        "👤 Waiting on your approval.\n\n"
         "Open My Tasks to Approve. If we don't hear back the team may start "
         "anyway — that is not an approval, and nothing is billed until you "
         "sign off at the end."
@@ -740,8 +738,7 @@ _TEMPLATES = {
         "👋 Hi {client_name},\n"
         "A new task needs your approval:\n"
         "📌 {title}\n"
-        "🗓 Deadline: {deadline}\n"
-        "👤 Created by: {created_by}\n\n"
+        "🗓 Deadline: {deadline}\n\n"
         "TAP A BUTTON BELOW (opens this chat with the action pre-filled — just tap Send):\n"
         "✅ Approve  →  {tap_approve}\n"
         "❌ Reject   →  {tap_reject}\n"
@@ -759,7 +756,7 @@ _TEMPLATES = {
         "⚠️ Reminder — please approve task {ref}\n"
         "📌 {title}\n"
         "Project: {project} • Deadline: {deadline}\n"
-        "👤 Developer: {dev} has started PREP work on this task in non-billable mode "
+        "👤 The team has started PREP work on this task in non-billable mode "
         "because we haven't received your approval yet.\n\n"
         "Please approve so the work can be billed as a full task:\n"
         "✅ Approve  →  {tap_approve}\n"
@@ -817,7 +814,7 @@ _TEMPLATES = {
     'internal_approved':  (
         "✅ Coordinator approved — {title}\n"
         "Ref: {ref}  •  Project: {project}\n"
-        "Developer: {dev}  •  Total time: {elapsed}\n"
+        "Total time: {elapsed}\n"
         "\n"
         "🖋 CLIENT — please sign off so we can invoice this work.\n"
         "TAP A BUTTON BELOW (opens this chat with the action pre-filled — just tap Send):\n"

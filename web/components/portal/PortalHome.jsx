@@ -58,7 +58,7 @@ export default function PortalHome() {
               {recent.map((k) => (
                 <Link key={k.id} href={`/portal/requests?focus=${k.id}`} className="notif" style={{ textDecoration: "none", color: "inherit" }}>
                   <span className="icbox" style={{ background: k.task_state === "completed" ? "var(--tint-green-bg)" : k.task_state === "awaiting_client" ? "var(--tint-violet-bg)" : "var(--tint-blue-bg)", color: k.task_state === "completed" ? "var(--tint-green)" : k.task_state === "awaiting_client" ? "var(--tint-violet)" : "var(--tint-blue)" }}><Icon n={k.task_state === "completed" ? "check" : k.task_state === "awaiting_client" ? "flag" : "play"} size={18} /></span>
-                  <div style={{ flex: 1 }}><p>{k.external_ref ? `${k.external_ref} · ` : ""}{k.name}</p><small>{k.project_name || ""}{k.primary_assignee ? ` · ${k.primary_assignee}` : ""}{k.completion_date ? ` · ${k.completion_date}` : ""}</small></div>
+                  <div style={{ flex: 1 }}><p>{k.external_ref ? `${k.external_ref} · ` : ""}{k.name}</p><small>{k.project_name || ""}{k.completion_date ? ` · ${k.completion_date}` : ""}</small></div>
                 </Link>
               ))}
               {!recent.length && <span className="mini">No tasks yet — send your first request above.</span>}
