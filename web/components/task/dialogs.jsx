@@ -181,17 +181,22 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
   const [githubRequired, setGithubRequired] = useState(S.needsGithub(task.deliverable_type));
   /* null | { missing: [...] } "What did we miss?" | { confirm: true } submit confirm */
   const [ask, setAsk] = useState(null);
+  /* Team-written updates only: what the client attached when raising the task
+     (from_client rows) is not the progress summary (server rule too). */
+  const [devCount, setDevCount] = useState(typeof task.dev_progress_count === "number" ? task.dev_progress_count : task.progress_count || 0);
   useEffect(() => {
     let live = true;
     S.fetchTaskDetails(task.id, { fresh: true }).then((r) => {
       if (!live || !r.ok) return;
+      const dpc = r.task?.dev_progress_count;
+      setDevCount(typeof dpc === "number" ? dpc : Array.isArray(r.progress) ? r.progress.filter((p) => !p.from_client).length : (r.task?.progress_count ?? task.progress_count ?? 0));
       setHasManual((r.manuals || []).length > 0);
       setHasGithub((r.github || []).length > 0);
       const gr = r.task?.github_required;
       setGithubRequired(typeof gr === "boolean" ? gr : S.needsGithub(r.task?.deliverable_type ?? task.deliverable_type));
       const pre = {};
       if ((r.github || []).length) pre.verify_github = true;
-      if ((r.files || []).length) { pre.user_manual = true; pre.documentation = true; }
+      if ((r.files || []).some((f) => !f.from_client)) { pre.user_manual = true; pre.documentation = true; }
       setInferred(Object.keys(pre));
       setChecks((c) => ({ ...pre, ...c }));
     }).catch(() => {});
@@ -199,7 +204,7 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
   }, [task.id]);
   /* Odoo's full Complete needs at least one item ticked (task_complete), not all five. */
   const anyDone = S.CHECKLIST_ITEMS.some((c) => checks[c.key]);
-  const hasSummary = !!summary.trim() || task.progress_count > 0;
+  const hasSummary = !!summary.trim() || devCount > 0;
   const ref = task.external_ref || `#${task.id}`;
   const send = (p) => { if (busy) return; setAsk(null); onConfirm({ employeeChecklist: checks, partial: p, summary: summary.trim() }); };
   /* Full Complete never silently disables: what's missing is reported in one popup. */
@@ -219,7 +224,7 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
           <label key={c.key} className="chk"><input type="checkbox" checked={!!checks[c.key]} onChange={(e) => setChecks((s) => ({ ...s, [c.key]: e.target.checked }))} style={CHK} />{c.label}{inferred.includes(c.key) && <span className="mini"> (ticked from what's attached)</span>}</label>
         ))}
       </div>
-      <Field label={task.progress_count > 0 ? "Progress note (optional — the task already has updates)" : "Progress note"} required={!(task.progress_count > 0)}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
+      <Field label={devCount > 0 ? "Progress note (optional — the task already has updates)" : "Progress note"} required={!(devCount > 0)}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
       {hasManual === false && <p className="note" style={{ margin: 0 }}>📘 Upload a user manual (PDF, DOC or DOCX) on the task before marking it fully complete. Without one you can still send it for review as a partial finish.</p>}
       {hasGithub === false && (githubRequired
         ? <Box tone="warn">This is a Module / App task — add the GitHub link (repository + branch) on the task before completing.</Box>

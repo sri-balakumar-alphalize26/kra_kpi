@@ -79,6 +79,37 @@ class KpiProgress(models.Model):
         string='Employee Name',
         store=True
     )
+
+    # Files the CLIENT attached when raising the task (WhatsApp client form or
+    # the client portal). They are shown in their own "From the client" section
+    # and never count as the developer's progress summary at Complete.
+    # Computed, not set by the two create sites, so every path (and every row
+    # saved before this field existed) is marked the same way.
+    from_client = fields.Boolean(
+        string='From the client', compute='_compute_from_client', store=True, index=True)
+
+    CLIENT_PORTAL_SUMMARY = 'Attached by the client when submitting this task.'
+
+    @api.depends('summary', 'user_id', 'kpi_id.client_submitted', 'kpi_id.submitted_by_uid')
+    def _compute_from_client(self):
+        client_group = self.env.ref('kra_kpi_module.group_kra_client', raise_if_not_found=False)
+        for rec in self:
+            text = (rec.summary or '').strip()
+            if text == self.CLIENT_PORTAL_SUMMARY or (
+                    text.startswith('Attached by ') and text.endswith(' on the WhatsApp form.')):
+                rec.from_client = True
+                continue
+            u = rec.user_id
+            if not u or any(u.has_group(g) for g in (
+                    'kra_kpi_module.group_kra_owner', 'kra_kpi_module.group_kra_admin',
+                    'kra_kpi_module.group_kra_developer', 'base.group_system')):
+                # Staff (developers included) never count as the client, even if
+                # they once filed a task on a client's behalf.
+                rec.from_client = False
+                continue
+            rec.from_client = bool(
+                (client_group and client_group in u.all_group_ids)
+                or (rec.kpi_id.client_submitted and rec.kpi_id.submitted_by_uid == u))
     
     @api.depends('time_spent_seconds')
     def _compute_time_spent_display(self):

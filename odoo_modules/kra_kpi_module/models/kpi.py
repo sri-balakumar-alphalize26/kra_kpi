@@ -99,6 +99,12 @@ class KpiMaster(models.Model):
         string='Updates Count',
         compute='_compute_progress_count'
     )
+    # The updates the TEAM wrote -- what Complete accepts as the summary. The
+    # client's own attachments (kpi.progress.from_client) are not counted.
+    dev_progress_count = fields.Integer(
+        string='Team Updates Count',
+        compute='_compute_progress_count'
+    )
     
     # 🆕 NEW: Reassignment History
     reassignment_history_ids = fields.One2many(
@@ -961,10 +967,11 @@ class KpiMaster(models.Model):
                 'approval_date': False,
             })
 
-    @api.depends('progress_ids')
+    @api.depends('progress_ids', 'progress_ids.from_client')
     def _compute_progress_count(self):
         for rec in self:
             rec.progress_count = len(rec.progress_ids)
+            rec.dev_progress_count = len(rec.progress_ids.filtered(lambda p: not p.from_client))
 
     @api.depends('reassignment_history_ids')
     def _compute_reassignment_count(self):

@@ -123,7 +123,7 @@ class KpiWaTaskPage(http.Controller):
         admin = router._is_admin(user)
         mine = lambda owner: started and (admin or owner.id == user.id)  # noqa: E731
         updates = [{
-            'id': p.id, 'can': mine(p.user_id),
+            'id': p.id, 'can': mine(p.user_id) and not p.from_client, 'from_client': p.from_client,
             'who': p.employee_name or p.user_id.name or '', 'when': when(p.create_date),
             'edited': when(p.edited_at) if p.edited_at else '',
             'text': p.summary or '', 'files': self._files(token, 'progress', p, 'uploaded_file'),
@@ -139,6 +139,10 @@ class KpiWaTaskPage(http.Controller):
                    'url': g.github_url, 'branch': g.branch_name or '', 'who': g.employee_name or '',
                    'when': when(g.create_date)}
                   for g in request.env['kpi.github.link'].sudo().search([('kpi_id', '=', task.id)], order='id desc')]
+        # What the client attached when raising the task gets its own section;
+        # "Updates" (and the summary Complete accepts) is the team's work only.
+        client_updates = [x for x in updates if x['from_client']]
+        updates = [x for x in updates if not x['from_client']]
         logs = [{'label': label, 'rows': router.log_rows(task, user, key)}
                 for key, label, _e in router.LOG_KINDS]
         return {
@@ -151,7 +155,8 @@ class KpiWaTaskPage(http.Controller):
                 'spent': '%dh %02dm' % (m // 60, m % 60), 'description': task.description or '',
                 'paused_reason': task.paused_reason if task.task_state == 'paused' else '',
             },
-            'updates': updates, 'manuals': manuals, 'github': github, 'logs': logs,
+            'updates': updates, 'client_updates': client_updates,
+            'manuals': manuals, 'github': github, 'logs': logs,
             'doubts': router._task_doubts(task, user),
             'started': started,
             'can_add': task.task_state in ('in_progress', 'paused', 'partially_completed',

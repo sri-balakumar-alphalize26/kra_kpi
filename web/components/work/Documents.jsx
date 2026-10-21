@@ -180,7 +180,7 @@ function Row({ t, open, onToggle, onOpenTask }) {
                     {docs.task_docs.map((x, i) => <DocLine key={`t${i}`} badge={x.kind} title={x.file_name || "document"} note={x.note} downloadUrl={href(x.download_url)} />)}
                   </Group>
                   <Group title="Attached files" icon="doc" count={docs.files?.length}>
-                    {docs.files.map((x) => <DocLine key={x.id} title={x.file_name || "file"} sub={by(x.uploaded_by, x.upload_date)} viewUrl={x.view_url ? href(x.view_url) : null} downloadUrl={x.download_url ? href(x.download_url) : null} />)}
+                    {docs.files.map((x) => <DocLine key={x.id} title={x.file_name || "file"} sub={[x.from_client ? "📎 From the client" : "", by(x.uploaded_by, x.upload_date)].filter(Boolean).join(" · ")} viewUrl={x.view_url ? href(x.view_url) : null} downloadUrl={x.download_url ? href(x.download_url) : null} />)}
                   </Group>
                   <Group title="Drive & Cloud" icon="upload" count={drive.length}>
                     {drive.map((l, i) => <DocLine key={`d${i}`} icon="link" badge={l.kind} title={l.url} sub={by(l.added_by, l.added_date)} viewUrl={l.url} external />)}

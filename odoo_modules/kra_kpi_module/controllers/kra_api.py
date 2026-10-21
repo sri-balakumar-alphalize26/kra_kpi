@@ -864,7 +864,9 @@ class KraKpiAPI(http.Controller):
         # 🆕 Part B guard — a task can only be completed after a Progress Summary
         # has been recorded. Keeps both "Complete" and "Partial Finish" honest and
         # always leaves the reviewer something to read.
-        has_summary = request.env['kpi.progress'].sudo().search_count([('kpi_id', '=', rec.id)]) > 0
+        # The client's own attachments don't count: the summary is the team's.
+        has_summary = request.env['kpi.progress'].sudo().search_count(
+            [('kpi_id', '=', rec.id), ('from_client', '=', False)]) > 0
         if not has_summary:
             return {'status': False,
                     'message': 'Please submit a Progress Summary before completing this task.'}
@@ -1352,6 +1354,7 @@ class KraKpiAPI(http.Controller):
                 'pause_reason_code': k.pause_reason_code or "",
                 'description': k.description or "",
                 'progress_count': k.progress_count or 0,
+                'dev_progress_count': k.dev_progress_count or 0,
                 'completed_by_id': k.completed_by.id if k.completed_by else False,
                 'completed_by_name': k.completed_by.name if k.completed_by else "",
                 'completion_date': convert_to_user_tz(k.completion_date) if k.completion_date else "",
@@ -1557,6 +1560,7 @@ class KraKpiAPI(http.Controller):
             'pause_reason_code': k.pause_reason_code or "",
             'description': k.description or "",
             'progress_count': k.progress_count or 0,
+            'dev_progress_count': k.dev_progress_count or 0,
             'completed_by_id': k.completed_by.id if k.completed_by else False,
             'completed_by_name': k.completed_by.name if k.completed_by else "",
             'completion_date': convert_to_user_tz(k.completion_date) if k.completion_date else "",
@@ -1766,6 +1770,9 @@ class KraKpiAPI(http.Controller):
                 # without this the edit and delete controls have nothing to gate on
                 # and would have to re-derive a rule the server already owns.
                 'can_edit': self._may_edit_progress(p),
+                # Attached by the client when raising the task: shown in its own
+                # "From the client" section, not in the team's history.
+                'from_client': bool(p.from_client),
                 # The whole set of files, where has_file/file_name above describe
                 # only the first. Same reason as can_edit: this route, not
                 # /kpi/progress/list, is where the app reads its history from.
@@ -1796,6 +1803,7 @@ class KraKpiAPI(http.Controller):
                 'file_name': p.file_name or '',
                 'uploaded_by': p.employee_name or '',
                 'upload_date': convert_to_user_tz(p.create_date),
+                'from_client': bool(p.from_client),
             } for p in progress if p.uploaded_file],
             # The web's "Drive & Links" pane. Links are stored as bare URL strings
             # with no type, so the ONLY way to group them is to read the url —
@@ -4210,6 +4218,8 @@ class KraKpiAPI(http.Controller):
                     # server re-checks on every write and delete regardless — this
                     # only stops offering an action that would be refused.
                     'can_edit': self._may_edit_progress(progress),
+                    # The client's own attachment (own "From the client" section).
+                    'from_client': bool(progress.sudo().from_client),
                 })
 
             return {
@@ -5885,6 +5895,7 @@ class KraKpiAPI(http.Controller):
                     'upload_date': convert_to_user_tz(prog.create_date),
                     'view_url': f'/kpi/progress/view?progress_id={prog.id}',
                     'download_url': f'/kpi/progress/download?progress_id={prog.id}',
+                    'from_client': bool(prog.from_client),
                 })
             
             # Get related links.
