@@ -1,4 +1,6 @@
 from odoo import models, fields, api
+
+from .kpi import ref_type
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -182,7 +184,9 @@ class KpiKraReport(models.TransientModel):
         # leading '|' operators.
         domain = ['|'] * (len(prefixes) - 1)
         for prefix in prefixes:
-            domain.append(('external_ref', '=ilike', prefix + '-%'))
+            # PREFIX% not PREFIX-%: a bug / update raised under a requirement
+            # is BUG001-REQ-012, with no hyphen straight after the type.
+            domain.append(('external_ref', '=ilike', prefix + '%'))
         return domain
 
     def _kra_filter_label(self):
@@ -332,7 +336,7 @@ class KpiKraReport(models.TransientModel):
         # No ORM grouping on a string prefix, so bucket the refs in Python.
         types = {}
         for kpi in Kpi.search(self._build_domain('type') + [('external_ref', '!=', False)]):
-            prefix = (kpi.external_ref or '').split('-')[0].strip().upper()
+            prefix = ref_type(kpi.external_ref)
             if prefix:
                 types[prefix] = types.get(prefix, 0) + 1
 
@@ -433,7 +437,7 @@ class KpiKraReport(models.TransientModel):
                 # There is no doc_type field on kra.kpi — the Requirement /
                 # Update / Bug type lives in the external_ref prefix
                 # (REQ-012 / UPT-004 / BUG-021), same as the invoice picker reads it.
-                'task_type': (kpi.external_ref or '').split('-')[0].strip().upper(),
+                'task_type': ref_type(kpi.external_ref),
                 'task_state': kpi.task_state or '',
                 'task_state_label': state_labels.get(kpi.task_state, kpi.task_state or ''),
                 'priority': kpi.priority or 'regular',
@@ -538,7 +542,7 @@ class KpiKraReport(models.TransientModel):
         """
         counts = {}
         for kpi in self.env['kra.kpi'].search([('external_ref', '!=', False)]):
-            prefix = (kpi.external_ref or '').split('-')[0].strip().upper()
+            prefix = ref_type(kpi.external_ref)
             if prefix:
                 counts[prefix] = counts.get(prefix, 0) + 1
 

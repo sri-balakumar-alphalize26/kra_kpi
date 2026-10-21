@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Avatar, Button, ErrorState, Icon, Lozenge, PageHeader, Skeleton, Tabs, useFlags, Select } from "@/components/ui";
 import { useResource } from "@/lib/useFetch";
 import * as R from "@/lib/services/reports";
+import { refPrefix } from "@/lib/services/kpiActions";
 import ReportsNav from "./ReportsNav";
 import { loadPdf } from "./exportLibs";
 
@@ -136,7 +137,7 @@ export default function WorkReport() {
             <table className="table">
               <thead><tr><th>Done on</th><th>Ref</th><th>Task</th><th>Client / project</th><th>Developer</th><th>Type</th>{showHours && <th className="num">Hours</th>}</tr></thead>
               <tbody>{tasks.map((t) => (
-                <tr key={t.task_id || t.ref}><td>{t.completion_date || ""}</td><td><span className="ref">{t.ref}</span></td><td><b>{t.name}</b></td><td>{t.client_name || t.client}{t.project_name ? ` · ${t.project_name}` : ""}</td><td>{t.assignee ? <><Avatar name={t.assignee} size={22} /> {t.assignee}</> : "—"}</td><td><Lozenge tone={/bug/i.test(t.ref) ? "danger" : /up/i.test(t.ref) ? "done" : "progress"}>{(t.ref || "").split("-")[0]}</Lozenge></td>{showHours && <td className="num">{t.hours_display}</td>}</tr>
+                <tr key={t.task_id || t.ref}><td>{t.completion_date || ""}</td><td><span className="ref">{t.ref}</span></td><td><b>{t.name}</b></td><td>{t.client_name || t.client}{t.project_name ? ` · ${t.project_name}` : ""}</td><td>{t.assignee ? <><Avatar name={t.assignee} size={22} /> {t.assignee}</> : "—"}</td><td><Lozenge tone={/bug/i.test(t.ref) ? "danger" : /up/i.test(t.ref) ? "done" : "progress"}>{refPrefix(t.ref)}</Lozenge></td>{showHours && <td className="num">{t.hours_display}</td>}</tr>
               ))}{!tasks.length && <tr><td colSpan={showHours ? 7 : 6} className="empty">Nothing completed in this period.</td></tr>}</tbody>
               {tasks.length > 0 && <tfoot><tr><td colSpan={showHours ? 6 : 6} style={{ fontWeight: 800, color: "var(--navy)" }}>Total · {d.total_tasks} tasks</td>{showHours && <td className="num" style={{ fontWeight: 800 }}>{d.total_hours_display}</td>}</tr></tfoot>}
             </table>

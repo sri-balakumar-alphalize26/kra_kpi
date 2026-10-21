@@ -350,7 +350,8 @@ def _summary(digest, plabel, workday=None):
     return title, blocks
 
 
-_REF_RX = re.compile(r'\b([A-Za-z]{2,6}-\d{1,6})\b')
+# BUG001-REQ-012 (raised under a requirement) is read whole, not as REQ-012.
+_REF_RX = re.compile(r'\b((?:[A-Za-z]{2,6}\d{1,6}-)?[A-Za-z]{2,6}-\d{1,6})\b')
 
 
 def extract_search(question):

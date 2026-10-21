@@ -7,7 +7,7 @@ from odoo.addons.kra_kpi_module.models.kpi_workflow import (
 )
 # Module / App / EXE. One cleaner for every create path, so each refuses a bad
 # value with the same words.
-from odoo.addons.kra_kpi_module.models.kpi import clean_deliverable_type
+from odoo.addons.kra_kpi_module.models.kpi import clean_deliverable, deliverable_type_label
 # One line on a Workday Map chip, not a paragraph. Imported rather than redefined
 # so the pause note, the non-task note and the idle note all share one number —
 # the same way kpi_reports_api.py imports it.
@@ -443,11 +443,11 @@ class KraKpiAPI(http.Controller):
             "is_customer_review_needed": params.get("is_customer_review_needed", False),
             "related_links": params.get("related_links", "[]"),
         }
-        deliverable, err = clean_deliverable_type(params.get("deliverable_type"))
+        dv, err = clean_deliverable(params.get("deliverable_type"), params.get("deliverable_other"))
         if err:
             return {"status": False, "message": err}
-        if deliverable:
-            kpi_vals["deliverable_type"] = deliverable
+        if dv["deliverable_type"]:
+            kpi_vals.update(dv)
 
         kpi_vals["timer_total_seconds"] = 0
         kpi_vals["start_time"] = False
@@ -657,21 +657,12 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Invalid meeting participants.'}
 
         user = request.env.user
-        Break = request.env['kpi.break.log'].sudo()
-        active = Break.search([('user_id', '=', user.id), ('is_active', '=', True)], limit=1)
-        if not active:
+        # Also keeps the paused task's reason in step (shared with WhatsApp).
+        res = request.env['kpi.break.log'].sudo().switch_open_break(
+            reason_code, user_id=user.id, reason_note=reason,
+            meeting_with_ids=meeting_with_ids)
+        if res is False:
             return {'status': False, 'message': 'No break is running.'}
-
-        source_task = active.source_task_id
-        res = Break.switch_break(reason_code, user_id=user.id, reason_note=reason,
-                                 meeting_with_ids=meeting_with_ids)
-        # Keep the task the break came from in step — it still shows the OLD reason
-        # on its card otherwise, which is the thing the developer is looking at.
-        if source_task and source_task.exists() and source_task.task_state == 'paused':
-            vals = {'pause_reason_code': reason_code}
-            if reason:
-                vals['paused_reason'] = reason
-            source_task.sudo().write(vals)
         return {'status': True, 'switched_from': res.get('switched_from') or '',
                 'break_id': res.get('break_id')}
 
@@ -880,8 +871,8 @@ class KraKpiAPI(http.Controller):
 
         # A full "Complete" needs AT LEAST ONE checklist item confirmed.
         #
-        # It used to demand all five. Not every task has a user manual to upload
-        # or anything to deploy, so people either ticked boxes that weren't true
+        # It used to demand all five. Not every task has anything to deploy or
+        # document separately, so people either ticked boxes that weren't true
         # or escaped through Partial Finish — and the stored flags are exactly
         # what the manager reviews, so a checklist you must lie to is worse than
         # none. Each box is still saved separately, so "deployed but not
@@ -895,6 +886,15 @@ class KraKpiAPI(http.Controller):
                 return {'status': False,
                         'message': 'Confirm at least one checklist item before completing '
                                    '(or use "Partial Finish" to send a summary only).'}
+            # The manual box above stays a statement, but a full Complete now also
+            # needs a real manual on the task (one already uploaded counts).
+            # Partial Finish is the way through for work without one.
+            refused = rec._manual_required_refusal()
+            if refused:
+                return {'status': False, 'message': refused, 'manual_required': True}
+            refused = rec._github_required_refusal()
+            if refused:
+                return {'status': False, 'message': refused, 'github_required': True}
 
         rec.complete_task(employee_checklist)
 
@@ -1299,6 +1299,9 @@ class KraKpiAPI(http.Controller):
                 'requested_priority': k.requested_priority or '',
                 'requested_doc_type': k.requested_doc_type or '',
                 'deliverable_type': k.deliverable_type or '',
+                'deliverable_other': k.deliverable_other or '',
+                'deliverable_label': deliverable_type_label(k.deliverable_type, k.deliverable_other),
+                'github_required': k._github_required(),
                 'reverted_from': k.reverted_from or '',
                 'revert_reason': k.revert_reason or '',
                 'task_state': k.task_state or "assigned",
@@ -1514,6 +1517,9 @@ class KraKpiAPI(http.Controller):
             'requested_priority': k.requested_priority or '',
             'requested_doc_type': k.requested_doc_type or '',
             'deliverable_type': k.deliverable_type or '',
+            'deliverable_other': k.deliverable_other or '',
+            'deliverable_label': deliverable_type_label(k.deliverable_type, k.deliverable_other),
+            'github_required': k._github_required(),
             'reverted_from': k.reverted_from or '',
             'revert_reason': k.revert_reason or '',
             'task_state': k.task_state or "assigned",
@@ -2823,11 +2829,11 @@ class KraKpiAPI(http.Controller):
         if est_h * 3600 + est_m * 60 <= worked:
             return {'status': False, 'message': 'Estimate must be more than the time worked.'}
 
-        deliverable, deliverable_err = clean_deliverable_type(params.get('deliverable_type'))
+        dv, deliverable_err = clean_deliverable(params.get('deliverable_type'), params.get('deliverable_other'))
         if deliverable_err:
             return {'status': False, 'message': deliverable_err}
-        if not deliverable:
-            return {'status': False, 'message': 'Choose the type: Module, App or EXE.'}
+        if not dv['deliverable_type']:
+            return {'status': False, 'message': 'Choose the type: Module, App, EXE or Other.'}
 
         priority = params.get('priority') or 'regular'
         if priority not in ('regular', 'important', 'urgent'):
@@ -2858,7 +2864,8 @@ class KraKpiAPI(http.Controller):
             'estimate_hours': est_h,
             'estimate_minutes': est_m,
             'priority': priority,
-            'deliverable_type': deliverable,
+            'deliverable_type': dv['deliverable_type'],
+            'deliverable_other': dv['deliverable_other'],
             'description': (params.get('description') or '').strip(),
             'external_ref': 'REQ-%03d' % Kpi._next_ref_for_prefix('REQ'),
             'requested_by_id': user.id,
@@ -2921,7 +2928,7 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'This task is not awaiting acceptance.'}
         # Module / App / EXE: kept as the developer set it unless the admin sends
         # a correction.
-        deliverable, deliverable_err = clean_deliverable_type(params.get('deliverable_type'))
+        dv, deliverable_err = clean_deliverable(params.get('deliverable_type'), params.get('deliverable_other'))
         if deliverable_err:
             return {'status': False, 'message': deliverable_err}
 
@@ -2935,8 +2942,8 @@ class KraKpiAPI(http.Controller):
             'admin_accepted_by_id': user.id,
             'admin_accept_deadline_at': False,
         }
-        if deliverable:
-            vals['deliverable_type'] = deliverable
+        if dv['deliverable_type']:
+            vals.update(dv)
         # Admin categorizes the accepted task — re-number its provisional TASK-###
         # ref into the chosen sequence (REQ/UPT/BUG) and apply the name prefix.
         # Prefix tables are shared with _auto_admin_accept so the human and
@@ -2945,8 +2952,12 @@ class KraKpiAPI(http.Controller):
         _NAME_PREFIX = NAME_PREFIX_FOR_DOC_TYPE
         doc_type = params.get('doc_type') or 'requirement'
         prefix = _REF_PREFIX.get(doc_type, 'REQ')
-        n = request.env['kra.kpi']._next_ref_for_prefix(prefix)
-        vals['external_ref'] = '%s-%03d' % (prefix, n)
+        # A bug / update the client raised under a requirement (BUG001-REQ-012)
+        # keeps its ref while it stays that type: it is numbered per requirement.
+        cur_ref = (rec.external_ref or '').strip().upper()
+        if not re.match(r'^%s\d+-' % prefix, cur_ref):
+            n = request.env['kra.kpi']._next_ref_for_prefix(prefix)
+            vals['external_ref'] = '%s-%03d' % (prefix, n)
         base_name = re.sub(r'^\[(Update|Bug)\]\s*', '', rec.name or '', flags=re.IGNORECASE)
         vals['name'] = _NAME_PREFIX.get(doc_type, '') + base_name
         if params.get('kra_id'):
@@ -3832,6 +3843,9 @@ class KraKpiAPI(http.Controller):
             "kra_id": kpi.kra_id.id if kpi.kra_id else False,
             "type": kind,
             "deliverable_type": kpi.deliverable_type or "",
+            "deliverable_other": kpi.deliverable_other or "",
+            "deliverable_label": deliverable_type_label(kpi.deliverable_type, kpi.deliverable_other),
+            "github_required": kpi._github_required(),
             "external_ref": kpi.external_ref or "",
             "is_manager": is_manager,
             # 🆕 Part B: gate the in-detail "Complete This Task" panel
