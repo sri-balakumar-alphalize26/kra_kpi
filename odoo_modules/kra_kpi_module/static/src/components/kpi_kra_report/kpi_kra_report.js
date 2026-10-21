@@ -433,13 +433,18 @@ export class KpiKraReport extends Component {
                                 </div>
                                 <!-- What the task builds. Separate from REQ/UPT/BUG below. -->
                                 <div class="col-md-4">
-                                    <label class="form-label fw-bold">Type (Module / App / EXE) *</label>
+                                    <label class="form-label fw-bold">Type (Module / App / EXE / Other) *</label>
                                     <select class="form-select" t-model="state.nt.deliverable_type">
                                         <option value="">— choose —</option>
                                         <option value="module">Module</option>
                                         <option value="app">App</option>
                                         <option value="exe">EXE</option>
+                                        <option value="other">Other</option>
                                     </select>
+                                    <!-- Other: say what it is (required) -->
+                                    <input t-if="state.nt.deliverable_type === 'other'" type="text" class="form-control mt-2"
+                                           maxlength="40" placeholder="What is it? e.g. Plugin, Website"
+                                           t-model="state.nt.deliverable_other"/>
                                 </div>
 
                                 <div class="col-md-3">
@@ -1569,6 +1574,7 @@ export class KpiKraReport extends Component {
             doc_type: 'requirement',
             // Module / App / EXE — no default, the person has to pick one.
             deliverable_type: '',
+            deliverable_other: '',  // text for type "Other"
             estimate_hours: 0, estimate_minutes: 0,
             worked_hours: 0, worked_minutes: 0,
             priority: 'regular', deadline: '', description: '',
@@ -1643,7 +1649,11 @@ export class KpiKraReport extends Component {
         }
         // Unlike Priority and REQ/UPT/BUG this one starts blank, so it is checked.
         if (!t.deliverable_type) {
-            t.error = 'Pick a type — Module, App or EXE.';
+            t.error = 'Pick a type — Module, App, EXE or Other.';
+            return;
+        }
+        if (t.deliverable_type === 'other' && !(t.deliverable_other || '').trim()) {
+            t.error = 'Type what the Other type is (e.g. Plugin, Website).';
             return;
         }
         t.error = '';
@@ -1692,6 +1702,7 @@ export class KpiKraReport extends Component {
                 kra_id: parseInt(t.kra_id, 10),
                 doc_type: t.doc_type,
                 deliverable_type: t.deliverable_type,
+                deliverable_other: t.deliverable_type === 'other' ? (t.deliverable_other || '').trim() : '',
                 estimate_hours: parseInt(t.estimate_hours, 10) || 0,
                 estimate_minutes: parseInt(t.estimate_minutes, 10) || 0,
                 priority: t.priority,

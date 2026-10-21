@@ -428,13 +428,18 @@ export class KpiCreate extends Component {
 
                 <!-- Type: what the task builds. Separate from REQ/UPT/BUG. -->
                 <div class="mb-3">
-                    <label class="form-label fw-bold">Type (Module / App / EXE) *</label>
+                    <label class="form-label fw-bold">Type (Module / App / EXE / Other) *</label>
                     <select class="form-select" t-model="state.deliverable_type">
                         <option value="">— choose —</option>
                         <option value="module">Module</option>
                         <option value="app">App</option>
                         <option value="exe">EXE</option>
+                        <option value="other">Other</option>
                     </select>
+                    <!-- Other: say what it is (required) -->
+                    <input t-if="state.deliverable_type === 'other'" type="text" class="form-control mt-2"
+                           maxlength="40" placeholder="What is it? e.g. Plugin, Website"
+                           t-model="state.deliverable_other"/>
                 </div>
 
                 <!-- User Group & Assignee Row -->
@@ -727,6 +732,7 @@ export class KpiCreate extends Component {
             priority: 'regular',
             // Module / App / EXE. Required; blank until chosen.
             deliverable_type: '',
+            deliverable_other: '',      // text for type "Other"
             user_group_id: '',
             user_id: '',
             action_config_id: "",
@@ -1300,7 +1306,11 @@ export class KpiCreate extends Component {
             return;
         }
         if (!this.state.deliverable_type) {
-            this.notification.add("Please choose a type — Module, App or EXE.", { type: "warning" });
+            this.notification.add("Please choose a type — Module, App, EXE or Other.", { type: "warning" });
+            return;
+        }
+        if (this.state.deliverable_type === 'other' && !(this.state.deliverable_other || '').trim()) {
+            this.notification.add("Type what the Other type is (e.g. Plugin, Website).", { type: "warning" });
             return;
         }
         if (!this.state.user_id) {
@@ -1325,6 +1335,7 @@ export class KpiCreate extends Component {
                 estimate_minutes: parseInt(this.state.estimate_minutes) || 0,
                 priority: this.state.priority,
                 deliverable_type: this.state.deliverable_type,
+                deliverable_other: this.state.deliverable_type === 'other' ? (this.state.deliverable_other || '').trim() : '',
                 user_group_id: this.state.user_group_id || false,
                 user_id: this.state.user_id || false,
                 action_config_id: this.state.action_config_id ? parseInt(this.state.action_config_id) : false,

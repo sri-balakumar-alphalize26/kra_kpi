@@ -632,7 +632,7 @@ export class KpiAction extends Component {
                         <!-- ============================================ -->
                         <!-- 📚 UPDATED: Multiple User Manuals Section -->
                         <!-- ============================================ -->
-                        <div t-if="detailStarted() or state.manualsList.length" class="card p-4 mb-3 bg-light">
+                        <div t-if="detailStarted() or state.manualsList.length" class="card p-4 mb-3 bg-light" id="kpiManualCard">
                             <h4 class="fw-bold mb-3">📖 User Manual / Documentation</h4>
                             <p class="text-muted">Upload comprehensive guides or documentation for this task</p>
                             
@@ -1031,9 +1031,10 @@ export class KpiAction extends Component {
                         </div>
 
                         <!-- Part B: GitHub branch — its own card, URL + Branch side by side -->
-                        <div t-if="detailStarted()" class="card p-4 mb-3">
+                        <div t-if="detailStarted()" class="card p-4 mb-3" id="kpiGithubCard">
                             <h4 class="fw-bold mb-3"><i class="fa fa-github"></i> Link a GitHub branch
-                                <span class="text-muted fw-normal small">(optional)</span></h4>
+                                <span t-if="state.detailData.github_required" class="text-danger fw-normal small">(required — Module / App task)</span>
+                                <span t-else="" class="text-muted fw-normal small">(optional)</span></h4>
                             <div class="row g-2">
                                 <div class="col-md-6 mb-2">
                                     <label class="form-label fw-bold">Repository URL</label>
@@ -1086,6 +1087,19 @@ export class KpiAction extends Component {
                                 <div t-if="state.progressUpdates.length === 0" class="alert alert-warning py-2">
                                     <i class="fa fa-info-circle"></i> Submit a <strong>Progress Summary</strong> above before you can complete this task.
                                 </div>
+                                <div t-if="!(state.manualsList or []).length" class="alert alert-warning py-2">
+                                    <i class="fa fa-book"></i> Upload a <strong>User Manual</strong> (PDF, DOC or DOCX) above before you can complete this task — or use Partial Finish to send a summary only.
+                                </div>
+                                <!-- Module / App tasks can't be fully completed without a GitHub
+                                     link (the server refuses too); for any other type it's only a nudge. -->
+                                <t t-if="!(state.githubLinks or []).length">
+                                    <div t-if="state.detailData.github_required" class="alert alert-warning py-2">
+                                        <i class="fa fa-github"></i> This is a <strong>Module / App</strong> task — add the GitHub link (repository + branch) above before completing.
+                                    </div>
+                                    <div t-else="" class="alert alert-warning py-2 small">
+                                        <i class="fa fa-github"></i> Optional: add the GitHub link — once it's uploaded, the code is safe.
+                                    </div>
+                                </t>
                                 <p class="text-muted mb-2">Tick everything that applies — at least one is needed to send this for approval. Your manager sees exactly which:</p>
                                 <div class="form-check mb-2">
                                     <input class="form-check-input" type="checkbox" id="cc_github" t-model="state.completeChecklist.verify_github"/>
@@ -1107,15 +1121,14 @@ export class KpiAction extends Component {
                                     <input class="form-check-input" type="checkbox" id="cc_tested" t-model="state.completeChecklist.tested_code"/>
                                     <label class="form-check-label" for="cc_tested"><strong>5. Manually Tested the Code</strong><small class="d-block text-muted">All features tested and working</small></label>
                                 </div>
+                                <!-- Only disabled while submitting: a click with something missing
+                                     opens a "what did we miss?" list instead of a dead button. -->
                                 <button class="btn btn-danger"
-                                        t-att-disabled="!canCompleteDetail()"
+                                        t-att-disabled="state.completeSubmitting"
                                         t-on-click="confirmCompleteFromDetail">
                                     <t t-if="state.completeSubmitting"><i class="fa fa-spinner fa-spin"></i> Submitting...</t>
                                     <t t-else=""><i class="fa fa-paper-plane"></i> Complete &amp; Send for Approval</t>
                                 </button>
-                                <div t-if="state.progressUpdates.length > 0 and !canCompleteDetail() and !state.completeSubmitting" class="text-muted small mt-2">
-                                    Tick at least one item to enable completion.
-                                </div>
                             </div>
                         </t>
 
@@ -2270,10 +2283,11 @@ export class KpiAction extends Component {
                                                         <span t-if="task.external_ref"
                                                               class="badge bg-secondary ms-1"
                                                               t-esc="task.external_ref"/>
-                                                        <!-- Module / App / EXE — what is being built. -->
+                                                        <!-- Module / App / EXE / Other — what is being built.
+                                                             The server's label already names the Other text. -->
                                                         <span t-if="task.deliverable_type"
                                                               class="badge bg-light text-dark border ms-1"
-                                                              t-esc="deliverableLabel(task.deliverable_type)"/>
+                                                              t-esc="task.deliverable_label || deliverableLabel(task.deliverable_type, task.deliverable_other)"/>
                                                     </div>
                                                     <!-- Who the work is for. With several clients in flight the
                                                          lanes were a wall of titles with no way to tell them
@@ -3996,11 +4010,103 @@ export class KpiAction extends Component {
         // documented" stays visible to whoever approves it.
         const anyTicked = !!(c.verify_github || c.deployed_task || c.user_manual
                              || c.documentation || c.tested_code);
-        return !!(hasSummary && anyTicked && !this.state.completeSubmitting);
+        // A full Complete also needs a real user manual on the task (the server
+        // refuses without one too); Partial Finish is the way through without.
+        const hasManual = (this.state.manualsList || []).length > 0;
+        return !!(hasSummary && hasManual && anyTicked && !this.state.completeSubmitting);
     }
 
-    async confirmCompleteFromDetail() {
-        if (!this.canCompleteDetail()) return;
+    // Everything still missing before a full Complete, in the order the
+    // sections appear on the page. Mirrors the server's own refusals.
+    _completeMissing() {
+        const missing = [];
+        const c = this.state.completeChecklist || {};
+        const d = this.state.detailData || {};
+        if (!(this.state.progressUpdates || []).length) missing.push('A progress summary');
+        if (!(this.state.manualsList || []).length) missing.push('The user manual (PDF, DOC or DOCX)');
+        if (d.github_required && !(this.state.githubLinks || []).length) {
+            missing.push('The GitHub link + branch (this is a Module / App task)');
+        }
+        if (!(c.verify_github || c.deployed_task || c.user_manual || c.documentation || c.tested_code)) {
+            missing.push('At least one ticked checkbox');
+        }
+        return missing;
+    }
+
+    // Complete click: list what's missing ("what did we miss?"), or ask once
+    // before sending. The button is never silently disabled for missing items.
+    confirmCompleteFromDetail() {
+        if (this.state.completeSubmitting) return;
+        const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const missing = this._completeMissing();
+        if (missing.length) {
+            const canPartial = (this.state.progressUpdates || []).length > 0;
+            const items = missing.map(m => `<li>${esc(m)}</li>`).join('');
+            const container = document.getElementById("modalContainer");
+            if (!container) { this._toast('Before completing, you still need: ' + missing.join(', '), 'warning'); return; }
+            // Built by hand rather than via _renderModal: that one needs a confirm
+            // button, and "Partial Finish instead" only exists with a summary.
+            container.innerHTML = `
+                <div class="modal-backdrop fade show"></div>
+                <div class="modal d-block" tabindex="-1">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header bg-warning">
+                                <h5 class="modal-title"><i class="fa fa-list-ul me-2"></i>Before completing, you still need:</h5>
+                                <button type="button" class="btn-close" id="closeModalBtn"></button>
+                            </div>
+                            <div class="modal-body"><ul class="mb-0">${items}</ul></div>
+                            <div class="modal-footer">
+                                ${canPartial ? '<button class="btn btn-outline-warning" id="partialInsteadBtn"><i class="fa fa-flag-checkered"></i> Send as Partial Finish instead</button>' : ''}
+                                <button class="btn btn-primary" id="cancelModalBtn">OK, I'll add them</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            document.getElementById("closeModalBtn").addEventListener("click", () => this.closeModal());
+            document.getElementById("cancelModalBtn").addEventListener("click", () => {
+                this.closeModal();
+                // Take them to the first section that still needs something.
+                const first = missing[0];
+                const id = first === 'A progress summary' ? 'progressSummary'
+                    : first.startsWith('The user manual') ? 'kpiManualCard'
+                    : first.startsWith('The GitHub link') ? 'kpiGithubCard'
+                    : 'kpiCompletePanel';
+                const el = document.getElementById(id);
+                if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+            });
+            const pBtn = document.getElementById("partialInsteadBtn");
+            if (pBtn) pBtn.addEventListener("click", () => {
+                this.closeModal();
+                const d = this.state.detailData || {};
+                this.openPartialFinishModal({ ...d, id: this.state.detailKpiId, name: d.name });
+            });
+            return;
+        }
+        const ref = esc(this.state.detailData?.name || 'this task');
+        this._renderModal(`
+            <div class="modal-backdrop fade show"></div>
+            <div class="modal d-block" tabindex="-1">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header bg-danger text-white">
+                            <h5 class="modal-title"><i class="fa fa-paper-plane me-2"></i>Complete task</h5>
+                            <button type="button" class="btn-close btn-close-white" id="closeModalBtn"></button>
+                        </div>
+                        <div class="modal-body"><p class="mb-0">Submit <strong>${ref}</strong> for approval?</p></div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
+                            <button class="btn btn-danger" id="confirmModalBtn">Yes</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`, () => { this.closeModal(); this._submitCompleteFromDetail(); });
+    }
+
+    // The actual POST, after the confirm. Server refusals (manual, GitHub
+    // link for Module / App, ...) come back as result.message and are shown.
+    async _submitCompleteFromDetail() {
+        if (this.state.completeSubmitting) return;
         const kpi_id = this.state.detailKpiId;
         const employee_checklist = { ...this.state.completeChecklist };
         this.state.completeSubmitting = true;
@@ -6728,6 +6834,7 @@ export class KpiAction extends Component {
               </div>
             </div>`;
         this._renderModal(html, () => this.submitNewTask());
+        this._wireDeliverableOther('ntDeliverable');
     }
 
     async submitNewTask() {
@@ -6739,13 +6846,17 @@ export class KpiAction extends Component {
         const priority = (g('ntPriority') && g('ntPriority').value) || 'regular';
         const doc_type = (g('ntDocType') && g('ntDocType').value) || 'requirement';
         const deliverable_type = this._checkedDeliverables('ntDeliverable');
+        const deliverable_other = this._deliverableOtherText('ntDeliverable');
         const description = (g('ntDesc') && g('ntDesc').value) || '';
         // Only present for admins; the route falls back to the caller when it is
         // absent, and refuses it outright from a non-admin.
         const user_id = parseInt((g('ntUser') && g('ntUser').value) || '0', 10) || 0;
         if (!name) { this._toast('Please enter a task name.', 'warning'); return; }
         if (!kra_id) { this._toast('Please choose a project (KRA).', 'warning'); return; }
-        if (!deliverable_type) { this._toast('Tick at least one type — Module, App or EXE.', 'warning'); return; }
+        if (!deliverable_type) { this._toast('Tick at least one type — Module, App, EXE or Other.', 'warning'); return; }
+        if (deliverable_type.split(',').includes('other') && !deliverable_other) {
+            this._toast('Type what the Other type is (e.g. Plugin, Website).', 'warning'); return;
+        }
         if (this.state.isAdmin && !user_id) { this._toast('Please choose a developer.', 'warning'); return; }
         // Estimate deliberately NOT required — same as the requirements upload.
         // The admin fills it in when accepting.
@@ -6753,7 +6864,7 @@ export class KpiAction extends Component {
             const res = await rpc('/kra_kpi/task/self_create', {
                 name, kra_id: parseInt(kra_id, 10),
                 estimate_hours, estimate_minutes, priority, doc_type, description,
-                user_id, deliverable_type,
+                user_id, deliverable_type, deliverable_other,
             });
             if (res && res.status) {
                 this.closeModal();
@@ -6856,6 +6967,7 @@ export class KpiAction extends Component {
               </div>
             </div>`;
         this._renderModal(html, () => this.submitDoneTask());
+        this._wireDeliverableOther('dtDeliverable');
 
         // Estimate follows the time worked until the admin types an estimate of
         // their own.
@@ -6878,8 +6990,11 @@ export class KpiAction extends Component {
             g(id).addEventListener('input', syncEstimate);
         }
         // The allowed extra depends on Module / App / EXE. The checkboxes'
-        // change events bubble up to their wrapper.
-        g('dtDeliverable').addEventListener('change', syncEstimate);
+        // change events bubble up to their wrapper — and so does the Other
+        // text box's, which says nothing about the estimate, so it is skipped.
+        g('dtDeliverable').addEventListener('change', (ev) => {
+            if (ev.target && ev.target.type === 'checkbox') syncEstimate();
+        });
         for (const id of ['dtEstHours', 'dtEstMinutes']) {
             g(id).addEventListener('input', () => { estTouched = true; });
         }
@@ -6899,8 +7014,9 @@ export class KpiAction extends Component {
         return Math.ceil(est / quarter) * quarter;
     }
 
-    // Module / App / EXE as checkboxes — a task can build more than one. Used by
-    // New Task and Add Done Task; `id` names the wrapper.
+    // Module / App / EXE / Other as checkboxes — a task can build more than one.
+    // Used by New Task and Add Done Task; `id` names the wrapper. Other reveals
+    // `${id}_otherText`, wired by _wireDeliverableOther once the modal is in.
     _deliverableChecksHtml(id) {
         const box = (code, label) => `
                       <div class="form-check form-check-inline">
@@ -6909,15 +7025,35 @@ export class KpiAction extends Component {
                       </div>`;
         return `
                     <div class="mb-2" id="${id}">
-                      <label class="form-label fw-bold d-block">Type (Module / App / EXE) *</label>
-                      ${box('module', 'Module')}${box('app', 'App')}${box('exe', 'EXE')}
+                      <label class="form-label fw-bold d-block">Type (Module / App / EXE / Other) *</label>
+                      ${box('module', 'Module')}${box('app', 'App')}${box('exe', 'EXE')}${box('other', 'Other')}
+                      <input type="text" id="${id}_otherText" class="form-control mt-1 d-none" maxlength="40"
+                             placeholder="What is it? e.g. Plugin, Website"/>
                       <small class="text-muted d-block">Tick more than one if the task builds several.</small>
                     </div>`;
     }
 
+    // Show the Other text box only while Other is ticked.
+    _wireDeliverableOther(id) {
+        const chk = document.getElementById(`${id}_other`);
+        const txt = document.getElementById(`${id}_otherText`);
+        if (!chk || !txt) return;
+        chk.addEventListener('change', () => {
+            txt.classList.toggle('d-none', !chk.checked);
+            if (chk.checked) txt.focus();
+        });
+    }
+
+    // The Other text, '' unless Other is ticked.
+    _deliverableOtherText(id) {
+        const chk = document.getElementById(`${id}_other`);
+        const txt = document.getElementById(`${id}_otherText`);
+        return chk && chk.checked && txt ? txt.value.trim() : '';
+    }
+
     // The ticked boxes as the server stores them: 'module,app'.
     _checkedDeliverables(id) {
-        return [...document.querySelectorAll(`#${id} input:checked`)]
+        return [...document.querySelectorAll(`#${id} input[type=checkbox]:checked`)]
             .map(el => el.value).join(',');
     }
 
@@ -6929,6 +7065,7 @@ export class KpiAction extends Component {
         const kra_id = parseInt(val('dtKra') || '0', 10) || 0;
         const user_id = parseInt(val('dtUser') || '0', 10) || 0;
         const deliverable_type = this._checkedDeliverables('dtDeliverable');
+        const deliverable_other = this._deliverableOtherText('dtDeliverable');
         const priority = val('dtPriority') || 'regular';
         const description = val('dtDesc');
         const work_date = val('dtDate');
@@ -6940,7 +7077,10 @@ export class KpiAction extends Component {
         if (worked_seconds <= 0) { this._toast('Enter the time worked.', 'warning'); return; }
         if (num('dtWorkedMinutes') > 59) { this._toast('Minutes worked must be between 0 and 59.', 'warning'); return; }
         if (!work_date) { this._toast('Please choose the work date.', 'warning'); return; }
-        if (!deliverable_type) { this._toast('Tick at least one type — Module, App or EXE.', 'warning'); return; }
+        if (!deliverable_type) { this._toast('Tick at least one type — Module, App, EXE or Other.', 'warning'); return; }
+        if (deliverable_type.split(',').includes('other') && !deliverable_other) {
+            this._toast('Type what the Other type is (e.g. Plugin, Website).', 'warning'); return;
+        }
 
         // The route wants an estimate above the time worked. Blank means "work
         // one out", the same way the form fills it in.
@@ -6961,7 +7101,7 @@ export class KpiAction extends Component {
         try {
             const res = await rpc('/kra_kpi/task/admin_create_done', {
                 name, kra_id, user_id, worked_seconds, work_date,
-                estimate_hours, estimate_minutes, deliverable_type, priority, description,
+                estimate_hours, estimate_minutes, deliverable_type, deliverable_other, priority, description,
             });
             if (res && res.status) {
                 this.closeModal();
@@ -7578,8 +7718,9 @@ export class KpiAction extends Component {
     }
     /** Module / App / EXE — what the task builds. Several are stored as
      *  'module,app' and read "Module + App". */
-    deliverableLabel(t) {
-        const labels = { module: 'Module', app: 'App', exe: 'EXE' };
+    // Fallback for payloads without deliverable_label; 'other' shows its text.
+    deliverableLabel(t, other) {
+        const labels = { module: 'Module', app: 'App', exe: 'EXE', other: (other || '').trim() || 'Other' };
         return String(t || '').split(',').map(c => labels[c]).filter(Boolean).join(' + ');
     }
 
