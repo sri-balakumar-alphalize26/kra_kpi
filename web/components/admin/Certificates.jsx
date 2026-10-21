@@ -4,7 +4,8 @@ import { Avatar, Button, ErrorState, Field, Icon, IconButton, Input, Lozenge, Mo
 import { useResource } from "@/lib/useFetch";
 import { invalidate } from "@/lib/api";
 import * as A from "@/lib/services/admin";
-import { DELIVERABLES } from "@/lib/services/kpiActions";
+import { DELIVERABLES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue } from "@/lib/services/kpiActions";
+import OtherTypeInput from "@/components/task/OtherTypeInput";
 import IntakeNav from "./IntakeNav";
 
 /* Completion certificates: tasks (completed by default) with their delivery
@@ -186,7 +187,7 @@ function RolesDialog({ k, users, flags, onClose, onSaved }) {
 }
 
 function QuickCreate({ clients, users, flags, onCreated }) {
-  const blank = { clientKraId: "", subKraId: "", taskName: "", requirementVersion: "", estimateHours: "0", estimateMinutes: "0", primaryUserId: "", deliverableType: "", fileData: "", fileName: "" };
+  const blank = { clientKraId: "", subKraId: "", taskName: "", requirementVersion: "", estimateHours: "0", estimateMinutes: "0", primaryUserId: "", deliverableType: "", deliverableOther: "", fileData: "", fileName: "" };
   const [t, setT] = useState(blank);
   const [kras, setKras] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -194,9 +195,11 @@ function QuickCreate({ clients, users, flags, onCreated }) {
   const pick = async (e) => { const file = e.target.files?.[0]; if (!file) { setT((x) => ({ ...x, fileData: "", fileName: "" })); return; } const fileData = await A.fileToBase64(file); setT((x) => ({ ...x, fileData, fileName: file.name })); };
   const create = async () => {
     if (!t.clientKraId || !t.subKraId || !t.taskName.trim()) { flags.warn("Choose the client and project, and name the task."); return; }
-    if (!t.deliverableType) { flags.warn("Choose a type — Module, App or Exe."); return; }
+    if (!t.deliverableType) { flags.warn("Choose a type — Module, App, Exe or Other."); return; }
+    const deliverableOther = deliverableOtherValue(t.deliverableType, t.deliverableOther);
+    if (t.deliverableType === "other" && !deliverableOther) { flags.warn(DELIVERABLE_OTHER_REQUIRED); return; }
     setBusy(true);
-    try { const r = A.assertOk(await A.createTaskFromDoc(t), "Could not create the task."); flags.ok(`Task created: ${r.name}`); setT(blank); onCreated(); }
+    try { const r = A.assertOk(await A.createTaskFromDoc({ ...t, deliverableOther }),"Could not create the task."); flags.ok(`Task created: ${r.name}`); setT(blank); onCreated(); }
     catch (e) { flags.err(e.message); } finally { setBusy(false); }
   };
   return (
@@ -210,6 +213,7 @@ function QuickCreate({ clients, users, flags, onCreated }) {
         <Field label="Estimate"><span style={{ display: "flex", gap: 6 }}><Input type="number" min="0" value={t.estimateHours} onChange={(e) => setT({ ...t, estimateHours: e.target.value })} right={<span className="ph">h</span>} /><Input type="number" min="0" max="59" value={t.estimateMinutes} onChange={(e) => setT({ ...t, estimateMinutes: e.target.value })} right={<span className="ph">m</span>} /></span></Field>
         <Field label="Primary developer"><span className="input"><Select value={t.primaryUserId} onChange={(e) => setT({ ...t, primaryUserId: e.target.value })} style={sel}><option value="">None</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
         <Field label="Type" required><span className="input"><Select value={t.deliverableType} onChange={(e) => setT({ ...t, deliverableType: e.target.value })} style={sel}><option value="">Choose…</option>{DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)}</Select></span></Field>
+        {t.deliverableType === "other" && <OtherTypeInput value={t.deliverableOther} onChange={(v) => setT({ ...t, deliverableOther: v })} autoFocus />}
       </div>
       <Button kind="primary" icon="plus" busy={busy} style={{ alignSelf: "flex-start" }} onClick={create}>Create task</Button>
     </div>

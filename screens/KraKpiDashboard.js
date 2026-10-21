@@ -18,7 +18,10 @@ import { createLogger } from '../api/logger';
 import FieldError from '../components/FieldError';
 import useAppDialog from '../components/useAppDialog';
 import * as svc from '../services/kraKpi';
-import { DELIVERABLE_TYPES, deliverableLabel, DELIVERABLE_REQUIRED_MSG } from '../utils/deliverableType';
+import {
+  DELIVERABLE_TYPES, deliverableLabel, DELIVERABLE_REQUIRED_MSG, DELIVERABLE_OTHER_REQUIRED_MSG,
+  needsOtherText, missingOtherText, DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER,
+} from '../utils/deliverableType';
 
 const log = createLogger('KraKpiMaster');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -140,7 +143,7 @@ export default function KraKpiDashboard({ onBack }) {
   }
   function openCreateKpi() {
     ensureFormData();
-    setModal({ type: 'kpi', name: '', kraId: '', hours: '0', minutes: '0', priority: 'regular', userId: '', deliverableType: '' });
+    setModal({ type: 'kpi', name: '', kraId: '', hours: '0', minutes: '0', priority: 'regular', userId: '', deliverableType: '', deliverableOther: '' });
   }
 
   // ---- Edit (rename) ------------------------------------------------------
@@ -273,8 +276,10 @@ export default function KraKpiDashboard({ onBack }) {
       if (!(parseInt(modal.hours, 10) > 0 || parseInt(modal.minutes, 10) > 0)) {
         e.estimate = 'Enter an estimate \u2014 hours and/or minutes.';
       }
-      // Module / App / EXE starts blank \u2014 unlike priority there is no default.
+      // Module / App / EXE / Other starts blank \u2014 unlike priority there is no
+      // default. Other also needs its text; the server refuses it without.
       if (!modal.deliverableType) e.deliverableType = DELIVERABLE_REQUIRED_MSG;
+      else if (missingOtherText(modal.deliverableType, modal.deliverableOther)) e.deliverableType = DELIVERABLE_OTHER_REQUIRED_MSG;
     }
     setModalErrs(e);
     if (Object.keys(e).length) return;
@@ -289,6 +294,7 @@ export default function KraKpiDashboard({ onBack }) {
         estimateHours: modal.hours, estimateMinutes: modal.minutes,
         priority: modal.priority, userId: modal.userId,
         deliverableType: modal.deliverableType,
+        deliverableOther: needsOtherText(modal.deliverableType) ? (modal.deliverableOther || '').trim() : '',
       }), 'KPI created');
     } else if (modal.type === 'editKra') {
       const id = modal.id, name = modal.name;
@@ -697,8 +703,15 @@ function CrudModal({ modal, setModal, parentKras, users, onSubmit, errs = {}, cl
                   <Selector value={prioLabel} onPress={() => setPicker('priority')} />
 
                   {/* What the task builds — separate from REQ/UPT/BUG. */}
-                  <Text style={s.mLabel}>Type (Module / App / EXE) <Text style={s.req}>*</Text></Text>
-                  <Selector value={deliverableLabel(modal.deliverableType)} placeholder="— choose —" onPress={() => { clearErr && clearErr('deliverableType'); setPicker('deliverable'); }} />
+                  <Text style={s.mLabel}>Type (Module / App / EXE / Other) <Text style={s.req}>*</Text></Text>
+                  <Selector value={deliverableLabel(modal.deliverableType, modal.deliverableOther)} placeholder="— choose —" onPress={() => { clearErr && clearErr('deliverableType'); setPicker('deliverable'); }} />
+                  {needsOtherText(modal.deliverableType) && (
+                    <TextInput
+                      style={[s.mInput, { marginTop: 8 }, errs.deliverableType && s.mInputErr]} placeholder={DELIVERABLE_OTHER_PLACEHOLDER} placeholderTextColor={COLORS.faint}
+                      maxLength={DELIVERABLE_OTHER_MAX} value={modal.deliverableOther || ''}
+                      onChangeText={(t) => { set({ deliverableOther: t }); clearErr && clearErr('deliverableType'); }}
+                    />
+                  )}
                   <FieldError msg={errs.deliverableType} />
 
                   <Text style={s.mLabel}>Assignee <Text style={s.req}>*</Text></Text>

@@ -35,7 +35,9 @@ import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/uploadAmendments';
 import { getClientProjects } from '../services/clientPortal';
-import { DELIVERABLE_TYPES, deliverableLabel } from '../utils/deliverableType';
+import {
+  DELIVERABLE_TYPES, deliverableLabel, needsOtherText, missingOtherText, DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER,
+} from '../utils/deliverableType';
 
 const log = createLogger('UploadAmendments');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -72,8 +74,10 @@ const emptyRow = (defaults) => ({
   name: '', external_ref: '', related_req_ref: '',
   estimate_hours: defaults.hours, estimate_minutes: defaults.minutes,
   priority: defaults.priority, primary_user_id: defaults.userId,
-  // Module / App / EXE. Blank unless a default is set — Create asks for it.
+  // Module / App / EXE / Other. Blank unless a default is set — Create asks for
+  // it. Other carries its text, copied from the default too.
   deliverable_type: defaults.deliverableType || '',
+  deliverable_other: needsOtherText(defaults.deliverableType) ? (defaults.deliverableOther || '') : '',
 });
 
 export default function UploadAmendments({ onBack, docType = 'update' }) {
@@ -109,7 +113,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   const [defMinutes, setDefMinutes] = useState('0');
   const [defPriority, setDefPriority] = useState('regular');
   const [defUserId, setDefUserId] = useState('');
-  const [defDeliverable, setDefDeliverable] = useState('');   // '' | 'module' | 'app' | 'exe'
+  const [defDeliverable, setDefDeliverable] = useState('');   // '' | 'module' | 'app' | 'exe' | 'other'
+  const [defDeliverableOther, setDefDeliverableOther] = useState('');   // Other's text
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -150,7 +155,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     priority: defPriority,
     userId: defUserId,
     deliverableType: defDeliverable,
-  }), [defHours, defMinutes, defPriority, defUserId, defDeliverable]);
+    deliverableOther: defDeliverableOther.trim(),
+  }), [defHours, defMinutes, defPriority, defUserId, defDeliverable, defDeliverableOther]);
 
   const flash = (type, text) => { setBanner({ type, text }); setTimeout(() => setBanner(null), 4000); };
 
@@ -524,6 +530,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     if (!named.length) missing.push('At least one task with a name');
     // Unlike priority there is no sensible default, so a row can reach here blank.
     if (named.some((r) => !r.deliverable_type)) missing.push('Type on every task');
+    // The server refuses Other without its text.
+    if (named.some((r) => missingOtherText(r.deliverable_type, r.deliverable_other))) missing.push('What the Other type is, on every Other task');
 
     if (missing.length) {
       setTouched(true);
@@ -617,7 +625,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     log.info('reset form');
     setClientId(''); setSubKraId(''); setSubKras([]); setVersion('');
     setSourceDoc(null); setPasteText(''); setTasks([]);
-    setDefHours('0'); setDefMinutes('0'); setDefPriority('regular'); setDefUserId(''); setDefDeliverable('');
+    setDefHours('0'); setDefMinutes('0'); setDefPriority('regular'); setDefUserId(''); setDefDeliverable(''); setDefDeliverableOther('');
     setSuggestionBadge(''); setImportStatus(''); setBanner(null); setTouched(false);
   }
 
@@ -904,12 +912,19 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                     <Text style={s.miniLabel}>Type *</Text>
                     <Selector
                       small placeholder="Module / App / EXE"
-                      value={deliverableLabel(row.deliverable_type)}
+                      value={deliverableLabel(row.deliverable_type, row.deliverable_other)}
                       onPress={() => setPicker(`rowDeliverable:${i}`)}
                       error={touched && !!row.name.trim() && !row.deliverable_type}
                     />
                   </View>
                 </View>
+                {needsOtherText(row.deliverable_type) && (
+                  <TextInput
+                    style={[s.numInput, { marginTop: 8 }, touched && !!row.name.trim() && missingOtherText(row.deliverable_type, row.deliverable_other) && s.fieldErr]}
+                    placeholder={DELIVERABLE_OTHER_PLACEHOLDER} placeholderTextColor={COLORS.faint} maxLength={DELIVERABLE_OTHER_MAX}
+                    value={row.deliverable_other || ''} onChangeText={(t) => updateRow(i, { deliverable_other: t })}
+                  />
+                )}
                 {isClientOnly ? null : (
                   <View style={s.rowSplit}>
                     <View style={s.half}>
@@ -1097,9 +1112,15 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
             </View>
             <View style={s.half}>
               <Label>Default Type</Label>
-              <Selector small placeholder="None" value={deliverableLabel(defDeliverable)} onPress={() => setPicker('defDeliverable')} />
+              <Selector small placeholder="None" value={deliverableLabel(defDeliverable, defDeliverableOther)} onPress={() => setPicker('defDeliverable')} />
             </View>
           </View>
+          {needsOtherText(defDeliverable) && (
+            <TextInput
+              style={[s.numInput, { marginTop: 8 }]} placeholder={DELIVERABLE_OTHER_PLACEHOLDER} placeholderTextColor={COLORS.faint}
+              maxLength={DELIVERABLE_OTHER_MAX} value={defDeliverableOther} onChangeText={setDefDeliverableOther}
+            />
+          )}
           {isClientOnly ? null : (
             <View style={s.rowSplit}>
               <View style={s.half}>
@@ -1220,7 +1241,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         onSelectRowPriority={(i, v) => { updateRow(i, { priority: v }); setPicker(null); }}
         onSelectRowUser={(i, id) => { updateRow(i, { primary_user_id: id ? String(id) : '' }); setPicker(null); }}
         onSelectDefDeliverable={(v) => { setDefDeliverable(v); setPicker(null); }}
-        onSelectRowDeliverable={(i, v) => { updateRow(i, { deliverable_type: v }); setPicker(null); }}
+        onSelectRowDeliverable={(i, v) => { updateRow(i, { deliverable_type: v, ...(needsOtherText(v) ? {} : { deliverable_other: '' }) }); setPicker(null); }}
       />
     </KeyboardAvoidingView>
   );

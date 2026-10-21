@@ -961,8 +961,9 @@ export async function getTodaySummary() {
 // ── Self-create a task ("New Task") ──────────────────────────────────────────
 // userId is ADMIN-ONLY — the route validates it and forces a non-admin caller to
 // themselves, so sending it from a developer changes nothing.
-// deliverableType is Module / App / EXE ('module' | 'app' | 'exe').
-export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, priority, description, userId, deliverableType }) =>
+// deliverableType is Module / App / EXE / Other ('module' | 'app' | 'exe' | 'other');
+// deliverableOther is Other's text (e.g. 'Plugin'), required by the server with Other.
+export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, priority, description, userId, deliverableType, deliverableOther }) =>
   action('/kra_kpi/task/self_create', {
     name: name || '',
     kra_id: kraId,
@@ -972,16 +973,17 @@ export const selfCreateTask = ({ name, kraId, estimateHours, estimateMinutes, pr
     description: description || '',
     user_id: userId || 0,
     deliverable_type: deliverableType || '',
+    deliverable_other: deliverableOther || '',
   });
 
 // ── Admin: record a task that is already done ("Done Task") ─────────────────
 // Lands straight in Pending Approvals with its worked time filed on workDate
 // ('YYYY-MM-DD', today or earlier). The time counts in the reports but never as
 // attendance. Admin-only on the server. userId 0 means the caller.
-// deliverableType may hold several: 'module,app'.
+// deliverableType may hold several: 'module,app'; deliverableOther is Other's text.
 export const adminCreateDoneTask = ({
   name, kraId, userId, workedSeconds, workDate, estimateHours, estimateMinutes,
-  deliverableType, priority, description,
+  deliverableType, deliverableOther, priority, description,
 }) =>
   action('/kra_kpi/task/admin_create_done', {
     name: name || '',
@@ -992,6 +994,7 @@ export const adminCreateDoneTask = ({
     estimate_hours: estimateHours || 0,
     estimate_minutes: estimateMinutes || 0,
     deliverable_type: deliverableType || '',
+    deliverable_other: deliverableOther || '',
     priority: priority || 'regular',
     description: description || '',
   });

@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, Button, ErrorState, Field, Input, Lozenge, Modal, PageHeader, Select, Skeleton, Tabs, useDialogs, useFlags, useOutside } from "@/components/ui";
 import { useResource } from "@/lib/useFetch";
 import * as R from "@/lib/services/reports";
+import { DELIVERABLES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue } from "@/lib/services/kpiActions";
+import OtherTypeInput from "@/components/task/OtherTypeInput";
 import ReportsNav from "./ReportsNav";
 import { blobToB64, saveBlob } from "./exportLibs";
 import { buildKraExcel, buildKraPdf, buildKraZip, fmtSec, isoWeek, projectSummary, rowDateOf, totalSeconds, uniqueEmployees } from "./kraExport";
@@ -34,7 +36,7 @@ const fmtSize = (b) => (b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : b >= 1
 const DOC_TYPE_TO_PREFIX = { requirement: "REQ", update: "UPT", bug: "BUG" };
 const typeTone = (t) => (/^BUG/i.test(t || "") ? "danger" : /^UP/i.test(t || "") ? "paused" : /^REQ/i.test(t || "") ? "review" : "neutral");
 const QUICK = [["", "Custom"], ["today", "Today"], ["yesterday", "Yesterday"], ["last_month", "Last month"], ["last_year", "Last year"]];
-const blankTask = () => ({ name: "", kra_id: "", user_id: "", doc_type: "requirement", deliverable_type: "", estimate_hours: 0, estimate_minutes: 0, worked_hours: 0, worked_minutes: 0, priority: "regular", deadline: "", description: "", error: "" });
+const blankTask = () => ({ name: "", kra_id: "", user_id: "", doc_type: "requirement", deliverable_type: "", deliverable_other: "", estimate_hours: 0, estimate_minutes: 0, worked_hours: 0, worked_minutes: 0, priority: "regular", deadline: "", description: "", error: "" });
 
 export default function KraReport() {
   const flags = useFlags();
@@ -267,7 +269,9 @@ export default function KraReport() {
     const worked = (parseInt(t.worked_hours, 10) || 0) * 3600 + (parseInt(t.worked_minutes, 10) || 0) * 60;
     if (worked <= 0) return err("Time worked is required. Enter the hours and/or minutes already spent.");
     if (!t.user_id) return err("Pick an assignee — time worked is recorded against a person.");
-    if (!t.deliverable_type) return err("Pick a type — Module, App or EXE.");
+    if (!t.deliverable_type) return err("Pick a type — Module, App, EXE or Other.");
+    const deliverableOther = deliverableOtherValue(t.deliverable_type, t.deliverable_other);
+    if (t.deliverable_type === "other" && !deliverableOther) return err(DELIVERABLE_OTHER_REQUIRED);
     if (scope === "report") {
       const kra = (f?.kras || []).find((k) => String(k.id) === String(t.kra_id)) || {};
       const emp = (f?.employees || []).find((e) => String(e.id) === String(t.user_id)) || {};
@@ -283,7 +287,7 @@ export default function KraReport() {
     setNtBusy(true);
     try {
       const kpiId = await R.createKpiOrm({
-        name: t.name.trim(), kra_id: parseInt(t.kra_id, 10), doc_type: t.doc_type, deliverable_type: t.deliverable_type,
+        name: t.name.trim(), kra_id: parseInt(t.kra_id, 10), doc_type: t.doc_type, deliverable_type: t.deliverable_type, deliverable_other: deliverableOther,
         estimate_hours: parseInt(t.estimate_hours, 10) || 0, estimate_minutes: parseInt(t.estimate_minutes, 10) || 0,
         priority: t.priority, user_id: parseInt(t.user_id, 10), deadline: t.deadline || false, description: t.description,
       });
@@ -567,8 +571,9 @@ export default function KraReport() {
             <div className="grid3" style={{ gap: 10 }}>
               <Field label="Project (KRA)" required><span className="input"><Select value={nt.kra_id} onChange={(e) => setNt({ ...nt, kra_id: e.target.value })} style={selStyle}><option value="">— pick a project —</option>{(f?.kras || []).map((k) => <option key={k.id} value={String(k.id)}>{k.display || k.name}</option>)}</Select></span></Field>
               <Field label="Assignee" required><span className="input"><Select value={nt.user_id} onChange={(e) => setNt({ ...nt, user_id: e.target.value })} style={selStyle}><option value="">— unassigned —</option>{(f?.employees || []).map((e) => <option key={e.id} value={String(e.id)}>{e.name}</option>)}</Select></span></Field>
-              <Field label="Type (Module / App / EXE)" required><span className="input"><Select value={nt.deliverable_type} onChange={(e) => setNt({ ...nt, deliverable_type: e.target.value })} style={selStyle}><option value="">— choose —</option><option value="module">Module</option><option value="app">App</option><option value="exe">EXE</option></Select></span></Field>
+              <Field label="Type (Module / App / EXE / Other)" required><span className="input"><Select value={nt.deliverable_type} onChange={(e) => setNt({ ...nt, deliverable_type: e.target.value })} style={selStyle}><option value="">— choose —</option>{DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)}</Select></span></Field>
             </div>
+            {nt.deliverable_type === "other" && <OtherTypeInput value={nt.deliverable_other} onChange={(v) => setNt({ ...nt, deliverable_other: v })} autoFocus />}
             <div className="grid3" style={{ gap: 10 }}>
               <Field label="Type" required><span className="input"><Select value={nt.doc_type} onChange={(e) => setNt({ ...nt, doc_type: e.target.value })} style={selStyle}><option value="requirement">Requirement → REQ</option><option value="update">Update → UPT</option><option value="bug">Bug → BUG</option></Select></span></Field>
               <div className="grid2" style={{ gap: 6 }}>

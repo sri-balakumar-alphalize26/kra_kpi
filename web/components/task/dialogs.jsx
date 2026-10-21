@@ -7,6 +7,7 @@ import * as S from "@/lib/services/kpiActions";
 import { fmtHM } from "@/lib/services/kpiActions";
 import { liveFromAnchor } from "@/lib/liveTime";
 import { serverNow } from "@/lib/api";
+import OtherTypeInput from "./OtherTypeInput";
 
 /* Every task dialog, keyed by the `dialog` names in actions.js. Each calls
    `onConfirm(payload)`; the runner (TaskActions.jsx) does the server call.
@@ -172,10 +173,22 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
   const [summary, setSummary] = useState("");
   const [partial, setPartial] = useState(true);
   const [inferred, setInferred] = useState([]);
+  /* null = not loaded yet. A full Complete needs a user manual on the task
+     (the server refuses without one); Partial needs none. */
+  const [hasManual, setHasManual] = useState(null);
+  /* A Module / App task needs a GitHub link for a full Complete (server rule). */
+  const [hasGithub, setHasGithub] = useState(null);
+  const [githubRequired, setGithubRequired] = useState(S.needsGithub(task.deliverable_type));
+  /* null | { missing: [...] } "What did we miss?" | { confirm: true } submit confirm */
+  const [ask, setAsk] = useState(null);
   useEffect(() => {
     let live = true;
-    S.fetchTaskDetails(task.id, { fresh: false }).then((r) => {
+    S.fetchTaskDetails(task.id, { fresh: true }).then((r) => {
       if (!live || !r.ok) return;
+      setHasManual((r.manuals || []).length > 0);
+      setHasGithub((r.github || []).length > 0);
+      const gr = r.task?.github_required;
+      setGithubRequired(typeof gr === "boolean" ? gr : S.needsGithub(r.task?.deliverable_type ?? task.deliverable_type));
       const pre = {};
       if ((r.github || []).length) pre.verify_github = true;
       if ((r.files || []).length) { pre.user_manual = true; pre.documentation = true; }
@@ -186,10 +199,20 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
   }, [task.id]);
   /* Odoo's full Complete needs at least one item ticked (task_complete), not all five. */
   const anyDone = S.CHECKLIST_ITEMS.some((c) => checks[c.key]);
-  useEffect(() => { if (!anyDone) setPartial(true); }, [anyDone]);
+  const hasSummary = !!summary.trim() || task.progress_count > 0;
+  const ref = task.external_ref || `#${task.id}`;
+  const send = (p) => { if (busy) return; setAsk(null); onConfirm({ employeeChecklist: checks, partial: p, summary: summary.trim() }); };
+  /* Full Complete never silently disables: what's missing is reported in one popup. */
+  const submit = () => {
+    if (busy) return;
+    if (partial) { send(true); return; }
+    const missing = S.completeMissing({ hasSummary, hasManual: hasManual === true, githubRequired, hasGithub: hasGithub === true, anyTicked: anyDone });
+    setAsk(missing.length ? { missing } : { confirm: true });
+  };
   return (
+    <>
     <Modal open onClose={onClose} title={<Title task={task}>Complete</Title>} width={540}
-      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="ok" busy={busy} disabled={!summary.trim() && !(task.progress_count > 0)} onClick={() => onConfirm({ employeeChecklist: checks, partial, summary: summary.trim() })}>{partial ? "Send for review" : "Complete"}</Button></>}>
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="ok" busy={busy} disabled={busy || (partial && !hasSummary)} title={partial && !hasSummary ? "Write a progress note first" : undefined} onClick={submit}>{partial ? "Send for review" : "Complete"}</Button></>}>
       <p className="note" style={{ margin: 0 }}>Tick what you did. It goes to an admin for approval{partial ? "" : " (or straight to done when admin acceptance is off)"}.</p>
       <div>
         {S.CHECKLIST_ITEMS.map((c) => (
@@ -197,9 +220,28 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
         ))}
       </div>
       <Field label={task.progress_count > 0 ? "Progress note (optional — the task already has updates)" : "Progress note"} required={!(task.progress_count > 0)}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
-      <label className="chk"><input type="checkbox" checked={!partial} disabled={!anyDone} onChange={(e) => setPartial(!e.target.checked)} style={CHK} />Mark fully complete{!anyDone && <span className="mini"> (tick at least one item first)</span>}</label>
+      {hasManual === false && <p className="note" style={{ margin: 0 }}>📘 Upload a user manual (PDF, DOC or DOCX) on the task before marking it fully complete. Without one you can still send it for review as a partial finish.</p>}
+      {hasGithub === false && (githubRequired
+        ? <Box tone="warn">This is a Module / App task — add the GitHub link (repository + branch) on the task before completing.</Box>
+        : <Box tone="warn">Optional: add the GitHub link — once it's uploaded, the code is safe.</Box>)}
+      <label className="chk"><input type="checkbox" checked={!partial} onChange={(e) => setPartial(!e.target.checked)} style={CHK} />Mark fully complete</label>
       <p className="mini" style={{ margin: 0 }}>Time spent: {fmtHM(spentOf(task))}</p>
     </Modal>
+    {ask?.missing && (
+      <Modal open onClose={() => setAsk(null)} title="Before completing, you still need:" width={460}
+        footer={<>{hasSummary && <Button kind="ghost" busy={busy} disabled={busy} onClick={() => send(true)}>Send as Partial Finish instead</Button>}<Button kind="primary" onClick={() => setAsk(null)} autoFocus>OK, I'll add them</Button></>}>
+        <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 4 }}>
+          {ask.missing.map((m) => <li key={m}>{m}</li>)}
+        </ul>
+      </Modal>
+    )}
+    {ask?.confirm && (
+      <Modal open onClose={() => setAsk(null)} title={`Submit ${ref} for approval?`} width={420}
+        footer={<><Button kind="ghost" onClick={() => setAsk(null)}>Cancel</Button><Button kind="ok" busy={busy} disabled={busy} onClick={() => send(false)} autoFocus>Yes</Button></>}>
+        <p className="note" style={{ margin: 0 }}>{task.name}</p>
+      </Modal>
+    )}
+    </>
   );
 }
 
@@ -474,6 +516,7 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
   const [client, setClient] = useState(""); const [kra, setKra] = useState("");
   const [name, setName] = useState(""); const [desc, setDesc] = useState("");
   const [deliv, setDeliv] = useState([]); const [pri, setPri] = useState("regular");
+  const [delivOther, setDelivOther] = useState("");
   const [docType, setDocType] = useState("requirement");
   const [h, setH] = useState("0"); const [m, setM] = useState("0");
   const [userId, setUserId] = useState(0); const [workDate, setWorkDate] = useState(() => S.localDay(Date.now()));
@@ -510,7 +553,9 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
     setErr("");
     if (!name.trim()) { setErr("Please enter a task name."); return; }
     if (!kra) { setErr("Please choose a client and project."); return; }
-    if (!delivStr) { setErr("Tick at least one type — Module, App or EXE."); return; }
+    if (!delivStr) { setErr("Tick at least one type — Module, App, EXE or Other."); return; }
+    const otherText = S.deliverableOtherValue(delivStr, delivOther);
+    if (S.hasOtherDeliverable(delivStr) && !otherText) { setErr(S.DELIVERABLE_OTHER_REQUIRED); return; }
     let estH = parseInt(h, 10) || 0, estM = parseInt(m, 10) || 0;
     if (estM > 59) { setErr("Estimate minutes must be between 0 and 59."); return; }
     let workedSec = 0;
@@ -525,11 +570,11 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
     setBusy(true);
     try {
       const res = mode === "done"
-        ? await S.adminCreateDoneTask({ name: name.trim(), kraId: +kra, userId: +userId || 0, workedSeconds: workedSec, workDate, estimateHours: estH, estimateMinutes: estM, deliverableType: delivStr, priority: pri, description: desc })
-        : await S.selfCreateTask({ name: name.trim(), kraId: +kra, estimateHours: estH, estimateMinutes: estM, priority: pri, docType, description: desc, userId: admin ? +userId || 0 : 0, deliverableType: delivStr });
+        ? await S.adminCreateDoneTask({ name: name.trim(), kraId: +kra, userId: +userId || 0, workedSeconds: workedSec, workDate, estimateHours: estH, estimateMinutes: estM, deliverableType: delivStr, deliverableOther: otherText, priority: pri, description: desc })
+        : await S.selfCreateTask({ name: name.trim(), kraId: +kra, estimateHours: estH, estimateMinutes: estM, priority: pri, docType, description: desc, userId: admin ? +userId || 0 : 0, deliverableType: delivStr, deliverableOther: otherText });
       S.assertOk(res, "Could not create the task.");
       flags.ok(mode === "done" ? `${res.external_ref || "Task"} added to Pending Approvals.` : res.message || "Task created in Pending review.");
-      setName(""); setDesc(""); setMatches([]); setEstTouched(false); setDeliv([]); setDocType("requirement");
+      setName(""); setDesc(""); setMatches([]); setEstTouched(false); setDeliv([]); setDelivOther(""); setDocType("requirement");
       onCreated?.(res);
       onClose();
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
@@ -546,11 +591,12 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
       {matches.length > 0 && <div className="callout" style={{ background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)", color: "var(--lz-paused)", padding: "8px 12px" }}><span>Already used in this project: {matches.slice(0, 3).map((x) => `${x.external_ref || ""} ${x.name || x}${x.assignee ? ` (${x.assignee})` : ""}`.trim()).join(" · ")}</span></div>}
       <div className="fit-row">
         {mode === "new" && <Field label="Type" hint="What you think it is — the admin makes the final call on Accept."><Tabs items={[{ key: "requirement", label: "REQ" }, { key: "update", label: "UPT" }, { key: "bug", label: "BUG" }]} value={docType} onChange={setDocType} /></Field>}
-        <Field label="Module / App / EXE (tick one or more)" required>
+        <Field label="Module / App / EXE / Other (tick one or more)" required>
           <span className="chips" style={{ margin: 0 }}>
             {S.DELIVERABLES.map((d) => <label key={d.code} className="chk" style={{ marginRight: 10 }}><input type="checkbox" checked={deliv.includes(d.code)} onChange={() => toggleDeliv(d.code)} style={CHK} />{d.label}</label>)}
           </span>
         </Field>
+        {deliv.includes("other") && <OtherTypeInput value={delivOther} onChange={setDelivOther} autoFocus />}
         <Field label="Priority"><Tabs items={S.PRIORITIES.map((p) => ({ key: p.code, label: p.label }))} value={pri} onChange={setPri} /></Field>
       </div>
       <div className="fit-row">

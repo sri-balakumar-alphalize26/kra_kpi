@@ -33,6 +33,7 @@ import { COLORS } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import GradientButton from '../components/GradientButton';
 import AddTimeModal from '../components/AddTimeModal';
+import AppDialog from '../components/AppDialog';
 import {
   fetchTaskDetails, submitProgressUpdate, addGithubLink, deleteGithubLink,
   deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime, deleteProgressBulk,
@@ -44,7 +45,8 @@ import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
 import { resolveGithubLink } from '../utils/githubLink';
 import { createLogger } from '../api/logger';
 import useBackHandler from '../components/useBackHandler';
-import { deliverableLabel } from '../utils/deliverableType';
+import { taskDeliverableLabel } from '../utils/deliverableType';
+import { completeMissing } from '../utils/completeMissing';
 
 const log = createLogger('KpiDetail');
 
@@ -869,13 +871,35 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // true, which is worse than an honest partial list.
   const anyChecked = CHECKLIST_ITEMS.some((c) => checks[c.key]);
   const hasProgress = (data?.progress?.length || 0) > 0;
+  // A full Complete also needs a user manual on the task (the server refuses
+  // without one); Partial Finish on the board needs none.
+  const hasManual = (data?.manuals?.length || 0) > 0;
+  // A Module / App task also needs a GitHub link before a full Complete (the
+  // server refuses without one); for any other type the link is optional.
+  const githubRequired = !!data?.task?.github_required;
+  const hasGithub = (data?.github?.length || 0) > 0;
+  // The popup on the Complete button: null, { kind: 'missing', items } or
+  // { kind: 'confirm' }. The button stays pressable so a tap explains everything
+  // still missing at once, instead of sitting greyed-out and silent.
+  const [cmpDlg, setCmpDlg] = useState(null);
 
-  async function onComplete() {
+  function onCompletePress() {
+    if (cmpBusy) return;
+    const items = completeMissing({
+      hasSummary: hasProgress, hasManual, githubRequired, hasGithub, anyTicked: anyChecked,
+    });
+    setCmpDlg(items.length ? { kind: 'missing', items } : { kind: 'confirm' });
+  }
+
+  // partial=true is the "Send as Partial Finish instead" escape from the
+  // missing-items popup: summary only, no checklist, nothing else required.
+  async function onComplete(partial = false) {
+    setCmpDlg(null);
     setCmpBusy(true);
-    const res = await completeTask(task.id, checks, false);
+    const res = await completeTask(task.id, partial ? {} : checks, partial);
     setCmpBusy(false);
     if (res?.status === false) { flash('err', res.message || 'Could not complete'); return; }
-    flash('ok', 'Sent for approval');
+    flash('ok', partial ? 'Partial finish sent' : 'Sent for approval');
     onChanged && onChanged();
     load(true);
   }
@@ -957,11 +981,11 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
               <View style={s.tagRow}>
                 {!!meta.external_ref && <View style={s.refBadge}><Text style={s.refTxt}>{meta.external_ref}</Text></View>}
                 <View style={[s.pill, { backgroundColor: kind.bg }]}><Text style={[s.pillTxt, { color: kind.fg }]}>{kind.label}</Text></View>
-                {/* Module / App / EXE — what the task builds. Older tasks have
+                {/* Module / App / EXE / Other — what the task builds. Older tasks have
                     none, so the badge only appears once one is set. */}
-                {!!deliverableLabel(t.deliverable_type) && (
+                {!!taskDeliverableLabel(t) && (
                   <View style={[s.pill, { backgroundColor: '#EEF3FF' }]}>
-                    <Text style={[s.pillTxt, { color: COLORS.primary }]}>{deliverableLabel(t.deliverable_type)}</Text>
+                    <Text style={[s.pillTxt, { color: COLORS.primary }]}>{taskDeliverableLabel(t)}</Text>
                   </View>
                 )}
                 <View style={[s.pill, { backgroundColor: pr.bg }]}><Text style={[s.pillTxt, { color: pr.fg }]}>{pr.label}</Text></View>
@@ -1367,6 +1391,23 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                     <Text style={s.warnTxt}>Submit a Progress Summary above before you complete this task.</Text>
                   </View>
                 )}
+                {!hasManual && (
+                  <View style={s.warnBox}>
+                    <Ionicons name="book-outline" size={15} color="#92400E" />
+                    <Text style={s.warnTxt}>Upload a User Manual (PDF, DOC or DOCX) above before you complete this task — or use Partial Finish on the board.</Text>
+                  </View>
+                )}
+                {!hasGithub && (githubRequired ? (
+                  <View style={s.warnBox}>
+                    <Ionicons name="logo-github" size={15} color="#92400E" />
+                    <Text style={s.warnTxt}>This is a Module / App task — add the GitHub link (repository + branch) above before completing.</Text>
+                  </View>
+                ) : (
+                  <View style={[s.warnBox, s.warnBoxSoft]}>
+                    <Ionicons name="logo-github" size={15} color="#A16207" />
+                    <Text style={[s.warnTxt, s.warnTxtSoft]}>Optional: add the GitHub link — once it's uploaded, the code is safe.</Text>
+                  </View>
+                ))}
 
                 <Text style={s.cardSub}>Tick everything that applies — at least one is needed to send this for approval. Your manager sees exactly which.</Text>
                 {CHECKLIST_ITEMS.map((c, i) => (
@@ -1379,8 +1420,8 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 ))}
 
                 <TouchableOpacity
-                  style={[s.wideBtn, { backgroundColor: COLORS.red }, (!anyChecked || !hasProgress || cmpBusy) && s.btnOff]}
-                  onPress={onComplete} disabled={!anyChecked || !hasProgress || cmpBusy}>
+                  style={[s.wideBtn, { backgroundColor: COLORS.red }, cmpBusy && s.btnOff]}
+                  onPress={onCompletePress} disabled={cmpBusy}>
                   {cmpBusy ? <ActivityIndicator color="#fff" size="small" /> : (
                     <><Ionicons name="flag" size={16} color="#fff" /><Text style={s.wideBtnTxt}>Complete &amp; Send for Approval</Text></>
                   )}
@@ -1938,6 +1979,29 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
             required reason cannot be enforced one way here and another there.
             Staying on this screen afterwards is the right answer HERE, exactly as
             staying on the board is the right answer there. */}
+        {/* Complete — one popup listing everything still missing (offering
+            Partial Finish when there is a summary to send), or the final
+            "submit for approval?" confirm when nothing is. */}
+        <AppDialog
+          visible={cmpDlg?.kind === 'missing'}
+          tone="warn"
+          title="Before completing, you still need:"
+          message={(cmpDlg?.items || []).map((m) => `• ${m}`).join('\n')}
+          cancelLabel="OK, I'll add them"
+          confirmLabel={hasProgress ? 'Send as Partial Finish instead' : "OK, I'll add them"}
+          onConfirm={hasProgress ? () => onComplete(true) : undefined}
+          onClose={() => setCmpDlg(null)}
+        />
+        <AppDialog
+          visible={cmpDlg?.kind === 'confirm'}
+          tone="info"
+          title={`Submit ${meta.external_ref || t?.name || 'this task'} for approval?`}
+          message="Your manager will review it and approve or send it back."
+          confirmLabel="Submit"
+          onConfirm={() => onComplete(false)}
+          onClose={() => setCmpDlg(null)}
+        />
+
         <AddTimeModal
           visible={addOpen}
           task={data?.task || task}
@@ -2192,6 +2256,8 @@ const s = StyleSheet.create({
 
   warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, backgroundColor: '#FEF3C7', borderRadius: 9, padding: 10, marginBottom: 10, marginTop: 4 },
   warnTxt: { flex: 1, fontSize: 12.5, color: '#92400E', fontWeight: '700', lineHeight: 17 },
+  warnBoxSoft: { backgroundColor: '#FEFCE8' },
+  warnTxtSoft: { color: '#A16207', fontWeight: '600' },
   checkRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 8 },
   checkTxt: { flex: 1, fontSize: 13, color: COLORS.ink, fontWeight: '700' },
 

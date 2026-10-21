@@ -26,7 +26,10 @@ import { createLogger } from '../api/logger';
 import { fetchQueue, saveQueueTask, publishQueueTask, discardQueueTask } from '../services/pendingQueue';
 // Reuse: same route the web picker uses, and the same priority triple.
 import { getUsers, getUserInfo, PRIORITIES } from '../services/uploadAmendments';
-import { DELIVERABLE_TYPES, deliverableLabel } from '../utils/deliverableType';
+import {
+  DELIVERABLE_TYPES, deliverableLabel, needsOtherText, missingOtherText,
+  DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER, DELIVERABLE_OTHER_REQUIRED_MSG,
+} from '../utils/deliverableType';
 
 const log = createLogger('ClientTaskQueue');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -139,6 +142,11 @@ export default function ClientTaskQueue({ onBack }) {
     setRows((list) => list.map((r) => (r.id === id ? { ...r, ...changes } : r)));
 
   const onSave = async (row, silent) => {
+    // The server refuses Other without its text — say so before the round trip.
+    if (missingOtherText(row.deliverable_type, row.deliverable_other)) {
+      setPopup({ ok: false, title: "Couldn't save", message: DELIVERABLE_OTHER_REQUIRED_MSG });
+      return false;
+    }
     setBusyId(row.id);
     try {
       await saveQueueTask(row);
@@ -513,16 +521,24 @@ function TaskForm({ r, users, busy, patch, setPicker, onSave, onPublish, onDisca
           <Selector value={prioLabel(r.priority)} onPress={() => setPicker({ kind: 'prio', id: r.id })} />
         </View>
         <View style={s.half}>
-          {/* Module / App / EXE. Clients may leave it blank; the admin fills it
-              in here. Not required to publish, so no red outline. */}
+          {/* Module / App / EXE / Other. Clients may leave it blank; the admin
+              fills it in here. Not required to publish, so no red outline —
+              except Other's text, which the server insists on. */}
           <Text style={s.lbl}>Type</Text>
           <Selector
-            value={deliverableLabel(r.deliverable_type)}
+            value={deliverableLabel(r.deliverable_type, r.deliverable_other)}
             placeholder="— choose —"
             onPress={() => setPicker({ kind: 'type', id: r.id })}
           />
         </View>
       </View>
+      {needsOtherText(r.deliverable_type) && (
+        <TextInput
+          style={[s.input, { marginTop: 8 }, missingOtherText(r.deliverable_type, r.deliverable_other) && s.selectorErr]}
+          placeholder={DELIVERABLE_OTHER_PLACEHOLDER} placeholderTextColor={COLORS.faint} maxLength={DELIVERABLE_OTHER_MAX}
+          value={r.deliverable_other || ''} onChangeText={(v) => patch(r.id, { deliverable_other: v })}
+        />
+      )}
 
       {/* Required to publish — the client is asked to approve WHO got it. */}
       <Text style={s.lbl}>Assign Developer <Text style={s.req}>*</Text></Text>
@@ -608,10 +624,10 @@ function PickerSheet({ picker, row, users, onClose, onPick }) {
   } else if (picker.kind === 'type') {
     title = 'Type';
     items = [
-      { key: 'none', label: '— none —', selected: !row.deliverable_type, onPress: () => onPick({ deliverable_type: '' }) },
+      { key: 'none', label: '— none —', selected: !row.deliverable_type, onPress: () => onPick({ deliverable_type: '', deliverable_other: '' }) },
       ...DELIVERABLE_TYPES.map((d) => ({
         key: d.code, label: d.label, selected: d.code === row.deliverable_type,
-        onPress: () => onPick({ deliverable_type: d.code }),
+        onPress: () => onPick({ deliverable_type: d.code, ...(d.code === 'other' ? {} : { deliverable_other: '' }) }),
       })),
     ];
   } else {

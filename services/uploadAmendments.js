@@ -204,6 +204,7 @@ export function buildTaskRow(row) {
     priority: row.priority || 'regular',
     primary_user_id: row.primary_user_id ? Number(row.primary_user_id) : false,
     deliverable_type: row.deliverable_type || '',
+    deliverable_other: row.deliverable_other || '',
   };
 }
 

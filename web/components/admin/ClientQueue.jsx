@@ -4,7 +4,8 @@ import { Avatar, Button, ErrorState, Field, Icon, Lozenge, Modal, PageHeader, Sk
 import { useResource } from "@/lib/useFetch";
 import { invalidate } from "@/lib/api";
 import * as A from "@/lib/services/admin";
-import { PRIORITIES, DELIVERABLES } from "@/lib/services/kpiActions";
+import { PRIORITIES, DELIVERABLES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue, hasOtherDeliverable, taskDeliverableLabel } from "@/lib/services/kpiActions";
+import OtherTypeInput from "@/components/task/OtherTypeInput";
 import { since } from "@/lib/liveTime";
 
 /* Requests from clients waiting for an estimate and a developer, grouped by
@@ -43,7 +44,9 @@ export default function ClientQueue() {
     try {
       if (!edit.name?.trim()) throw new Error("The task needs a name.");
       if (publish && !edit.user_id) throw new Error("Pick a developer before publishing.");
-      A.assertOk(await A.saveQueueTask(edit), "Could not save.");
+      const deliverable_other = deliverableOtherValue(edit.deliverable_type, edit.deliverable_other);
+      if (hasOtherDeliverable(edit.deliverable_type) && !deliverable_other) throw new Error(DELIVERABLE_OTHER_REQUIRED);
+      A.assertOk(await A.saveQueueTask({ ...edit, deliverable_other }), "Could not save.");
       if (publish) { const r = await A.publishQueueTask(edit.id); A.assertOk(r, "Could not publish."); flags.ok(r.message || "Published."); }
       else flags.ok("Saved.");
       setEdit(null); refresh();
@@ -168,7 +171,8 @@ function GroupRows({ g, users, edit, setEdit, onSave, onDiscard, onDecline, busy
             <td>{sel(e.priority || "regular", (v) => setEdit({ ...e, priority: v }), PRIORITIES.map((p) => <option key={p.code} value={p.code}>{p.label}</option>), 120)}</td>
             {/* Read-only: /kpi_pending_queue/update has no kind field; the type comes from the ref / name prefix. */}
             <td title="The type follows the request (ref / name) and cannot be changed here">{KIND_LABEL[t.kind] || "—"}</td>
-            <td>{sel(e.deliverable_type || "", (v) => setEdit({ ...e, deliverable_type: v }), [<option key="" value="">—</option>, ...DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)], 110)}</td>
+            <td>{sel(e.deliverable_type || "", (v) => setEdit({ ...e, deliverable_type: v }), [<option key="" value="">—</option>, ...DELIVERABLES.map((d) => <option key={d.code} value={d.code}>{d.label}</option>)], 110)}
+              {hasOtherDeliverable(e.deliverable_type) && <OtherTypeInput bare value={e.deliverable_other} onChange={(v) => setEdit({ ...e, deliverable_other: v })} style={{ height: 32, marginTop: 4, width: 160 }} />}</td>
             <td>{sel(e.user_id || "", (v) => setEdit({ ...e, user_id: v }), [<option key="" value="">Unassigned</option>, ...users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)], 160)}</td>
             <td><span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}><Button size="sm" kind="primary" busy={busy} onClick={() => onSave(true)}>Save &amp; publish</Button><Button size="sm" busy={busy} onClick={() => onSave(false)}>Save</Button><Button size="sm" kind="ghost" onClick={() => setEdit(null)}>Cancel</Button></span></td>
           </tr>
@@ -180,7 +184,7 @@ function GroupRows({ g, users, edit, setEdit, onSave, onDiscard, onDecline, busy
             <td>{t.estimate_hours || t.estimate_minutes ? `${t.estimate_hours || 0}h ${t.estimate_minutes || 0}m` : <span className="mini">not set</span>}</td>
             <td>{t.priority ? <span style={{ fontWeight: 800, color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)" }}>{t.priority}</span> : <span className="mini">—</span>}</td>
             <td>{KIND_LABEL[t.kind] || "—"}</td>
-            <td>{t.deliverable_type || <span className="mini">—</span>}</td>
+            <td>{t.deliverable_type ? taskDeliverableLabel(t) : <span className="mini">—</span>}</td>
             <td>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={22} /> {t.user_name}</> : <span className="mini">unassigned</span>}</td>
             <td><span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}><Button size="sm" onClick={() => setEdit({ ...t })}>Edit</Button><Button size="sm" kind="ghost" title="Decline it or re-type it, with a reason the client is told" onClick={() => onDecline(t)}>Decline / re-type</Button><Button size="sm" kind="ghost" onClick={() => onDiscard(t)}>Discard</Button></span></td>
           </tr>

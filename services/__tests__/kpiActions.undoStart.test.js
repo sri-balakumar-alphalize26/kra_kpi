@@ -38,5 +38,15 @@ describe('kpiActions — undo start and deliverable type', () => {
     const [, path, params] = mockRpc.mock.calls[0];
     expect(path).toBe('/kra_kpi/task/self_create');
     expect(params.deliverable_type).toBe('exe');
+    expect(params.deliverable_other).toBe('');
+  });
+
+  it("sends Other's text alongside the type", async () => {
+    mockConn.serverUrl = 'https://odoo.example.com';
+    mockRpc.mockResolvedValueOnce({ status: true });
+    await selfCreateTask({ name: 'Checkout plugin', kraId: 4, deliverableType: 'module,other', deliverableOther: 'Plugin' });
+    const [, , params] = mockRpc.mock.calls[0];
+    expect(params.deliverable_type).toBe('module,other');
+    expect(params.deliverable_other).toBe('Plugin');
   });
 });
