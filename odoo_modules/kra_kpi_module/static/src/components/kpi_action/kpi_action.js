@@ -624,9 +624,11 @@ export class KpiAction extends Component {
                         <!-- Not started yet: no progress / manual / file / GitHub forms.
                              Details are added while working on the task, so until its
                              first Start there is nothing to report against. -->
-                        <div t-if="!detailStarted()" class="alert alert-info d-flex align-items-center gap-2 mb-3">
-                            <i class="fa fa-info-circle"></i>
-                            <span>Start this task to add progress updates, files, manuals and GitHub links.</span>
+                        <!-- Same yellow warning and wording as the WhatsApp task page. -->
+                        <div t-if="!detailStarted()" class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+                            <i class="fa fa-exclamation-triangle"></i>
+                            <span>This task hasn't been started yet, so updates, files, links and manuals can't be
+                                added or edited. Start it first, then come back to add them.</span>
                         </div>
 
                         <!-- ============================================ -->

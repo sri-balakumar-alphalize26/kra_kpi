@@ -1035,15 +1035,21 @@ class KpiWaStaffTask(models.AbstractModel):
         if not summary and ((raw_links or '').strip() or (gh_url or '').strip()):
             return False, 'Write a summary to go with the links.'
         no_summary = not summary and not self.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id), ('from_client', '=', False)])
+        # Only the client's files on the task: say they don't count, not just "missing".
+        client_only = no_summary and bool(self.env['kpi.progress'].sudo().search_count(
+            [('kpi_id', '=', task.id), ('from_client', '=', True)]))
+        summary_item = ("a summary of what you did (the client's files don't count)" if client_only
+                        else 'a summary of what you did')
         if partial and no_summary:
-            return False, 'Write a summary of what you did — this is what your manager reads.'
+            return False, ("The client's files don't count as your summary — write what you did."
+                           if client_only else 'Write a summary of what you did — this is what your manager reads.')
         checklist = {} if partial else {k: (k in ticks) for k, _l in CHECKLIST}
         if not partial:
             # Everything missing at once, so one reply says all of it (the same
             # list the page's "you still need" popup shows).
             missing = []
             if no_summary:
-                missing.append('a summary of what you did')
+                missing.append(summary_item)
             if not files and task._manual_required_refusal():
                 missing.append('the user manual (PDF, DOC or DOCX)')
             if not (gh_url or '').strip() and task._github_required_refusal():
@@ -1183,7 +1189,12 @@ class KpiWaStaffTask(models.AbstractModel):
 
     def _done_finish(self, message, state, user, task, ticked, partial=False):
         """/kra_kpi/task/complete, rule for rule."""
-        if not self.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id), ('from_client', '=', False)]):
+        Progress = self.env['kpi.progress'].sudo()
+        if not Progress.search_count([('kpi_id', '=', task.id), ('from_client', '=', False)]):
+            if Progress.search_count([('kpi_id', '=', task.id), ('from_client', '=', True)]):
+                return self._back_to_task(message, state, task, _(
+                    "The client's files don't count as your summary — add your own progress update "
+                    "(what you did), then complete."))
             return self._back_to_task(message, state, task, _(
                 'Please submit a Progress Summary before completing this task.'))
         checklist = {} if partial else {k: (k in ticked) for k, _l in CHECKLIST}
