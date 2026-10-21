@@ -400,6 +400,47 @@ class KpiAi(models.AbstractModel):
         "urgent=true only if they actually say urgent/immediately/today."
     ) % '|'.join(WORK_AREA_CODES)
 
+    _POLISH_PROMPT = (
+        "You tidy a description a shop client typed for a software request. "
+        "The English is often broken, abbreviated or ALL CAPS.\n"
+        "Return ONLY this JSON object: {\"text\": \"<the tidied paragraph>\"}\n"
+        "Rules: fix spelling, grammar and punctuation; add the small missing "
+        "words (is, a, an, the, will, should...); capitalise each sentence; "
+        "keep the author's meaning, language, numbers and product names exactly; "
+        "do NOT add facts, steps or detail they did not write; keep it about "
+        "the same length."
+    )
+
+    @api.model
+    def polish_text(self, raw_text):
+        """Tidy a typed paragraph. -> {text, source}. Never raises.
+
+        The client form shows the result and leaves it editable, so a wrong
+        tidy-up costs a correction, never the request."""
+        raw = ' '.join((raw_text or '').split())
+        fallback = {'text': self._polish_heuristic(raw), 'source': 'heuristic'}
+        if not raw or not self.is_available():
+            return fallback
+        data, source = self.complete_json(self._POLISH_PROMPT, raw[:3000], max_tokens=900)
+        text = str((data or {}).get('text') or '').strip() if isinstance(data, dict) else ''
+        if not text:
+            return fallback
+        return {'text': text[:4000], 'source': source}
+
+    @api.model
+    def _polish_heuristic(self, text):
+        """No key or the model failed: capitalise sentences, end with a stop."""
+        text = ' '.join((text or '').split())
+        if not text:
+            return ''
+        if text.isupper():
+            text = text.lower()
+        parts = re.split(r'([.!?]\s+)', text)
+        out = ''.join(p[:1].upper() + p[1:] if i % 2 == 0 else p
+                      for i, p in enumerate(parts))
+        out = re.sub(r'\bi\b', 'I', out)
+        return out if out[-1:] in '.!?' else out + '.'
+
     @api.model
     def correct_and_classify(self, raw_text, hint_doc_type=None, hint_area=None):
         """Tidy a free-text request and work out its type and area.

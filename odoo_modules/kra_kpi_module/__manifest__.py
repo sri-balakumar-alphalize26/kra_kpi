@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.7.33",
+    "version": "19.0.7.41",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -35,6 +35,7 @@
         "data/kpi_meeting_cron.xml",
         "views/wa_approval_templates.xml",
         "views/wa_task_form_templates.xml",
+        "views/wa_client_form_templates.xml",
         "views/wa_task_page_templates.xml",
         "views/wa_endday_templates.xml",
         # Must load BEFORE menu.xml — menu_kra_root references this action.
