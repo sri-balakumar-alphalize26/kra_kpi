@@ -865,9 +865,15 @@ class KraKpiAPI(http.Controller):
         # has been recorded. Keeps both "Complete" and "Partial Finish" honest and
         # always leaves the reviewer something to read.
         # The client's own attachments don't count: the summary is the team's.
-        has_summary = request.env['kpi.progress'].sudo().search_count(
+        Progress = request.env['kpi.progress'].sudo()
+        has_summary = Progress.search_count(
             [('kpi_id', '=', rec.id), ('from_client', '=', False)]) > 0
         if not has_summary:
+            # Say plainly why, when the only "update" is the client's attachment.
+            if Progress.search_count([('kpi_id', '=', rec.id), ('from_client', '=', True)]):
+                return {'status': False,
+                        'message': "The client's files don't count as your summary — add your own "
+                                   "progress update (what you did), then complete."}
             return {'status': False,
                     'message': 'Please submit a Progress Summary before completing this task.'}
 
