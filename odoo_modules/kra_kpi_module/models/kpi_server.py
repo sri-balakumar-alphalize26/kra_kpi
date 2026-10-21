@@ -33,9 +33,15 @@ PG_CONNECT_TIMEOUT = 8
 # Keep one slot for "Other".
 POLL_MAX_SERVERS = 11
 
-# Postgres identifiers: <= 63 bytes, and anything not matching this needs
-# quoting in every psql / pg_dump / backup script the provisioner will type.
-_DB_NAME_RE = re.compile(r'^[a-z][a-z0-9_]{2,62}$')
+# Postgres identifiers: <= 63 bytes. Case is KEPT: Odoo quotes database
+# names, so HILAL_VAN_SALE stays HILAL_VAN_SALE, and the client form now asks
+# for exactly that shape. Lowercase names already on the servers still pass.
+_DB_NAME_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_]{2,62}$')
+
+# What a client types on the New Database form: CAPITAL words joined by a
+# single underscore, e.g. HILAL_VAN_SALE.
+_NEW_DB_NAME_RE = re.compile(r'^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$')
+NEW_DB_NAME_EXAMPLE = 'HILAL_VAN_SALE'
 
 RESERVED_DB_NAMES = {'postgres', 'template0', 'template1', 'odoo', 'root'}
 
@@ -154,23 +160,54 @@ class KpiServer(models.Model):
             return '', 'Type the database name.'
         if any(ch.isspace() for ch in s):
             return '', ('A database name cannot contain spaces. '
-                        'Try %s' % re.sub(r'\s+', '_', s.lower()))
-        note = ''
-        if s != s.lower():
-            # Postgres folds unquoted identifiers to lowercase anyway; silently
-            # accepting mixed case creates a database whose real name is not
-            # the one everybody agreed.
-            s = s.lower()
-            note = ' (lowercased)'
+                        'Try %s' % re.sub(r'\s+', '_', s))
         if '-' in s:
             return '', ('Hyphens have to be quoted in every script. Use %s'
                         % s.replace('-', '_'))
-        if s in RESERVED_DB_NAMES:
+        if s.lower() in RESERVED_DB_NAMES:
             return '', '"%s" is reserved. Pick another name.' % s
         if not _DB_NAME_RE.match(s):
-            return '', ('Use lowercase letters, numbers and _ only, starting '
+            return '', ('Use letters, numbers and _ only, starting '
                         'with a letter, 3-63 characters.')
-        return s + ('' if not note else ''), ''
+        return s, ''
+
+    @api.model
+    def validate_new_db_name(self, raw):
+        """-> (clean_name, [errors]). The client New Database form's rule.
+
+        Stricter than validate_db_name: CAPITAL words joined by one _ , e.g.
+        HILAL_VAN_SALE. Every mismatch is listed, not just the first, so the
+        client can fix the name in one go. `clean_name` is the corrected
+        suggestion whenever one can be made. The form's JavaScript repeats
+        these rules for the live check; this is the one that decides.
+        """
+        s = (raw or '').strip()
+        if not s:
+            return '', ['Type the database name.']
+        errors = []
+        if any(ch.isspace() for ch in s):
+            errors.append('No spaces — join the words with _')
+        if any(ch.islower() for ch in s):
+            errors.append('Use CAPITAL letters only (found small letters)')
+        bad = sorted({ch for ch in s if not (ch.isalnum() or ch == '_' or ch.isspace())})
+        if bad:
+            errors.append('Not allowed: %s — only A-Z, 0-9 and _' % ' '.join(bad))
+        if s[:1].isdigit() or s[:1] == '_':
+            errors.append('Must start with a letter')
+        if '__' in s:
+            errors.append('Only one _ between words')
+        if s.endswith('_'):
+            errors.append('Cannot end with _')
+        if not 3 <= len(s) <= 63:
+            errors.append('Must be 3 to 63 characters')
+        if s.lower() in RESERVED_DB_NAMES:
+            errors.append('"%s" is a reserved name' % s)
+        # The suggestion: what they probably meant.
+        fix = re.sub(r'[^A-Z0-9]+', '_', s.upper()).strip('_')
+        fix = re.sub(r'_+', '_', fix)
+        if not errors and not _NEW_DB_NAME_RE.match(s):
+            errors.append('Use the format %s' % NEW_DB_NAME_EXAMPLE)
+        return (s if not errors else fix), errors
 
     # ------------------------------------------------------------------
     # reading the database list off the server
@@ -339,7 +376,9 @@ class KpiServer(models.Model):
             now = fields.Datetime.now()
             known = Db.with_context(active_test=False).search(
                 [('server_id', '=', rec.id)])
-            by_name = {r.db_name: r for r in known}
+            # Matched case-insensitively: rows saved before names kept their
+            # case were stored lowercased, and must not be listed twice.
+            by_name = {(r.db_name or '').lower(): r for r in known}
             added = 0
             for name in names:
                 clean, err = self.validate_db_name(name)
@@ -348,7 +387,7 @@ class KpiServer(models.Model):
                     # create. It still exists, so it is recorded under its
                     # actual name -- refusing to list it would hide reality.
                     clean = name
-                row = by_name.get(clean)
+                row = by_name.get(clean.lower())
                 if row:
                     row.write({'last_fetch_at': now, 'active': True})
                     continue
@@ -360,7 +399,8 @@ class KpiServer(models.Model):
                     'last_fetch_at': now,
                 })
                 added += 1
-            gone = [r for r in known if r.db_name not in names and r.active
+            seen = {(n or '').lower() for n in names}
+            gone = [r for r in known if (r.db_name or '').lower() not in seen and r.active
                     and r.source == 'fetched']
             for row in gone:
                 row.write({'active': False})
@@ -395,4 +435,4 @@ class KpiServer(models.Model):
         if not db_name:
             return self.env['kra.kpi']
         return self.env['kra.kpi'].sudo().search(
-            [('provision_db_name', '=', db_name), ('active', '=', True)], limit=1)
+            [('provision_db_name', '=ilike', db_name), ('active', '=', True)], limit=1)

@@ -308,7 +308,8 @@ class KpiClientInvoice(models.Model):
                 for _ in range(len(types) - 1):
                     ref_dom.append('|')
                 for t in types:
-                    ref_dom.append(('external_ref', '=ilike', t + '-%'))
+                    # t% also covers BUG001-REQ-012 (raised under a requirement).
+                    ref_dom.append(('external_ref', '=ilike', t + '%'))
                 allowed = self.env['kra.kpi'].search(ref_dom)
                 type_allowed_ids = allowed.ids
                 domain.append(('kpi_id', 'in', type_allowed_ids))

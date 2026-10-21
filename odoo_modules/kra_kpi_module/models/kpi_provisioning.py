@@ -70,6 +70,14 @@ class KraKpiProvisioning(models.Model):
     provision_db_name = fields.Char(string='Database Name', index=True)
     provision_preset = fields.Char(string='Install Preset')
     provision_modules = fields.Text(string='Requested Modules')
+    # The login the client asked for on the New Database form. Staff only:
+    # the developer who builds the database needs it, nobody else does.
+    provision_username = fields.Char(
+        string='Login', copy=False,
+        groups='kra_kpi_module.group_kra_developer,kra_kpi_module.group_kra_admin,base.group_system')
+    provision_password = fields.Char(
+        string='Password', copy=False,
+        groups='kra_kpi_module.group_kra_developer,kra_kpi_module.group_kra_admin,base.group_system')
 
     provision_chk_db_created = fields.Boolean('Database created')
     provision_chk_modules_installed = fields.Boolean('Modules installed')

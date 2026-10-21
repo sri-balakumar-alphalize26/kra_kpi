@@ -562,7 +562,7 @@ class KpiClientDb(models.Model):
 
         shown = ' — '.join(p for p in (reason_label, text) if p) or '—'
         return _(
-            "🔌 *Disconnect requested*%(ref)s\n"
+            "💥 *Destroy requested*%(ref)s\n"
             "🗄️ Database: *%(db)s*\n"
             "🖥️ Server: %(srv)s\n"
             "📝 Reason: %(reason)s\n"

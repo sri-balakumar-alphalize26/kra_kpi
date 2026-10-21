@@ -44,7 +44,11 @@ from odoo import _, api, fields, models
 _logger = logging.getLogger(__name__)
 
 # A task reference as this module mints them: REQ-336, UPT-018, BUG-004.
-REF_RE = re.compile(r'\b([A-Z]{2,5}-\d{1,6})\b', re.IGNORECASE)
+#
+# A bug / update the client raised under a requirement is BUG001-REQ-012. The
+# optional BUG001- head keeps the WHOLE ref: without it the search found
+# "REQ-012" inside it and a tap on the bug acted on its parent requirement.
+REF_RE = re.compile(r'\b((?:[A-Z]{2,5}\d{1,6}-)?[A-Z]{2,5}-\d{1,6})\b', re.IGNORECASE)
 
 # A developer's question, labelled D5 in the poll it is decided from.
 # Deliberately a DIFFERENT shape from a task reference and matched by its own
