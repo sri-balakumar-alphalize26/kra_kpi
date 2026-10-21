@@ -38,6 +38,7 @@ import logging
 import mimetypes
 import os
 import re
+from hmac import compare_digest as hmac_compare
 from urllib.parse import urlparse
 
 import pytz
@@ -303,21 +304,21 @@ class KpiWaStaffTask(models.AbstractModel):
             'kpi_menu': self._fl_kpi_menu,
             'guide': self._fl_guide, 'resume_reason': self._fl_resume_reason,
             'undo': self._fl_undo, 'files': self._fl_files, 'logs': self._fl_logs,
-            'c_name': self._fl_c_name, 'c_proj': self._fl_c_proj, 'c_type': self._fl_c_type,
-            'c_deliv': self._fl_c_deliv, 'c_prio': self._fl_c_prio, 'c_est': self._fl_c_est,
-            'c_confirm': self._fl_c_confirm,
             'mt_phase': self._fl_mt_phase, 'mt_lane': self._fl_mt_lane, 'mt_task': self._fl_mt_task,
-            'mt_search': self._fl_mt_search,
+            'mt_search': self._fl_mt_search, 'mt_filter': self._fl_mt_filter, 'mt_proj': self._fl_mt_proj,
             'pause_meet': self._fl_pause_meet, 'day_pausemenu': self._fl_day_pausemenu,
             'switch_pick': self._fl_switch_pick,
+            'pause_which': self._fl_pause_which, 'switch_from_which': self._fl_switch_from_which,
+            'day_pick': self._fl_day_pick,
         }.get(at)
         if not handler:
             state._reset()
             return False
         task = state.staff_kpi_id
-        needs_task = not (at in ('meet_menu', 'meet_client', 'day_pausemenu')
-                          or (at or '').startswith(('c_', 'mt_'))
-                          or (at in ('meet_who', 'meet_note') and d.get('purpose') == 'nontask'))
+        needs_task = not (at in ('meet_menu', 'meet_client', 'day_pausemenu', 'pause_which', 'day_pick')
+                          or (at or '').startswith('mt_')
+                          or (at in ('pause_code', 'pause_note', 'pause_meet') and d.get('all'))
+                          or (at in ('meet_who', 'meet_note') and d.get('purpose') in ('nontask', 'pauseall')))
         if needs_task and (not task or not task.exists()):
             state._reset()
             return False
@@ -895,18 +896,184 @@ class KpiWaStaffTask(models.AbstractModel):
         what = 'Update saved' if kind == 'progress' else 'User manual saved'
         return True, '%s — %s.' % (what, ', '.join(bits) or 'saved')
 
-    def page_complete(self, user, task, ticks, partial=False):
-        """/kra_kpi/task/complete, rule for rule. Returns (ok, message)."""
+    PAGE_KINDS = {'progress': 'p', 'manual': 'm', 'github': 'g'}
+
+    def page_entry(self, user, task, kind, entry_id):
+        """The page's Edit / Delete target: (record, error). Own entry or an admin
+        (_entry_rec, the chat flow's rule), on THIS task, once it has started."""
+        if task.task_state not in STARTED_STATES:
+            return None, ('Start %s first — what was added can be changed once the task has started.'
+                          % self._ref(task))
+        code = self.PAGE_KINDS.get(kind)
+        if not code:
+            return None, 'Unknown item.'
+        try:
+            rid = int(entry_id or 0)
+        except (TypeError, ValueError):
+            rid = 0
+        model = {'p': 'kpi.progress', 'm': 'kpi.user.manual', 'g': 'kpi.github.link'}[code]
+        raw = self.env[model].sudo().browse(rid).exists()
+        if not raw or raw.kpi_id != task:
+            return None, 'That item is no longer on this task.'
+        rec = self._entry_rec(code, rid, user)
+        if not rec:
+            return None, 'Only the person who added it, or an admin, can change it.'
+        return rec, ''
+
+    def page_edit(self, user, task, kind, entry_id, summary=None, raw_links=None, remove=None,
+                  files=None, replace_same=False):
+        """Edit an update / manual from the page, as the board's /kpi/progress/update
+        and /kpi/file/remove do: only what was sent is written, an update's text
+        can't be emptied, "Edited" is stamped only on a real change, and a manual
+        left with no file is removed (board rule). All or nothing. (ok, message)."""
+        rec, err = self.page_entry(user, task, kind, entry_id)
+        if err:
+            return False, err
+        if kind == 'github':
+            return False, 'A GitHub link can only be deleted.'
+        text_field = 'summary' if kind == 'progress' else 'description'
+        vals, changed = {}, False
+        if summary is not None:
+            text = summary.strip()
+            if kind == 'progress' and not text:
+                return False, 'The update text cannot be empty.'
+            if (rec[text_field] or '') != text:
+                vals[text_field] = text
+        if raw_links is not None:
+            # The links box holds the entry's full list: what is left is what stays.
+            keep, d = [], {'links': []}
+            for tok in re.split(r'[\s,]+', raw_links or ''):
+                if not tok.strip():
+                    continue
+                url = _norm_url(tok)
+                if not url:
+                    return False, '"%s" is not a valid link (e.g. https://example.com).' % tok
+                if url not in keep:
+                    keep.append(url)
+            before = []
+            try:
+                before = [v.get('url') if isinstance(v, dict) else v for v in json.loads(rec.related_links or '[]')]
+            except (TypeError, ValueError):
+                pass
+            new_links = [u for u in keep if u not in before]
+            for url in new_links:                       # only NEW links are checked for duplicates
+                dup = self._link_dup(task, url, d)
+                if dup:
+                    return False, dup
+                d['links'].append(url)
+            if keep != before:
+                vals['related_links'] = json.dumps(keep)
+        atts, replace, ferr = self._page_files(task, user, files or [], replace_same, manual=(kind == 'manual'))
+        if ferr:
+            return False, ferr
+        removed = [int(x) for x in (remove or []) if str(x).lstrip('-').isdigit()]
+        own_atts = set(self.env['kpi.file.attachment'].sudo().search(
+            [('progress_id' if kind == 'progress' else 'manual_id', '=', rec.id)]).ids)
+        if any(a and a not in own_atts for a in removed):
+            return False, 'That file is not on this entry.'
+        deleted = False
+        try:
+            with self.env.cr.savepoint():
+                if vals:
+                    rec.sudo().write(vals)
+                    changed = True
+                # New files go on BEFORE anything is removed, so swapping a manual's
+                # only file for another never empties (and so deletes) the manual.
+                if atts:
+                    self._attach(rec, 'uploaded_file' if kind == 'progress' else 'manual_file', atts)
+                    changed = True
+                # Attachment rows first, the entry's own file (0) last, so the
+                # promotion in _remove_file never moves a file that is about to go.
+                for a in sorted(removed, reverse=True):
+                    if self._remove_file(kind, rec, a) == 'deleted':
+                        deleted = True
+                        break
+                    changed = True
+                if not deleted:
+                    for r in replace:
+                        model = 'kpi.progress' if r['kind'] == 'progress' else 'kpi.user.manual'
+                        entry = self.env[model].sudo().browse(r['entry']).exists()
+                        if entry and entry != rec:
+                            self._remove_file(r['kind'], entry, r['att'])
+                if changed and kind == 'progress' and not deleted:
+                    rec.sudo().write({'edited_at': fields.Datetime.now()})
+        except Exception as exc:
+            _logger.exception('page edit failed')
+            return False, 'Could not save: %s' % str(exc)[:200]
+        if deleted:
+            return True, 'The manual had no file left, so it was removed.'
+        if not changed:
+            return True, 'Nothing changed.'
+        return True, ('Update saved.' if kind == 'progress' else 'User manual saved.')
+
+    def page_delete(self, user, task, kind, entry_id):
+        """Delete an update / manual / GitHub link from the page (own or admin). (ok, message)."""
+        rec, err = self.page_entry(user, task, kind, entry_id)
+        if err:
+            return False, err
+        try:
+            rec.sudo().unlink()
+        except Exception as exc:
+            return False, 'Could not delete: %s' % str(exc)[:200]
+        return True, {'progress': 'Update deleted.', 'manual': 'User manual deleted.',
+                      'github': 'GitHub link deleted.'}[kind]
+
+    def page_complete(self, user, task, ticks, partial=False, summary='', raw_links='',
+                      gh_url='', gh_branch='', files=None):
+        """The page's Complete form: /kra_kpi/task/complete's rules, plus what
+        the form brings with it -- a summary (with optional links / GitHub) and
+        the user manual file(s).
+
+        All or nothing: the summary and manual are saved, then the task is
+        completed, inside ONE savepoint, so a refusal at any step leaves no
+        half-saved update behind and the form can simply be sent again.
+        Returns (ok, message)."""
         if task.task_state not in ('in_progress', 'paused', 'hold', 'rework'):
             return False, 'Only a running or paused task can be finished.'
-        if not self.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id)]):
-            return False, 'Please submit a Progress Summary before completing this task.'
+        summary = (summary or '').strip()
+        files = files or []
+        if not summary and ((raw_links or '').strip() or (gh_url or '').strip()):
+            return False, 'Write a summary to go with the links.'
+        no_summary = not summary and not self.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id)])
+        if partial and no_summary:
+            return False, 'Write a summary of what you did — this is what your manager reads.'
         checklist = {} if partial else {k: (k in ticks) for k, _l in CHECKLIST}
-        if not partial and not any(checklist.values()):
-            return False, ('Confirm at least one checklist item before completing (or use Partial '
-                           'finish to send a summary only).')
+        if not partial:
+            # Everything missing at once, so one reply says all of it (the same
+            # list the page's "you still need" popup shows).
+            missing = []
+            if no_summary:
+                missing.append('a summary of what you did')
+            if not files and task._manual_required_refusal():
+                missing.append('the user manual (PDF, DOC or DOCX)')
+            if not (gh_url or '').strip() and task._github_required_refusal():
+                missing.append('the GitHub link + branch (this is a Module / App task)')
+            if not any(checklist.values()):
+                missing.append('at least one ticked checkbox')
+            if missing:
+                return False, ('Before completing, you still need: %s. Or use Partial finish to send a '
+                               'summary only.' % '; '.join(missing))
+
+        class _Refused(Exception):
+            pass
+
         try:
-            task.with_user(user).sudo().complete_task(employee_checklist=checklist)
+            with self.env.cr.savepoint():
+                if summary:
+                    ok, msg = self.page_save(user, task, 'progress', summary, raw_links, gh_url, gh_branch)
+                    if not ok:
+                        raise _Refused(msg)
+                if files:
+                    ok, msg = self.page_save(user, task, 'manual', '', '', files=files)
+                    if not ok:
+                        raise _Refused(msg)
+                if not partial:
+                    refused = task._manual_required_refusal() or task._github_required_refusal()
+                    if refused:
+                        raise _Refused(refused)
+                task.with_user(user).sudo().complete_task(employee_checklist=checklist)
+        except _Refused as exc:
+            return False, str(exc)
         except Exception as exc:
             return False, str(exc).strip()[:300]
         return True, ('Finished as a partial finish — sent for review with the summary.' if partial
@@ -949,24 +1116,27 @@ class KpiWaStaffTask(models.AbstractModel):
     # Completed                                                           #
     # ================================================================== #
     def _done_begin(self, message, state, user, task):
+        """✅ Completed: finishing happens on the task page, not in the chat.
+
+        The page asks for what the web's Complete does -- a summary, a user
+        manual (unless one is already on the task), at least one checkbox --
+        and keeps the form filled on a mistake, which a poll cannot. The group
+        is told plainly that the task is NOT finished yet."""
         if task.task_state not in STARTED_STATES:
             return self._back_to_task(message, state, task, _(
                 'Resume %s first — a task has to be started before it can be finished.')
                 % self._ref(task))
-        Progress = self.env['kpi.progress'].sudo()
-        last = Progress.search([('kpi_id', '=', task.id)], order='create_date desc, id desc', limit=1)
-        if not last:
-            return self._upd_begin(message, state, user, task, mode='progress', after='done')
-        snippet = (last.summary or '').strip().replace('\n', ' ')
-        if len(snippet) > 160:
-            snippet = snippet[:157] + '…'
-        q = _('✅ Finish %s — %s\n\nLast update (%s, %s):\n"%s"\n\nAdd a new update first, '
-              'or go on with the last one?') % (
-            self._ref(task), task.name or '', last.employee_name or last.user_id.name or '',
-            self._when(user, last.create_date), snippet)
-        return self._fask(message, state, {'at': 'done_pick'}, q,
-                          ['📝 Add a new update', '➡️ Go on with the last update', CANCEL])
+        state._reset()
+        needed = _('summary, user manual and GitHub link') if task._github_required() \
+            else _('summary and user manual')
+        self._send_page_link(message, state, user, task, group_note=_(
+            '⏳ %(ref)s is not completed yet, %(who)s. Open the link in your private chat, fill in '
+            'the mandatory items (%(needed)s), tick the checkboxes, then tap '
+            '*Submit for approval*.') % {'ref': self._ref(task), 'who': user.name or '', 'needed': needed})
+        return True
 
+    # The in-chat finish below is no longer started (✅ Completed sends the page
+    # link). It stays for polls sent before that change, which still land here.
     def _fl_done_pick(self, message, state, user, d, task, tapped, low, body):
         i = self._fchoice(d, tapped, low)
         if i == 0:
@@ -1019,6 +1189,9 @@ class KpiWaStaffTask(models.AbstractModel):
         checklist = {} if partial else {k: (k in ticked) for k, _l in CHECKLIST}
         if not partial and not any(checklist.values()):
             return self._done_checklist(message, state, user, task, True)
+        if not partial and (task._manual_required_refusal() or task._github_required_refusal()):
+            # A manual / GitHub link is added on the page: send them there.
+            return self._done_begin(message, state, user, task)
         return self._staff_run(message, state, user, task, 'complete',
                                checklist=checklist, partial=partial)
 
@@ -1216,6 +1389,50 @@ class KpiWaStaffTask(models.AbstractModel):
     # ================================================================== #
     # Task details                                                        #
     # ================================================================== #
+    DOUBT_KIND = {'question': '❓', 'meet_admin': '📅', 'meet_client': '🤝', 'escalation': '🚨'}
+    DOUBT_STATE = {'open': '⏳ waiting for the manager', 'answered': '✅ answered',
+                   'released': '📤 sent to the client', 'client_replied': '💬 client replied',
+                   'rejected': '✖️ declined', 'closed': '✔️ closed'}
+
+    def _task_doubts(self, task, user):
+        """The questions and meeting requests raised on this task, newest first,
+        with the manager's answer -- what the web lists under the task (the
+        WhatsApp group only ever saw each answer once). Plain dicts, for the
+        chat and the task page alike."""
+        out = []
+        for x in self.env['kpi.doubt'].sudo().search([('kpi_id', '=', task.id)], order='id desc', limit=15):
+            out.append({
+                'icon': self.DOUBT_KIND.get(x.kind, '❓'),
+                'question': ' '.join((x.question or '').split()),
+                'asked_by': x.raised_by_id.name or '',
+                'asked': self._when_short(user, x.create_date),
+                'state': self.DOUBT_STATE.get(x.state, x.state or ''),
+                'answer': ' '.join((x.answer or '').split()),
+                'answered_by': x.answered_by_id.name or '',
+                'answered': self._when_short(user, x.answered_at) if x.answered_at else '',
+                'client_answer': ' '.join((x.client_answer or '').split()),
+            })
+        return out
+
+    def _answers_show(self, message, state, user, task):
+        """💬 Manager answers: every question on the task and how it was answered."""
+        rows = self._task_doubts(task, user)
+        if not rows:
+            return self._back_to_task(message, state, task, _('No questions have been asked on %s yet.')
+                                      % self._ref(task))
+        lines = [_('💬 %s — questions to the manager') % self._ref(task)]
+        for n, r in enumerate(rows, 1):
+            lines.append('')
+            lines.append('%d. %s "%s" — %s, %s' % (n, r['icon'], r['question'][:200], r['asked_by'], r['asked']))
+            if r['answer']:
+                lines.append('   → %s "%s" — %s%s' % (r['state'].split(' ')[0], r['answer'][:300], r['answered_by'],
+                                                     (', %s' % r['answered']) if r['answered'] else ''))
+            else:
+                lines.append('   → %s' % r['state'])
+            if r['client_answer']:
+                lines.append(_('   🧑‍💼 Client: "%s"') % r['client_answer'][:300])
+        return self._back_to_task(message, state, task, '\n'.join(lines))
+
     def _info_show(self, message, state, user, task, then_menu=True):
         labels = dict(task._fields['task_state'].selection)
         prio = dict(task._fields['priority'].selection or []).get(task.priority, task.priority or '—')
@@ -1252,6 +1469,10 @@ class KpiWaStaffTask(models.AbstractModel):
                                            ' '.join((p.summary or '').split())[:120]))
         for g in gh[:5]:
             lines.append('🐙 %s (%s)' % (g.github_url, g.branch_name or ''))
+        doubts = self._task_doubts(task, user)
+        if doubts:
+            lines.append(_('💬 Questions to the manager: %(n)d · answered %(a)d — tap 💬 Manager answers') % {
+                'n': len(doubts), 'a': len([x for x in doubts if x['answer']])})
         if task.task_state == 'partially_completed':
             ticks = [l for k, l in CHECKLIST if task['employee_checklist_%s' % {
                 'verify_github': 'github', 'deployed_task': 'deployed', 'user_manual': 'manual',
@@ -1263,8 +1484,8 @@ class KpiWaStaffTask(models.AbstractModel):
         return self._back_to_task(message, state, task)
 
     def _kpi_details(self, message, state, user, task):
-        """📋 KPI details: the details first, then a poll with Completed and
-        the update rows (Add update, My updates & files, Add user manual)."""
+        """📋 KPI details: the page link and the details, then a poll with
+        Completed, Get a file and Logs (updates and manuals are on the page)."""
         self._send_page_link(message, state, user, task)
         self._info_show(message, state, user, task, then_menu=False)
         rows = _kpi_actions_for(task)
@@ -1274,10 +1495,13 @@ class KpiWaStaffTask(models.AbstractModel):
         return self._fask(message, state, d, _('📋 %s — what next?') % self._ref(task),
                           [l for _c, l in rows] + [BACK])
 
-    def _send_page_link(self, message, state, user, task):
+    def _send_page_link(self, message, state, user, task, group_note=''):
         """A private link to this task's page (controllers/kpi_wa_task_page.py):
         everything on the task, plus add update / manual / complete. Only this
-        person, only this task, for 2 hours."""
+        person, only this task, for 2 hours.
+
+        `group_note` replaces the usual "the link is in your private chat" line
+        in the group (✅ Completed uses it to say the task is not finished yet)."""
         token = secrets.token_urlsafe(24)
         state.sudo().write({'staff_page_token': token, 'staff_page_kpi_id': task.id,
                             'staff_page_expires': fields.Datetime.now() + timedelta(hours=2)})
@@ -1289,12 +1513,56 @@ class KpiWaStaffTask(models.AbstractModel):
         if number:
             try:
                 self._session(message).sudo().send_message(number, text)
-                self._text(message, _('📩 %s, the %s page link is in your private chat.')
+                self._text(message, group_note or _('📩 %s, the %s page link is in your private chat.')
                            % (user.name or '', self._ref(task)))
                 return
             except Exception as exc:
                 _logger.warning('private task page link failed: %s', exc)
-        self._text(message, text)
+        self._text(message, ('%s\n\n%s' % (group_note, text)) if group_note else text)
+
+    # ------------------------------------------------------------------ #
+    # 📂 Projects & documents: a private "My work" page. Its link is SIGNED #
+    # (state, person, expiry) rather than stored, so it never displaces the #
+    # task-page link held on the same state row.                           #
+    # ------------------------------------------------------------------ #
+    MY_WORK_HOURS = 2
+
+    def _my_work_sig(self, state_id, user_id, exp):
+        from odoo.tools.misc import hmac as odoo_hmac
+        return odoo_hmac(self.env(su=True), 'kpi_wa_my_work', '%s:%s:%s' % (state_id, user_id, exp))[:32]
+
+    def my_work_token(self, state, user):
+        exp = int((fields.Datetime.now() + timedelta(hours=self.MY_WORK_HOURS)).timestamp())
+        return '%s-%s-%s' % (state.id, exp, self._my_work_sig(state.id, user.id, exp))
+
+    def my_work_resolve(self, token):
+        """(state, user) for a valid, unexpired My-work link, else (None, None)."""
+        try:
+            sid, exp, sig = (token or '').split('-', 2)
+            sid, exp = int(sid), int(exp)
+        except (ValueError, TypeError):
+            return None, None
+        if exp < fields.Datetime.now().timestamp():
+            return None, None
+        st = self.env['kpi.wa.group.intake'].sudo().browse(sid).exists()
+        if not st:
+            return None, None
+        user, ok = self._staff_member(st, st.group_id)
+        if not ok or not hmac_compare(sig, self._my_work_sig(sid, user.id, exp)):
+            return None, None
+        return st, user
+
+    def my_task_ids(self, user):
+        """The tasks the My-work page covers: the person's own board tasks."""
+        return list({i for ids in self._board_lanes(user).values() for i in ids})
+
+    def _send_overview_link(self, message, state, user):
+        base = self.env['whatsapp.config'].sudo().get_config().get_kpi_public_base_url()
+        url = '%s/kpi/wa/my/%s' % (base, self.my_work_token(state, user))
+        text = _('📂 Your projects & documents (only for you, %d hours):\n%s') % (self.MY_WORK_HOURS, url)
+        state._reset()
+        return self._send_private(message, user, text,
+                                  _('📩 %s, your projects & documents page is in your private chat.') % (user.name or ''))
 
     def _send_endday_link(self, message, state, user):
         """🌙 End my day: a private link to the End Workday page. Only this
@@ -1379,10 +1647,21 @@ class KpiWaStaffTask(models.AbstractModel):
             'who': user.name, 'ref': self._ref(task), 'why': reason})
         return True
 
-    def _switch_to(self, message, state, user, task):
-        """kra.kpi.switch_to_task: stop what runs, start this, in one step."""
+    def _switch_to(self, message, state, user, task, from_task=None):
+        """kra.kpi.switch_to_task: stop what runs, start this, in one step.
+
+        With several running (multitask) the person says which one hands over,
+        as the web's per-card Switch does; without a from_kpi_id the server
+        would stop every running task."""
+        running = self._running_tasks(user) - task
+        if from_task is None and len(running) > 1:
+            d = {'at': 'switch_from_which', 'ids': running.ids}
+            return self._fask(message, state, d,
+                              _('🔀 Start %s — which running task should stop?') % self._ref(task),
+                              [self._task_line(t, True) for t in running] + [BACK])
         try:
-            res = task.with_user(user).sudo().switch_to_task(from_kpi_id=None, note='')
+            res = task.with_user(user).sudo().switch_to_task(
+                from_kpi_id=from_task.id if from_task else None, note='')
         except Exception as exc:
             res = {'status': False, 'message': str(exc).strip()[:300]}
         state._reset()
@@ -1391,8 +1670,27 @@ class KpiWaStaffTask(models.AbstractModel):
                 'ref': self._ref(task), 'why': (res or {}).get('message') or _('could not switch')})
             self._menu_again(message, state, user)
             return True
-        self._text(message, _('🔀 %(who)s switched to %(ref)s.') % {'who': user.name, 'ref': self._ref(task)})
+        self._text(message, _('🔀 %(who)s switched to %(ref)s.%(still)s') % {
+            'who': user.name, 'ref': self._ref(task), 'still': self._still_running(user, task)})
         return True
+
+    def _fl_switch_from_which(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        ids = d.get('ids') or []
+        if i >= len(ids):
+            return self._back_to_task(message, state, task)
+        from_task = self.env['kra.kpi'].sudo().browse(ids[i]).exists()
+        if not from_task or from_task.task_state != 'in_progress':
+            self._text(message, _('That task is no longer running.'))
+            return self._switch_to(message, state, user, task)
+        return self._switch_to(message, state, user, task, from_task=from_task)
+
+    def _still_running(self, user, task):
+        """' (still running: REF-A, REF-B)' when others keep going (multitask), else ''."""
+        others = self._running_tasks(user) - task
+        return (_(' (still running: %s)') % ', '.join(self._ref(t) for t in others)) if others else ''
 
     def _switch_from_begin(self, message, state, user, task):
         """From the RUNNING task: pick the task to move to (the web's Switch to…)."""
@@ -1529,10 +1827,6 @@ class KpiWaStaffTask(models.AbstractModel):
     # ================================================================== #
     # ➕ Create my own task -- kra.kpi.self_create_task                    #
     # ================================================================== #
-    C_TYPES = [('requirement', '✨ Requirement'), ('update', '🔧 Update'), ('bug', '🐞 Bug')]
-    C_DELIV = [('module', '🧩 Module'), ('app', '📱 App'), ('exe', '💻 EXE')]
-    C_PRIO = [('regular', '⚪ Regular'), ('important', '🟡 Important'), ('urgent', '🔴 Urgent')]
-
     def _create_begin(self, message, state, user):
         """➕ Create my own task: a private link to the New Task page -- the
         board's form, same fields and rules (controllers/kpi_wa_task_form.py).
@@ -1561,169 +1855,6 @@ class KpiWaStaffTask(models.AbstractModel):
             self._text(message, _('📩 %s, the new-task form is in your private chat.') % (user.name or ''))
         else:
             self._text(message, text)
-        return True
-
-    def _fl_c_name(self, message, state, user, d, task, tapped, low, body):
-        name = (body or '').strip()
-        if not name:
-            self._text(message, _('Task name is required.'))
-            return True
-        d['c'] = {'name': name[:200]}
-        return self._c_proj_ask(message, state, user, d)
-
-    def _kra_path(self, k):
-        path, cur = [], k
-        while cur:
-            path.insert(0, cur.name or '')
-            cur = cur.parent_id
-        return ' › '.join(path)
-
-    def _c_proj_ask(self, message, state, user, d, only=None, note=''):
-        Kra = self.env['kra.master'].sudo()
-        if only is None:
-            # The projects this person works in first, then the rest.
-            mine = self.env['kra.kpi'].sudo().search([('user_id', '=', user.id)], order='id desc',
-                                                     limit=50).mapped('kra_id')
-            rest = Kra.search([('id', 'not in', mine.ids)], order='name')
-            only = (mine | rest)[:8]
-        d['at'] = 'c_proj'
-        d['proj_ids'] = only.ids
-        q = ((note + '\n\n') if note else '') + _('📁 Which project? Tap one, or type part of its name.')
-        return self._fask(message, state, d, q, ['📁 %s' % self._kra_path(k)[:90] for k in only] + [CANCEL])
-
-    def _fl_c_proj(self, message, state, user, d, task, tapped, low, body):
-        i = self._fchoice(d, tapped, low, allow_number=False)
-        ids = d.get('proj_ids') or []
-        if i is None:
-            q = (body or '').strip()
-            if not q:
-                return False
-            hits = self.env['kra.master'].sudo().search([('name', 'ilike', q)], limit=8)
-            if len(hits) == 1:
-                d['c']['kra_id'] = hits.id
-                return self._c_type_ask(message, state, d)
-            return self._c_proj_ask(message, state, user, d, only=hits if hits else None,
-                                    note=_('No project matches "%s".') % q if not hits else '')
-        if i >= len(ids):
-            state._reset()
-            self._text(message, _('Cancelled — no task created.'))
-            return True
-        d['c']['kra_id'] = ids[i]
-        return self._c_type_ask(message, state, d)
-
-    def _c_type_ask(self, message, state, d):
-        d['at'] = 'c_type'
-        return self._fask(message, state, d, _('What kind of task is it?'),
-                          [l for _c, l in self.C_TYPES] + [BACK])
-
-    def _fl_c_type(self, message, state, user, d, task, tapped, low, body):
-        i = self._fchoice(d, tapped, low)
-        if i is None:
-            return False
-        if i >= len(self.C_TYPES):                       # ↩️ Back → project
-            return self._c_proj_ask(message, state, user, d)
-        d['c']['doc_type'] = self.C_TYPES[i][0]
-        d['c']['deliv'] = []
-        return self._c_deliv_ask(message, state, d)
-
-    def _c_deliv_ask(self, message, state, d):
-        """Module / App / EXE -- at least one, tick one at a time."""
-        d['at'] = 'c_deliv'
-        picked = d['c'].get('deliv') or []
-        labels = dict(self.C_DELIV)
-        opts = [l for c, l in self.C_DELIV if c not in picked]
-        if picked:
-            opts.append('➡️ Next')
-        q = _('What does it deliver? Tick at least one type — Module, App or EXE.\nTicked: %s') % (
-            ', '.join(labels[c] for c in picked) or _('nothing yet'))
-        opts.append(BACK)
-        return self._fask(message, state, d, q, opts)
-
-    def _c_prio_ask(self, message, state, d):
-        d['at'] = 'c_prio'
-        return self._fask(message, state, d, _('Priority?'), [l for _c, l in self.C_PRIO] + [BACK])
-
-    def _fl_c_deliv(self, message, state, user, d, task, tapped, low, body):
-        i = self._fchoice(d, tapped, low)
-        if i is None:
-            return False
-        label = d['opts'][i]
-        if label == BACK:                                 # → type
-            return self._c_type_ask(message, state, d)
-        if label.startswith('➡️'):
-            return self._c_prio_ask(message, state, d)
-        code = {l: c for c, l in self.C_DELIV}.get(label)
-        if code and code not in d['c']['deliv']:
-            d['c']['deliv'].append(code)
-        return self._c_deliv_ask(message, state, d)
-
-    def _fl_c_prio(self, message, state, user, d, task, tapped, low, body):
-        i = self._fchoice(d, tapped, low)
-        if i is None:
-            return False
-        if i >= len(self.C_PRIO):                        # ↩️ Back → delivers
-            return self._c_deliv_ask(message, state, d)
-        d['c']['priority'] = self.C_PRIO[i][0]
-        return self._c_est_ask(message, state, d)
-
-    def _c_est_ask(self, message, state, d):
-        d['at'] = 'c_est'
-        return self._fask(message, state, d, _('⏱️ Estimate? Type it like *2h 30m*, or skip — the admin can '
-                                               'set it when accepting.'), ['⏭️ Skip', BACK, CANCEL])
-
-    def _fl_c_est(self, message, state, user, d, task, tapped, low, body):
-        i = self._fchoice(d, tapped, low, allow_number=False)
-        if i == 1:                                        # ↩️ Back → priority
-            return self._c_prio_ask(message, state, d)
-        if i == 2:
-            state._reset()
-            self._text(message, _('Cancelled — no task created.'))
-            return True
-        h = m = 0
-        if i != 0:
-            mt = re.match(r'^\s*(?:(\d{1,3})\s*h\w*)?\s*(?:(\d{1,2})\s*m\w*)?\s*$', body or '', re.I)
-            if not mt or not (mt.group(1) or mt.group(2)):
-                self._text(message, _('Type it like *2h 30m* or *45m*, or tap Skip.'))
-                return True
-            h, m = int(mt.group(1) or 0), int(mt.group(2) or 0)
-            if m > 59:
-                self._text(message, _('Minutes must be 0–59.'))
-                return True
-        d['c']['est_h'], d['c']['est_m'] = h, m
-        c = d['c']
-        kra = self.env['kra.master'].sudo().browse(c.get('kra_id'))
-        labels = dict(self.C_TYPES + self.C_DELIV + self.C_PRIO)
-        q = _('➕ Create this task?\n\nName: %s\nProject: %s\nType: %s\nDelivers: %s\nPriority: %s\n'
-              'Estimate: %s\n\nIt waits in Pending review until an admin accepts it.') % (
-            c['name'], self._kra_path(kra), labels[c['doc_type']],
-            ', '.join(labels[x] for x in c['deliv']), labels[c['priority']],
-            ('%dh %02dm' % (h, m)) if (h or m) else _('not set'))
-        d['at'] = 'c_confirm'
-        return self._fask(message, state, d, q, ['✅ Create task', BACK, CANCEL])
-
-    def _fl_c_confirm(self, message, state, user, d, task, tapped, low, body):
-        i = self._fchoice(d, tapped, low)
-        if i is None:
-            return False
-        if i == 1:                                        # ↩️ Back → estimate
-            return self._c_est_ask(message, state, d)
-        if i != 0:
-            state._reset()
-            self._text(message, _('Cancelled — no task created.'))
-            return True
-        c = d['c']
-        res = self.env['kra.kpi'].with_user(user).self_create_task({
-            'name': c['name'], 'kra_id': c['kra_id'], 'doc_type': c['doc_type'],
-            'deliverable_type': c['deliv'], 'priority': c['priority'],
-            'estimate_hours': c.get('est_h') or 0, 'estimate_minutes': c.get('est_m') or 0,
-        })
-        state._reset()
-        if not res or not res.get('status'):
-            self._text(message, _('Could not create it: %s') % ((res or {}).get('message') or ''))
-            return True
-        self._text(message, _('✅ %(ref)s created — "%(name)s". It is in your Pending review lane; '
-                              'you can start it now, and an admin will accept it.') % {
-            'ref': res.get('external_ref') or '', 'name': c['name']})
         return True
 
     # ================================================================== #
@@ -1807,8 +1938,8 @@ class KpiWaStaffTask(models.AbstractModel):
             inside = ' · '.join('%s %d' % (self.LANE_SHORT[k].upper(), len(lanes.get(k, []))) for k in keys)
             opts.append(('%s (%s)' % (label, inside))[:99])
             codes.append(key)
-        opts += [STAFF_CREATE_LABEL, self.SEARCH, BACK]
-        codes += ['new', 'search', 'back']
+        opts += [self.FILTER, self.OVERVIEW, STAFF_CREATE_LABEL, self.SEARCH, BACK]
+        codes += ['filter', 'overview', 'new', 'search', 'back']
         q = _('📋 Your tasks — pick a section') if total \
             else _('📋 Nothing is assigned to you yet — create your own, or wait for a manager to assign one.')
         self._fsave(state, {}, staff_kpi_id=False)
@@ -1821,6 +1952,10 @@ class KpiWaStaffTask(models.AbstractModel):
         code = d['codes'][i]
         if code == 'new':
             return self._create_begin(message, state, user)
+        if code == 'filter':
+            return self._mt_filter_menu(message, state, user)
+        if code == 'overview':
+            return self._send_overview_link(message, state, user)
         if code == 'search':                      # search all tasks from the top
             self._fsave(state, {'at': 'mt_search', 'phase': None, 'lane': None})
             self._text(message, _('🔍 Search task name or tag — e.g. REQ-014, req14, REQ, or part of '
@@ -1854,13 +1989,94 @@ class KpiWaStaffTask(models.AbstractModel):
         return self._mt_tasks(message, state, user, d['phase'], keys[i], 0)
 
     SEARCH = '🔍 Search'
+    FILTER = '🎯 Filter'
+    OVERVIEW = '📂 Projects & documents'
+
+    # ------------------------------------------------------------------ #
+    # 🎯 Filter: taps only. Each filter is a "lane" named f_… so the list,  #
+    # paging, Search, Back and the task menu's Back all work unchanged.   #
+    # ------------------------------------------------------------------ #
+    FILTERS = [('f_urgent', '🔴 Urgent'), ('f_important', '🟣 Important'), ('f_regular', '⚪ Regular'),
+               ('f_active', '▶️ Running & paused')]
+    FINISHED = ('partially_completed', 'awaiting_client', 'completed')
+
+    def _filter_ids(self, user, lane):
+        lanes = self._board_lanes(user)
+        order = []
+        for k in ('in_progress', 'paused', 'urgent', 'important', 'regular', 'pending_review',
+                  'approvals', 'awaiting_client', 'completed'):
+            order += [i for i in lanes.get(k, []) if i not in order]
+        tasks = self.env['kra.kpi'].sudo().browse(order).exists()
+        if lane == 'f_active':
+            keep = tasks.filtered(lambda t: t.task_state in ('in_progress', 'paused'))
+        elif lane.startswith('f_p'):
+            kra = int(lane[3:] or 0)
+            keep = tasks.filtered(lambda t: t.kra_id.id == kra)
+        else:
+            prio = lane[2:]
+            keep = tasks.filtered(lambda t: (t.priority or 'regular') == prio and t.task_state not in self.FINISHED)
+        return keep.ids
+
+    def _filter_title(self, lane):
+        if lane.startswith('f_p'):
+            kra = self.env['kra.master'].sudo().browse(int(lane[3:] or 0)).exists()
+            return '📁 %s' % (kra.display_name if kra else _('Project'))
+        return dict(self.FILTERS).get(lane, lane)
+
+    def _mt_filter_menu(self, message, state, user):
+        opts, codes = [], []
+        for code, label in self.FILTERS:
+            opts.append('%s (%d)' % (label, len(self._filter_ids(user, code))))
+            codes.append(code)
+        opts += [_('📁 By project'), BACK]
+        codes += ['projects', 'back']
+        return self._fask(message, state, {'at': 'mt_filter', 'codes': codes}, _('🎯 Show which tasks?'), opts)
+
+    def _fl_mt_filter(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        code = (d.get('codes') or [])[i] if i < len(d.get('codes') or []) else 'back'
+        if code == 'back':
+            return self._mytasks_begin(message, state, user)
+        if code == 'projects':
+            return self._mt_projects(message, state, user)
+        return self._mt_tasks(message, state, user, 'filter', code, 0)
+
+    def _mt_projects(self, message, state, user):
+        """📁 By project: the projects this person has tasks in, busiest first."""
+        tasks = self.env['kra.kpi'].sudo().browse(
+            list({i for ids in self._board_lanes(user).values() for i in ids})).exists()
+        count = {}
+        for t in tasks:
+            if t.kra_id:
+                count[t.kra_id] = count.get(t.kra_id, 0) + 1
+        projects = sorted(count, key=lambda k: (-count[k], k.display_name or ''))[:8]
+        if not projects:
+            self._text(message, _('None of your tasks has a project yet.'))
+            return self._mt_filter_menu(message, state, user)
+        opts = [('%s (%d)' % (p.display_name or p.name or '', count[p]))[:99] for p in projects] + [BACK]
+        return self._fask(message, state, {'at': 'mt_proj', 'ids': [p.id for p in projects]},
+                          _('📁 Which project?'), opts)
+
+    def _fl_mt_proj(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        ids = d.get('ids') or []
+        if i >= len(ids):
+            return self._mt_filter_menu(message, state, user)
+        return self._mt_tasks(message, state, user, 'filter', 'f_p%d' % ids[i], 0)
 
     def _mt_tasks(self, message, state, user, phase, lane, page, query=None, note=''):
-        """One page of tasks -- a lane's, or search results (query set).
-        Every page ends with 🔍 Search and ↩️ Back (and ➡️ More when needed)."""
+        """One page of tasks -- a lane's, a filter's (lane f_…), or search results
+        (query set). Every page ends with 🔍 Search and ↩️ Back (and ➡️ More)."""
         if query is not None:
             ids = self._mt_search_ids(user, query)
             title = _('🔍 "%s" — %d found') % (query, len(ids))
+        elif (lane or '').startswith('f_'):
+            ids = self._filter_ids(user, lane)
+            title = '%s — %s' % (self._filter_title(lane), _('pick a task') if ids else _('nothing here right now'))
         else:
             ids = self._board_lanes(user).get(lane, [])
             title = '%s — %s' % (self.LANE_LABEL.get(lane, lane), _('pick a task'))
@@ -1871,7 +2087,7 @@ class KpiWaStaffTask(models.AbstractModel):
         chunk = tasks[page * per:(page + 1) * per]
         # A lane already says the state; Today and search results mix states,
         # so those lines carry it too.
-        with_state = query is not None or lane == 'today'
+        with_state = query is not None or lane == 'today' or (lane or '').startswith('f_')
         opts = [self._task_line(t, with_state) for t in chunk]
         if pages > 1:
             opts.append('➡️ More')
@@ -1941,6 +2157,10 @@ class KpiWaStaffTask(models.AbstractModel):
             return True
         if not d.get('phase'):                    # searched from the top → My tasks
             return self._mytasks_begin(message, state, user)
+        if d.get('phase') == 'filter' and d.get('query') is None:   # a filter's list → its menu
+            if (d.get('lane') or '').startswith('f_p'):
+                return self._mt_projects(message, state, user)
+            return self._mt_filter_menu(message, state, user)
         if d.get('query') is not None:            # Back from results → the lane
             return self._mt_tasks(message, state, user, d['phase'], d['lane'], 0)
         return self._mt_lanes(message, state, user, d['phase'])
@@ -1966,11 +2186,9 @@ class KpiWaStaffTask(models.AbstractModel):
     # ================================================================== #
     # Main menu ⏸️ Pause: Break · Lunch · Meeting · Pause my whole day     #
     # ================================================================== #
+    # The old main-menu Pause poll. ⏸️ Pause now opens the full reasons
+    # (_pause_menu, below); this stays so a poll sent before that still works.
     PAUSE_MENU = ['☕ Break', '🍽️ Lunch', '👥 Meeting', '🗓️ Pause my whole day', BACK]
-
-    def _pause_menu(self, message, state, user):
-        return self._fask(message, state, {'at': 'day_pausemenu'}, _('⏸️ Pause — what for?'),
-                          self.PAUSE_MENU)
 
     def _fl_day_pausemenu(self, message, state, user, d, task, tapped, low, body):
         i = self._fchoice(d, tapped, low)
@@ -1981,22 +2199,9 @@ class KpiWaStaffTask(models.AbstractModel):
             running = self.env['kpi.time.log'].sudo().search_count(
                 [('user_id', '=', user.id), ('is_active', '=', True)])
             if running:
-                # A task is running: pause it with this reason, as the web's
-                # Pause does (every running timer, one shared reason).
-                try:
-                    res = self.env['kra.kpi'].sudo().with_user(user).pause_all_running(
-                        reason=PAUSE_STORED[code], reason_code=code)
-                except Exception as exc:
-                    res = {'status': False, 'message': str(exc).strip()[:200]}
-                state._reset()
-                if not res or res.get('status') is False:
-                    self._text(message, _('Could not pause: %s') % ((res or {}).get('message') or ''))
-                    return self._show_staff_menu(message, state, user)
-                self._text(message, _('%(icon)s %(what)s noted, %(who)s — your running task is paused. '
-                                      'Tap *Resume* on it when you are back.') % {
-                    'icon': '☕' if code == 'break' else '🍽️',
-                    'what': _('Break') if code == 'break' else _('Lunch'), 'who': user.name or ''})
-                return True
+                # A task is running: pause every running timer with this reason,
+                # as the web's Pause all does; the reply names each one.
+                return self._pause_all_apply(message, state, user, code, PAUSE_STORED[code], [])
             # Nothing running: record it as break / lunch time on the day.
             return self._staff_nontask(message, state, user, 'nt_%s' % code)
         if i == 2:
@@ -2005,6 +2210,46 @@ class KpiWaStaffTask(models.AbstractModel):
             return self._staff_day_control(message, state, user, 'day_pause')
         state._reset()
         return self._show_staff_menu(message, state, user)
+
+    SWITCH_ICONS = {'break': '☕', 'lunch': '🍽️', 'meeting': '👥'}
+
+    def _switch_open_break(self, message, state, user, code, note='', picked=None):
+        """Break / Lunch / Meeting while a task's break is still open.
+
+        Pausing a task for a break opens a break row. Recording Lunch as non-task
+        time on top of it left both open, so the Workday Map showed them
+        overlapping. Instead the open break is split at now, as the web's
+        "switch without resuming" button does, and the task stays paused.
+
+        Returns None when no break is open, so the caller records non-task time
+        as before."""
+        Break = self.env['kpi.break.log'].sudo()
+        if not Break.search_count([('user_id', '=', user.id), ('is_active', '=', True)]):
+            return None
+        state._reset()
+        try:
+            res = Break.switch_open_break(code, user_id=user.id,
+                                          reason_note=note or PAUSE_STORED.get(code) or '',
+                                          meeting_with_ids=picked or None)
+        except Exception as exc:
+            self._text(message, _('Could not record that: %s') % str(exc).strip()[:200])
+            return True
+        if res is False:
+            return None
+        icon = self.SWITCH_ICONS.get(code, '')
+        what = PAUSE_STORED.get(code) or code
+        task = self.env['kra.kpi'].sudo().browse(res.get('source_task_id') or 0).exists()
+        back = (_(' %s stays paused — tap *Resume* on it when you are back.') % self._ref(task)
+                if task else _(' Tap *Back to work* when you are in.'))
+        prev = res.get('switched_from')
+        if not prev:
+            self._text(message, _('%(icon)s %(what)s is already noted.%(back)s') % {
+                'icon': icon, 'what': what, 'back': back})
+            return True
+        self._text(message, _('%(from_icon)s %(from)s → %(icon)s %(what)s.%(back)s') % {
+            'from_icon': self.SWITCH_ICONS.get(prev, ''), 'from': PAUSE_STORED.get(prev) or prev,
+            'icon': icon, 'what': what, 'back': back})
+        return True
 
     # ================================================================== #
     # Pause / resume my day, No tasks                                     #
@@ -2091,36 +2336,110 @@ class KpiWaStaffTask(models.AbstractModel):
     # ================================================================== #
     # The poll holds 10, so the reasons sit on two polls, each with ↩️ Back:
     # the common ones (and Urgent) first, the rest under ➕ More reasons….
-    PAUSE_TOP = ['break', 'lunch', 'priority_task', 'meeting', 'day_end', 'urgent', 'more', 'back']
+    # 🗓️ Pause my whole day sits with the reasons too, as the web's Pause dialog
+    # sits beside its Pause workday button.
+    PAUSE_TOP = ['break', 'lunch', 'priority_task', 'meeting', 'day_end', 'urgent', 'more',
+                 'day_pause', 'back']
     PAUSE_MORE = ['awaiting_approval', 'technical_issue', 'leave', 'other', 'back_top']
 
-    def _pause_poll(self, message, state, task, codes, question):
-        labels = dict(PAUSE_CODES, more='➕ More reasons…', back=BACK, back_top=BACK)
-        return self._fask(message, state, {'at': 'pause_code', 'codes': codes}, question,
+    # d['all'] = True: the same polls, but every running task pauses together
+    # (kra.kpi.pause_all_running), for a multitask person who chose "All".
+    def _pause_poll(self, message, state, task, codes, question, all_=False):
+        labels = dict(PAUSE_CODES, more='➕ More reasons…', back=BACK, back_top=BACK,
+                      day_pause='🗓️ Pause my whole day')
+        return self._fask(message, state, {'at': 'pause_code', 'codes': codes, 'all': all_}, question,
                           [labels[c] for c in codes])
 
-    def _pause_begin(self, message, state, user, task):
-        return self._pause_poll(message, state, task, self.PAUSE_TOP,
-                                _('⏸️ Why are you pausing %s?') % self._ref(task))
+    def _pause_begin(self, message, state, user, task, all_=False):
+        if all_:
+            refs = ', '.join(self._ref(t) for t in self._running_tasks(user))
+            q = _('⏸️ Why are you pausing all your running tasks (%s)?') % refs
+        else:
+            q = _('⏸️ Why are you pausing %s?') % self._ref(task)
+        return self._pause_poll(message, state, task, self.PAUSE_TOP, q, all_=all_)
+
+    def _running_tasks(self, user):
+        """Every task this person has a timer running on (several when multitasking)."""
+        return self.env['kpi.time.log'].sudo().search(
+            [('user_id', '=', user.id), ('is_active', '=', True)]).mapped('kpi_id').filtered(
+            lambda k: k.task_state == 'in_progress')
+
+    def _pause_menu(self, message, state, user):
+        """Main-menu ⏸️ Pause. One task running: straight to its reasons. Several
+        (multitask): which one, or all of them."""
+        running = self._running_tasks(user)
+        if not running:
+            state._reset()
+            self._text(message, _('Nothing is running to pause.'))
+            return self._show_staff_menu(message, state, user)
+        if len(running) == 1:
+            state._touch(staff_kpi_id=running.id)
+            return self._pause_begin(message, state, user, running)
+        d = {'at': 'pause_which', 'ids': running.ids}
+        return self._fask(message, state, d, _('⏸️ Pause which? You have %d tasks running.') % len(running),
+                          [self._task_line(t, True) for t in running]
+                          + [_('⏸️ All %d tasks') % len(running), BACK])
+
+    def _fl_pause_which(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        ids = d.get('ids') or []
+        if i < len(ids):
+            picked = self.env['kra.kpi'].sudo().browse(ids[i]).exists()
+            if not picked or picked.task_state != 'in_progress':
+                self._text(message, _('That task is no longer running.'))
+                return self._pause_menu(message, state, user)
+            state._touch(staff_kpi_id=picked.id)
+            return self._pause_begin(message, state, user, picked)
+        if i == len(ids):
+            return self._pause_begin(message, state, user, task, all_=True)
+        state._reset()
+        return self._show_staff_menu(message, state, user)
+
+    def _pause_all_apply(self, message, state, user, code, note, meet_ids):
+        """Pause every running task with one reason (multitask "All")."""
+        refs = ', '.join(self._ref(t) for t in self._running_tasks(user))
+        try:
+            res = self.env['kra.kpi'].sudo().with_user(user).pause_all_running(
+                reason=note, reason_code=code, meeting_with_ids=meet_ids or [])
+        except Exception as exc:
+            res = {'status': False, 'message': str(exc).strip()[:200]}
+        state._reset()
+        if not res or res.get('status') is False:
+            self._text(message, _('Could not pause: %s') % ((res or {}).get('message') or ''))
+            self._menu_again(message, state, user)
+            return True
+        who = ''
+        if meet_ids:
+            who = _(' (with %s)') % ', '.join(self.env['res.users'].sudo().browse(meet_ids).mapped('name'))
+        self._text(message, _('⏸️ Paused %(refs)s — %(why)s%(who)s') % {'refs': refs, 'why': note, 'who': who})
+        return True
 
     def _fl_pause_code(self, message, state, user, d, task, tapped, low, body):
         i = self._fchoice(d, tapped, low)
         if i is None:
             return False
+        all_ = bool(d.get('all'))
         codes = d.get('codes') or [c for c, _l in PAUSE_CODES]
         code = codes[i] if i < len(codes) else 'back'
         if code == 'back':
+            if all_:
+                return self._pause_menu(message, state, user)
             return self._back_to_task(message, state, task)
         if code == 'back_top':
-            return self._pause_begin(message, state, user, task)
+            return self._pause_begin(message, state, user, task, all_=all_)
         if code == 'more':
             return self._pause_poll(message, state, task, self.PAUSE_MORE,
-                                    _('⏸️ %s — other reasons') % self._ref(task))
+                                    _('⏸️ %s — other reasons') % (_('All tasks') if all_ else self._ref(task)),
+                                    all_=all_)
+        if code == 'day_pause':
+            return self._staff_day_control(message, state, user, 'day_pause')
         if code == 'meeting':
-            return self._fask(message, state, {'at': 'pause_meet'},
+            return self._fask(message, state, {'at': 'pause_meet', 'all': all_},
                               _('👥 Meeting with whom?'), self.PAUSE_MEET)
         if code in PAUSE_NOTE_CODES:
-            self._fsave(state, {'at': 'pause_note', 'code': code})
+            self._fsave(state, {'at': 'pause_note', 'code': code, 'all': all_})
             prompt = {
                 'urgent': _('Describe the issue — this note is sent to the owner / configured recipients.'),
                 'awaiting_approval': _('Waiting for whose approval, on what? (short)'),
@@ -2130,6 +2449,8 @@ class KpiWaStaffTask(models.AbstractModel):
             self._text(message, prompt + _(' (Type cancel to stop.)'))
             return True
         # Break / Lunch / Moved to another task / Day End: the label is the reason.
+        if all_:
+            return self._pause_all_apply(message, state, user, code, PAUSE_STORED[code], [])
         return self._pause_apply(message, state, user, task, code, PAUSE_STORED[code], [])
 
     def _fl_pause_note(self, message, state, user, d, task, tapped, low, body):
@@ -2140,6 +2461,8 @@ class KpiWaStaffTask(models.AbstractModel):
         code = d.get('code') or 'other'
         if code == 'meeting':                      # "With manager — <topic>"
             note = (_('With manager — %s') % note)[:NOTE_MAX]
+        if d.get('all'):
+            return self._pause_all_apply(message, state, user, code, note, [])
         return self._pause_apply(message, state, user, task, code, note, [])
 
     PAUSE_MEET = ['👨‍💻 With developer', '👥 Team meeting', '🧑‍💼 With manager', '🤝 With client', BACK]
@@ -2151,19 +2474,31 @@ class KpiWaStaffTask(models.AbstractModel):
         i = self._fchoice(d, tapped, low)
         if i is None:
             return False
+        all_ = bool(d.get('all'))
+        if all_ and i in (0, 1, 3):
+            # All tasks: the 📅 Meeting flow already pauses every running task
+            # (_meet_done → pause_all_running), and books client meetings.
+            if i == 0:
+                return self._meet_begin(message, state, user, purpose='pauseall', devs_only=True)
+            if i == 1:
+                return self._pause_all_apply(message, state, user, 'meeting', TEAM_MEETING_LABEL, [])
+            return self._meet_client_pick(message, state, user)
         if i == 0:
             return self._meet_begin(message, state, user, purpose='pause', devs_only=True)
         if i == 1:
             return self._pause_apply(message, state, user, task, 'meeting', TEAM_MEETING_LABEL, [])
         if i == 2:
-            self._fsave(state, {'at': 'pause_note', 'code': 'meeting'})
+            self._fsave(state, {'at': 'pause_note', 'code': 'meeting', 'all': all_})
             self._text(message, _('What is the meeting with the manager about? (short — type cancel to stop)'))
             return True
         if i == 3:
             self._text(message, _('🤝 Client meetings are booked for a set time, so %s keeps running.')
                        % self._ref(task))
+            # staff_action is still 'pause' here, and _staff_do_text reads the
+            # request kind from it -- without this it is filed as a question.
+            state._touch(staff_action='meet_client', staff_draft=False)
             return self._staff_begin(message, state, user, task, 'meet_client')
-        return self._pause_begin(message, state, user, task)
+        return self._pause_begin(message, state, user, task, all_=all_)
 
     def _pause_apply(self, message, state, user, task, code, note, meet_ids):
         ref = self._ref(task)
@@ -2223,13 +2558,19 @@ class KpiWaStaffTask(models.AbstractModel):
                 lines.append(_('▶️ Running: %s — %s · %s') % (self._ref(k), k.name or '', _hm(run)))
             return '\n'.join(lines)
         presence = since(live.get('login_raw')) - (live.get('paused_base') or 0) - since(live.get('paused_since'))
-        productive = (live.get('productive_base') or 0) + sum(
-            since(t.get('timer_start')) for t in live.get('active_tasks') or [])
+        # Timers running side by side (multitask) cover the SAME wall-clock time,
+        # so the live part counts once -- from the earliest start -- not once per
+        # timer. Summing them made Productive run ahead of Presence.
+        active = live.get('active_tasks') or []
+        productive = (live.get('productive_base') or 0) + max(
+            [since(t.get('timer_start')) for t in active] or [0])
         lines.append(_('Day open since %s · Presence %s · Productive %s') % (
             clock(live.get('login_raw')), _hm(max(0, presence)), _hm(productive)))
         if live.get('is_paused'):
             lines.append(_('⏸️ Workday paused since %s') % clock(live.get('paused_since')))
-        for t in live.get('active_tasks') or []:
+        if len(active) > 1:
+            lines.append(_('⚡ Multi-tasking %d tasks:') % len(active))
+        for t in active:
             k = Kpi.browse(t['id'])
             run = since(t.get('timer_start'))
             lines.append(_('▶️ Working on %s — %s\n    running %s · total %s') % (
@@ -2265,21 +2606,97 @@ class KpiWaStaffTask(models.AbstractModel):
         return '\n'.join(lines)
 
     def _staff_status(self, message, state, user):
-        number = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
+        """📍 Current status: which day? Today is the live status; an earlier day
+        is that day's summary (the End Workday numbers), both sent privately."""
+        today = fields.Date.context_today(self.with_context(tz=kpi_tz_name(self.env, user)))
+        yesterday = today - timedelta(days=1)
+        worked = self.env['kpi.work.session'].sudo().search_read(
+            [('user_id', '=', user.id), ('session_date', '<', yesterday)],
+            ['session_date'], order='session_date desc', limit=40)
+        earlier = []
+        for r in worked:
+            if r['session_date'] not in earlier:
+                earlier.append(r['session_date'])
+            if len(earlier) == 6:
+                break
+        dates = ['today', fields.Date.to_string(yesterday)] + [fields.Date.to_string(x) for x in earlier]
+        labels = [_('📍 Today (live)'), _('Yesterday — %s') % yesterday.strftime('%a %d %b')] + [
+            x.strftime('%a %d %b') for x in earlier]
+        return self._fask(message, state, {'at': 'day_pick', 'dates': dates}, _('📅 Which day?'),
+                          labels + [BACK])
+
+    def _fl_day_pick(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        dates = d.get('dates') or []
         state._reset()
+        if i >= len(dates):
+            return self._show_staff_menu(message, state, user)
+        if dates[i] == 'today':
+            return self._send_private(message, user, self._status_text(user),
+                                      _('📩 %s, your current status is in your private chat.') % (user.name or ''))
+        day = fields.Date.from_string(dates[i])
+        text, image = self._day_summary(user, day)
+        return self._send_private(message, user, text,
+                                  _('📩 %(who)s, your summary for %(day)s is in your private chat.') % {
+                                      'who': user.name or '', 'day': day.strftime('%a %d %b')}, image=image)
+
+    def _send_private(self, message, user, text, ack, image=None):
+        """Send to the person's own number; the group only hears that it went."""
+        number = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
         if not number:
             self._text(message, _('%s, I do not have your WhatsApp number — set your login mobile in '
                                   'Login Management.') % (user.name or ''))
             return True
         try:
-            s = self._session(message)
-            s.sudo().send_message(number, self._status_text(user))
+            s = self._session(message).sudo()
+            s.send_message(number, text)
+            if image:
+                try:
+                    s.send_image(number, image, caption=_('End Workday summary'))
+                except Exception as exc:          # the text already went; the picture is extra
+                    _logger.warning('private day image failed: %s', exc)
         except Exception as exc:
             _logger.warning('private status send failed: %s', exc)
-            self._text(message, _('Could not send your status privately: %s') % str(exc)[:150])
+            self._text(message, _('Could not send it privately: %s') % str(exc)[:150])
             return True
-        self._text(message, _('📩 %s, your current status is in your private chat.') % (user.name or ''))
+        self._text(message, ack)
         return True
+
+    def _day_summary(self, user, day):
+        """(text, image b64 | None) for one earlier day: hours, each task, breaks,
+        the note -- kpi.work.session._daily_summary_payload, with today's running
+        timers kept out of it."""
+        label = day.strftime('%a %d %b %Y')
+        sess = self.env['kpi.work.session'].sudo().search(
+            [('user_id', '=', user.id), ('session_date', '=', day)], order='login_at asc', limit=1)
+        if not sess:
+            return _('📅 %s — you did not work that day.') % label, None
+        p = sess.with_context(kpi_summary_no_live=True)._daily_summary_payload(full_day=True)
+        hhmm = lambda s: (s or '')[11:16] or (s or '')  # noqa: E731  'YYYY-MM-DD HH:MM:SS' → 'HH:MM'
+        lines = ['📅 %s' % label,
+                 _('%(start)s → %(end)s · Presence %(presence)s · Productive %(productive)s') % {
+                     'start': hhmm(p.get('login_at')) or '—', 'end': hhmm(p.get('logout_at')) or _('(not ended)'),
+                     'presence': p.get('presence_display'), 'productive': p.get('productive_display')}]
+        if (p.get('paused_seconds') or 0) >= 60:
+            lines.append(_('⏸️ Day paused %s') % p.get('paused_display'))
+        tasks = p.get('tasks') or []
+        lines.append('')
+        lines += ['%s %s %s — %s' % ('⚡' if t.get('concurrent') else '•', t.get('ref') or '',
+                                     (t.get('name') or '')[:48], t.get('duration_display') or '')
+                  for t in tasks] or [_('(no task time logged)')]
+        away = [(k, lab) for k, lab in (('break', _('☕ Break')), ('lunch', _('🍽️ Lunch')),
+                                         ('meeting', _('👥 Meeting')), ('away', _('🚶 Away')))
+                if p.get('%s_seconds' % k)]
+        if away:
+            lines += ['', ' · '.join('%s %s' % (lab, p.get('%s_display' % k)) for k, lab in away)]
+        if p.get('note'):
+            lines += ['', '📝 %s' % p['note']]
+        snap = self.env['kpi.workday.snapshot'].sudo().search(
+            [('user_id', '=', user.id), ('session_date', '=', day), ('superseded', '=', False)], limit=1)
+        image = snap.image.decode() if snap and snap.image else None
+        return '\n'.join(lines), image
 
     # ================================================================== #
     # 📅 Meeting -- one menu row, then: manager / client / developer / team #
@@ -2496,6 +2913,10 @@ class KpiWaStaffTask(models.AbstractModel):
                                   'when you are back.') % {
                 'who': who, 'note': note, 'tasks': ', '.join(self._ref(k) for k in running)})
             return True
+        # A task's break still open: split it into the meeting, task stays paused.
+        switched = self._switch_open_break(message, state, user, 'meeting', note, picked)
+        if switched is not None:
+            return switched
         # "In a meeting" from the menu: the same _set_nontask_reason the board's
         # idle dialog uses, with the attendees.
         try:

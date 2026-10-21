@@ -138,19 +138,22 @@ ACT_KPI = ('kpi', '📋 KPI details')
 
 def _kpi_actions_for(task):
     """What the 📋 KPI details poll offers, after the details are shown:
-    Completed, then the update rows -- the same state rules as before."""
+    Completed, Get a file, Logs.
+
+    Add update, My updates & files and Add user manual are no longer offered:
+    the task page link sent with the details does all three (with files kept on
+    a mistake and an upload percentage). Their handlers stay, so a poll sent
+    before this change still works when tapped."""
     state = task.task_state
     rows = []
     if state in ('in_progress', 'paused', 'hold', 'rework'):
         rows.append(('done', '✅ Completed'))
-    if state in STARTED_STATES:
-        rows += [ACT_UPDATE, ACT_MINE, ACT_MANUAL]
-    elif task.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id)]):
-        # Rework / hold: nothing new until it is started again, but what was
-        # already added can still be corrected -- the history is shown there.
-        rows.append(ACT_MINE)
-    # Get a file only when the task has one; Logs always.
     env = task.env
+    # The manager's answers, once anything has been asked on the task.
+    asked = env['kpi.doubt'].sudo().search_count([('kpi_id', '=', task.id)])
+    if asked:
+        rows.append(('answers', '💬 Manager answers (%d)' % asked))
+    # Get a file only when the task has one; Logs always.
     has_file = (env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id), ('file_name', '!=', False)])
                 or env['kpi.user.manual'].sudo().search_count([('kpi_id', '=', task.id)]))
     if has_file:
@@ -202,6 +205,16 @@ def _actions_for(task, user=None):
     now, so a normal task menu stays short.
     """
     state = task.task_state
+    # Workday paused: nothing can be started or resumed (the server refuses), but
+    # the task can still be finished -- 📋 KPI details → ✅ Completed below.
+    day_paused = bool(user) and bool(task.env['kpi.work.session'].sudo().search_count(
+        [('user_id', '=', user.id), ('state', '=', 'open'), ('is_paused', '=', True)]))
+    if day_paused:
+        rows = []
+        rows.append(ACT_KPI)
+        if _time_offered(task):
+            rows.append(ACT_TIME)
+        return rows + list(ACTIONS_ALWAYS)
     if state == 'in_progress':
         rows = [ACTIONS_RUNNING[0]]          # Pause
         # The web's "Switch to…" lives on the RUNNING task: stop this one and
@@ -231,7 +244,24 @@ def _actions_for(task, user=None):
     rows.append(ACT_KPI)
     if _time_offered(task):
         rows.append(ACT_TIME)
+    if user and user.kpi_allow_multitask:
+        # Multitask: say which running task this would be -- "(2nd multi task)"
+        # with one already going, "(3rd multi task)" with two. The tap is matched
+        # against this same list rebuilt, so the label stays in step.
+        others = task.env['kpi.time.log'].sudo().search([
+            ('user_id', '=', user.id), ('is_active', '=', True), ('kpi_id', '!=', task.id)]).mapped('kpi_id')
+        if others:
+            nth = _ordinal(len(others) + 1)
+            rows = [(c, '%s (%s multi task)' % (l, nth)) if c in ('take', 'resume') else (c, l)
+                    for c, l in rows]
     return rows + list(ACTIONS_ALWAYS)
+
+
+def _ordinal(n):
+    """2 → '2nd', 3 → '3rd', 4 → '4th', 11 → '11th', 21 → '21st'."""
+    if 10 <= n % 100 <= 20:
+        return '%dth' % n
+    return '%d%s' % (n, {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th'))
 
 # How many of a person's tasks to offer at once. Ten leaves room inside the
 # poll limit and is already more than anybody is working on.
@@ -335,12 +365,8 @@ class KpiWaStaffRouter(models.AbstractModel):
             return self._staff_pick_task(message, state, user, tapped, low)
         if step == 'staff_task_actions':
             return self._staff_task_action(message, state, user, tapped, low)
-        if step == 'staff_pause_reason':
-            return self._staff_do_pause(message, state, user, body)
         if step == 'staff_text':
             return self._staff_do_text(message, state, user, body)
-        if step == 'staff_day_note':
-            return self._staff_do_day_end(message, state, user, body)
         if step == 'staff_flow':
             return self._flow(message, state, user, tapped, low, body)
         return False
@@ -405,9 +431,10 @@ class KpiWaStaffRouter(models.AbstractModel):
         Built from the state of their day rather than fixed, so nothing is
         ever offered that would only be refused.
 
-        The longest version is EIGHT rows: End my day, Finish the meeting, the
-        four STAFF_ROWS and the two break rows. On a break it is seven,
-        because the break rows are replaced by one Back to work. Ten is the
+        The longest version is TEN rows, with nothing running: Finish the
+        meeting, the four STAFF_ROWS, On a break, Lunch, No tasks, Pause my day
+        and End my day. With a task running those four give way to one Pause;
+        on a break, to one Back to work. Ten is the
         ceiling Evolution allows -- past it the menu silently turns back into
         text.
         """
@@ -425,8 +452,11 @@ class KpiWaStaffRouter(models.AbstractModel):
         if sess and sess.is_paused:
             # The whole day is frozen: the only sensible moves are to unfreeze
             # it or end it. Starting a task would be refused anyway.
+            # My tasks stays: a task can still be FINISHED on a paused day (the
+            # web allows it -- finishing is not starting work); _actions_for hides
+            # Take / Resume there, which the server would refuse.
             rows = [STAFF_DAY_RESUME] + ([STAFF_MEET_END] if live else [])
-            return rows + [r for r in STAFF_ROWS if r[0] in ('status', 'doubt')] + [STAFF_DAY_END]
+            return rows + [r for r in STAFF_ROWS if r[0] in ('mytasks', 'status', 'doubt')] + [STAFF_DAY_END]
         on_break = bool(sess and sess.nontask_reason)
         if live:
             rows.append(STAFF_MEET_END)
@@ -436,12 +466,24 @@ class KpiWaStaffRouter(models.AbstractModel):
             rows.append(STAFF_BACK)
         rows += list(STAFF_ROWS)
         if not on_break:
-            # Break, Lunch, Meeting and Pause my whole day live under ONE row.
-            rows.append(STAFF_PAUSE_MENU)
-            # "I have no tasks" only means something while nothing is running.
-            if not self.env['kpi.time.log'].sudo().search_count(
-                    [('user_id', '=', user.id), ('is_active', '=', True)]):
-                rows.append(STAFF_NO_TASKS)
+            running = self.env['kpi.time.log'].sudo().search_count(
+                [('user_id', '=', user.id), ('is_active', '=', True)])
+            if running:
+                # Like the web: Pause only while a task runs. Break, Lunch,
+                # Meeting and Pause my whole day live under that ONE row.
+                rows.append(STAFF_PAUSE_MENU)
+            else:
+                # Nothing running: the web's "not on a task" buttons instead --
+                # break / lunch recorded as non-task time (📅 Meeting is already
+                # a row above), "I have no tasks", and pausing the whole day.
+                # On a break FROM a task, one tap back to it replaces "On a
+                # break" (they are on it already; keeps the poll within ten).
+                back_to = self._break_source_task(user)
+                if back_to:
+                    rows += [('brk_resume', _('▶️ Back to %s') % self._ref(back_to)), STAFF_BREAK_ROWS[1]]
+                else:
+                    rows += list(STAFF_BREAK_ROWS)
+                rows += [STAFF_NO_TASKS, STAFF_DAY_PAUSE]
         # Last: ending the day is the final thing you do, after Pause.
         rows.append(STAFF_DAY_END)
         if len(rows) > MAX_MENU_ROWS:
@@ -536,6 +578,10 @@ class KpiWaStaffRouter(models.AbstractModel):
             # Who it is with and what it is about, like the board's
             # "In a meeting" picker. Recorded once both are known.
             return self._meet_begin(message, state, user, purpose='nontask')
+        # A task's break still open: split it rather than open a block on top.
+        switched = self._switch_open_break(message, state, user, reason)
+        if switched is not None:
+            return switched
         Session = self.env['kpi.work.session'].sudo()
         try:
             sess = Session.with_user(user).sudo()._get_or_open_today(user=user)
@@ -591,23 +637,13 @@ class KpiWaStaffRouter(models.AbstractModel):
         # as the web, the Odoo board and the app.
         return self._send_endday_link(message, state, user)
 
-    def _staff_do_day_end(self, message, state, user, body):
-        sess, is_open, _ended = self._workday(user)
-        if not is_open or not sess:
-            state._reset()
-            self._text(message, _('Your day is not open.'))
-            return True
-        try:
-            sess.with_user(user).sudo().action_end_day(note=(body or '').strip())
-        except Exception as exc:
-            state._reset()
-            self._text(message, _('Could not end your day: %s')
-                       % str(exc).strip()[:200])
-            return True
-        state._reset()
-        self._text(message, _('🌙 Day closed, %(who)s. Thanks.') % {
-            'who': user.name or ''})
-        return True
+    def _break_source_task(self, user):
+        """The paused task an open break came from (the web's break-pill
+        Resume), or an empty recordset."""
+        brk = self.env['kpi.break.log'].sudo().search(
+            [('user_id', '=', user.id), ('is_active', '=', True)], limit=1)
+        task = brk.source_task_id
+        return task if task and task.exists() and task.task_state == 'paused' else self.env['kra.kpi']
 
     def _staff_pick_action(self, message, state, user, tapped, low):
         # Matched against what was OFFERED, not the full table: the workday
@@ -616,7 +652,10 @@ class KpiWaStaffRouter(models.AbstractModel):
         rows = self._staff_rows_for(user)
         offered = [c for c in (state.menu_csv or '').split(',') if c]
         if offered:
-            rows = [(c, STAFF_BY_ID.get(c, c)) for c in offered]
+            # Labels from the menu as it is now first: some carry a task ref
+            # (▶️ Back to REQ-002), which the fixed table cannot know.
+            current = dict(rows)
+            rows = [(c, current.get(c) or STAFF_BY_ID.get(c, c)) for c in offered]
         choice = None
         clean = _strip_emoji(tapped).strip().lower()
         for code, label in rows:
@@ -645,6 +684,15 @@ class KpiWaStaffRouter(models.AbstractModel):
             return self._meeting_menu(message, state, user)
         if choice == 'pause_menu':
             return self._pause_menu(message, state, user)
+        if choice == 'brk_resume':
+            back_to = self._break_source_task(user)
+            if not back_to:
+                state._reset()
+                self._text(message, _('That break has already ended.'))
+                return self._show_staff_menu(message, state, user)
+            # Through _staff_begin, so a sent-back task still asks what changed.
+            # resume_task closes the break by itself.
+            return self._staff_begin(message, state, user, back_to, 'resume')
         if choice in ('day_pause', 'day_resume', 'no_tasks'):
             return self._staff_day_control(message, state, user, choice)
 
@@ -675,8 +723,6 @@ class KpiWaStaffRouter(models.AbstractModel):
         if len(tasks) == 1:
             only = tasks[0]
             state._touch(staff_kpi_id=only.id)
-            if action == 'mytasks':
-                return self._staff_offer_actions(message, state, only)
             return self._staff_begin(message, state, user, only, action)
 
         # The reference leads every label: a poll vote carries only the
@@ -687,10 +733,7 @@ class KpiWaStaffRouter(models.AbstractModel):
         opts = [self._task_line(t, True) for t in tasks]
         state._touch(step='staff_pick_task',
                      menu_csv=','.join(str(t.id) for t in tasks))
-        header = (_('Your tasks — pick one')
-                  if action == 'mytasks'
-                  else _('Which one? (%s)') % STAFF_BY_ID.get(action, ''))
-        self._poll(message, header, opts)
+        self._poll(message, _('Which one? (%s)') % STAFF_BY_ID.get(action, ''), opts)
         return True
 
     def _staff_pick_task(self, message, state, user, tapped, low):
@@ -699,13 +742,6 @@ class KpiWaStaffRouter(models.AbstractModel):
         tasks = self.env['kra.kpi'].sudo().browse(ids).exists()
         picked = self.env['kra.kpi']
         text = _strip_emoji(tapped).strip().lower()
-        if 'new' in (state.menu_csv or '').split(','):
-            if text == _strip_emoji(STAFF_CREATE_LABEL).strip().lower() or \
-                    (low.strip().isdigit() and int(low.strip()) == len(tasks) + 1):
-                return self._create_begin(message, state, user)
-            if text in ('back',):
-                state._reset()
-                return self._show_staff_menu(message, state, user)
         for t in tasks:
             ref = (t.external_ref or ('#%s' % t.id)).lower()
             if ref and ref in text:
@@ -832,6 +868,8 @@ class KpiWaStaffRouter(models.AbstractModel):
             return self._mine_begin(message, state, user, task)
         if action in ('info', 'kpi'):
             return self._kpi_details(message, state, user, task)
+        if action == 'answers':
+            return self._answers_show(message, state, user, task)
         if action == 'time':
             return self._time_begin(message, state, user, task)
         if action == 'getfile':
@@ -866,11 +904,11 @@ class KpiWaStaffRouter(models.AbstractModel):
             if verb == 'start':
                 rec.start_task()
                 msg = _('▶️ %(who)s has taken %(ref)s.') % {
-                    'who': user.name, 'ref': ref}
+                    'who': user.name, 'ref': ref} + self._still_running(user, kpi)
             elif verb == 'resume':
                 rec.resume_task()
                 msg = _('▶️ %(who)s is back on %(ref)s.') % {
-                    'who': user.name, 'ref': ref}
+                    'who': user.name, 'ref': ref} + self._still_running(user, kpi)
             else:
                 # The checklist the developer ticked, saved on the task for
                 # the manager to review -- the same flags the board stores.
@@ -906,26 +944,6 @@ class KpiWaStaffRouter(models.AbstractModel):
         except Exception as exc:
             _logger.warning('staff menu: could not re-show the menu: %s', exc)
 
-    def _staff_do_pause(self, message, state, user, body):
-        kpi = state.staff_kpi_id
-        if not kpi or not kpi.exists():
-            state._reset()
-            return False
-        ref = kpi.external_ref or ('#%s' % kpi.id)
-        try:
-            kpi.with_user(user).sudo().pause_task(
-                reason=body or _('Paused from WhatsApp'))
-        except Exception as exc:
-            state._reset()
-            self._text(message, _('%(ref)s: %(why)s') % {
-                'ref': ref, 'why': str(exc).strip()[:300]})
-            self._menu_again(message, state, user)
-            return True
-        state._reset()
-        self._text(message, _('⏸️ %(ref)s paused — %(why)s') % {
-            'ref': ref, 'why': body})
-        return True
-
     def _staff_do_text(self, message, state, user, body):
         """A question or a meeting request. It goes to the manager, not out."""
         kpi = state.staff_kpi_id
@@ -958,6 +976,7 @@ class KpiWaStaffRouter(models.AbstractModel):
 # the step list live with the router they belong to.
 from .kpi_wa_group_intake import _strip_emoji          # noqa: E402
 
+# staff_pause_reason / staff_day_note stay in the step Selection (intake.py) but
+# nothing routes them any more: a state left on one reads as idle.
 _STAFF_STEPS = ('idle', 'staff_menu', 'staff_pick_task',
-                'staff_task_actions', 'staff_pause_reason', 'staff_text',
-                'staff_day_note', 'staff_flow')
+                'staff_task_actions', 'staff_text', 'staff_flow')
