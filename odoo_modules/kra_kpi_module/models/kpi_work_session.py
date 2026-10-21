@@ -1488,7 +1488,11 @@ class KpiWorkSession(models.Model):
         # so a multitasking developer with two timers going had the second one
         # dropped from Productive and from the Map until it stopped.
         now_ts = fields.Datetime.now()
-        for log in Log.search([('user_id', '=', self.user_id.id), ('is_active', '=', True)]):
+        # kpi_summary_no_live: a PAST day asked for (WhatsApp "which day?") must
+        # not pick up a timer running today.
+        live_logs = Log.browse() if self.env.context.get('kpi_summary_no_live') else Log.search(
+            [('user_id', '=', self.user_id.id), ('is_active', '=', True)])
+        for log in live_logs:
             k = log.kpi_id
             if not k or not log.start_time:
                 continue

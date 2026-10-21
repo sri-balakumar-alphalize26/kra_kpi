@@ -177,6 +177,35 @@ class KpiBreakLog(models.Model):
         return {'switched_from': previous, 'break_id': new_id}
 
     @api.model
+    def switch_open_break(self, reason_code, user_id=None, reason_note=None,
+                          meeting_with_ids=None):
+        """switch_break for a break that is ALREADY open, plus the paused task.
+
+        The web's /kra_kpi/break/switch and the WhatsApp menu both need this, so it
+        lives here once. The task the break came from still shows the OLD reason on
+        its card otherwise, so its reason is rewritten too.
+
+        Returns False when no break is open -- the caller then records the time as
+        a non-task block instead. Otherwise the switch_break result plus
+        `source_task_id`.
+        """
+        if not user_id:
+            user_id = self.env.user.id
+        active = self.search([('user_id', '=', user_id), ('is_active', '=', True)], limit=1)
+        if not active:
+            return False
+        source_task = active.source_task_id
+        res = self.switch_break(reason_code, user_id=user_id, reason_note=reason_note,
+                                meeting_with_ids=meeting_with_ids)
+        if source_task and source_task.exists() and source_task.task_state == 'paused':
+            vals = {'pause_reason_code': reason_code}
+            if reason_note:
+                vals['paused_reason'] = reason_note
+            source_task.sudo().write(vals)
+        res['source_task_id'] = source_task.id if source_task else False
+        return res
+
+    @api.model
     def stop_break(self, user_id=None, at=None):
         """Close the user's active break/lunch (if any).
 

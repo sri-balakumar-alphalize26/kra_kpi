@@ -4,6 +4,118 @@
         <!-- WhatsApp "📋 KPI details": one task's page, like the web app's task
              panel. Reuses wa_task_layout (web look). Saves go through
              kpi.wa.group.router.page_save / page_complete. -->
+        <!-- ✏️ Edit / 🗑️ Delete under one update or manual (own, or an admin; the
+             task has started). Edit opens a form filled with what is there now;
+             both go through the page's in-page submit (confirm, upload %). -->
+        <template id="wa_task_entry_tools" name="WA Task Entry Tools">
+            <div class="tools">
+                <details class="act">
+                    <summary>✏️ Edit</summary>
+                    <form class="in js-send" method="post" enctype="multipart/form-data" data-kind="edit"
+                          t-att-data-entry="kind" t-att-data-max-mb="25 if kind == 'manual' else 50"
+                          t-att-action="'/kpi/wa/task/%s/entry/edit' % token">
+                        <input type="hidden" name="kind" t-att-value="kind"/>
+                        <input type="hidden" name="entry" t-att-value="e['id']"/>
+                        <div class="field"><span class="lbl"><t t-if="kind == 'progress'">What did you do? <span class="req">*</span></t><t t-else="">Description</t></span>
+                            <textarea name="summary" t-esc="e['text']"/></div>
+                        <div class="field"><span class="lbl">Links (remove one to drop it)</span>
+                            <input class="input" name="links" t-att-value="' '.join(e['links'])"
+                                   placeholder="Paste one or more links, separated by spaces"/></div>
+                        <div t-if="e['files']" class="field"><span class="lbl">Files — tick to remove</span>
+                            <span class="chks" style="flex-direction:column; gap:6px;">
+                                <!-- str(): the entry's own file is id 0, and a bare 0 drops the attribute. -->
+                                <label t-foreach="e['files']" t-as="f"><input type="checkbox" name="remove" t-att-value="str(f['att'])"/>
+                                    <t t-esc="f['name']"/></label>
+                            </span></div>
+                        <div class="field"><span class="lbl">Add files<t t-if="kind == 'manual'"> (PDF, DOC or DOCX, up to 25 MB)</t><t t-else=""> (up to 50 MB each)</t></span>
+                            <input class="input" type="file" name="files" multiple="multiple"
+                                   t-att-accept="'.pdf,.doc,.docx' if kind == 'manual' else None"/></div>
+                        <button type="submit" class="btn primary">Save changes</button>
+                    </form>
+                </details>
+                <form class="js-send" method="post" data-kind="delete" t-att-data-what="what"
+                      t-att-action="'/kpi/wa/task/%s/entry/delete' % token">
+                    <input type="hidden" name="kind" t-att-value="kind"/>
+                    <input type="hidden" name="entry" t-att-value="e['id']"/>
+                    <button type="submit" class="btn ghost sm">🗑️ Delete</button>
+                </form>
+            </div>
+        </template>
+
+        <!-- 📂 Projects & documents: the person's projects with their tasks by
+             state, and every document on those tasks, newest first, with a
+             search box. Opened from 📋 My tasks in WhatsApp (signed link, 2 h). -->
+        <template id="wa_my_work" name="WA My Work">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'My work'"/>
+                <style>
+                    .sec { border-top:1px solid var(--border); padding:16px 20px; }
+                    .sec h3 { margin:0 0 10px; font-size:14px; font-weight:800; }
+                    .proj { border:1px solid var(--border); border-radius:var(--r); margin-bottom:10px; }
+                    .proj > summary { padding:11px 14px; font-weight:800; cursor:pointer; list-style:none; }
+                    .proj .cnt { display:inline-block; margin:4px 6px 0 0; padding:2px 8px; border-radius:999px;
+                                 background:var(--input); font-size:11.5px; font-weight:700; }
+                    .proj .in { padding:6px 14px 12px; }
+                    .row { display:flex; justify-content:space-between; gap:10px; padding:7px 0;
+                           border-bottom:1px dashed var(--border); font-size:13px; }
+                    .row a { color:var(--brand); text-decoration:none; font-weight:700; overflow-wrap:anywhere; }
+                    .row small { color:var(--subtlest); white-space:nowrap; }
+                    .doc { padding:8px 0; border-bottom:1px dashed var(--border); font-size:13px; }
+                    .doc a { color:var(--brand); font-weight:700; text-decoration:none; overflow-wrap:anywhere; }
+                    .doc .meta { font-size:12px; color:var(--subtlest); }
+                    #docSearch { width:100%; margin-bottom:10px; }
+                </style>
+                <div class="hd">📂 My work
+                    <small>For <t t-esc="user_name"/> · <t t-esc="task_count"/> task(s) · link valid 2 hours</small></div>
+
+                <div class="sec">
+                    <h3>Projects (<t t-esc="len(projects)"/>)</h3>
+                    <p t-if="not projects" class="mini">No tasks yet.</p>
+                    <details t-foreach="projects" t-as="p" class="proj" t-att-open="'open' if p_index == 0 else None">
+                        <summary><t t-esc="p['name']"/> · <t t-esc="len(p['tasks'])"/> task(s)
+                            <div><t t-foreach="groups" t-as="g"><span t-if="p['counts'][g[0]]" class="cnt"><t t-esc="g[1]"/> <t t-esc="p['counts'][g[0]]"/></span></t></div>
+                        </summary>
+                        <div class="in">
+                            <div t-foreach="p['tasks']" t-as="t" class="row">
+                                <a t-att-href="t['url']"><t t-esc="t['ref']"/> — <t t-esc="t['name']"/></a>
+                                <small t-esc="t['state']"/>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <div class="sec">
+                    <h3>Documents (<t t-esc="len(docs)"/>)</h3>
+                    <input id="docSearch" class="input" placeholder="🔍 Search by file name, task or person"/>
+                    <p t-if="not docs" class="mini">No documents on your tasks yet.</p>
+                    <div id="docList">
+                        <div t-foreach="docs" t-as="dc" class="doc"
+                             t-att-data-q="(dc['name'] + ' ' + dc['ref'] + ' ' + dc['task'] + ' ' + dc['who']).lower()">
+                            <a t-att-href="dc['url']" target="_blank" rel="noopener"><t t-esc="dc['kind']"/> <t t-esc="dc['name']"/></a>
+                            <div class="meta"><t t-esc="dc['ref']"/> — <t t-esc="dc['task']"/> · <t t-esc="dc['who']"/> · <t t-esc="dc['when']"/></div>
+                        </div>
+                    </div>
+                    <p id="docNone" class="mini" style="display:none;">Nothing matches.</p>
+                </div>
+                <script>
+                    (function () {
+                        var box = document.getElementById('docSearch');
+                        if (!box) { return; }
+                        var rows = Array.prototype.slice.call(document.querySelectorAll('#docList .doc'));
+                        box.addEventListener('input', function () {
+                            var q = box.value.trim().toLowerCase(), shown = 0;
+                            rows.forEach(function (r) {
+                                var hit = !q || r.getAttribute('data-q').indexOf(q) !== -1;
+                                r.style.display = hit ? '' : 'none';
+                                if (hit) { shown += 1; }
+                            });
+                            document.getElementById('docNone').style.display = (rows.length ? !shown : false) ? '' : 'none';
+                        });
+                    })();
+                </script>
+            </t>
+        </template>
+
         <template id="wa_task_page" name="WA Task Page">
             <t t-call="kra_kpi_module.wa_task_layout">
                 <t t-set="page_title" t-value="t['ref']"/>
@@ -30,6 +142,20 @@
                     .flash.ok { background:var(--ok-bg); color:var(--ok); }
                     .flash.err { background:#FEE2E2; color:var(--danger); }
                     .log { font-size:12.5px; padding:4px 0; border-bottom:1px dashed var(--border); }
+                    form .flash { margin:0; }
+                    .prog { height:8px; border-radius:999px; background:var(--input); border:1px solid var(--border); overflow:hidden; }
+                    .prog > i { display:block; height:100%; width:0; background:var(--brand); transition:width .15s; }
+                    .chk { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border:1px solid var(--border);
+                           border-radius:var(--r); cursor:pointer; }
+                    .chk b { display:block; font-size:13.5px; }
+                    .chk small { color:var(--subtlest); font-size:12px; }
+                    .warn { font-size:12.5px; padding:8px 10px; border-radius:var(--r); background:#FEF3C7; color:#92400E; font-weight:700; }
+                    .have { font-size:12.5px; padding:8px 10px; border-radius:var(--r); background:var(--ok-bg); color:var(--ok); font-weight:700; }
+                    .req { color:var(--danger); }
+                    .tools { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; margin-top:8px; }
+                    .tools details.act { flex:1 1 260px; margin-bottom:0; }
+                    .tools details.act > summary { padding:6px 12px; font-size:12.5px; }
+                    .btn.sm { padding:6px 12px; font-size:12.5px; }
                 </style>
                 <div class="hd"><t t-esc="t['ref']"/> — <t t-esc="t['name']"/>
                     <small><span class="chip" t-esc="t['state'].upper()"/><span class="chip pri" t-esc="t['priority']"/>
@@ -53,8 +179,8 @@
                     <t t-if="can_add">
                         <details class="act">
                             <summary>📝 Add update</summary>
-                            <form class="in" method="post" enctype="multipart/form-data"
-                                  t-att-action="'/kpi/wa/task/%s/update' % token">
+                            <form class="in js-send" method="post" enctype="multipart/form-data" data-kind="update"
+                                  data-max-mb="50" t-att-action="'/kpi/wa/task/%s/update' % token">
                                 <div class="field"><span class="lbl">What did you do? <span class="req">*</span></span>
                                     <textarea name="summary" placeholder="This is what your manager reads."/></div>
                                 <div class="field"><span class="lbl">Links (Drive, docs…)</span>
@@ -74,8 +200,8 @@
                         </details>
                         <details class="act">
                             <summary>📘 Add user manual</summary>
-                            <form class="in" method="post" enctype="multipart/form-data"
-                                  t-att-action="'/kpi/wa/task/%s/manual' % token">
+                            <form class="in js-send" method="post" enctype="multipart/form-data" data-kind="manual"
+                                  data-max-mb="25" t-att-action="'/kpi/wa/task/%s/manual' % token">
                                 <div class="field"><span class="lbl">Manual file(s) — PDF, DOC or DOCX, up to 25 MB <span class="req">*</span></span>
                                     <input class="input" type="file" name="files" multiple="multiple" accept=".pdf,.doc,.docx"/></div>
                                 <div class="field"><span class="lbl">Description</span><textarea name="description"/></div>
@@ -87,21 +213,45 @@
                             </form>
                         </details>
                     </t>
-                    <p t-else="" class="mini">Updates, files, manuals and GitHub links are added once the task has been started.</p>
-                    <details t-if="can_complete" class="act">
+                    <div t-else="" class="warn">⚠️ This task hasn't been started yet, so updates, files, links and manuals
+                        can't be added or edited. Start it in WhatsApp (▶️ Take it), then come back to this page.</div>
+                    <details t-if="can_complete" class="act" id="completeBox">
                         <summary>✅ Completed</summary>
-                        <form class="in" method="post" t-att-action="'/kpi/wa/task/%s/complete' % token">
-                            <span class="lbl">Tick what you have done (one is enough). It goes to your manager for approval.</span>
-                            <span class="chks" style="flex-direction:column; gap:8px;">
-                                <t t-foreach="checklist" t-as="c">
-                                    <label><input type="checkbox" name="check" t-att-value="c[0]"/> <t t-esc="c[1]"/></label>
-                                </t>
-                            </span>
+                        <form class="in js-send" method="post" enctype="multipart/form-data" data-kind="complete"
+                              data-max-mb="25" t-att-data-has-manual="'1' if has_manual else ''"
+                              t-att-data-has-update="'1' if has_update else ''"
+                              t-att-data-gh-required="'1' if github_required and not has_github else ''"
+                              t-att-data-ref="t['ref']" t-att-action="'/kpi/wa/task/%s/complete' % token">
+                            <div class="field"><span class="lbl">Summary — what did you do?
+                                    <span t-if="not has_update" class="req">*</span></span>
+                                <textarea name="summary" t-att-placeholder="('Leave empty to use your last update: “%s”' % last_update[:120]) if has_update else 'This is what your manager reads.'"/></div>
+                            <div class="field"><span class="lbl">User manual — PDF, DOC or DOCX, up to 25 MB
+                                    <span t-if="not has_manual" class="req">*</span></span>
+                                <div t-if="has_manual" class="have">📘 A user manual is already on this task — add another only if needed.</div>
+                                <input class="input" type="file" name="files" multiple="multiple" accept=".pdf,.doc,.docx"/></div>
+                            <div class="field"><span class="lbl">Links (optional)</span>
+                                <input class="input" name="links" placeholder="Paste one or more links, separated by spaces"/></div>
+                            <div t-if="has_github" class="have">🐙 A GitHub link is already on this task — add another only if needed.</div>
+                            <div t-elif="github_required" class="warn">🐙 This is a Module / App task — the GitHub link (repository + branch) is required to complete it.</div>
+                            <div t-else="" class="warn">💡 Optional: add the GitHub link — once it's uploaded, the code is safe.</div>
+                            <div class="grid2">
+                                <div class="field"><span class="lbl">GitHub repo URL
+                                        <t t-if="github_required and not has_github"><span class="req">*</span></t>
+                                        <t t-else="">(optional)</t></span>
+                                    <input class="input" name="gh_url" placeholder="https://github.com/org/repo"/></div>
+                                <div class="field"><span class="lbl">Branch</span>
+                                    <input class="input" name="gh_branch" placeholder="main"/></div>
+                            </div>
+                            <span class="lbl">Tick everything that applies — at least one is needed to send this for approval. Your manager sees exactly which: <span class="req">*</span></span>
+                            <t t-foreach="checklist" t-as="c">
+                                <label class="chk"><input type="checkbox" name="check" t-att-value="c[0]" t-att-checked="c[3] or None"/>
+                                    <span><b t-esc="c[1]"/><small t-esc="c[2]"/></span></label>
+                            </t>
                             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                                 <button type="submit" name="mode" value="full" class="btn primary">Submit for approval</button>
                                 <button type="submit" name="mode" value="partial" class="btn ghost">🏁 Partial finish — summary only</button>
                             </div>
-                            <span class="hint">A progress update must exist first. Partial finish sends it as-is with the summary.</span>
+                            <span class="hint">Partial finish sends the task for review with just the summary — no manual or checkboxes needed.</span>
                         </form>
                     </details>
                 </div>
@@ -110,10 +260,15 @@
                     <h3>Updates (<t t-esc="len(updates)"/>)</h3>
                     <p t-if="not updates" class="mini">No updates yet.</p>
                     <div t-foreach="updates" t-as="u" class="item">
-                        <div class="meta"><t t-esc="u['who']"/> · <t t-esc="u['when']"/></div>
+                        <div class="meta"><t t-esc="u['who']"/> · <t t-esc="u['when']"/>
+                            <t t-if="u['edited']"> · <i>edited <t t-esc="u['edited']"/></i></t></div>
                         <div class="txt" t-esc="u['text']"/>
                         <div class="files"><a t-foreach="u['files']" t-as="f" t-att-href="f['url']" target="_blank">📎 <t t-esc="f['name']"/></a></div>
                         <div t-foreach="u['links']" t-as="l"><a t-att-href="l" target="_blank" rel="noopener">🔗 <t t-esc="l"/></a></div>
+                        <t t-if="u['can']" t-call="kra_kpi_module.wa_task_entry_tools">
+                            <t t-set="kind" t-value="'progress'"/><t t-set="e" t-value="u"/>
+                            <t t-set="what" t-value="'this update and its files'"/>
+                        </t>
                     </div>
                 </div>
 
@@ -123,6 +278,12 @@
                     <div t-foreach="github" t-as="g" class="item">
                         <a t-att-href="g['url']" target="_blank" rel="noopener" t-esc="g['url']"/>
                         <div class="meta">branch <b t-esc="g['branch']"/> · <t t-esc="g['who']"/> · <t t-esc="g['when']"/></div>
+                        <form t-if="g['can']" class="js-send tools" method="post" data-kind="delete"
+                              data-what="this GitHub link" t-att-action="'/kpi/wa/task/%s/entry/delete' % token">
+                            <input type="hidden" name="kind" value="github"/>
+                            <input type="hidden" name="entry" t-att-value="g['id']"/>
+                            <button type="submit" class="btn ghost sm">🗑️ Delete</button>
+                        </form>
                     </div>
                 </div>
 
@@ -134,6 +295,21 @@
                         <div t-if="u['text']" class="txt" t-esc="u['text']"/>
                         <div class="files"><a t-foreach="u['files']" t-as="f" t-att-href="f['url']" target="_blank">📄 <t t-esc="f['name']"/></a></div>
                         <div t-foreach="u['links']" t-as="l"><a t-att-href="l" target="_blank" rel="noopener">🔗 <t t-esc="l"/></a></div>
+                        <t t-if="u['can']" t-call="kra_kpi_module.wa_task_entry_tools">
+                            <t t-set="kind" t-value="'manual'"/><t t-set="e" t-value="u"/>
+                            <t t-set="what" t-value="'this user manual and its files'"/>
+                        </t>
+                    </div>
+                </div>
+
+                <div t-if="doubts" class="sec">
+                    <h3>Questions to manager (<t t-esc="len(doubts)"/>)</h3>
+                    <div t-foreach="doubts" t-as="q" class="item">
+                        <div class="meta"><t t-esc="q['icon']"/> <t t-esc="q['asked_by']"/> · <t t-esc="q['asked']"/> · <t t-esc="q['state']"/></div>
+                        <div class="txt" t-esc="q['question']"/>
+                        <div t-if="q['answer']" class="have" style="margin-top:6px;">→ <t t-esc="q['answer']"/>
+                            <span style="font-weight:400;"> — <t t-esc="q['answered_by']"/><t t-if="q['answered']">, <t t-esc="q['answered']"/></t></span></div>
+                        <div t-if="q['client_answer']" class="meta" style="margin-top:6px;">🧑‍💼 Client: <t t-esc="q['client_answer']"/></div>
                     </div>
                 </div>
 
@@ -147,6 +323,175 @@
                         </div>
                     </details>
                 </div>
+                <!-- Forms go in the background: a mistake (a bad link, a missing
+                     manual) shows here and the chosen files STAY chosen; a plain
+                     post reloaded the page and lost them. The upload shows a
+                     percentage, and every save is confirmed first. The server
+                     checks everything again; this only catches mistakes early.
+                     (No less-than or ampersand below: it lives inside XML.) -->
+                <script>
+                    (function () {
+                        var LINK = /^(https?:\/\/)?([\w-]+\.)+[a-z]{2,}(:\d+)?([\/?#]\S*)?$/i;
+                        var GITHUB = /^(https?:\/\/)?(www\.)?github\.com\/\S+/i;
+                        var DOCS = /\.(pdf|docx?)$/i;
+                        function val(f, n) { var el = f.elements[n]; return el ? String(el.value || '').trim() : ''; }
+                        function words(s) { return s.split(/[\s,]+/).filter(function (x) { return !!x; }); }
+                        function flash(f, kind, text) {
+                            var box = f.querySelector('.flash');
+                            if (!box) { box = document.createElement('div'); f.insertBefore(box, f.firstChild); }
+                            box.className = 'flash ' + kind;
+                            box.textContent = (kind === 'ok' ? '✅ ' : '⚠ ') + text;
+                            box.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        }
+                        function check(f, mode) {
+                            var kind = f.getAttribute('data-kind'), partial = mode === 'partial';
+                            var maxMb = Number(f.getAttribute('data-max-mb') || 50);
+                            var hasUpdate = !!f.getAttribute('data-has-update');
+                            var hasManual = !!f.getAttribute('data-has-manual');
+                            var input = f.elements.files;
+                            var files = input ? Array.prototype.slice.call(input.files || []) : [];
+                            var summary = val(f, 'summary'), links = words(val(f, 'links'));
+                            var gh = val(f, 'gh_url'), branch = val(f, 'gh_branch');
+                            var bad = links.filter(function (l) { return !LINK.test(l); })[0];
+                            if (bad) { return '“' + bad + '” is not a valid link (e.g. https://example.com).'; }
+                            if (gh) {
+                                if (!GITHUB.test(gh)) { return 'Please enter a valid GitHub URL (must start with https://github.com/).'; }
+                                if (!branch || /\s/.test(branch)) { return 'Please enter a branch name (no spaces).'; }
+                            }
+                            // A full Complete's missing items are listed together by missing().
+                            var entry = f.getAttribute('data-entry') || '';
+                            if (kind === 'edit' ? (entry === 'progress' ? !summary : false) : false) {
+                                return 'The update text cannot be empty.';
+                            }
+                            if (kind === 'update' ? !summary : (kind === 'complete' ? (partial ? !(summary || hasUpdate) : false) : false)) {
+                                return 'Write a summary of what you did — this is what your manager reads.';
+                            }
+                            if (kind === 'complete' ? (!summary ? !!(links.length || gh) : false) : false) {
+                                return 'Write a summary to go with the links.';
+                            }
+                            var docOnly = kind === 'manual' || kind === 'complete' || (kind === 'edit' ? entry === 'manual' : false);
+                            if (!partial) {
+                                var big = files.filter(function (x) { return x.size > maxMb * 1048576; })[0];
+                                if (big) { return '“' + big.name + '” is over ' + maxMb + ' MB.'; }
+                                var notDoc = docOnly ? files.filter(function (x) { return !DOCS.test(x.name); })[0] : null;
+                                if (notDoc) { return '“' + notDoc.name + '” is not a PDF, DOC or DOCX file.'; }
+                            }
+                            if (kind === 'manual' ? !files.length : false) { return 'Choose the manual file (PDF, DOC or DOCX).'; }
+                            return '';
+                        }
+                        // Everything a full Complete still needs, all at once: [{text, el}].
+                        function missing(f) {
+                            var out = [], el = f.elements;
+                            var input = el.files, nFiles = input ? input.files.length : 0;
+                            if (!(val(f, 'summary') || f.getAttribute('data-has-update'))) {
+                                out.push({text: 'A summary of what you did', el: el.summary});
+                            }
+                            if (!nFiles ? !f.getAttribute('data-has-manual') : false) {
+                                out.push({text: 'The user manual (PDF, DOC or DOCX)', el: input});
+                            }
+                            if (f.getAttribute('data-gh-required') ? !val(f, 'gh_url') : false) {
+                                out.push({text: 'The GitHub link + branch (this is a Module / App task)', el: el.gh_url});
+                            }
+                            if (!f.querySelectorAll('input[name=check]:checked').length) {
+                                out.push({text: 'At least one ticked checkbox', el: f.querySelector('input[name=check]')});
+                            }
+                            return out;
+                        }
+                        function question(f, mode) {
+                            var kind = f.getAttribute('data-kind');
+                            var input = f.elements.files, n = input ? input.files.length : 0;
+                            var bits = [];
+                            if (val(f, 'summary')) { bits.push('summary ✓'); }
+                            var nl = words(val(f, 'links')).length;
+                            if (nl) { bits.push(nl + ' link' + (nl === 1 ? '' : 's')); }
+                            if (n ? mode !== 'partial' : false) { bits.push(n + ' file' + (n === 1 ? '' : 's')); }
+                            if (val(f, 'gh_url')) { bits.push('GitHub ' + val(f, 'gh_url').replace(/^(https?:\/\/)?(www\.)?github\.com\//i, '') + ' (' + val(f, 'gh_branch') + ')'); }
+                            var what = bits.join(' · ');
+                            if (kind === 'delete') {
+                                return 'Delete ' + (f.getAttribute('data-what') || 'this') + '? This cannot be undone.';
+                            }
+                            if (kind === 'edit') {
+                                var drop = f.querySelectorAll('input[name=remove]:checked').length;
+                                var all = f.querySelectorAll('input[name=remove]').length;
+                                var head = f.getAttribute('data-entry') === 'manual' ? 'Save changes to this user manual?' : 'Save changes to this update?';
+                                var lose = drop ? '\n\n' + drop + ' file' + (drop === 1 ? '' : 's') + ' will be removed.' : '';
+                                if (f.getAttribute('data-entry') === 'manual' ? (drop === all ? (all ? !n : false) : false) : false) {
+                                    lose += ' No file would be left, so the manual itself will be deleted.';
+                                }
+                                return head + '\n\n' + (what || 'text / links') + lose;
+                            }
+                            if (kind === 'update') { return 'Save this update?\n\n' + what; }
+                            if (kind === 'manual') { return 'Save this user manual?\n\n' + what; }
+                            var ref = f.getAttribute('data-ref') || 'this task';
+                            if (mode === 'partial') { return 'Send ' + ref + ' for review as a partial finish?\n\n' + (what || 'Your last update is used as the summary.'); }
+                            var ticks = f.querySelectorAll('input[name=check]:checked').length;
+                            return 'Submit ' + ref + ' for approval?\n\n' + (what ? what + ' · ' : '') + ticks + ' ticked';
+                        }
+                        Array.prototype.forEach.call(document.querySelectorAll('form.js-send'), function (f) {
+                            var clicked = null;
+                            Array.prototype.forEach.call(f.querySelectorAll('button[type=submit]'), function (b) {
+                                b.addEventListener('click', function () { clicked = b; });
+                            });
+                            f.addEventListener('submit', function (e) {
+                                e.preventDefault();
+                                var btn = e.submitter || clicked || f.querySelector('button[type=submit]');
+                                var mode = btn ? (btn.getAttribute('value') || '') : '';
+                                var problem = check(f, mode);
+                                if (problem) { flash(f, 'err', problem); return; }
+                                var gaps = (f.getAttribute('data-kind') === 'complete' ? mode !== 'partial' : false) ? missing(f) : [];
+                                if (gaps.length) {
+                                    // One popup naming everything still missing. A partial finish
+                                    // is offered instead when there is a summary to send.
+                                    var list = 'Before completing ' + (f.getAttribute('data-ref') || 'this task') + ' you still need:\n\n'
+                                        + gaps.map(function (g) { return '• ' + g.text; }).join('\n');
+                                    var canPartial = !!(val(f, 'summary') || f.getAttribute('data-has-update'));
+                                    var asPartial = canPartial ? window.confirm(list + '\n\nPress OK to send it as a Partial finish instead (summary only), or Cancel to go back and add them.') : (window.alert(list), false);
+                                    if (!asPartial) {
+                                        flash(f, 'err', 'Still needed: ' + gaps.map(function (g) { return g.text; }).join(' · ') + '.');
+                                        if (gaps[0].el) { gaps[0].el.focus(); }
+                                        return;
+                                    }
+                                    mode = 'partial';
+                                }
+                                if (!window.confirm(question(f, mode))) { return; }
+                                var data = new FormData(f);
+                                if (mode) { data.set('mode', mode); }
+                                if (mode === 'partial') { data.delete('files'); }
+                                var buttons = f.querySelectorAll('button');
+                                var label = btn ? btn.textContent : '';
+                                var bar = f.querySelector('.prog');
+                                if (!bar) { bar = document.createElement('div'); bar.className = 'prog'; bar.appendChild(document.createElement('i')); f.appendChild(bar); }
+                                bar.style.display = 'block';
+                                Array.prototype.forEach.call(buttons, function (b) { b.disabled = true; });
+                                function done() {
+                                    Array.prototype.forEach.call(buttons, function (b) { b.disabled = false; });
+                                    if (btn) { btn.textContent = label; }
+                                    bar.style.display = 'none'; bar.firstChild.style.width = '0';
+                                }
+                                var xhr = new XMLHttpRequest();
+                                xhr.open('POST', f.getAttribute('action'));
+                                xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+                                xhr.upload.onprogress = function (ev) {
+                                    if (!ev.lengthComputable) { return; }
+                                    var pct = Math.min(100, Math.round(ev.loaded * 100 / ev.total));
+                                    bar.firstChild.style.width = pct + '%';
+                                    if (btn) { btn.textContent = pct === 100 ? 'Saving…' : 'Uploading ' + pct + '%'; }
+                                };
+                                xhr.onload = function () {
+                                    var res = null;
+                                    try { res = JSON.parse(xhr.responseText); } catch (err) { res = null; }
+                                    done();
+                                    if (!res) { flash(f, 'err', 'This link has expired. Tap 📋 KPI details in WhatsApp for a fresh one — what you filled in is still here.'); return; }
+                                    if (!res.ok) { flash(f, 'err', res.message || 'Could not save that.'); return; }
+                                    flash(f, 'ok', res.message || 'Saved.');
+                                    window.location.href = window.location.pathname + '?ok=' + encodeURIComponent(res.message || 'Saved.');
+                                };
+                                xhr.onerror = function () { done(); flash(f, 'err', 'Network problem — nothing was sent. Your entries are still here; try again.'); };
+                                xhr.send(data);
+                            });
+                        });
+                    })();
+                </script>
             </t>
         </template>
     </data>
