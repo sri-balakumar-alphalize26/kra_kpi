@@ -36,6 +36,7 @@
         "views/wa_approval_templates.xml",
         "views/wa_task_form_templates.xml",
         "views/wa_client_form_templates.xml",
+        "views/wa_admin_decide_templates.xml",
         "views/wa_task_page_templates.xml",
         "views/wa_endday_templates.xml",
         # Must load BEFORE menu.xml — menu_kra_root references this action.

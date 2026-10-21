@@ -1,0 +1,304 @@
+"""The admin's WhatsApp decision page (/kpi/wa/admin/<token>).
+
+One page for five decisions (models/kpi_wa_admin_link.py): a new client
+request, a New Database, a Destroy request, a developer's own task, and
+finished work to check. Every choice runs through the route or model method
+the web admin uses -- with the request switched to that admin -- so what is
+checked, written and told to the client is identical either way.
+
+auth='public' like the other WhatsApp pages: the phone opening the link is not
+logged in. The token is the key; the admin behind it must still be an admin,
+and the task must still need the decision, every time the page is used.
+"""
+
+import json
+import logging
+import re
+
+from markupsafe import Markup
+
+from odoo import fields, http
+from odoo.exceptions import UserError
+from odoo.http import request
+
+from .kpi_wa_approval import _render
+from .kpi_reports_api import KpiReportsAPI
+from .kra_api import KraKpiAPI
+from ..models.kpi import DELIVERABLE_TYPES, deliverable_type_label
+from ..models.kpi_wa_admin_link import _is_admin
+
+_logger = logging.getLogger(__name__)
+
+PRIORITIES = [('regular', 'Regular'), ('important', 'Important'), ('urgent', 'Urgent')]
+DOC_TYPES = [('requirement', 'Requirement'), ('update', 'Update'), ('bug', 'Bug')]
+_TITLES = {
+    'new_request': ('🆕', 'New client request', 'Accept', 'Refuse'),
+    'new_database': ('🗄️', 'New Database request', 'Approve', 'Refuse'),
+    'disconnect': ('💥', 'Destroy Database request', 'Destroy it', 'Refuse'),
+    'self_task': ('🧑‍💻', "Developer's own task", 'Accept', 'Send back'),
+    'qa': ('✅', 'Finished work — check it', 'Approve', 'Send back'),
+}
+
+
+def _link_for(token):
+    if not token or len(token) < 16 or len(token) > 64:
+        return None
+    link = request.env['kpi.wa.admin.link'].sudo().search([('token', '=', token)], limit=1)
+    if not link or link.token != token:
+        return None
+    return link
+
+
+def _fmt_dt(value, user=None):
+    """Local time, the module's way (kpi.tz: company zone, else the admin's)."""
+    if not value:
+        return ''
+    tz = (user.tz if user else None) or None
+    return request.env['kpi.tz'].sudo().fmt(value, tz=tz, with_zone=False)
+
+
+class KpiWaAdminDecide(http.Controller):
+
+    # ------------------------------------------------------------------
+    # what the page shows
+    # ------------------------------------------------------------------
+    def _developers(self):
+        """Same list as the web's developer picker (/kra_kpi/get_users)."""
+        users = request.env['res.users'].sudo().search(
+            [('active', '=', True), ('share', '=', False), ('id', '!=', 1)])
+        return [{'id': u.id, 'name': u.name}
+                for u in users.filtered(lambda u: u.kpi_role != 'client').sorted('name')]
+
+    def _files(self, kpi):
+        names = []
+        for p in request.env['kpi.progress'].sudo().search([('kpi_id', '=', kpi.id)], order='id'):
+            if p.file_name:
+                names.append(p.file_name)
+            names += [a.file_name for a in request.env['kpi.file.attachment'].sudo().search(
+                [('progress_id', '=', p.id)], order='sequence') if a.file_name]
+        return names
+
+    def _details(self, link):
+        """[(label, value)] for the top of the page. Admin eyes only."""
+        k = link.kpi_id.sudo()
+        rows = [('Ref', k.external_ref or '#%s' % k.id), ('Task', k.name or ''),
+                ('Client', (k.client_kra_id or k.kra_id).name or '')]
+        if k.kra_id and k.client_kra_id and k.kra_id != k.client_kra_id:
+            rows.append(('Project', k.kra_id.display_name or ''))
+        if k.client_db_id:
+            rows.append(('Database', '%s (%s)' % (k.client_db_id.db_name or '',
+                                                 k.client_db_id.server_id.poll_label() or '')))
+        if link.kind == 'new_database':
+            rows += [('Server', k.provision_server_id.poll_label() if k.provision_server_id
+                      else (k.provision_server_other or '')),
+                     ('New DB name', k.provision_db_name or ''),
+                     ('Login', k.provision_username or ''),
+                     ('Password', k.provision_password or '')]
+        if link.kind == 'disconnect':
+            db = link._db()
+            if db:
+                rows += [('Destroy', '%s (%s)' % (db.db_name, db.server_id.poll_label() or '')),
+                         ('Reason', db.disconnect_reason_text or '')]
+        rows.append(('Urgency', dict(k._fields['priority'].selection).get(k.priority, k.priority or '')))
+        if k.deadline:
+            rows.append(('Needed by', k.deadline.strftime('%d-%m-%Y')))
+        if k.deliverable_type:
+            rows.append(('Type', deliverable_type_label(k.deliverable_type, k.deliverable_other)))
+        who = k.submitted_by_uid or k.requested_by_id
+        rows.append(('Raised by', '%s · %s' % (who.name if who else '—', _fmt_dt(k.create_date, link.user_id))))
+        if link.kind in ('self_task', 'qa') and k.user_id:
+            rows.append(('Developer', k.user_id.name))
+        if link.kind == 'self_task':
+            est = '%sh %sm' % (k.estimate_hours or 0, k.estimate_minutes or 0)
+            rows.append(('Their estimate', est))
+        if link.kind == 'qa':
+            secs = int(k.timer_total_seconds or 0)
+            rows.append(('Time worked', '%dh %02dm' % (secs // 3600, (secs % 3600) // 60)))
+            last = request.env['kpi.progress'].sudo().search(
+                [('kpi_id', '=', k.id), ('summary', '!=', False)], order='id desc', limit=1)
+            if last:
+                rows.append(('Last update', last.summary))
+        files = self._files(k)
+        if files:
+            rows.append(('Attachments', ', '.join(files)))
+        if k.description:
+            rows.append(('Description', re.sub(r'<[^>]+>', '', k.description or '').strip()[:1500]))
+        return rows
+
+    def _page(self, token, link, error='', values=None):
+        k = link.kpi_id.sudo()
+        emoji, title, yes, no = _TITLES[link.kind]
+        reasons = request.env['kpi.decline.reason'].sudo().options_for('decline') \
+            if link.kind in ('new_request', 'new_database') else []
+        boot = {'kind': link.kind, 'yes': yes, 'no': no,
+                'ref': k.external_ref or '#%s' % k.id, 'values': values or {}}
+        return _render('kra_kpi_module.wa_admin_decide', {
+            'token': token, 'kind': link.kind, 'emoji': emoji, 'title': title,
+            'yes': yes, 'no': no, 'admin': link.user_id.name or '',
+            'rows': self._details(link), 'error': error,
+            'developers': self._developers() if link.kind in ('new_request', 'new_database') else [],
+            'reasons': reasons, 'priorities': PRIORITIES, 'doc_types': DOC_TYPES,
+            'deliverables': DELIVERABLE_TYPES,
+            'cur': {'priority': (k.requested_priority if link.kind == 'self_task' else k.priority) or 'regular',
+                    'doc_type': k.requested_doc_type or 'requirement',
+                    'estimate_hours': k.estimate_hours or 0, 'estimate_minutes': k.estimate_minutes or 0,
+                    'deliverable': (k.deliverable_type or '').split(','),
+                    'deliverable_other': k.deliverable_other or '',
+                    'user_id': k.user_id.id or 0},
+            'boot': Markup(json.dumps(boot).replace('</', '<\\/'))})
+
+    def _closed(self, link, why=''):
+        last = link._last_decision()
+        if last:
+            why = why or 'Already handled — %s by %s, %s.' % (
+                last.decision or 'decided', last.decided_by_id.name or '—', _fmt_dt(last.used_at, link.user_id))
+        return _render('kra_kpi_module.wa_admin_decide_closed', {
+            'ref': link.kpi_id.external_ref or '', 'name': link.kpi_id.name or '',
+            'why': why or 'Already handled on the web. Nothing more to do here.'})
+
+    def _check(self, token):
+        """-> (link, admin, response). response is set when the page must not be used."""
+        link = _link_for(token)
+        if not link:
+            return None, None, _render('kra_kpi_module.wa_approval_expired', {
+                'meta': 'This admin link can no longer be used.',
+                'reason': 'This link is not valid.',
+                'hint': 'Decide it on the web — Queue or Approvals.'})
+        admin = link.user_id
+        if not admin.active or not _is_admin(admin):
+            return link, None, self._closed(link, 'This link was for an admin account that can no longer decide.')
+        if not link._still_open():
+            return link, None, self._closed(link)
+        if link.used_at:
+            return link, None, self._closed(link)
+        if link.expires < fields.Datetime.now():
+            return link, None, self._closed(link, 'This link has expired. Decide it on the web, or wait for the next reminder.')
+        return link, admin, None
+
+    @http.route('/kpi/wa/admin/<string:token>', type='http', auth='public',
+                methods=['GET'], csrf=False, website=False)
+    def page(self, token, **kw):
+        link, admin, stop = self._check(token)
+        if stop:
+            return stop
+        return self._page(token, link)
+
+    # ------------------------------------------------------------------
+    # the decision -- through the web's own code, as that admin
+    # ------------------------------------------------------------------
+    @http.route('/kpi/wa/admin/<string:token>/decide', type='http', auth='public',
+                methods=['POST'], csrf=False, website=False)
+    def decide(self, token, **post):
+        link, admin, stop = self._check(token)
+        if stop:
+            return stop
+        action = post.get('action')
+        if action not in ('yes', 'no'):
+            return self._page(token, link, 'Choose what to do.', post)
+        request.update_env(user=admin.id)
+        try:
+            ok, msg, label = self._apply(link, action, post)
+        except UserError as exc:
+            ok, msg, label = False, str(exc), ''
+        except Exception as exc:
+            _logger.exception('admin WhatsApp decision failed for %s: %s', link.kpi_id.id, exc)
+            ok, msg, label = False, 'That could not be saved. Try again, or use the web.', ''
+        if not ok:
+            request.env.cr.rollback()
+            return self._page(token, link, msg or 'That could not be saved.', post)
+
+        link._close_all(label, admin)
+        k = link.kpi_id.sudo()
+        done = '%s — %s' % (k.external_ref or '#%s' % k.id, msg)
+        try:
+            request.env['kpi.wa.group.report'].sudo().post_text_to_user(admin, '✅ Done: ' + done)
+        except Exception as exc:
+            _logger.warning('admin WhatsApp confirmation failed: %s', exc)
+        emoji, title, _y, _n = _TITLES[link.kind]
+        return _render('kra_kpi_module.wa_admin_decide_done', {
+            'emoji': emoji, 'title': title, 'ref': k.external_ref or '', 'name': k.name or '',
+            'message': msg})
+
+    def _apply(self, link, action, post):
+        """-> (ok, message, decision label)."""
+        k = link.kpi_id.sudo()
+        kind = link.kind
+        note = (post.get('note') or '').strip()
+        reason_id = int(post.get('reason_id') or 0) or None
+        reports, kra = KpiReportsAPI(), KraKpiAPI()
+
+        if kind == 'new_request':
+            if action == 'yes':
+                if not post.get('user_id'):
+                    return False, 'Pick the developer it goes to.', ''
+                deliverable = request.httprequest.form.getlist('deliverable_type')
+                res = reports.update_pending_kpi(
+                    kpi_id=k.id, user_id=post.get('user_id'),
+                    priority=post.get('priority') or k.priority or 'regular',
+                    estimate_hours=post.get('estimate_hours') or 0,
+                    estimate_minutes=post.get('estimate_minutes') or 0,
+                    deliverable_type=deliverable or k.deliverable_type or '',
+                    deliverable_other=post.get('deliverable_other') or k.deliverable_other or '')
+                if not res.get('status'):
+                    return False, res.get('message'), ''
+                res = reports.publish_pending_kpi(kpi_id=k.id)
+                if not res.get('status'):
+                    return False, res.get('message'), ''
+                dev = request.env['res.users'].sudo().browse(int(post['user_id']))
+                return True, 'accepted → %s. The client is asked to approve it.' % dev.name, 'accepted'
+            if not (note or reason_id):
+                return False, 'Pick a reason or write one — the client is told.', ''
+            res = reports.pending_queue_decline(kpi_id=k.id, mode='decline',
+                                                reason_id=reason_id, reason_text=note)
+            if not res.get('status'):
+                return False, res.get('message'), ''
+            return True, 'refused. The client has been told why.', 'refused'
+
+        if kind in ('new_database', 'disconnect'):
+            res_model, res_id = ('kra.kpi', k.id) if kind == 'new_database' else \
+                ('kpi.client.db', link._db().id)
+            vals = {'res_model': res_model, 'res_id': res_id, 'kind': kind,
+                    'decision': 'approve' if action == 'yes' else 'reject',
+                    'note': note, 'reason_id': reason_id or False,
+                    'tell_client': post.get('tell_client') != '0'}
+            if kind == 'new_database' and action == 'yes':
+                if not post.get('user_id'):
+                    return False, 'Pick the developer who builds it.', ''
+                vals['user_id'] = int(post['user_id'])
+            if kind == 'disconnect' and not note:
+                return False, 'Write a note — it is recorded and shown to the client.', ''
+            if kind == 'new_database' and action == 'no' and not (note or reason_id):
+                return False, 'Pick a reason or write one — the client is told.', ''
+            wiz = request.env['kpi.approval.decide'].create(vals)
+            wiz.action_apply()
+            if kind == 'new_database':
+                return True, ('approved → %s.' % wiz.user_id.name) if action == 'yes' \
+                    else 'refused. The client has been told why.', \
+                    'approved' if action == 'yes' else 'refused'
+            return True, 'database switched off.' if action == 'yes' \
+                else 'refused — the database stays running.', \
+                'destroyed' if action == 'yes' else 'refused'
+
+        if kind == 'self_task':
+            if action == 'yes':
+                res = kra.accept_self_created(kpi_id=k.id, doc_type=post.get('doc_type') or 'requirement',
+                                              priority=post.get('priority') or 'regular')
+                return bool(res.get('status')), res.get('message') or 'accepted.', 'accepted'
+            res = kra.reject_self_created(kpi_id=k.id, note=note, discard=post.get('discard') == '1')
+            return bool(res.get('status')), res.get('message') or 'sent back.', \
+                'discarded' if post.get('discard') == '1' else 'sent back'
+
+        if kind == 'qa':
+            if action == 'yes':
+                res = kra.task_approve(kpi_id=k.id)
+                if res.get('status'):
+                    nxt = 'sent to the client for sign-off.' if res.get('new_state') == 'awaiting_client' \
+                        else 'completed.'
+                    return True, 'approved — %s' % nxt, 'approved'
+                return False, res.get('message'), ''
+            if not note:
+                return False, 'Say what needs fixing — the developer sees it.', ''
+            res = kra.task_reject(kpi_id=k.id, reason=note)
+            return bool(res.get('status')), res.get('message') or 'sent back for rework.', 'sent back'
+
+        return False, 'Nothing to do for this link.', ''

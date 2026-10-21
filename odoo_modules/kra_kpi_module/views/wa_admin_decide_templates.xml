@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- The admin's WhatsApp decision page (controllers/kpi_wa_admin_decide.py):
+             a new client request, a New Database, a Destroy request, a
+             developer's own task, or finished work to check. Same look as the
+             other WhatsApp pages (wa_task_layout); behaviour in
+             static/src/wa_client_form/admin.js. -->
+        <template id="wa_admin_decide" name="WA Admin Decision">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="title"/>
+                <style>
+                    .det { margin:0; display:grid; grid-template-columns:auto 1fr; gap:6px 14px; }
+                    .det dt { font-size:12.5px; font-weight:700; color:var(--subtlest); }
+                    .det dd { margin:0; white-space:pre-wrap; word-break:break-word; }
+                    .choice { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+                    .choice input { display:none; }
+                    .choice label { text-align:center; padding:12px; border-radius:var(--r); font-weight:800;
+                                    border:1.5px solid var(--border); background:var(--input); cursor:pointer; }
+                    .choice input:checked + label.y { background:var(--ok-bg); color:var(--ok); border-color:var(--ok); }
+                    .choice input:checked + label.n { background:#FEE2E2; color:var(--danger); border-color:var(--danger); }
+                    .part[hidden] { display:none; }
+                    .row { display:flex; gap:8px; }
+                    .pv { border:1px solid var(--border); border-radius:var(--r); background:var(--canvas); }
+                    .pv h4 { margin:0; padding:10px 12px; font-size:13px; border-bottom:1px solid var(--border); }
+                    .pv dl { margin:0; padding:8px 12px; display:grid; grid-template-columns:auto 1fr; gap:6px 12px; }
+                    .pv dt { font-size:12.5px; font-weight:700; color:var(--subtlest); }
+                    .pv dd { margin:0; white-space:pre-wrap; word-break:break-word; }
+                    .pv dd.empty { color:var(--danger); font-weight:700; }
+                    .modal { position:fixed; inset:0; background:rgba(16,24,40,.45); display:flex; align-items:center;
+                             justify-content:center; padding:16px; z-index:10; }
+                    .modal[hidden] { display:none; }
+                    .modal .box { background:var(--surface); border-radius:var(--r-card); width:100%; max-width:560px;
+                                  max-height:90vh; overflow-y:auto; box-shadow:0 18px 50px rgba(16,24,40,.25); }
+                    .btn.danger { background:var(--danger); color:#fff; }
+                    .btn[disabled] { opacity:.5; }
+                </style>
+                <form id="ad" method="post" t-att-action="'/kpi/wa/admin/%s/decide' % token">
+                    <div class="hd"><t t-esc="emoji"/> <t t-esc="title"/>
+                        <small>For <t t-esc="admin"/> · this link works once</small></div>
+                    <div class="bd">
+                        <div t-if="error" class="err" t-esc="error"/>
+                        <dl class="det">
+                            <t t-foreach="rows" t-as="r">
+                                <dt t-esc="r[0]"/><dd t-esc="r[1]"/>
+                            </t>
+                        </dl>
+
+                        <div class="choice">
+                            <input type="radio" name="action" id="adYes" value="yes"/>
+                            <label for="adYes" class="y">✓ <t t-esc="yes"/></label>
+                            <input type="radio" name="action" id="adNo" value="no"/>
+                            <label for="adNo" class="n">✕ <t t-esc="no"/></label>
+                        </div>
+
+                        <!-- ===== YES ===== -->
+                        <div class="part" id="adYesPart" hidden="hidden">
+                            <t t-if="kind in ('new_request', 'new_database')">
+                                <div class="field">
+                                    <span class="lbl"><t t-esc="'Who builds it' if kind == 'new_database' else 'Give it to'"/> <span class="req">*</span></span>
+                                    <select name="user_id" id="adDev">
+                                        <option value="">Choose a developer</option>
+                                        <t t-foreach="developers" t-as="d">
+                                            <option t-att-value="d['id']" t-esc="d['name']"
+                                                    t-att-selected="'selected' if d['id'] == cur['user_id'] else None"/>
+                                        </t>
+                                    </select>
+                                </div>
+                            </t>
+                            <t t-if="kind == 'new_request'">
+                                <div class="grid2">
+                                    <div class="field">
+                                        <span class="lbl">Estimate</span>
+                                        <div class="hm">
+                                            <span><input class="input" type="number" min="0" name="estimate_hours" id="adH" t-att-value="cur['estimate_hours']"/><i>h</i></span>
+                                            <span><input class="input" type="number" min="0" max="59" name="estimate_minutes" id="adM" t-att-value="cur['estimate_minutes']"/><i>m</i></span>
+                                        </div>
+                                    </div>
+                                    <div class="field">
+                                        <span class="lbl">Urgency</span>
+                                        <span class="tabs">
+                                            <t t-foreach="priorities" t-as="p">
+                                                <input type="radio" name="priority" t-att-id="'adP_%s' % p[0]" t-att-value="p[0]"
+                                                       t-att-checked="'checked' if p[0] == cur['priority'] else None"/>
+                                                <label t-att-for="'adP_%s' % p[0]" t-esc="p[1]"/>
+                                            </t>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <span class="lbl">Type</span>
+                                    <span class="chks">
+                                        <t t-foreach="deliverables" t-as="dv">
+                                            <label><input type="checkbox" name="deliverable_type" t-att-value="dv[0]"
+                                                          t-att-checked="'checked' if dv[0] in cur['deliverable'] else None"/> <t t-esc="dv[1]"/></label>
+                                        </t>
+                                    </span>
+                                    <input class="input" name="deliverable_other" maxlength="40" placeholder="Other type"
+                                           t-att-value="cur['deliverable_other']"/>
+                                </div>
+                            </t>
+                            <t t-if="kind == 'self_task'">
+                                <div class="grid2">
+                                    <div class="field">
+                                        <span class="lbl">Type</span>
+                                        <span class="tabs">
+                                            <t t-foreach="doc_types" t-as="o">
+                                                <input type="radio" name="doc_type" t-att-id="'adT_%s' % o[0]" t-att-value="o[0]"
+                                                       t-att-checked="'checked' if o[0] == cur['doc_type'] else None"/>
+                                                <label t-att-for="'adT_%s' % o[0]" t-esc="o[1]"/>
+                                            </t>
+                                        </span>
+                                    </div>
+                                    <div class="field">
+                                        <span class="lbl">Urgency</span>
+                                        <span class="tabs">
+                                            <t t-foreach="priorities" t-as="p">
+                                                <input type="radio" name="priority" t-att-id="'adP_%s' % p[0]" t-att-value="p[0]"
+                                                       t-att-checked="'checked' if p[0] == cur['priority'] else None"/>
+                                                <label t-att-for="'adP_%s' % p[0]" t-esc="p[1]"/>
+                                            </t>
+                                        </span>
+                                    </div>
+                                </div>
+                            </t>
+                            <p t-if="kind == 'qa'" class="mini">Approving sends it to the client for sign-off (or completes it when no client sign-off is needed).</p>
+                        </div>
+
+                        <!-- ===== NO ===== -->
+                        <div class="part" id="adNoPart" hidden="hidden">
+                            <div class="field" t-if="reasons">
+                                <span class="lbl">Reason</span>
+                                <select name="reason_id" id="adReason">
+                                    <option value="">Choose a reason (or write one below)</option>
+                                    <t t-foreach="reasons" t-as="r"><option t-att-value="r['id']" t-esc="r['name']"/></t>
+                                </select>
+                            </div>
+                            <span class="chks" t-if="kind == 'self_task'">
+                                <label><input type="checkbox" name="discard" value="1" id="adDiscard"/> Discard it (instead of sending back to fix)</label>
+                            </span>
+                        </div>
+
+                        <!-- The note: always for Destroy, for any refusal / send-back. -->
+                        <div class="field part" id="adNotePart" hidden="hidden">
+                            <span class="lbl" id="adNoteLbl">Note</span>
+                            <textarea name="note" id="adNote" rows="3" maxlength="2000"></textarea>
+                        </div>
+                        <div class="field part" id="adTellPart" t-if="kind in ('new_database', 'disconnect')" hidden="hidden">
+                            <span class="lbl">Tell the client on WhatsApp</span>
+                            <select name="tell_client" id="adTell"><option value="1">Yes</option><option value="0">No — they already know</option></select>
+                        </div>
+
+                        <div class="pv"><h4>Preview</h4><dl id="adPreview"></dl></div>
+                        <div id="adErr" class="err" hidden="hidden"></div>
+                    </div>
+                    <div class="ft">
+                        <button type="button" class="btn ghost" onclick="window.close(); history.back();">Close</button>
+                        <button type="button" class="btn primary" id="adGo" disabled="disabled">Continue</button>
+                    </div>
+                </form>
+
+                <div id="adModal" class="modal" hidden="hidden" role="dialog" aria-modal="true">
+                    <div class="box">
+                        <div class="hd" id="adModalTitle">Confirm<small>Check it once more.</small></div>
+                        <div class="bd"><div class="pv"><dl id="adModalPreview"></dl></div></div>
+                        <div class="ft">
+                            <button type="button" class="btn ghost" id="adBack">Back</button>
+                            <button type="button" class="btn primary" id="adConfirm">Confirm</button>
+                        </div>
+                    </div>
+                </div>
+                <script>window.AD_BOOT = <t t-out="boot"/>;</script>
+                <script src="/kra_kpi_module/static/src/wa_client_form/admin.js?v=1"></script>
+            </t>
+        </template>
+
+        <template id="wa_admin_decide_done" name="WA Admin Decision Done">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'Done'"/>
+                <div class="done">
+                    <div class="big">✅</div>
+                    <div style="font-size:18px; font-weight:800;"><t t-esc="title"/></div>
+                    <span class="ref"><t t-esc="ref"/><t t-if="ref"> — </t><t t-esc="name"/></span>
+                    <p style="margin-top:16px; font-weight:700;"><t t-esc="ref"/> <t t-esc="message"/></p>
+                    <p class="mini">A confirmation is in your WhatsApp. This link no longer works.</p>
+                </div>
+            </t>
+        </template>
+
+        <template id="wa_admin_decide_closed" name="WA Admin Decision Closed">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'Already handled'"/>
+                <div class="done">
+                    <div class="big">ℹ️</div>
+                    <div style="font-size:18px; font-weight:800;"><t t-esc="ref"/><t t-if="ref"> — </t><t t-esc="name"/></div>
+                    <p style="margin-top:16px; font-weight:700;" t-esc="why"/>
+                </div>
+            </t>
+        </template>
+    </data>
+</odoo>

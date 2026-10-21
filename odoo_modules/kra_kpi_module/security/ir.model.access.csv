@@ -177,3 +177,6 @@ access_kpi_ai_chat_message_system,kpi.ai.chat.message.system,model_kpi_ai_chat_m
 access_kpi_ai_config_admin,kpi.ai.config.admin,model_kpi_ai_config,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_ai_config_owner,kpi.ai.config.owner,model_kpi_ai_config,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_ai_config_system,kpi.ai.config.system,model_kpi_ai_config,base.group_system,1,1,1,1
+access_kpi_wa_admin_link_admin,kpi.wa.admin.link.admin,model_kpi_wa_admin_link,kra_kpi_module.group_kra_admin,1,0,0,0
+access_kpi_wa_admin_link_owner,kpi.wa.admin.link.owner,model_kpi_wa_admin_link,kra_kpi_module.group_kra_owner,1,0,0,0
+access_kpi_wa_admin_link_system,kpi.wa.admin.link.system,model_kpi_wa_admin_link,base.group_system,1,1,1,1
