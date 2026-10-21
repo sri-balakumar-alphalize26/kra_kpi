@@ -851,7 +851,13 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // The file's id IS its kpi.progress id, so they match directly.
   function onViewNote(f) {
     log.info('view note →', { progress_id: f.id });
-    const y = historyY.current + (noteY.current[f.id] || 0);
+    // Client-raised rows live in their own card, not in Progress History, so
+    // they have no recorded offset — don't scroll to a row that isn't there.
+    if (noteY.current[f.id] === undefined) {
+      log.warn('view note: no history row for', { progress_id: f.id });
+      return;
+    }
+    const y = historyY.current + noteY.current[f.id];
     scrollRef.current?.scrollTo({ y: Math.max(0, y - 70), animated: true });
     setNoteFocus(f.id);
     noteFlash.setValue(0);
@@ -870,7 +876,14 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // gate. Demanding all five here just taught people to tick boxes that weren't
   // true, which is worse than an honest partial list.
   const anyChecked = CHECKLIST_ITEMS.some((c) => checks[c.key]);
-  const hasProgress = (data?.progress?.length || 0) > 0;
+  // Files a CLIENT attached when raising the task come back as progress / file
+  // rows flagged `from_client`. They get their own read-only card and never
+  // count as the team's progress summary (the server refuses Complete on them).
+  const teamProgress = (data?.progress || []).filter((p) => !p.from_client);
+  const clientProgress = (data?.progress || []).filter((p) => p.from_client);
+  const teamFiles = (data?.files || []).filter((f) => !f.from_client);
+  const clientProgressIds = new Set(clientProgress.map((p) => p.id));
+  const hasProgress = teamProgress.length > 0;
   // A full Complete also needs a user manual on the task (the server refuses
   // without one); Partial Finish on the board needs none.
   const hasManual = (data?.manuals?.length || 0) > 0;
@@ -1429,11 +1442,55 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
               </View>
             )}
 
+            {/* ── From the client (only when there is any) ───────────── */}
+            {/* What the client attached when raising the task. Read-only: no
+                edit / delete / select — and kept out of Attached Files,
+                Documents and Progress History so it is never mistaken for the
+                team's own work (nor counted as the progress summary). */}
+            {clientProgress.length > 0 && (
+              <Section icon="person-circle-outline" title={`📎 From the client (${clientProgress.length})`}>
+                {clientProgress.map((p) => (
+                  <View key={`client-${p.id}`} style={s.histRow}>
+                    <View style={s.histTop}>
+                      <Text style={s.histWho}>{p.employee_name || 'Client'}</Text>
+                      <Text style={s.histWhen}>{p.create_date}</Text>
+                    </View>
+                    {!!(p.summary || '').trim() && <Text style={s.body}>{p.summary}</Text>}
+                    {parseLinks(p.related_links).map((l, i) => (
+                      <TouchableOpacity key={i} onPress={() => Linking.openURL(l).catch(() => flash('err', 'Could not open link'))}>
+                        <Text style={s.linkTxt} numberOfLines={1}>🔗 {l}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    {entryFiles(p).map((f) => (
+                      <View key={f.key} style={s.fileRow}>
+                        <Ionicons name="document-text-outline" size={15} color={COLORS.primary} style={{ marginTop: 2 }} />
+                        <View style={{ flex: 1, marginLeft: 8 }}>
+                          <Text style={s.fileName} numberOfLines={1}>{f.file_name}</Text>
+                        </View>
+                        {fileBusy === f.key ? (
+                          <ActivityIndicator size="small" color={COLORS.primary} />
+                        ) : (
+                          <>
+                            <TouchableOpacity style={s.attView} onPress={() => onViewFile(f)}>
+                              <Text style={s.attBtnTxt}>View</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[s.attDl, { marginLeft: 6 }]} onPress={() => onDownloadFile(f)}>
+                              <Text style={s.attBtnTxt}>Download</Text>
+                            </TouchableOpacity>
+                          </>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                ))}
+              </Section>
+            )}
+
             {/* ── Attached Files ─────────────────────────────────────── */}
             <Section icon="folder-open-outline" title="Attached Files"
-              right={(data.files || []).length > 1 ? <SortChip value={sortFiles} onChange={setSortFiles} /> : null}>
-              {(data.files || []).length === 0 ? <Empty text="No documents yet" /> : (
-                sortItems(data.files, sortFiles, 'upload_date', 'file_name').map((f) => (
+              right={teamFiles.length > 1 ? <SortChip value={sortFiles} onChange={setSortFiles} /> : null}>
+              {teamFiles.length === 0 ? <Empty text="No documents yet" /> : (
+                sortItems(teamFiles, sortFiles, 'upload_date', 'file_name').map((f) => (
                   <View key={f.id} style={s.attRow}>
                     <View style={s.attTop}>
                       <Ionicons name="document-outline" size={16} color={COLORS.primary} style={{ marginTop: 2 }} />
@@ -1511,9 +1568,9 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
             {/* Same source as Attached Files (the web renders it twice too), kept
                 as its own compact pane so the layout matches the web page. */}
             <Section icon="documents-outline" title="Documents"
-              right={(data.files || []).length > 1 ? <SortChip value={sortDocs} onChange={setSortDocs} /> : null}>
-              {(data.files || []).length === 0 ? <Empty text="No documents yet" /> : (
-                sortItems(data.files, sortDocs, 'upload_date', 'file_name').map((f) => (
+              right={teamFiles.length > 1 ? <SortChip value={sortDocs} onChange={setSortDocs} /> : null}>
+              {teamFiles.length === 0 ? <Empty text="No documents yet" /> : (
+                sortItems(teamFiles, sortDocs, 'upload_date', 'file_name').map((f) => (
                   <View key={`doc-${f.id}`} style={s.fileRow}>
                     <Ionicons name="document-text-outline" size={15} color={COLORS.primary} style={{ marginTop: 2 }} />
                     <View style={{ flex: 1, marginLeft: 8 }}>
@@ -1555,7 +1612,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                     <View style={s.attBtns}>
                       {/* Only when the link came from a progress update — a
                           task-level link has no note to jump to. */}
-                      {!!l.progress_id && (
+                      {!!l.progress_id && !clientProgressIds.has(l.progress_id) && (
                         <TouchableOpacity style={s.attGhost} onPress={() => onViewNote({ id: l.progress_id })}>
                           <Ionicons name="reader-outline" size={13} color={COLORS.muted} />
                           <Text style={s.attGhostTxt}>View note</Text>
@@ -1585,7 +1642,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                     — the row checkboxes are gated on the server's own can_edit,
                     so a list of other people's updates would give a Select button
                     that selects nothing. */}
-                {(data.progress || []).some((p) => p.can_edit) ? (
+                {teamProgress.some((p) => p.can_edit) ? (
                   <View style={s.bulkBar}>
                     {selMode ? (
                       <>
@@ -1595,12 +1652,12 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                         <View style={{ flex: 1 }} />
                         <TouchableOpacity
                           onPress={() => {
-                            const all = (data.progress || []).filter((p) => p.can_edit).map((p) => p.id);
+                            const all = teamProgress.filter((p) => p.can_edit).map((p) => p.id);
                             setSelIds(selIds.length === all.length ? [] : all);
                           }}
                         >
                           <Text style={s.bulkLink}>
-                            {selIds.length === (data.progress || []).filter((p) => p.can_edit).length
+                            {selIds.length === teamProgress.filter((p) => p.can_edit).length
                               ? 'Select none' : 'Select all'}
                           </Text>
                         </TouchableOpacity>
@@ -1622,10 +1679,10 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                     )}
                   </View>
                 ) : null}
-                {(data.progress || []).length === 0 ? (
+                {teamProgress.length === 0 ? (
                   <Empty text="No progress updates yet. Submit your first update above." />
                 ) : (
-                  data.progress.map((p) => (
+                  teamProgress.map((p) => (
                     <Animated.View
                       key={p.id}
                       onLayout={(e) => { noteY.current[p.id] = e.nativeEvent.layout.y; }}

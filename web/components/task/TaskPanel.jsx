@@ -8,7 +8,7 @@ import { liveFromAnchor, fmtClock, secsSince, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
 import { actionsFor } from "./actions";
 import { useTaskActions } from "./TaskActions";
-import { ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList } from "./TaskExtras";
+import { ClientProgress, ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList } from "./TaskExtras";
 
 /* Odoo's has_started states (kra_api.py /kpi_action/details). */
 const STARTED_STATES = ["in_progress", "paused", "partially_completed", "awaiting_client", "completed"];
@@ -68,7 +68,12 @@ export default function TaskPanel({ id, onClose }) {
   /* refreshAll fires kpi:refresh, which reloads this panel too. */
   const changed = acts.refreshAll;
   const late = t ? S.deadlinePassed(t, now) : false;
-  const fileCount = (d?.files?.length || 0) + (d?.github?.length || 0) + (d?.manuals?.length || 0) + (d?.links?.length || 0);
+  /* Client rows (what the client attached when raising the task) sit in their
+     own "From the client" block, never among the team's updates. */
+  const teamProgress = (d?.progress || []).filter((p) => !p.from_client);
+  const clientProgress = (d?.progress || []).filter((p) => p.from_client);
+  const updatesCount = t ? (typeof t.dev_progress_count === "number" ? t.dev_progress_count : t.progress_count) : 0;
+  const fileCount = (d?.files?.length || 0) +(d?.github?.length || 0) + (d?.manuals?.length || 0) + (d?.links?.length || 0);
   /* Updates, files, manuals and GitHub links are added only once the task has
      been started, as on the Odoo board. /kpi_action/details says so (has_started:
      the task's STATE only, for everyone, admins included. Time logged earlier
@@ -137,7 +142,7 @@ export default function TaskPanel({ id, onClose }) {
                 <dt>Time spent</dt><dd><LiveTick active={!!running} fn={(n) => { const spent = spentAt(n); return <>{fmtHM(spent)}<span className="bar"><i style={{ width: `${est ? Math.min(100, (spent / est) * 100) : 0}%`, background: est && spent > est ? "var(--danger)" : "var(--brand)" }} /></span></>; }} /></dd>
                 {(t.time_by_user || []).length > 0 && <><dt>Time by person</dt><dd style={{ height: "auto", minHeight: 24, flexDirection: "column", alignItems: "flex-start", gap: 2 }}>{t.time_by_user.map((u) => <span key={u.user_id}>{u.user_name}{u.is_current ? <span className="mini" style={{ color: "var(--pri-regular)" }}> (current)</span> : null} — <b>{u.display}</b></span>)}</dd></>}
                 {t.today_seconds > 0 && <><dt>Today</dt><dd>{fmtHM(t.today_seconds)}</dd></>}
-                {t.progress_count > 0 && <><dt>Updates</dt><dd>{t.progress_count}</dd></>}
+                {updatesCount > 0 && <><dt>Updates</dt><dd>{updatesCount}</dd></>}
                 {t.deadline && <><dt>Deadline</dt><dd style={late ? { color: "var(--danger)", fontWeight: 800 } : undefined}>{t.deadline}{late ? " · passed" : ""}</dd></>}
                 {S.reminderIntervalMs(t) > 0 && <><dt>Reminder</dt><dd>Every {S.fmtReminder(t)}{t.last_reminder_shown ? <span className="mini"> · last {t.last_reminder_shown}</span> : null}</dd></>}
                 {t.completion_date && <><dt>Completed</dt><dd>{t.completion_date}{t.completed_by_name ? ` · ${t.completed_by_name}` : ""}</dd></>}
@@ -151,19 +156,20 @@ export default function TaskPanel({ id, onClose }) {
               {info && <ExtraDetails info={info} />}
 
               <div className="tabs" role="tablist">
-                {[["updates", `Updates${d.progress?.length ? ` · ${d.progress.length}` : ""}`], ["files", `Files${fileCount ? ` · ${fileCount}` : ""}`], ["history", "History"]].map(([k, l]) => (
+                {[["updates", `Updates${teamProgress.length ? ` · ${teamProgress.length}` : ""}`], ["files", `Files${fileCount ? ` · ${fileCount}` : ""}`], ["history", "History"]].map(([k, l]) => (
                   <span key={k} role="tab" className={tab === k ? "on" : ""} onClick={() => setTab(k)} style={{ cursor: "pointer" }}>{l}</span>
                 ))}
               </div>
 
               {tab === "updates" && (
                 <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {clientProgress.length > 0 && <ClientProgress progress={clientProgress} />}
                   {lane !== "completed" && (started ? <ProgressComposer kpiId={id} d={d} onChanged={changed} /> : <NotStartedNote />)}
                   {/* Questions go to the manager, never the client: the assignee (and
                       admins) can ask; everyone on the task sees the answers. */}
                   <ManagerQuestions key={`mq${id}`} kpiId={id} canAsk={!!(meta.is_assignee || meta.is_manager) && lane !== "completed"} />
-                  <ProgressList progress={d.progress || []} onChanged={changed} />
-                  {!d.progress?.length && <span className="mini">No updates yet.</span>}
+                  <ProgressList progress={teamProgress} onChanged={changed} />
+                  {!teamProgress.length && <span className="mini">No updates yet.</span>}
                 </div>
               )}
               {tab === "files" && <FilesTab kpiId={id} d={d} canAdd={started} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}

@@ -256,6 +256,16 @@
                     </details>
                 </div>
 
+                <div t-if="client_updates" class="sec">
+                    <h3>📎 From the client (<t t-esc="sum(len(c['files']) for c in client_updates) or len(client_updates)"/>)</h3>
+                    <div t-foreach="client_updates" t-as="u" class="item">
+                        <div class="meta"><t t-esc="u['who']"/> · <t t-esc="u['when']"/></div>
+                        <div class="txt" t-esc="u['text']"/>
+                        <div class="files"><a t-foreach="u['files']" t-as="f" t-att-href="f['url']" target="_blank">📎 <t t-esc="f['name']"/></a></div>
+                        <div t-foreach="u['links']" t-as="l"><a t-att-href="l" target="_blank" rel="noopener">🔗 <t t-esc="l"/></a></div>
+                    </div>
+                </div>
+
                 <div class="sec">
                     <h3>Updates (<t t-esc="len(updates)"/>)</h3>
                     <p t-if="not updates" class="mini">No updates yet.</p>

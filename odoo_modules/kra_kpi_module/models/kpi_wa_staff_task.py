@@ -1034,7 +1034,7 @@ class KpiWaStaffTask(models.AbstractModel):
         files = files or []
         if not summary and ((raw_links or '').strip() or (gh_url or '').strip()):
             return False, 'Write a summary to go with the links.'
-        no_summary = not summary and not self.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id)])
+        no_summary = not summary and not self.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id), ('from_client', '=', False)])
         if partial and no_summary:
             return False, 'Write a summary of what you did — this is what your manager reads.'
         checklist = {} if partial else {k: (k in ticks) for k, _l in CHECKLIST}
@@ -1183,7 +1183,7 @@ class KpiWaStaffTask(models.AbstractModel):
 
     def _done_finish(self, message, state, user, task, ticked, partial=False):
         """/kra_kpi/task/complete, rule for rule."""
-        if not self.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id)]):
+        if not self.env['kpi.progress'].sudo().search_count([('kpi_id', '=', task.id), ('from_client', '=', False)]):
             return self._back_to_task(message, state, task, _(
                 'Please submit a Progress Summary before completing this task.'))
         checklist = {} if partial else {k: (k in ticked) for k, _l in CHECKLIST}

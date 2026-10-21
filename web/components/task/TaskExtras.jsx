@@ -616,21 +616,32 @@ export function ProgressItem({ p, onChanged, selected, onSelect }) {
 export function FilesTab({ kpiId, d, canAdd = true, canManageGithub, onChanged }) {
   const manuals = d.manuals || [];
   const linkIdx = taskLinkIndex(d);
+  /* Files the client attached when raising the task get their own list on top,
+     apart from what the team attached to its updates. */
+  const clientFiles = (d.files || []).filter((f) => f.from_client);
+  const teamFiles = (d.files || []).filter((f) => !f.from_client);
+  const fileRow = (f) => (
+    <div key={`f${f.id}`} className="kv" style={{ padding: "6px 0" }}>
+      <FileBadge kind={fileKind(f.file_name)} />
+      <a className="val" href={href(`/kpi/progress/view?progress_id=${f.id}`)} target="_blank" rel="noreferrer" style={{ ...ELLIPSIS, textDecoration: "none", minWidth: 0 }}>{f.file_name || "file"}</a>
+      <span className="right mini">{f.uploaded_by} · {fmtFriendly(f.upload_date)}<a className="icon-btn" href={href(`/kpi/progress/download?progress_id=${f.id}`)} title="Download" aria-label="Download"><Icon n="download" size={15} /></a></span>
+    </div>
+  );
   return (
     <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {clientFiles.length > 0 && (
+        <div>
+          <h3>📎 From the client · {clientFiles.length}</h3>
+          {clientFiles.map(fileRow)}
+        </div>
+      )}
       {!canAdd && <NotStartedNote />}
       {(canAdd || manuals.length > 0) && <Manuals kpiId={kpiId} manuals={manuals} progress={d.progress || []} linkIdx={linkIdx} canAdd={canAdd} onChanged={onChanged} />}
       <Github kpiId={kpiId} github={d.github || []} linkIdx={linkIdx} canAdd={canAdd} canDelete={canManageGithub} onChanged={onChanged} />
       <div>
-        <h3>Attached to updates{d.files?.length ? ` · ${d.files.length}` : ""}</h3>
-        {(d.files || []).map((f) => (
-          <div key={`f${f.id}`} className="kv" style={{ padding: "6px 0" }}>
-            <FileBadge kind={fileKind(f.file_name)} />
-            <a className="val" href={href(`/kpi/progress/view?progress_id=${f.id}`)} target="_blank" rel="noreferrer" style={{ ...ELLIPSIS, textDecoration: "none", minWidth: 0 }}>{f.file_name || "file"}</a>
-            <span className="right mini">{f.uploaded_by} · {fmtFriendly(f.upload_date)}<a className="icon-btn" href={href(`/kpi/progress/download?progress_id=${f.id}`)} title="Download" aria-label="Download"><Icon n="download" size={15} /></a></span>
-          </div>
-        ))}
-        {!d.files?.length && <span className="mini">No files on progress updates yet.</span>}
+        <h3>Attached to updates{teamFiles.length ? ` · ${teamFiles.length}` : ""}</h3>
+        {teamFiles.map(fileRow)}
+        {!teamFiles.length && <span className="mini">No files on progress updates yet.</span>}
       </div>
       {(d.links || []).length > 0 && (
         <div>
@@ -1041,5 +1052,19 @@ export function ProgressList({ progress, onChanged }) {
       )}
       {progress.map((p) => <ProgressItem key={p.id} p={p} onChanged={onChanged} selected={!!sel[p.id]} onSelect={deletable.length > 1 ? toggle : null} />)}
     </>
+  );
+}
+
+/* What the client attached when raising the task (progress rows marked
+   from_client). Read-only, kept apart from the team's own updates, and never
+   the progress summary Complete asks for. Nothing when there is none. */
+export function ClientProgress({ progress }) {
+  const rows = (progress || []).filter((p) => p.from_client);
+  if (!rows.length) return null;
+  return (
+    <div className="callout" style={{ flexDirection: "column", alignItems: "stretch", gap: 6, background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)" }}>
+      <h3 style={{ margin: 0 }}>📎 From the client ({rows.length})</h3>
+      {rows.map((p) => <ProgressItem key={`c${p.id}`} p={{ ...p, can_edit: false }} />)}
+    </div>
   );
 }

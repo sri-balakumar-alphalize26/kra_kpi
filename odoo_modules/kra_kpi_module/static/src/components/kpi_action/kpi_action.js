@@ -1084,7 +1084,7 @@ export class KpiAction extends Component {
                         <t t-if="(state.detailData.task_state === 'in_progress' or state.detailData.task_state === 'paused') and (state.detailData.is_assignee or state.detailData.is_manager)">
                             <div class="card p-4 mb-3 border-danger" id="kpiCompletePanel">
                                 <h4 class="fw-bold mb-3 text-danger"><i class="fa fa-check-circle"></i> Complete This Task</h4>
-                                <div t-if="state.progressUpdates.length === 0" class="alert alert-warning py-2">
+                                <div t-if="teamProgress().length === 0" class="alert alert-warning py-2">
                                     <i class="fa fa-info-circle"></i> Submit a <strong>Progress Summary</strong> above before you can complete this task.
                                 </div>
                                 <div t-if="!(state.manualsList or []).length" class="alert alert-warning py-2">
@@ -1132,12 +1132,64 @@ export class KpiAction extends Component {
                             </div>
                         </t>
 
+                        <!-- What the CLIENT sent when raising the task (WhatsApp form /
+                             client portal). Kept apart from the team's Attached Files and
+                             Progress History, read-only, and never counted as the
+                             progress summary Complete asks for. -->
+                        <t t-if="clientProgress().length > 0">
+                            <div class="card p-4 mb-3 border-warning">
+                                <h4 class="fw-bold mb-3">📎 From the client (<t t-esc="clientProgress().length"/>)</h4>
+                                <div class="list-group">
+                                    <t t-foreach="clientProgress()" t-as="cu" t-key="cu.id">
+                                        <div class="list-group-item">
+                                            <div class="small text-muted mb-1">
+                                                <i class="fa fa-user-circle me-1"></i>
+                                                <strong t-esc="cu.employee_name"/>
+                                                <span class="mx-1">•</span>
+                                                <span t-esc="formatDate(cu.create_date)"/>
+                                            </div>
+                                            <div t-if="cu.summary" style="white-space: pre-wrap;" t-esc="cu.summary"/>
+                                            <t t-if="cu.links and cu.links.length > 0">
+                                                <ul class="list-unstyled mt-2 mb-0">
+                                                    <t t-foreach="cu.links" t-as="link" t-key="link">
+                                                        <li>
+                                                            <a t-att-href="link" target="_blank" class="text-decoration-none small">
+                                                                <i class="fa fa-external-link"></i> <t t-esc="link"/>
+                                                            </a>
+                                                            <button type="button" class="btn btn-link btn-sm p-0 ms-1 text-secondary small" title="Copy link"
+                                                                    t-on-click.stop="() => this.copyLink(link)"><i class="fa fa-copy"/></button>
+                                                        </li>
+                                                    </t>
+                                                </ul>
+                                            </t>
+                                            <t t-if="(cu.files or []).length">
+                                                <div class="mt-2 d-flex flex-wrap gap-2">
+                                                    <t t-foreach="cu.files" t-as="cf" t-key="cf.id">
+                                                        <div class="d-inline-flex flex-column align-items-start">
+                                                            <a t-att-href="cf.url"
+                                                               class="btn btn-sm btn-outline-primary"
+                                                               target="_blank">
+                                                                <i class="fa fa-download"></i> <t t-esc="cf.file_name"/>
+                                                            </a>
+                                                            <small t-if="cf.uploaded_at" class="text-muted" style="font-size:.72rem;">
+                                                                Saved <t t-esc="formatDate(cf.uploaded_at)"/>
+                                                            </small>
+                                                        </div>
+                                                    </t>
+                                                </div>
+                                            </t>
+                                        </div>
+                                    </t>
+                                </div>
+                            </div>
+                        </t>
+
                         <!-- 🆕 NEW: Attached Files Section -->
-                        <t t-if="state.attachedFiles.length > 0">
+                        <t t-if="teamAttachedFiles().length > 0">
                             <div class="card p-4 mb-3 bg-light border-primary">
                                 <h4 class="fw-bold mb-3">📎 Attached Files</h4>
                                 <div class="list-group">
-                                    <t t-foreach="state.attachedFiles" t-as="file" t-key="file.key">
+                                    <t t-foreach="teamAttachedFiles()" t-as="file" t-key="file.key">
                                         <div class="list-group-item d-flex justify-content-between align-items-center">
                                             <div>
                                                 <i class="fa fa-file text-primary me-2"></i>
@@ -1257,6 +1309,7 @@ export class KpiAction extends Component {
                                                 <div class="list-group-item d-flex justify-content-between align-items-center">
                                                     <div class="text-truncate" style="max-width:58%;">
                                                         <i class="fa fa-file me-1"></i><span t-esc="doc.file_name"/>
+                                                        <span t-if="doc.from_client" class="badge bg-warning text-dark ms-1">from client</span>
                                                         <div class="small text-muted"><t t-esc="doc.uploaded_by"/> · <t t-esc="formatDate(doc.upload_date)"/></div>
                                                     </div>
                                                     <div class="d-flex gap-1">
@@ -1361,9 +1414,9 @@ export class KpiAction extends Component {
                                 </t>
                             </div>
 
-                            <t t-if="state.progressUpdates.length">
+                            <t t-if="teamProgress().length">
                                 <div class="timeline">
-                                    <t t-foreach="state.progressUpdates" t-as="update" t-key="update.id">
+                                    <t t-foreach="teamProgress()" t-as="update" t-key="update.id">
                                         <div class="timeline-entry" t-att-id="'prog-' + update.id">
                                             <div class="timeline-head small text-muted mb-1 d-flex align-items-center gap-1">
                                                 <t t-if="update.can_edit">
@@ -2785,7 +2838,19 @@ export class KpiAction extends Component {
     // _may_edit_progress, and every route re-checks it — hiding a control is a
     // courtesy, not a permission.
     deletableProgress() {
-        return (this.state.progressUpdates || []).filter(u => u.can_edit);
+        return this.teamProgress().filter(u => u.can_edit);
+    }
+    // Team updates vs. what the client attached when raising the task. Client
+    // rows get their own read-only card and never count as a progress summary
+    // (the server's /kra_kpi/task/complete applies the same split).
+    teamProgress() {
+        return (this.state.progressUpdates || []).filter(u => !u.from_client);
+    }
+    clientProgress() {
+        return (this.state.progressUpdates || []).filter(u => u.from_client);
+    }
+    teamAttachedFiles() {
+        return (this.state.attachedFiles || []).filter(f => !f.from_client);
     }
     isProgressSelected(id) { return !!this.state.progressSelected[id]; }
     toggleProgressSelected(id) {
@@ -3908,7 +3973,7 @@ export class KpiAction extends Component {
         // Auto-tick items we can already infer from what's attached.
         const c = this.state.completeChecklist;
         if ((this.state.githubLinks || []).length > 0) c.verify_github = true;
-        if ((this.state.attachedFiles || []).length > 0) { c.user_manual = true; c.documentation = true; }
+        if (this.teamAttachedFiles().length > 0) { c.user_manual = true; c.documentation = true; }
         // Nudge the user toward the Complete panel at the bottom of the detail.
         setTimeout(() => {
             const el = document.getElementById("kpiCompletePanel");
@@ -3996,7 +4061,7 @@ export class KpiAction extends Component {
 
     // In-detail Complete is allowed only with a submitted summary + all 5 items ticked.
     canCompleteDetail() {
-        const hasSummary = (this.state.progressUpdates || []).length > 0;
+        const hasSummary = this.teamProgress().length > 0;
         const c = this.state.completeChecklist || {};
         // ONE tick is enough, not all five.
         //
@@ -4022,7 +4087,7 @@ export class KpiAction extends Component {
         const missing = [];
         const c = this.state.completeChecklist || {};
         const d = this.state.detailData || {};
-        if (!(this.state.progressUpdates || []).length) missing.push('A progress summary');
+        if (!this.teamProgress().length) missing.push('A progress summary');
         if (!(this.state.manualsList || []).length) missing.push('The user manual (PDF, DOC or DOCX)');
         if (d.github_required && !(this.state.githubLinks || []).length) {
             missing.push('The GitHub link + branch (this is a Module / App task)');
@@ -4040,7 +4105,7 @@ export class KpiAction extends Component {
         const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const missing = this._completeMissing();
         if (missing.length) {
-            const canPartial = (this.state.progressUpdates || []).length > 0;
+            const canPartial = this.teamProgress().length > 0;
             const items = missing.map(m => `<li>${esc(m)}</li>`).join('');
             const container = document.getElementById("modalContainer");
             if (!container) { this._toast('Before completing, you still need: ' + missing.join(', '), 'warning'); return; }
@@ -5749,6 +5814,7 @@ export class KpiAction extends Component {
                     }
                     return {
                         ...update,
+                        from_client: !!update.from_client,
                         links: links  // 🆕 NEW
                     };
                 });
@@ -5860,6 +5926,7 @@ export class KpiAction extends Component {
                         create_date: update.create_date,
                         uploaded_at: f.uploaded_at || update.create_date,
                         can_edit: !!update.can_edit,     // may Replace it
+                        from_client: !!update.from_client, // shown in "From the client", not here
                         summary: update.summary || '',   // Part D: link back to the note
                         // Only the entry's own file has an inline viewer route; the
                         // extras are served as downloads, so View points at the same
