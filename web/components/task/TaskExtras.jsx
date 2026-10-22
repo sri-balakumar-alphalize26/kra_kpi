@@ -341,6 +341,17 @@ function linkDupMessage(text, idx) {
   return "";
 }
 const DupLine = ({ text }) => (text ? <small style={{ color: "var(--danger)", fontSize: 12, fontWeight: 700 }}>⚠ {text}</small> : null);
+/* What is wrong with a link box's text while it is typed / pasted ('' = fine).
+   Several links separated by spaces; each must be a real web link. Same rule
+   as Odoo's KPI details (kpi_action.js linkBad). */
+export function linkProblem(text) {
+  for (const w of String(text || "").trim().split(/s+/).filter(Boolean)) {
+    let u = null;
+    try { u = new URL(w); } catch { u = null; }
+    if (!u || !/^https?:$/.test(u.protocol) || !u.hostname.includes(".")) return `“${w.length > 40 ? w.slice(0, 40) + "…" : w}” is not a web link. Links must start with https:// — e.g. https://drive.google.com/…`;
+  }
+  return "";
+}
 
 /* ---- small shared bits ---- */
 /* onPick(files) lets the caller vet a pick (the duplicate check) before it is added. */
@@ -540,12 +551,13 @@ export function ProgressComposer({ kpiId, d, onChanged }) {
       <Field label="Progress summary" required>
         <span className="input ta" style={{ height: 72 }}><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="Describe the work done: issues fixed, next steps…" disabled={busy} style={TA} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) post(); }} /></span>
       </Field>
-      <Input icon="link" value={links} onChange={(e) => setLinks(e.target.value)} disabled={busy} placeholder="Links (optional) — Drive, GitHub, … separated by spaces" />
+      <Input icon="link" value={links} onChange={(e) => setLinks(e.target.value)} disabled={busy} placeholder="Links (optional) — Drive, GitHub, … separated by spaces" style={linkProblem(links) ? { borderColor: "var(--danger)" } : undefined} />
+      <DupLine text={linkProblem(links)} />
       {/* A link already on the task blocks posting until it is taken out, as Odoo's Add Link does. */}
       <DupLine text={linkDup} />
       <div className="pillset" style={{ alignItems: "center" }}>
         <FilePicker files={files} setFiles={setFiles} onPick={pick} disabled={busy} />
-        <span style={{ marginLeft: "auto" }}><Button kind="primary" size="sm" busy={busy} disabled={!summary.trim() || !!linkDup} onClick={post}>Post</Button></span>
+        <span style={{ marginLeft: "auto" }}><Button kind="primary" size="sm" busy={busy} disabled={!summary.trim() || !!linkDup || !!linkProblem(links)} onClick={post}>Post</Button></span>
       </div>
       <LargeFileNote mb={50} />
       {dups.dialog}
@@ -593,9 +605,10 @@ export function ProgressItem({ p, onChanged, selected, onSelect }) {
         {edit ? (
           <div className="reveal" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
             <span className="input ta" style={{ height: 72 }}><textarea value={edit.summary} autoFocus onChange={(e) => setEdit((v) => ({ ...v, summary: e.target.value }))} style={TA} /></span>
-            <Input icon="link" value={edit.links} onChange={(e) => setEdit((v) => ({ ...v, links: e.target.value }))} placeholder="Links, separated by spaces" />
+            <Input icon="link" value={edit.links} onChange={(e) => setEdit((v) => ({ ...v, links: e.target.value }))} placeholder="Links, separated by spaces" style={linkProblem(edit.links) ? { borderColor: "var(--danger)" } : undefined} />
+            <DupLine text={linkProblem(edit.links)} />
             {p.has_file && <label className="chk"><input type="checkbox" checked={edit.clearFile} onChange={(e) => setEdit((v) => ({ ...v, clearFile: e.target.checked }))} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} />Remove the file “{p.file_name || "file"}”</label>}
-            <div className="pillset"><Button size="sm" kind="ghost" onClick={() => { setEdit(null); setErr(""); }}>Cancel</Button><Button size="sm" kind="primary" busy={busy} disabled={!edit.summary.trim()} onClick={save}>Save</Button></div>
+            <div className="pillset"><Button size="sm" kind="ghost" onClick={() => { setEdit(null); setErr(""); }}>Cancel</Button><Button size="sm" kind="primary" busy={busy} disabled={!edit.summary.trim() || !!linkProblem(edit.links)} onClick={save}>Save</Button></div>
             <Err>{err}</Err>
           </div>
         ) : (
@@ -706,11 +719,12 @@ function Manuals({ kpiId, manuals, progress, linkIdx, canAdd = true, onChanged }
           </Field>
           {dups.dialog}
           <Input value={desc} onChange={(e) => setDesc(e.target.value)} disabled={busy} placeholder="What is this manual for? (optional)" />
-          <Input icon="link" value={mlinks} onChange={(e) => setMlinks(e.target.value)} disabled={busy} placeholder="Related links (optional) — separated by spaces" />
+          <Input icon="link" value={mlinks} onChange={(e) => setMlinks(e.target.value)} disabled={busy} placeholder="Related links (optional) — separated by spaces" style={linkProblem(mlinks) ? { borderColor: "var(--danger)" } : undefined} />
+          <DupLine text={linkProblem(mlinks)} />
           <DupLine text={mlinkDup} />
           <LargeFileNote mb={25} />
           {up.prog && <UploadBar prog={up.prog} onCancel={up.cancel} />}
-          <div className="pillset"><Button size="sm" kind="ghost" disabled={busy} onClick={() => { setOpen(false); setFiles([]); setErr(""); }}>Cancel</Button><Button size="sm" kind="primary" busy={busy} disabled={!files.length || !!mlinkDup} onClick={send}>Upload</Button></div>
+          <div className="pillset"><Button size="sm" kind="ghost" disabled={busy} onClick={() => { setOpen(false); setFiles([]); setErr(""); }}>Cancel</Button><Button size="sm" kind="primary" busy={busy} disabled={!files.length || !!mlinkDup || !!linkProblem(mlinks)} onClick={send}>Upload</Button></div>
           <Err>{err}</Err>
         </div>
       )}
@@ -795,8 +809,11 @@ function Github({ kpiId, github, linkIdx, canAdd = true, canDelete, onChanged })
        GitHub repositories only. If it is already on the task it says where;
        otherwise it says where such links go. */
   const relDup = !dup && key.startsWith("github.com/") && hit && !hit.where.startsWith("GitHub") ? already : "";
-  const notGit = !key.startsWith("github.com/") && key.includes(".")
-    ? (already || "Only GitHub repository links can be added here. Add other links under Related Links.") : "";
+  const notGit = !url.trim() ? ""
+    : !key.includes(".") || /\s/.test(url.trim()) ? "This is not a web link — it should look like https://github.com/username/repository"
+    : !key.startsWith("github.com/") ? (already || "Only GitHub repository links can be added here. Add other links under Related Links.")
+    : !/^github\.com\/[^/]+\/[^/]+/.test(key) ? "Not a repository link — it should look like https://github.com/username/repository"
+    : "";
   /* A pasted ".../tree/<branch>" URL is split into the repo root + that branch
      (unless one is already typed), as the phone does. On paste and on blur, not
      per keystroke: mid-typing, "…/tree/m" would match and trim the URL early. */

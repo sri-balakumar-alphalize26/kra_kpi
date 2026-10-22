@@ -234,6 +234,8 @@ export const startTask = (kpiId) => action("/kra_kpi/task/start", { kpi_id: kpiI
 export const resumeTask = (kpiId) => action("/kra_kpi/task/resume", { kpi_id: kpiId });
 export const resumeTaskWithReason = (kpiId, reason) => action("/kra_kpi/task/resume_with_reason", { kpi_id: kpiId, reason: (reason || "").trim() });
 export const undoTaskStart = (kpiId) => action("/kra_kpi/task/undo_start", { kpi_id: kpiId });
+/* What Undo start keeps: {keeps: "Today's 2 updates and 1 link on this task are kept…"}. */
+export const undoStartInfo = (kpiId) => rpc("/kra_kpi/task/undo_start_info", { kpi_id: kpiId });
 export const addTaskTime = (kpiId, hours, minutes, reason) =>
   action("/kra_kpi/task/add_time", { kpi_id: kpiId, hours: hours || 0, minutes: minutes || 0, reason: reason || "" });
 /* Admin: take forgotten time off YESTERDAY only (decrease only, reason required). */

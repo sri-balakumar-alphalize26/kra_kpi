@@ -27,7 +27,7 @@ export default function TaskDialog({ dialog, task, extra, busy, onClose, onConfi
     case "delete": return <ReasonDialog {...props} title={`Delete ${task.external_ref || "task"}?`} label="Reason (kept in the log)" confirm="Delete task" danger text="Only a task nobody has worked on can be deleted. This cannot be undone." />;
     case "resume_reason": return <ResumeReasonDialog {...props} />;
     case "sendback": return <SendBackDialog {...props} />;
-    case "undo_start": return <ReasonDialog {...props} title="Undo today's start?" text={`${task.external_ref || "The task"} goes back to how it was before today's first start and today's time on it is removed.`} confirm="Undo start" noReason />;
+    case "undo_start": return <UndoStartDialog {...props} task={task} />;
     case "add_time": return <AddTimeDialog {...props} />;
     case "reduce_prev": return <ReducePrevDialog {...props} />;
     case "reassign": return <ReassignDialog {...props} />;
@@ -312,7 +312,7 @@ function ReasonDialog({ task, busy, onClose, onConfirm, title, label, text, conf
   return (
     <Modal open onClose={onClose} title={<Title task={task}>{title}</Title>} width={480}
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind={danger ? "danger" : "primary"} busy={busy} disabled={!noReason && !reason.trim()} onClick={() => onConfirm({ reason: reason.trim() })}>{confirm}</Button></>}>
-      {text && <p className="note" style={{ margin: 0 }}>{text}</p>}
+      {text && <p className="note" style={{ margin: 0, whiteSpace: "pre-line" }}>{text}</p>}
       {!noReason && <Field label={label} required><span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus style={TA} /></span></Field>}
     </Modal>
   );
@@ -621,4 +621,15 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
         : <p className="mini" style={{ margin: 0 }}>This goes straight to <b>Pending approvals</b> as a finished task — it still needs approving. The time counts in the KRA, employee and invoice reports on the work date, but <b>not as attendance</b> or productive time for the day.</p>}
     </Modal>
   );
+}
+
+/* Undo start: also says what STAYS (today's updates, links, files…) — the
+   server counts them (kra.kpi._undo_keeps_line). */
+function UndoStartDialog({ task, ...props }) {
+  const [keeps, setKeeps] = useState("");
+  useEffect(() => { S.undoStartInfo(task.id).then((r) => setKeeps(r?.keeps || "")).catch(() => {}); }, [task.id]);
+  const base = `${task.external_ref || "The task"} goes back to how it was before today's first start and today's time on it is removed.`;
+  return <ReasonDialog {...props} title="Undo today's start?" text={keeps ? `${base}
+
+✅ ${keeps}` : base} confirm="Undo start" noReason />;
 }
