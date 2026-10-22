@@ -380,3 +380,25 @@
 .fv-bd audio{width:90%;margin:32px 0}
 .fv-bd iframe{width:100%;height:82vh;border:0;background:#fff}
 .fv-none{color:#fff;text-align:center;padding:40px 16px;line-height:1.6}
+
+/* 💬 Chat with the client (task panel ChatTab), WhatsApp style. Its own colours
+   on purpose -- it should look like WhatsApp in both themes. */
+.chat { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; padding: 0; }
+.chat-head { background: #008069; color: #fff; padding: 10px 14px; font-weight: 700; }
+.chat-head .mini { color: rgba(255,255,255,.8); font-weight: 400; }
+.chat-body { background: #efeae2; height: 420px; overflow-y: auto; padding: 14px 16px; }
+.chat-note { text-align: center; margin: 24px auto; max-width: 360px; background: #fff3c4; color: #54656f; border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+.chat-day { text-align: center; margin: 8px 0; }
+.chat-day span { background: #fff; color: #54656f; font-size: 12px; padding: 3px 12px; border-radius: 8px; box-shadow: 0 1px .5px rgba(11,20,26,.13); }
+.chat-row { display: flex; margin-bottom: 6px; }
+.chat-row.out { justify-content: flex-end; }
+.chat-bubble { max-width: 75%; padding: 6px 9px 4px; border-radius: 8px; background: #fff; box-shadow: 0 1px .5px rgba(11,20,26,.13); }
+.chat-row.out .chat-bubble { background: #d9fdd3; }
+.chat-who { font-size: 12px; font-weight: 700; color: #d4572e; }
+.chat-row.out .chat-who { color: #027eb5; }
+.chat-text { white-space: pre-wrap; word-break: break-word; color: #111b21; }
+.chat-time { text-align: right; font-size: 11px; color: #667781; }
+.chat-foot { display: flex; gap: 8px; align-items: flex-end; background: #f0f2f5; padding: 10px 12px; color: #54656f; }
+.chat-input { flex: 1; border: 0; border-radius: 8px; padding: 8px 10px; resize: none; font: inherit; color: #111b21; background: #fff; outline: 0; }
+.chat-send { width: 42px; height: 42px; border-radius: 50%; border: 0; background: #00a884; color: #fff; font-size: 18px; cursor: pointer; }
+.chat-send:disabled { opacity: .5; cursor: default; }

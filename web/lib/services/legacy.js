@@ -51,6 +51,11 @@ export function legacyProblem({ ref, name, note, files }) {
 /* The KPI Details card: {status, legacy: false | {on, status, status_label, ref,
    name, note, transcript, confirmed_by, confirmed_on, parent_id, voice_notes:[{name,url}]}, can_edit}. */
 export const getLegacy = (kpiId) => rpc("/kra_kpi/legacy/get", { kpi_id: Number(kpiId) });
+/* Everything the client sent for one task, oldest first: {status, sends:[{round,
+   sent_at (UTC), sent_by, ref, name, description, old_db, status: refused |
+   retyped | replaced | accepted | waiting, refused_by, refused_at, reason,
+   files:[{name, entry, att, url}]}], legacy, can_edit} (legacy / can_edit as getLegacy). */
+export const getClientSends = (kpiId) => rpc("/kra_kpi/client_sends", { kpi_id: Number(kpiId) });
 /* Admins / managers only. A Request ID links the task under that old
    requirement, renumbers it (BUG-031 → BUG001-REQ-012) and marks it Confirmed.
    Answers {status, legacy, ref, message}; {status:false, message} is left to the caller. */

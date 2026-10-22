@@ -12,7 +12,6 @@ import { resolveGithubLink } from "@/lib/githubLink";
 import { fmtBytes, progressLine, rateTracker } from "@/lib/uploadRate";
 import * as S from "@/lib/services/kpiActions";
 import * as P from "@/lib/services/approvals";
-import { LegacyCard, useLegacy } from "./Legacy";
 
 const TA = { border: 0, background: "none", outline: 0, resize: "none", width: "100%", height: "100%", font: "inherit", color: "inherit" };
 const CHIP = { background: "var(--hover)", color: "var(--navy)", textDecoration: "none", maxWidth: "100%" };
@@ -634,9 +633,8 @@ export function FilesTab({ kpiId, d, canAdd = true, canManageGithub, onChanged }
      apart from what the team attached to its updates. */
   const clientFiles = (d.files || []).filter((f) => f.from_client);
   const teamFiles = (d.files || []).filter((f) => !f.from_client);
-  /* A bug / update about an old-DB requirement: its KPI Details card sits in
-     the same block, shown even when the client attached no files. */
-  const [legacy, reloadLegacy] = useLegacy(kpiId);
+  /* The old-DB KPI Details card lives in the Client tab (ClientTab.jsx), with
+     every time the client sent the task. */
   const fileRow = (f) => (
     <div key={`f${f.id}`} className="kv" style={{ padding: "6px 0" }}>
       <FileBadge kind={fileKind(f.file_name)} />
@@ -646,10 +644,9 @@ export function FilesTab({ kpiId, d, canAdd = true, canManageGithub, onChanged }
   );
   return (
     <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {(clientFiles.length > 0 || legacy?.legacy) && (
+      {clientFiles.length > 0 && (
         <div>
-          <h3>📎 From the client{clientFiles.length ? ` · ${clientFiles.length}` : ""}</h3>
-          {legacy?.legacy && <LegacyCard kpiId={kpiId} res={legacy} onSaved={() => { reloadLegacy(); onChanged?.(); }} />}
+          <h3>📎 From the client · {clientFiles.length}</h3>
           {clientFiles.map(fileRow)}
         </div>
       )}
@@ -1087,6 +1084,95 @@ export function ClientProgress({ progress }) {
     <div className="callout" style={{ flexDirection: "column", alignItems: "stretch", gap: 6, background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)" }}>
       <h3 style={{ margin: 0 }}>📎 From the client ({rows.length})</h3>
       {rows.map((p) => <ProgressItem key={`c${p.id}`} p={{ ...p, can_edit: false }} />)}
+    </div>
+  );
+}
+
+/* 💬 Chat with the client (models/kpi_chat.py), WhatsApp style: the client on
+   the left in white, the team on the right in green, a day divider, and a box
+   at the bottom. Enter sends, Shift+Enter is a new line. The client group only
+   ever sees "Reply from our team"; here staff see who wrote what. Refreshes
+   every 10 s while open. */
+const CHAT_DAY = (d) => {
+  const today = new Date().toDateString();
+  const yday = new Date(Date.now() - 86400000).toDateString();
+  const k = d.toDateString();
+  return k === today ? "Today" : k === yday ? "Yesterday" : d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+};
+const chatDate = (at) => (at ? new Date(String(at).replace(" ", "T") + "Z") : null);
+
+export function ChatTab({ kpiId }) {
+  const flags = useFlags();
+  const [res, setRes] = useState(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const body = useRef(null);
+  const count = useRef(0);
+  const load = () => S.fetchChat(kpiId).then((r) => {
+    if (r.status === false) { setRes({ messages: [], error: r.message }); return; }
+    setRes(r);
+  }).catch((e) => setRes({ messages: [], error: e.message }));
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, [kpiId]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* Scroll to the newest only when a message arrives, not on every refresh. */
+  useEffect(() => {
+    const n = res?.messages?.length || 0;
+    if (n !== count.current && body.current) body.current.scrollTop = body.current.scrollHeight;
+    count.current = n;
+  }, [res]);
+  const send = async () => {
+    const t = text.trim();
+    if (!t || busy) return;
+    setBusy(true);
+    try {
+      const r = await S.sendChat(kpiId, t);
+      if (r.status === false) { flags.err(r.message); return; }
+      setText("");
+      setRes(r);
+    } catch (e) { flags.err(e.message); } finally { setBusy(false); }
+  };
+  const groups = [];
+  for (const m of res?.messages || []) {
+    const d = chatDate(m.at);
+    const day = d ? CHAT_DAY(d) : "";
+    if (!groups.length || groups[groups.length - 1].day !== day) groups.push({ day, msgs: [] });
+    groups[groups.length - 1].msgs.push(m);
+  }
+  return (
+    <div className="sec chat">
+      <div className="chat-head">💬 Chat with {res?.client || "the client"}<span className="mini"> · the client sees team messages as “Reply from our team”</span></div>
+      <div className="chat-body" ref={body}>
+        {!res && <span className="mini">Loading…</span>}
+        {res?.error && <div className="callout">{res.error}</div>}
+        {res && !res.error && !groups.length && <div className="chat-note">No messages yet. When the client sends 💬 Discuss from their WhatsApp group, it shows here.</div>}
+        {groups.map((g) => (
+          <div key={g.day}>
+            <div className="chat-day"><span>{g.day}</span></div>
+            {g.msgs.map((m) => (
+              <div key={m.id} className={`chat-row ${m.side === "team" ? "out" : "in"}`}>
+                <div className="chat-bubble">
+                  <div className="chat-who">{m.side === "team" ? m.who : `${m.who} · client`}</div>
+                  <div className="chat-text">{m.body}</div>
+                  <div className="chat-time">{chatDate(m.at)?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      {res && !res.error && (res.locked ? <div className="chat-foot mini">🔒 {res.locked}</div>
+        : !res.can_send ? <div className="chat-foot mini">This client has no WhatsApp group linked, so messages can’t be sent.</div>
+          : (
+            <div className="chat-foot">
+              <textarea className="chat-input" rows={2} value={text} placeholder="Type a message"
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
+              <button type="button" className="chat-send" title="Send" disabled={busy || !text.trim()} onClick={send}>➤</button>
+            </div>
+          ))}
     </div>
   );
 }

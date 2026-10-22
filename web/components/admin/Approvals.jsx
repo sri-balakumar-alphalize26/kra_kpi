@@ -227,14 +227,14 @@ function Questions({ doubts, all, setAll, onReply, onMeeting }) {
                     <td className="mini">{P.doubtKindLabel(d.kind)}</td>
                     <td><span style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{d.question}</span>
                       {d.answer && <div className="mini" style={{ marginTop: 4, color: "var(--pri-regular)" }}><b>Answer:</b> {d.answer}</div>}</td>
-                    <td className="mini">{m2o(d.raised_by_id) || "—"}</td>
+                    <td className="mini">{m2o(d.raised_by_id) || (d.raised_by_name ? `${d.raised_by_name} (client)` : "—")}</td>
                     <td className="mini">{when(d.create_date)}</td>
                     <td><Lozenge tone={tone} style={{ textTransform: "none" }}>{label}</Lozenge></td>
                     <td>
                       {live && (
                         <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-                          {d.state === "open" && <Button size="sm" kind="primary" onClick={() => onReply({ doubt: d, mode: "answer" })}>Answer</Button>}
-                          {!d.client_posted_at && <Button size="sm" kind="ghost" onClick={() => onReply({ doubt: d, mode: "release" })}>Send to client</Button>}
+                          {d.state === "open" && <Button size="sm" kind="primary" onClick={() => onReply({ doubt: d, mode: "answer" })}>{d.kind === "client_msg" ? "Reply to client" : "Answer"}</Button>}
+                          {!d.client_posted_at && d.kind !== "client_msg" && <Button size="sm" kind="ghost" onClick={() => onReply({ doubt: d, mode: "release" })}>Send to client</Button>}
                           {!d.meeting_id && d.state === "open" && <Button size="sm" kind="ghost" onClick={() => onMeeting(d)}>Make a meeting</Button>}
                           {d.state === "open" && <Button size="sm" kind="ghost" onClick={() => onReply({ doubt: d, mode: "reject" })}>Not now</Button>}
                         </span>
@@ -260,6 +260,8 @@ function ReplyDialog({ r, onClose, onDone }) {
     answer: { title: "Answer the developer", label: "Your answer", required: true, button: "Send answer", hint: "Goes back to the developer who asked.", ok: "Answered." },
     release: { title: "Send to the client", label: "What the client should read", required: false, button: "Send to client", hint: "This is the only way a question reaches a client. It goes to the client's group, in your words.", ok: "Sent to the client." },
     reject: { title: "Not now", label: "Note (optional)", required: false, button: "Not now", hint: "The developer is told it is not being taken up now.", ok: "Marked not now." },
+    /* A client's 💬 Discuss message (models/kpi_chat.py): the answer goes to their group. */
+    ...(d.kind === "client_msg" ? { answer: { title: "Reply to the client", label: "Your reply", required: true, button: "Send reply", hint: "Goes to the client's WhatsApp group as “Reply from our team”, and into the task's 💬 Chat.", ok: "Sent to the client." } } : {}),
   }[mode];
   const submit = async () => {
     if (cfg.required && !text.trim()) return setErr("Write the answer first.");
@@ -274,7 +276,7 @@ function ReplyDialog({ r, onClose, onDone }) {
   return (
     <Modal open onClose={onClose} title={cfg.title} width={520}
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind={mode === "reject" ? "danger" : "primary"} busy={busy} onClick={submit}>{cfg.button}</Button></>}>
-      <div className="callout" style={{ margin: 0, alignItems: "flex-start" }}><Icon n="info" size={16} /><span>{d.task_ref ? <b>{d.task_ref} · </b> : null}{m2o(d.kpi_id)}<span style={{ display: "block", whiteSpace: "pre-wrap", marginTop: 4 }}>“{d.question}”</span><span className="mini">— {m2o(d.raised_by_id)}</span></span></div>
+      <div className="callout" style={{ margin: 0, alignItems: "flex-start" }}><Icon n="info" size={16} /><span>{d.task_ref ? <b>{d.task_ref} · </b> : null}{m2o(d.kpi_id)}<span style={{ display: "block", whiteSpace: "pre-wrap", marginTop: 4 }}>“{d.question}”</span><span className="mini">— {m2o(d.raised_by_id) || d.raised_by_name}</span></span></div>
       <Field label={cfg.label} required={cfg.required} hint={cfg.hint}><span className="input ta" style={{ height: "auto" }}><textarea rows={4} value={text} onChange={(e) => { setText(e.target.value); setErr(""); }} autoFocus style={TA} /></span></Field>
       {err && <small className="err" style={{ color: "var(--danger)", fontWeight: 700 }}>{err}</small>}
     </Modal>
