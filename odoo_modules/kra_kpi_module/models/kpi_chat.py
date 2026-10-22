@@ -7,8 +7,9 @@ request → type). The team answers from the 💬 Chat window in KPI details
 
 WHO THE CLIENT SEES
 -------------------
-Every team message reaches the client group as "Reply from the Alphalize team" --
-never a developer's name. Putting a client and a developer in direct touch is
+Every team message reaches the client group as a link to the client's chat
+page ("the Alphalize team replied … open the chat"), where it reads as
+"Alphalize team" -- never a developer's name. Putting a client and a developer in direct touch is
 the one thing the rest of this module is careful not to do (see
 kpi_doubt.action_release_to_client). Inside the Chat window staff see who
 wrote what.
@@ -249,7 +250,7 @@ class KraKpiChat(models.Model):
             link = self._chat_page_link(dev)
             sent = Report.post_text_to_user(dev, _(
                 '💬 *%(ref)s — %(title)s* · %(client)s\n%(mgr)s asks you to reply to the client.\n\n%(said)s\n\n'
-                'Type your reply here — it goes to their group as "Reply from the Alphalize team". '
+                'Type your reply here — the client gets it in their chat as "Alphalize team". '
                 '(Type cancel to stop.)%(link)s') % {
                     'ref': ref, 'title': self.name or '', 'client': client,
                     'mgr': manager.name or _('The manager'), 'said': said,
@@ -301,10 +302,19 @@ class KraKpiChat(models.Model):
         if not Report._group_for_kpi(self):
             raise UserError(_('This client has no WhatsApp group linked, so the message '
                               'could not be sent.'))
+        # The client group gets a LINK to the chat, not the message itself:
+        # they read it there and carry on the conversation on that page.
+        askers = self._chat_askers()
+        # Only real WhatsApp numbers are tagged; a name typed on the chat page
+        # (or the company name) is not a person in the group.
+        tags = ['@%s' % d for _n, d in askers if len(d) >= 11]
         posted = Report.post_for_kpi(self, _(
-            '💬 *%(ref)s — %(title)s*\nReply from the Alphalize team:\n\n%(body)s\n\n'
-            '_To answer, send *hi* → 💬 Discuss._') % {
-                'ref': ref, 'title': self.name or '', 'body': body})
+            '💬 %(who)sthe Alphalize team replied about *%(ref)s — %(title)s*.\n'
+            'Open the chat to read it and reply (works for %(hours)d hours):\n%(link)s') % {
+                'who': (', '.join(tags) + ' — ') if tags else '',
+                'ref': ref, 'title': self.name or '', 'hours': CLIENT_CHAT_HOURS,
+                'link': self._client_chat_link()},
+            mentions=[d for _n, d in askers if len(d) >= 11])
         if not posted:
             raise UserError(_("WhatsApp couldn't be reached just now — nothing was sent. "
                               "Try again in a minute."))
