@@ -6,6 +6,7 @@ import { useResource } from "@/lib/useFetch";
 import { href } from "@/lib/api";
 import * as M from "@/lib/services/more";
 import { useTaskActions } from "@/components/task/TaskActions";
+import { OldDbBadge } from "@/components/task/Legacy";
 
 /* Odoo's task_documents.js filters, same options and the same rules (all
    client-side over /task_documents/list, which is already scoped per user). */
@@ -170,6 +171,7 @@ function Row({ t, open, onToggle, onOpenTask }) {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 6 }}>
                 {task.external_ref && <Lozenge tone="progress">{task.external_ref}</Lozenge>}
                 {task.related_req_ref && <Lozenge tone="neutral">Linked to {task.related_req_ref}</Lozenge>}
+                <OldDbBadge t={task} />
                 {task.delivery_version && <Lozenge tone="review">{task.delivery_version}</Lozenge>}
                 <span className="mini">Assignee: {t.assignee || "Unassigned"} · Priority: {pri}</span>
               </div>

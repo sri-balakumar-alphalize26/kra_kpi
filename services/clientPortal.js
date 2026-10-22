@@ -93,3 +93,56 @@ export async function removeClientSignature() {
   // the write did what was asked.
   return { status: !!res?.status, hasSignature: !!res?.has_signature, message: res?.message || '' };
 }
+
+// Raise ONE task as the client — used for a Bug / Update "from the old system",
+// the one case the bulk upload route cannot take: there is no requirement to
+// pick, and a voice note / photo / video has to travel WITH the task so the
+// server can count it (models/kpi_legacy.py legacy_input_problem). The bulk
+// route only sees the typed fields.
+//
+// `attachments: [{ name, data_b64, mimetype }]` (25 MB in total). Voice notes
+// must be named "Voice note 1 (0m07s).m4a" — the server reads the length back
+// from the name. Returns { status, kpi_id, name, ref } or { status:false, message }.
+export async function addClientTask({
+  subKraId, kind, name, description, priority, attachments,
+  legacyOn, legacyRef, legacyName, legacyNote, parentId,
+}) {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'Not connected to a server.' };
+  const payload = {
+    sub_kra_id: subKraId,
+    kind: kind || 'bug',
+    name: name || '',
+    description: description || '',
+    priority: priority || 'regular',
+    attachments: attachments || [],
+    ...(legacyOn
+      ? { legacy_on: true, legacy_ref: legacyRef || '', legacy_name: legacyName || '', legacy_note: legacyNote || '' }
+      : { parent_id: parentId || false }),
+  };
+  log.info('add_task →', {
+    sub_kra_id: subKraId, kind: payload.kind, legacy_on: !!legacyOn,
+    files: payload.attachments.length,
+    bytesB64: payload.attachments.reduce((n, a) => n + (a.data_b64 || '').length, 0),
+  });
+  // 60s: the files ride in the JSON body as base64.
+  const res = await jsonRpc(serverUrl, '/kpi_client_portal/add_task', payload, 60000, db);
+  if (!res || res.status === false) {
+    log.warn('add_task ✗', res?.message);
+    return { status: false, message: res?.message || 'Could not send the task' };
+  }
+  log.info('add_task ←', { kpi_id: res.kpi_id, ref: res.ref });
+  return res;
+}
+
+// The client's requirements a Bug / Update can be about, newest first —
+// [{ id, ref, name, date, db, old }]. `old` marks an Old DB placeholder.
+export async function getParentTasks(subKraId) {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl) return { tasks: [] };
+  const res = await jsonRpc(serverUrl, '/kpi_client_portal/parent_tasks',
+    subKraId ? { sub_kra_id: subKraId } : {}, undefined, db);
+  if (!res || res.status === false) throw new Error(res?.message || 'Could not load your requirements');
+  log.info('parent_tasks ←', { count: (res.tasks || []).length });
+  return { tasks: res.tasks || [] };
+}

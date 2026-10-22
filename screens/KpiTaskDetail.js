@@ -39,6 +39,7 @@ import {
   deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime, deleteProgressBulk,
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
   fetchActivity, updateProgress, deleteProgress, updateTaskMeta, fetchProjects,
+  fetchLegacy, saveLegacy, legacyVoiceSource,
 } from '../services/kpiActions';
 import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
 import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
@@ -288,7 +289,45 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     });
     setError(null);
     setData(res);
+    loadLegacy();
   }, [task.id]);
+
+  // ---- 🗄️ From the old system (KPI Details card) --------------------------
+  // A bug / update raised about a requirement in the OLD database. Its own
+  // route, so an ordinary task costs one tiny call that answers legacy: false.
+  const [legacy, setLegacy] = useState(null);       // the card, or null
+  const [legacyCanEdit, setLegacyCanEdit] = useState(false);
+  const [legacyEdit, setLegacyEdit] = useState(null); // { ref, name, note } while editing
+  const [legacyBusy, setLegacyBusy] = useState(false);
+  const [legacyErr, setLegacyErr] = useState('');
+  async function loadLegacy() {
+    const r = await fetchLegacy(task.id);
+    if (!r?.status) { log.warn('legacy card not loaded', r?.message); return; }
+    setLegacy(r.legacy || null);
+    setLegacyCanEdit(!!r.can_edit);
+  }
+  async function onSaveLegacy() {
+    if (!legacyEdit) return;
+    setLegacyBusy(true);
+    setLegacyErr('');
+    try {
+      const res = await saveLegacy(task.id, legacyEdit);
+      if (!res?.status) { setLegacyErr(res?.message || 'Could not save the KPI Details'); return; }
+      log.info('legacy details saved', { kpi_id: task.id, ref: res.ref });
+      setLegacy(res.legacy || null);
+      setLegacyEdit(null);
+      flash('ok', res.message || 'KPI Details saved.');
+      // A Request ID renumbers the task (BUG-031 → BUG001-REQ-012): reload it,
+      // and tell the list it came from.
+      load(true);
+      onChanged?.();
+    } catch (e) {
+      log.error('legacy save failed', e?.message);
+      setLegacyErr(e?.message || 'Could not save the KPI Details');
+    } finally {
+      setLegacyBusy(false);
+    }
+  }
 
   useEffect(() => {
     log.info('open KPI detail', { kpi_id: task.id, name: task.name });
@@ -844,6 +883,53 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     } catch (e) {
       log.error('download file failed', e?.message);
       flash('err', 'Could not download that file');
+    } finally { setFileBusy(null); }
+  }
+
+  // ▶ A voice note in the old-system card. Fetched over the JSON door like every
+  // other file here, then played in place with expo-audio. A build made before
+  // expo-audio was added has no player, so it hands the file to the device's own
+  // instead — still playable, never a dead button.
+  const playerRef = useRef(null);
+  const [playing, setPlaying] = useState(null);   // the url being played
+  const stopVoice = () => {
+    try { playerRef.current?.remove(); } catch (_) {}
+    playerRef.current = null;
+    setPlaying(null);
+  };
+  useEffect(() => () => { try { playerRef.current?.remove(); } catch (_) {} }, []);
+  async function onPlayVoice(v) {
+    if (playing === v.url) { stopVoice(); return; }
+    const src = legacyVoiceSource(v.url);
+    if (!src) { flash('err', 'Could not find that voice note'); return; }
+    stopVoice();
+    setFileBusy(`voice-${v.url}`);
+    try {
+      const c = await cacheFile(src.progressId, 'progress', src.attachmentId);
+      if (!c) return;
+      let audio = null;
+      try {
+        // eslint-disable-next-line global-require
+        audio = require('expo-audio');
+        await audio.setAudioModeAsync({ playsInSilentMode: true });
+      } catch (e) {
+        log.warn('in-app audio not available', e?.message);
+        audio = null;
+      }
+      if (audio) {
+        const p = audio.createAudioPlayer(c.uri);
+        playerRef.current = p;
+        p.addListener('playbackStatusUpdate', (st) => { if (st?.didJustFinish) stopVoice(); });
+        p.play();
+        setPlaying(v.url);
+      } else if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(c.uri, { mimeType: c.mimetype, dialogTitle: `Play ${c.file_name}` });
+      } else {
+        flash('err', 'No app available to play this voice note');
+      }
+    } catch (e) {
+      log.error('play voice failed', e?.message);
+      flash('err', 'Could not play that voice note');
     } finally { setFileBusy(null); }
   }
 
@@ -1440,6 +1526,108 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                   )}
                 </TouchableOpacity>
               </View>
+            )}
+
+            {/* ── 🗄️ From the old system — KPI Details ────────────────── */}
+            {/* Shown whenever the task was raised "from the old system", even
+                with no client files: the voice notes, the message, and the old
+                Request ID / Task name the team confirms with the client. */}
+            {!!legacy && (
+              <Section icon="server-outline" tint={COLORS.amber} title="🗄️ KPI Details — old system"
+                right={legacyCanEdit && !legacyEdit ? (
+                  <TouchableOpacity style={s.attView} onPress={() => {
+                    setLegacyErr('');
+                    setLegacyEdit({ ref: legacy.ref || '', name: legacy.name || '', note: legacy.note || '' });
+                  }}>
+                    <Ionicons name="create-outline" size={13} color="#fff" />
+                    <Text style={s.attBtnTxt}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}>
+                <View style={s.oldBadges}>
+                  <View style={s.oldBadge}><Text style={s.oldBadgeTxt}>🗄️ Old DB Requirement</Text></View>
+                  <View style={[s.oldBadge, legacy.status === 'confirmed' ? s.oldBadgeOk : s.oldBadgeWait]}>
+                    <Text style={[s.oldBadgeTxt, { color: legacy.status === 'confirmed' ? COLORS.green : '#92400E' }]}>
+                      {legacy.status_label || (legacy.status === 'confirmed' ? 'Confirmed with client' : 'Pending')}
+                    </Text>
+                  </View>
+                </View>
+
+                {(legacy.voice_notes || []).map((v) => (
+                  <View key={v.url} style={s.fileRow}>
+                    <Ionicons name="mic-outline" size={15} color={COLORS.primary} style={{ marginTop: 2 }} />
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <Text style={s.fileName} numberOfLines={1}>{v.name}</Text>
+                    </View>
+                    {fileBusy === `voice-${v.url}` ? (
+                      <ActivityIndicator size="small" color={COLORS.primary} />
+                    ) : (
+                      <TouchableOpacity style={s.attView} onPress={() => onPlayVoice(v)}>
+                        <Ionicons name={playing === v.url ? 'stop' : 'play'} size={13} color="#fff" />
+                        <Text style={s.attBtnTxt}>{playing === v.url ? 'Stop' : 'Play'}</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))}
+                {!!(legacy.transcript || '').trim() && (
+                  <>
+                    <Text style={s.oldLbl}>Voice note says</Text>
+                    <Text style={s.body}>{legacy.transcript}</Text>
+                  </>
+                )}
+
+                {legacyEdit ? (
+                  <>
+                    <Text style={s.oldLbl}>Message</Text>
+                    <TextInput
+                      style={[s.oldInput, { minHeight: 70, textAlignVertical: 'top', paddingTop: 9 }]} multiline
+                      value={legacyEdit.note} onChangeText={(t) => setLegacyEdit({ ...legacyEdit, note: t })}
+                      placeholder="What the client said it is about" placeholderTextColor={COLORS.faint}
+                    />
+                    <Text style={s.oldLbl}>Request ID</Text>
+                    <TextInput
+                      style={s.oldInput} autoCapitalize="characters"
+                      value={legacyEdit.ref} onChangeText={(t) => setLegacyEdit({ ...legacyEdit, ref: t })}
+                      placeholder="e.g. REQ-012" placeholderTextColor={COLORS.faint}
+                    />
+                    <Text style={s.oldLbl}>Task name</Text>
+                    <TextInput
+                      style={s.oldInput}
+                      value={legacyEdit.name} onChangeText={(t) => setLegacyEdit({ ...legacyEdit, name: t })}
+                      placeholder="The old task's name" placeholderTextColor={COLORS.faint}
+                    />
+                    <Text style={s.cardSub}>Saving a Request ID files this task under that old requirement and marks it Confirmed with client.</Text>
+                    {!!legacyErr && <Text style={s.oldErr}>{legacyErr}</Text>}
+                    <View style={s.oldBtns}>
+                      <TouchableOpacity style={s.attGhost} onPress={() => { setLegacyEdit(null); setLegacyErr(''); }} disabled={legacyBusy}>
+                        <Text style={s.attGhostTxt}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[s.attDl, legacyBusy && s.btnOff]} onPress={onSaveLegacy} disabled={legacyBusy}>
+                        {legacyBusy ? <ActivityIndicator size="small" color="#fff" /> : (
+                          <><Ionicons name="checkmark" size={13} color="#fff" /><Text style={s.attBtnTxt}>Save</Text></>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    {!!(legacy.note || '').trim() && (
+                      <>
+                        <Text style={s.oldLbl}>Message</Text>
+                        <Text style={s.body}>{legacy.note}</Text>
+                      </>
+                    )}
+                    <Text style={s.oldLbl}>Request ID</Text>
+                    <Text style={[s.body, !legacy.ref && s.oldPending]}>{legacy.ref || 'Pending — confirm with client'}</Text>
+                    <Text style={s.oldLbl}>Task name</Text>
+                    <Text style={[s.body, !legacy.name && s.oldPending]}>{legacy.name || 'Pending — confirm with client'}</Text>
+                    {!!legacy.confirmed_by && (
+                      <Text style={s.cardSub}>
+                        Confirmed by {legacy.confirmed_by}{legacy.confirmed_on ? ` on ${legacy.confirmed_on}` : ''}
+                      </Text>
+                    )}
+                  </>
+                )}
+              </Section>
             )}
 
             {/* ── From the client (only when there is any) ───────────── */}
@@ -2264,6 +2452,20 @@ const s = StyleSheet.create({
   wideBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: COLORS.primary, height: 46, borderRadius: 10, marginTop: 14 },
   wideBtnTxt: { color: '#fff', fontWeight: '900', fontSize: 14 },
   btnOff: { opacity: 0.45 },
+  // 🗄️ From the old system card
+  oldBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  oldBadge: { backgroundColor: COLORS.amberBg, borderRadius: 7, paddingHorizontal: 9, paddingVertical: 4 },
+  oldBadgeOk: { backgroundColor: COLORS.greenBg },
+  oldBadgeWait: { backgroundColor: '#FFF7ED' },
+  oldBadgeTxt: { fontSize: 11.5, fontWeight: '800', color: '#92400E' },
+  oldLbl: { fontSize: 11.5, fontWeight: '700', color: COLORS.muted, marginTop: 10, marginBottom: 4 },
+  oldPending: { color: COLORS.amber, fontStyle: 'italic' },
+  oldInput: {
+    backgroundColor: '#fff', borderWidth: 1.5, borderColor: COLORS.line, borderRadius: 10,
+    paddingHorizontal: 12, minHeight: 44, fontSize: 14, color: COLORS.ink,
+  },
+  oldErr: { fontSize: 12.5, color: COLORS.red, fontWeight: '600', marginBottom: 8 },
+  oldBtns: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
 
   // Edit / Delete on a progress-history row, and the edit modal they open.
   // A manual's 2nd..Nth document, listed under its own entry.

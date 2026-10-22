@@ -767,6 +767,40 @@ export const updateTaskMeta = (kpiId, { name, type, kraId, confirmClientMove } =
 export const deleteManual = (manualId) =>
   action('/kpi/manual/delete', { manual_id: manualId });
 
+// KPI Details of a bug / update raised "from the old system"
+// (models/kpi_legacy.py). `legacy` is false for an ordinary task, else
+// { on, status, status_label, ref, name, note, transcript, confirmed_by,
+// confirmed_on, parent_id, voice_notes:[{ name, url }] }. Never throws — the card
+// is extra, and failing to load it must not break the task's own details.
+export async function fetchLegacy(kpiId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, legacy: false, can_edit: false };
+  try {
+    const res = await jsonRpc(serverUrl, '/kra_kpi/legacy/get', { kpi_id: kpiId });
+    return res || { status: false, legacy: false };
+  } catch (e) {
+    log.warn('fetchLegacy failed', e?.message);
+    return { status: false, legacy: false, message: 'Could not load the old requirement details' };
+  }
+}
+
+// Save the KPI Details (admins / managers). A Request ID renumbers the task
+// under that old requirement (BUG-031 → BUG001-REQ-012) and marks it Confirmed
+// with client. → { status, legacy, ref, message }.
+export const saveLegacy = (kpiId, { ref, name, note } = {}) =>
+  action('/kra_kpi/legacy/save', { kpi_id: kpiId, ref: ref || '', name: name || '', note: note || '' });
+
+// Where a voice note in that card lives. The urls are the web's type='http'
+// routes, which an app request cannot use (no session cookie) — so read the id
+// out of the url and fetch the bytes over the JSON door instead.
+export function legacyVoiceSource(url) {
+  const att = /[?&]attachment_id=(\d+)/.exec(url || '');
+  if (att) return { progressId: 0, attachmentId: Number(att[1]) };
+  const prog = /[?&]progress_id=(\d+)/.exec(url || '');
+  if (prog) return { progressId: Number(prog[1]), attachmentId: 0 };
+  return null;
+}
+
 // The 5 employee-checklist keys the server expects for a full Complete.
 export const CHECKLIST_ITEMS = [
   { key: 'verify_github', label: 'Verified GitHub URL' },

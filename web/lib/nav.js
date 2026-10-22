@@ -48,6 +48,8 @@ export const WORK_MENU = [
     /* badge: the Sidebar shows the number waiting on a manager (Shell.jsx). */
     { key: "approvals", label: "Approvals", href: "/approvals", badge: "approvals" },
     { key: "queue", label: "Client Task Queue", href: "/queue" },
+    /* Old-DB bugs / updates still waiting for their Request ID. web only */
+    { key: "needs-linking", label: "Needs Linking", href: "/queue/needs-linking" },
     { key: "files", label: "Generate Client Files", href: "/intake/files" },
     { key: "live-dbs", label: "Live Databases", href: "/settings/setup/live-databases" },
   ] },

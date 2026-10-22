@@ -160,6 +160,8 @@ export const buildTaskRow = (row) => ({
   name: (row.name || "").trim(), external_ref: row.external_ref || "", related_req_ref: row.related_req_ref || "", description: row.description || "",
   estimate_hours: Number(row.estimate_hours) || 0, estimate_minutes: Number(row.estimate_minutes) || 0, priority: row.priority || "regular",
   primary_user_id: row.primary_user_id ? Number(row.primary_user_id) : false, deliverable_type: row.deliverable_type || "", deliverable_other: row.deliverable_other || "",
+  /* Bug / Update about an old-DB requirement: no Linked Req, its Request ID / name / message instead. */
+  ...(row.legacy_on ? { legacy_on: true, related_req_ref: "", legacy_ref: (row.legacy_ref || "").trim(), legacy_name: (row.legacy_name || "").trim(), legacy_note: (row.legacy_note || "").trim() } : {}),
 });
 /* The blank XLSX template and the client-files ZIP are type='http' GETs: plain links through the proxy. */
 const TEMPLATE_NAME = { requirement: "requirement", update: "update", bug: "bug_report" };

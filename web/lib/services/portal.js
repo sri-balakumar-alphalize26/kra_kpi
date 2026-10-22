@@ -51,14 +51,18 @@ export const uploadSignature = (fileData, fileName) => rpc("/kpi_client_portal/u
 export const removeSignature = () => rpc("/kpi_client_portal/upload_signature", { file_data: "", file_name: "" });
 export const certificateHref =(kpiId) => href(`/kpi_client_portal/download_cert?kpi_id=${kpiId}`);
 
-/* One request from the portal. needed_by / attachments are new on 19.0.5.7. */
-export const addClientTask = ({ subKraId, kind, name, description, priority, deliverableType, deliverableOther, neededBy, attachments, parentId }) =>
+/* One request from the portal. needed_by / attachments are new on 19.0.5.7.
+   legacy*: a Bug / Update about an old-DB requirement (no parent to pick);
+   the server checks it says enough (lib/services/legacy legacyProblem). */
+export const addClientTask = ({ subKraId, kind, name, description, priority, deliverableType, deliverableOther, neededBy, attachments, parentId, legacyOn, legacyRef, legacyName, legacyNote }) =>
   rpc("/kpi_client_portal/add_task", {
     sub_kra_id: subKraId, kind: kind || "requirement", name: name || "", description: description || "", priority: priority || "regular", parent_id: parentId || 0,
     deliverable_type: deliverableType || "", deliverable_other: deliverableOther || "", needed_by: neededBy || "", attachments: attachments || [],
+    legacy_on: !!legacyOn, legacy_ref: legacyOn ? legacyRef || "" : "", legacy_name: legacyOn ? legacyName || "" : "", legacy_note: legacyOn ? legacyNote || "" : "",
   }, { timeout: 120000 });
 
-/* The requirements a Bug / Update can be about, newest first: [{id, ref, name, date, db}]. */
+/* The requirements a Bug / Update can be about, newest first: [{id, ref, name, date, db, old}]
+   (old: an old-DB requirement already added here). */
 export const fetchParentTasks = (subKraId) => rpc("/kpi_client_portal/parent_tasks", { sub_kra_id: subKraId ? Number(subKraId) : 0 }).then((r) => (r?.status ? r.tasks || [] : []));
 
 /* Invoices (client view). */

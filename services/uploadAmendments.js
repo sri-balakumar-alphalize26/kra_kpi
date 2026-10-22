@@ -193,11 +193,18 @@ export async function createBulkTasks({ subKraId, docType, tasks, fileData, file
 }
 
 // Build the exact server-side row shape from a UI row + defaults.
+// A "from the old system" row (Bug / Update) has no linked requirement; it sends
+// legacy_on + what it typed instead, and the server checks it says enough
+// (models/kpi_legacy.py). Its files cannot ride along on this route.
 export function buildTaskRow(row) {
+  const legacy = row.legacy_on
+    ? { legacy_on: true, legacy_ref: row.legacy_ref || '', legacy_name: row.legacy_name || '', legacy_note: row.legacy_note || '' }
+    : {};
   return {
+    ...legacy,
     name: (row.name || '').trim(),
     external_ref: row.external_ref || '',
-    related_req_ref: row.related_req_ref || '',
+    related_req_ref: row.legacy_on ? '' : (row.related_req_ref || ''),
     description: row.description || '',
     estimate_hours: Number(row.estimate_hours) || 0,
     estimate_minutes: Number(row.estimate_minutes) || 0,
