@@ -188,6 +188,7 @@ class KpiWaTaskPage(http.Controller):
             'legacy': legacy,
             'manuals': manuals, 'github': github, 'logs': logs,
             'doubts': router._task_doubts(task, user),
+            'chat_waiting': task.chat_waiting(),
             'started': started,
             'locked': locked,
             'can_add': not locked and task.task_state in ('in_progress', 'paused', 'partially_completed',
@@ -224,6 +225,40 @@ class KpiWaTaskPage(http.Controller):
         if not task:
             return self._expired()
         return _render('kra_kpi_module.wa_task_page', self._ctx(token, st, user, task, ok, err))
+
+    # 💬 Chat with the client (models/kpi_chat.py): the page's chat window
+    # loads and sends here, in the background, as JSON.
+    def _chat_json(self, task, user, ok=True, message=''):
+        Report = request.env['kpi.wa.group.report'].sudo()
+        return request.make_json_response({
+            'ok': ok, 'message': message,
+            'messages': task.chat_rows(viewer=user), 'waiting': task.chat_waiting(),
+            'can_send': bool(Report._group_for_kpi(task)),
+            'locked': task._details_locked_for(user),
+            'client': task.client_kra_id.name or task.kra_id.name or ''})
+
+    @http.route('/kpi/wa/task/<string:token>/chat', type='http', auth='public',
+                methods=['GET'], csrf=False, website=False)
+    def chat_list(self, token, **kw):
+        st, user, task = self._resolve(token)
+        if not task:
+            return request.make_json_response({'ok': False, 'message': 'This link has expired.'})
+        return self._chat_json(task, user)
+
+    @http.route('/kpi/wa/task/<string:token>/chat', type='http', auth='public',
+                methods=['POST'], csrf=False, website=False)
+    def chat_send(self, token, **post):
+        st, user, task = self._resolve(token)
+        if not task:
+            return request.make_json_response({'ok': False, 'message': 'This link has expired.'})
+        locked = task._details_locked_for(user)
+        if locked:
+            return self._chat_json(task, user, ok=False, message=locked)
+        try:
+            task.chat_post_team(post.get('text') or '', user, source='wa_page')
+        except Exception as exc:
+            return self._chat_json(task, user, ok=False, message=str(exc).strip()[:300])
+        return self._chat_json(task, user, message='Sent to the client.')
 
     @http.route('/kpi/wa/task/<string:token>/update', type='http', auth='public',
                 methods=['POST'], csrf=False, website=False)

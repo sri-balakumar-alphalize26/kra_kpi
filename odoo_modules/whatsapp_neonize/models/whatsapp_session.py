@@ -724,17 +724,22 @@ class WhatsAppSession(models.Model):
         """Kept for callers; delegates to the one JID helper."""
         return wa_jid.normalize_target(phone)
 
-    def send_message(self, phone, message):
+    def send_message(self, phone, message, mentions=None):
         """Send a text. Group-aware: Evolution accepts `...@g.us` directly, so
         the kra_kpi `send_message` override that existed only to hand-build a
-        group JID is no longer needed (and must be removed)."""
+        group JID is no longer needed (and must be removed).
+
+        `mentions`: phone digits (e.g. '919876543210') to tag in a group, so
+        an "@919876543210" in the text becomes a real, tappable mention.
+        Optional, so every existing caller is unchanged."""
         self.ensure_one()
         client, instance = self._get_client()
         target = wa_jid.normalize_target(phone)
         if not target:
             raise UserError(_('No valid WhatsApp number in "%s".') % phone)
         try:
-            res = client.send_text(instance, target, message, delay=self.send_delay_ms)
+            res = client.send_text(instance, target, message, delay=self.send_delay_ms,
+                                   mentions=[m for m in (mentions or []) if m] or None)
         except EvolutionError as exc:
             self._log_outgoing(target, message, 'failed', err=str(exc)[:1000])
             raise UserError(_('WhatsApp send failed: %s') % exc)

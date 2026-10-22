@@ -78,13 +78,21 @@ class KpiWaConversationManager(models.Model):
         ('mgr_type_reason', 'Manager: type a decline reason'),
         ('mgr_doubt_decide', 'Manager: decide on a question'),
         ('mgr_doubt_answer', 'Manager: answer a question'),
+        # 💬 Discuss: a developer the manager asked to reply to the client,
+        # answering in their private chat (kpi_chat.chat_ask_developer).
+        ('dev_client_reply', 'Developer: typing a reply to the client'),
+        ('dev_client_confirm', 'Developer: confirming the reply'),
     ], ondelete={
         'mgr_pick_dev': 'set default',
         'mgr_pick_reason': 'set default',
         'mgr_type_reason': 'set default',
         'mgr_doubt_decide': 'set default',
         'mgr_doubt_answer': 'set default',
+        'dev_client_reply': 'set default',
+        'dev_client_confirm': 'set default',
     })
+    # The developer's reply, between typing it and tapping ✅ Send.
+    chat_draft = fields.Text(copy=False)
 
     decline_reason_id = fields.Many2one(
         'kpi.decline.reason', string='Chosen decline reason', ondelete='set null')
@@ -104,7 +112,7 @@ class KpiWaConversationManager(models.Model):
         answers after lunch is not the same situation: resetting them would
         silently discard the refusal they are in the middle of giving.
         """
-        if rec.step and rec.step.startswith('mgr_'):
+        if rec.step and rec.step.startswith(('mgr_', 'dev_client_')):
             return False
         return super()._is_stale(rec)
 
@@ -293,6 +301,9 @@ class KpiManagerDmRouter(models.AbstractModel):
         # No emoji stripping needed: these are substring tests, and the emoji
         # sit beside the words rather than inside them.
         low = (text or '').lower()
+        # 💬 Discuss: "👨‍💻 D12 — Ask Sri to reply" hands it to the developer.
+        if '👨‍💻' in (text or '') or 'to reply' in low:
+            return 'developer'
         if 'client' in low:
             return 'client'
         if 'meeting' in low or 'let us talk' in low or 'set up' in low:
@@ -326,6 +337,12 @@ class KpiManagerDmRouter(models.AbstractModel):
 
         kpi = self._kpi_from_text(text)
         verb = self._verb(text) if kpi else None
+
+        # A developer answering a client's question in their private chat.
+        # Only a vote on a manager's poll (D<id>) is not part of that reply.
+        if live and (live.step or '').startswith('dev_client_') and not (doubt and doubt_verb):
+            return self._continue_dev_reply(phone, live, text)
+
         if not mid_flow and not (kpi and verb) and not (doubt and doubt_verb):
             return False            # not ours; let the chain keep walking
 
@@ -333,7 +350,7 @@ class KpiManagerDmRouter(models.AbstractModel):
             if not user or not allowed:
                 self._reply(phone, _('Only a manager can decide that.'))
                 return True
-            return self._decide_doubt(phone, user, doubt, doubt_verb)
+            return self._decide_doubt(phone, user, doubt, doubt_verb, text=text)
 
         if not user or not allowed:
             # Loud, not quiet. A manager verb arriving from a number that is
@@ -355,9 +372,14 @@ class KpiManagerDmRouter(models.AbstractModel):
 
     # ------------------------------------------------------------------
     @api.model
-    def _decide_doubt(self, phone, user, doubt, verb):
+    def _decide_doubt(self, phone, user, doubt, verb, text=''):
         """What the manager chose to do with a developer's question."""
         ref = doubt.kpi_id.external_ref or ('#%s' % doubt.kpi_id.id)
+        if doubt.state not in ('open',) and doubt.kind == 'client_msg':
+            self._reply(phone, _('%(ref)s — already answered by %(who)s: "%(answer)s"') % {
+                'ref': ref, 'who': doubt.answered_by_id.name or _('the team'),
+                'answer': (doubt.answer or '')[:200]})
+            return True
         if doubt.state not in ('open',):
             self._reply(phone, _(
                 '%(ref)s — that one was already dealt with (%(state)s).') % {
@@ -376,10 +398,40 @@ class KpiManagerDmRouter(models.AbstractModel):
                         'target_kpi_id': doubt.kpi_id.id,
                         'pending_action': 'doubt_answer',
                         'step': 'mgr_doubt_answer'})
+            if doubt.kind == 'client_msg':
+                self._reply(phone, _(
+                    'What should I tell the client about %s? It goes to their '
+                    'group as "our team".') % ref)
+                return True
             self._reply(phone, _(
                 'What should I tell %(who)s about %(ref)s? It goes to the '
                 'team group, not to the client.') % {
                     'who': doubt.raised_by_id.name or _('them'), 'ref': ref})
+            return True
+
+        if verb == 'developer' and doubt.kind == 'client_msg':
+            # Reset BEFORE handing it over: when the manager is also the
+            # developer, the hand-over sets this same conversation to wait
+            # for their reply.
+            conv.reset()
+            # "👨‍💻 D12 → Karthick": the developer the manager picked.
+            picked = None
+            if '→' in (text or ''):
+                name = text.split('→', 1)[1].strip().lower()
+                picked = doubt.kpi_id._chat_dev_candidates().filtered(
+                    lambda u: (u.name or '').strip().lower()[:40] == name[:40])[:1] or None
+            try:
+                devs, unreachable = doubt.kpi_id.chat_ask_developer(user, devs=picked)
+            except Exception as exc:
+                self._reply(phone, _('That did not go through: %s') % str(exc).strip()[:200])
+                return True
+            names = ', '.join(devs.mapped('name'))
+            msg = _('👨‍💻 Sent to %(who)s privately. Our group is told who replies, and the '
+                    'client got their chat link. You can still answer yourself.') % {'who': names}
+            if unreachable:
+                msg += '\n' + _('⚠️ %s has no WhatsApp number — they can reply from 📋 KPI details '
+                                '→ 💬 Reply to client.') % ', '.join(unreachable.mapped('name'))
+            self._reply(phone, msg)
             return True
 
         try:
@@ -408,6 +460,62 @@ class KpiManagerDmRouter(models.AbstractModel):
 
         conv.reset()
         self._reply(phone, msg)
+        return True
+
+    @api.model
+    def _continue_dev_reply(self, phone, conv, text):
+        """💬 Discuss: the developer's private reply to a client's question.
+        Typed → shown back with ✅ Send / ✏️ Retype / ❌ Cancel → on Send it
+        reaches the client group as "Reply from our team"."""
+        doubt = conv.target_doubt_id
+        kpi = doubt.kpi_id if doubt else conv.target_kpi_id
+
+        def done(msg):
+            conv.reset()
+            conv.sudo().write({'target_doubt_id': False, 'chat_draft': False})
+            self._reply(phone, msg)
+            return True
+
+        if not kpi or not kpi.exists():
+            return done(_('That request is gone. Nothing was sent.'))
+        user = self.env['res.users']._kpi_user_for_number(phone)
+        on_task = user and (user in (kpi.user_id | kpi.contributor_ids)
+                            or user.has_group('kra_kpi_module.group_kra_admin'))
+        if not on_task:
+            return done(_('You are not on %s, so this reply was not sent.') % kpi._ref())
+        ref = kpi._ref()
+        if doubt and doubt.state != 'open':
+            return done(_('%(ref)s — already answered by %(who)s: "%(answer)s"') % {
+                'ref': ref, 'who': doubt.answered_by_id.name or _('the team'),
+                'answer': (doubt.answer or '')[:200]})
+        low = (text or '').strip().lower()
+        if low in ('cancel', 'stop', 'exit'):
+            return done(_('Cancelled — nothing was sent to the client.'))
+        tag = 'C%s' % (doubt.id if doubt else kpi.id)
+
+        if conv.step == 'dev_client_confirm':
+            # Votes arrive as the option's label ("✅ C12 — Send"); typed words too.
+            if tag in (text or '') or low in ('send', 'yes', 'retype', 'edit', 'no'):
+                if '✅' in (text or '') or low in ('send', 'yes') or low.endswith('send'):
+                    try:
+                        kpi.chat_post_team(conv.chat_draft or '', user, source='whatsapp')
+                    except Exception as exc:
+                        return done(_('Could not send: %s') % str(exc).strip()[:200])
+                    return done(_('✅ Sent to the client group for %s, as "Reply from our team".') % ref)
+                if '✏️' in (text or '') or low in ('retype', 'edit') or low.endswith('retype'):
+                    conv.sudo().write({'step': 'dev_client_reply', 'chat_draft': False})
+                    conv.touch()
+                    self._reply(phone, _('OK — type the reply again.'))
+                    return True
+                return done(_('Cancelled — nothing was sent to the client.'))
+            # Anything else typed here is a new version of the reply.
+
+        draft = (text or '').strip()[:1000]
+        conv.sudo().write({'step': 'dev_client_confirm', 'chat_draft': draft})
+        conv.touch()
+        self.env['kpi.wa.group.report'].sudo()._post_poll(
+            phone, _('💬 %(ref)s — send this to the client?\n\n"%(text)s"') % {'ref': ref, 'text': draft},
+            ['✅ %s — Send' % tag, '✏️ %s — Retype' % tag, '❌ %s — Cancel' % tag])
         return True
 
     @api.model
@@ -488,11 +596,16 @@ class KpiManagerDmRouter(models.AbstractModel):
             try:
                 doubt.action_answer(text, by_user=user)
             except Exception as exc:
+                if doubt.kind == 'client_msg' and doubt.state != 'open':
+                    conv.reset()        # somebody answered first; nothing to wait for
                 self._reply(phone, _('That did not go through: %s')
                             % str(exc).strip()[:200])
                 return True
             ref = doubt.kpi_id.external_ref or ('#%s' % doubt.kpi_id.id)
             conv.reset()
+            if doubt.kind == 'client_msg':
+                self._reply(phone, _('✅ Sent to the client group for %s.') % ref)
+                return True
             self._reply(phone, _(
                 '✅ Sent to the team group for %(ref)s. The client was not '
                 'told.') % {'ref': ref})

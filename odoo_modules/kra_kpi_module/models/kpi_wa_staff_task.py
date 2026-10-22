@@ -312,6 +312,8 @@ class KpiWaStaffTask(models.AbstractModel):
             'day_pick': self._fl_day_pick,
             # Smart typing's ✅ Yes / ❌ No and "what next" polls (kpi_wa_smart).
             'smart_pick': self._fl_smart_pick,
+            # 💬 Reply to client (kpi_chat.py).
+            'client_reply': self._fl_client_reply, 'client_reply_confirm': self._fl_client_reply_confirm,
         }.get(at)
         if not handler:
             state._reset()
@@ -1420,7 +1422,9 @@ class KpiWaStaffTask(models.AbstractModel):
         WhatsApp group only ever saw each answer once). Plain dicts, for the
         chat and the task page alike."""
         out = []
-        for x in self.env['kpi.doubt'].sudo().search([('kpi_id', '=', task.id)], order='id desc', limit=15):
+        # Client messages live in the 💬 chat (kpi_chat.py), not here.
+        for x in self.env['kpi.doubt'].sudo().search([('kpi_id', '=', task.id), ('kind', '!=', 'client_msg')],
+                                                     order='id desc', limit=15):
             out.append({
                 'icon': self.DOUBT_KIND.get(x.kind, '❓'),
                 'question': ' '.join((x.question or '').split()),
@@ -1452,6 +1456,52 @@ class KpiWaStaffTask(models.AbstractModel):
             if r['client_answer']:
                 lines.append(_('   🧑‍💼 Client: "%s"') % r['client_answer'][:300])
         return self._back_to_task(message, state, task, '\n'.join(lines))
+
+    # ================================================================== #
+    # 💬 Reply to client -- the task's chat with the client (kpi_chat.py)  #
+    # ================================================================== #
+    def _client_reply_begin(self, message, state, user, task):
+        locked = task._details_locked_for(user)
+        if locked:
+            return self._back_to_task(message, state, task, '🔒 ' + locked)
+        lines = [_('💬 %s — chat with the client') % self._ref(task)]
+        rows = task.chat_rows(viewer=user, limit=6)
+        for r in rows:
+            when = self._when_short(user, fields.Datetime.to_datetime(r['at']))
+            who = r['who'] if r['side'] == 'client' else '%s (%s)' % (_('Team'), r['who'])
+            lines.append('%s %s, %s:\n   %s' % ('🧑‍💼' if r['side'] == 'client' else '👥', who, when,
+                                              ' '.join(r['body'].split())[:300]))
+        if not rows:
+            lines.append(_('No messages yet — yours will be the first.'))
+        lines += ['', _('Type your message to the client. It reaches their group as "Reply from our team". '
+                        '(Type cancel to stop.)')]
+        self._fsave(state, {'at': 'client_reply'})
+        self._text(message, '\n'.join(lines))
+        return True
+
+    def _fl_client_reply(self, message, state, user, d, task, tapped, low, body):
+        text = (body or '').strip()
+        if not text or text in _MEDIA_PLACEHOLDERS:
+            self._text(message, _('Type the message as text (type cancel to stop).'))
+            return True
+        d = {'at': 'client_reply_confirm', 'text': text[:1000]}
+        return self._fask(message, state, d, _('💬 %(ref)s — send this to the client?\n\n"%(text)s"') % {
+            'ref': self._ref(task), 'text': text[:1000]},
+            [_('✅ Send to client'), _('✏️ Retype'), CANCEL])
+
+    def _fl_client_reply_confirm(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        if i == 1:
+            return self._client_reply_begin(message, state, user, task)
+        if i != 0:
+            return self._back_to_task(message, state, task, _('Cancelled — nothing was sent.'))
+        try:
+            task.chat_post_team(d.get('text') or '', user, source='whatsapp')
+        except Exception as exc:
+            return self._back_to_task(message, state, task, _('Could not send: %s') % str(exc).strip()[:200])
+        return self._back_to_task(message, state, task, _('📨 Sent to the client for %s.') % self._ref(task))
 
     def _info_show(self, message, state, user, task, then_menu=True):
         labels = dict(task._fields['task_state'].selection)
@@ -1858,7 +1908,9 @@ class KpiWaStaffTask(models.AbstractModel):
     ]
     LOG_LABELS = {'meta_updated': 'Renamed', 'priority_changed': 'Priority changed',
                   'start_undone': 'Start undone', 'time_reduced': "Yesterday's time reduced",
-                  'estimate_extended': 'Estimate extended'}
+                  'estimate_extended': 'Estimate extended',
+                  'client_chat_message': 'Client message (Discuss)', 'client_chat_reply': 'Reply to the client',
+                  'client_chat_forwarded': 'Client question sent to the developer'}
 
     def _logs_begin(self, message, state, user, task):
         return self._fask(message, state, {'at': 'logs'}, _('🧾 Which log for %s?') % self._ref(task),

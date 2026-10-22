@@ -150,7 +150,7 @@ def _kpi_actions_for(task):
         rows.append(('done', '✅ Completed'))
     env = task.env
     # The manager's answers, once anything has been asked on the task.
-    asked = env['kpi.doubt'].sudo().search_count([('kpi_id', '=', task.id)])
+    asked = env['kpi.doubt'].sudo().search_count([('kpi_id', '=', task.id), ('kind', '!=', 'client_msg')])
     if asked:
         rows.append(('answers', '💬 Manager answers (%d)' % asked))
     # Get a file only when the task has one; Logs always.
@@ -158,6 +158,12 @@ def _kpi_actions_for(task):
                 or env['kpi.user.manual'].sudo().search_count([('kpi_id', '=', task.id)]))
     if has_file:
         rows.append(('getfile', '📎 Get a file'))
+    # 💬 Discuss (kpi_chat.py): reply to the client, or write first -- only
+    # when the client has a WhatsApp group the message can go to.
+    if env['kpi.wa.group.report'].sudo()._group_for_kpi(task):
+        waiting = task.chat_waiting()
+        rows.insert(0, ('client_reply', '💬 Reply to client (%d waiting)' % waiting) if waiting
+                    else ('client_reply', '💬 Message the client'))
     rows.append(('logs', '🧾 Logs'))
     return rows
 
@@ -792,6 +798,9 @@ class KpiWaStaffRouter(models.AbstractModel):
         status = labels.get(task.task_state, '')
         if task.task_state == 'paused' and (task.paused_reason or '').strip():
             status += ' — %s' % task.paused_reason.strip()
+        waiting = task.chat_waiting()
+        if waiting:
+            status += _('\n💬 %d client message(s) waiting — 📋 KPI details → 💬 Reply to client') % waiting
         self._poll(message, _('%(ref)s — %(title)s\n%(state)s') % {
             'ref': ref, 'title': task.name or '', 'state': status},
             [l for _c, l in rows])
@@ -879,6 +888,8 @@ class KpiWaStaffRouter(models.AbstractModel):
             return self._files_begin(message, state, user, task)
         if action == 'logs':
             return self._logs_begin(message, state, user, task)
+        if action == 'client_reply':
+            return self._client_reply_begin(message, state, user, task)
         # doubt / meet_admin / meet_client all want words next.
         state._touch(step='staff_text', staff_kpi_id=task.id)
         prompt = {

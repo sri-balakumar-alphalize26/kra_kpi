@@ -140,6 +140,11 @@ class KraKpiLegacy(models.Model):
                                           readonly=True)
     legacy_confirmed_on = fields.Datetime(string='Confirmed On', copy=False, readonly=True)
 
+    # Every earlier time the client sent this request (JSON, oldest first) --
+    # kept when they send it again after a refusal. See client_sends().
+    client_send_log = fields.Text(string='Earlier Client Sends', copy=False, readonly=True)
+    client_last_sent_at = fields.Datetime(string='Last Sent By Client', copy=False, readonly=True)
+
     # ------------------------------------------------------------------
     # numbering
     # ------------------------------------------------------------------
@@ -273,11 +278,17 @@ class KraKpiLegacy(models.Model):
     # ------------------------------------------------------------------
     # KPI Details: filled in later by the team
     # ------------------------------------------------------------------
-    def legacy_save_details(self, ref=None, name=None, note=None):
-        """Save the KPI Details card. A Request ID links + confirms it."""
+    def legacy_save_details(self, ref=None, name=None, note=None, user=None):
+        """Save the KPI Details card. A Request ID links + confirms it.
+        `user`: who is saving (the routes call this under sudo). Locked with the
+        rest of the task's details once it is fully completed; admins excepted
+        (kpi_time_adjust._details_locked_for)."""
         self.ensure_one()
         if not self.legacy_req_link:
             raise UserError('This task is not marked From old DB.')
+        locked = self._details_locked_for(user or self.env.user)
+        if locked:
+            raise UserError(locked)
         vals = {}
         if name is not None:
             vals['legacy_req_name'] = ' '.join((name or '').split())[:200] or False
@@ -314,17 +325,36 @@ class KraKpiLegacy(models.Model):
     # ------------------------------------------------------------------
     # voice note -> text, after the request is saved
     # ------------------------------------------------------------------
+    def _legacy_client_files(self):
+        """The files the CLIENT attached to this task (WhatsApp form / portal),
+        oldest first: [{'entry': progress id, 'att': attachment id or 0,
+        'name', 'mime', 'data': base64}]. A declined request that is fixed and
+        sent again keeps them, so they still count as what it is about."""
+        out = []
+        Att = self.env['kpi.file.attachment'].sudo()
+        for p in self.env['kpi.progress'].sudo().search(
+                [('kpi_id', '=', self.id), ('from_client', '=', True)], order='id'):
+            if p.file_name and p.uploaded_file:
+                out.append({'entry': p.id, 'att': 0, 'name': p.file_name, 'mime': '',
+                            'data': p.uploaded_file})
+            for a in Att.search([('progress_id', '=', p.id)], order='sequence, id'):
+                if a.file:
+                    out.append({'entry': p.id, 'att': a.id, 'name': a.file_name or 'file',
+                                'mime': a.mimetype or '', 'data': a.file})
+        return out
+
+    def _legacy_existing_inputs(self):
+        """The client's files as legacy_input_problem() reads them:
+        [(name, size in bytes, mimetype)]."""
+        import base64
+        return [(f['name'], len(base64.b64decode(f['data'])), f['mime'])
+                for f in self._legacy_client_files()]
+
     def _legacy_voice_files(self):
         """[(name, bytes, mimetype)] audio the client attached to this task."""
         import base64
-        out = []
-        for p in self.env['kpi.progress'].sudo().search([('kpi_id', '=', self.id)], order='id'):
-            if p.file_name and p.uploaded_file and is_audio(p.file_name):
-                out.append((p.file_name, base64.b64decode(p.uploaded_file), ''))
-            for a in self.env['kpi.file.attachment'].sudo().search([('progress_id', '=', p.id)]):
-                if a.file and is_audio(a.file_name, a.mimetype):
-                    out.append((a.file_name, base64.b64decode(a.file), a.mimetype or ''))
-        return out
+        return [(f['name'], base64.b64decode(f['data']), f['mime'])
+                for f in self._legacy_client_files() if is_audio(f['name'], f['mime'])]
 
     def _legacy_transcribe(self):
         """Run in the background after commit. Never fails the request: no
@@ -343,6 +373,70 @@ class KraKpiLegacy(models.Model):
                     _logger.info('old-DB voice note on %s not transcribed: %s', rec.id, res.get('error'))
             if texts:
                 rec.sudo().write({'legacy_transcript': '\n\n'.join(texts)[:8000]})
+
+    # ------------------------------------------------------------------
+    # every time the client sent this request (the task's Client tab)
+    # ------------------------------------------------------------------
+    def _client_send_copy(self, done_ids):
+        """What the client sent this time, as it stands now."""
+        self.ensure_one()
+        desc = self.description or ''
+        # Drop what the form itself appended (About:, Database:, footer).
+        desc = re.split(r'\n\n(?:About: |Database: |— Sent (?:again )?from the WhatsApp form)',
+                        desc)[0].strip()
+        files = [f for f in self._legacy_client_files() if f['entry'] not in done_ids]
+        return {
+            'sent_at': fields.Datetime.to_string(self.client_last_sent_at or self.create_date),
+            'sent_by': self.submitted_by_uid.name or '',
+            'ref': self.external_ref or '',
+            'name': self.name or '',
+            'description': desc[:4000],
+            'old_db': bool(self.legacy_req_link),
+            'files': [{'name': f['name'], 'entry': f['entry'], 'att': f['att']} for f in files],
+        }
+
+    def _client_sends_saved(self):
+        import json
+        try:
+            return json.loads(self.client_send_log or '[]')
+        except ValueError:
+            return []
+
+    def _client_send_snapshot(self):
+        """Keep the send the client is about to replace, with its refusal."""
+        import json
+        self.ensure_one()
+        saved = self._client_sends_saved()
+        done = {f['entry'] for s in saved for f in s.get('files', [])}
+        copy = self._client_send_copy(done)
+        copy.update({
+            'status': 'refused' if self.decline_mode == 'decline' else (
+                'retyped' if self.decline_mode == 'reclassify' else 'replaced'),
+            'refused_by': self.declined_by_id.name or '',
+            'refused_at': fields.Datetime.to_string(self.declined_at) if self.declined_at else '',
+            'reason': self.decline_note or '',
+        })
+        saved.append(copy)
+        super(KraKpiLegacy, self.sudo()).write({'client_send_log': json.dumps(saved)})
+
+    def client_sends(self):
+        """Every send, oldest first: the kept copies, then the current one."""
+        self.ensure_one()
+        saved = self._client_sends_saved()
+        done = {f['entry'] for s in saved for f in s.get('files', [])}
+        current = self._client_send_copy(done)
+        if not self.active and self.decline_mode:
+            current.update(status='refused', refused_by=self.declined_by_id.name or '',
+                           refused_at=fields.Datetime.to_string(self.declined_at)
+                           if self.declined_at else '', reason=self.decline_note or '')
+        elif self.published or self.admin_accepted:
+            current['status'] = 'accepted'
+        else:
+            current['status'] = 'waiting'
+        out = saved + [current]
+        for n, s in enumerate(out, start=1):
+            s['round'] = n
+        return out
 
     # ------------------------------------------------------------------
     # rules
@@ -388,6 +482,14 @@ class KraKpiLegacy(models.Model):
         return records
 
     def write(self, vals):
+        # A client sending a declined request again (fix form or corrected
+        # wording): keep a copy of what they sent before, with its refusal,
+        # before the new send overwrites it. Shown in the task's Client tab.
+        if vals.get('correction_round'):
+            for rec in self:
+                if vals['correction_round'] > (rec.correction_round or 0):
+                    rec._client_send_snapshot()
+            vals = dict(vals, client_last_sent_at=fields.Datetime.now())
         if vals.get('task_state') == 'completed':
             blocked = self.filtered(lambda r: r.legacy_req_link and not r.is_legacy
                                     and (r.legacy_status or 'pending') == 'pending')

@@ -188,6 +188,67 @@ export class KpiAction extends Component {
             </div>
         </div>
 
+        <!-- 💬 Chat with the client (models/kpi_chat.py), WhatsApp style: the
+             client on the left in white, the team on the right in green. The
+             client group only ever sees "Reply from our team". -->
+        <div t-if="state.chatOpen" class="modal d-block" tabindex="-1"
+             style="background: rgba(0,0,0,0.5); z-index:2100;">
+            <div class="modal-dialog modal-lg modal-dialog-centered">
+                <div class="modal-content" style="overflow:hidden;">
+                    <div class="modal-header text-white" style="background:#008069;">
+                        <h5 class="modal-title">
+                            💬 Chat with <t t-esc="state.chatInfo.client or 'the client'"/>
+                            <small class="ms-2 opacity-75" t-esc="state.detailData.external_ref or ''"/>
+                        </h5>
+                        <button type="button" class="btn-close btn-close-white" t-on-click="closeChat"/>
+                    </div>
+                    <div class="modal-body o_kpi_chat_body"
+                         style="height:60vh; overflow-y:auto; background:#efeae2; padding:16px 18px;">
+                        <div t-if="state.chatLoading and !state.chatMsgs.length" class="text-muted small py-3 text-center">
+                            <i class="fa fa-spinner fa-spin me-2"/>Loading…
+                        </div>
+                        <div t-elif="!state.chatMsgs.length" class="text-center py-4">
+                            <span class="small px-3 py-2" style="background:#fff3c4; border-radius:8px; color:#54656f;">
+                                No messages yet. When the client sends 💬 Discuss from their WhatsApp group, it shows here.
+                            </span>
+                        </div>
+                        <t t-foreach="chatGroups()" t-as="g" t-key="g.day">
+                            <div class="text-center my-2">
+                                <span class="small px-3 py-1" style="background:#fff; border-radius:8px; color:#54656f; box-shadow:0 1px 0.5px rgba(11,20,26,.13);" t-esc="g.day"/>
+                            </div>
+                            <t t-foreach="g.msgs" t-as="m" t-key="m.id">
+                                <div t-att-class="'d-flex mb-2 ' + (m.side === 'team' ? 'justify-content-end' : 'justify-content-start')">
+                                    <div t-att-style="'max-width:72%; padding:6px 9px 4px; border-radius:8px; box-shadow:0 1px 0.5px rgba(11,20,26,.13); background:' + (m.side === 'team' ? '#d9fdd3' : '#ffffff')">
+                                        <div class="fw-bold small" t-att-style="'color:' + (m.side === 'team' ? '#027eb5' : '#d4572e')">
+                                            <t t-esc="m.side === 'team' ? m.who : (m.who + ' · client')"/>
+                                        </div>
+                                        <div style="white-space:pre-wrap; word-break:break-word; color:#111b21;" t-esc="m.body"/>
+                                        <div class="text-end" style="font-size:11px; color:#667781;" t-esc="chatTime(m.at)"/>
+                                    </div>
+                                </div>
+                            </t>
+                        </t>
+                    </div>
+                    <div class="modal-footer d-block" style="background:#f0f2f5;">
+                        <div t-if="state.chatInfo.locked" class="small text-muted">🔒 <t t-esc="state.chatInfo.locked"/></div>
+                        <div t-elif="!state.chatInfo.can_send" class="small text-muted">
+                            This client has no WhatsApp group linked, so messages can't be sent.
+                        </div>
+                        <div t-else="" class="d-flex gap-2 align-items-end">
+                            <textarea class="form-control" rows="2" placeholder="Type a message — the client sees it as &quot;Reply from our team&quot;"
+                                      style="border-radius:8px; resize:none;"
+                                      t-model="state.chatText" t-on-keydown="onChatKey"/>
+                            <button class="btn text-white rounded-circle" style="background:#00a884; width:44px; height:44px;"
+                                    title="Send" t-att-disabled="state.chatSending or !state.chatText.trim()"
+                                    t-on-click="sendChat">
+                                <i t-att-class="'fa ' + (state.chatSending ? 'fa-spinner fa-spin' : 'fa-paper-plane')"/>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Edit a Progress History entry. Carries the same three fields the create
              form does — description, links, attachment — because an edit popup that
              offers less than the form that made the entry cannot express what is
@@ -414,7 +475,13 @@ export class KpiAction extends Component {
                             </div>
                         </div>
 
-                        <h3 class="fw-bold mb-3">KPI Details</h3>
+                        <div class="d-flex align-items-center justify-content-between mb-3">
+                            <h3 class="fw-bold mb-0">KPI Details</h3>
+                            <button class="btn btn-sm text-white" style="background:#00a884;" t-on-click="openChat">
+                                💬 Chat with client
+                                <span t-if="state.chatWaiting" class="badge bg-danger ms-1" t-esc="state.chatWaiting"/>
+                            </button>
+                        </div>
 
                         <div class="card p-4 mb-3">
                             <div class="row">
@@ -1165,14 +1232,69 @@ export class KpiAction extends Component {
                              client portal). Kept apart from the team's Attached Files and
                              Progress History, read-only, and never counted as the
                              progress summary Complete asks for. -->
-                        <t t-if="clientProgress().length > 0 or state.legacy.data">
+                        <t t-if="clientProgress().length > 0 or state.legacy.data or hasClientSends()">
                             <div class="card p-4 mb-3 border-warning">
                                 <h4 class="fw-bold mb-3">📎 From the client (<t t-esc="clientProgress().length"/>)</h4>
+                                <!-- Details | Client tabs, only once the client has sent text or
+                                     files. Client = every send (oldest first) + KPI Details. -->
+                                <t t-set="csTabs" t-value="hasClientSends()"/>
+                                <t t-set="csTab" t-value="csTabs ? state.clientSends.tab : ''"/>
+                                <ul t-if="csTabs" class="nav nav-tabs mb-3">
+                                    <li class="nav-item">
+                                        <a href="#" t-att-class="'nav-link' + (csTab === 'details' ? ' active' : '')"
+                                           t-on-click.prevent="() => this.setClientTab('details')">Details</a>
+                                    </li>
+                                    <li class="nav-item">
+                                        <a href="#" t-att-class="'nav-link' + (csTab === 'client' ? ' active' : '')"
+                                           t-on-click.prevent="() => this.setClientTab('client')">
+                                            Client (<t t-esc="clientSendsShown().length"/>)
+                                        </a>
+                                    </li>
+                                </ul>
+                                <t t-if="csTab === 'client'">
+                                    <t t-set="csList" t-value="clientSendsShown()"/>
+                                    <t t-foreach="csList" t-as="cs" t-key="cs_index">
+                                        <t t-set="csNew" t-value="csList.length > 1 and cs_last"/>
+                                        <div t-att-class="'card p-3 mb-3' + (csNew ? ' border-primary' : '')">
+                                            <div t-if="csList.length > 1" class="small text-muted mb-1">
+                                                <strong t-esc="clientSendRound(cs_index)"/>
+                                                <t t-if="cs.sent_at"> · <t t-esc="clientSendDate(cs.sent_at)"/></t>
+                                                <t t-if="cs.sent_by"> · by <t t-esc="cs.sent_by"/></t>
+                                                <span t-if="csNew" class="badge bg-primary ms-1">NEW</span>
+                                            </div>
+                                            <div t-else="" class="small text-muted mb-1">
+                                                <t t-esc="clientSendDate(cs.sent_at)"/>
+                                                <t t-if="cs.sent_by"> · by <t t-esc="cs.sent_by"/></t>
+                                            </div>
+                                            <h6 t-if="cs.name" class="fw-bold mb-1" t-esc="cs.name"/>
+                                            <div t-if="cs.description" class="mb-2" style="white-space: pre-wrap;" t-esc="cs.description"/>
+                                            <div t-if="(cs.files or []).length" class="d-flex flex-wrap gap-2 mb-2">
+                                                <t t-foreach="cs.files" t-as="csf" t-key="csf_index">
+                                                    <a t-att-href="csf.url" target="_blank" class="btn btn-sm btn-outline-primary">
+                                                        <t t-esc="clientFileIcon(csf)"/> <t t-esc="csf.name"/>
+                                                    </a>
+                                                </t>
+                                            </div>
+                                            <t t-if="csList.length > 1">
+                                                <div t-if="cs.status === 'refused'" class="small text-danger">
+                                                    ❌ Refused by <t t-esc="cs.refused_by or '—'"/>
+                                                    <t t-if="cs.refused_at"> · <t t-esc="clientSendDate(cs.refused_at)"/></t>
+                                                    <div t-if="cs.reason" class="text-body" style="white-space: pre-wrap;">Reason: <t t-esc="cs.reason"/></div>
+                                                </div>
+                                                <div t-elif="cs.status === 'retyped' or cs.status === 'replaced'" class="small text-secondary">
+                                                    🔁 Re-typed by <t t-esc="cs.refused_by or cs.sent_by or '—'"/>
+                                                </div>
+                                                <div t-elif="cs.status === 'accepted'" class="small text-success">✅ Accepted</div>
+                                                <div t-elif="cs.status === 'waiting'" class="small text-warning">⏳ Waiting for decision</div>
+                                            </t>
+                                        </div>
+                                    </t>
+                                </t>
                                 <!-- KPI Details: a bug / update about a requirement from the
                                      OLD database. Pending until an admin adds its Request ID
                                      (which also renumbers the task under that REQ). -->
                                 <t t-set="lg" t-value="state.legacy.data"/>
-                                <div t-if="lg" class="card p-3 mb-3 bg-light">
+                                <div t-if="lg and (!csTabs or csTab === 'client')" class="card p-3 mb-3 bg-light">
                                     <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                                         <h5 class="fw-bold mb-0">KPI Details</h5>
                                         <span class="badge bg-secondary">🗄️ Old DB Requirement</span>
@@ -1245,7 +1367,7 @@ export class KpiAction extends Component {
                                         </div>
                                     </t>
                                 </div>
-                                <div class="list-group">
+                                <div t-if="!csTabs or csTab === 'details'" class="list-group">
                                     <t t-foreach="clientProgress()" t-as="cu" t-key="cu.id">
                                         <div class="list-group-item">
                                             <div class="small text-muted mb-1">
@@ -2958,6 +3080,31 @@ export class KpiAction extends Component {
     teamAttachedFiles() {
         return (this.state.attachedFiles || []).filter(f => !f.from_client);
     }
+    // Client tab: only sends that carry text or files count.
+    clientSendsShown() {
+        return (this.state.clientSends.sends || []).filter(s =>
+            (s.name || '').trim() || (s.description || '').trim() || (s.files || []).length);
+    }
+    hasClientSends() { return this.clientSendsShown().length > 0; }
+    setClientTab(tab) { this.state.clientSends.tab = tab; }
+    clientSendRound(i) {
+        const n = i + 1;
+        const circled = '①②③④⑤⑥⑦⑧⑨⑩'[i] || `(${n})`;
+        const sfx = (n % 100 >= 11 && n % 100 <= 13) ? 'th'
+            : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
+        return `${circled} ${n}${sfx} send`;
+    }
+    clientSendDate(at) {
+        // Server times are UTC 'YYYY-MM-DD HH:MM:SS'.
+        return at ? this.formatDate(new Date(String(at).replace(' ', 'T') + 'Z')) : '';
+    }
+    clientFileIcon(f) {
+        const n = ((f && f.name) || '').toLowerCase();
+        if (/\.(jpe?g|png|gif|webp|heic|bmp|svg)$/.test(n)) return '📷';
+        if (/\.(mp4|mov|avi|mkv|webm|3gp|m4v)$/.test(n)) return '🎥';
+        if (/\.(mp3|ogg|oga|opus|wav|m4a|aac|amr|weba)$/.test(n)) return '🎤';
+        return '📎';
+    }
     isProgressSelected(id) { return !!this.state.progressSelected[id]; }
     toggleProgressSelected(id) {
         this.state.progressSelected[id] = !this.state.progressSelected[id];
@@ -3317,6 +3464,9 @@ export class KpiAction extends Component {
             detailError: null,
             tasksByState: {},
             activityOpen: false,      // the Activity popup
+            // 💬 Chat with the client popup (models/kpi_chat.py)
+            chatOpen: false, chatLoading: false, chatSending: false, chatText: '',
+            chatMsgs: [], chatInfo: {}, chatWaiting: 0,
             activityExpanded: {},     // which day sections are open, keyed by date
             activityKind: 'all',      // which log the dropdown picked
             activityRows: [],         // rows for a narrowed kind ('all' reads detailData)
@@ -3376,6 +3526,9 @@ export class KpiAction extends Component {
             githubLinks: [],
             // KPI Details card of a From-old-DB bug / update (/kra_kpi/legacy/get).
             legacy: { data: false, canEdit: false, editing: false, saving: false, ref: '', name: '', note: '' },
+            // Every time the client sent this task (/kra_kpi/client_sends), oldest first,
+            // and which tab of the "From the client" card is open.
+            clientSends: { sends: [], tab: 'details' },
             // Old files the user chose to Replace, removed only once the new upload
             // has succeeded, so a failed upload never loses them.
             pendingReplace: { progress: [], manual: [] },
@@ -3644,6 +3797,7 @@ export class KpiAction extends Component {
 
         // 🆕 NEW: Cleanup intervals when component is destroyed
         onWillUnmount(() => {
+            clearInterval(this._chatTimer);
             if (this.timerInterval) {
                 clearInterval(this.timerInterval);
             }
@@ -6681,6 +6835,105 @@ export class KpiAction extends Component {
         await this.loadGithubLinks(id);  // 🆕 NEW
         await this.loadResourceSections(id);  // Part E: sortable resource sections
         await this.loadLegacy(id);
+        await this.loadClientSends(id);
+        this.state.chatWaiting = 0;
+        this.loadChat(true);
+    }
+
+    // ---- 💬 Chat with the client (models/kpi_chat.py) ----------------------
+    async loadChat(countOnly = false) {
+        const kpiId = this.state.detailKpiId;
+        if (!kpiId) return;
+        if (!countOnly) this.state.chatLoading = true;
+        try {
+            const res = await rpc('/kpi_action/chat', { kpi_id: kpiId });
+            if (kpiId !== this.state.detailKpiId) return;   // moved to another task meanwhile
+            if (res && res.status === false) {
+                if (!countOnly) this._toast(res.message || "Couldn't load the chat.", 'danger');
+                return;
+            }
+            this.state.chatWaiting = res.waiting || 0;
+            if (countOnly) return;
+            const grew = (res.messages || []).length !== this.state.chatMsgs.length;
+            this.state.chatMsgs = res.messages || [];
+            this.state.chatInfo = { can_send: res.can_send, locked: res.locked, client: res.client };
+            if (grew) this._chatScroll();
+        } catch (e) {
+            if (!countOnly) this._toast("Couldn't load the chat: " + ((e && e.message) || e), 'danger');
+        } finally {
+            this.state.chatLoading = false;
+        }
+    }
+    async openChat() {
+        this.state.chatOpen = true;
+        this.state.chatMsgs = [];
+        this.state.chatText = '';
+        await this.loadChat();
+        // New messages show up while the window is open, like WhatsApp.
+        clearInterval(this._chatTimer);
+        this._chatTimer = setInterval(() => {
+            if (this.state.chatOpen) this.loadChat(); else clearInterval(this._chatTimer);
+        }, 10000);
+    }
+    closeChat() {
+        this.state.chatOpen = false;
+        clearInterval(this._chatTimer);
+        this.loadChat(true);
+    }
+    _chatScroll() {
+        setTimeout(() => {
+            const el = document.querySelector('.o_kpi_chat_body');
+            if (el) el.scrollTop = el.scrollHeight;
+        }, 30);
+    }
+    onChatKey(ev) {
+        // Enter sends, Shift+Enter is a new line -- as in WhatsApp Web.
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+            ev.preventDefault();
+            this.sendChat();
+        }
+    }
+    async sendChat() {
+        const text = (this.state.chatText || '').trim();
+        if (!text || this.state.chatSending) return;
+        this.state.chatSending = true;
+        try {
+            const res = await rpc('/kpi_action/chat/send', { kpi_id: this.state.detailKpiId, text, source: 'odoo' });
+            if (res && res.status === false) {
+                this._toast(res.message || "Couldn't send.", 'danger');
+                return;
+            }
+            this.state.chatText = '';
+            this.state.chatMsgs = res.messages || [];
+            this.state.chatWaiting = res.waiting || 0;
+            this._chatScroll();
+        } catch (e) {
+            this._toast("Couldn't send: " + ((e && e.message) || e), 'danger');
+        } finally {
+            this.state.chatSending = false;
+        }
+    }
+    _chatDate(at) {
+        // Server times are UTC 'YYYY-MM-DD HH:MM:SS'.
+        return at ? new Date(at.replace(' ', 'T') + 'Z') : null;
+    }
+    chatTime(at) {
+        const d = this._chatDate(at);
+        return d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    }
+    chatGroups() {
+        const groups = [];
+        const today = new Date().toDateString();
+        const yday = new Date(Date.now() - 86400000).toDateString();
+        for (const m of this.state.chatMsgs) {
+            const d = this._chatDate(m.at);
+            const key = d ? d.toDateString() : '';
+            const day = key === today ? 'Today' : key === yday ? 'Yesterday'
+                : (d ? d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+            if (!groups.length || groups[groups.length - 1].day !== day) groups.push({ day, msgs: [] });
+            groups[groups.length - 1].msgs.push(m);
+        }
+        return groups;
     }
 
     // KPI Details of a bug / update about an OLD database requirement.
@@ -6694,6 +6947,18 @@ export class KpiAction extends Component {
             }
         } catch (error) {
             console.error('Error loading KPI Details:', error);
+        }
+    }
+    // Each time the client sent this task, for the Client tab.
+    async loadClientSends(kpi_id) {
+        this.state.clientSends = { sends: [], tab: 'details' };
+        try {
+            const res = await rpc('/kra_kpi/client_sends', { kpi_id: parseInt(kpi_id) });
+            if (res && res.status && parseInt(kpi_id) === parseInt(this.state.detailKpiId)) {
+                this.state.clientSends.sends = res.sends || [];
+            }
+        } catch (error) {
+            console.error('Error loading client sends:', error);
         }
     }
     beginLegacyEdit() {
@@ -6757,6 +7022,8 @@ export class KpiAction extends Component {
         this.state.progressUpdates = [];
         this.state.reassignmentHistory = [];  // 🆕 NEW
         this.state.metaEdit = { editing: false, saving: false, name: '', type: '', kra_id: '' };
+        this.state.chatOpen = false;
+        clearInterval(this._chatTimer);
         this.refresh();
     }
 
