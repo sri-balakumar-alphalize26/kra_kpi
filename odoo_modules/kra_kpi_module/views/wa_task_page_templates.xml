@@ -304,6 +304,27 @@
                     </details>
                 </div>
 
+                <!-- Every time the client sent this request: what became of each send. -->
+                <div t-if="sends" class="sec">
+                    <h3>👤 Client · <t t-esc="len(sends)"/> sends</h3>
+                    <div t-foreach="sends" t-as="sd" class="item"
+                         t-att-style="'border:1.5px solid #2563eb' if sd_last else None">
+                        <div class="meta"><t t-esc="sd['round']"/>. send · <t t-esc="sd['when']"/>
+                            <t t-if="sd['by']"> · by <t t-esc="sd['by']"/></t>
+                            <b t-if="sd_last" style="color:#2563eb"> · NEW</b></div>
+                        <div t-if="sd['name']"><b t-esc="sd['name']"/></div>
+                        <div t-if="sd['text']" class="txt" t-esc="sd['text']"/>
+                        <div t-if="sd['files']" class="mini">📎 <t t-esc="sd['files']"/> file(s)</div>
+                        <div t-if="sd['status'] == 'refused'" style="color:#b91c1c;font-weight:700;margin-top:4px;">
+                            ❌ Refused<t t-if="sd['refused_by']"> by <t t-esc="sd['refused_by']"/></t><t t-if="sd['refused_at']"> · <t t-esc="sd['refused_at']"/></t></div>
+                        <div t-elif="sd['status'] == 'retyped'" class="mini" style="margin-top:4px;">🔁 Re-typed<t t-if="sd['refused_by']"> by <t t-esc="sd['refused_by']"/></t></div>
+                        <div t-elif="sd['status'] == 'replaced'" class="mini" style="margin-top:4px;">🔁 Replaced by a later send</div>
+                        <div t-elif="sd['status'] == 'accepted'" style="color:#15803d;font-weight:700;margin-top:4px;">✅ Accepted</div>
+                        <div t-else="" class="mini" style="margin-top:4px;">⏳ Waiting for decision</div>
+                        <div t-if="sd['reason']" class="txt"><b>Reason:</b> <t t-esc="sd['reason']"/></div>
+                    </div>
+                </div>
+
                 <div t-if="client_updates or legacy" class="sec">
                     <h3>📎 From the client (<t t-esc="sum(len(c['files']) for c in client_updates) or len(client_updates)"/>)</h3>
                     <!-- KPI Details of a bug / update about an OLD database requirement

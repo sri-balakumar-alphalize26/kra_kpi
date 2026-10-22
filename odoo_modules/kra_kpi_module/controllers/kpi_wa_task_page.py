@@ -154,6 +154,21 @@ class KpiWaTaskPage(http.Controller):
         if legacy:
             legacy['voice_notes'] = [f for c in client_updates for f in c['files'] if is_audio(f['name'])]
             legacy['confirmed_on'] = when(task.legacy_confirmed_on) if task.legacy_confirmed_on else ''
+        # 👤 Every time the client sent it (kra.kpi.client_sends, the web's Client
+        # tab), shown once there is more than one: who refused it and why. The
+        # files themselves are in "From the client" below.
+        sends = []
+        for s in task.client_sends():
+            at = lambda v: when(fields.Datetime.to_datetime(v)) if v else ''  # noqa: E731
+            sends.append({
+                'round': s.get('round'), 'when': at(s.get('sent_at')), 'by': s.get('sent_by') or '',
+                'name': s.get('name') or '', 'text': s.get('description') or '',
+                'files': len(s.get('files') or []), 'status': s.get('status') or '',
+                'refused_by': s.get('refused_by') or '', 'refused_at': at(s.get('refused_at')),
+                'reason': s.get('reason') or '',
+            })
+        if len(sends) < 2:
+            sends = []
         logs = [{'label': label, 'rows': router.log_rows(task, user, key)}
                 for key, label, _e in router.LOG_KINDS]
         # Under Estimate, as on the board: the original, then each extension
@@ -185,7 +200,7 @@ class KpiWaTaskPage(http.Controller):
                 'paused_reason': task.paused_reason if task.task_state == 'paused' else '',
             },
             'updates': updates, 'client_updates': client_updates,
-            'legacy': legacy,
+            'legacy': legacy, 'sends': sends,
             'manuals': manuals, 'github': github, 'logs': logs,
             'doubts': router._task_doubts(task, user),
             'chat_waiting': task.chat_waiting(),
