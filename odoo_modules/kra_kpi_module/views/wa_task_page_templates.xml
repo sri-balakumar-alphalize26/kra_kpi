@@ -218,6 +218,7 @@
                             }
                         })();
                     </script>
+                    <div t-if="locked" class="warn" style="background:var(--input); color:var(--subtle);">🔒 <t t-esc="locked"/></div>
                     <t t-if="can_add">
                         <details class="act">
                             <summary>📝 Add update</summary>
@@ -298,8 +299,35 @@
                     </details>
                 </div>
 
-                <div t-if="client_updates" class="sec">
+                <div t-if="client_updates or legacy" class="sec">
                     <h3>📎 From the client (<t t-esc="sum(len(c['files']) for c in client_updates) or len(client_updates)"/>)</h3>
+                    <!-- KPI Details of a bug / update about an OLD database requirement
+                         (kra.kpi.legacy_details). Read-only: admins fill it in Odoo / web. -->
+                    <div t-if="legacy" class="item">
+                        <div><b>KPI Details</b> · 🗄️ Old DB Requirement ·
+                            <b t-att-style="'color:#15803d' if legacy['status'] == 'confirmed' else 'color:#b45309'"
+                               t-esc="legacy['status_label']"/></div>
+                        <div t-foreach="legacy['voice_notes']" t-as="vn" style="margin-top:6px;">
+                            <div class="mini" t-esc="vn['name']"/>
+                            <audio controls="controls" preload="none" t-att-src="vn['url']" style="max-width:100%;"/>
+                        </div>
+                        <div t-if="legacy['transcript']" style="margin-top:6px;">
+                            <div class="mini">Transcript</div>
+                            <div class="txt" t-esc="legacy['transcript']"/>
+                        </div>
+                        <div t-if="legacy['note']" style="margin-top:6px;">
+                            <div class="mini">Message</div>
+                            <div class="txt" t-esc="legacy['note']"/>
+                        </div>
+                        <div class="meta" style="margin-top:6px;">Request ID:
+                            <b t-if="legacy['ref']" t-esc="legacy['ref']"/>
+                            <i t-else="">Pending — confirm with client</i></div>
+                        <div t-if="legacy['name']" class="meta">Task name: <b t-esc="legacy['name']"/></div>
+                        <div t-if="legacy['confirmed_by'] or legacy['confirmed_on']" class="meta">
+                            Confirmed by <t t-esc="legacy['confirmed_by'] or '—'"/>
+                            <t t-if="legacy['confirmed_on']"> on <t t-esc="legacy['confirmed_on']"/></t>
+                        </div>
+                    </div>
                     <div t-foreach="client_updates" t-as="u" class="item">
                         <div class="meta"><t t-esc="u['who']"/> · <t t-esc="u['when']"/></div>
                         <div class="txt" t-esc="u['text']"/>

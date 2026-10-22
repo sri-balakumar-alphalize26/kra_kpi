@@ -25,6 +25,7 @@ from odoo.http import request
 
 from .kpi_wa_approval import _render
 from .kra_api import serve_file, _guess_mime
+from ..models.kpi_legacy import is_audio
 from ..models.kpi_wa_staff_menu import STARTED_STATES
 
 _logger = logging.getLogger(__name__)
@@ -122,7 +123,10 @@ class KpiWaTaskPage(http.Controller):
         # once the task has started (page_entry checks the same on save).
         started = task.task_state in STARTED_STATES
         admin = router._is_admin(user)
-        mine = lambda owner: started and (admin or owner.id == user.id)  # noqa: E731
+        # Signed off by the client: nothing can be added, edited or deleted
+        # (admins excepted) -- kra.kpi._details_locked_for.
+        locked = task._details_locked_for(user)
+        mine = lambda owner: started and not locked and (admin or owner.id == user.id)  # noqa: E731
         updates = [{
             'id': p.id, 'can': mine(p.user_id) and not p.from_client, 'from_client': p.from_client,
             'who': p.employee_name or p.user_id.name or '', 'when': when(p.create_date),
@@ -144,6 +148,12 @@ class KpiWaTaskPage(http.Controller):
         # "Updates" (and the summary Complete accepts) is the team's work only.
         client_updates = [x for x in updates if x['from_client']]
         updates = [x for x in updates if not x['from_client']]
+        # KPI Details of a From-old-DB bug / update (read-only here). Voice notes
+        # play through this page's own token links -- the phone is not logged in.
+        legacy = task.legacy_details()
+        if legacy:
+            legacy['voice_notes'] = [f for c in client_updates for f in c['files'] if is_audio(f['name'])]
+            legacy['confirmed_on'] = when(task.legacy_confirmed_on) if task.legacy_confirmed_on else ''
         logs = [{'label': label, 'rows': router.log_rows(task, user, key)}
                 for key, label, _e in router.LOG_KINDS]
         # Under Estimate, as on the board: the original, then each extension
@@ -175,10 +185,12 @@ class KpiWaTaskPage(http.Controller):
                 'paused_reason': task.paused_reason if task.task_state == 'paused' else '',
             },
             'updates': updates, 'client_updates': client_updates,
+            'legacy': legacy,
             'manuals': manuals, 'github': github, 'logs': logs,
             'doubts': router._task_doubts(task, user),
             'started': started,
-            'can_add': task.task_state in ('in_progress', 'paused', 'partially_completed',
+            'locked': locked,
+            'can_add': not locked and task.task_state in ('in_progress', 'paused', 'partially_completed',
                                            'awaiting_client', 'completed'),
             'can_complete': task.task_state in ('in_progress', 'paused', 'hold', 'rework'),
             # ⏱️ Ask for more time: pickers instead of typing "2h 30m reason".
@@ -376,9 +388,9 @@ class KpiWaTaskPage(http.Controller):
         st, user = router.my_work_resolve(token)
         if not user:
             return request.not_found()
-        return self._send_file(kind, entry, att, set(router.my_task_ids(user)))
+        return self._send_file(kind, entry, att, set(router.my_task_ids(user)), kw.get('download'))
 
-    def _send_file(self, kind, entry, att, allowed_task_ids):
+    def _send_file(self, kind, entry, att, allowed_task_ids, download=None):
         """One file of a progress update / manual, only if its task is allowed."""
         model, field = {'progress': ('kpi.progress', 'uploaded_file'),
                         'manual': ('kpi.user.manual', 'manual_file')}.get(kind, (None, None))
@@ -400,7 +412,7 @@ class KpiWaTaskPage(http.Controller):
         # Its real type and Range support, so it opens in the View popup (and a
         # video can be seeked) instead of the phone downloading it.
         return serve_file(base64.b64decode(data), name or 'file', _guess_mime(name, mime or ''),
-                          inline=kw.get('download') not in ('1', 'true'))
+                          inline=download not in ('1', 'true'))
 
     @http.route('/kpi/wa/task/<string:token>/file', type='http', auth='public',
                 methods=['GET'], csrf=False, website=False)

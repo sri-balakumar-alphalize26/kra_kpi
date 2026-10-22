@@ -124,6 +124,43 @@
             </field>
         </record>
 
+        <!-- From old DB: a bug / update about a requirement from the OLD
+             database (models/kpi_legacy.py). Its KPI Details, as the task screen
+             shows them; saving a Request ID there also links + renumbers it. -->
+        <record id="view_kra_kpi_form_legacy_inherit" model="ir.ui.view">
+            <field name="name">kra.kpi.form.legacy.inherit</field>
+            <field name="model">kra.kpi</field>
+            <field name="inherit_id" ref="kra_kpi_module.view_kra_kpi_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//notebook" position="inside">
+                    <page string="KPI Details (Old DB)" name="page_legacy"
+                          invisible="not legacy_req_link and not is_legacy">
+                        <group>
+                            <group string="Old DB Requirement">
+                                <field name="is_legacy" readonly="1" invisible="not is_legacy"/>
+                                <field name="legacy_req_link" readonly="1"/>
+                                <field name="legacy_status" readonly="1"/>
+                                <!-- Read-only here: only the KPI Details card links + renumbers. -->
+                                <field name="legacy_req_ref" readonly="1"
+                                       help="Add it from the task screen's KPI Details card, which also links the task under it and renumbers it."/>
+                                <field name="legacy_req_name"/>
+                            </group>
+                            <group string="Confirmed">
+                                <field name="legacy_confirmed_by" readonly="1"/>
+                                <field name="legacy_confirmed_on" readonly="1"/>
+                            </group>
+                        </group>
+                        <group string="About the old requirement">
+                            <field name="legacy_note" nolabel="1" colspan="2"/>
+                        </group>
+                        <group string="Voice note transcript" invisible="not legacy_transcript">
+                            <field name="legacy_transcript" nolabel="1" colspan="2" readonly="1"/>
+                        </group>
+                    </page>
+                </xpath>
+            </field>
+        </record>
+
         <!-- ============================================================
              kpi.action.log — backend list + form view + menu.
              ACL'd to admin + owner (read-only via ir.model.access.csv).

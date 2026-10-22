@@ -89,6 +89,7 @@
                     (String(t.id) === String(keepParent || '') ? ' checked' : '') +
                     ' data-ref="' + esc(t.ref) + '" data-name="' + esc(t.name) + '"/>' +
                     '<span><span class="ref">' + esc(t.ref) + '</span>' + esc(t.name) +
+                    (t.old ? ' <b class="old-badge">Old DB</b>' : '') +
                     '<small>' + esc(t.date) + '</small></span></label>';
             }).join('');
             filterReqs();
@@ -216,6 +217,77 @@
         });
     }
 
+    // ---- 🗄️ from the old system: nothing to pick, so say what it is about ----
+    // Same rule as the server (models/kpi_legacy.py legacy_input_problem): a
+    // voice note of 5 s or more, OR a typed message of 30+ characters, OR a
+    // photo, OR a video, OR a Request ID, OR a task name. Nothing at all
+    // cannot be sent.
+    var oldChk = $('kfOld'), oldRef = $('kfOldRef'), oldName = $('kfOldName'), oldNote = $('kfOldNote');
+    function oldOn() { return !!(oldChk && oldChk.checked); }
+    function voiceSecs(f) {
+        var m = /\((\d+)m(\d{1,2})s\)/.exec(f.name || '');
+        return m ? (+m[1]) * 60 + (+m[2]) : null;
+    }
+    function isMedia(f) {
+        return /^(image|video)\//.test(f.type || '') || /\.(jpe?g|png|gif|webp|bmp|heic|heif|mp4|mov|mkv|avi|3gp|m4v)$/i.test(f.name || '');
+    }
+    function isAudio(f) {
+        if ((f.type || '').indexOf('video/') === 0) { return false; }
+        return (f.type || '').indexOf('audio/') === 0 || /\.(webm|ogg|opus|mp3|wav|m4a|aac|amr|3gp)$/i.test(f.name || '');
+    }
+    function oldProblem() {
+        if (!oldOn()) { return ''; }
+        var ref = oldRef.value.trim();
+        if (ref) { return /^REQ\s*-?\s*\d{1,9}$/i.test(ref) ? '' : 'The Request ID looks like REQ-012.'; }
+        var n = oldName.value.replace(/\s+/g, ' ').trim();
+        if (n.length >= 15 || n.split(' ').length >= 3) { return ''; }
+        if (oldNote.value.replace(/\s+/g, ' ').trim().length >= 30) { return ''; }
+        if (picked.some(function (f) { return f.size && isMedia(f); })) { return ''; }
+        var audio = picked.filter(isAudio);
+        if (audio.some(function (f) { var s = voiceSecs(f); return s === null ? f.size >= 16000 : s >= 5; })) { return ''; }
+        return audio.length ? 'The voice note is too short (5 seconds or more) — add a photo or video if you can, if not possible record again or type a message.'
+            : 'Add a photo or video of the old screen if you can — if not possible, record a voice note or type a message (or add the Request ID).';
+    }
+    function oldHint() {
+        var h = $('kfOldHint');
+        if (!h) { return; }
+        var p = oldProblem();
+        h.textContent = p || '✓ Enough to trace this — the team adds anything missing later.';
+        h.classList.toggle('good', !p);
+    }
+    function micFailed() {
+        // No microphone (or not allowed): type it instead, never stuck.
+        if (!oldOn()) { return; }
+        $('kfOldHint').textContent = "Can't use the mic — type it instead.";
+        $('kfOldHint').classList.remove('good');
+        oldNote.focus();
+    }
+    if (oldChk) {
+        var showOld = function () {
+            $('kfPick').hidden = oldOn();
+            $('kfOldBox').hidden = !oldOn();
+            if (oldOn()) {
+                var r = parent();
+                if (r) { r.checked = false; }
+            }
+            preview();
+        };
+        oldChk.addEventListener('change', showOld);
+        [oldRef, oldName, oldNote].forEach(function (el) { el.addEventListener('input', preview); });
+        oldRef.addEventListener('blur', function () {
+            var m = /^REQ\s*-?\s*(\d{1,9})$/i.exec(oldRef.value.trim());
+            if (m) { oldRef.value = 'REQ-' + ('00' + (+m[1])).slice(-Math.max(3, String(+m[1]).length)); preview(); }
+        });
+        // Photo / video first: they use the same camera inputs as the files section.
+        $('kfOldPhoto').addEventListener('click', function () { $('kfCamPhoto').click(); });
+        $('kfOldVideo').addEventListener('click', function () { $('kfCamVideo').click(); });
+        $('kfOldVoice').addEventListener('click', function () {
+            var v = $('kfVoice');
+            if (!v || v.disabled) { micFailed(); return; }
+            v.click();
+        });
+    }
+
     // ---- files -------------------------------------------------------------
     function syncFiles() {
         try {
@@ -243,6 +315,7 @@
         if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) {
             btn.disabled = true;
             msg.textContent = 'Voice recording is not available in this browser — attach an audio file instead.';
+            if ($('kfOldVoice')) { $('kfOldVoice').disabled = true; $('kfOldVoice').textContent = "🎤 Can't record here — type it below"; }
             return;
         }
         var pauseBtn = $('kfRecPause'), sendBtn = $('kfRecSend'), delBtn = $('kfRecDel'),
@@ -337,6 +410,7 @@
                 cleanupAudio();
                 modal.hidden = true;
                 msg.textContent = 'Microphone not allowed. Allow it in the browser, or attach an audio file instead.';
+                micFailed();
             });
         }
         function stopRec() {
@@ -563,7 +637,12 @@
             r.push(['Password', $('kfDPass').value ? '••••••' : '', true]);
         }
         if (KIND === 'requirement') { r.push(['Task name', name.value.trim(), true]); }
-        if (KIND === 'bug' || KIND === 'update') {
+        if ((KIND === 'bug' || KIND === 'update') && oldOn()) {
+            var oref = oldRef.value.trim(), oname = oldName.value.trim();
+            r.push(['About task', '🗄️ Old DB Requirement' + (oref || oname ? ' — ' + [oref, oname].filter(Boolean).join(' · ') : ' (details to be confirmed)'), false]);
+            r.push(['New ref', oref ? (KIND === 'bug' ? 'BUG' : 'UPT') + '### under ' + oref.toUpperCase() : (KIND === 'bug' ? 'BUG' : 'UPT') + '-### (numbered under the requirement once it is confirmed)', false]);
+            if (oldNote.value.trim()) { r.push(['About the old requirement', oldNote.value.trim(), false]); }
+        } else if (KIND === 'bug' || KIND === 'update') {
             var p = parent();
             r.push(['About task', p ? p.getAttribute('data-ref') + ' — ' + p.getAttribute('data-name') : '', true]);
             r.push(['New ref', p ? (KIND === 'bug' ? 'BUG' : 'UPT') + '### under ' + p.getAttribute('data-ref') : '', false]);
@@ -586,7 +665,7 @@
                 (empty ? 'missing' : esc(x[1])) + '</dd>';
         }).join('');
     }
-    function preview() { $('kfPreview').innerHTML = html(rows()); }
+    function preview() { $('kfPreview').innerHTML = html(rows()); oldHint(); }
     ['kfDbUrl', 'kfDUser', 'kfDPass'].forEach(function (id) {
         if ($(id)) { $(id).addEventListener('input', preview); }
     });
@@ -596,6 +675,8 @@
         var out = [];
         rows().forEach(function (x) { if (x[2] && !x[1]) { out.push(x[0]); } });
         if (KIND === 'newdb' && dbName.value.trim() && !dbNameOk) { out.push('a valid database name'); }
+        var op = oldProblem();
+        if (op) { out.push(op.charAt(0).toLowerCase() + op.slice(1).replace(/\.$/, '')); }
         var total = picked.reduce(function (s, f) { return s + f.size; }, 0);
         if (total > (B.filesMax || 52428800)) { out.push('attachments under 50 MB'); }
         return out;
@@ -604,7 +685,11 @@
     $('kfCreate').addEventListener('click', function () {
         var p = problems();
         err.hidden = !p.length;
-        if (p.length) { err.textContent = 'Please fill in: ' + p.join(', ') + '.'; return; }
+        if (p.length) {
+            err.textContent = 'Please fill in: ' + p.join(', ') + '.';
+            if (oldProblem()) { $('kfOldBox').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+            return;
+        }
         $('kfModalPreview').innerHTML = html(rows());
         agree.checked = false;
         $('kfConfirm').disabled = true;
@@ -649,6 +734,11 @@
     if (V.needed_by && $('kfNeeded')) { $('kfNeeded').value = V.needed_by; }
     (V.deliverable || []).forEach(function (code) { var c = $('kfDeliv_' + code); if (c) { c.checked = true; } });
     if (otherBox && V.deliverable_other) { otherBox.value = V.deliverable_other; }
+    if (oldChk && V.legacy_on) {
+        oldChk.checked = true;
+        oldRef.value = V.legacy_ref || ''; oldName.value = V.legacy_name || ''; oldNote.value = V.legacy_note || '';
+        $('kfPick').hidden = true; $('kfOldBox').hidden = false;
+    }
     if (otherBox && $('kfDeliv_other').checked) { otherBox.style.display = ''; }
     var only = (B.servers || []).length === 1 ? String(B.servers[0].id) : '';
     server.value = V.server_id || only;

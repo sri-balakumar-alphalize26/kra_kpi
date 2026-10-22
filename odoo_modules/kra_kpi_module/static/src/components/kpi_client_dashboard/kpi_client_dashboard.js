@@ -335,6 +335,10 @@ export class KpiClientDashboard extends Component {
                                     <span t-if="k.related_req_ref" class="badge bg-light text-dark ms-1">
                                         →<t t-esc="k.related_req_ref"/>
                                     </span>
+                                    <span t-if="k.legacy_req_link" class="badge bg-secondary ms-1"
+                                          title="About a requirement from the old database">🗄️ Old DB</span>
+                                    <span t-if="k.legacy_req_link and k.legacy_status !== 'confirmed'"
+                                          class="badge bg-warning text-dark ms-1" title="Pending — confirm with client">Pending</span>
                                 </td>
                                 <td class="fw-bold">
                                     <div t-esc="k.name"/>

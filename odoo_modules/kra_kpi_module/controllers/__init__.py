@@ -8,3 +8,4 @@ from . import kpi_wa_admin_decide
 from . import kpi_wa_task_page
 from . import kpi_wa_endday
 from . import kpi_meeting_page
+from . import kpi_legacy_api
