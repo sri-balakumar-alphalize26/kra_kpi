@@ -8,6 +8,7 @@ import { liveFromAnchor, fmtClock, secsSince, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
 import { actionsFor } from "./actions";
 import DbHandover from "./DbHandover";
+import { OldDbBadge } from "./Legacy";
 import { useTaskActions } from "./TaskActions";
 import { ClientProgress, ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList } from "./TaskExtras";
 
@@ -83,6 +84,8 @@ export default function TaskPanel({ id, onClose }) {
      the same rule from the task row. */
   const started = t ? (typeof info?.has_started === "boolean" ? info.has_started
     : STARTED_STATES.includes(t.task_state)) : false;
+  /* Signed off by the client: nothing more can be added or changed (admins excepted; the server refuses too). */
+  const locked = t?.details_locked || info?.details_locked || "";
 
   return (
     <>
@@ -139,7 +142,7 @@ export default function TaskPanel({ id, onClose }) {
                 <dt>Assignee</dt><dd>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={20} />{t.user_name}</> : <span className="mini">Unassigned</span>}</dd>
                 <dt>Client</dt><dd>{t.client_name || "—"}</dd>
                 <dt>Project</dt><dd>{meta.kra || t.project_name || "—"}</dd>
-                {t.parent_ref && <><dt>Under task</dt><dd>{t.parent_ref}</dd></>}
+                {(t.parent_ref || t.legacy_req_link) && <><dt>Under task</dt><dd>{t.parent_ref}<OldDbBadge t={t} style={t.parent_ref ? { marginLeft: 6 } : undefined} /></dd></>}
                 <dt>Type</dt><dd>{meta.kind || refPrefix(t.external_ref) || "Task"}{t.deliverable_type ? ` · ${S.taskDeliverableLabel(t)}` : ""}{t.is_self_created && !t.admin_accepted && t.requested_doc_type ? <span className="mini"> (asked: {t.requested_doc_type})</span> : null}</dd>
                 <dt>Priority</dt><dd style={{ color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)", fontWeight: 800 }}>{t.priority === "urgent" ? "▲▲ Urgent" : t.priority === "important" ? "▲ Important" : "– Regular"}{t.requested_priority && t.requested_priority !== t.priority ? <span className="mini"> (developer asked for {S.priorityLabel(t.requested_priority)})</span> : null}</dd>
                 <dt>Estimate</dt><dd style={{ height: "auto", minHeight: 24, flexWrap: "wrap" }}>{fmtHM(est)}{t.estimate_extension_count > 0 && <span className="mini"> · extended {t.estimate_extension_count}×{t.estimate_extended_by_name ? ` by ${t.estimate_extended_by_name}` : ""} {t.estimate_extend_reason ? `— ${t.estimate_extend_reason}` : ""}</span>}</dd>
@@ -168,7 +171,8 @@ export default function TaskPanel({ id, onClose }) {
               {tab === "updates" && (
                 <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {clientProgress.length > 0 && <ClientProgress progress={clientProgress} />}
-                  {lane !== "completed" && (started ? <ProgressComposer kpiId={id} d={d} onChanged={changed} /> : <NotStartedNote />)}
+                  {locked ? <div className="callout" style={{ background: "var(--hover)", borderColor: "var(--border)" }}>🔒 {locked}</div>
+                    : lane !== "completed" && (started ? <ProgressComposer kpiId={id} d={d} onChanged={changed} /> : <NotStartedNote />)}
                   {/* Questions go to the manager, never the client: the assignee (and
                       admins) can ask; everyone on the task sees the answers. */}
                   <ManagerQuestions key={`mq${id}`} kpiId={id} canAsk={!!(meta.is_assignee || meta.is_manager) && lane !== "completed"} />
@@ -176,7 +180,7 @@ export default function TaskPanel({ id, onClose }) {
                   {!teamProgress.length && <span className="mini">No updates yet.</span>}
                 </div>
               )}
-              {tab === "files" && <FilesTab kpiId={id} d={d} canAdd={started} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
+              {tab === "files" && <FilesTab kpiId={id} d={d} canAdd={started && !locked} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
               {tab === "history" && <HistoryTab key={id} kpiId={id} d={d} />}
             </>
           )}

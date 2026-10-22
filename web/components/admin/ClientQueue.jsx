@@ -6,6 +6,7 @@ import { invalidate } from "@/lib/api";
 import * as A from "@/lib/services/admin";
 import { PRIORITIES, DELIVERABLES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue, hasOtherDeliverable, taskDeliverableLabel } from "@/lib/services/kpiActions";
 import OtherTypeInput from "@/components/task/OtherTypeInput";
+import { OldDbBadge } from "@/components/task/Legacy";
 import { since } from "@/lib/liveTime";
 
 /* Requests from clients waiting for an estimate and a developer, grouped by
@@ -85,6 +86,7 @@ export default function ClientQueue() {
     <>
       <PageHeader crumbs={[{ label: "Work" }, { label: "Client task queue" }]} title="Client task queue" meta="Requests from clients, waiting for an estimate and a developer">
         {queue.data && !queueErr && <span className="chip">{items.length} pending</span>}
+        <a className="btn btn-ghost" href="/queue/needs-linking">Needs linking</a>
         <a className="btn btn-ghost" href="/settings/pre-approvals">Pre-approvals</a>
       </PageHeader>
       <div className="page">
@@ -180,7 +182,7 @@ function GroupRows({ g, users, edit, setEdit, onSave, onDiscard, onDecline, busy
         return (
           <tr key={t.id}>
             <td><span className="ref">{t.external_ref || t.ref || "—"}</span></td>
-            <td style={{ whiteSpace: "normal" }}><b>{t.name}</b>{t.related_req_ref && <span className="mini"> · for {t.related_req_ref}</span>}<Meta t={t} /></td>
+            <td style={{ whiteSpace: "normal" }}><b>{t.name}</b>{t.related_req_ref && <span className="mini"> · for {t.related_req_ref}</span>}<OldDbBadge t={t} style={{ marginLeft: 6 }} /><Meta t={t} /></td>
             <td>{t.estimate_hours || t.estimate_minutes ? `${t.estimate_hours || 0}h ${t.estimate_minutes || 0}m` : <span className="mini">not set</span>}</td>
             <td>{t.priority ? <span style={{ fontWeight: 800, color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)" }}>{t.priority}</span> : <span className="mini">—</span>}</td>
             <td>{KIND_LABEL[t.kind] || "—"}</td>

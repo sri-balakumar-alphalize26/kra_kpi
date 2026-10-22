@@ -7,6 +7,7 @@ import * as A from "@/lib/services/admin";
 import IntakeNav from "./IntakeNav";
 import { PRIORITIES, DELIVERABLES, DELIVERABLE_OTHER_REQUIRED, deliverableLabel, deliverableOtherValue } from "@/lib/services/kpiActions";
 import OtherTypeInput from "@/components/task/OtherTypeInput";
+import * as L from "@/lib/services/legacy";
 
 /* Upload requirements / updates / bug reports (Odoo's kpi_requirements_upload):
    destination → source (a source document attached to every task, plus an
@@ -15,10 +16,18 @@ import OtherTypeInput from "@/components/task/OtherTypeInput";
    bulk path: in client mode (Odoo's is_client_only) hours, minutes, priority
    and developer are hidden, and the type (Module / App / EXE) starts blank and
    must be chosen. Update / Bug rows can name the requirement they belong to
-   ("Linked Req"). */
+   ("Linked Req"), or, ticked "Old DB", one from the old database: its Request
+   ID, its name or a message about it (no voice notes here, so one of those). */
 const SEL = { border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" };
 const CELL = { border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" };
 const SOURCE_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt";
+const OLD_MISSING = "Add the old requirement's Request ID, its name or a message about it.";
+/* '' when an Old DB row says enough (the server's rule, without files). */
+const oldProblem = (r) => {
+  if (!r.legacy_on) return "";
+  const p = L.legacyProblem({ ref: r.legacy_ref, name: r.legacy_name, note: r.legacy_note, files: [] });
+  return p === L.LEGACY_MISSING ? OLD_MISSING : p;
+};
 
 export default function Intake({ docType = "requirement", portal = false }) {
   const { me } = useMe();
@@ -45,7 +54,7 @@ export default function Intake({ docType = "requirement", portal = false }) {
   useEffect(() => { if (!client) { setKras([]); return; } A.getSubKras(+client).then((k) => { setKras(k); setKra(k[0] ? String(k[0].id) : ""); }).catch(() => setKras([])); }, [client]);
   useEffect(() => { A.peekNextRef(type).then(setNextRef).catch(() => {}); }, [type]);
 
-  const blank = () => ({ name: "", external_ref: "", related_req_ref: "", estimate_hours: staff ? 1 : 0, estimate_minutes: 0, priority: defPri, deliverable_type: defDeliv, deliverable_other: "", primary_user_id: defUser, description: "" });
+  const blank = () => ({ name: "", external_ref: "", related_req_ref: "", legacy_on: false, legacy_ref: "", legacy_name: "", legacy_note: "", estimate_hours: staff ? 1 : 0, estimate_minutes: 0, priority: defPri, deliverable_type: defDeliv, deliverable_other: "", primary_user_id: defUser, description: "" });
   /* A row's own "Other" text, else the default's when the default is Other too. */
   const rowOther = (r) => deliverableOtherValue(r.deliverable_type || defDeliv, (r.deliverable_other || "").trim() || (defDeliv === "other" ? defDelivOther : ""));
   const defOther = deliverableOtherValue(defDeliv, defDelivOther);
@@ -98,9 +107,11 @@ export default function Intake({ docType = "requirement", portal = false }) {
     if (defDeliv === "other" && !defOther) { flags.err(DELIVERABLE_OTHER_REQUIRED); return; }
     const noOther = valid.filter((r) => (r.deliverable_type || defDeliv) === "other" && !rowOther(r));
     if (noOther.length) { flags.err(`${DELIVERABLE_OTHER_REQUIRED} Missing for: ${noOther.map((r) => r.name.trim()).join(", ")}`); return; }
+    const oldBad = linked ? valid.filter((r) => oldProblem(r)) : [];
+    if (oldBad.length) { flags.err(`Old DB: ${oldProblem(oldBad[0])} Missing for: ${oldBad.map((r) => r.name.trim()).join(", ")}`); return; }
     setBusy("create");
     try {
-      const tasks = valid.map((r) => { const row = { ...r, deliverable_other: rowOther(r) }; return staff ? A.buildTaskRow(row) : { ...A.buildTaskRow(row), estimate_hours: 0, estimate_minutes: 0, priority: "regular", primary_user_id: false }; });
+      const tasks = valid.map((r) => { const row = { ...r, deliverable_other: rowOther(r), legacy_on: linked && !!r.legacy_on }; return staff ? A.buildTaskRow(row) : { ...A.buildTaskRow(row), estimate_hours: 0, estimate_minutes: 0, priority: "regular", primary_user_id: false }; });
       const r = await A.createBulkTasks({ subKraId: +kra, docType: type, tasks, deliverableType: defDeliv, deliverableOther: defOther, fileData: source?.b64 || "", fileName: source?.name || "", requirementVersion: version });
       A.assertOk(r, "Task creation failed.");
       flags.ok(`${r.created_count || valid.length} task${(r.created_count || valid.length) === 1 ? "" : "s"} created.`);
@@ -161,7 +172,16 @@ export default function Intake({ docType = "requirement", portal = false }) {
                 {rows.map((r, i) => (
                   <tr key={i}>
                     <td><span className="ref" title="Assigned when created; the number can move if someone else adds tasks first">{refOf(i)}</span></td>
-                    {linked && <td><span className="input" style={{ height: 32, width: 96 }}><input value={r.related_req_ref || ""} onChange={(e) => upd(i, { related_req_ref: e.target.value })} placeholder="REQ-001" style={CELL} /></span></td>}
+                    {linked && <td style={{ verticalAlign: "top" }}>
+                      <label className="mini" style={{ display: "flex", gap: 4, alignItems: "center", cursor: "pointer", marginBottom: 4, whiteSpace: "nowrap" }} title="The requirement is in the old database, not in this one"><input type="checkbox" checked={!!r.legacy_on} onChange={(e) => upd(i, { legacy_on: e.target.checked })} />🗄️ Old DB</label>
+                      {r.legacy_on ? (
+                        <span style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 170 }} title={oldProblem(r) || L.ENOUGH}>
+                          <span className="input" style={{ height: 32, borderColor: r.name?.trim() && oldProblem(r) ? "var(--danger)" : undefined }}><input value={r.legacy_ref || ""} aria-label="Old Request ID" onChange={(e) => upd(i, { legacy_ref: e.target.value })} onBlur={(e) => upd(i, { legacy_ref: L.normalizeRef(e.target.value) })} placeholder="Request ID, e.g. REQ-012" style={CELL} /></span>
+                          <span className="input" style={{ height: 32 }}><input value={r.legacy_name || ""} aria-label="Old task name" onChange={(e) => upd(i, { legacy_name: e.target.value })} placeholder="Task name" style={CELL} /></span>
+                          <span className="input ta" style={{ height: 56 }}><textarea value={r.legacy_note || ""} aria-label="About the old requirement" onChange={(e) => upd(i, { legacy_note: e.target.value })} placeholder="Message about it" style={{ ...CELL, resize: "none", height: "100%" }} /></span>
+                        </span>
+                      ) : <span className="input" style={{ height: 32, width: 96 }}><input value={r.related_req_ref || ""} onChange={(e) => upd(i, { related_req_ref: e.target.value })} placeholder="REQ-001" style={CELL} /></span>}
+                    </td>}
                     <td><span className="input" style={{ height: 32 }}><input value={r.name} onChange={(e) => upd(i, { name: e.target.value })} placeholder="What needs doing" style={CELL} /></span></td>
                     {staff && <>
                       <td><span className="input" style={{ height: 32, width: 56 }}><input type="number" min="0" value={r.estimate_hours} onChange={(e) => upd(i, { estimate_hours: e.target.value })} style={CELL} /></span></td>

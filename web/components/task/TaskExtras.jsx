@@ -12,6 +12,7 @@ import { resolveGithubLink } from "@/lib/githubLink";
 import { fmtBytes, progressLine, rateTracker } from "@/lib/uploadRate";
 import * as S from "@/lib/services/kpiActions";
 import * as P from "@/lib/services/approvals";
+import { LegacyCard, useLegacy } from "./Legacy";
 
 const TA = { border: 0, background: "none", outline: 0, resize: "none", width: "100%", height: "100%", font: "inherit", color: "inherit" };
 const CHIP = { background: "var(--hover)", color: "var(--navy)", textDecoration: "none", maxWidth: "100%" };
@@ -633,6 +634,9 @@ export function FilesTab({ kpiId, d, canAdd = true, canManageGithub, onChanged }
      apart from what the team attached to its updates. */
   const clientFiles = (d.files || []).filter((f) => f.from_client);
   const teamFiles = (d.files || []).filter((f) => !f.from_client);
+  /* A bug / update about an old-DB requirement: its KPI Details card sits in
+     the same block, shown even when the client attached no files. */
+  const [legacy, reloadLegacy] = useLegacy(kpiId);
   const fileRow = (f) => (
     <div key={`f${f.id}`} className="kv" style={{ padding: "6px 0" }}>
       <FileBadge kind={fileKind(f.file_name)} />
@@ -642,9 +646,10 @@ export function FilesTab({ kpiId, d, canAdd = true, canManageGithub, onChanged }
   );
   return (
     <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {clientFiles.length > 0 && (
+      {(clientFiles.length > 0 || legacy?.legacy) && (
         <div>
-          <h3>📎 From the client · {clientFiles.length}</h3>
+          <h3>📎 From the client{clientFiles.length ? ` · ${clientFiles.length}` : ""}</h3>
+          {legacy?.legacy && <LegacyCard kpiId={kpiId} res={legacy} onSaved={() => { reloadLegacy(); onChanged?.(); }} />}
           {clientFiles.map(fileRow)}
         </div>
       )}

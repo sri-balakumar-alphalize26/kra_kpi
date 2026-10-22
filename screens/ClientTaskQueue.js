@@ -30,6 +30,7 @@ import {
   DELIVERABLE_TYPES, deliverableLabel, needsOtherText, missingOtherText,
   DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER, DELIVERABLE_OTHER_REQUIRED_MSG,
 } from '../utils/deliverableType';
+import { legacyBadge } from '../utils/legacyReq';
 
 const log = createLogger('ClientTaskQueue');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -418,6 +419,7 @@ function TaskForm({ r, users, busy, patch, setPicker, onSave, onPublish, onDisca
   const reqLabel = r.related_req_ref
     ? ((r.req_options || []).find((o) => o.ref === r.related_req_ref) || {}).label || r.related_req_ref
     : '';
+  const oldDb = legacyBadge(r);
   return (
     <View style={s.form}>
       {/* The client turned this developer down — lead with it. */}
@@ -473,6 +475,14 @@ function TaskForm({ r, users, busy, patch, setPicker, onSave, onPublish, onDisca
         <View style={s.half}>
           <Text style={s.lbl}>Linked Req</Text>
           <Selector value={reqLabel} placeholder="— none —" onPress={() => setPicker({ kind: 'req', id: r.id })} />
+          {/* Raised "from the old system": the requirement lives in the old
+              database — Pending until its Request ID is confirmed with the client. */}
+          {!!oldDb && (
+            <View style={s.oldRow}>
+              <View style={s.oldTag}><Text style={s.oldTagTxt}>{oldDb.label}</Text></View>
+              {oldDb.pending && <View style={[s.oldTag, s.oldTagWait]}><Text style={s.oldTagTxt}>Pending</Text></View>}
+            </View>
+          )}
         </View>
       </View>
 
@@ -750,6 +760,10 @@ const s = StyleSheet.create({
   split: { flexDirection: 'row', gap: 10 },
   half: { flex: 1 },
   lbl: { fontSize: 11.5, fontWeight: '800', color: COLORS.muted, marginBottom: 5, marginTop: 11 },
+  oldRow: { flexDirection: 'row', gap: 5, marginTop: 5 },
+  oldTag: { backgroundColor: COLORS.amberBg, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  oldTagWait: { backgroundColor: '#FFF7ED' },
+  oldTagTxt: { fontSize: 11, fontWeight: '800', color: '#92400E' },
   req: { color: COLORS.red },
   input: {
     backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E7ECF3', borderRadius: 10,

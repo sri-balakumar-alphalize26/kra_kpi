@@ -77,6 +77,12 @@
           "resizeMode": "contain",
           "backgroundColor": "#EBF1FC"
         }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone to record voice notes."
+        }
       ]
     ],
     "extra": {

@@ -6,6 +6,7 @@ import { serverNow } from "@/lib/api";
 import { deadlinePassed, estimateSeconds, fmtHM, isFreshTask, laneForTask, PAUSED_STATES, priorityLabel, refPrefix, sinceResume, taskDeliverableLabel, TYPE_TILE } from "@/lib/services/kpiActions";
 import { liveFromAnchor, fmtClock, secsSince, gateLabel, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
+import { OldDbBadge } from "./Legacy";
 
 const SETTLED = ["completed", "awaiting_client", "partially_completed"];
 
@@ -93,6 +94,7 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
       <div className="row">
         <span className="key" style={t.parent_ref ? { fontSize: "0.85em" } : undefined} title={t.parent_ref ? `Under ${t.parent_ref}` : undefined}><span className="type" style={{ background: tileColor }}>{tileLetter}</span>{t.parent_ref ? "↳ " : ""}{t.external_ref || `#${t.id}`}</span>
         <span className="pri" style={{ color: pri[1] }} title={pri[2]}><Icon n={pri[0]} size={16} /></span>
+        <OldDbBadge t={t} />
         {t.progress_count > 0 && <span className="mini" title={`${t.progress_count} progress update${t.progress_count === 1 ? "" : "s"}`}><Icon n="doc" size={12} />{t.progress_count}</span>}
         <LiveTick active={!!running} fn={(n) => {
           const spent = running ? liveFromAnchor(t.timer_start_datetime, t.timer_total_seconds, n) : (t.timer_total_seconds || 0);

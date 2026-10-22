@@ -1,13 +1,15 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button, Field, Icon, Input, Modal, PageHeader, useFlags, Select } from "@/components/ui";
+import { Button, Field, Icon, Input, Lozenge, Modal, PageHeader, useFlags, Select } from "@/components/ui";
 import * as P from "@/lib/services/portal";
 import { fileToBase64, humanSize } from "@/lib/services/admin";
 import { ymd } from "@/lib/services/reports";
 import { DELIVERABLES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue } from "@/lib/services/kpiActions";
 import OtherTypeInput from "@/components/task/OtherTypeInput";
+import VoiceRecorder from "@/components/task/VoiceRecorder";
+import * as L from "@/lib/services/legacy";
 
 /* Raise one request (requirement / update / bug) with needed-by date and
    attachments → /kpi_client_portal/add_task. Bulk upload lives in Intake. */
@@ -32,7 +34,26 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
   const [parents, setParents] = useState(null); const [parentId, setParentId] = useState(""); const [parentQ, setParentQ] = useState("");
   /* "Are you sure all details are accurate?" — ticked before anything is sent. */
   const [confirming, setConfirming] = useState(false); const [agreed, setAgreed] = useState(false);
+  /* 🗄️ From the old system: the requirement is not in this list, so the request
+     says what it is about instead: a photo / video of the old screen, a voice
+     note, a message, its Request ID or its name (any ONE, lib/services/legacy). */
+  const [legacyOn, setLegacyOn] = useState(false);
+  const [legacyRef, setLegacyRef] = useState(""); const [legacyName, setLegacyName] = useState(""); const [legacyNote, setLegacyNote] = useState("");
+  const [micMsg, setMicMsg] = useState(""); /* "Can't use the mic", until the next change */
+  const noteRef = useRef(null);
   const child = kind === "bug" || kind === "update";
+  const oldDb = child && legacyOn;
+  const problem = oldDb ? L.legacyProblem({ ref: legacyRef, name: legacyName, note: legacyNote, files }) : "";
+  useEffect(() => { setMicMsg(""); }, [legacyRef, legacyName, legacyNote, files]);
+  const micFailed = () => { setMicMsg(L.MIC_FAILED); noteRef.current?.focus(); };
+  /* Camera files all arrive as image.jpg / video.mp4: give each its own name. */
+  const addShot = (e, isVideo) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f) return;
+    const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, "");
+    const ext = (f.name.match(/\.[A-Za-z0-9]+$/) || [isVideo ? ".mp4" : ".jpg"])[0];
+    setFiles((fs) => [...fs, new File([f], `${isVideo ? "Video" : "Photo"} ${stamp}${ext}`, { type: f.type })]);
+  };
   useEffect(() => { P.fetchClientProjects().then((p) => { setProjects(p); if (p[0]) setProject(String(p[0].id)); }).catch((e) => flags.err(e.message)); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!child || !project) { setParents(null); return; }
@@ -50,7 +71,8 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
     e.preventDefault();
     if (!name.trim()) { flags.err("Give the request a title."); return; }
     if (!project) { flags.err("Pick a project."); return; }
-    if (child && !parentId) { flags.err("Pick the task this is about."); return; }
+    if (child && !legacyOn && !parentId) { flags.err("Pick the task this is about, or tick “It's from the old system”."); return; }
+    if (problem) { flags.err(problem); return; }
     if (!child && !deliverable) { flags.err("Please choose a type — Module, App, EXE or Other."); return; }
     if (!child && deliverable === "other" && !otherText) { flags.err(DELIVERABLE_OTHER_REQUIRED); return; }
     if (total > MAX_TOTAL) { flags.err("Attachments must be under 25 MB in total."); return; }
@@ -62,7 +84,8 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
     try {
       const attachments = [];
       for (const f of files) attachments.push({ name: f.name, data_b64: await fileToBase64(f), mimetype: f.type || "application/octet-stream" });
-      const r = await P.addClientTask({ subKraId: +project, kind, name: name.trim(), description: desc.trim(), priority, deliverableType: child ? "" : deliverable, deliverableOther: child ? "" : otherText, neededBy: needed, attachments, parentId: child ? +parentId : 0 });
+      const r = await P.addClientTask({ subKraId: +project, kind, name: name.trim(), description: desc.trim(), priority, deliverableType: child ? "" : deliverable, deliverableOther: child ? "" : otherText, neededBy: needed, attachments, parentId: child && !legacyOn ? +parentId : 0,
+        legacyOn: oldDb, legacyRef: legacyRef.trim(), legacyName: legacyName.trim(), legacyNote: legacyNote.trim() });
       P.assertOk(r, "Could not send the request.");
       /* add_task answers {kpi_id, name, needed_by, attachment_count}. The new task
          is not admin-accepted yet, and the portal lists only accepted tasks, so
@@ -72,7 +95,7 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
       setSent({ name: r.name || name.trim(), neededBy: r.needed_by || "", files: r.attachment_count || 0 });
     } catch (ex) { flags.err(ex.message); } finally { setBusy(false); }
   };
-  const another = () => { setSent(null); setParentId(""); setParentQ(""); setName(""); setDesc(""); setNeeded(""); setFiles([]); setPriority("regular"); setDeliverable(""); setDeliverableOther(""); };
+  const another = () => { setSent(null); setParentId(""); setParentQ(""); setName(""); setDesc(""); setNeeded(""); setFiles([]); setPriority("regular"); setDeliverable(""); setDeliverableOther(""); setLegacyOn(false); setLegacyRef(""); setLegacyName(""); setLegacyNote(""); };
 
   if (sent) return (
     <>
@@ -105,20 +128,46 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
             <Field label="How urgent is it?"><span className="input"><Select value={priority} onChange={(e) => setPriority(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="regular">Normal</option><option value="important">Important</option><option value="urgent">Urgent</option></Select></span></Field>
           </div>
           {child && (
-            <Field label="Which task is it about?" required hint="Newest first. The new request is numbered under it, e.g. BUG001-REQ-012.">
-              <Input id="pnr-parent-q" icon="search" value={parentQ} onChange={(e) => setParentQ(e.target.value)} placeholder="Search by number or name" />
-              <div className="parent-list" role="radiogroup" aria-label="Task it is about">
-                {parents === null && <span className="mini">Loading tasks…</span>}
-                {parents && !parents.length && <span className="mini">This project has no requirements yet — send a New requirement instead.</span>}
-                {parents && parents.length > 0 && !shownParents.length && <span className="mini">No task matches that search.</span>}
-                {shownParents.map((t) => (
-                  <label key={t.id} className={String(t.id) === parentId ? "on" : ""}>
-                    <input type="radio" name="parent" value={t.id} checked={String(t.id) === parentId} onChange={() => setParentId(String(t.id))} />
-                    <span><b>{t.ref}</b> {t.name}<small>{t.date}{t.db ? ` · ${t.db}` : ""}</small></span>
-                  </label>
-                ))}
+            <>
+              {!legacyOn && (
+                <Field label="Which task is it about?" required hint="Newest first. The new request is numbered under it, e.g. BUG001-REQ-012.">
+                  <Input id="pnr-parent-q" icon="search" value={parentQ} onChange={(e) => setParentQ(e.target.value)} placeholder="Search by number or name" />
+                  <div className="parent-list" role="radiogroup" aria-label="Task it is about">
+                    {parents === null && <span className="mini">Loading tasks…</span>}
+                    {parents && !parents.length && <span className="mini">This project has no requirements yet — tick “It's from the old system” below, or send a New requirement.</span>}
+                    {parents && parents.length > 0 && !shownParents.length && <span className="mini">No task matches that search.</span>}
+                    {shownParents.map((t) => (
+                      <label key={t.id} className={String(t.id) === parentId ? "on" : ""}>
+                        <input type="radio" name="parent" value={t.id} checked={String(t.id) === parentId} onChange={() => setParentId(String(t.id))} />
+                        <span><b>{t.ref}</b> {t.name}{t.old && <Lozenge tone="review" style={{ textTransform: "none", marginLeft: 6 }}>Old DB</Lozenge>}<small>{t.date}{t.db ? ` · ${t.db}` : ""}</small></span>
+                      </label>
+                    ))}
+                  </div>
+                </Field>
+              )}
+              {/* Its own label, outside the Field: a click anywhere in the list must not tick it. */}
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700, cursor: "pointer" }}>
+                <input id="pnr-old" type="checkbox" checked={legacyOn} onChange={(e) => { setLegacyOn(e.target.checked); if (e.target.checked) setParentId(""); }} />
+                <span>🗄️ It&apos;s from the old system — not in this list</span>
+              </label>
+            </>
+          )}
+          {oldDb && (
+            <div id="pnr-old-box" className="cardbox" style={{ gap: 10, background: "var(--lz-review-bg)", borderColor: "var(--lz-review)" }}>
+              <span><Lozenge tone="review" style={{ textTransform: "none" }}>🗄️ Old DB Requirement</Lozenge></span>
+              <span className="mini">{L.BEST_HINT}</span>
+              <div className="pillset" style={{ flexWrap: "wrap" }}>
+                <label className="btn btn-primary" style={{ cursor: "pointer" }}>📷 Photo<input type="file" accept="image/*" capture="environment" hidden onChange={(e) => addShot(e, false)} /></label>
+                <label className="btn btn-primary" style={{ cursor: "pointer" }}>🎥 Video<input type="file" accept="video/*" capture="environment" hidden onChange={(e) => addShot(e, true)} /></label>
+                <VoiceRecorder onAttach={(f) => setFiles((fs) => [...fs, f])} onMicFailed={micFailed} />
               </div>
-            </Field>
+              <div className="grid2">
+                <Field label="Request ID (optional)"><Input value={legacyRef} onChange={(e) => setLegacyRef(e.target.value)} onBlur={() => setLegacyRef((v) => L.normalizeRef(v))} placeholder="REQ-012" /></Field>
+                <Field label="Task name (optional)"><Input value={legacyName} onChange={(e) => setLegacyName(e.target.value)} placeholder="Its name in the old system" /></Field>
+              </div>
+              <Field label="Message"><span className="input ta" style={{ height: 90 }}><textarea ref={noteRef} value={legacyNote} onChange={(e) => setLegacyNote(e.target.value)} placeholder="Which screen, what it does today, what is wrong or should change" style={{ border: 0, background: "none", outline: 0, resize: "none", width: "100%", height: "100%", font: "inherit", color: "inherit" }} /></span></Field>
+              <small role="status" style={{ fontSize: 12.5, fontWeight: 700, color: micMsg || problem ? "var(--danger)" : "var(--tint-green)" }}>{micMsg || problem || L.ENOUGH}</small>
+            </div>
           )}
           <div className="grid2" style={child ? undefined : { gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)" }}>
             <Field label="Title" required><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === "bug" ? "What is broken" : "What you need"} autoFocus /></Field>
@@ -131,7 +180,7 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
             <Field label="Attachments (optional)"><label className="dropzone" style={{ padding: 12, cursor: "pointer" }}><b>Add screenshots or files</b>up to 25 MB in total · {files.length ? `${files.length} selected · ${humanSize(total)}` : "none yet"}<input type="file" multiple hidden onChange={addFiles} /></label></Field>
           </div>
           {files.length > 0 && <div className="pillset">{files.map((f, i) => <span key={i} className="chip-sm" style={{ background: "var(--hover)", color: "var(--navy)" }}><Icon n="paperclip" size={13} />{f.name} · {humanSize(f.size)}<button type="button" className="icon-btn" style={{ width: 20, height: 20 }} aria-label="Remove" onClick={() => setFiles((fs) => fs.filter((_, j) => j !== i))}><Icon n="x" size={12} /></button></span>)}</div>}
-          <div className="row"><Button kind="primary" size="lg" type="submit" busy={busy} style={{ padding: "0 24px" }}>Send request</Button><span className="mini">You'll get a WhatsApp message when it's estimated.</span></div>
+          <div className="row"><Button kind="primary" size="lg" type="submit" busy={busy} disabled={!!problem} title={problem || undefined} style={{ padding: "0 24px" }}>Send request</Button><span className="mini">You'll get a WhatsApp message when it's estimated.</span></div>
         </form>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div className="cardbox"><h2>Have a list?</h2><p className="mini" style={{ margin: 0 }}>Upload an XLSX or CSV with many requests at once; each becomes a task.</p><Link className="btn" href="/portal/requests/bulk" style={{ alignSelf: "flex-start" }}>Upload a list</Link></div>
@@ -142,7 +191,7 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
       </div>
       <Modal open={confirming} onClose={() => !busy && setConfirming(false)} title="Send this request?" footer={<><Button kind="ghost" onClick={() => setConfirming(false)} disabled={busy}>Back</Button><Button kind="primary" busy={busy} disabled={!agreed} onClick={send}>Confirm</Button></>}>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <span><b>{name.trim()}</b>{child && parentId ? <span className="mini"> · about {(parents || []).find((t) => String(t.id) === parentId)?.ref}</span> : null}</span>
+          <span><b>{name.trim()}</b>{oldDb ? <span className="mini"> · about 🗄️ an Old DB requirement{legacyRef.trim() ? ` (${legacyRef.trim()})` : ""}</span> : child && parentId ? <span className="mini"> · about {(parents || []).find((t) => String(t.id) === parentId)?.ref}</span> : null}</span>
           <span className="mini">{TYPES.find((x) => x[0] === kind)?.[1]} · {projects.find((p) => String(p.id) === project)?.name || ""}{files.length ? ` · ${files.length} file${files.length === 1 ? "" : "s"}` : ""}</span>
           <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontWeight: 700, cursor: "pointer" }}>
             <input id="pnr-agree" type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={{ marginTop: 3 }} />

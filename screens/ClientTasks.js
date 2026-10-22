@@ -30,6 +30,7 @@ import * as Sharing from 'expo-sharing';
 import { fetchPreApprovals, decidePreApproval, holdPreApproval, submitClientSignoff, submitClientRejection } from '../services/preApproval';
 import { REJECT_REASONS } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
+import { legacyBadge } from '../utils/legacyReq';
 
 const log = createLogger('ClientTasks');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -791,7 +792,15 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 ) : null}
                 <DRow label="Priority" value={PRIO_LABEL[detail?.priority] || '—'} />
                 {detail?.deadline ? <DRow label="Deadline" value={detail.deadline} /> : null}
-                {detail?.related_req_ref ? <DRow label="Linked to" value={detail.related_req_ref} /> : null}
+                {/* Raised "from the old system": the requirement lives in the old
+                    database, Pending until its Request ID is confirmed with you. */}
+                {legacyBadge(detail) ? (
+                  <DRow
+                    label="Linked to"
+                    value={[detail.related_req_ref, legacyBadge(detail).label, legacyBadge(detail).pending ? 'Pending' : '']
+                      .filter(Boolean).join(' · ')}
+                  />
+                ) : detail?.related_req_ref ? <DRow label="Linked to" value={detail.related_req_ref} /> : null}
                 {detail?.delivery_version ? <DRow label="Version" value={detail.delivery_version} /> : null}
                 {detail?.completion_date ? <DRow label="Completed on" value={detail.completion_date} /> : null}
 

@@ -6,6 +6,7 @@ import { useResource } from "@/lib/useFetch";
 import { invalidate } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import * as P from "@/lib/services/portal";
+import { LegacyBlock, OldDbBadge } from "@/components/task/Legacy";
 import { BulkSignOff, CertificatePreview, SignatureCard, SignatureFields, useSignature } from "./SignOff";
 
 /* The client's tasks: tabs, table, and a right-side sheet to approve the
@@ -126,7 +127,7 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
                   return (
                     <tr key={k.id} className={focusId === k.id ? "sel" : ""} style={{ cursor: "pointer" }} onClick={() => open(k)}>
                       <td onClick={(e) => e.stopPropagation()}>{isSign && <input type="checkbox" aria-label={`Select ${k.external_ref || k.name}`} checked={picked.has(k.id)} onChange={() => togglePick(k.id)} />}</td>
-                      <td><span className="ref">{k.external_ref || `#${k.id}`}</span></td>
+                      <td><span className="ref">{k.external_ref || `#${k.id}`}</span><OldDbBadge t={k} style={{ marginLeft: 6 }} /></td>
                       <td><b>{k.name}</b></td><td>{k.project_name || "—"}</td>
                       <td><Lozenge tone={tone}>{lbl}</Lozenge></td>
                       <td><span className="prog"><i style={{ width: `${pct}%`, background: k.task_state === "completed" ? "var(--pri-regular)" : isSign ? "var(--tint-violet)" : "var(--brand)" }} /></span></td>
@@ -161,7 +162,7 @@ function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
     <>
       <div className="panel-scrim" onClick={onClose} />
       <aside className="sheet" style={{ width: "min(600px, 100vw)", top: 56, zIndex: 46, overflowY: "auto" }} aria-label={k.external_ref || "Request"}>
-        <div className="row"><span className="ref" style={{ fontSize: 13 }}>{k.external_ref || `#${k.id}`}</span><Lozenge tone={tone}>{lbl}</Lozenge><IconButton icon="x" label="Close" style={{ marginLeft: "auto" }} onClick={onClose} /></div>
+        <div className="row"><span className="ref" style={{ fontSize: 13 }}>{k.external_ref || `#${k.id}`}</span><Lozenge tone={tone}>{lbl}</Lozenge><OldDbBadge t={k} /><IconButton icon="x" label="Close" style={{ marginLeft: "auto" }} onClick={onClose} /></div>
         <h2>{k.name}</h2>
         {k.description && <p style={{ margin: 0, fontSize: 13.5, lineHeight: "20px", whiteSpace: "pre-wrap" }}>{k.description}</p>}
         <dl className="details">
@@ -173,6 +174,7 @@ function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
           {k.completion_date && <><dt>Completed</dt><dd>{k.completion_date}</dd></>}
           {k.client_signed && <><dt>Signed off</dt><dd>by you{k.has_signed_certificate ? <> · <a href={P.certificateHref(k.id)}>certificate</a></> : null}</dd></>}
         </dl>
+        {k.legacy_req_link && <LegacyBlock kpiId={k.id} />}
 
         {pre && mode === "view" && (
           <div className="cardbox" style={{ background: "var(--lz-review-bg)", borderColor: "var(--tint-violet-border)", gap: 8 }}>

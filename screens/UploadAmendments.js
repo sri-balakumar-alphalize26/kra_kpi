@@ -34,7 +34,9 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/uploadAmendments';
-import { getClientProjects } from '../services/clientPortal';
+import { getClientProjects, addClientTask } from '../services/clientPortal';
+import OldDbBox from '../components/OldDbBox';
+import { legacyProblem } from '../utils/legacyReq';
 import {
   DELIVERABLE_TYPES, deliverableLabel, needsOtherText, missingOtherText, DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER,
 } from '../utils/deliverableType';
@@ -78,6 +80,9 @@ const emptyRow = (defaults) => ({
   // it. Other carries its text, copied from the default too.
   deliverable_type: defaults.deliverableType || '',
   deliverable_other: needsOtherText(defaults.deliverableType) ? (defaults.deliverableOther || '') : '',
+  // 🗄️ From the old system (Bug / Update only): nothing to link to, so the
+  // row says what it is about instead — see components/OldDbBox.js.
+  legacy_on: false, legacy_ref: '', legacy_name: '', legacy_note: '', legacy_files: [],
 });
 
 export default function UploadAmendments({ onBack, docType = 'update' }) {
@@ -384,6 +389,23 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   // identifies it in the picker.
   const namedRows = tasks.map((r, i) => ({ i, name: (r.name || '').trim() })).filter((r) => r.name);
 
+  // ---- 🗄️ From the old system ---------------------------------------------
+  // Bug / Update only. A client's row carries its files with it (add_task), so
+  // a photo, video or voice note counts; an admin's goes through the bulk route,
+  // which sees only the typed fields — so only those count there.
+  const isLegacyRow = (r) => MODE.showLinkedReq && !!r.legacy_on;
+  const rowExtraFiles = (r) => attachments.filter((a) => a.rowId === r.rowId)
+    .map((a) => ({ name: a.name, size: a.size, mimetype: a.kind === 'video' ? 'video/mp4' : 'image/jpeg' }));
+  const rowLegacyProblem = (r) => {
+    if (!isLegacyRow(r) || !(r.name || '').trim()) return '';
+    return legacyProblem({
+      ref: r.legacy_ref, name: r.legacy_name, note: r.legacy_note,
+      files: isClientOnly ? [...(r.legacy_files || []), ...rowExtraFiles(r)] : [],
+    });
+  };
+  // Create stays off while an old-system row says nothing about itself.
+  const legacyBlock = tasks.map((r, i) => ({ i, p: rowLegacyProblem(r) })).find((x) => x.p) || null;
+
   async function pickMedia() {
     setMediaBusy(true);
     try {
@@ -529,7 +551,13 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
     const named = tasks.filter((r) => r.name.trim());
     if (!named.length) missing.push('At least one task with a name');
     // Unlike priority there is no sensible default, so a row can reach here blank.
-    if (named.some((r) => !r.deliverable_type)) missing.push('Type on every task');
+    // A client's old-system row has no Type to give: the server leaves it blank.
+    if (named.some((r) => !r.deliverable_type && !(isClientOnly && isLegacyRow(r)))) missing.push('Type on every task');
+    // From the old system: each such row must say what it is about.
+    named.forEach((r) => {
+      const p = rowLegacyProblem(r);
+      if (p) missing.push(`${r.name.trim()}: ${p}`);
+    });
     // The server refuses Other without its text.
     if (named.some((r) => missingOtherText(r.deliverable_type, r.deliverable_other))) missing.push('What the Other type is, on every Other task');
 
@@ -540,12 +568,69 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
       return;
     }
 
-    log.info('create all tasks', { subKraId, docType: DOC_TYPE, count: named.length, hasFile: !!sourceDoc, version });
+    // A client's "from the old system" rows go one by one through the client
+    // portal's add_task, WITH their voice notes / photos / videos: the bulk route
+    // only sees the typed fields, so it would refuse a row whose only
+    // explanation is a voice note or a picture. Everything else stays bulk.
+    const legacyRows = isClientOnly && MODE.showLinkedReq ? named.filter((r) => r.legacy_on) : [];
+    const bulkRows = named.filter((r) => !legacyRows.includes(r));
+
+    log.info('create all tasks', { subKraId, docType: DOC_TYPE, count: named.length, legacy: legacyRows.length, hasFile: !!sourceDoc, version });
     setCreating(true);
+    // Rows already created through add_task — they must leave the form whatever
+    // happens next, or pressing Create again would make them twice.
+    const sentIds = new Set();
     try {
+      // ---- From the old system (client) ------------------------------------
+      // First, and stopping at the first refusal: what was created leaves the
+      // form, the refused row and everything after it stay.
+      for (const r of legacyRows) {
+        const own = attachments.filter((a) => a.rowId === r.rowId);
+        const res = await addClientTask({
+          subKraId,
+          kind: DOC_TYPE,
+          name: r.name.trim(),
+          priority: r.priority,
+          // The Photos / video section's reasons have nowhere else to go here.
+          description: own.map((a) => `📎 ${a.name}: ${a.reason}`).join('\n'),
+          attachments: [
+            ...(r.legacy_files || []).map((f) => ({ name: f.name, data_b64: f.data_b64, mimetype: f.mimetype })),
+            ...own.map((a) => ({ name: a.name, data_b64: a.data, mimetype: a.kind === 'video' ? 'video/mp4' : 'image/jpeg' })),
+          ],
+          legacyOn: true,
+          legacyRef: r.legacy_ref,
+          legacyName: r.legacy_name,
+          legacyNote: r.legacy_note,
+        });
+        if (!res?.status) {
+          log.warn('old-DB task refused', { row: r.rowId, msg: res?.message });
+          setTasks((t) => t.filter((x) => !sentIds.has(x.rowId)));
+          setAttachments((l) => l.filter((a) => !sentIds.has(a.rowId)));
+          flash('err', `${r.name.trim()}: ${res?.message || 'Could not send it'}`);
+          return;
+        }
+        log.info('old-DB task created', { kpi_id: res.kpi_id, ref: res.ref });
+        sentIds.add(r.rowId);
+      }
+      if (!bulkRows.length) {
+        setTasks([]);
+        setAttachments([]);
+        setMediaOpen(false);
+        setSourceDoc(null);
+        setPasteText('');
+        setSuggestionBadge('');
+        setImportStatus('');
+        const ref = await svc.peekNextRef(DOC_TYPE).catch(() => null);
+        if (ref) { setRefPrefix(ref.prefix); setRefNext(ref.next_number); }
+        flash('ok', `Created ${sentIds.size} task(s)`);
+        return;
+      }
+      // Their files already went with them.
+      const bulkAtts = attachments.filter((a) => !sentIds.has(a.rowId));
+
       // A client sets their own estimate + priority; only the developer
       // assignment stays internal (they have no Developer picker).
-      const rows = named.map((r) => svc.buildTaskRow(isClientOnly ? { ...r, primary_user_id: '' } : r));
+      const rows = bulkRows.map((r) => svc.buildTaskRow(isClientOnly ? { ...r, primary_user_id: '' } : r));
       const res = await svc.createBulkTasks({
         subKraId,
         docType: DOC_TYPE,
@@ -563,19 +648,14 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
       // everything they typed. Failures are reported and retryable instead.
       const ids = res.kpi_ids || [];
       let failed = [];
-      if (attachments.length && ids.length) {
-        // `named` is the filtered list actually sent, so kpi_ids[n] lines up with
-        // named[n]. Map each attachment's ORIGINAL row index onto that.
-        const namedIdx = new Map(); // original tasks index -> sent index
-        let k = 0;
-        tasks.forEach((r, i) => { if (r.name.trim()) namedIdx.set(i, k++); });
-
+      if (bulkAtts.length && ids.length) {
+        // `bulkRows` is the filtered list actually sent, so kpi_ids[n] lines up
+        // with bulkRows[n]. Map each attachment's row onto that by its id.
         // Stamp each attachment with the task it now belongs to. Retry needs this
         // AFTER the form is cleared — without it a retry would have no kpi_id.
-        const withIds = attachments.map((a) => {
-          const rowIdx = tasks.findIndex((r) => r.rowId === a.rowId);
-          const sentIdx = rowIdx >= 0 ? namedIdx.get(rowIdx) : undefined;
-          return { ...a, kpiId: sentIdx != null ? ids[sentIdx] || null : null };
+        const withIds = bulkAtts.map((a) => {
+          const sentIdx = bulkRows.findIndex((r) => r.rowId === a.rowId);
+          return { ...a, kpiId: sentIdx >= 0 ? ids[sentIdx] || null : null };
         });
         setAttachments(withIds);
 
@@ -587,7 +667,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         }
       }
 
-      const total = attachments.length;
+      const total = bulkAtts.length;
       const done = total - failed.length;
 
       // The TASKS are created either way — always clear the form so a retry can
@@ -605,16 +685,20 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         setAttachments(failed);                 // keep ONLY the failures, for retry
         setMediaOpen(true);
         setUploadPopup({ ok: false, done, total, failed: failed.map((f) => f.name) });
-        flash('ok', `Created ${res.created_count} task(s)`);
+        flash('ok', `Created ${res.created_count + sentIds.size} task(s)`);
         return;
       }
 
       setAttachments([]);
       setMediaOpen(false);
       if (total) setUploadPopup({ ok: true, done, total, failed: [] });
-      flash('ok', `Created ${res.created_count} task(s)${res.isMock ? ' (offline mock)' : ''}`);
+      flash('ok', `Created ${res.created_count + sentIds.size} task(s)${res.isMock ? ' (offline mock)' : ''}`);
     } catch (err) {
       log.error('create failed', err?.message);
+      if (sentIds.size) {
+        setTasks((t) => t.filter((x) => !sentIds.has(x.rowId)));
+        setAttachments((l) => l.filter((a) => !sentIds.has(a.rowId)));
+      }
       flash('err', err?.message || 'Task creation failed');
     } finally {
       setCreating(false);
@@ -857,7 +941,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                       autoCapitalize="characters"
                     />
                   </View>
-                  {MODE.showLinkedReq ? (
+                  {MODE.showLinkedReq && !row.legacy_on ? (
                     <View style={s.half}>
                       <Text style={s.miniLabel}>Linked Req</Text>
                       <TextInput
@@ -866,8 +950,38 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                         autoCapitalize="characters"
                       />
                     </View>
+                  ) : MODE.showLinkedReq ? (
+                    <View style={[s.half, { justifyContent: 'flex-end' }]}>
+                      <Text style={s.miniLabel}>Linked Req</Text>
+                      <View style={s.oldTag}><Text style={s.oldTagTxt}>🗄️ Old DB</Text></View>
+                    </View>
                   ) : <View style={s.half} />}
                 </View>
+
+                {/* 🗄️ The new database has none of the old requirements — say
+                    what it is about instead of linking one. */}
+                {MODE.showLinkedReq && (
+                  <TouchableOpacity
+                    style={s.oldToggle} activeOpacity={0.8}
+                    onPress={() => updateRow(i, { legacy_on: !row.legacy_on, related_req_ref: row.legacy_on ? row.related_req_ref : '' })}
+                  >
+                    <Ionicons name={row.legacy_on ? 'checkbox' : 'square-outline'} size={19}
+                      color={row.legacy_on ? COLORS.amber : COLORS.faint} />
+                    <Text style={s.oldToggleTxt}>🗄️ It's from the old system — not in this list</Text>
+                  </TouchableOpacity>
+                )}
+                {isLegacyRow(row) && (
+                  <OldDbBox
+                    value={row}
+                    withMedia={isClientOnly}
+                    extraFiles={isClientOnly ? rowExtraFiles(row) : []}
+                    onChange={(next) => updateRow(i, {
+                      legacy_ref: next.legacy_ref, legacy_name: next.legacy_name,
+                      legacy_note: next.legacy_note, legacy_files: next.legacy_files,
+                    })}
+                    onError={(m) => flash('err', m)}
+                  />
+                )}
 
                 <Text style={[s.miniLabel, { marginTop: 8 }]}>Task Name</Text>
                 <TextInput
@@ -1134,12 +1248,20 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
       </ScrollView>
 
       {/* Sticky footer actions */}
+      {legacyBlock && (
+        <View style={s.oldBlock}>
+          <Ionicons name="alert-circle" size={15} color={COLORS.red} style={{ marginTop: 1 }} />
+          <Text style={s.oldBlockTxt}>Task #{legacyBlock.i + 1}: {legacyBlock.p}</Text>
+        </View>
+      )}
       <View style={s.footer}>
         <TouchableOpacity style={s.resetBtn} onPress={onReset} disabled={creating}>
           <Ionicons name="close" size={18} color={COLORS.muted} />
           <Text style={s.resetTxt}>Reset</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[s.createBtn, creating && { opacity: 0.7 }]} onPress={onCreate} disabled={creating} activeOpacity={0.9}>
+        <TouchableOpacity
+          style={[s.createBtn, (creating || legacyBlock) && { opacity: 0.55 }]}
+          onPress={onCreate} disabled={creating || !!legacyBlock} activeOpacity={0.9}>
           {creating ? <ActivityIndicator color="#fff" /> : (
             <>
               <Ionicons name="checkmark-circle" size={19} color="#fff" />
@@ -1448,6 +1570,15 @@ const s = StyleSheet.create({
   rowSplit: { flexDirection: 'row', gap: 10, marginTop: 8 },
   half: { flex: 1 },
   miniLabel: { fontSize: 11.5, fontWeight: '700', color: COLORS.muted, marginBottom: 5 },
+  oldTag: { height: 46, borderRadius: 10, backgroundColor: COLORS.amberBg, alignItems: 'center', justifyContent: 'center' },
+  oldTagTxt: { fontSize: 13, fontWeight: '800', color: '#92400E' },
+  oldToggle: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 9, paddingVertical: 4 },
+  oldToggleTxt: { flex: 1, fontSize: 13, fontWeight: '700', color: COLORS.ink },
+  oldBlock: {
+    flexDirection: 'row', gap: 7, paddingHorizontal: 16, paddingVertical: 8,
+    backgroundColor: COLORS.redBg, borderTopWidth: 1, borderTopColor: '#FBCACA',
+  },
+  oldBlockTxt: { flex: 1, fontSize: 12.5, color: COLORS.red, fontWeight: '600', lineHeight: 17 },
   numInput: {
     backgroundColor: '#F5F8FD', borderWidth: 1.5, borderColor: '#E7ECF3', borderRadius: 10,
     paddingHorizontal: 12, height: 46, fontSize: 15, color: COLORS.ink,
