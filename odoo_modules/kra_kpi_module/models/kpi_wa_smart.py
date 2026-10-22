@@ -67,7 +67,8 @@ STAFF_COMMANDS = [
     ('lunch', ('lunch', 'lunch break')),
     ('break', ('break', 'tea', 'tea break', 'coffee', 'coffee break', 'short break')),
     ('back', ('back to work', 'resume', 'resume day', 'resume my day', 'im back', 'i am back')),
-    ('pause', ('pause', 'pause task')),
+    # "stop" is how people say pause: it asks first, then the reason.
+    ('pause', ('pause', 'pause task', 'stop', 'stop task', 'stop work', 'stop it')),
     ('switch', ('switch', 'switch task')),
     ('doubt', ('doubt', 'clarification')),
     ('meeting', ('meeting',)),
@@ -147,10 +148,11 @@ MENU_CONFIRM = {
     'day_start': 'day_start', 'day_end': 'day_end', 'day_pause': 'day_pause',
     'day_resume': 'back', 'nt_end': 'back', 'brk_resume': 'back',
     'nt_lunch': 'lunch', 'nt_break': 'break', 'no_tasks': 'no_tasks',
+    'pause_menu': 'pause',
 }
 # Other rows that DO something when picked. Typed, they ask "Did you mean …?"
 MENU_TAP_CONFIRM = ('meet_end',)
-TASK_TAP_CONFIRM = ('take', 'resume', 'switch')
+TASK_TAP_CONFIRM = ('take', 'resume', 'switch', 'pause')
 # Polls that only open or show something; anything picked in any other poll
 # changes something (a pause reason, a switch, a meeting, a delete…).
 VIEW_FLOW_STEPS = ('mt_phase', 'mt_lane', 'mt_task', 'mt_filter', 'mt_proj', 'kpi_menu', 'logs', 'files',
@@ -662,6 +664,10 @@ class KpiWaSmartTyping(models.AbstractModel):
                 self._text(message, _('Your whole day is already paused.'))
                 return True
             if running:
+                if not confirmed:
+                    # Typed "pause" / "stop": ask first, then the reason poll.
+                    return self._smart_confirm(message, state, cmd, _(
+                        '⏸️ Pause %s? You will pick the reason next.') % ', '.join(self._ref(t) for t in running))
                 return self._pause_menu(message, state, user)
             return self._smart_next(message, state, _('No task is running right now.'),
                                     ['mytasks', 'day_pause', 'lunch', 'break'])
