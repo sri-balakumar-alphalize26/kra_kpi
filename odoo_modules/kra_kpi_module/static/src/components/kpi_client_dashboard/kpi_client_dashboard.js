@@ -1,7 +1,10 @@
 /** @odoo-module **/
-import { Component, xml, useState, onWillStart } from "@odoo/owl";
+import { Component, xml, useState, onWillStart, onWillUnmount } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { rpc } from "@web/core/network/rpc";
+
+// Same cap as /kpi_client_portal/add_task.
+const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
 
 export class KpiClientDashboard extends Component {
     static template = xml/* xml */`
@@ -104,8 +107,9 @@ export class KpiClientDashboard extends Component {
                         </select>
                     </div>
                     <!-- Bug / Update: always about ONE requirement, numbered under it
-                         (BUG001-REQ-012) -- the server refuses one without it. -->
+                         (BUG001-REQ-012); the server refuses one without it. -->
                     <div class="col-12" t-if="state.newTask.kind !== 'requirement'">
+                        <t t-if="!state.newTask.legacy_on">
                         <label class="form-label fw-bold">Which requirement is it about? <span class="text-danger">*</span></label>
                         <select class="form-select" t-att-value="state.newTask.parent_id" t-on-change="onParentChange"
                                 t-att-disabled="!state.newTask.sub_kra_id or !state.parents.length">
@@ -130,6 +134,30 @@ export class KpiClientDashboard extends Component {
                                 </div>
                                 <div t-if="state.kids.next_ref" class="fw-bold mt-1">➜ This one will be <t t-esc="state.kids.next_ref"/></div>
                             </t>
+                        </div>
+                        </t>
+                        <!-- 🗄️ Not in the list: say what it is about instead (same as the web portal / WhatsApp form). -->
+                        <label class="d-flex align-items-center gap-2 fw-bold mt-2" style="cursor:pointer">
+                            <input type="checkbox" class="form-check-input m-0" t-att-checked="state.newTask.legacy_on" t-on-change="onLegacyToggle"/>
+                            <span>🗄️ It's from the old system — not in this list</span>
+                        </label>
+                        <div t-if="state.newTask.legacy_on" class="card p-3 mt-2 border-warning" style="background:#FFF8E6">
+                            <div class="small text-muted mb-2">Best: a 📷 photo or 🎥 video of the old screen (add it under Attachments below). If not possible, record a voice note or type a message.</div>
+                            <div class="row g-2">
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">Request ID (optional)</label>
+                                    <input type="text" class="form-control" placeholder="REQ-012" t-model="state.newTask.legacy_ref"/>
+                                </div>
+                                <div class="col-md-8">
+                                    <label class="form-label fw-bold">Task name (optional)</label>
+                                    <input type="text" class="form-control" placeholder="Its name in the old system" t-model="state.newTask.legacy_name"/>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label fw-bold">Message</label>
+                                    <textarea class="form-control" rows="2" t-model="state.newTask.legacy_note"
+                                              placeholder="Which screen, what it does today, what is wrong or should change"/>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div t-att-class="state.newTask.kind === 'requirement' ? 'col-md-9' : 'col-12'">
@@ -157,6 +185,30 @@ export class KpiClientDashboard extends Component {
                         <label class="form-label fw-bold">Description</label>
                         <textarea class="form-control" rows="3" t-model="state.newTask.description"
                                   placeholder="Details, acceptance criteria, links..."/>
+                    </div>
+                    <!-- Photos, videos, voice notes and files (25 MB in total). -->
+                    <div class="col-12">
+                        <label class="form-label fw-bold">Attachments (optional)</label>
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            <label class="btn btn-outline-primary btn-sm mb-0">📷 Photo
+                                <input type="file" accept="image/*" capture="environment" class="d-none" t-on-change="onAddFiles"/></label>
+                            <label class="btn btn-outline-primary btn-sm mb-0">🎥 Video
+                                <input type="file" accept="video/*" capture="environment" class="d-none" t-on-change="onAddFiles"/></label>
+                            <button type="button" t-att-class="'btn btn-sm ' + (state.rec ? 'btn-danger' : 'btn-outline-primary')" t-on-click="onVoice">
+                                <t t-if="state.rec">⏹ Stop and attach (<t t-esc="state.rec.secs"/>s)</t><t t-else="">🎤 Voice note</t>
+                            </button>
+                            <label class="btn btn-outline-secondary btn-sm mb-0">📎 Files
+                                <input type="file" multiple="multiple" class="d-none" t-on-change="onAddFiles"/></label>
+                            <span class="small text-muted" t-esc="state.files.length ? state.files.length + ' file(s) · ' + fmtSize(filesTotal()) : 'up to 25 MB in total'"/>
+                        </div>
+                        <div t-if="state.files.length" class="d-flex flex-wrap gap-2 mt-2">
+                            <t t-foreach="state.files" t-as="f" t-key="f_index">
+                                <span class="badge text-bg-light border d-inline-flex align-items-center gap-1 fw-normal">
+                                    <t t-esc="f.name"/> · <t t-esc="fmtSize(f.size)"/>
+                                    <a href="#" class="text-danger ms-1" t-on-click.prevent="() => this.removeFile(f_index)">✕</a>
+                                </span>
+                            </t>
+                        </div>
                     </div>
                     <div class="col-12 text-end">
                         <button class="btn btn-success" t-on-click="submitNewTask">
@@ -627,7 +679,11 @@ export class KpiClientDashboard extends Component {
                 external_ref: '', related_req_ref: '',
                 description: '', priority: 'regular',
                 deliverable_type: '', deliverable_other: '', parent_id: '',
+                legacy_on: false, legacy_ref: '', legacy_name: '', legacy_note: '',
             },
+            // Picked files (File objects) and the running voice recording, if any.
+            files: [],
+            rec: null,          // { secs } while recording
             // Bug / Update: the requirements of the chosen project to pick from.
             parents: [],
             parentsLoading: false,
@@ -654,6 +710,99 @@ export class KpiClientDashboard extends Component {
             const rp = await rpc('/kpi_client_portal/get_projects', {});
             if (rp && rp.status) this.state.projects = rp.projects || [];
         });
+        this._voiceCount = 0;
+        onWillUnmount(() => this._stopVoice(false));
+    }
+
+    // ---- Attachments (photo / video / voice / files) --------------------------
+    fmtSize(n) {
+        if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+        return Math.max(1, Math.round(n / 1024)) + ' KB';
+    }
+    filesTotal() { return this.state.files.reduce((n, f) => n + f.size, 0); }
+    // Camera files all arrive as image.jpg / video.mp4: a single camera shot gets its own name.
+    onAddFiles(ev) {
+        const picked = [...(ev.target.files || [])];
+        const camera = ev.target.hasAttribute('capture');
+        ev.target.value = '';
+        for (const f of picked) {
+            let file = f;
+            if (camera) {
+                const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+                const isVideo = (f.type || '').startsWith('video');
+                const ext = (f.name.match(/\.[A-Za-z0-9]+$/) || [isVideo ? '.mp4' : '.jpg'])[0];
+                file = new File([f], `${isVideo ? 'Video' : 'Photo'} ${stamp}${ext}`, { type: f.type });
+            }
+            if (this.filesTotal() + file.size > MAX_ATTACH_BYTES) {
+                this._toast('Attachments are limited to 25 MB in total.', 'warning');
+                return;
+            }
+            this.state.files.push(file);
+        }
+    }
+    removeFile(i) { this.state.files.splice(i, 1); }
+    // 🎤 Record → Stop attaches it, named "Voice note 1 (0m07s).webm" (the server
+    // reads the length back from the name), as the web portal's VoiceRecorder.
+    async onVoice() {
+        if (this._rec) { this._stopVoice(true); return; }
+        if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) {
+            this._toast("Can't use the mic — type it instead.", 'warning');
+            return;
+        }
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+            this._toast("Can't use the mic — type it instead.", 'warning');
+            return;
+        }
+        const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']
+            .find((t) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+        const rec = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
+        const r = { rec, stream, chunks: [], from: Date.now(), keep: false,
+                    mime: (rec.mimeType || type || 'audio/webm').split(';')[0] };
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) r.chunks.push(e.data); };
+        rec.onstop = () => {
+            stream.getTracks().forEach((t) => t.stop());
+            clearInterval(r.tick); clearTimeout(r.cap);
+            if (this._rec === r) { this._rec = null; }
+            this.state.rec = null;
+            if (!r.keep || !r.chunks.length) { return; }
+            const secs = Math.round((Date.now() - r.from) / 1000);
+            const ext = r.mime.includes('mp4') ? 'm4a' : (r.mime.includes('ogg') ? 'ogg' : 'webm');
+            this._voiceCount += 1;
+            const name = `Voice note ${this._voiceCount} (${Math.floor(secs / 60)}m${String(secs % 60).padStart(2, '0')}s).${ext}`;
+            const file = new File([new Blob(r.chunks, { type: r.mime })], name, { type: r.mime });
+            if (this.filesTotal() + file.size > MAX_ATTACH_BYTES) {
+                this._toast('Attachments are limited to 25 MB in total.', 'warning');
+                return;
+            }
+            this.state.files.push(file);
+        };
+        rec.start(250);
+        this._rec = r;
+        this.state.rec = { secs: 0 };
+        r.tick = setInterval(() => { if (this.state.rec) this.state.rec.secs = Math.round((Date.now() - r.from) / 1000); }, 500);
+        r.cap = setTimeout(() => this._stopVoice(true), 5 * 60 * 1000);   // 5-minute cap
+    }
+    _stopVoice(keep) {
+        const r = this._rec;
+        if (!r) { return; }
+        r.keep = keep;
+        if (r.rec.state !== 'inactive') { r.rec.stop(); }
+    }
+    async _attachmentsPayload() {
+        const read = (f) => new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+            fr.onerror = () => reject(fr.error);
+            fr.readAsDataURL(f);
+        });
+        const out = [];
+        for (const f of this.state.files) {
+            out.push({ name: f.name, data_b64: await read(f), mimetype: f.type || '' });
+        }
+        return out;
     }
 
     // Same call and same shape as kpi_client_completions.loadSignatureInfo — the two
@@ -681,6 +830,13 @@ export class KpiClientDashboard extends Component {
         this.state.dashboard = r;
     }
 
+    onLegacyToggle(ev) {
+        this.state.newTask.legacy_on = ev.target.checked;
+        if (ev.target.checked) {
+            this.state.newTask.parent_id = '';
+            this.state.kids = null;
+        }
+    }
     onKindChange(ev) {
         this.state.newTask.kind = ev.target.value;
         this.state.newTask.parent_id = '';
@@ -721,13 +877,21 @@ export class KpiClientDashboard extends Component {
             this._toast('Project and Task Name are required.', 'warning');
             return;
         }
+        if (this._rec) {
+            this._toast('Stop the voice recording first.', 'warning');
+            return;
+        }
+        const attachments = await this._attachmentsPayload();
         if (t.kind !== 'requirement') {
-            if (!t.parent_id) {
-                this._toast('Pick the requirement this bug or update is about.', 'warning');
+            if (!t.legacy_on && !t.parent_id) {
+                this._toast('Pick the requirement this bug or update is about, or tick "It\'s from the old system".', 'warning');
                 return;
             }
+            // From the old system: the server checks it says enough (photo / video /
+            // voice note / message / Request ID / name) and answers what is missing.
             const r = await rpc('/kpi_client_portal/add_task', {
-                ...t, parent_id: Number(t.parent_id), deliverable_type: '', deliverable_other: '' });
+                ...t, parent_id: t.legacy_on ? false : Number(t.parent_id),
+                deliverable_type: '', deliverable_other: '', attachments });
             if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
             this._toast(`Task submitted: ${r.name}. Your admin will review and assign it.`, 'warning');
             this._resetNewTask();
@@ -743,7 +907,7 @@ export class KpiClientDashboard extends Component {
             this._toast('Type what the Other type is (e.g. Plugin, Website).', 'warning');
             return;
         }
-        const r = await rpc('/kpi_client_portal/add_task', { ...t, deliverable_other: other });
+        const r = await rpc('/kpi_client_portal/add_task', { ...t, legacy_on: false, deliverable_other: other, attachments });
         if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
         this._toast(`Task submitted: ${r.name}. Your admin will review and assign it.`, 'warning');
         this._resetNewTask();
@@ -756,7 +920,9 @@ export class KpiClientDashboard extends Component {
             external_ref: '', related_req_ref: '',
             description: '', priority: 'regular',
             deliverable_type: '', deliverable_other: '', parent_id: '',
+            legacy_on: false, legacy_ref: '', legacy_name: '', legacy_note: '',
         };
+        this.state.files = [];
         this.state.parents = [];
         this.state.kids = null;
         this.state.showAdd = false;
