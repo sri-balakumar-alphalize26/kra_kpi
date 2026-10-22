@@ -49,7 +49,7 @@ STAFF_FREE_TEXT = ('collect', 'branch', 'dupfile', 'entry_text', 'entry_file', '
 # Client pickers that get a "didn't catch that" hint. Free-text and confirm
 # steps are left alone.
 CLIENT_PICK_STEPS = ('pick_type', 'pick_server', 'pick_db', 'pick_area', 'pick_install', 'pick_hour',
-                     'pick_slot', 'pick_tz', 'myreq_pick', 'discuss_pick', 'livedb_server', 'livedb_db',
+                     'pick_slot', 'pick_tz', 'myreq_pick', 'discuss_kind', 'discuss_pick', 'livedb_server', 'livedb_db',
                      'pick_disc_db', 'pick_disc_reason')
 
 # Steps where a request word the step itself did not take ("bug" while a

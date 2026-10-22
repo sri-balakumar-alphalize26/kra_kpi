@@ -26,7 +26,7 @@ import logging
 import secrets
 from datetime import timedelta
 
-from odoo import _, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -66,8 +66,39 @@ class KraKpiChat(models.Model):
     client_chat_token = fields.Char(copy=False, index=True, readonly=True)
     client_chat_expires = fields.Datetime(copy=False, readonly=True)
 
+    # 💬 Discuss › "Something else": a client's general questions, not about
+    # one request, are held on ONE hidden task per client -- archived, like
+    # the old-requirement placeholders (kpi_legacy), so no report, queue,
+    # count or invoice ever sees it -- and get the same chat, manager poll
+    # and developer hand-off as a request.
+    is_chat_general = fields.Boolean(
+        string='General questions (Discuss)', readonly=True, copy=False, index=True)
+
     def _chat_ref(self):
+        if self.is_chat_general:
+            return _('General question')
         return self.external_ref or ('#%s' % self.id)
+
+    @api.model
+    def _chat_general_task(self, client):
+        """The hidden task that holds `client`'s general questions, made once."""
+        Kpi = self.env['kra.kpi'].sudo().with_context(active_test=False)
+        rec = Kpi.search([('is_chat_general', '=', True), ('kra_id', '=', client.id)], limit=1)
+        if rec:
+            return rec
+        # kpi_legacy_quiet: no "new task" notices for bookkeeping;
+        # kpi_no_admin_arm: nothing for an admin to accept.
+        rec = Kpi.with_context(kpi_no_admin_arm=True, kpi_legacy_quiet=True).create({
+            'name': client.name or _('Client'),
+            'kra_id': client.id,
+            'external_ref': 'GEN-%03d' % client.id,
+            'is_chat_general': True,
+            'task_state': 'completed',
+            'published': False,
+            'description': _('💬 Discuss: general questions from the client, not about one request.'),
+        })
+        rec.active = False
+        return rec
 
     def chat_rows(self, viewer=None, limit=200):
         """The thread, oldest first, as plain dicts for every screen.

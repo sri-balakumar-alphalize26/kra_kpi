@@ -161,7 +161,7 @@ class KpiDoubt(models.Model):
         """Privately, because a decision is not team chatter."""
         self.ensure_one()
         Report = self.env['kpi.wa.group.report'].sudo()
-        ref = self.kpi_id.external_ref or ('#%s' % self.kpi_id.id)
+        ref = self.kpi_id._chat_ref()
         label = {
             'question': _('has a question'),
             'meet_admin': _('wants a word with you'),
