@@ -6,6 +6,31 @@ import { useService } from "@web/core/utils/hooks";
 import { ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 
 export class KpiConfiguration extends Component {
+    async loadTiers() {
+        try {
+            const rows = await this.orm.searchRead("kpi.escalation.tier", [],
+                ["name", "minutes", "use_task_manager", "user_ids"], { order: "sequence, id" });
+            const ids = [...new Set(rows.flatMap((r) => r.user_ids))];
+            const names = ids.length ? Object.fromEntries((await this.orm.read("res.users", ids, ["name"])).map((u) => [u.id, u.name])) : {};
+            this.state.tiers = rows.map((r) => ({ ...r, people: r.user_ids.map((id) => names[id] || "#" + id), saved: false }));
+        } catch (e) { this.state.tiers = []; }
+    }
+    tierPeople(t) {
+        const who = [...t.people];
+        if (t.use_task_manager || !who.length) who.push("the task's manager");
+        return who.join(", ");
+    }
+    async saveTierMinutes(t) {
+        const m = Math.max(1, parseInt(t.minutes, 10) || 1);
+        t.minutes = m;
+        await this.orm.write("kpi.escalation.tier", [t.id], { minutes: m });
+        t.saved = true;
+        setTimeout(() => { t.saved = false; }, 1500);
+    }
+    async openChain() {
+        await this.action.doAction("kra_kpi_module.action_kpi_escalation_tier", { onClose: () => this.loadTiers() });
+    }
+
     static template = xml/* xml */`
         <div class="o_kpi_configuration p-4" style="max-width: 860px; margin: 0 auto;">
             <div class="d-flex align-items-center justify-content-between mb-1">
@@ -77,6 +102,34 @@ export class KpiConfiguration extends Component {
                         <small class="text-muted d-block mt-2">When a developer taps 🚨 <b>Urgent</b> in the Pause
                             dialog, the owner + coordinators are notified in the app and re-nudged this often
                             <b>until one of them reads it</b> (also stops when the task resumes).</small>
+                    </div>
+                </div>
+
+                <!-- Approval chain: who decides a new client request, in order (kpi.escalation.tier). -->
+                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #f59e0b !important; border-left-style: solid;">
+                    <div class="card-header bg-white fw-bold d-flex align-items-center">
+                        <i class="fa fa-sitemap me-2" style="color:#f59e0b;"></i> Approval Chain
+                        <button class="btn btn-sm btn-outline-primary ms-auto" t-on-click="() => this.openChain()">
+                            <i class="fa fa-pencil me-1"/>Edit people &amp; order</button>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-3">A new client request goes to the first row. If nobody there decides
+                            within its minutes, the next row is asked, and so on. After the last row it keeps waiting and
+                            the last row is reminded every 30 minutes. <b>Nothing is accepted automatically.</b></p>
+                        <t t-if="!state.tiers.length"><div class="text-muted small">No tiers — every manager is asked at once.</div></t>
+                        <t t-foreach="state.tiers" t-as="tier" t-key="tier.id">
+                            <div class="d-flex align-items-center gap-2 flex-wrap border rounded p-2 mb-2">
+                                <span class="badge bg-light text-dark border" t-esc="tier_index + 1"/>
+                                <b style="min-width:120px;" t-esc="tier.name"/>
+                                <div class="input-group input-group-sm" style="max-width:130px;">
+                                    <input type="number" min="1" class="form-control" t-model.number="tier.minutes"
+                                           t-on-change="() => this.saveTierMinutes(tier)"/>
+                                    <span class="input-group-text">min</span>
+                                    <span t-if="tier.saved" class="input-group-text text-success bg-white border-success">✓</span>
+                                </div>
+                                <span class="small text-muted flex-grow-1" t-esc="tierPeople(tier)"/>
+                            </div>
+                        </t>
                     </div>
                 </div>
 
@@ -499,6 +552,8 @@ export class KpiConfiguration extends Component {
 
     setup() {
         this.dialog = useService("dialog");
+        this.orm = useService("orm");
+        this.action = useService("action");
         this.state = useState({
             // Workflow gate timers (same res.company fields the mobile app edits).
             // Nothing about these windows is hard-coded anywhere — the crons read
@@ -544,9 +599,12 @@ export class KpiConfiguration extends Component {
             // keyInput, busy, testing, msg, msgOk, savedModel}] in cascade order.
             ai: [],
             aiError: "",
+            // Approval chain rows: [{id, name, minutes, use_task_manager, people: [names], saved}]
+            tiers: [],
         });
         this.AI_LABEL = { gemini: "Google Gemini", groq: "Groq (Llama)", anthropic: "Anthropic Claude" };
         onWillStart(async () => {
+            await this.loadTiers();
             // Admins only; anyone else sees a note instead of the card's fields.
             try { this._aiFill(await rpc("/kpi_config/ai_get", {})); }
             catch (e) { this.state.aiError = "Could not load the AI settings."; }

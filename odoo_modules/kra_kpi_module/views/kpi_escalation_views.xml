@@ -28,10 +28,6 @@
         </field>
     </record>
 
-    <menuitem id="menu_kpi_escalation_tiers"
-              parent="menu_kpi_settings"
-              name="Approval Chain"
-              action="action_kpi_escalation_tier"
-              sequence="1"
-              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+    <!-- No menu of its own: opened from Settings > Configuration
+         (kpi_configuration.js, "Approval Chain" card). -->
 </odoo>
