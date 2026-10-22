@@ -34,7 +34,7 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/uploadAmendments';
-import { getClientProjects, addClientTask } from '../services/clientPortal';
+import { getClientProjects, addClientTask, getParentTasks } from '../services/clientPortal';
 import OldDbBox from '../components/OldDbBox';
 import { legacyProblem } from '../utils/legacyReq';
 import {
@@ -152,6 +152,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   const [mediaBusy, setMediaBusy] = useState(false);
   // [{ rowIndex, kind, data, name, size, reason, status, pct }]
   const [attachments, setAttachments] = useState([]);
+  // A client picks the requirement a Bug / Update is about instead of typing it.
+  const [parentReqs, setParentReqs] = useState([]);
   const [uploadPopup, setUploadPopup] = useState(null);  // { ok, done, total, failed:[] }
 
   const defaults = useMemo(() => ({
@@ -164,6 +166,13 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   }), [defHours, defMinutes, defPriority, defUserId, defDeliverable, defDeliverableOther]);
 
   const flash = (type, text) => { setBanner({ type, text }); setTimeout(() => setBanner(null), 4000); };
+
+  useEffect(() => {
+    if (!isClientOnly || !MODE.showLinkedReq || !subKraId) { setParentReqs([]); return; }
+    getParentTasks(subKraId)
+      .then((r) => setParentReqs(r.tasks))
+      .catch((e) => { log.warn('parent_tasks failed', e?.message); setParentReqs([]); });
+  }, [isClientOnly, MODE.showLinkedReq, subKraId]);
 
   // ---- Load on mount ------------------------------------------------------
   useEffect(() => {
@@ -944,11 +953,16 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                   {MODE.showLinkedReq && !row.legacy_on ? (
                     <View style={s.half}>
                       <Text style={s.miniLabel}>Linked Req</Text>
-                      <TextInput
-                        style={s.numInput} placeholder="e.g. REQ-001" placeholderTextColor={COLORS.faint}
-                        value={row.related_req_ref} onChangeText={(t) => updateRow(i, { related_req_ref: t })}
-                        autoCapitalize="characters"
-                      />
+                      {isClientOnly ? (
+                        <Selector small placeholder="Pick one" value={row.related_req_ref}
+                          onPress={() => setPicker(`rowReq:${i}`)} />
+                      ) : (
+                        <TextInput
+                          style={s.numInput} placeholder="e.g. REQ-001" placeholderTextColor={COLORS.faint}
+                          value={row.related_req_ref} onChangeText={(t) => updateRow(i, { related_req_ref: t })}
+                          autoCapitalize="characters"
+                        />
+                      )}
                     </View>
                   ) : MODE.showLinkedReq ? (
                     <View style={[s.half, { justifyContent: 'flex-end' }]}>
@@ -1364,6 +1378,8 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         onSelectRowUser={(i, id) => { updateRow(i, { primary_user_id: id ? String(id) : '' }); setPicker(null); }}
         onSelectDefDeliverable={(v) => { setDefDeliverable(v); setPicker(null); }}
         onSelectRowDeliverable={(i, v) => { updateRow(i, { deliverable_type: v, ...(needsOtherText(v) ? {} : { deliverable_other: '' }) }); setPicker(null); }}
+        parentReqs={parentReqs}
+        onSelectRowReq={(i, ref) => { updateRow(i, { related_req_ref: ref }); setPicker(null); }}
       />
     </KeyboardAvoidingView>
   );
@@ -1426,6 +1442,7 @@ function PickerModal({
   picker, onClose, clients, subKras, users, priorities,
   onSelectClient, onSelectSubKra, onSelectDefPriority, onSelectDefUser,
   onSelectRowPriority, onSelectRowUser, onSelectDefDeliverable, onSelectRowDeliverable,
+  parentReqs = [], onSelectRowReq,
 }) {
   if (!picker) return null;
   let title = 'Select';
@@ -1464,6 +1481,14 @@ function PickerModal({
     const i = Number(picker.split(':')[1]);
     title = 'Type';
     items = DELIVERABLE_TYPES.map((d) => ({ key: d.code, label: d.label, onPress: () => onSelectRowDeliverable(i, d.code) }));
+  } else if (picker.startsWith('rowReq:')) {
+    const i = Number(picker.split(':')[1]);
+    title = 'Which requirement is it about?';
+    items = parentReqs.map((t) => ({
+      key: String(t.id),
+      label: `${t.ref} · ${t.name}${t.old ? ' · 🗄️ Old DB' : ''}${t.date ? ` · ${t.date}` : ''}`,
+      onPress: () => onSelectRowReq(i, t.ref),
+    }));
   }
 
   return (
