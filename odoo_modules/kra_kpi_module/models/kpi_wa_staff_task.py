@@ -307,7 +307,7 @@ class KpiWaStaffTask(models.AbstractModel):
             'mt_phase': self._fl_mt_phase, 'mt_lane': self._fl_mt_lane, 'mt_task': self._fl_mt_task,
             'mt_search': self._fl_mt_search, 'mt_filter': self._fl_mt_filter, 'mt_proj': self._fl_mt_proj,
             'pause_meet': self._fl_pause_meet, 'day_pausemenu': self._fl_day_pausemenu,
-            'switch_pick': self._fl_switch_pick,
+            'switch_pick': self._fl_switch_pick, 'switch_search': self._fl_switch_search,
             'pause_which': self._fl_pause_which, 'switch_from_which': self._fl_switch_from_which,
             'day_pick': self._fl_day_pick,
         }.get(at)
@@ -1506,7 +1506,7 @@ class KpiWaStaffTask(models.AbstractModel):
         return self._fask(message, state, d, _('📋 %s — what next?') % self._ref(task),
                           [l for _c, l in rows] + [BACK])
 
-    def _send_page_link(self, message, state, user, task, group_note=''):
+    def _send_page_link(self, message, state, user, task, group_note='', anchor='', intro=''):
         """A private link to this task's page (controllers/kpi_wa_task_page.py):
         everything on the task, plus add update / manual / complete. Only this
         person, only this task, for 2 hours.
@@ -1517,9 +1517,12 @@ class KpiWaStaffTask(models.AbstractModel):
         state.sudo().write({'staff_page_token': token, 'staff_page_kpi_id': task.id,
                             'staff_page_expires': fields.Datetime.now() + timedelta(hours=2)})
         base = self.env['whatsapp.config'].sudo().get_config().get_kpi_public_base_url()
-        url = '%s/kpi/wa/task/%s' % (base, token)
-        text = _('🔗 Open %s in your browser (only for you, 2 hours) — see everything and add updates, '
-                 'files, GitHub links or finish it there:\n%s') % (self._ref(task), url)
+        # `anchor` opens the page on one section (e.g. #addtime); `intro` replaces
+        # the usual line, with %(ref)s and %(url)s.
+        url = '%s/kpi/wa/task/%s%s' % (base, token, ('#' + anchor) if anchor else '')
+        text = (intro % {'ref': self._ref(task), 'url': url}) if intro else _(
+            '🔗 Open %s in your browser (only for you, 2 hours) — see everything and add updates, '
+            'files, GitHub links or finish it there:\n%s') % (self._ref(task), url)
         number = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
         if number:
             try:
@@ -1703,22 +1706,50 @@ class KpiWaStaffTask(models.AbstractModel):
         others = self._running_tasks(user) - task
         return (_(' (still running: %s)') % ', '.join(self._ref(t) for t in others)) if others else ''
 
-    def _switch_from_begin(self, message, state, user, task):
-        """From the RUNNING task: pick the task to move to (the web's Switch to…)."""
-        targets = _switch_targets(task, user)
-        if not targets:
+    def _switch_from_begin(self, message, state, user, task, ids=None, query=''):
+        """From the RUNNING task: pick the task to move to (the web's Switch to…).
+        Ends with 🔍 Search: type part of a ref or name to narrow the list."""
+        targets = self.env['kra.kpi'].sudo().browse(ids).exists() if ids is not None \
+            else _switch_targets(task, user)
+        if not targets and not query:
             return self._back_to_task(message, state, task, _('You have no other task to switch to.'))
-        d = {'at': 'switch_pick', 'ids': targets.ids}
-        return self._fask(message, state, d,
-                          _('🔀 Switch from %s to which task? %s pauses ("Moved to another task") and the '
-                            'one you pick starts.') % (self._ref(task), self._ref(task)),
-                          [self._task_line(t, True) for t in targets] + [BACK])
+        d = {'at': 'switch_pick', 'ids': targets.ids, 'search': True}
+        head = _('🔀 Switch from %s to which task? %s pauses ("Moved to another task") and the '
+                 'one you pick starts.') % (self._ref(task), self._ref(task))
+        if query:
+            head = _('🔍 "%(q)s" — %(n)d found. %(head)s') % {'q': query, 'n': len(targets), 'head': head}
+        return self._fask(message, state, d, head,
+                          [self._task_line(t, True) for t in targets] + [self.SEARCH, BACK])
+
+    def _switch_search_ids(self, user, task, query):
+        """Tasks this person could switch to that match the typed text: the
+        same matching as 📋 My tasks › 🔍 Search, over every switchable task."""
+        allowed = set(self.env['kra.kpi'].sudo().search([
+            ('user_id', '=', user.id), ('active', '=', True), ('id', '!=', task.id),
+            ('task_state', 'not in', ('in_progress', 'partially_completed', 'awaiting_client', 'completed')),
+        ]).ids)
+        return [i for i in self._mt_search_ids(user, query) if i in allowed][:9]
+
+    def _fl_switch_search(self, message, state, user, d, task, tapped, low, body):
+        q = (body or '').strip()
+        if not q:
+            return False
+        return self._switch_from_begin(message, state, user, task,
+                                       ids=self._switch_search_ids(user, task, q), query=q)
 
     def _fl_switch_pick(self, message, state, user, d, task, tapped, low, body):
         i = self._fchoice(d, tapped, low)
         if i is None:
+            # Typed instead of tapped: treat it as a search.
+            if d.get('search') and (body or '').strip():
+                return self._fl_switch_search(message, state, user, d, task, tapped, low, body)
             return False
         ids = d.get('ids') or []
+        if d.get('search') and i == len(ids):               # 🔍 Search
+            self._fsave(state, {'at': 'switch_search'})
+            self._text(message, _('🔍 Type part of the task number or name to switch to — e.g. REQ-014, '
+                                  'req14, or a word from the name. (Type cancel to stop.)'))
+            return True
         if i >= len(ids):
             return self._back_to_task(message, state, task)
         target = self.env['kra.kpi'].sudo().browse(ids[i]).exists()
@@ -1739,6 +1770,9 @@ class KpiWaStaffTask(models.AbstractModel):
     def _undo_begin(self, message, state, user, task):
         q = _('↩️ Undo today\'s start of %s?\nIt goes back to how it was before today\'s first '
               'start, and today\'s time on it is removed.') % self._ref(task)
+        keeps = task._undo_keeps_line()
+        if keeps:
+            q += '\n\n✅ ' + keeps
         return self._fask(message, state, {'at': 'undo'}, q, ['↩️ Yes, undo start', '❌ No, keep it'])
 
     def _fl_undo(self, message, state, user, d, task, tapped, low, body):
@@ -1938,6 +1972,11 @@ class KpiWaStaffTask(models.AbstractModel):
         lanes = self._board_lanes(user)
         opts, codes = [], []
         total = 0
+        # Straight to the running task(s): the one thing a developer most often
+        # wants, without going through DO first.
+        running = lanes.get('in_progress', [])
+        opts.append('%s (%d)' % (self.LANE_LABEL['in_progress'], len(running)))
+        codes.append('inprog')
         for key, label, keys in self.PHASES:
             n = len({i for k in keys for i in lanes.get(k, [])})
             total += n
@@ -1961,6 +2000,11 @@ class KpiWaStaffTask(models.AbstractModel):
         if i is None:
             return False
         code = d['codes'][i]
+        if code == 'inprog':
+            if not self._board_lanes(user).get('in_progress'):
+                self._text(message, _('Nothing is in progress right now.'))
+                return self._mytasks_begin(message, state, user)
+            return self._mt_tasks(message, state, user, 'do', 'in_progress', 0)
         if code == 'new':
             return self._create_begin(message, state, user)
         if code == 'filter':
@@ -2308,6 +2352,16 @@ class KpiWaStaffTask(models.AbstractModel):
             '⏱️ %s — estimate %02d:%02d.\nHow much more time, and why? Example:\n'
             '*2h 30m client asked for a new report*\nThe reason is shown on the task card. '
             '(Type cancel to stop.)') % (self._ref(task), task.estimate_hours, task.estimate_minutes))
+        # Or pick it on the task page instead of typing: the link opens right on
+        # the ⏱️ Ask for more time section (kpi_wa_task_page, #addtime).
+        try:
+            self._send_page_link(message, state, user, task, anchor='addtime',
+                                 group_note=_('📩 %s, or pick the time on the page — the link is in your '
+                                              'private chat.') % (user.name or ''),
+                                 intro=_('⏱️ Pick the extra time for %(ref)s instead of typing '
+                                         '(only for you, 2 hours):\n%(url)s'))
+        except Exception as exc:
+            _logger.warning('add-time page link failed: %s', exc)
         return True
 
     def _fl_time(self, message, state, user, d, task, tapped, low, body):
