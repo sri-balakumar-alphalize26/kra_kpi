@@ -95,6 +95,18 @@ export default function Approvals() {
           ? <Questions doubts={doubts} all={allDoubts} setAll={setAllDoubts} onReply={setReply} onMeeting={async (d) => {
               if (!(await dlg.confirm({ title: "Make a meeting?", text: d.kind === "meet_admin" ? "An internal meeting with the developer is set up and opened now." : "A client meeting is requested. It then waits here under Meetings for you to confirm a time.", confirmLabel: "Make the meeting" }))) return;
               try { await P.meetingFromDoubt(d.id); flags.ok("Meeting made. See My Work › Meetings."); loadDoubts(); load(); } catch (e) { flags.err(e.message); }
+            }} onAsk={async (d) => {
+              /* 💬 Same hand-off as the WhatsApp "👨‍💻 → name" buttons. */
+              try {
+                const opts = await P.devOptionsForDoubt(d.id) || [];
+                if (!opts.length) { flags.err("There is no developer to hand it to."); return; }
+                const v = await dlg.form({ title: "Ask a developer to reply", fields: [{ key: "dev", label: "Developer", value: String(opts[0].id), options: opts.map((o) => ({ value: String(o.id), label: o.name })) }] });
+                if (!v) return;
+                const r = await P.askDeveloper(d.id, v.dev);
+                flags.ok(`Sent to ${(r?.sent_to || []).join(", ") || "the developer"} privately; the client got their chat link.`);
+                if (r?.unreachable?.length) flags.warn(`${r.unreachable.join(", ")} has no WhatsApp number — they can reply from the task's 💬 Chat.`);
+                loadDoubts(); load();
+              } catch (e) { flags.err(e.message); }
             }} />
           : (
             <div className="cardbox table-scroll" style={{ padding: 0 }}>
@@ -209,7 +221,7 @@ function DecideDialog({ d, onClose, onDone }) {
 
 /* Developers' questions to the manager. Answer goes back to the developer;
    Send to client is the ONLY path that reaches a client. */
-function Questions({ doubts, all, setAll, onReply, onMeeting }) {
+function Questions({ doubts, all, setAll, onReply, onMeeting, onAsk }) {
   return (
     <>
       <div className="toolbar"><label className="row mini" style={{ cursor: "pointer" }}><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Show answered, sent and closed too</label></div>
@@ -234,6 +246,7 @@ function Questions({ doubts, all, setAll, onReply, onMeeting }) {
                       {live && (
                         <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
                           {d.state === "open" && <Button size="sm" kind="primary" onClick={() => onReply({ doubt: d, mode: "answer" })}>{d.kind === "client_msg" ? "Reply to client" : "Answer"}</Button>}
+                          {d.state === "open" && d.kind === "client_msg" && <Button size="sm" kind="ghost" onClick={() => onAsk(d)}>👨‍💻 Ask a developer</Button>}
                           {!d.client_posted_at && d.kind !== "client_msg" && <Button size="sm" kind="ghost" onClick={() => onReply({ doubt: d, mode: "release" })}>Send to client</Button>}
                           {!d.meeting_id && d.state === "open" && <Button size="sm" kind="ghost" onClick={() => onMeeting(d)}>Make a meeting</Button>}
                           {d.state === "open" && <Button size="sm" kind="ghost" onClick={() => onReply({ doubt: d, mode: "reject" })}>Not now</Button>}
@@ -261,7 +274,7 @@ function ReplyDialog({ r, onClose, onDone }) {
     release: { title: "Send to the client", label: "What the client should read", required: false, button: "Send to client", hint: "This is the only way a question reaches a client. It goes to the client's group, in your words.", ok: "Sent to the client." },
     reject: { title: "Not now", label: "Note (optional)", required: false, button: "Not now", hint: "The developer is told it is not being taken up now.", ok: "Marked not now." },
     /* A client's 💬 Discuss message (models/kpi_chat.py): the answer goes to their group. */
-    ...(d.kind === "client_msg" ? { answer: { title: "Reply to the client", label: "Your reply", required: true, button: "Send reply", hint: "Goes to the client's WhatsApp group as “Reply from our team”, and into the task's 💬 Chat.", ok: "Sent to the client." } } : {}),
+    ...(d.kind === "client_msg" ? { answer: { title: "Reply to the client", label: "Your reply", required: true, button: "Send reply", hint: "The client gets a link in their WhatsApp group and reads your reply in their chat, as “Alphalize team”. It is also saved in the task's 💬 Chat.", ok: "Sent to the client." } } : {}),
   }[mode];
   const submit = async () => {
     if (cfg.required && !text.trim()) return setErr("Write the answer first.");

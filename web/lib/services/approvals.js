@@ -109,6 +109,10 @@ export const answerDoubt = (id, text) => kw("kpi.doubt", "action_answer", [[id],
 export const releaseDoubt = (id, text) => kw("kpi.doubt", "action_release_to_client", [[id], text || false]);
 export const meetingFromDoubt = (id) => kw("kpi.doubt", "action_make_meeting", [[id]]);
 export const rejectDoubt = (id, note) => kw("kpi.doubt", "action_reject", [[id], note || ""]);
+/* 💬 A client message handed to a developer -- the WhatsApp "👨‍💻 → name"
+   buttons: they get it privately, the group is told, the client gets their chat link. */
+export const devOptionsForDoubt = (id) => kw("kpi.doubt", "chat_dev_options", [[id]]);
+export const askDeveloper = (id, userId) => kw("kpi.doubt", "action_ask_developer", [[id], Number(userId)]);
 
 /* ---- a task's correction history (the client's first wording) ---- */
 export const taskCorrection = async (kpiId) =>
