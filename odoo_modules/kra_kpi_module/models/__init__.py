@@ -86,3 +86,6 @@ from . import kpi_wa_admin_link
 # AFTER kpi_wa_admin_link: the chain sends its links.
 from . import kpi_escalation
 from . import kpi_client_updates
+# LAST: overrides _notify, _next_ref_for_prefix and the related-req link
+# from kpi_notify / kpi / kpi_decline (old DB requirement, kpi_legacy.py).
+from . import kpi_legacy

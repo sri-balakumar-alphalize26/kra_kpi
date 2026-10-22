@@ -79,6 +79,9 @@ export class KpiPendingQueue extends Component {
                                                 <span class="badge"
                                                       t-att-class="q.kind === 'bug' ? 'bg-danger' : (q.kind === 'update' ? 'bg-warning text-dark' : 'bg-primary')"
                                                       t-esc="q.kind"/>
+                                                <span t-if="q.legacy_req_link" class="badge bg-secondary" title="About a requirement from the old database">🗄️ Old DB</span>
+                                                <span t-if="q.legacy_req_link and q.legacy_status !== 'confirmed'" class="badge bg-warning text-dark"
+                                                      title="Pending — confirm with client">Pending</span>
                                                 <span class="small text-truncate" t-esc="q.name"/>
                                                 <i t-if="q.rejected" class="fa fa-times-circle text-danger small"/>
                                                 <i t-if="!q.user_id" class="fa fa-user-times text-warning small" title="No developer assigned"/>
@@ -120,7 +123,10 @@ export class KpiPendingQueue extends Component {
                                                                    t-model="q.external_ref" placeholder="REQ-001"/>
                                                         </div>
                                                         <div class="col-md-2">
-                                                            <label class="form-label small fw-bold">Linked Req</label>
+                                                            <label class="form-label small fw-bold">Linked Req
+                                                                <span t-if="q.legacy_req_link" class="badge bg-secondary ms-1">🗄️ Old DB</span>
+                                                                <span t-if="q.legacy_req_link and q.legacy_status !== 'confirmed'" class="badge bg-warning text-dark ms-1">Pending</span>
+                                                            </label>
                                                             <select class="form-select form-select-sm" t-model="q.related_req_ref">
                                                                 <option value="">— none —</option>
                                                                 <t t-foreach="q.req_options or []" t-as="ro" t-key="ro.ref">

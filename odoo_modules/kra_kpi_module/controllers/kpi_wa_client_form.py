@@ -29,6 +29,7 @@ from odoo.http import request
 
 from .kpi_wa_approval import _render
 from ..models.kpi import DELIVERABLE_TYPES, clean_deliverable
+from ..models.kpi_legacy import legacy_input_problem
 from ..models.kpi_server import NEW_DB_NAME_EXAMPLE
 from ..models.kpi_workflow import NAME_PREFIX_FOR_DOC_TYPE, REF_PREFIX_FOR_DOC_TYPE
 
@@ -109,9 +110,11 @@ class KpiWaClientForm(http.Controller):
         return rows
 
     def _requirements(self, db):
-        """The client's requirement tasks on one database, newest first."""
-        rows = request.env['kra.kpi'].sudo().search([
-            ('client_db_id', '=', db.id), ('external_ref', '=ilike', 'REQ-%')],
+        """The client's requirement tasks on one database, newest first --
+        old-DB requirements already added (archived placeholders) included."""
+        rows = request.env['kra.kpi'].sudo().with_context(active_test=False).search([
+            ('client_db_id', '=', db.id), ('external_ref', '=ilike', 'REQ-%'),
+            '|', ('active', '=', True), ('is_legacy', '=', True)],
             order='create_date desc', limit=200)
         return rows
 
@@ -151,6 +154,10 @@ class KpiWaClientForm(http.Controller):
             'needed_by': fields.Date.to_string(kpi.deadline) if kpi.deadline else '',
             'deliverable': [c for c in (kpi.deliverable_type or '').split(',') if c],
             'deliverable_other': kpi.deliverable_other or '',
+            'legacy_on': '1' if kpi.legacy_req_link and not parent else '',
+            'legacy_ref': kpi.legacy_req_ref or '',
+            'legacy_name': kpi.legacy_req_name or '',
+            'legacy_note': kpi.legacy_note or '',
         }
 
     def _page(self, token, st, values=None, error=''):
@@ -239,6 +246,7 @@ class KpiWaClientForm(http.Controller):
         return {'ok': True, 'tasks': [{
             'id': k.id, 'ref': k.external_ref or '', 'name': k.name or '',
             'date': k.create_date.strftime('%d-%m-%Y') if k.create_date else '',
+            'old': bool(k.is_legacy),
         } for k in self._requirements(db)]}
 
     @http.route('/kpi/wa/client/<string:token>/polish', type='json', auth='public',
@@ -436,6 +444,36 @@ class KpiWaClientForm(http.Controller):
             router._finish_client_ticket(kpi, group, st, {'client_db_id': db.id},
                                          {'form': kind, 'db_id': db.id},
                                          action='wa_client_form')
+        elif self._legacy_on(post):
+            # Bug / Update about a requirement from the OLD database: nothing
+            # to pick here, so a voice note (or the Request ID / name / a typed
+            # explanation) says what it is about. kpi_legacy.py.
+            lref, lname, lnote = self._legacy_post(post)
+            problem = legacy_input_problem(lref, lname, lnote, files)
+            if problem:
+                return None, problem, ''
+            title = lname or (text.split('\n')[0][:80].strip() or 'Old DB requirement')
+            kpi = Kpi.browse(Kpi.create_kpi(dict(common, **{
+                'name': NAME_PREFIX_FOR_DOC_TYPE[kind] + _clean_title(title),
+                'kra_id': target.id,
+                'description': '%s\n\nAbout: an old DB requirement%s\nDatabase: %s%s' % (
+                    text, ' — %s' % ' · '.join(x for x in (lref, lname) if x)
+                    if (lref or lname) else ' (details to be confirmed)', scope, footer),
+            })))
+            router._finish_client_ticket(kpi, group, st, dict(
+                Kpi._legacy_vals(lref, lname, lnote),
+                client_db_id=db.id, external_ref=Kpi._legacy_new_ref(kind),
+                requested_doc_type=kind,
+            ), {'form': kind, 'db_id': db.id, 'old_db': True},
+                action='wa_client_form')
+            if files:
+                self._attach(kpi, files, st)
+            if lref:
+                err = kpi._legacy_link(lref, lname)
+                if err:
+                    return None, err, ''
+            kpi._after_commit_in_background('_legacy_transcribe')
+            return kpi, '', ''
         else:
             # Bug / Update: always about ONE existing requirement on this DB,
             # numbered under it -- BUG001-REQ-012, UPT001-REQ-012.
@@ -485,6 +523,17 @@ class KpiWaClientForm(http.Controller):
                 return None, 'Needed by cannot be in the past.'
         return {'priority': priority, 'deadline': deadline}, ''
 
+    @staticmethod
+    def _legacy_on(post):
+        return (post.get('legacy_on') or '') in ('1', 'on', 'true')
+
+    @staticmethod
+    def _legacy_post(post):
+        """(Request ID, Task name, typed explanation) of a From-old-DB request."""
+        return ((post.get('legacy_ref') or '').strip()[:32],
+                ' '.join((post.get('legacy_name') or '').split())[:200],
+                (post.get('legacy_note') or '').strip()[:TEXT_MAX])
+
     def _resubmit(self, st, kind, post):
         """A declined task, fixed by the client on the same form.
 
@@ -530,6 +579,19 @@ class KpiWaClientForm(http.Controller):
                         description='%s\n\nDatabase: %s%s' % (text, scope, footer))
             if old_kind != 'requirement':
                 vals['external_ref'] = 'REQ-%03d' % Kpi._next_ref_for_prefix('REQ')
+        elif self._legacy_on(post):
+            lref, lname, lnote = self._legacy_post(post)
+            problem = legacy_input_problem(lref, lname, lnote, files)
+            if problem:
+                return None, problem, ''
+            title = lname or (text.split('\n')[0][:80].strip() or 'Old DB requirement')
+            vals.update(Kpi._legacy_vals(lref, lname, lnote),
+                        name=NAME_PREFIX_FOR_DOC_TYPE[kind] + _clean_title(title),
+                        related_req_ref=False, requested_doc_type=kind,
+                        description='%s\n\nAbout: an old DB requirement\nDatabase: %s%s' % (
+                            text, scope, footer))
+            if old_kind != kind or kpi.related_req_ref:
+                vals['external_ref'] = Kpi._legacy_new_ref(kind)
         else:
             try:
                 parent = Kpi.browse(int(post.get('parent_id') or 0)).exists()
@@ -563,6 +625,13 @@ class KpiWaClientForm(http.Controller):
             'self_review_note': ('[CLIENT FIXED] %s' % text)[:255],
         })
         kpi.write(vals)
+        if kind != 'requirement' and self._legacy_on(post):
+            lref, lname, _n = self._legacy_post(post)
+            if lref:
+                err = kpi._legacy_link(lref, lname)
+                if err:
+                    return None, err, ''
+            kpi._after_commit_in_background('_legacy_transcribe')
         kpi._log_action('client_resubmitted', source='whatsapp', actor_label=who, payload={
             'round': kpi.correction_round, 'old_ref': old_ref, 'new_ref': kpi.external_ref,
             'old_kind': old_kind, 'new_kind': kind})
@@ -605,7 +674,10 @@ class KpiWaClientForm(http.Controller):
         emoji, title = _TITLES.get(kind, ('', ''))
         lines = ['%s *%s* — *%s*' % (emoji, title, ref), kpi.name or '']
         if kpi.related_req_ref:
-            lines.append('About: %s' % kpi.related_req_ref)
+            lines.append('About: %s%s' % (kpi.related_req_ref,
+                                          ' (old DB)' if kpi.legacy_req_link else ''))
+        elif kpi.legacy_req_link:
+            lines.append('About: an old DB requirement — the team will confirm the details with you')
         if db:
             lines.append('🗄️ %s (%s)' % (db.db_name, db.server_id.name))
         if who:

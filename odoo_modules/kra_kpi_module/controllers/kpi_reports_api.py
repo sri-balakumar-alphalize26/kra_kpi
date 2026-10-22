@@ -2500,13 +2500,16 @@ class KpiReportsAPI(http.Controller):
                 else:
                     if root_kra.id not in req_cache:
                         desc_ids = root_kra._get_descendant_ids()
-                        reqs = request.env['kra.kpi'].sudo().search([
+                        # Old-DB requirements already added are archived
+                        # placeholders (kpi_legacy.py) — listed too, marked Old.
+                        reqs = request.env['kra.kpi'].sudo().with_context(active_test=False).search([
                             ('kra_id', 'in', desc_ids),
                             ('external_ref', 'ilike', 'REQ%'),
-                            ('active', '=', True),
+                            '|', ('active', '=', True), ('is_legacy', '=', True),
                         ], order='external_ref')
                         req_cache[root_kra.id] = [
-                            {'ref': r.external_ref, 'name': r.name or ''}
+                            {'ref': r.external_ref,
+                             'name': (r.name or '') + (' (Old)' if r.is_legacy else '')}
                             for r in reqs if r.external_ref]
                     opts = list(req_cache[root_kra.id])
                 cur = (current_ref or '').strip()
@@ -2539,6 +2542,7 @@ class KpiReportsAPI(http.Controller):
                     'project_id': project.id if project else (root.id if root else False),
                     'external_ref': k.external_ref or '',
                     'related_req_ref': k.related_req_ref or '',
+                    'legacy_req_link': bool(getattr(k, 'legacy_req_link', False)), 'legacy_status': getattr(k, 'legacy_status', '') or '',
                     'priority': k.priority or 'regular',
                     'deliverable_type': k.deliverable_type or '',
                     'deliverable_other': k.deliverable_other or '',
@@ -3037,6 +3041,7 @@ class KpiReportsAPI(http.Controller):
                     'kind': kind,
                     'external_ref': k.external_ref or '',
                     'related_req_ref': k.related_req_ref or '',
+                    'legacy_req_link': bool(getattr(k, 'legacy_req_link', False)), 'legacy_status': getattr(k, 'legacy_status', '') or '',
                     'client_name': root.name if root else '',
                     'project_id': project.id if project else (k.kra_id.id if k.kra_id else 0),
                     'project_name': project.name if project else '',
@@ -3231,13 +3236,15 @@ class KpiReportsAPI(http.Controller):
                 ids = list(request.env['kra.master'].sudo().browse(sub)._get_descendant_ids())
             else:
                 ids = list(allowed_ids)
-            rows = request.env['kra.kpi'].sudo().search([
-                ('kra_id', 'in', ids), ('external_ref', '=ilike', 'REQ-%')],
+            rows = request.env['kra.kpi'].sudo().with_context(active_test=False).search([
+                ('kra_id', 'in', ids), ('external_ref', '=ilike', 'REQ-%'),
+                '|', ('active', '=', True), ('is_legacy', '=', True)],
                 order='create_date desc', limit=300)
             return {'status': True, 'tasks': [{
                 'id': k.id, 'ref': k.external_ref or '', 'name': k.name or '',
                 'date': k.create_date.strftime('%d-%m-%Y') if k.create_date else '',
                 'db': k.client_db_id.db_name or '',
+                'old': bool(k.is_legacy),
             } for k in rows]}
         except Exception as e:
             return {'status': False, 'message': str(e)}
@@ -3273,7 +3280,12 @@ class KpiReportsAPI(http.Controller):
             # Bug / Update: always about ONE of the client's requirements, and
             # numbered under it (BUG001-REQ-012), like the WhatsApp form.
             parent = None
-            if kind in ('bug', 'update'):
+            # From old DB: about a requirement from the old database, so there
+            # is nothing to pick (models/kpi_legacy.py). Checked after files.
+            legacy_on = kind in ('bug', 'update') and bool(params.get('legacy_on'))
+            if legacy_on:
+                dv, err = {'deliverable_type': False, 'deliverable_other': False}, None
+            elif kind in ('bug', 'update'):
                 try:
                     parent = request.env['kra.kpi'].sudo().browse(
                         int(params.get('parent_id') or 0)).exists()
@@ -3299,6 +3311,14 @@ class KpiReportsAPI(http.Controller):
             files, err = self._client_task_files(params.get('attachments'))
             if err:
                 return {'status': False, 'message': err}
+            if legacy_on:
+                from ..models.kpi_legacy import legacy_input_problem
+                lref = (params.get('legacy_ref') or '').strip()[:32]
+                lname = ' '.join((params.get('legacy_name') or '').split())[:200]
+                lnote = (params.get('legacy_note') or '').strip()[:4000]
+                problem = legacy_input_problem(lref, lname, lnote, files)
+                if problem:
+                    return {'status': False, 'message': problem}
             vals = {
                 'name': name_prefix + raw_name,
                 'kra_id': sub_kra_id,
@@ -3318,6 +3338,11 @@ class KpiReportsAPI(http.Controller):
                 vals.update(dv)
             if needed_by:
                 vals['deadline'] = needed_by
+            if legacy_on:
+                Kpi = request.env['kra.kpi'].sudo()
+                vals.update(Kpi._legacy_vals(lref, lname, lnote),
+                            external_ref=Kpi._legacy_new_ref(kind), related_req_ref='',
+                            requested_doc_type=kind)
             if parent:
                 from ..models.kpi_workflow import REF_PREFIX_FOR_DOC_TYPE
                 prefix = REF_PREFIX_FOR_DOC_TYPE[kind]
@@ -3330,9 +3355,17 @@ class KpiReportsAPI(http.Controller):
                     'related_req_ref': parent.external_ref,
                     'client_db_id': parent.client_db_id.id or False,
                 })
-            kpi = request.env['kra.kpi'].sudo().create(vals)
-            if files:
-                self._attach_client_files(kpi, files)
+            # Savepoint: an old Request ID that cannot be used (a new-system
+            # number, a duplicate) undoes the task instead of leaving it half made.
+            with request.env.cr.savepoint():
+                kpi = request.env['kra.kpi'].sudo().create(vals)
+                if files:
+                    self._attach_client_files(kpi, files)
+                legacy_err = kpi._legacy_link(lref, lname) if legacy_on and lref else ''
+                if legacy_err:
+                    raise ValueError(legacy_err)
+            if legacy_on:
+                kpi._after_commit_in_background('_legacy_transcribe')
             # Tell the admins a client task is queued (re-nudged while unread).
             try:
                 kpi._notify('client_task_queued', attachments_line=(
@@ -3348,6 +3381,7 @@ class KpiReportsAPI(http.Controller):
                 logging.getLogger(__name__).warning(
                     "client_task_queued notify failed for kpi %s: %s", kpi.id, exc)
             return {'status': True, 'kpi_id': kpi.id, 'name': kpi.name,
+                    'ref': kpi.external_ref or '',
                     'needed_by': fields.Date.to_string(needed_by) if needed_by else '',
                     'attachment_count': len(files)}
         except Exception as e:
@@ -7392,6 +7426,23 @@ class KpiReportsAPI(http.Controller):
                             'message': '%s (task %d: %s)' % (err, i + 1, (t.get('name') or '').strip())}
                 row_deliverable[i] = dv if dv['deliverable_type'] else default_deliverable
 
+            # From old DB rows (Bug / Update only): checked for every row first,
+            # for the same reason. No voice note here, so the Request ID, the
+            # name or a typed explanation has to say what it is about.
+            from ..models.kpi_legacy import legacy_input_problem
+            Legacy = request.env['kra.kpi'].sudo()
+            for i, t in enumerate(tasks_in):
+                if not (t.get('legacy_on') and doc_type in ('bug', 'update')
+                        and (t.get('name') or '').strip()):
+                    continue
+                problem = legacy_input_problem(t.get('legacy_ref'), t.get('legacy_name'),
+                                               t.get('legacy_note'), [])
+                if not problem and (t.get('legacy_ref') or '').strip():
+                    problem = Legacy._legacy_check_ref(t['legacy_ref'], sub_kra)[2]
+                if problem:
+                    return {'status': False, 'message': '%s (task %d: %s)' % (
+                        problem, i + 1, (t.get('name') or '').strip())}
+
             # is_client was already computed above (used for authorization).
             # Clients use sudo() to bypass ACL on kra.kpi.create (mirroring
             # /kpi_client_portal/add_task) since their portal group lacks CRUD on kra.kpi.
@@ -7438,7 +7489,11 @@ class KpiReportsAPI(http.Controller):
                 # nobody can fork the numbering by typing their own.
                 vals['external_ref'] = '%s-%03d' % (ref_prefix, ref_counter)
                 ref_counter += 1
-                if t.get('related_req_ref'):
+                legacy_row = bool(t.get('legacy_on') and doc_type in ('bug', 'update'))
+                if legacy_row:
+                    vals.update(Legacy._legacy_vals(t.get('legacy_ref'), t.get('legacy_name'),
+                                                    t.get('legacy_note')))
+                elif t.get('related_req_ref'):
                     vals['related_req_ref'] = t['related_req_ref']
                 # The client's reason / detail for this task. This was silently
                 # dropped before, which is why the Client Task Queue's Description
@@ -7457,6 +7512,8 @@ class KpiReportsAPI(http.Controller):
                     vals['requirement_version'] = requirement_version
                 kpi = kpi_model.create(vals)
                 created_ids.append(kpi.id)
+                if legacy_row and (t.get('legacy_ref') or '').strip():
+                    kpi._legacy_link(t['legacy_ref'], t.get('legacy_name'))
                 # Client submission → tell the admins it's sitting in the queue
                 # needing a developer. Re-nudged while unread by
                 # kra.kpi._cron_nudge_queued_tasks. Never raises.
@@ -7515,6 +7572,7 @@ class KpiReportsAPI(http.Controller):
                     'name': k.name,
                     'external_ref': k.external_ref or '',
                     'related_req_ref': k.related_req_ref or '',
+                    'legacy_req_link': bool(getattr(k, 'legacy_req_link', False)), 'legacy_status': getattr(k, 'legacy_status', '') or '',
                     'task_state': k.task_state or '',
                     'priority': k.priority or '',
                     'primary_assignee': k.user_id.name if k.user_id else '',

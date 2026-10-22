@@ -91,6 +91,15 @@
                     .kind-tabs a.on { background:var(--brand); border-color:var(--brand); color:#fff; }
                     .agree { display:flex; gap:8px; align-items:flex-start; font-weight:700; }
                     .agree input { margin-top:3px; accent-color:var(--brand); }
+                    .old-toggle { display:flex; gap:8px; align-items:center; font-weight:700; cursor:pointer; }
+                    .old-toggle input { accent-color:var(--brand); width:18px; height:18px; }
+                    #kfPick[hidden], .old-box[hidden] { display:none; }
+                    .old-box { display:flex; flex-direction:column; gap:10px; border:1.5px solid var(--brand);
+                               border-radius:var(--r); padding:10px 12px; background:var(--input); }
+                    .old-badge { align-self:flex-start; padding:3px 10px; border-radius:999px; font-size:12.5px;
+                                 font-weight:800; background:var(--sel-bg); color:var(--sel-text); }
+                    .old-hint { font-size:12.5px; font-weight:700; color:var(--danger); }
+                    .old-hint.good { color:var(--ok); }
                 </style>
                 <form id="kf" method="post" enctype="multipart/form-data"
                       t-att-action="'/kpi/wa/client/%s/submit' % token">
@@ -131,10 +140,42 @@
                         <!-- Bug / Update: about one existing requirement -->
                         <div class="field" t-if="kind in ('bug', 'update')">
                             <span class="lbl">Which task is it about? <span class="req">*</span></span>
-                            <input class="input" id="kfReqSearch" type="search" autocomplete="off"
-                                   placeholder="🔍 Search by number or name (newest first)"/>
-                            <div id="kfReqs" class="req-list"><span class="mini">Choose the server and database first.</span></div>
-                            <span class="hint">Pick one. The new request is numbered under it, e.g. <t t-esc="'BUG001' if kind == 'bug' else 'UPT001'"/>-REQ-012.</span>
+                            <!-- The task is from the OLD database, so it is not in the list (kpi_legacy.py). -->
+                            <label class="old-toggle"><input type="checkbox" id="kfOld" name="legacy_on" value="1"/>
+                                <span>🗄️ It's from the old system — not in this list</span></label>
+                            <div id="kfPick">
+                                <input class="input" id="kfReqSearch" type="search" autocomplete="off"
+                                       placeholder="🔍 Search by number or name (newest first)"/>
+                                <div id="kfReqs" class="req-list"><span class="mini">Choose the server and database first.</span></div>
+                                <span class="hint">Pick one. The new request is numbered under it, e.g. <t t-esc="'BUG001' if kind == 'bug' else 'UPT001'"/>-REQ-012.</span>
+                            </div>
+                            <div id="kfOldBox" class="old-box" hidden="hidden">
+                                <span class="old-badge">🗄️ Old DB Requirement</span>
+                                <div class="grid2">
+                                    <div class="field">
+                                        <span class="lbl">Request ID <span class="hint">(optional)</span></span>
+                                        <input class="input" id="kfOldRef" name="legacy_ref" maxlength="32" autocomplete="off"
+                                               autocapitalize="characters" spellcheck="false" placeholder="REQ-012"/>
+                                    </div>
+                                    <div class="field">
+                                        <span class="lbl">Task name <span class="hint">(optional)</span></span>
+                                        <input class="input" id="kfOldName" name="legacy_name" maxlength="200"
+                                               placeholder="e.g. Leave approval screen"/>
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <span class="lbl">Tell us about it — any one is enough</span>
+                                    <span class="hint">Best: a 📷 photo or 🎥 video of the old screen. If not possible, record a voice note or type a message.</span>
+                                    <div class="capture">
+                                        <button type="button" class="btn" id="kfOldPhoto">📷 Photo</button>
+                                        <button type="button" class="btn" id="kfOldVideo">🎥 Video</button>
+                                        <button type="button" class="btn ghost" id="kfOldVoice">🎤 Voice note</button>
+                                    </div>
+                                    <textarea id="kfOldNote" name="legacy_note" maxlength="4000" rows="3"
+                                              placeholder="…or type it here instead of recording"></textarea>
+                                </div>
+                                <span id="kfOldHint" class="old-hint"></span>
+                            </div>
                         </div>
 
                         <!-- New Database -->

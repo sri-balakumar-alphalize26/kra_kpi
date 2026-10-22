@@ -636,6 +636,9 @@ export class KpiAction extends Component {
                              Details are added while working on the task, so until its
                              first Start there is nothing to report against. -->
                         <!-- Same yellow warning and wording as the WhatsApp task page. -->
+                        <div t-if="detailLocked()" class="alert alert-secondary d-flex align-items-center gap-2 mb-3">
+                            🔒 <span t-esc="detailLocked()"/>
+                        </div>
                         <div t-if="!detailStarted()" class="alert alert-warning d-flex align-items-center gap-2 mb-3">
                             <i class="fa fa-exclamation-triangle"></i>
                             <span>This task hasn't been started yet, so updates, files, links and manuals can't be
@@ -745,7 +748,7 @@ export class KpiAction extends Component {
                             </t>
                             
                             <!-- Upload New Manual Form -->
-                            <div t-if="detailStarted()">
+                            <div t-if="detailStarted() and !detailLocked()">
                                 <button class="btn btn-primary mb-3" 
                                         t-on-click="() => this.state.showManualUpload = !this.state.showManualUpload">
                                     <i class="fa fa-plus"></i> Add New Manual
@@ -914,7 +917,7 @@ export class KpiAction extends Component {
                         
 
                        <!-- Progress Updates Section -->
-                        <div t-if="detailStarted()" class="card p-4 mb-3">
+                        <div t-if="detailStarted() and !detailLocked()" class="card p-4 mb-3">
                             <h4 class="fw-bold mb-3">Submit Progress Update</h4>
                             
                             <div class="mb-3">
@@ -1053,7 +1056,7 @@ export class KpiAction extends Component {
                         </div>
 
                         <!-- Part B: GitHub branch — its own card, URL + Branch side by side -->
-                        <div t-if="detailStarted()" class="card p-4 mb-3" id="kpiGithubCard">
+                        <div t-if="detailStarted() and !detailLocked()" class="card p-4 mb-3" id="kpiGithubCard">
                             <h4 class="fw-bold mb-3"><i class="fa fa-github"></i> Link a GitHub branch
                                 <span t-if="state.detailData.github_required" class="text-danger fw-normal small">(required — Module / App task)</span>
                                 <span t-else="" class="text-muted fw-normal small">(optional)</span></h4>
@@ -1162,9 +1165,86 @@ export class KpiAction extends Component {
                              client portal). Kept apart from the team's Attached Files and
                              Progress History, read-only, and never counted as the
                              progress summary Complete asks for. -->
-                        <t t-if="clientProgress().length > 0">
+                        <t t-if="clientProgress().length > 0 or state.legacy.data">
                             <div class="card p-4 mb-3 border-warning">
                                 <h4 class="fw-bold mb-3">📎 From the client (<t t-esc="clientProgress().length"/>)</h4>
+                                <!-- KPI Details: a bug / update about a requirement from the
+                                     OLD database. Pending until an admin adds its Request ID
+                                     (which also renumbers the task under that REQ). -->
+                                <t t-set="lg" t-value="state.legacy.data"/>
+                                <div t-if="lg" class="card p-3 mb-3 bg-light">
+                                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                        <h5 class="fw-bold mb-0">KPI Details</h5>
+                                        <span class="badge bg-secondary">🗄️ Old DB Requirement</span>
+                                        <span t-att-class="'badge ' + (lg.status === 'confirmed' ? 'bg-success' : 'bg-warning text-dark')"
+                                              t-esc="lg.status_label"/>
+                                        <button t-if="state.legacy.canEdit and !state.legacy.editing"
+                                                type="button" class="btn btn-sm btn-outline-primary ms-auto"
+                                                t-on-click="beginLegacyEdit">
+                                            <i class="fa fa-pencil"></i> Edit
+                                        </button>
+                                    </div>
+                                    <t t-if="(lg.voice_notes or []).length">
+                                        <div class="small text-muted mb-1">Voice notes</div>
+                                        <t t-foreach="lg.voice_notes" t-as="vn" t-key="vn.url">
+                                            <div class="mb-2">
+                                                <div class="small" t-esc="vn.name"/>
+                                                <audio controls="" preload="none" t-att-src="vn.url" style="max-width:100%;"/>
+                                            </div>
+                                        </t>
+                                    </t>
+                                    <div t-if="lg.transcript" class="mb-2">
+                                        <div class="small text-muted">Transcript</div>
+                                        <div style="white-space: pre-wrap;" t-esc="lg.transcript"/>
+                                    </div>
+                                    <t t-if="!state.legacy.editing">
+                                        <div t-if="lg.note" class="mb-2">
+                                            <div class="small text-muted">Message</div>
+                                            <div style="white-space: pre-wrap;" t-esc="lg.note"/>
+                                        </div>
+                                        <div class="mb-1">
+                                            <span class="small text-muted">Request ID: </span>
+                                            <strong t-if="lg.ref" t-esc="lg.ref"/>
+                                            <span t-else="" class="text-warning">Pending — confirm with client</span>
+                                        </div>
+                                        <div class="mb-1">
+                                            <span class="small text-muted">Task name: </span>
+                                            <strong t-if="lg.name" t-esc="lg.name"/>
+                                            <span t-else="" class="text-muted">—</span>
+                                        </div>
+                                        <div t-if="lg.confirmed_by or lg.confirmed_on" class="small text-muted">
+                                            Confirmed by <t t-esc="lg.confirmed_by or '—'"/>
+                                            <t t-if="lg.confirmed_on"> on <t t-esc="formatDate(lg.confirmed_on)"/></t>
+                                        </div>
+                                    </t>
+                                    <t t-else="">
+                                        <div class="mb-2">
+                                            <label class="form-label small mb-1">Request ID (from the old system)</label>
+                                            <input type="text" class="form-control form-control-sm" placeholder="REQ-012"
+                                                   t-model="state.legacy.ref" t-att-disabled="state.legacy.saving"/>
+                                            <small class="text-muted">Saving a Request ID links the task under it and marks it Confirmed with client.</small>
+                                        </div>
+                                        <div class="mb-2">
+                                            <label class="form-label small mb-1">Task name</label>
+                                            <input type="text" class="form-control form-control-sm"
+                                                   t-model="state.legacy.name" t-att-disabled="state.legacy.saving"/>
+                                        </div>
+                                        <div class="mb-2">
+                                            <label class="form-label small mb-1">Message</label>
+                                            <textarea class="form-control form-control-sm" rows="3"
+                                                      t-model="state.legacy.note" t-att-disabled="state.legacy.saving"/>
+                                        </div>
+                                        <div class="d-flex gap-2">
+                                            <button type="button" class="btn btn-sm btn-primary"
+                                                    t-att-disabled="state.legacy.saving" t-on-click="saveLegacy">
+                                                <t t-if="state.legacy.saving"><i class="fa fa-spinner fa-spin"></i> Saving...</t>
+                                                <t t-else=""><i class="fa fa-save"></i> Save</t>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                    t-att-disabled="state.legacy.saving" t-on-click="cancelLegacyEdit">Cancel</button>
+                                        </div>
+                                    </t>
+                                </div>
                                 <div class="list-group">
                                     <t t-foreach="clientProgress()" t-as="cu" t-key="cu.id">
                                         <div class="list-group-item">
@@ -3294,6 +3374,8 @@ export class KpiAction extends Component {
                 branch_name: '',
             },
             githubLinks: [],
+            // KPI Details card of a From-old-DB bug / update (/kra_kpi/legacy/get).
+            legacy: { data: false, canEdit: false, editing: false, saving: false, ref: '', name: '', note: '' },
             // Old files the user chose to Replace, removed only once the new upload
             // has succeeded, so a failed upload never loses them.
             pendingReplace: { progress: [], manual: [] },
@@ -6377,6 +6459,11 @@ export class KpiAction extends Component {
     /** Progress, manuals, files and GitHub links are added only once the task has
      *  been started (has_started from /kpi_action/details). Older payloads without
      *  the flag keep the forms, as before. */
+    /** Signed off by the client: why nothing more can be added ('' = can). */
+    detailLocked() {
+        return (this.state.detailData && this.state.detailData.details_locked) || '';
+    }
+
     detailStarted() {
         return this.state.detailData.has_started !== false;
     }
@@ -6593,6 +6680,54 @@ export class KpiAction extends Component {
         await this.loadAttachedFiles(id);  // 🆕 ADD THIS LINE
         await this.loadGithubLinks(id);  // 🆕 NEW
         await this.loadResourceSections(id);  // Part E: sortable resource sections
+        await this.loadLegacy(id);
+    }
+
+    // KPI Details of a bug / update about an OLD database requirement.
+    async loadLegacy(kpi_id) {
+        this.state.legacy = { data: false, canEdit: false, editing: false, saving: false, ref: '', name: '', note: '' };
+        try {
+            const res = await rpc('/kra_kpi/legacy/get', { kpi_id: parseInt(kpi_id) });
+            if (res && res.status) {
+                this.state.legacy.data = res.legacy || false;
+                this.state.legacy.canEdit = !!res.can_edit;
+            }
+        } catch (error) {
+            console.error('Error loading KPI Details:', error);
+        }
+    }
+    beginLegacyEdit() {
+        const d = this.state.legacy.data || {};
+        Object.assign(this.state.legacy, {
+            editing: true, ref: d.ref || '', name: d.name || '', note: d.note || '',
+        });
+    }
+    cancelLegacyEdit() { this.state.legacy.editing = false; }
+    async saveLegacy() {
+        const lg = this.state.legacy;
+        if (lg.ref.trim() && !/^REQ\s*-?\s*\d{1,9}$/i.test(lg.ref.trim())) {
+            this._toast('The Request ID looks like REQ-012.', 'danger');
+            return;
+        }
+        lg.saving = true;
+        try {
+            const res = await rpc('/kra_kpi/legacy/save', {
+                kpi_id: this.state.detailKpiId, ref: lg.ref, name: lg.name, note: lg.note,
+            });
+            if (!res || !res.status) {
+                this._toast((res && res.message) || "Couldn't save KPI Details.", 'danger');
+                return;
+            }
+            this._toast(res.message || 'KPI Details saved.', 'success');
+            // A Request ID renumbers the task: reload the header as well.
+            await this.loadKpiDetail(this.state.detailKpiId);
+            await this.loadLegacy(this.state.detailKpiId);
+        } catch (error) {
+            console.error('Error saving KPI Details:', error);
+            this._toast("Couldn't save KPI Details.", 'danger');
+        } finally {
+            this.state.legacy.saving = false;
+        }
     }
 
     async loadKpiDetail(id) {
