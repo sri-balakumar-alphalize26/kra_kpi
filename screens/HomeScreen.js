@@ -126,6 +126,8 @@ const QUICK = [
   { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true,  section: 'main',     bg: '#FFEDD5', fg: '#EA580C' },
   { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true,  section: 'main',     bg: '#FEE2E2', fg: '#DC2626' },
   { label: 'Client Task Queue',  lib: 'mc',  name: 'inbox-arrow-down', dest: 'taskqueue',          adminOnly: true,  section: 'main',     bg: '#FEF3C7', fg: '#D97706' },
+  // Old-DB bugs / updates waiting for their Request ID (same list as the web and Odoo).
+  { label: 'Needs Linking',      lib: 'mc',  name: 'link-variant',     dest: 'needslinking',       adminOnly: true,  section: 'main',     bg: '#FFF7ED', fg: '#C2410C' },
   { label: 'Generate Client Files', lib: 'mc', name: 'folder-zip',     dest: 'clientfiles',        adminOnly: true,  section: 'main',     bg: '#E0F2FE', fg: '#0284C7' },
   { label: 'Reassignment History', lib: 'mc', name: 'swap-horizontal', dest: 'reassignhistory',    adminOnly: true,  section: 'settings', bg: '#F3E8FF', fg: '#9333EA' },
   { label: 'Users',              lib: 'mc',  name: 'account-multiple-plus', dest: 'users',          adminOnly: true,  section: 'settings', bg: '#E0ECFF', fg: '#2563EB' },
