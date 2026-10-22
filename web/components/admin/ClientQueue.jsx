@@ -87,6 +87,7 @@ export default function ClientQueue() {
       <PageHeader crumbs={[{ label: "Work" }, { label: "Client task queue" }]} title="Client task queue" meta="Requests from clients, waiting for an estimate and a developer">
         {queue.data && !queueErr && <span className="chip">{items.length} pending</span>}
         <a className="btn btn-ghost" href="/queue/needs-linking">Needs linking</a>
+        <a className="btn btn-ghost" href="/queue/refused">🚫 Refused{queue.data?.refused_count ? ` (${queue.data.refused_count})` : ""}</a>
         <a className="btn btn-ghost" href="/settings/pre-approvals">Pre-approvals</a>
       </PageHeader>
       <div className="page">

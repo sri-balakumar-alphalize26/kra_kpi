@@ -2580,11 +2580,77 @@ class KpiReportsAPI(http.Controller):
                         'reason': m.description or '',
                     } for m in k.user_manual_ids],
                 })
-            return {'status': True, 'queue': result}
+            return {'status': True, 'queue': result, 'refused_count': self._refused_count()}
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"list_pending_queue: {str(e)}")
             return {'status': False, 'message': str(e), 'queue': []}
+
+    # ------------------------------------------------------------------
+    # 🚫 Refused: client requests an admin declined. They are archived, not
+    # deleted (kpi_decline.action_decline), so the list reads archived rows.
+    # ↩️ Restore puts one back in the queue above (action_restore_declined).
+    # ------------------------------------------------------------------
+    _REFUSED_DOMAIN = [('active', '=', False), ('declined_at', '!=', False),
+                       ('decline_mode', '=', 'decline'),
+                       ('is_legacy', '=', False), ('is_chat_general', '=', False)]
+
+    def _refused_count(self):
+        return request.env['kra.kpi'].sudo().with_context(active_test=False).search_count(
+            self._REFUSED_DOMAIN)
+
+    @http.route('/kpi_pending_queue/refused', type='json', auth='user', methods=['POST'], csrf=False)
+    def list_refused_queue(self, **params):
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            kpis = request.env['kra.kpi'].sudo().with_context(active_test=False).search(
+                self._REFUSED_DOMAIN, order='declined_at desc')
+            answers = dict(kpis._fields['client_reconfirm_state'].selection or [])
+            out = []
+            for k in kpis:
+                root = k.kra_id
+                while root and root.parent_id:
+                    root = root.parent_id
+                project = k.kra_id if k.kra_id != root else False
+                out.append({
+                    'id': k.id,
+                    'name': k.name or '',
+                    'external_ref': k.external_ref or '',
+                    'client_name': root.name if root else '',
+                    'project_name': project.name if project else '',
+                    'received_at': k.create_date.strftime('%Y-%m-%d %H:%M') if k.create_date else '',
+                    'declined_at': k.declined_at.strftime('%Y-%m-%d %H:%M') if k.declined_at else '',
+                    'declined_by': k.declined_by_id.name or '',
+                    'reason': k.decline_reason_id.name or '',
+                    'note': k.decline_note or '',
+                    'decline_count': k.decline_count or 0,
+                    'client_answer': k.client_reconfirm_state or '',
+                    'client_answer_label': answers.get(k.client_reconfirm_state, '') if k.client_reconfirm_state else '',
+                    'description': k.description or '',
+                    'submitted_by': k.submitted_by_uid.name if k.submitted_by_uid else (
+                        k.create_uid.name if k.create_uid else ''),
+                    'attachments': [{'id': m.id, 'file_name': m.file_name or 'file',
+                                     'reason': m.description or ''} for m in k.user_manual_ids],
+                })
+            return {'status': True, 'refused': out}
+        except Exception as e:
+            _logger.error("list_refused_queue: %s", e)
+            return {'status': False, 'message': str(e), 'refused': []}
+
+    @http.route('/kpi_pending_queue/restore', type='json', auth='user', methods=['POST'], csrf=False)
+    def restore_refused(self, kpi_id=None, **params):
+        if not self._is_owner_admin():
+            return {'status': False, 'message': 'Not authorized.'}
+        try:
+            kpi = request.env['kra.kpi'].sudo().with_context(active_test=False).browse(int(kpi_id or 0)).exists()
+            if not kpi:
+                return {'status': False, 'message': 'Task not found.'}
+            kpi.action_restore_declined(by_user=request.env.user)
+            return {'status': True, 'message': '%s is back in the client queue.' % (kpi.external_ref or kpi.id)}
+        except Exception as e:
+            _logger.warning("restore_refused: %s", e)
+            return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_pending_queue/update', type='json', auth='user', methods=['POST'], csrf=False)
     def update_pending_kpi(self, **params):
