@@ -1101,7 +1101,7 @@ const CHAT_DAY = (d) => {
 };
 const chatDate = (at) => (at ? new Date(String(at).replace(" ", "T") + "Z") : null);
 
-export function ChatTab({ kpiId }) {
+export function ChatTab({ kpiId, onSeen }) {
   const flags = useFlags();
   const [res, setRes] = useState(null);
   const [text, setText] = useState("");
@@ -1132,6 +1132,7 @@ export function ChatTab({ kpiId }) {
       if (r.status === false) { flags.err(r.message); return; }
       setText("");
       setRes(r);
+      onSeen?.();   /* the tab's waiting count drops once the team has replied */
     } catch (e) { flags.err(e.message); } finally { setBusy(false); }
   };
   const groups = [];

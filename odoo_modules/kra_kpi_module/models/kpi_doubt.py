@@ -415,3 +415,30 @@ class KpiDoubt(models.Model):
                 'ref': ref, 'who': self.raised_by_id.name or '',
                 'note': ('\n%s' % note) if note else ''})
         return True
+
+    # ------------------------------------------------------------------
+    # 💬 Discuss from the web Approvals desk: the same hand-off as the
+    # WhatsApp "👨‍💻 D<id> → name" buttons (kpi_manager_dm._decide_doubt).
+    # ------------------------------------------------------------------
+    def chat_dev_options(self):
+        """[{id, name}]: who this client message can be handed to -- the people
+        on the task first, then the Developer role (kra.kpi._chat_dev_candidates)."""
+        self.ensure_one()
+        self._decider()
+        return [{'id': u.id, 'name': u.name} for u in self.sudo().kpi_id._chat_dev_candidates()]
+
+    def action_ask_developer(self, user_id, by_user=None):
+        """Hand an open client message to one developer: they get the question
+        privately with their chat link, our group is told who was picked, and
+        the client gets their chat link (kra.kpi.chat_ask_developer)."""
+        self.ensure_one()
+        user = self._decider(by_user)
+        if self.kind != 'client_msg':
+            raise UserError(_('Only a client message can be handed to a developer.'))
+        if self.state != 'open':
+            raise UserError(_('Already answered by %s.') % (self.answered_by_id.name or _('the team')))
+        dev = self.env['res.users'].sudo().browse(int(user_id or 0)).exists()
+        if not dev or dev not in self.sudo().kpi_id._chat_dev_candidates():
+            raise UserError(_('Pick one of the developers in the list.'))
+        devs, unreachable = self.sudo().kpi_id.chat_ask_developer(user, devs=dev)
+        return {'sent_to': devs.mapped('name'), 'unreachable': unreachable.mapped('name')}

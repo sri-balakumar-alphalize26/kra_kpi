@@ -35,8 +35,13 @@ export default function TaskPanel({ id, onClose }) {
   /* /kpi_action/details: the flags and low-signal fields the Odoo detail pane
      shows (mandatory, service KPI, reviews, warehouse, next KPI, task file…). */
   const [info, setInfo] = useState(null);
+  /* 💬 Client messages waiting for the team -- the count on the Chat tab, as
+     Odoo's "💬 Chat with client" badge. */
+  const [chatWaiting, setChatWaiting] = useState(0);
+  const loadChatCount = () => S.fetchChat(id).then((r) => setChatWaiting(r?.status === false ? 0 : (r?.waiting || 0))).catch(() => setChatWaiting(0));
   const load = () => {
     S.fetchActionDetails(id).then(setInfo).catch(() => setInfo(null));
+    loadChatCount();
     return S.fetchTaskDetails(id).then((r) => { if (r.ok) { setD(r); setErr(""); } else setErr(r.message); }).catch((e) => setErr(e.message));
   };
   useEffect(() => { setD(null); setInfo(null); load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -168,7 +173,7 @@ export default function TaskPanel({ id, onClose }) {
               {info && <ExtraDetails info={info} />}
 
               <div className="tabs" role="tablist">
-                {[["updates", `Updates${teamProgress.length ? ` · ${teamProgress.length}` : ""}`], ["files", `Files${fileCount ? ` · ${fileCount}` : ""}`], ...(showClient ? [["client", "Client"]] : []), ["chat", "💬 Chat"], ["history", "History"]].map(([k, l]) => (
+                {[["updates", `Updates${teamProgress.length ? ` · ${teamProgress.length}` : ""}`], ["files", `Files${fileCount ? ` · ${fileCount}` : ""}`], ...(showClient ? [["client", "Client"]] : []), ["chat", chatWaiting ? `💬 Chat · ${chatWaiting} waiting` : "💬 Chat"], ["history", "History"]].map(([k, l]) => (
                   <span key={k} role="tab" className={tab === k ? "on" : ""} onClick={() => setTab(k)} style={{ cursor: "pointer" }}>{l}</span>
                 ))}
               </div>
@@ -187,7 +192,7 @@ export default function TaskPanel({ id, onClose }) {
               )}
               {tab === "files" && <FilesTab kpiId={id} d={d} canAdd={started && !locked} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
               {tab === "client" && showClient && <ClientTab kpiId={id} res={sends} onSaved={changed} />}
-              {tab === "chat" && <ChatTab key={`chat${id}`} kpiId={id} />}
+              {tab === "chat" && <ChatTab key={`chat${id}`} kpiId={id} onSeen={loadChatCount} />}
               {tab === "history" && <HistoryTab key={id} kpiId={id} d={d} />}
             </>
           )}
