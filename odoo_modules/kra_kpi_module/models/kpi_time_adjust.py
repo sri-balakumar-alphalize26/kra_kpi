@@ -50,6 +50,62 @@ def _hm(secs):
 class KraKpiTimeAdjust(models.Model):
     _inherit = 'kra.kpi'
 
+    # The estimate is what the client signed off against once it is with them.
+    ESTIMATE_LOCKED = ('awaiting_client', 'completed')
+
+    def _may_extend_estimate(self, user):
+        """'' when `user` may add time to this task's estimate, else why not.
+        The board's rule (/kra_kpi/task/add_time): the person on the task or an
+        admin, and not once it is with the client."""
+        self.ensure_one()
+        if self.task_state in self.ESTIMATE_LOCKED:
+            return _("This task is with the client — its estimate is what they signed off "
+                     "against and can't be changed now.")
+        admin = any(user.has_group(g) for g in (
+            'kra_kpi_module.group_kra_owner', 'kra_kpi_module.group_kra_admin',
+            'kra_kpi_module.group_kra_manager', 'base.group_system'))
+        if not (admin or self.user_id == user or user in self.contributor_ids):
+            return _('You can only add time to your own tasks.')
+        return ''
+
+    def extend_estimate(self, user, add_h, add_m, reason, source='web'):
+        """Add time to the estimate, with the reason shown on the card and kept
+        in the activity log. -> (ok, message). Same as the board's Add time and
+        WhatsApp's ⏱️ Ask for more time."""
+        self.ensure_one()
+        why = self._may_extend_estimate(user)
+        if why:
+            return False, why
+        # Lenient: "0 min" / "1 h" / "" all read as their number (an untouched
+        # 0 picker used to arrive as its label and was refused).
+        def num(v):
+            digits = ''.join(ch for ch in str(v or '') if ch.isdigit())
+            return int(digits) if digits else 0
+        add_h, add_m = num(add_h), num(add_m)
+        reason = (reason or '').strip()
+        if not (add_h or add_m):
+            return False, _('Add more than 0 minutes.')
+        if not reason:
+            return False, _('Give a reason — it is shown on the task card.')
+        rec = self.sudo()
+        before = '%02d:%02d' % (rec.estimate_hours, rec.estimate_minutes)
+        total = rec.estimate_hours * 60 + rec.estimate_minutes + add_h * 60 + add_m
+        rec.write({
+            'estimate_hours': total // 60, 'estimate_minutes': total % 60,
+            'estimate_extend_reason': reason[:255],
+            'estimate_extension_count': (rec.estimate_extension_count or 0) + 1,
+            'estimate_extended_by_id': user.id,
+            'estimate_extended_at': fields.Datetime.now(),
+        })
+        after = '%02d:%02d' % (rec.estimate_hours, rec.estimate_minutes)
+        self.env['kpi.action.log'].sudo().create({
+            'kpi_id': rec.id, 'event': 'estimate_extended', 'source': source,
+            'actor_user_id': user.id, 'actor_label': user.name or user.login or '',
+            'payload_json': json.dumps({'from': before, 'to': after, 'added_hours': add_h,
+                                        'added_minutes': add_m, 'reason': reason}),
+        })
+        return True, _('Estimate extended from %s to %s — %s') % (before, after, reason)
+
     def _prev_day_date(self):
         return fields.Date.context_today(self) - timedelta(days=1)
 

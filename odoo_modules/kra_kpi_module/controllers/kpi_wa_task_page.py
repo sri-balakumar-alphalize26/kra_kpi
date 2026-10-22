@@ -24,6 +24,7 @@ from odoo import fields, http
 from odoo.http import request
 
 from .kpi_wa_approval import _render
+from .kra_api import serve_file, _guess_mime
 from ..models.kpi_wa_staff_menu import STARTED_STATES
 
 _logger = logging.getLogger(__name__)
@@ -145,8 +146,26 @@ class KpiWaTaskPage(http.Controller):
         updates = [x for x in updates if not x['from_client']]
         logs = [{'label': label, 'rows': router.log_rows(task, user, key)}
                 for key, label, _e in router.LOG_KINDS]
+        # Under Estimate, as on the board: the original, then each extension
+        # "+01:05 → 02:05 · "reason" — who, when" (kpi.action.log estimate_extended).
+        est_rows = []
+        for r in request.env['kpi.action.log'].sudo().search(
+                [('kpi_id', '=', task.id), ('event', '=', 'estimate_extended')], order='id asc'):
+            try:
+                p = json.loads(r.payload_json or '{}') or {}
+            except (TypeError, ValueError):
+                p = {}
+            est_rows.append({
+                'from': p.get('from') or '', 'to': p.get('to') or '',
+                'added': '+%02d:%02d' % (int(p.get('added_hours') or 0), int(p.get('added_minutes') or 0)),
+                'reason': p.get('reason') or '',
+                'who': r.actor_label or (r.actor_user_id.name or ''),
+                'when': when(r.create_date),
+            })
+        est_original = est_rows[0]['from'] if est_rows else ''
         return {
             'token': token, 'user_name': user.name, 'ok': ok, 'err': err, 'theme': user._kpi_wa_color()[1],
+            'est_rows': est_rows, 'est_original': est_original,
             't': {
                 'ref': task.external_ref or '#%s' % task.id, 'name': task.name or '',
                 'state': sel('task_state', task.task_state), 'priority': (sel('priority', task.priority) or '').upper(),
@@ -162,6 +181,8 @@ class KpiWaTaskPage(http.Controller):
             'can_add': task.task_state in ('in_progress', 'paused', 'partially_completed',
                                            'awaiting_client', 'completed'),
             'can_complete': task.task_state in ('in_progress', 'paused', 'hold', 'rework'),
+            # ⏱️ Ask for more time: pickers instead of typing "2h 30m reason".
+            'can_time': not task._may_extend_estimate(user),
             # The board's "Complete This Task" boxes, word for word, pre-ticked
             # the way openCompleteFromCard does (GitHub links -> 1, a manual -> 3, 4).
             'checklist': [
@@ -204,6 +225,17 @@ class KpiWaTaskPage(http.Controller):
                                    replace_same=bool(post.get('replace_same')))
         if ok:
             self._notify(st, user, '📝 %s added an update on %s.' % (user.name, task.external_ref or task.id))
+        return self._back(token, ok=msg if ok else '', err='' if ok else msg)
+
+    @http.route('/kpi/wa/task/<string:token>/addtime', type='http', auth='public',
+                methods=['POST'], csrf=False, website=False)
+    def add_time(self, token, **post):
+        """⏱️ Ask for more time from the page: hours + minutes + reason."""
+        st, user, task = self._resolve(token)
+        if not task:
+            return self._expired()
+        ok, msg = task.extend_estimate(user, post.get('hours'), post.get('minutes'),
+                                       post.get('reason'), source='whatsapp')
         return self._back(token, ok=msg if ok else '', err='' if ok else msg)
 
     @http.route('/kpi/wa/task/<string:token>/manual', type='http', auth='public',
@@ -365,11 +397,10 @@ class KpiWaTaskPage(http.Controller):
             data, name, mime = rec[field], rec.file_name, None
         if not data:
             return request.not_found()
-        return request.make_response(base64.b64decode(data), headers=[
-            ('Content-Type', mime or 'application/octet-stream'),
-            ('Content-Disposition', 'inline; filename="%s"' % (name or 'file').replace('"', '')),
-            ('Cache-Control', 'no-store'),
-        ])
+        # Its real type and Range support, so it opens in the View popup (and a
+        # video can be seeked) instead of the phone downloading it.
+        return serve_file(base64.b64decode(data), name or 'file', _guess_mime(name, mime or ''),
+                          inline=kw.get('download') not in ('1', 'true'))
 
     @http.route('/kpi/wa/task/<string:token>/file', type='http', auth='public',
                 methods=['GET'], csrf=False, website=False)
@@ -394,8 +425,7 @@ class KpiWaTaskPage(http.Controller):
             data, name, mime = rec[field], rec.file_name, None
         if not data:
             return request.not_found()
-        return request.make_response(base64.b64decode(data), headers=[
-            ('Content-Type', mime or 'application/octet-stream'),
-            ('Content-Disposition', 'inline; filename="%s"' % (name or 'file').replace('"', '')),
-            ('Cache-Control', 'no-store'),
-        ])
+        # Its real type and Range support, so it opens in the View popup (and a
+        # video can be seeked) instead of the phone downloading it.
+        return serve_file(base64.b64decode(data), name or 'file', _guess_mime(name, mime or ''),
+                          inline=kw.get('download') not in ('1', 'true'))

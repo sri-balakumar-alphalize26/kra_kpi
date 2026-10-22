@@ -156,6 +156,7 @@
                     .tools details.act { flex:1 1 260px; margin-bottom:0; }
                     .tools details.act > summary { padding:6px 12px; font-size:12.5px; }
                     .btn.sm { padding:6px 12px; font-size:12.5px; }
+                    .est-hist { margin-top:4px; font-size:12.5px; color:var(--subtlest); display:flex; flex-direction:column; gap:2px; }
                 </style>
                 <div class="hd"><t t-esc="t['ref']"/> — <t t-esc="t['name']"/>
                     <small><span class="chip" t-esc="t['state'].upper()"/><span class="chip pri" t-esc="t['priority']"/>
@@ -169,13 +170,54 @@
                         <dt>Project</dt><dd t-esc="t['project'] or '—'"/>
                         <dt>Status</dt><dd><t t-esc="t['state']"/><t t-if="t['paused_reason']"> — <t t-esc="t['paused_reason']"/></t></dd>
                         <dt>Deadline</dt><dd t-esc="t['deadline']"/>
-                        <dt>Estimate</dt><dd t-esc="t['estimate']"/>
+                        <dt>Estimate</dt>
+                        <dd><b t-esc="t['estimate']"/>
+                            <!-- How it grew: the original, then each extension (as on the board). -->
+                            <div t-if="est_rows" class="est-hist">
+                                <div><t t-esc="est_original"/> — original</div>
+                                <div t-foreach="est_rows" t-as="er">
+                                    <t t-esc="er['added']"/> → <t t-esc="er['to']"/><t t-if="er['reason']"> · “<t t-esc="er['reason']"/>”</t>
+                                    — <t t-esc="er['who']"/>, <t t-esc="er['when']"/>
+                                </div>
+                            </div>
+                        </dd>
                         <dt>Time spent</dt><dd t-esc="t['spent']"/>
                     </dl>
                     <div t-if="t['description']" class="item" style="margin-top:12px;"><div class="txt" t-esc="t['description']"/></div>
                 </div>
 
                 <div class="sec">
+                    <!-- ⏱️ Ask for more time: pick it instead of typing "2h 30m reason" in
+                         WhatsApp. Added straight to the estimate, reason shown on the card. -->
+                    <details t-if="can_time" class="act" id="addtime">
+                        <summary>⏱️ Ask for more time <small style="font-weight:600; color:var(--subtlest);">— estimate <t t-esc="t['estimate']"/></small></summary>
+                        <form class="in js-send" method="post" data-kind="time"
+                              t-att-action="'/kpi/wa/task/%s/addtime' % token">
+                            <div class="grid2">
+                                <div class="field"><span class="lbl">Hours</span>
+                                    <select name="hours">
+                                        <t t-foreach="range(0, 25)" t-as="h"><option t-att-value="str(h)" t-esc="'%d h' % h"/></t>
+                                    </select></div>
+                                <div class="field"><span class="lbl">Minutes</span>
+                                    <select name="minutes">
+                                        <t t-foreach="[0, 5, 10, 15, 20, 30, 40, 45, 50]" t-as="mi"><option t-att-value="str(mi)" t-esc="'%d min' % mi"/></t>
+                                    </select></div>
+                            </div>
+                            <div class="field"><span class="lbl">Why do you need more time? <span class="req">*</span></span>
+                                <input class="input" name="reason" maxlength="255" placeholder="e.g. client asked for a new report"/></div>
+                            <button type="submit" class="btn primary">Add time</button>
+                        </form>
+                    </details>
+                    <!-- Opened from ⏱️ Ask for more time in WhatsApp (link ends #addtime). -->
+                    <script>
+                        (function () {
+                            var d = document.getElementById(location.hash.slice(1));
+                            if (d &amp;&amp; d.tagName === 'DETAILS') {
+                                d.open = true;
+                                setTimeout(function () { d.scrollIntoView({behavior: 'smooth', block: 'start'}); }, 50);
+                            }
+                        })();
+                    </script>
                     <t t-if="can_add">
                         <details class="act">
                             <summary>📝 Add update</summary>
@@ -355,6 +397,11 @@
                         }
                         function check(f, mode) {
                             var kind = f.getAttribute('data-kind'), partial = mode === 'partial';
+                            if (kind === 'time') {
+                                if (!(Number(val(f, 'hours')) || Number(val(f, 'minutes')))) { return 'Pick how much more time — hours, minutes or both.'; }
+                                if (!val(f, 'reason')) { return 'Write why you need more time — it is shown on the task card.'; }
+                                return '';
+                            }
                             var maxMb = Number(f.getAttribute('data-max-mb') || 50);
                             var hasUpdate = !!f.getAttribute('data-has-update');
                             var hasManual = !!f.getAttribute('data-has-manual');
@@ -409,6 +456,10 @@
                         }
                         function question(f, mode) {
                             var kind = f.getAttribute('data-kind');
+                            if (kind === 'time') {
+                                var hh = Number(val(f, 'hours')), mm = Number(val(f, 'minutes'));
+                                return 'Add ' + (hh ? hh + 'h ' : '') + (mm ? mm + 'm' : '') + ' to the estimate?\n\nReason: ' + val(f, 'reason');
+                            }
                             var input = f.elements.files, n = input ? input.files.length : 0;
                             var bits = [];
                             if (val(f, 'summary')) { bits.push('summary ✓'); }
@@ -449,21 +500,33 @@
                                 var problem = check(f, mode);
                                 if (problem) { flash(f, 'err', problem); return; }
                                 var gaps = (f.getAttribute('data-kind') === 'complete' ? mode !== 'partial' : false) ? missing(f) : [];
+                                // Our own popup (static/src/wa_client_form/dialog.js), not the
+                                // browser's "… says" box. It answers later, so the send waits.
+                                var step = Promise.resolve(true);
                                 if (gaps.length) {
                                     // One popup naming everything still missing. A partial finish
                                     // is offered instead when there is a summary to send.
                                     var list = 'Before completing ' + (f.getAttribute('data-ref') || 'this task') + ' you still need:\n\n'
                                         + gaps.map(function (g) { return '• ' + g.text; }).join('\n');
                                     var canPartial = !!(val(f, 'summary') || f.getAttribute('data-has-update'));
-                                    var asPartial = canPartial ? window.confirm(list + '\n\nPress OK to send it as a Partial finish instead (summary only), or Cancel to go back and add them.') : (window.alert(list), false);
-                                    if (!asPartial) {
-                                        flash(f, 'err', 'Still needed: ' + gaps.map(function (g) { return g.text; }).join(' · ') + '.');
-                                        if (gaps[0].el) { gaps[0].el.focus(); }
-                                        return;
-                                    }
-                                    mode = 'partial';
+                                    step = (canPartial
+                                        ? window.kpiConfirm(list + '\n\nSend it as a Partial finish instead (summary only), or go back and add them?',
+                                                            {ok: 'Send as partial', cancel: 'Go back'})
+                                        : window.kpiAlert(list).then(function () { return false; })
+                                    ).then(function (asPartial) {
+                                        if (!asPartial) {
+                                            flash(f, 'err', 'Still needed: ' + gaps.map(function (g) { return g.text; }).join(' · ') + '.');
+                                            if (gaps[0].el) { gaps[0].el.focus(); }
+                                            return false;
+                                        }
+                                        mode = 'partial';
+                                        return true;
+                                    });
                                 }
-                                if (!window.confirm(question(f, mode))) { return; }
+                                step.then(function (go) {
+                                    return go ? window.kpiConfirm(question(f, mode), {ok: 'Yes, send'}) : false;
+                                }).then(function (go) { if (go) { send(); } });
+                                function send() {
                                 var data = new FormData(f);
                                 if (mode) { data.set('mode', mode); }
                                 if (mode === 'partial') { data.delete('files'); }
@@ -498,6 +561,7 @@
                                 };
                                 xhr.onerror = function () { done(); flash(f, 'err', 'Network problem — nothing was sent. Your entries are still here; try again.'); };
                                 xhr.send(data);
+                                }
                             });
                         });
                     })();
