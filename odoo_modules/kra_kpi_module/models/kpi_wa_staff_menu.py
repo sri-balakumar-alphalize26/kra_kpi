@@ -342,9 +342,19 @@ class KpiWaStaffRouter(models.AbstractModel):
         user, allowed = self._staff_member(state, group)
         step = state.step if state.step in _STAFF_STEPS else 'idle'
 
-        if low in ('cancel', 'stop', 'exit'):
+        # cancel / exit leave the step in progress -- only for staff who ARE in
+        # one. With nothing open it is chat, and "Stopped." would claim a task
+        # was stopped when nothing was. "stop" on its own means "pause my
+        # task" (kpi_wa_smart: ask first, then the reason); it only cancels
+        # while they are typing into a step.
+        typing = step == 'staff_text' or (step == 'staff_flow' and self._fd(state).get('at') in (
+            'collect', 'branch', 'entry_text', 'time', 'pause_note', 'meet_note', 'resume_reason',
+            'mt_search', 'switch_search', 'client_reply'))
+        if low in ('cancel', 'exit') or (low == 'stop' and typing):
+            if step == 'idle' or not allowed:
+                return False
             state._reset()
-            self._text(message, _('Stopped.'))
+            self._text(message, _('Cancelled — nothing was changed.'))
             return True
 
         # NOT 'start'. In a client group "start" means "show me the menu"; to
