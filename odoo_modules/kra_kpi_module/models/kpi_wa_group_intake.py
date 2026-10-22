@@ -256,6 +256,32 @@ def _choose(tapped, typed, valid_ids, by_label, by_number):
     return by_number.get((typed or '').strip())
 
 
+def _words(text):
+    return _strip_emoji(text).replace('/', ' ').replace('-', ' ').replace("'", '').split()
+
+
+def _smart_rows(typed, rows):
+    """Smart typing: the rows [(id, label)] that TYPED words point at.
+
+    "pause" -> ⏸️ Pause, "in prog" -> ▶️ In progress, "bug" -> 🐞 Report a Bug.
+    Every typed word must start a word of the label. Labels that START with
+    the typed words win over ones that only contain them, so "pause" is the
+    ⏸️ Pause row and not "My tasks — take, pause, finish".
+    Returns the matching rows; one row means one clear answer.
+    """
+    typed_w = _words(typed)
+    if not typed_w or len(''.join(typed_w)) < 2 or ''.join(typed_w).isdigit():
+        return []
+    leading, anywhere = [], []
+    for oid, label in rows:
+        lw = _words(label)
+        if len(lw) >= len(typed_w) and all(lw[i].startswith(w) for i, w in enumerate(typed_w)):
+            leading.append((oid, label))
+        elif all(any(x.startswith(w) for x in lw) for w in typed_w):
+            anywhere.append((oid, label))
+    return leading or anywhere
+
+
 class KpiWaGroupIntake(models.Model):
     """One in-progress flow, for one person, in one group."""
     _name = 'kpi.wa.group.intake'
@@ -559,6 +585,10 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                 or [r[0] for r in _TYPE_ROWS]
             by_number = {str(i + 1): c for i, c in enumerate(offered)}
             choice = _choose(tapped, low, _TYPE_BY_ID, _TYPE_BY_LABEL, by_number)
+            if not choice and not tapped:
+                # Typed part of an option ("bug", "new req"): one clear match only.
+                hits = _smart_rows(low, [(c, _TYPE_BY_ID[c][1]) for c in offered if c in _TYPE_BY_ID])
+                choice = hits[0][0] if len(hits) == 1 else None
             if not choice:
                 if low in _GREETINGS:
                     return self._show_types(message, state, group)
@@ -855,6 +885,9 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
 
         if step == 'pick_area':
             area = _choose(tapped, low, WORK_AREA_CODES, _AREA_BY_LABEL, _AREA_BY_NUMBER)
+            if not area and not tapped:
+                hits = _smart_rows(low, [(c, _area_label(c)) for c, _l in WORK_AREAS])
+                area = hits[0][0] if len(hits) == 1 else None
             if not area:
                 return False
             state._touch(step='ask_text', work_area=area)
@@ -1141,8 +1174,13 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             by_label[(label or '').lower()] = oid
             by_label[_strip_emoji(label)] = oid
             by_number[str(n + 1)] = oid
-        return _choose(tapped, low, tuple(o for o, _l in rows),
+        pick = _choose(tapped, low, tuple(o for o, _l in rows),
                        by_label, by_number)
+        if not pick and not (tapped or '').strip():
+            # Typed part of an option: one clear match only.
+            hits = _smart_rows(low, rows)
+            pick = hits[0][0] if len(hits) == 1 else None
+        return pick
 
     @api.model
     def _db_scope_label(self, state):

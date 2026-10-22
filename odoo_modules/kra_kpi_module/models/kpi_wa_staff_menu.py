@@ -667,7 +667,10 @@ class KpiWaStaffRouter(models.AbstractModel):
             choice = by_number.get(low.strip())
         if not choice:
             return False
+        return self._staff_run_code(message, state, user, choice)
 
+    def _staff_run_code(self, message, state, user, choice):
+        """Run one main-menu row by its code -- tapped, or typed (kpi_wa_smart)."""
         if choice == 'day_start':
             return self._staff_day_start(message, state, user)
         if choice == 'day_end':
