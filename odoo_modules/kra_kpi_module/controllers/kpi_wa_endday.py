@@ -68,8 +68,24 @@ class KpiWaEndDay(http.Controller):
                 'sub': ''})
         sess.invalidate_recordset(['productive_seconds', 'presence_seconds', 'task_count'])
         d = sess._daily_summary_payload(full_day=True)
+        missing = self._missing(user)
+        # Every task worked today, each with today's summary or a box for one.
+        # A task with time but missing from d['tasks'] (still running) is added.
+        tasks = list(d.get('tasks') or [])
+        listed = {t.get('kpi_id') for t in tasks}
+        for m in missing:
+            if m['kpi_id'] not in listed:
+                tasks.append({'kpi_id': m['kpi_id'], 'ref': m.get('external_ref') or '#%s' % m['kpi_id'],
+                              'name': m.get('name'), 'duration_display': ''})
+        W = request.env['kpi.work.session'].sudo()
+        ids = [t.get('kpi_id') for t in tasks if t.get('kpi_id')]
+        summaries = W._task_summaries_today(user, ids)
+        # "What did you work on today?" is filled from the summaries, not typed.
+        work_blocks = W._today_work_blocks(user, ids)
         return _render('kra_kpi_module.wa_endday_page', {
-            'token': token, 'd': d, 'missing': self._missing(user), 'ok': ok, 'err': err,
+            'token': token, 'd': d, 'missing': missing, 'ok': ok, 'err': err,
+            'tasks': tasks, 'summaries': summaries, 'work_blocks': work_blocks,
+            'missing_ids': [m['kpi_id'] for m in missing],
             'user_name': user.name, 'theme': user._kpi_wa_color()[1]})
 
     @http.route('/kpi/wa/endday/<string:token>/summary', type='http', auth='public',
@@ -104,8 +120,29 @@ class KpiWaEndDay(http.Controller):
         sess, is_open, _ended = router._workday(user)
         if not is_open:
             return _render('kra_kpi_module.wa_endday_done', {'title': 'Your day is already closed.', 'sub': ''})
+        # One end per day, even on a double tap: lock the day's row first. A
+        # second request arriving while the first is closing it used to fail
+        # with "transaction aborted" and show the phone an Internal Server Error
+        # (22 Oct 2026) -- now it just says the day is closed.
+        import psycopg2
         try:
-            sess.with_user(user).sudo().action_end_day(note=(post.get('note') or '').strip()[:NOTE_MAX])
+            with request.env.cr.savepoint():
+                request.env.cr.execute(
+                    'SELECT id FROM kpi_work_session WHERE id = %s FOR UPDATE NOWAIT', (sess.id,))
+        except (psycopg2.errors.LockNotAvailable, psycopg2.errors.SerializationFailure):
+            return _render('kra_kpi_module.wa_endday_done', {
+                'title': 'Your day is being closed.', 'sub': 'It was already sent — go back to WhatsApp.'})
+        sess.invalidate_recordset(['state'])
+        if sess.state != 'open':
+            return _render('kra_kpi_module.wa_endday_done', {'title': 'Your day is already closed.', 'sub': ''})
+        # The day's note is built from today's task summaries (the page shows it,
+        # read-only), so what is sent is exactly what was written on the tasks.
+        W = request.env['kpi.work.session'].sudo()
+        d = sess._daily_summary_payload(full_day=True)
+        ids = [t.get('kpi_id') for t in (d.get('tasks') or []) if t.get('kpi_id')]
+        note = W._today_work_note(W._today_work_blocks(user, ids))
+        try:
+            sess.with_user(user).sudo().action_end_day(note=note[:NOTE_MAX])
         except Exception as exc:
             _logger.exception('end day from page failed')
             return self._back(token, err='Could not end your day: %s' % str(exc)[:200])

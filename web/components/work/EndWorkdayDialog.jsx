@@ -10,14 +10,13 @@ import { Button, Input, Modal, Skeleton } from "@/components/ui";
 import * as S from "@/lib/services/kpiActions";
 import WorkdayTimeline from "./WorkdayTimeline";
 
-const NOTE_MAX = 2000;
+
 const AWAY = [["break", "Break"], ["lunch", "Lunch"], ["meeting", "Meeting"], ["no_tasks", "No tasks"], ["other", "Other"], ["away", "Away (system)"], ["other_idle", "Other / Idle"]];
 const hhmm = (ts) => (ts ? String(ts).slice(11, 16) || ts : "—");
 
 export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened, paused }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
-  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   /* Tasks worked today still without a summary. REQUIRED: End stays disabled
      until it is 0 (and /kpi_workday/end refuses as well). */
@@ -29,11 +28,18 @@ export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened,
       .then((r) => { if (r && r.status === false) throw new Error(r.message || "Could not load today's summary."); setD(r || {}); })
       .catch((e) => setErr(e.message));
   }, []);
+  /* "What did you work on today?" is made from the task summaries: after one is
+     saved below, read them again so the box shows it. */
+  useEffect(() => {
+    if (left === null) return;
+    S.getTodaySummary().then((r) => { if (r && r.status !== false) setD((x) => ({ ...(x || {}), work_blocks: r.work_blocks || [] })); }).catch(() => {});
+  }, [left]);
 
   const end = async () => {
     setBusy(true); setErr("");
     try {
-      S.assertOk(await S.endWorkday(note.trim().slice(0, NOTE_MAX)), "Could not end the workday.");
+      /* The note is built on the server from today's task summaries. */
+      S.assertOk(await S.endWorkday(""), "Could not end the workday.");
       onEnded?.();
     } catch (e) { setErr(e.message); setBusy(false); }
   };
@@ -43,7 +49,6 @@ export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened,
     try { const r = S.assertOk(await S.pauseWorkday(), "Could not pause the workday."); onPaused?.(r.message); }
     catch (e) { setErr(e.message); setBusy(false); }
   };
-  const words = note.trim().split(/\s+/).filter((w) => /\p{L}{2,}/u.test(w)).length;
 
   return (
     <Modal open onClose={busy ? undefined : onClose} title={`End workday${d?.dev ? ` — ${d.dev}` : ""}`} width={780}
@@ -57,17 +62,19 @@ export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened,
       )}
       {d && <Summary d={d} onLeft={setLeft} />}
       {d && (
-        <label className="field">
-          What did you work on today? (optional)
-          <span className="input ta" style={{ height: 120 }}>
-            <textarea value={note} maxLength={NOTE_MAX} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Finished the login screen, fixed the invoice total bug, started on reports."
-              style={{ border: 0, background: "none", outline: 0, resize: "none", width: "100%", height: "100%", font: "inherit", color: "inherit" }} />
-          </span>
+        <div className="field">
+          What did you work on today?
+          {/* Filled from today's task summaries: the task in bold, what was written under it. */}
+          <div style={{ padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--hover)", display: "flex", flexDirection: "column", gap: 14 }}>
+            {(d.work_blocks || []).map((b, i) => (
+              <div key={i}><b style={{ display: "block", color: "var(--navy)" }}>{b.head}</b>{b.lines.map((l, j) => <div key={j} style={{ marginTop: 3, paddingLeft: 12, whiteSpace: "pre-wrap" }}>{l}</div>)}</div>
+            ))}
+            {!(d.work_blocks || []).length && <span className="mini">Nothing yet. Add a summary on each task above and it shows here.</span>}
+          </div>
           <small className="mini">
-            Saved with your workday snapshot and sent in the daily summary.{d.wa_group_end_posts ? ` It is also posted to the team's WhatsApp group (${d.wa_group_name}).` : ""}
-            {note.trim() && words < 2 ? " Tip: a few more words make the summary more useful." : ""}
+            Made from your task summaries. Saved with your workday snapshot and sent in the daily summary.{d.wa_group_end_posts ? ` It is also posted to the team's WhatsApp group (${d.wa_group_name}).` : ""}
           </small>
-        </label>
+        </div>
       )}
     </Modal>
   );

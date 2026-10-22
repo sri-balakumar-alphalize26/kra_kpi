@@ -60,6 +60,8 @@ export const cfgSet = {
   clientApproval: (minutes) => rpc("/kpi_config/set_client_approval", { minutes }),
   queueNudge: (minutes) => rpc("/kpi_config/set_queue_nudge", { minutes }),
   urgentNudge: (minutes) => rpc("/kpi_config/set_urgent_nudge", { minutes }),
+  /* WhatsApp number(s), comma-separated, that get each End Workday's "What did you work on today?". */
+  ceoNumbers: (numbers) => rpc("/kpi_config/set_ceo_numbers", { numbers: numbers || "" }),
   breakAlerts: (values) => rpc("/kpi_config/set_break_alerts", values || {}),
   standardHours: (hours) => rpc("/kpi_config/set_standard_hours", { hours }),
   country: (country_id) => rpc("/kpi_config/set_country", { country_id }),
