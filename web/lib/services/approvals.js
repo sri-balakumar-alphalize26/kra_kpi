@@ -83,7 +83,7 @@ export const DOUBT_KINDS = [
   { key: "meet_admin", label: "Meet the manager" },
   { key: "meet_client", label: "Need a client meeting" },
 ];
-export const doubtKindLabel = (k) => ({ question: "Question", meet_admin: "Meet the manager", meet_client: "Client meeting", escalation: "Escalation" })[k] || k;
+export const doubtKindLabel = (k) => ({ question: "Question", meet_admin: "Meet the manager", meet_client: "Client meeting", escalation: "Escalation", client_msg: "💬 Client message" })[k] || k;
 export const DOUBT_STATES = {
   open: ["paused", "Waiting for the manager"],
   answered: ["done", "Answered"],
@@ -92,12 +92,12 @@ export const DOUBT_STATES = {
   rejected: ["neutral", "Not now"],
   closed: ["neutral", "Closed"],
 };
-const DOUBT_FIELDS = ["display_ref", "kpi_id", "task_ref", "client_kra_id", "kind", "question", "raised_by_id", "manager_user_id",
+const DOUBT_FIELDS = ["display_ref", "kpi_id", "task_ref", "client_kra_id", "kind", "question", "raised_by_id", "raised_by_name", "manager_user_id",
   "state", "answer", "answered_by_id", "answered_at", "client_posted_at", "client_answer", "meeting_id", "create_date"];
 export const listDoubts = (states) =>
   kw("kpi.doubt", "search_read", [states && states.length ? [["state", "in", states]] : []], { fields: DOUBT_FIELDS, limit: 300, order: "create_date desc" });
 export const taskDoubts = (kpiId) =>
-  kw("kpi.doubt", "search_read", [[["kpi_id", "=", Number(kpiId)]]], { fields: DOUBT_FIELDS, order: "create_date desc" });
+  kw("kpi.doubt", "search_read", [[["kpi_id", "=", Number(kpiId)], ["kind", "!=", "client_msg"]]], { fields: DOUBT_FIELDS, order: "create_date desc" });
 export const countOpenDoubts = () => kw("kpi.doubt", "search_count", [[["state", "=", "open"]]]);
 /* The asker is the signed-in person (the model's default); the module works out
    the manager and asks them. */

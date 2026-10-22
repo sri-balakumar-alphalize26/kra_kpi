@@ -10,7 +10,8 @@ import { actionsFor } from "./actions";
 import DbHandover from "./DbHandover";
 import { OldDbBadge } from "./Legacy";
 import { useTaskActions } from "./TaskActions";
-import { ClientProgress, ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList } from "./TaskExtras";
+import ClientTab, { hasClientTab, useClientSends } from "./ClientTab";
+import { ChatTab, ClientProgress, ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList } from "./TaskExtras";
 
 /* Odoo's has_started states (kra_api.py /kpi_action/details). */
 const STARTED_STATES = ["in_progress", "paused", "partially_completed", "awaiting_client", "completed"];
@@ -24,6 +25,10 @@ export default function TaskPanel({ id, onClose }) {
   const [err, setErr] = useState("");
   const [tab, setTab] = useState("updates");
   const [editing, setEditing] = useState(false);
+  /* What the client sent (Client tab): the tab shows only when there is something. */
+  const [sends] = useClientSends(id);
+  const showClient = hasClientTab(sends);
+  useEffect(() => { if (tab === "client" && sends && !showClient) setTab("updates"); }, [sends]); // eslint-disable-line react-hooks/exhaustive-deps
   /* Timers tick inside LiveTick; the deadline flag needs only a one-minute clock. */
   const now = useNow(!!d?.task && d.task.task_state !== "completed", 60000);
 
@@ -163,7 +168,7 @@ export default function TaskPanel({ id, onClose }) {
               {info && <ExtraDetails info={info} />}
 
               <div className="tabs" role="tablist">
-                {[["updates", `Updates${teamProgress.length ? ` · ${teamProgress.length}` : ""}`], ["files", `Files${fileCount ? ` · ${fileCount}` : ""}`], ["history", "History"]].map(([k, l]) => (
+                {[["updates", `Updates${teamProgress.length ? ` · ${teamProgress.length}` : ""}`], ["files", `Files${fileCount ? ` · ${fileCount}` : ""}`], ...(showClient ? [["client", "Client"]] : []), ["chat", "💬 Chat"], ["history", "History"]].map(([k, l]) => (
                   <span key={k} role="tab" className={tab === k ? "on" : ""} onClick={() => setTab(k)} style={{ cursor: "pointer" }}>{l}</span>
                 ))}
               </div>
@@ -181,6 +186,8 @@ export default function TaskPanel({ id, onClose }) {
                 </div>
               )}
               {tab === "files" && <FilesTab kpiId={id} d={d} canAdd={started && !locked} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
+              {tab === "client" && showClient && <ClientTab kpiId={id} res={sends} onSaved={changed} />}
+              {tab === "chat" && <ChatTab key={`chat${id}`} kpiId={id} />}
               {tab === "history" && <HistoryTab key={id} kpiId={id} d={d} />}
             </>
           )}

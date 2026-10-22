@@ -198,6 +198,20 @@ export async function fetchActivity(kpiId, kind = "all") {
   return { status: true, activity_log: res.activity_log || [], activity_total: res.activity_total || 0, activity_limit: res.activity_limit || 0 };
 }
 
+/* 💬 Chat with the client (models/kpi_chat.py). Messages are oldest first;
+   `at` is UTC "YYYY-MM-DD HH:MM:SS". */
+export async function fetchChat(kpiId) {
+  const res = await rpc("/kpi_action/chat", { kpi_id: kpiId });
+  if (!res?.status) return { status: false, message: res?.message || "Could not load the chat" };
+  return res;
+}
+
+export async function sendChat(kpiId, text) {
+  const res = await rpc("/kpi_action/chat/send", { kpi_id: kpiId, text, source: "web" });
+  if (!res?.status) return { status: false, message: res?.message || "Could not send" };
+  return res;
+}
+
 /* The web detail route: the project picker (available_kras, every KRA with its
    client root) and the manager flag the heading editor needs. Param is `id`;
    failure is {error}, not {status:false}. */
