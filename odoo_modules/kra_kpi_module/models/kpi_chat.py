@@ -183,8 +183,8 @@ class KraKpiChat(models.Model):
         return self.env['whatsapp.config'].sudo().get_config().get_kpi_public_base_url()
 
     def _staff_task_url(self):
-        """The task in Odoo, for the team (needs their login)."""
-        return '%s/odoo/kra.kpi/%s' % (self._public_base(), self.id)
+        """The team chat page for this task (/kpi/team/chat, needs their login)."""
+        return '%s/kpi/team/chat/%s' % (self._public_base(), self.id)
 
     def _client_chat_link(self):
         """The client's chat page for this task, valid CLIENT_CHAT_HOURS from now.
