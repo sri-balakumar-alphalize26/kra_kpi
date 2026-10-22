@@ -65,7 +65,6 @@ export const WORK_MENU = [
     { key: "whatsapp", label: "WhatsApp Connect", href: "/settings/whatsapp" },
     { key: "wa-groups", label: "WhatsApp Groups", href: "/settings/setup/wa-groups" },
     { key: "servers", label: "Servers", href: "/settings/setup/servers" },
-    { key: "approval-chain", label: "Approval Chain", href: "/settings/setup/approval-chain" },
     { key: "decline-reasons", label: "Decline Reasons", href: "/settings/setup/decline-reasons" },
     { key: "install-packages", label: "Install Packages", href: "/settings/setup/install-packages" },
     { key: "databases", label: "Databases", href: "/settings/setup/databases" },
