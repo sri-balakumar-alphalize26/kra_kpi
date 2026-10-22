@@ -107,7 +107,7 @@ export default function ClientQueue() {
                 </table>
               )}
             </div>
-            <div className="callout" style={{ background: "var(--lz-review-bg)", borderColor: "var(--tint-violet)", color: "var(--tint-violet-text)" }}><Icon n="flag" size={18} />Publishing sends a WhatsApp pre-approval to the client when "Client approval" is on in Configuration. Follow those up in Settings › Pre-approvals.</div>
+            <div className="callout" style={{ background: "var(--lz-review-bg)", borderColor: "var(--tint-violet)", color: "var(--tint-violet-text)" }}><Icon n="flag" size={18} />The client raised these themselves, so publishing releases the task for work straight away. No second approval is asked of the client.</div>
         </>
       </div>
       <Modal open={!!discard} onClose={() => setDiscard(null)} title={discard ? `Discard ${discard.external_ref || "request"}?` : ""} width={460}
