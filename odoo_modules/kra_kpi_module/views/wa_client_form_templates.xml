@@ -28,6 +28,7 @@
                     .chips { display:flex; flex-wrap:wrap; gap:6px; }
                     .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px;
                             background:var(--sel-bg); color:var(--sel-text); font-size:12.5px; font-weight:700; }
+                    .chip .pct, .chip .kept { font-weight:800; color:var(--ok); }
                     .chip button { border:0; background:none; color:inherit; font-weight:900; cursor:pointer; padding:0; }
                     .chip .open { font-weight:700; text-decoration:underline; max-width:220px; overflow:hidden;
                                   text-overflow:ellipsis; white-space:nowrap; }
@@ -100,6 +101,13 @@
                                  font-weight:800; background:var(--sel-bg); color:var(--sel-text); }
                     .old-hint { font-size:12.5px; font-weight:700; color:var(--danger); }
                     .old-hint.good { color:var(--ok); }
+                    .kids { border:1px solid var(--border); border-radius:var(--r); padding:8px 10px;
+                            background:var(--surface); display:flex; flex-direction:column; gap:6px; }
+                    .kids[hidden] { display:none; }
+                    .kids h5 { margin:0; font-size:13px; }
+                    .kids .kid b { color:var(--brand); margin-right:6px; }
+                    .kids .kid small { display:block; color:var(--subtlest); }
+                    .kids .next { font-weight:800; }
                 </style>
                 <form id="kf" method="post" enctype="multipart/form-data"
                       t-att-action="'/kpi/wa/client/%s/submit' % token">
@@ -148,6 +156,8 @@
                                        placeholder="🔍 Search by number or name (newest first)"/>
                                 <div id="kfReqs" class="req-list"><span class="mini">Choose the server and database first.</span></div>
                                 <span class="hint">Pick one. The new request is numbered under it, e.g. <t t-esc="'BUG001' if kind == 'bug' else 'UPT001'"/>-REQ-012.</span>
+                                <!-- The bugs / updates already raised under the picked requirement (form.js). -->
+                                <div id="kfKids" class="kids" hidden="hidden"></div>
                             </div>
                             <div id="kfOldBox" class="old-box" hidden="hidden">
                                 <span class="old-badge">🗄️ Old DB Requirement</span>
@@ -171,6 +181,7 @@
                                         <button type="button" class="btn" id="kfOldVideo">🎥 Video</button>
                                         <button type="button" class="btn ghost" id="kfOldVoice">🎤 Voice note</button>
                                     </div>
+                                    <div id="kfOldChips" class="chips"></div>
                                     <textarea id="kfOldNote" name="legacy_note" maxlength="4000" rows="3"
                                               placeholder="…or type it here instead of recording"></textarea>
                                 </div>
@@ -226,8 +237,8 @@
                             <span class="hint">Only our team sees these. Nothing is deleted until the team checks the request.</span>
                         </t>
 
-                        <!-- Type: Requirement only (Bug / Update take it from the requirement). -->
-                        <div class="field" t-if="kind == 'requirement'">
+                        <!-- Type: every request. Bug / Update pre-tick the requirement's (form.js). -->
+                        <div class="field" t-if="kind in ('requirement', 'bug', 'update')">
                             <span class="lbl">Type — tick one or more <span class="req">*</span></span>
                             <span class="chks">
                                 <t t-foreach="deliverables" t-as="dv">
@@ -365,7 +376,7 @@
                     </div>
                 </div>
                 <script>window.KF_BOOT = <t t-out="boot"/>;</script>
-                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=7"></script>
+                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=12"></script>
             </t>
         </template>
 
@@ -379,6 +390,90 @@
                     <p style="margin-top:16px; font-weight:700;">Go back to WhatsApp — the details are posted in your group.</p>
                     <p class="mini">The team reviews it next. This link no longer works.</p>
                 </div>
+            </t>
+        </template>
+
+        <!-- The client's chat for ONE task (controllers/kpi_client_chat.py): the
+             reference, the title and the messages with their times. Nothing
+             else from KPI details. Team messages show as "Our team". -->
+        <template id="wa_client_chat" name="WA Client Chat">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'Chat · %s' % ref"/>
+                <style>
+                    /* WhatsApp look: the client's own messages green on the right,
+                       the Alphalize team white on the left. */
+                    .cc-list { display:flex; flex-direction:column; gap:6px; min-height:200px; max-height:60vh;
+                               overflow-y:auto; padding:12px; border-radius:var(--r); background:#efeae2; }
+                    .cc-msg { align-self:flex-start; max-width:80%; padding:6px 9px 4px; border-radius:8px;
+                              white-space:pre-wrap; word-break:break-word; background:#ffffff; color:#111b21;
+                              box-shadow:0 1px .5px rgba(11,20,26,.13); }
+                    .cc-msg.me { align-self:flex-end; background:#d9fdd3; }
+                    .cc-msg small { display:block; margin-top:2px; font-size:11px; color:#667781; text-align:right; }
+                    .cc-msg b { display:block; font-size:12.5px; margin-bottom:2px; color:#027eb5; }
+                    .cc-msg.me b { color:#1f7a3a; }
+                    #ccSend { background:#00a884; color:#fff; border-color:#00a884; }
+                    .cc-empty { color:var(--subtlest); text-align:center; padding:24px 0; }
+                    .cc-row { display:flex; gap:8px; align-items:flex-end; }
+                    .cc-row textarea { flex:1; }
+                </style>
+                <div class="hd">💬 <t t-esc="ref"/> — <t t-esc="title"/>
+                    <small><t t-esc="client"/> · this link works for a limited time</small></div>
+                <div class="bd">
+                    <div id="ccList" class="cc-list" t-att-data-token="token"><div class="cc-empty">Loading…</div></div>
+                    <!-- No name asked: a message from this page is from the client's company. -->
+                    <div class="cc-row">
+                        <textarea id="ccText" maxlength="1000" rows="2" placeholder="Type your message…"></textarea>
+                        <button type="button" class="btn" id="ccSend">Send</button>
+                    </div>
+                    <div id="ccErr" class="err" hidden="hidden"></div>
+                </div>
+                <script>
+                (function () {
+                    'use strict';
+                    var list = document.getElementById('ccList'), T = list.getAttribute('data-token'),
+                        textEl = document.getElementById('ccText'),
+                        btn = document.getElementById('ccSend'), err = document.getElementById('ccErr');
+                    function esc(s) { return String(s == null ? '' : s).replace(/[&amp;&lt;&gt;"']/g, function (c) {
+                        return { '&amp;': '&amp;amp;', '&lt;': '&amp;lt;', '&gt;': '&amp;gt;', '"': '&amp;quot;', "'": '&amp;#39;' }[c]; }); }
+                    function when(utc) {
+                        var d = new Date((utc || '').replace(' ', 'T') + 'Z');
+                        return isNaN(d) ? '' : d.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+                    }
+                    function rpc(path, params) {
+                        return fetch('/kpi/wa/chat/' + T + path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ jsonrpc: '2.0', method: 'call', params: params || {} }) })
+                            .then(function (r) { return r.json(); })
+                            .then(function (d) { var res = (d &amp;&amp; d.result) || {}; if (res.expired) { location.reload(); } return res; });
+                    }
+                    var lastId = null;
+                    function draw(rows) {
+                        if (!rows.length) { list.innerHTML = '&lt;div class="cc-empty"&gt;No messages yet.&lt;/div&gt;'; return; }
+                        var top = rows[rows.length - 1].id;
+                        list.innerHTML = rows.map(function (r) {
+                            return '&lt;div class="cc-msg' + (r.side === 'client' ? ' me' : '') + '"&gt;&lt;b&gt;' + esc(r.who) +
+                                '&lt;/b&gt;' + esc(r.body) + '&lt;small&gt;' + esc(when(r.at)) + '&lt;/small&gt;&lt;/div&gt;';
+                        }).join('');
+                        if (top !== lastId) { list.scrollTop = list.scrollHeight; lastId = top; }
+                    }
+                    function load() { rpc('/rows').then(function (res) { if (res.ok) { draw(res.rows || []); } }); }
+                    btn.addEventListener('click', function () {
+                        var text = textEl.value.trim();
+                        err.hidden = true;
+                        if (!text) { textEl.focus(); return; }
+                        btn.disabled = true; btn.textContent = 'Sending…';
+                        rpc('/send', { text: text }).then(function (res) {
+                            btn.disabled = false; btn.textContent = 'Send';
+                            if (!res.ok) { err.textContent = res.message || 'Not sent.'; err.hidden = false; return; }
+                            textEl.value = ''; draw(res.rows || []);
+                        }).catch(function () {
+                            btn.disabled = false; btn.textContent = 'Send';
+                            err.textContent = 'No connection — try again.'; err.hidden = false;
+                        });
+                    });
+                    load();
+                    setInterval(load, 15000);
+                })();
+                </script>
             </t>
         </template>
     </data>
