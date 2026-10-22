@@ -30,6 +30,7 @@ from . import kpi_inbound_patch
 from . import kpi_work_session
 from . import kpi_nontask_block
 from . import kpi_notification_queue
+from . import kpi_wa_ack
 from . import kpi_notification
 from . import kpi_push_token
 from . import kpi_pair
@@ -80,3 +81,6 @@ from . import kpi_user_color
 from . import kpi_reminder
 # AFTER kpi_manager (_manager_users) and kpi_wa_group_report (the 1:1 send).
 from . import kpi_wa_admin_link
+# AFTER kpi_wa_admin_link: the chain sends its links.
+from . import kpi_escalation
+from . import kpi_client_updates

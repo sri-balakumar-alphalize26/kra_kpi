@@ -155,12 +155,28 @@ class KraKpiAdminWa(models.Model):
             return 0
         sent = 0
         for rec in self.sudo():
+            k = kind or rec._wa_admin_kind()
+            # New client requests climb the approval chain when one is set up
+            # (kpi_escalation.py); it sends the links itself, tier by tier.
             try:
-                k = kind or rec._wa_admin_kind()
+                if rec._esc_start(k) is not None:
+                    sent += 1
+                    continue
+            except Exception as exc:
+                _logger.warning('approval chain start for %s failed: %s', rec.id, exc)
+            sent += rec._wa_send_admin_links(k, rec._wa_admin_recipients())
+        return sent
+
+    def _wa_send_admin_links(self, kind, admins):
+        """One private decision link per admin in `admins`. Never raises."""
+        sent = 0
+        for rec in self.sudo():
+            try:
+                k = kind
                 base = self.env['whatsapp.config'].sudo().get_config().get_kpi_public_base_url()
                 Link = self.env['kpi.wa.admin.link'].sudo()
                 Report = self.env['kpi.wa.group.report'].sudo()
-                for admin in rec._wa_admin_recipients():
+                for admin in admins:
                     link = Link.create({
                         'token': secrets.token_urlsafe(24), 'kpi_id': rec.id, 'kind': k,
                         'user_id': admin.id,

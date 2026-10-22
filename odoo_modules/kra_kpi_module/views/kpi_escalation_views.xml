@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Approval chain: who is asked about a new client request, in which
+         order, and for how long (models/kpi_escalation.py). -->
+    <record id="view_kpi_escalation_tier_list" model="ir.ui.view">
+        <field name="name">kpi.escalation.tier.list</field>
+        <field name="model">kpi.escalation.tier</field>
+        <field name="arch" type="xml">
+            <list string="Approval Chain" editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="minutes"/>
+                <field name="use_task_manager"/>
+                <field name="user_ids" widget="many2many_tags"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_kpi_escalation_tier" model="ir.actions.act_window">
+        <field name="name">Approval Chain</field>
+        <field name="res_model">kpi.escalation.tier</field>
+        <field name="view_mode">list</field>
+        <field name="help" type="html">
+            <p>A new client request goes to the first row. If nobody there decides in its minutes,
+               the next row is asked, and so on. After the last row it keeps waiting and the last
+               row is reminded every 30 minutes. Nothing is accepted automatically.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_kpi_escalation_tiers"
+              parent="menu_grp_setup"
+              name="Approval Chain"
+              action="action_kpi_escalation_tier"
+              sequence="32"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_owner,base.group_system"/>
+</odoo>

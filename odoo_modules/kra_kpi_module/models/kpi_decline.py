@@ -99,6 +99,15 @@ class KraKpiDecline(models.Model):
     last_correction_text = fields.Text(
         string='Latest Correction', readonly=True, copy=False)
 
+    # Only ever goes up: the card shows "Declined N×" for good, even after the
+    # client fixes it and it is accepted.
+    decline_count = fields.Integer(
+        string='Times Declined', default=0, readonly=True, copy=False)
+    # The client's link to fix a declined task on the same form
+    # (/kpi/wa/fix/<token>). It does not expire; it is cleared when they
+    # resubmit, and a new decline mints a new one.
+    client_fix_token = fields.Char(index=True, copy=False, readonly=True)
+
     # Two rounds, then a human. A loop with no limit is a loop a client and a
     # manager can sit in all day, each believing the other is about to move.
     MAX_CORRECTION_ROUNDS = 2
@@ -231,10 +240,13 @@ class KraKpiDecline(models.Model):
             # _cron_admin_accept_timeout cannot resurrect it -- that cron keys
             # on active=True, but an admin un-archiving later would otherwise
             # inherit a stale deadline.
+            import secrets
             vals.update({
                 'active': False,
                 'task_state': 'rework',
                 'admin_accept_deadline_at': False,
+                'decline_count': self.decline_count + 1,
+                'client_fix_token': secrets.token_urlsafe(24),
             })
         else:
             target = doc_type or (reason.target_doc_type if reason else None)
@@ -273,6 +285,8 @@ class KraKpiDecline(models.Model):
         if notify_group:
             posted = self._post_decline_to_group(mode, text, old_ref)
             self._arm_client_reconfirm()
+            if mode == 'decline':
+                self._post_fix_link()
 
         return {
             'status': True,
@@ -339,6 +353,46 @@ class KraKpiDecline(models.Model):
             _logger.warning('Could not post decline for %s: %s',
                             self.external_ref or self.id, exc)
             return False
+
+    def fix_url(self):
+        self.ensure_one()
+        if not self.client_fix_token:
+            return ''
+        base = self.env['whatsapp.config'].sudo().get_config().get_kpi_public_base_url()
+        return '%s/kpi/wa/fix/%s' % (base, self.client_fix_token)
+
+    def _post_fix_link(self):
+        """The same form, already filled in, to fix and send it back."""
+        self.ensure_one()
+        url = self.fix_url()
+        if not url:
+            return False
+        try:
+            return bool(self.env['kpi.wa.group.report'].sudo().post_for_kpi(self, _(
+                "✏️ To fix %(ref)s, open the same form — your earlier answers are "
+                "already filled in. Change what is needed (you can also change "
+                "the type) and send it again:\n%(url)s") % {
+                    'ref': self.external_ref or '#%s' % self.id, 'url': url}))
+        except Exception as exc:
+            _logger.warning('Could not post fix link for %s: %s', self.id, exc)
+            return False
+
+    def _next_child_number(self, prefix, parent_ref):
+        """Next N for <PREFIX>NNN-<parent_ref>, counted per requirement.
+        Archived tasks and retired refs count, so a number is never reused.
+        Shared by the WhatsApp form and the portal."""
+        import re as _re
+        Kpi = self.env['kra.kpi'].sudo().with_context(active_test=False)
+        pat = '%s%%-%s' % (prefix, parent_ref)
+        rx = _re.compile(r'^%s(\d{1,9})-%s$' % (_re.escape(prefix), _re.escape(parent_ref)), _re.I)
+        nums = [0]
+        for k in Kpi.search(['|', ('external_ref', '=ilike', pat),
+                             ('previous_external_ref', '=ilike', pat)]):
+            for r in (k.external_ref, k.previous_external_ref):
+                m = rx.match((r or '').strip())
+                if m:
+                    nums.append(int(m.group(1)))
+        return max(nums) + 1
 
     def _arm_client_reconfirm(self):
         """Put the submitter's group conversation into the re-confirm step, so

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- The four tiers from the call notes. noupdate: people and minutes are
+         set in Settings > Approval Chain and must survive upgrades. Tiers 2-4
+         start with no people, so until someone is added they fall back to the
+         task's managers too (kpi_escalation._esc_tier_users). -->
+    <data noupdate="1">
+        <record id="esc_tier_manager" model="kpi.escalation.tier">
+            <field name="name">Manager</field>
+            <field name="sequence">10</field>
+            <field name="minutes">5</field>
+            <field name="use_task_manager" eval="True"/>
+        </record>
+        <record id="esc_tier_owner" model="kpi.escalation.tier">
+            <field name="name">Owner / CEO</field>
+            <field name="sequence">20</field>
+            <field name="minutes">5</field>
+        </record>
+        <record id="esc_tier_senior" model="kpi.escalation.tier">
+            <field name="name">Senior</field>
+            <field name="sequence">30</field>
+            <field name="minutes">5</field>
+        </record>
+        <record id="esc_tier_next_senior" model="kpi.escalation.tier">
+            <field name="name">Next Senior</field>
+            <field name="sequence">40</field>
+            <field name="minutes">5</field>
+        </record>
+
+        <!-- Every minute: move undecided client requests up one tier. -->
+        <record id="ir_cron_kpi_escalate_tiers" model="ir.cron">
+            <field name="name">KRA/KPI: Approval chain — ask the next tier</field>
+            <field name="model_id" ref="model_kra_kpi"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_escalate_tiers()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

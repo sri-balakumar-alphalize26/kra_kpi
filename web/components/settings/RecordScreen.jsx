@@ -68,11 +68,14 @@ function Screen({ config: c, embedded }) {
     return () => { gone = true; };
   }, [tab, archived]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* Choices for every many2one the form edits. */
+  /* Choices for every many2one the form edits, and every many2many on the
+     screen (the list shows their names). */
   useEffect(() => {
-    if (!meta || !edit) return;
-    const rels = [...new Set((c.form || []).filter((f) => typeof f === "string" && meta[f]?.type === "many2one" && !ro(f)).map((f) => meta[f].relation))];
-    rels.filter((rel) => !opts[rel]).forEach((rel) => callKw(rel, "name_search", [], { name: "", limit: 300 })
+    if (!meta) return;
+    const m2m = fields.filter((f) => meta[f]?.type === "many2many");
+    const m2o = edit ? (c.form || []).filter((f) => typeof f === "string" && meta[f]?.type === "many2one" && !ro(f)) : [];
+    const rels = [...new Set([...m2o, ...m2m].map((f) => meta[f].relation))];
+    rels.filter((rel) => !opts[rel]).forEach((rel) => callKw(rel, "name_search", [], { name: "", limit: 300, ...(rel === "res.users" ? { domain: [["share", "=", false]] } : {}) })
       .then((r) => setOpts((o) => ({ ...o, [rel]: r || [] }))).catch(() => setOpts((o) => ({ ...o, [rel]: [] }))));
   }, [meta, edit]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -83,6 +86,7 @@ function Screen({ config: c, embedded }) {
     if (v === false || v == null || v === "") return t === "boolean" ? "—" : "";
     if (t === "boolean") return v ? "✓" : "—";
     if (t === "many2one") return m2o(v);
+    if (t === "many2many") { const names = new Map(opts[meta[f].relation] || []); return (v || []).map((id) => names.get(id) || `#${id}`).join(", "); }
     if (t === "selection") return (meta[f].selection || []).find(([k]) => k === v)?.[1] || v;
     if (t === "datetime") return local(v, { date: true });
     if (t === "html") return String(v).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -93,8 +97,14 @@ function Screen({ config: c, embedded }) {
   const save = async () => {
     const vals = {};
     for (const f of c.form || []) {
-      if (typeof f !== "string" || !meta[f] || ro(f) || meta[f].type === "one2many" || meta[f].type === "many2many") continue;
+      if (typeof f !== "string" || !meta[f] || ro(f) || meta[f].type === "one2many") continue;
       let v = edit[f];
+      if (meta[f].type === "many2many") {
+        const ids = [...(v || [])].map(Number).sort((a, b) => a - b);
+        if (edit.id && JSON.stringify(ids) === JSON.stringify([...(edit._orig?.[f] || [])].map(Number).sort((a, b) => a - b))) continue;
+        vals[f] = [[6, 0, ids]];
+        continue;
+      }
       if (meta[f].type === "many2one") v = idOf(v) ? Number(idOf(v)) : false;
       else if (meta[f].type === "integer") v = v === "" || v == null ? 0 : parseInt(v, 10) || 0;
       else if (meta[f].type === "float") v = v === "" || v == null ? 0 : parseFloat(v) || 0;
@@ -242,6 +252,22 @@ export function FieldInput({ name, m, value, readOnly, secret, options, show, on
   if (m.type === "boolean") return <label className="chk rs-bool" title={m.help || undefined}><input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} />{m.string}</label>;
   if (m.type === "text") return <Field label={m.string} required={m.required} hint={m.help} className="rs-wide"><span className="input ta" style={{ height: 84 }}><textarea value={value || ""} onChange={(e) => onChange(e.target.value)} style={{ ...plain, resize: "vertical", height: "100%" }} /></span></Field>;
   if (m.type === "selection") return <Field label={m.string} required={m.required}><span className="input"><Select value={value || ""} onChange={(e) => onChange(e.target.value || false)} style={plain}>{!m.required && <option value="">—</option>}{(m.selection || []).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></span></Field>;
+  if (m.type === "many2many") {
+    const on = new Set((value || []).map(Number));
+    const flip = (id) => { const n = new Set(on); if (n.has(id)) n.delete(id); else n.add(id); onChange([...n]); };
+    return (
+      <Field label={m.string} required={m.required} hint={m.help} className="rs-wide">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 180, overflowY: "auto", padding: 6, border: "1px solid var(--border)", borderRadius: 8 }}>
+          {!options && <span className="mini">Loading…</span>}
+          {(options || []).map(([id, n]) => (
+            <label key={id} className="chk" style={{ display: "inline-flex", gap: 6, alignItems: "center", padding: "2px 8px", borderRadius: 999, border: "1px solid var(--border)", background: on.has(id) ? "var(--hover)" : undefined, cursor: "pointer", fontSize: 13 }}>
+              <input type="checkbox" checked={on.has(id)} onChange={() => flip(id)} style={{ accentColor: "var(--brand)" }} />{n}
+            </label>
+          ))}
+        </div>
+      </Field>
+    );
+  }
   if (m.type === "many2one") return <Field label={m.string} required={m.required}><span className="input"><Select value={String(idOf(value) || "")} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : false)} placeholder={options ? "—" : "Loading…"} style={plain}><option value="">—</option>{(options || []).map(([id, n]) => <option key={id} value={String(id)}>{n}</option>)}</Select></span></Field>;
   const type = m.type === "integer" || m.type === "float" ? "number" : m.type === "date" ? "date" : secret && !reveal ? "password" : "text";
   return (

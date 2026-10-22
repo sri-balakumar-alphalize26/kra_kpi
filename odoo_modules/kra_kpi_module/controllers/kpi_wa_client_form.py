@@ -19,7 +19,8 @@ import hmac
 import json
 import logging
 import re
-from types import SimpleNamespace
+import secrets
+from datetime import timedelta
 
 from markupsafe import Markup
 
@@ -45,6 +46,8 @@ _TITLES = {
     'newdb': ('🗄️', 'New Database'),
     'dbdisconnect': ('💥', 'Destroy a Database'),
 }
+# What a declined task may be re-sent as.
+FIX_KINDS = [('requirement', '✨ Requirement'), ('bug', '🐞 Bug'), ('update', '🔧 Update')]
 
 
 def _state_for(token):
@@ -132,9 +135,30 @@ class KpiWaClientForm(http.Controller):
             'reason': 'It has expired (links last 30 minutes) or was already used to send a request.',
             'hint': 'Send “hi” in your WhatsApp group to get a fresh link.'})
 
+    def _fix_values(self, kpi):
+        """A declined task's earlier answers, in the form's own field names."""
+        db = kpi.client_db_id
+        parent = kpi.related_req_kpi_id if 'related_req_kpi_id' in kpi._fields else False
+        desc = kpi.original_client_text or kpi.description or ''
+        # Drop the lines the form itself appended (Database:, About:, footer).
+        desc = re.split(r'\n\n(?:About: |Database: |— Sent from the WhatsApp form)', desc)[0]
+        return {
+            'server_id': db.server_id.id if db else '', 'db_id': db.id if db else '',
+            'parent_id': parent.id if parent else '',
+            'name': re.sub(r'^\[(Update|Bug)\]\s*', '', kpi.name or '', flags=re.I),
+            'description': desc.strip(),
+            'priority': kpi.priority or 'regular',
+            'needed_by': fields.Date.to_string(kpi.deadline) if kpi.deadline else '',
+            'deliverable': [c for c in (kpi.deliverable_type or '').split(',') if c],
+            'deliverable_other': kpi.deliverable_other or '',
+        }
+
     def _page(self, token, st, values=None, error=''):
         kind = st.client_form_kind
         emoji, title = _TITLES[kind]
+        fix = st.client_form_fix_kpi_id
+        if fix and values is None:
+            values = self._fix_values(fix)
         boot = {
             'token': token, 'kind': kind,
             'servers': self._servers(st),
@@ -148,15 +172,48 @@ class KpiWaClientForm(http.Controller):
             'example': NEW_DB_NAME_EXAMPLE, 'error': error,
             'priorities': PRIORITIES, 'deliverables': DELIVERABLE_TYPES,
             'today': fields.Date.to_string(fields.Date.today()),
+            'fix_ref': (fix.external_ref or '#%s' % fix.id) if fix else '',
+            'fix_reason': (fix.decline_note or '') if fix else '',
+            'fix_kinds': FIX_KINDS if fix else [],
             'boot': _json_for_script(boot)})
 
     @http.route('/kpi/wa/client/<string:token>', type='http', auth='public',
                 methods=['GET'], csrf=False, website=False)
-    def form(self, token, **kw):
+    def form(self, token, kind=None, **kw):
         st = _state_for(token)
         if not st:
             return self._expired()
+        # Fixing a declined task: the client may switch Requirement / Bug / Update.
+        if st.client_form_fix_kpi_id and kind in dict(FIX_KINDS) and kind != st.client_form_kind:
+            st.sudo().write({'client_form_kind': kind})
         return self._page(token, st)
+
+    @http.route('/kpi/wa/fix/<string:token>', type='http', auth='public',
+                methods=['GET'], csrf=False, website=False)
+    def fix(self, token, **kw):
+        """The declined task's own link. It does not expire: each open starts a
+        normal 30-minute form session on it and redirects there."""
+        if not token or len(token) < 16 or len(token) > 64:
+            return self._expired()
+        kpi = request.env['kra.kpi'].sudo().with_context(active_test=False).search(
+            [('client_fix_token', '=', token)], limit=1)
+        if not kpi or not hmac.compare_digest(kpi.client_fix_token or '', token):
+            return self._expired()
+        group = request.env['kpi.wa.group.report'].sudo()._group_for_kpi(kpi)
+        if not group or group.is_staff_group or not group.kra_id:
+            return self._expired()
+        Intake = request.env['kpi.wa.group.intake'].sudo()
+        member = False
+        if kpi.submitted_by_uid:
+            member = request.env['kpi.wa.group.member'].sudo().search(
+                [('group_id', '=', group.id), ('user_id', '=', kpi.submitted_by_uid.id)], limit=1)
+        key = (member.lid or member.phone) if member else 'fix-%s' % kpi.id
+        st = Intake._get_or_create(group, key, member.wa_name if member else '')
+        form_token = secrets.token_urlsafe(24)
+        st.write({'client_form_token': form_token, 'client_form_kind': kpi._kind_now(),
+                  'client_form_fix_kpi_id': kpi.id,
+                  'client_form_expires': fields.Datetime.now() + timedelta(minutes=30)})
+        return request.redirect('/kpi/wa/client/%s' % form_token, local=True)
 
     # ------------------------------------------------------------------
     # lookups (JSON)
@@ -246,7 +303,10 @@ class KpiWaClientForm(http.Controller):
         receipt = ''
         try:
             with request.env.cr.savepoint():
-                kpi, err, receipt = self._create(st, kind, post)
+                if st.client_form_fix_kpi_id:
+                    kpi, err, receipt = self._resubmit(st, kind, post)
+                else:
+                    kpi, err, receipt = self._create(st, kind, post)
                 if err:
                     # Roll back anything half made (e.g. a ticket created
                     # before its files were refused).
@@ -260,7 +320,7 @@ class KpiWaClientForm(http.Controller):
 
         # One use: the link stops working the moment the request exists.
         st.sudo().write({'client_form_token': False, 'client_form_expires': False,
-                         'created_kpi_id': kpi.id})
+                         'client_form_fix_kpi_id': False, 'created_kpi_id': kpi.id})
         receipt = receipt or self._receipt(st, kind, kpi, post)
         self._post_in_group(st, receipt)
         emoji, title = _TITLES[kind]
@@ -324,36 +384,38 @@ class KpiWaClientForm(http.Controller):
         scope = '%s (%s)' % (db.db_name, db.server_id.name)
 
         if kind == 'dbdisconnect':
+            # The team needs the way in to do the deletion: URL and login.
+            url = (post.get('db_url') or '').strip()[:255]
+            username = (post.get('username') or '').strip()[:64]
+            password = (post.get('password') or '')[:128]
+            if not url:
+                return None, 'Type the database URL.', ''
+            if not username:
+                return None, 'Type the user ID.', ''
+            if not password:
+                return None, 'Type the password.', ''
             kpi = Kpi.browse(Kpi.create_kpi({
                 'name': '[Destroy] Destroy %s on %s' % (db.db_name, db.server_id.name),
                 'kra_id': target.id, 'doc_type': 'requirement',
-                'description': ('— Destroy request —\nDatabase: %s\nServer: %s\n'
+                'description': ('— Destroy request —\nDatabase: %s\nServer: %s\nURL: %s\n'
+                                'User ID: %s\nPassword: on the request (staff only)\n'
                                 'Reason: %s\n\nNOT ACTIONED. The database is still live. '
                                 'Approve or refuse it on Clients > Live Databases.%s')
-                               % (db.db_name, db.server_id.name, text, footer),
+                               % (db.db_name, db.server_id.name, url, username, text, footer),
             }))
             router._finish_client_ticket(kpi, group, st, {
                 'client_db_id': db.id, 'request_category': 'db_disconnect',
+                'provision_url': url, 'provision_username': username,
+                'provision_password': password,
             }, {'form': kind, 'db_id': db.id}, action='wa_client_form')
             receipt = db.request_disconnect(
                 kpi=kpi, reason_text=text,
                 by_number=router._participant_number(st), by_name=st.participant_name or '')
             return kpi, '', receipt
 
-        # Urgency and Needed by: the web portal's New Request fields
-        # (/kpi_client_portal/add_task), same values and same rules.
-        priority = post.get('priority') or 'regular'
-        if priority not in PRIORITY_CODES:
-            return None, 'Choose the urgency.', ''
-        deadline = False
-        if post.get('needed_by'):
-            try:
-                deadline = fields.Date.to_date(post['needed_by'])
-            except ValueError:
-                return None, 'Needed by: pick a date.', ''
-            if deadline < fields.Date.today():
-                return None, 'Needed by cannot be in the past.', ''
-        common = {'priority': priority, 'deadline': deadline}
+        common, cerr = self._common(post)
+        if cerr:
+            return None, cerr, ''
 
         if kind == 'requirement':
             name = _clean_title(post.get('name'))
@@ -385,7 +447,7 @@ class KpiWaClientForm(http.Controller):
                     or not (parent.external_ref or '').upper().startswith('REQ-')):
                 return None, 'Pick the task this is about.', ''
             prefix = REF_PREFIX_FOR_DOC_TYPE[kind]
-            ref = '%s%03d-%s' % (prefix, self._next_child_number(prefix, parent.external_ref),
+            ref = '%s%03d-%s' % (prefix, Kpi._next_child_number(prefix, parent.external_ref),
                                  parent.external_ref)
             base = re.sub(r'^\[(Update|Bug)\]\s*', '', parent.name or '', flags=re.I)
             # The type comes from the requirement it is about.
@@ -407,23 +469,112 @@ class KpiWaClientForm(http.Controller):
             self._attach(kpi, files, st)
         return kpi, '', ''
 
-    def _next_child_number(self, prefix, parent_ref):
-        """Next N for <PREFIX>NNN-<parent_ref>, counted per requirement.
-        Archived tasks and retired refs count, so a number is never reused."""
-        Kpi = request.env['kra.kpi'].sudo().with_context(active_test=False)
-        pat = '%s%%-%s' % (prefix, parent_ref)
-        rx = re.compile(r'^%s(\d{1,9})-%s$' % (re.escape(prefix), re.escape(parent_ref)), re.I)
-        has_prev = 'previous_external_ref' in Kpi._fields
-        domain = [('external_ref', '=ilike', pat)]
-        if has_prev:
-            domain = ['|'] + domain + [('previous_external_ref', '=ilike', pat)]
-        nums = [0]
-        for k in Kpi.search(domain):
-            for r in (k.external_ref, k.previous_external_ref if has_prev else ''):
-                m = rx.match((r or '').strip())
-                if m:
-                    nums.append(int(m.group(1)))
-        return max(nums) + 1
+    def _common(self, post):
+        """Urgency and Needed by: the web portal's New Request fields
+        (/kpi_client_portal/add_task), same values and same rules."""
+        priority = post.get('priority') or 'regular'
+        if priority not in PRIORITY_CODES:
+            return None, 'Choose the urgency.'
+        deadline = False
+        if post.get('needed_by'):
+            try:
+                deadline = fields.Date.to_date(post['needed_by'])
+            except ValueError:
+                return None, 'Needed by: pick a date.'
+            if deadline < fields.Date.today():
+                return None, 'Needed by cannot be in the past.'
+        return {'priority': priority, 'deadline': deadline}, ''
+
+    def _resubmit(self, st, kind, post):
+        """A declined task, fixed by the client on the same form.
+
+        Same record. The ref stays unless the type changed (then a new ref,
+        with the old one kept in previous_external_ref). Back in the queue for
+        the approval chain, exactly like a fresh request."""
+        Kpi = request.env['kra.kpi'].sudo()
+        kpi = st.client_form_fix_kpi_id.sudo().with_context(active_test=False)
+        if kind not in dict(FIX_KINDS):
+            return None, 'Choose Requirement, Bug or Update.', ''
+        if kpi.correction_round >= kpi.MAX_CORRECTION_ROUNDS:
+            return None, ('This has been sent back %d times already, so a person from the '
+                          'team will contact you about it.') % kpi.correction_round, ''
+        db = self._db_for(st, post.get('server_id'), post.get('db_id'))
+        if not db:
+            return None, 'Choose the server and the database.', ''
+        text = (post.get('description') or '').strip()[:TEXT_MAX]
+        if not text:
+            return None, 'Write the summary / description.', ''
+        files, ferr = self._files()
+        if ferr:
+            return None, ferr, ''
+        common, cerr = self._common(post)
+        if cerr:
+            return None, cerr, ''
+        who = st.participant_name or st.participant_key
+        footer = '\n\n— Sent again from the WhatsApp form by %s after a decline.' % who
+        scope = '%s (%s)' % (db.db_name, db.server_id.name)
+        old_ref, old_kind = kpi.external_ref or '', kpi._kind_now()
+        vals = dict(common, client_db_id=db.id)
+
+        if kind == 'requirement':
+            name = _clean_title(post.get('name'))
+            if not name:
+                return None, 'Type the task name.', ''
+            dv, dv_err = clean_deliverable(request.httprequest.form.getlist('deliverable_type'),
+                                           post.get('deliverable_other'))
+            if dv_err:
+                return None, dv_err, ''
+            if not dv['deliverable_type']:
+                return None, 'Tick the type — Module, App, EXE or Other.', ''
+            vals.update(dv, name=name, related_req_ref=False,
+                        description='%s\n\nDatabase: %s%s' % (text, scope, footer))
+            if old_kind != 'requirement':
+                vals['external_ref'] = 'REQ-%03d' % Kpi._next_ref_for_prefix('REQ')
+        else:
+            try:
+                parent = Kpi.browse(int(post.get('parent_id') or 0)).exists()
+            except (TypeError, ValueError):
+                parent = None
+            if (not parent or parent == kpi or parent.client_db_id != db
+                    or not (parent.external_ref or '').upper().startswith('REQ-')):
+                return None, 'Pick the task this is about.', ''
+            base = re.sub(r'^\[(Update|Bug)\]\s*', '', parent.name or '', flags=re.I)
+            vals.update(name=NAME_PREFIX_FOR_DOC_TYPE[kind] + base,
+                        related_req_ref=parent.external_ref, requested_doc_type=kind,
+                        deliverable_type=parent.deliverable_type or False,
+                        deliverable_other=parent.deliverable_other or False,
+                        description='%s\n\nAbout: %s — %s\nDatabase: %s%s' % (
+                            text, parent.external_ref, base, scope, footer))
+            if old_kind != kind or kpi.related_req_ref != parent.external_ref:
+                prefix = REF_PREFIX_FOR_DOC_TYPE[kind]
+                vals['external_ref'] = '%s%03d-%s' % (
+                    prefix, Kpi._next_child_number(prefix, parent.external_ref),
+                    parent.external_ref)
+        if vals.get('external_ref') and old_ref:
+            vals['previous_external_ref'] = old_ref
+        if not kpi.original_client_text:
+            vals['original_client_text'] = kpi.description or ''
+        vals.update({
+            'active': True, 'published': False, 'user_id': False,
+            'task_state': 'queue_waiting', 'admin_accept_deadline_at': False,
+            'client_reconfirm_state': 'corrected', 'client_dispute': False,
+            'correction_round': kpi.correction_round + 1,
+            'last_correction_text': text, 'client_fix_token': False,
+            'self_review_note': ('[CLIENT FIXED] %s' % text)[:255],
+        })
+        kpi.write(vals)
+        kpi._log_action('client_resubmitted', source='whatsapp', actor_label=who, payload={
+            'round': kpi.correction_round, 'old_ref': old_ref, 'new_ref': kpi.external_ref,
+            'old_kind': old_kind, 'new_kind': kind})
+        try:
+            kpi._notify('client_task_queued')
+            kpi._schedule_queue_nudge()
+        except Exception as exc:
+            _logger.warning('resubmit notify failed for %s: %s', kpi.id, exc)
+        kpi._wa_ask_admins()
+        if files:
+            self._attach(kpi, files, st)
+        return kpi, '', ''
 
     def _attach(self, kpi, files, st):
         """Same storage as the portal's client files: one progress entry, the
@@ -447,37 +598,33 @@ class KpiWaClientForm(http.Controller):
     # back in the group
     # ------------------------------------------------------------------
     def _receipt(self, st, kind, kpi, post):
+        """The request's details. _post_in_group puts a human opening line and
+        the team name around them (kpi.wa.ack)."""
         who = st.participant_name or ''
-        client = self._client(st).name or ''
         ref = kpi.external_ref or str(kpi.id)
-        if kind == 'dbdisconnect':
-            return '💥 Destroy requested — %s' % ref
         if kind == 'newdb':
-            return ('🗄️ *New Database* — logged *%s* for *%s*\n'
-                    'Database: *%s*\nServer: %s\nLogin: %s\n\n'
-                    '_In the admin queue for review._') % (
-                ref, client, kpi.provision_db_name or '',
+            return ('🗄️ *New Database* — *%s*\nDatabase: *%s*\nServer: %s\nLogin: %s') % (
+                ref, kpi.provision_db_name or '',
                 kpi.provision_server_id.name or '', post.get('username') or '')
         db = kpi.client_db_id
-        emoji, title = _TITLES[kind]
-        lines = ['%s *%s* — logged *%s* for *%s*' % (emoji, title, ref, client),
-                 kpi.name or '']
+        emoji, title = _TITLES.get(kind, ('', ''))
+        lines = ['%s *%s* — *%s*' % (emoji, title, ref), kpi.name or '']
         if kpi.related_req_ref:
             lines.append('About: %s' % kpi.related_req_ref)
         if db:
             lines.append('🗄️ %s (%s)' % (db.db_name, db.server_id.name))
-        lines.append('\n_%sIn the admin queue for review._' % (
-            ('Sent by %s. ' % who) if who else ''))
+        if who:
+            lines.append('Sent by %s' % who)
         return '\n'.join(lines)
 
     def _post_in_group(self, st, text):
+        """Not instantly: 10-30 s later, like a person who read it first."""
         try:
-            session = request.env['whatsapp.session'].sudo().search(
-                [('status', '=', 'connected')], limit=1)
-            if not session or not st.group_id.jid:
+            if not st.group_id.jid:
                 return
-            msg = SimpleNamespace(phone=st.group_id.jid, session_id=session, message='',
-                                  message_type='text', interactive_reply_id='')
-            request.env['kpi.wa.group.router'].sudo()._text(msg, text)
+            body = request.env['kpi.wa.ack'].sudo().wrap(text, 'received')
+            request.env['kpi.notification.queue'].sudo().enqueue_delayed(
+                st.group_id.jid, body, event='client_receipt',
+                kpi_id=st.created_kpi_id.id or False)
         except Exception as exc:
             _logger.warning('client form saved but the WhatsApp receipt failed: %s', exc)

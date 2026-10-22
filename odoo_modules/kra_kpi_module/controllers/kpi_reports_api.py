@@ -3216,6 +3216,32 @@ class KpiReportsAPI(http.Controller):
             })
         return progress
 
+    @http.route('/kpi_client_portal/parent_tasks', type='json', auth='user', methods=['POST'], csrf=False)
+    def client_portal_parent_tasks(self, sub_kra_id=None, **kw):
+        """The requirements a Bug / Update can be about: the client's REQ tasks,
+        newest first. With sub_kra_id, only that project's."""
+        try:
+            allowed_ids = set()
+            for k in self._resolve_client_kras_for_user():
+                allowed_ids.update(k._get_descendant_ids())
+            if sub_kra_id:
+                sub = int(sub_kra_id)
+                if sub not in allowed_ids:
+                    return {'status': False, 'message': 'You are not authorized for this project.'}
+                ids = list(request.env['kra.master'].sudo().browse(sub)._get_descendant_ids())
+            else:
+                ids = list(allowed_ids)
+            rows = request.env['kra.kpi'].sudo().search([
+                ('kra_id', 'in', ids), ('external_ref', '=ilike', 'REQ-%')],
+                order='create_date desc', limit=300)
+            return {'status': True, 'tasks': [{
+                'id': k.id, 'ref': k.external_ref or '', 'name': k.name or '',
+                'date': k.create_date.strftime('%d-%m-%Y') if k.create_date else '',
+                'db': k.client_db_id.db_name or '',
+            } for k in rows]}
+        except Exception as e:
+            return {'status': False, 'message': str(e)}
+
     @http.route('/kpi_client_portal/add_task', type='json', auth='user', methods=['POST'], csrf=False)
     def client_portal_add_task(self, **params):
         """Allow a client portal user to self-submit a new task under one of their projects.
@@ -3244,7 +3270,22 @@ class KpiReportsAPI(http.Controller):
             raw_name = (params.get('name') or '').strip()
             if not raw_name:
                 return {'status': False, 'message': 'Task name required.'}
-            dv, err = clean_deliverable(params.get('deliverable_type'), params.get('deliverable_other'))
+            # Bug / Update: always about ONE of the client's requirements, and
+            # numbered under it (BUG001-REQ-012), like the WhatsApp form.
+            parent = None
+            if kind in ('bug', 'update'):
+                try:
+                    parent = request.env['kra.kpi'].sudo().browse(
+                        int(params.get('parent_id') or 0)).exists()
+                except (TypeError, ValueError):
+                    parent = None
+                if (not parent or parent.kra_id.id not in allowed_ids
+                        or not (parent.external_ref or '').upper().startswith('REQ-')):
+                    return {'status': False, 'message': 'Pick the task this bug or update is about.'}
+                dv, err = {'deliverable_type': parent.deliverable_type or False,
+                           'deliverable_other': parent.deliverable_other or False}, None
+            else:
+                dv, err = clean_deliverable(params.get('deliverable_type'), params.get('deliverable_other'))
             if err:
                 return {'status': False, 'message': err}
             needed_by = False
@@ -3277,6 +3318,18 @@ class KpiReportsAPI(http.Controller):
                 vals.update(dv)
             if needed_by:
                 vals['deadline'] = needed_by
+            if parent:
+                from ..models.kpi_workflow import REF_PREFIX_FOR_DOC_TYPE
+                prefix = REF_PREFIX_FOR_DOC_TYPE[kind]
+                Kpi = request.env['kra.kpi'].sudo()
+                vals.update({
+                    'kra_id': parent.kra_id.id,
+                    'external_ref': '%s%03d-%s' % (
+                        prefix, Kpi._next_child_number(prefix, parent.external_ref),
+                        parent.external_ref),
+                    'related_req_ref': parent.external_ref,
+                    'client_db_id': parent.client_db_id.id or False,
+                })
             kpi = request.env['kra.kpi'].sudo().create(vals)
             if files:
                 self._attach_client_files(kpi, files)

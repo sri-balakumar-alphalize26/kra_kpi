@@ -62,6 +62,7 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
         {lane === "pending_review" && <Lozenge tone="review">Self-created · pending review</Lozenge>}
         {fresh && <Lozenge tone="fresh">New</Lozenge>}
         {t.self_needs_resume_reason && <Lozenge tone="danger">Sent back</Lozenge>}
+        {t.decline_count > 0 && <Lozenge tone="danger" title={`The approver declined this ${t.decline_count} time(s); the client fixed it and sent it again.`}>Declined {t.decline_count}×</Lozenge>}
         {t.estimate_extension_count > 0 && <Lozenge tone="neutral" style={{ textTransform: "none" }} title={`Extended ${t.estimate_extension_count} time(s) by ${t.estimate_extended_by_name || "someone"}`}>+{t.estimate_extension_count} ext</Lozenge>}
         {late && <Lozenge tone="danger">Past deadline · {t.deadline}</Lozenge>}
         {t.pre_approval_auto_released && !t.pre_approval_decision && <Lozenge tone="neutral" style={{ textTransform: "none" }} title="The client did not reply within the approval window, so work was released. This is not their approval — they can still object, and sign-off is still required before billing.">Released — no client reply</Lozenge>}
@@ -90,7 +91,7 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
         </div>
       )}
       <div className="row">
-        <span className="key"><span className="type" style={{ background: tileColor }}>{tileLetter}</span>{t.external_ref || `#${t.id}`}</span>
+        <span className="key" style={t.parent_ref ? { fontSize: "0.85em" } : undefined} title={t.parent_ref ? `Under ${t.parent_ref}` : undefined}><span className="type" style={{ background: tileColor }}>{tileLetter}</span>{t.parent_ref ? "↳ " : ""}{t.external_ref || `#${t.id}`}</span>
         <span className="pri" style={{ color: pri[1] }} title={pri[2]}><Icon n={pri[0]} size={16} /></span>
         {t.progress_count > 0 && <span className="mini" title={`${t.progress_count} progress update${t.progress_count === 1 ? "" : "s"}`}><Icon n="doc" size={12} />{t.progress_count}</span>}
         <LiveTick active={!!running} fn={(n) => {

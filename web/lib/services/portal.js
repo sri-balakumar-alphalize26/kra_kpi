@@ -52,11 +52,14 @@ export const removeSignature = () => rpc("/kpi_client_portal/upload_signature", 
 export const certificateHref =(kpiId) => href(`/kpi_client_portal/download_cert?kpi_id=${kpiId}`);
 
 /* One request from the portal. needed_by / attachments are new on 19.0.5.7. */
-export const addClientTask = ({ subKraId, kind, name, description, priority, deliverableType, deliverableOther, neededBy, attachments }) =>
+export const addClientTask = ({ subKraId, kind, name, description, priority, deliverableType, deliverableOther, neededBy, attachments, parentId }) =>
   rpc("/kpi_client_portal/add_task", {
-    sub_kra_id: subKraId, kind: kind || "requirement", name: name || "", description: description || "", priority: priority || "regular",
+    sub_kra_id: subKraId, kind: kind || "requirement", name: name || "", description: description || "", priority: priority || "regular", parent_id: parentId || 0,
     deliverable_type: deliverableType || "", deliverable_other: deliverableOther || "", needed_by: neededBy || "", attachments: attachments || [],
   }, { timeout: 120000 });
+
+/* The requirements a Bug / Update can be about, newest first: [{id, ref, name, date, db}]. */
+export const fetchParentTasks = (subKraId) => rpc("/kpi_client_portal/parent_tasks", { sub_kra_id: subKraId ? Number(subKraId) : 0 }).then((r) => (r?.status ? r.tasks || [] : []));
 
 /* Invoices (client view). */
 export const INVOICES_PATH = "/kpi_client_invoice/list";

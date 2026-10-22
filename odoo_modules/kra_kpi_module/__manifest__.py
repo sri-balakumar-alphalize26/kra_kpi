@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.7.43",
+    "version": "19.0.7.44",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -33,6 +33,7 @@
         "data/kpi_db_disconnect_reasons.xml",
         "data/kpi_db_term_cron.xml",
         "data/kpi_meeting_cron.xml",
+        "data/kpi_escalation_data.xml",
         "views/wa_approval_templates.xml",
         "views/wa_task_form_templates.xml",
         "views/wa_client_form_templates.xml",
@@ -67,6 +68,7 @@
         "views/kpi_approval_views.xml",
         "views/kpi_wa_database_views.xml",
         "views/menu.xml",
+        "views/kpi_escalation_views.xml",
         "views/kpi_workflow_views.xml",
         "views/kpi_reports_views.xml",
         "views/kpi_employee_report_views.xml",

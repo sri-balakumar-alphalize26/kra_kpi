@@ -373,6 +373,21 @@ function PeopleFilter({ people, value, onChange }) {
   );
 }
 
+/* [[task, indented]] with each bug / update moved to just after its parent
+   requirement when that requirement is in the same list. */
+function nestUnderParent(items) {
+  const here = new Set(items.map((t) => t.id));
+  const kids = new Map();
+  for (const t of items) if (t.parent_kpi_id && here.has(t.parent_kpi_id)) (kids.get(t.parent_kpi_id) || kids.set(t.parent_kpi_id, []).get(t.parent_kpi_id)).push(t);
+  const out = [];
+  for (const t of items) {
+    if (t.parent_kpi_id && here.has(t.parent_kpi_id)) continue;
+    out.push([t, false]);
+    for (const k of kids.get(t.id) || []) out.push([k, true]);
+  }
+  return out;
+}
+
 const Lane = memo(function Lane({ lane, items, dragging, allowed, hint, blocked, selectedId, onOpen, onAction, workdayLocked }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane.key });
   /* Odoo style: "auto" folds the lane into a thin strip while it has no cards;
@@ -383,7 +398,9 @@ const Lane = memo(function Lane({ lane, items, dragging, allowed, hint, blocked,
   const narrow = !(dragging && allowed) && (mode === "folded" || (mode === "auto" && items.length === 0));
   /* A long lane draws LANE_PAGE cards, then "Show more". */
   const [limit, setLimit] = useState(LANE_PAGE);
-  const shown = items.length > limit ? items.slice(0, limit) : items;
+  /* A bug / update sits right under its REQ, indented, when both are in this lane. */
+  const nested = useMemo(() => nestUnderParent(items), [items]);
+  const shown = nested.length > limit ? nested.slice(0, limit) : nested;
   const hidden = items.length - shown.length;
   const cls = ["col", narrow ? "narrow" : "", dragging ? (allowed ? "drop-ok" : home ? "" : "drop-no") : "", isOver && dragging && !home ? "over" : ""].join(" ");
   return (
@@ -396,7 +413,7 @@ const Lane = memo(function Lane({ lane, items, dragging, allowed, hint, blocked,
       <div className="col-b">
         {dragging && allowed && hint && <div className="drop-hint" role="note"><Icon n="check" size={13} />{hint}</div>}
         {dragging && !allowed && !home && isOver && blocked && <div className="drop-hint no" role="note"><Icon n="x" size={13} />{blocked}</div>}
-        {shown.map((t) => <DraggableCard key={`${lane.key}-${t.id}`} task={t} selected={selectedId === t.id} onOpen={onOpen} onAction={onAction} workdayLocked={workdayLocked} isDragging={dragging?.id === t.id} />)}
+        {shown.map(([t, child]) => <DraggableCard key={`${lane.key}-${t.id}`} task={t} child={child} selected={selectedId === t.id} onOpen={onOpen} onAction={onAction} workdayLocked={workdayLocked} isDragging={dragging?.id === t.id} />)}
         {hidden > 0 && <div style={{ display: "flex", justifyContent: "center", padding: "4px 0 8px" }}><Button size="sm" kind="ghost" onClick={() => setLimit((n) => n + LANE_PAGE)}>Show {Math.min(LANE_PAGE, hidden)} more</Button></div>}
         {!items.length && <div className="empty">{lane.key === "today" ? "Nothing worked on yet today" : "No tasks"}</div>}
       </div>
@@ -405,12 +422,12 @@ const Lane = memo(function Lane({ lane, items, dragging, allowed, hint, blocked,
 });
 
 /* Memoised: a poll or a timer tick elsewhere leaves an unchanged card alone. */
-const DraggableCard = memo(function DraggableCard({ task, selected, onOpen, onAction, workdayLocked, isDragging }) {
+const DraggableCard = memo(function DraggableCard({ task, child, selected, onOpen, onAction, workdayLocked, isDragging }) {
   const { attributes, listeners, setNodeRef } = useDraggable({ id: task.id, data: { task } });
   const { me } = useMe();
   const cardActs = useMemo(() => actionsFor(task, me, { workdayLocked }).filter((a) => a.card), [task, me, workdayLocked]);
   return (
-    <div ref={setNodeRef} {...attributes} style={{ outline: "none" }}>
+    <div ref={setNodeRef} {...attributes} style={{ outline: "none", marginLeft: child ? 18 : 0 }}>
       <TaskCard task={task} selected={selected} onOpen={onOpen} dragging={isDragging} dragHandle={listeners} actions={cardActs} onAction={onAction} />
     </div>
   );

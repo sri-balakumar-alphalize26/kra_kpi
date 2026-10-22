@@ -7,6 +7,7 @@ import { fmtHM, estimateSeconds, laneForTask, refPrefix, TYPE_TILE } from "@/lib
 import { liveFromAnchor, fmtClock, secsSince, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
 import { actionsFor } from "./actions";
+import DbHandover from "./DbHandover";
 import { useTaskActions } from "./TaskActions";
 import { ClientProgress, ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList } from "./TaskExtras";
 
@@ -106,6 +107,7 @@ export default function TaskPanel({ id, onClose }) {
                 {running && <span className="timer"><span className="pulse" /><LiveTick fn={(n) => fmtClock(secsSince(t.timer_start_datetime, n))} /> running</span>}
                 {t.paused_reason && lane === "paused" && <Lozenge tone="paused">{t.paused_reason}</Lozenge>}
                 {t.self_needs_resume_reason && <Lozenge tone="danger">Sent back</Lozenge>}
+                {t.decline_count > 0 && <Lozenge tone="danger">Declined {t.decline_count}×</Lozenge>}
                 {late && <Lozenge tone="danger">Deadline passed</Lozenge>}
                 {t.pre_approval_auto_released && !t.pre_approval_decision && <Lozenge tone="neutral" style={{ textTransform: "none" }} title="The client did not reply within the approval window, so work was released. This is not their approval — sign-off is still required before billing.">Released — no client reply</Lozenge>}
                 {t.admin_accepted_auto && <Lozenge tone="neutral" style={{ textTransform: "none" }} title="No admin actioned this within the accept window, so it was accepted automatically.">Auto-accepted</Lozenge>}
@@ -130,12 +132,14 @@ export default function TaskPanel({ id, onClose }) {
 
               {t.description && <div className="sec"><h3>Description</h3><p style={{ whiteSpace: "pre-wrap" }}>{t.description}</p></div>}
               <ClientWording key={`cw${id}`} kpiId={id} />
+              {(t.request_category === "new_database" || t.request_category === "db_disconnect") && <DbHandover key={`dbh${id}`} kpiId={id} canEdit={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
               {String(meta.guidelines || "").trim() && <div className="sec"><h3>Guidelines</h3><p style={{ whiteSpace: "pre-wrap" }}>{meta.guidelines}</p></div>}
 
               <dl className="details">
                 <dt>Assignee</dt><dd>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={20} />{t.user_name}</> : <span className="mini">Unassigned</span>}</dd>
                 <dt>Client</dt><dd>{t.client_name || "—"}</dd>
                 <dt>Project</dt><dd>{meta.kra || t.project_name || "—"}</dd>
+                {t.parent_ref && <><dt>Under task</dt><dd>{t.parent_ref}</dd></>}
                 <dt>Type</dt><dd>{meta.kind || refPrefix(t.external_ref) || "Task"}{t.deliverable_type ? ` · ${S.taskDeliverableLabel(t)}` : ""}{t.is_self_created && !t.admin_accepted && t.requested_doc_type ? <span className="mini"> (asked: {t.requested_doc_type})</span> : null}</dd>
                 <dt>Priority</dt><dd style={{ color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)", fontWeight: 800 }}>{t.priority === "urgent" ? "▲▲ Urgent" : t.priority === "important" ? "▲ Important" : "– Regular"}{t.requested_priority && t.requested_priority !== t.priority ? <span className="mini"> (developer asked for {S.priorityLabel(t.requested_priority)})</span> : null}</dd>
                 <dt>Estimate</dt><dd style={{ height: "auto", minHeight: 24, flexWrap: "wrap" }}>{fmtHM(est)}{t.estimate_extension_count > 0 && <span className="mini"> · extended {t.estimate_extension_count}×{t.estimate_extended_by_name ? ` by ${t.estimate_extended_by_name}` : ""} {t.estimate_extend_reason ? `— ${t.estimate_extend_reason}` : ""}</span>}</dd>
