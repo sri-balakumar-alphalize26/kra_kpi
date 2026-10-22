@@ -7,7 +7,7 @@ request → type). The team answers from the 💬 Chat window in KPI details
 
 WHO THE CLIENT SEES
 -------------------
-Every team message reaches the client group as "Reply from our team" --
+Every team message reaches the client group as "Reply from the Alphalize team" --
 never a developer's name. Putting a client and a developer in direct touch is
 the one thing the rest of this module is careful not to do (see
 kpi_doubt.action_release_to_client). Inside the Chat window staff see who
@@ -113,12 +113,11 @@ class KraKpiChat(models.Model):
         doubt = Doubt.search([('kpi_id', '=', self.id), ('kind', '=', 'client_msg'),
                               ('state', '=', 'open')], limit=1)
         if doubt:
-            # The manager already has the poll for this task: tell them the
-            # client added to it, rather than sending a second poll.
-            Report = self.env['kpi.wa.group.report'].sudo()
-            for mgr in (doubt.manager_user_id or self._manager_users()[:1]):
-                Report.post_text_to_user(mgr, _('💬 %(ref)s — %(who)s added:\n\n%(body)s') % {
-                    'ref': self._chat_ref(), 'who': name or _('the client'), 'body': body})
+            # Still unanswered: the manager gets the full alert again -- every
+            # message so far, the Open link and the developer buttons -- not a
+            # bare "added" line they cannot act on.
+            doubt.sudo().write({'question': ('%s\n%s' % (doubt.question or '', body)).strip()[-2000:]})
+            doubt._ask_the_manager()
         else:
             # The MANAGER decides first (their poll: reply, ask the developer,
             # meeting, not now); the developer is told only when asked.
@@ -219,7 +218,7 @@ class KraKpiChat(models.Model):
             link = self._chat_page_link(dev)
             sent = Report.post_text_to_user(dev, _(
                 '💬 *%(ref)s — %(title)s* · %(client)s\n%(mgr)s asks you to reply to the client.\n\n%(said)s\n\n'
-                'Type your reply here — it goes to their group as "Reply from our team". '
+                'Type your reply here — it goes to their group as "Reply from the Alphalize team". '
                 '(Type cancel to stop.)%(link)s') % {
                     'ref': ref, 'title': self.name or '', 'client': client,
                     'mgr': manager.name or _('The manager'), 'said': said,
@@ -237,7 +236,7 @@ class KraKpiChat(models.Model):
         # Never the developer's name -- to the client it is "our team".
         tags = [('@%s' % d) if len(d) >= 11 else (n or _('there')) for n, d in askers] or [_('there')]
         Report.post_for_kpi(self, _(
-            '💬 %(who)s — about *%(ref)s — %(title)s*: our team has your message and '
+            '💬 %(who)s — about *%(ref)s — %(title)s*: the Alphalize team has your message and '
             'will reply soon.\n\nOpen the chat (works for %(hours)d hours):\n%(link)s') % {
                 'who': ', '.join(tags), 'ref': ref, 'title': self.name or '',
                 'hours': CLIENT_CHAT_HOURS, 'link': self._client_chat_link()},
@@ -272,7 +271,7 @@ class KraKpiChat(models.Model):
             raise UserError(_('This client has no WhatsApp group linked, so the message '
                               'could not be sent.'))
         posted = Report.post_for_kpi(self, _(
-            '💬 *%(ref)s — %(title)s*\nReply from our team:\n\n%(body)s\n\n'
+            '💬 *%(ref)s — %(title)s*\nReply from the Alphalize team:\n\n%(body)s\n\n'
             '_To answer, send *hi* → 💬 Discuss._') % {
                 'ref': ref, 'title': self.name or '', 'body': body})
         if not posted:

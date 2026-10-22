@@ -4,7 +4,8 @@ Sent in the client's WhatsApp group when a manager hands their 💬 Discuss
 question to a developer (kpi_chat.chat_ask_developer). It shows THAT chat and
 nothing else -- the reference, the title and the messages with their times.
 No hours, people, files or notes: KPI details are for the team only. Team
-messages read "Our team", never a name.
+messages read "Alphalize team", never a name, and the client is not asked for
+one: messages from the page carry the client's company name.
 
 auth='public' like the other WhatsApp pages: the phone opening the link is
 not logged in. The token is the key and it lasts CLIENT_CHAT_HOURS.
@@ -39,7 +40,7 @@ def _task_for(token):
 def _rows(kpi):
     """The thread as the client may see it: no staff names."""
     return [{'id': r['id'], 'side': r['side'], 'body': r['body'], 'at': r['at'],
-             'who': r['who'] if r['side'] == 'client' else 'Our team'}
+             'who': r['who'] if r['side'] == 'client' else 'Alphalize team'}
             for r in kpi.chat_rows(limit=200)]
 
 
@@ -77,9 +78,8 @@ class KpiClientChat(http.Controller):
         kpi = _task_for(token)
         if not kpi:
             return {'ok': False, 'expired': True}
-        name = ' '.join((name or '').split())[:60]
-        if not name:
-            return {'ok': False, 'message': 'Type your name first.'}
+        # No name is asked for: the message is from the client's company.
+        name = ' '.join((name or '').split())[:60] or kpi.client_kra_id.name or kpi.kra_id.name or 'Client'
         try:
             kpi.chat_post_client(text, name=name, source='client_page')
         except UserError as exc:
