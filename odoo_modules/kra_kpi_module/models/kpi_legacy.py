@@ -278,15 +278,30 @@ class KraKpiLegacy(models.Model):
     # ------------------------------------------------------------------
     # KPI Details: filled in later by the team
     # ------------------------------------------------------------------
+    def _legacy_locked_for(self, user):
+        """'' when `user` may change the KPI Details card, else why not.
+        Locked once the client has signed the task off (what they signed is
+        what it was about) and with the rest of its details once it is fully
+        completed (kpi_time_adjust._details_locked_for). Admins excepted."""
+        self.ensure_one()
+        locked = self._details_locked_for(user)
+        if locked:
+            return locked
+        rec = self.sudo()
+        if rec.client_signed_datetime and not (user and self._is_kpi_admin_user(user)):
+            when = fields.Datetime.to_datetime(rec.client_signed_datetime).date()
+            return ("The client signed this task off on %s — its old-system details can't be "
+                    "changed now. Ask an admin if something must change." % fields.Date.to_string(when))
+        return ''
+
     def legacy_save_details(self, ref=None, name=None, note=None, user=None):
         """Save the KPI Details card. A Request ID links + confirms it.
-        `user`: who is saving (the routes call this under sudo). Locked with the
-        rest of the task's details once it is fully completed; admins excepted
-        (kpi_time_adjust._details_locked_for)."""
+        `user`: who is saving (the routes call this under sudo). Locked once
+        the client signs it off; admins excepted (_legacy_locked_for)."""
         self.ensure_one()
         if not self.legacy_req_link:
             raise UserError('This task is not marked From old DB.')
-        locked = self._details_locked_for(user or self.env.user)
+        locked = self._legacy_locked_for(user or self.env.user)
         if locked:
             raise UserError(locked)
         vals = {}

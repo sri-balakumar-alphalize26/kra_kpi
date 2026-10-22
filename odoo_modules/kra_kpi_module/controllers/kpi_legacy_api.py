@@ -47,8 +47,8 @@ def _voice_notes(kpi):
 
 def _edit_state(kpi, user):
     """(can_edit, locked_reason) for the KPI Details card: managers only, and
-    not once the task is fully completed (admins excepted)."""
-    locked = kpi.sudo()._details_locked_for(user)
+    not once the client signed it off (admins excepted)."""
+    locked = kpi.sudo()._legacy_locked_for(user)
     return bool(_may_edit(user) and not locked), locked or ''
 
 
