@@ -5,7 +5,7 @@ import { useResource } from "@/lib/useFetch";
 import * as S from "@/lib/services/settings";
 import { paymentTerm } from "@/lib/services/admin";
 import SettingsNav from "./SettingsNav";
-import SetupScreen from "./SetupScreen";
+import ApprovalChainCard from "./ApprovalChainCard";
 
 /* Company switches, each saved on change (the app auto-saves too). */
 export default function Configuration() {
@@ -104,7 +104,7 @@ export default function Configuration() {
               </div>
             </div>
             {/* Who decides a new client request, in order (kpi.escalation.tier). */}
-            <div className="cardbox" id="approval-chain" style={{ scrollMarginTop: 72 }}><h2>Approval chain</h2><SetupScreen name="approval-chain" embedded /></div>
+            <ApprovalChainCard />
             <WaGroupCard selectedJid={c.wa_group_jid} selectedName={c.wa_group_name} flags={flags} onChanged={() => { S.invalidateConfig(); cfg.refresh(); }} />
             <div className="cardbox"><h2>WhatsApp group report <small>{c.wa_group_name ? `→ ${c.wa_group_name}` : c.wa_group_jid ? `→ ${c.wa_group_jid}` : "no group chosen yet (pick one above)"}</small></h2>
               {!events && <Skeleton rows={3} />}

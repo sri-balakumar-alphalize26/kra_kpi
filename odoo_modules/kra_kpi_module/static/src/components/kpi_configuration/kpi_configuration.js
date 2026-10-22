@@ -9,26 +9,62 @@ export class KpiConfiguration extends Component {
     async loadTiers() {
         try {
             const rows = await this.orm.searchRead("kpi.escalation.tier", [],
-                ["name", "minutes", "use_task_manager", "user_ids"], { order: "sequence, id" });
-            const ids = [...new Set(rows.flatMap((r) => r.user_ids))];
-            const names = ids.length ? Object.fromEntries((await this.orm.read("res.users", ids, ["name"])).map((u) => [u.id, u.name])) : {};
-            this.state.tiers = rows.map((r) => ({ ...r, people: r.user_ids.map((id) => names[id] || "#" + id), saved: false }));
+                ["name", "sequence", "minutes", "use_task_manager", "user_ids"], { order: "sequence, id" });
+            if (!this.state.staff.length) {
+                const staff = await this.orm.searchRead("res.users", [["share", "=", false]],
+                    ["name", "kpi_wa_number", "kpi_mobile_number"], { order: "name" });
+                this.state.staff = staff.map((u) => ({ id: u.id, name: u.name, number: u.kpi_wa_number || u.kpi_mobile_number || "" }));
+            }
+            this.state.tiers = rows.map((r) => ({ ...r, saved: false }));
         } catch (e) { this.state.tiers = []; }
     }
-    tierPeople(t) {
-        const who = [...t.people];
-        if (t.use_task_manager || !who.length) who.push("the task's manager");
-        return who.join(", ");
-    }
-    async saveTierMinutes(t) {
-        const m = Math.max(1, parseInt(t.minutes, 10) || 1);
-        t.minutes = m;
-        await this.orm.write("kpi.escalation.tier", [t.id], { minutes: m });
+    userName(id) { return (this.state.staff.find((u) => u.id === id) || {}).name || "#" + id; }
+    userNumber(id) { return (this.state.staff.find((u) => u.id === id) || {}).number || ""; }
+    async saveTier(t, vals) {
+        if ("name" in vals && !String(vals.name || "").trim()) { await this.loadTiers(); return; }
+        Object.assign(t, vals);
+        await this.orm.write("kpi.escalation.tier", [t.id], vals);
         t.saved = true;
         setTimeout(() => { t.saved = false; }, 1500);
     }
-    async openChain() {
-        await this.action.doAction("kra_kpi_module.action_kpi_escalation_tier", { onClose: () => this.loadTiers() });
+    async addPerson(t, ev) {
+        const id = parseInt(ev.target.value, 10);
+        ev.target.value = "";
+        if (!id || t.user_ids.includes(id)) return;
+        t.user_ids = [...t.user_ids, id];
+        await this.orm.write("kpi.escalation.tier", [t.id], { user_ids: [[4, id]] });
+        t.saved = true;
+        setTimeout(() => { t.saved = false; }, 1500);
+    }
+    async removePerson(t, id) {
+        t.user_ids = t.user_ids.filter((x) => x !== id);
+        await this.orm.write("kpi.escalation.tier", [t.id], { user_ids: [[3, id]] });
+        t.saved = true;
+        setTimeout(() => { t.saved = false; }, 1500);
+    }
+    async moveTier(i, dir) {
+        const list = [...this.state.tiers];
+        const j = i + dir;
+        if (j < 0 || j >= list.length) return;
+        [list[i], list[j]] = [list[j], list[i]];
+        // Re-number every step 10, 20, 30… so the order is exactly what is shown.
+        await Promise.all(list.map((t, k) => this.orm.write("kpi.escalation.tier", [t.id], { sequence: (k + 1) * 10 })));
+        await this.loadTiers();
+    }
+    async addTier() {
+        const last = this.state.tiers[this.state.tiers.length - 1];
+        await this.orm.create("kpi.escalation.tier", [{ name: "New step", minutes: 5,
+            sequence: (last ? last.sequence : 0) + 10 }]);
+        await this.loadTiers();
+    }
+    deleteTier(t) {
+        this.dialog.add(ConfirmationDialog, {
+            title: "Delete this step?",
+            body: `"${t.name}" is removed from the approval chain.`,
+            confirmLabel: "Delete",
+            confirm: async () => { await this.orm.unlink("kpi.escalation.tier", [t.id]); await this.loadTiers(); },
+            cancel: () => {},
+        });
     }
 
     static template = xml/* xml */`
@@ -105,29 +141,70 @@ export class KpiConfiguration extends Component {
                     </div>
                 </div>
 
-                <!-- Approval chain: who decides a new client request, in order (kpi.escalation.tier). -->
+                <!-- Approval chain: who decides a new client request, in order (kpi.escalation.tier).
+                     Everything is edited right here: name, minutes, people, order. -->
                 <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #f59e0b !important; border-left-style: solid;">
                     <div class="card-header bg-white fw-bold d-flex align-items-center">
                         <i class="fa fa-sitemap me-2" style="color:#f59e0b;"></i> Approval Chain
-                        <button class="btn btn-sm btn-outline-primary ms-auto" t-on-click="() => this.openChain()">
-                            <i class="fa fa-pencil me-1"/>Edit people &amp; order</button>
+                        <button class="btn btn-sm btn-outline-primary ms-auto" t-on-click="() => this.addTier()">
+                            <i class="fa fa-plus me-1"/>Add step</button>
                     </div>
                     <div class="card-body">
-                        <p class="text-muted small mb-3">A new client request goes to the first row. If nobody there decides
-                            within its minutes, the next row is asked, and so on. After the last row it keeps waiting and
-                            the last row is reminded every 30 minutes. <b>Nothing is accepted automatically.</b></p>
-                        <t t-if="!state.tiers.length"><div class="text-muted small">No tiers — every manager is asked at once.</div></t>
+                        <p class="text-muted small mb-3">A new client request goes to step 1. If nobody there decides
+                            within its minutes, the next step is asked, and so on. After the last step it keeps waiting
+                            and the last step is reminded every 30 minutes. <b>Nothing is accepted automatically.</b>
+                            Each person gets a private WhatsApp link on the number shown under their name.</p>
+                        <t t-if="!state.tiers.length"><div class="text-muted small">No steps — every manager is asked at once.</div></t>
                         <t t-foreach="state.tiers" t-as="tier" t-key="tier.id">
-                            <div class="d-flex align-items-center gap-2 flex-wrap border rounded p-2 mb-2">
-                                <span class="badge bg-light text-dark border" t-esc="tier_index + 1"/>
-                                <b style="min-width:120px;" t-esc="tier.name"/>
-                                <div class="input-group input-group-sm" style="max-width:130px;">
-                                    <input type="number" min="1" class="form-control" t-model.number="tier.minutes"
-                                           t-on-change="() => this.saveTierMinutes(tier)"/>
-                                    <span class="input-group-text">min</span>
-                                    <span t-if="tier.saved" class="input-group-text text-success bg-white border-success">✓</span>
+                            <div class="border rounded p-2 mb-2">
+                                <div class="d-flex align-items-center gap-2 flex-wrap">
+                                    <span class="badge bg-light text-dark border" t-esc="tier_index + 1"/>
+                                    <input class="form-control form-control-sm fw-bold" style="max-width:180px;"
+                                           t-model="tier.name" t-on-change="() => this.saveTier(tier, {name: tier.name})"/>
+                                    <div class="input-group input-group-sm" style="max-width:130px;">
+                                        <input type="number" min="1" class="form-control" t-model.number="tier.minutes"
+                                               t-on-change="() => this.saveTier(tier, {minutes: Math.max(1, parseInt(tier.minutes, 10) || 1)})"/>
+                                        <span class="input-group-text">min</span>
+                                    </div>
+                                    <label class="small d-flex align-items-center gap-1 mb-0" title="Also ask the task's own manager">
+                                        <input type="checkbox" t-att-checked="tier.use_task_manager"
+                                               t-on-change="(e) => this.saveTier(tier, {use_task_manager: e.target.checked})"/>
+                                        Task's manager
+                                    </label>
+                                    <span t-if="tier.saved" class="text-success small">✓ saved</span>
+                                    <span class="ms-auto d-flex gap-1">
+                                        <button class="btn btn-sm btn-light border" title="Move up" t-att-disabled="tier_first"
+                                                t-on-click="() => this.moveTier(tier_index, -1)"><i class="fa fa-arrow-up"/></button>
+                                        <button class="btn btn-sm btn-light border" title="Move down" t-att-disabled="tier_last"
+                                                t-on-click="() => this.moveTier(tier_index, 1)"><i class="fa fa-arrow-down"/></button>
+                                        <button class="btn btn-sm btn-light border text-danger" title="Delete step"
+                                                t-on-click="() => this.deleteTier(tier)"><i class="fa fa-trash"/></button>
+                                    </span>
                                 </div>
-                                <span class="small text-muted flex-grow-1" t-esc="tierPeople(tier)"/>
+                                <div class="d-flex flex-wrap gap-2 mt-2 align-items-stretch">
+                                    <t t-foreach="tier.user_ids" t-as="uid" t-key="uid">
+                                        <div class="border rounded px-2 py-1 d-flex align-items-start gap-2" style="background:#fffbeb;">
+                                            <div class="lh-sm">
+                                                <div class="fw-semibold small" t-esc="userName(uid)"/>
+                                                <div class="text-muted" style="font-size:11.5px;" t-esc="userNumber(uid) or 'no WhatsApp number'"/>
+                                            </div>
+                                            <button class="btn btn-link btn-sm p-0 text-danger" title="Remove"
+                                                    t-on-click="() => this.removePerson(tier, uid)"><i class="fa fa-times"/></button>
+                                        </div>
+                                    </t>
+                                    <div t-if="tier.use_task_manager or !tier.user_ids.length"
+                                         class="border rounded px-2 py-1 lh-sm text-muted small" style="border-style:dashed !important;">
+                                        the task's manager<div style="font-size:11.5px;">from the task</div>
+                                    </div>
+                                    <select class="form-select form-select-sm" style="max-width:220px; align-self:center;"
+                                            t-on-change="(e) => this.addPerson(tier, e)">
+                                        <option value="">+ Add person…</option>
+                                        <t t-foreach="state.staff" t-as="u" t-key="u.id">
+                                            <option t-if="!tier.user_ids.includes(u.id)" t-att-value="u.id"
+                                                    t-esc="u.name + (u.number ? ' · ' + u.number : '')"/>
+                                        </t>
+                                    </select>
+                                </div>
                             </div>
                         </t>
                     </div>
@@ -601,6 +678,7 @@ export class KpiConfiguration extends Component {
             aiError: "",
             // Approval chain rows: [{id, name, minutes, use_task_manager, people: [names], saved}]
             tiers: [],
+            staff: [],   // internal users for "+ Add person": [{id, name, number}]
         });
         this.AI_LABEL = { gemini: "Google Gemini", groq: "Groq (Llama)", anthropic: "Anthropic Claude" };
         onWillStart(async () => {
