@@ -272,6 +272,19 @@
               sequence="10"
               groups="kra_kpi_module.group_kra_admin,base.group_system"/>
 
+    <!-- Needs Linking: old-DB bugs / updates still waiting for their Request ID -->
+    <record id="action_kpi_needs_linking" model="ir.actions.client">
+        <field name="name">Needs Linking</field>
+        <field name="tag">kpi_needs_linking</field>
+    </record>
+
+    <menuitem id="menu_kpi_needs_linking"
+              name="Needs Linking"
+              parent="menu_grp_clients"
+              action="action_kpi_needs_linking"
+              sequence="11"
+              groups="kra_kpi_module.group_kra_admin,kra_kpi_module.group_kra_manager,base.group_system"/>
+
     <!-- Generate Client Files (in our format) -->
     <record id="action_kpi_client_workspace" model="ir.actions.client">
         <field name="name">Generate Client Files</field>
