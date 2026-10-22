@@ -566,12 +566,7 @@ class KpiWaClientForm(http.Controller):
         kpi._log_action('client_resubmitted', source='whatsapp', actor_label=who, payload={
             'round': kpi.correction_round, 'old_ref': old_ref, 'new_ref': kpi.external_ref,
             'old_kind': old_kind, 'new_kind': kind})
-        try:
-            kpi._notify('client_task_queued')
-            kpi._schedule_queue_nudge()
-        except Exception as exc:
-            _logger.warning('resubmit notify failed for %s: %s', kpi.id, exc)
-        kpi._wa_ask_admins()
+        kpi._after_commit_in_background('_announce_new_client_ticket')
         if files:
             self._attach(kpi, files, st)
         return kpi, '', ''

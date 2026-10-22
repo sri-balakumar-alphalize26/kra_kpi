@@ -69,6 +69,9 @@ class KpiWaAdminLink(models.Model):
     used_at = fields.Datetime(copy=False)
     decided_by_id = fields.Many2one('res.users', copy=False)
     decision = fields.Char(copy=False)
+    # What the decider picked and typed (the reason, or who it went to), shown
+    # to everyone else who opens a link for the same decision afterwards.
+    decision_note = fields.Text(copy=False)
 
     _token_uniq = models.Constraint('unique(token)', 'Link tokens are unique.')
 
@@ -97,13 +100,13 @@ class KpiWaAdminLink(models.Model):
             return k.task_state == 'partially_completed' and not k.admin_approved
         return False
 
-    def _close_all(self, decision, user):
+    def _close_all(self, decision, user, note=''):
         """Every admin's link for this task and decision stops working."""
         self.ensure_one()
         self.sudo().search([('kpi_id', '=', self.kpi_id.id), ('kind', '=', self.kind),
                             ('used_at', '=', False)]).write({
             'used_at': fields.Datetime.now(), 'decided_by_id': user.id,
-            'decision': decision})
+            'decision': decision, 'decision_note': note or False})
 
     def _last_decision(self):
         """Who decided, when it was decided here. Empty when it was the web."""
@@ -167,8 +170,9 @@ class KraKpiAdminWa(models.Model):
             sent += rec._wa_send_admin_links(k, rec._wa_admin_recipients())
         return sent
 
-    def _wa_send_admin_links(self, kind, admins):
-        """One private decision link per admin in `admins`. Never raises."""
+    def _wa_send_admin_links(self, kind, admins, note=''):
+        """One private decision link per admin in `admins`. Never raises.
+        `note` is a line put above the link, e.g. who did not reply before."""
         sent = 0
         for rec in self.sudo():
             try:
@@ -181,8 +185,9 @@ class KraKpiAdminWa(models.Model):
                         'token': secrets.token_urlsafe(24), 'kpi_id': rec.id, 'kind': k,
                         'user_id': admin.id,
                         'expires': fields.Datetime.now() + timedelta(hours=LINK_TTL_HOURS)})
-                    text = _('%(intro)s — %(ref)s\n%(summary)s\n\n👉 %(action)s: %(url)s\n'
+                    text = _('%(intro)s — %(ref)s\n%(summary)s%(note)s\n\n👉 %(action)s: %(url)s\n'
                              '_Only for you · works once · %(ttl)sh_') % {
+                        'note': ('\n\n' + note) if note else '',
                         'intro': _INTRO[k], 'ref': rec.external_ref or '#%s' % rec.id,
                         'summary': rec._wa_admin_summary(k), 'action': _ACTION[k],
                         'url': '%s/kpi/wa/admin/%s' % (base, link.token), 'ttl': LINK_TTL_HOURS}
