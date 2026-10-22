@@ -61,6 +61,37 @@
                         .done .ref { display:inline-block; margin-top:8px; padding:3px 10px; border-radius:999px;
                                      background:var(--ok-bg); color:var(--ok); font-weight:800; }
                         .card { border-top:4px solid var(--brand); }
+                        /* Our own dropdown (static/src/wa_client_form/picker.js). */
+                        .kp { position:relative; }
+                        .kp-native { position:absolute !important; opacity:0; pointer-events:none; width:1px !important;
+                                     height:1px; min-height:0 !important; padding:0 !important; border:0 !important; }
+                        .kp-btn { width:100%; min-height:42px; display:flex; align-items:center; gap:8px; padding:9px 12px;
+                                  font:inherit; color:var(--text); text-align:left; cursor:pointer;
+                                  background:var(--input); border:1px solid var(--border); border-radius:var(--r); }
+                        .kp-btn:hover { border-color:var(--brand); }
+                        .kp-btn:focus-visible, .kp-open .kp-btn { outline:0; border-color:var(--brand);
+                                  box-shadow:0 0 0 3px var(--sel-bg); background:#fff; }
+                        .kp-btn.kp-empty .kp-label { color:var(--subtlest); }
+                        .kp-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+                        .kp-caret { color:var(--subtlest); transition:transform .15s; }
+                        .kp-open .kp-caret { transform:rotate(180deg); }
+                        .kp-disabled .kp-btn { opacity:.6; cursor:not-allowed; }
+                        .kp-panel { position:absolute; z-index:30; left:0; right:0; top:calc(100% + 6px);
+                                    background:var(--surface); border:1px solid var(--border); border-radius:var(--r-card);
+                                    box-shadow:0 14px 34px rgba(16,24,40,.16); padding:6px; }
+                        .kp-panel[hidden] { display:none; }
+                        .kp-search { width:100%; min-height:36px; margin-bottom:6px; padding:7px 10px; font:inherit;
+                                     background:var(--input); border:1px solid var(--border); border-radius:var(--r); outline:0; }
+                        .kp-search:focus { border-color:var(--brand); }
+                        .kp-search[hidden] { display:none; }
+                        .kp-list { max-height:260px; overflow-y:auto; display:flex; flex-direction:column; gap:2px; }
+                        .kp-opt { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:var(--r);
+                                  cursor:pointer; color:var(--text); }
+                        .kp-opt span { flex:1; min-width:0; overflow-wrap:anywhere; }
+                        .kp-opt:hover, .kp-opt:focus { background:var(--hover); outline:0; }
+                        .kp-opt.on { background:var(--sel-bg); color:var(--sel-text); font-weight:700; }
+                        .kp-opt.off { opacity:.45; cursor:not-allowed; }
+                        .kp-none { padding:10px 12px; color:var(--subtlest); font-size:13px; }
                     </style>
                     <!-- The person's own colour (kpi_user_color.py), same as their
                          marker in the WhatsApp group. -->
@@ -70,6 +101,11 @@
                 </head>
                 <body>
                     <div class="card"><t t-out="0"/></div>
+                    <script src="/kra_kpi_module/static/src/wa_client_form/picker.js?v=1"></script>
+                    <script src="/kra_kpi_module/static/src/wa_client_form/viewer.js?v=1"></script>
+                    <script src="/kra_kpi_module/static/src/wa_client_form/links.js?v=2"></script>
+                    <script src="/kra_kpi_module/static/src/wa_client_form/filepick.js?v=1"></script>
+                    <script src="/kra_kpi_module/static/src/wa_client_form/dialog.js?v=1"></script>
                 </body>
             </html>
         </template>
