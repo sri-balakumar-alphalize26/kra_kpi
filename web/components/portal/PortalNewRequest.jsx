@@ -202,6 +202,14 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
             <Field label="Needed by (optional)"><Input type="date" min={ymd(new Date())} value={needed} onChange={(e) => setNeeded(e.target.value)} /></Field>
             <Field label="Attachments (optional)"><label className="dropzone" style={{ padding: 12, cursor: "pointer" }}><b>Add screenshots or files</b>up to 25 MB in total · {files.length ? `${files.length} selected · ${humanSize(total)}` : "none yet"}<input type="file" multiple hidden onChange={addFiles} /></label></Field>
           </div>
+          {/* Camera / mic shortcuts for every request (the old-system box has its own). */}
+          {!oldDb && (
+            <div className="pillset" style={{ flexWrap: "wrap" }}>
+              <label className="btn" style={{ cursor: "pointer" }}>📷 Photo<input type="file" accept="image/*" capture="environment" hidden onChange={(e) => addShot(e, false)} /></label>
+              <label className="btn" style={{ cursor: "pointer" }}>🎥 Video<input type="file" accept="video/*" capture="environment" hidden onChange={(e) => addShot(e, true)} /></label>
+              <VoiceRecorder onAttach={(f) => setFiles((fs) => [...fs, f])} onMicFailed={() => flags.err(L.MIC_FAILED)} />
+            </div>
+          )}
           {files.length > 0 && <div className="pillset">{files.map((f, i) => <span key={i} className="chip-sm" style={{ background: "var(--hover)", color: "var(--navy)" }}><Icon n="paperclip" size={13} />{f.name} · {humanSize(f.size)}<button type="button" className="icon-btn" style={{ width: 20, height: 20 }} aria-label="Remove" onClick={() => setFiles((fs) => fs.filter((_, j) => j !== i))}><Icon n="x" size={12} /></button></span>)}</div>}
           <div className="row"><Button kind="primary" size="lg" type="submit" busy={busy} disabled={!!problem} title={problem || undefined} style={{ padding: "0 24px" }}>Send request</Button><span className="mini">You'll get a WhatsApp message when it's estimated.</span></div>
         </form>
