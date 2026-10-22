@@ -60,6 +60,16 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
     setParents(null); setParentId("");
     P.fetchParentTasks(project).then(setParents).catch(() => setParents([]));
   }, [child, project]);
+  /* The bugs / updates already raised under the picked requirement, and the
+     ref this one gets ("This one will be BUG003-REQ-012"). */
+  const [kids, setKids] = useState(null);
+  useEffect(() => {
+    if (!child || !parentId || legacyOn) { setKids(null); return; }
+    let live = true;
+    setKids({ loading: true });
+    P.fetchChildren(parentId, kind).then((r) => { if (live) setKids(r); }).catch(() => { if (live) setKids(null); });
+    return () => { live = false; };
+  }, [child, parentId, kind, legacyOn]);
   const q = parentQ.trim().toLowerCase();
   const shownParents = (parents || []).filter((t) => !q || `${t.ref} ${t.name}`.toLowerCase().includes(q));
 
@@ -143,6 +153,19 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
                       </label>
                     ))}
                   </div>
+                  {kids && (
+                    <div className="cardbox" style={{ gap: 6, padding: 10 }}>
+                      {kids.loading ? <span className="mini">Checking earlier {kind === "bug" ? "bugs" : "updates"}…</span> : (
+                        <>
+                          <b>{kids.items?.length ? `${kind === "bug" ? "🐞" : "🔧"} Already raised under ${kids.parent}:` : `No ${kind === "bug" ? "bugs" : "updates"} under ${kids.parent} yet.`}</b>
+                          {(kids.items || []).map((k) => (
+                            <span key={k.ref}><b style={{ color: "var(--brand)", marginRight: 6 }}>{k.ref}</b>{k.name}<small className="mini" style={{ display: "block" }}>{k.status}{k.date ? ` · ${k.date}` : ""}</small></span>
+                          ))}
+                          {kids.next_ref && <b>➜ This one will be {kids.next_ref}</b>}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </Field>
               )}
               {/* Its own label, outside the Field: a click anywhere in the list must not tick it. */}

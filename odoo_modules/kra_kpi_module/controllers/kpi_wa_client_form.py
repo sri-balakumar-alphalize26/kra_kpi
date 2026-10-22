@@ -28,8 +28,9 @@ from odoo import fields, http
 from odoo.http import request
 
 from .kpi_wa_approval import _render
+from .kra_api import serve_file, _guess_mime
 from ..models.kpi import DELIVERABLE_TYPES, clean_deliverable
-from ..models.kpi_legacy import legacy_input_problem
+from ..models.kpi_legacy import is_audio, is_image_or_video, legacy_input_problem
 from ..models.kpi_server import NEW_DB_NAME_EXAMPLE
 from ..models.kpi_workflow import NAME_PREFIX_FOR_DOC_TYPE, REF_PREFIX_FOR_DOC_TYPE
 
@@ -172,6 +173,9 @@ class KpiWaClientForm(http.Controller):
             'values': values or {},
             'example': NEW_DB_NAME_EXAMPLE,
             'filesMax': FILES_MAX_BYTES,
+            # Fixing a declined request: the files sent the first time are
+            # still on it -- shown (and counted) so nobody uploads them again.
+            'existing': self._existing_files(token, fix) if fix else [],
         }
         return _render('kra_kpi_module.wa_client_form', {
             'token': token, 'kind': kind, 'emoji': emoji, 'title': title,
@@ -183,6 +187,39 @@ class KpiWaClientForm(http.Controller):
             'fix_reason': (fix.decline_note or '') if fix else '',
             'fix_kinds': FIX_KINDS if fix else [],
             'boot': _json_for_script(boot)})
+
+    def _existing_files(self, token, kpi):
+        """The client's files already on a declined request, with a link that
+        works only through this form link."""
+        out = []
+        for f in kpi._legacy_client_files():
+            name, mime = f['name'], f['mime']
+            kind = ('audio' if is_audio(name, mime) else
+                    'video' if (mime or '').startswith('video/') or name.lower().endswith(
+                        ('.mp4', '.mov', '.mkv', '.avi', '.3gp', '.m4v')) else
+                    'image' if is_image_or_video(name, mime) else 'other')
+            out.append({'name': name, 'kind': kind, 'mime': mime,
+                        'url': '/kpi/wa/client/%s/file?entry=%s&att=%s' % (token, f['entry'], f['att'])})
+        return out
+
+    @http.route('/kpi/wa/client/<string:token>/file', type='http', auth='public',
+                methods=['GET'], csrf=False, website=False)
+    def existing_file(self, token, entry='0', att='0', **kw):
+        """One file of the request being fixed -- nothing else."""
+        st = _state_for(token)
+        kpi = st.client_form_fix_kpi_id if st else None
+        if not kpi:
+            return request.not_found()
+        try:
+            entry, att = int(entry or 0), int(att or 0)
+        except (TypeError, ValueError):
+            return request.not_found()
+        for f in kpi.sudo()._legacy_client_files():
+            if f['entry'] == entry and f['att'] == att:
+                return serve_file(base64.b64decode(f['data']), f['name'],
+                                  _guess_mime(f['name'], f['mime'] or ''),
+                                  inline=kw.get('download') not in ('1', 'true'))
+        return request.not_found()
 
     @http.route('/kpi/wa/client/<string:token>', type='http', auth='public',
                 methods=['GET'], csrf=False, website=False)
@@ -247,7 +284,30 @@ class KpiWaClientForm(http.Controller):
             'id': k.id, 'ref': k.external_ref or '', 'name': k.name or '',
             'date': k.create_date.strftime('%d-%m-%Y') if k.create_date else '',
             'old': bool(k.is_legacy),
+            'deliverable': k.deliverable_type or '', 'deliverable_other': k.deliverable_other or '',
         } for k in self._requirements(db)]}
+
+    @http.route('/kpi/wa/client/<string:token>/children', type='json', auth='public',
+                methods=['POST'], csrf=False)
+    def children(self, token, server_id=None, db_id=None, parent_id=None, **kw):
+        """The bugs (or updates -- the form's kind) already raised under the
+        picked requirement, and the ref this one will get."""
+        st = _state_for(token)
+        if not st:
+            return {'ok': False, 'expired': True}
+        kind = st.client_form_kind
+        db = self._db_for(st, server_id, db_id)
+        if kind not in ('bug', 'update') or not db:
+            return {'ok': True, 'items': [], 'next_ref': ''}
+        try:
+            parent = request.env['kra.kpi'].sudo().browse(int(parent_id or 0)).exists()
+        except (TypeError, ValueError):
+            parent = None
+        # Same checks as _create: this client's database, a requirement.
+        if (not parent or parent.client_db_id != db
+                or not (parent.external_ref or '').upper().startswith('REQ-')):
+            return {'ok': True, 'items': [], 'next_ref': ''}
+        return dict(parent._child_requests(kind), ok=True, parent=parent.external_ref)
 
     @http.route('/kpi/wa/client/<string:token>/polish', type='json', auth='public',
                 methods=['POST'], csrf=False)
@@ -338,7 +398,12 @@ class KpiWaClientForm(http.Controller):
 
     def _create(self, st, kind, post):
         """-> (kra.kpi, error, receipt). Re-checks everything the page checked.
-        `receipt` is only set when the model builds its own (Destroy)."""
+        `receipt` is only set when the model builds its own (Destroy).
+
+        Every create here passes kpi_no_admin_arm: a client's request is never
+        "accepted by an admin" on creation -- not even when the link was opened
+        in a browser that is logged in to Odoo as an admin, which made create()
+        take it for the admin's own task and closed the approval links."""
         router = request.env['kpi.wa.group.router'].sudo()
         Kpi = request.env['kra.kpi'].sudo()
         group, client = st.group_id, self._client(st)
@@ -363,7 +428,7 @@ class KpiWaClientForm(http.Controller):
                 return None, 'Type or generate the password.', ''
             children = client.child_ids.filtered('active')
             target = children[0] if len(children) == 1 else client
-            kpi = Kpi.browse(Kpi.create_kpi({
+            kpi = Kpi.browse(Kpi.with_context(kpi_no_admin_arm=True).create_kpi({
                 'name': '[New DB] New DB %s on %s' % (clean, server.name),
                 'kra_id': target.id, 'doc_type': 'requirement',
                 'description': ('— New database —\nServer: %s\nDatabase name: %s\n'
@@ -402,7 +467,7 @@ class KpiWaClientForm(http.Controller):
                 return None, 'Type the user ID.', ''
             if not password:
                 return None, 'Type the password.', ''
-            kpi = Kpi.browse(Kpi.create_kpi({
+            kpi = Kpi.browse(Kpi.with_context(kpi_no_admin_arm=True).create_kpi({
                 'name': '[Destroy] Destroy %s on %s' % (db.db_name, db.server_id.name),
                 'kra_id': target.id, 'doc_type': 'requirement',
                 'description': ('— Destroy request —\nDatabase: %s\nServer: %s\nURL: %s\n'
@@ -435,7 +500,7 @@ class KpiWaClientForm(http.Controller):
                 return None, dv_err, ''
             if not dv['deliverable_type']:
                 return None, 'Tick the type — Module, App, EXE or Other.', ''
-            kpi = Kpi.browse(Kpi.create_kpi(dict(common, **{
+            kpi = Kpi.browse(Kpi.with_context(kpi_no_admin_arm=True).create_kpi(dict(common, **{
                 'name': name, 'kra_id': target.id, 'doc_type': 'requirement',
                 'description': '%s\n\nDatabase: %s%s' % (text, scope, footer),
                 'deliverable_type': dv['deliverable_type'],
@@ -452,8 +517,11 @@ class KpiWaClientForm(http.Controller):
             problem = legacy_input_problem(lref, lname, lnote, files)
             if problem:
                 return None, problem, ''
+            dv, dv_err = self._type_from_post(post)
+            if dv_err:
+                return None, dv_err, ''
             title = lname or (text.split('\n')[0][:80].strip() or 'Old DB requirement')
-            kpi = Kpi.browse(Kpi.create_kpi(dict(common, **{
+            kpi = Kpi.browse(Kpi.with_context(kpi_no_admin_arm=True).create_kpi(dict(common, **dv, **{
                 'name': NAME_PREFIX_FOR_DOC_TYPE[kind] + _clean_title(title),
                 'kra_id': target.id,
                 'description': '%s\n\nAbout: an old DB requirement%s\nDatabase: %s%s' % (
@@ -488,14 +556,15 @@ class KpiWaClientForm(http.Controller):
             ref = '%s%03d-%s' % (prefix, Kpi._next_child_number(prefix, parent.external_ref),
                                  parent.external_ref)
             base = re.sub(r'^\[(Update|Bug)\]\s*', '', parent.name or '', flags=re.I)
-            # The type comes from the requirement it is about.
-            kpi = Kpi.browse(Kpi.create_kpi(dict(common, **{
+            # The type the client ticked (the form pre-ticks the requirement's).
+            dv, dv_err = self._type_from_post(post, parent)
+            if dv_err:
+                return None, dv_err, ''
+            kpi = Kpi.browse(Kpi.with_context(kpi_no_admin_arm=True).create_kpi(dict(common, **dv, **{
                 'name': NAME_PREFIX_FOR_DOC_TYPE[kind] + base,
                 'kra_id': parent.kra_id.id or target.id,
                 'description': '%s\n\nAbout: %s — %s\nDatabase: %s%s' % (
                     text, parent.external_ref, base, scope, footer),
-                'deliverable_type': parent.deliverable_type or False,
-                'deliverable_other': parent.deliverable_other or False,
             })))
             router._finish_client_ticket(kpi, group, st, {
                 'client_db_id': db.id, 'external_ref': ref,
@@ -522,6 +591,21 @@ class KpiWaClientForm(http.Controller):
             if deadline < fields.Date.today():
                 return None, 'Needed by cannot be in the past.'
         return {'priority': priority, 'deadline': deadline}, ''
+
+    @staticmethod
+    def _type_from_post(post, parent=None):
+        """Module / App / EXE / Other as ticked on the form -> (vals, error).
+        Nothing ticked on a Bug / Update about a requirement: the requirement's."""
+        dv, err = clean_deliverable(request.httprequest.form.getlist('deliverable_type'),
+                                    post.get('deliverable_other'))
+        if err:
+            return None, err
+        if not dv['deliverable_type'] and parent:
+            dv = {'deliverable_type': parent.deliverable_type or False,
+                  'deliverable_other': parent.deliverable_other or False}
+        if not dv['deliverable_type']:
+            return None, 'Tick the type — Module, App, EXE or Other.'
+        return dv, ''
 
     @staticmethod
     def _legacy_on(post):
@@ -581,10 +665,16 @@ class KpiWaClientForm(http.Controller):
                 vals['external_ref'] = 'REQ-%03d' % Kpi._next_ref_for_prefix('REQ')
         elif self._legacy_on(post):
             lref, lname, lnote = self._legacy_post(post)
-            problem = legacy_input_problem(lref, lname, lnote, files)
+            # The files sent the first time are still on the task: they count.
+            problem = legacy_input_problem(lref, lname, lnote,
+                                           files + kpi._legacy_existing_inputs())
             if problem:
                 return None, problem, ''
+            dv, dv_err = self._type_from_post(post)
+            if dv_err:
+                return None, dv_err, ''
             title = lname or (text.split('\n')[0][:80].strip() or 'Old DB requirement')
+            vals.update(dv)
             vals.update(Kpi._legacy_vals(lref, lname, lnote),
                         name=NAME_PREFIX_FOR_DOC_TYPE[kind] + _clean_title(title),
                         related_req_ref=False, requested_doc_type=kind,
@@ -601,10 +691,12 @@ class KpiWaClientForm(http.Controller):
                     or not (parent.external_ref or '').upper().startswith('REQ-')):
                 return None, 'Pick the task this is about.', ''
             base = re.sub(r'^\[(Update|Bug)\]\s*', '', parent.name or '', flags=re.I)
+            dv, dv_err = self._type_from_post(post, parent)
+            if dv_err:
+                return None, dv_err, ''
+            vals.update(dv)
             vals.update(name=NAME_PREFIX_FOR_DOC_TYPE[kind] + base,
                         related_req_ref=parent.external_ref, requested_doc_type=kind,
-                        deliverable_type=parent.deliverable_type or False,
-                        deliverable_other=parent.deliverable_other or False,
                         description='%s\n\nAbout: %s — %s\nDatabase: %s%s' % (
                             text, parent.external_ref, base, scope, footer))
             if old_kind != kind or kpi.related_req_ref != parent.external_ref:
@@ -673,16 +765,36 @@ class KpiWaClientForm(http.Controller):
         db = kpi.client_db_id
         emoji, title = _TITLES.get(kind, ('', ''))
         lines = ['%s *%s* — *%s*' % (emoji, title, ref), kpi.name or '']
-        if kpi.related_req_ref:
-            lines.append('About: %s%s' % (kpi.related_req_ref,
-                                          ' (old DB)' if kpi.legacy_req_link else ''))
-        elif kpi.legacy_req_link:
-            lines.append('About: an old DB requirement — the team will confirm the details with you')
+        if kpi.legacy_req_link:
+            lines.append('About: %s' % self._legacy_about(kpi))
+        elif kpi.related_req_ref:
+            lines.append('About: %s' % kpi.related_req_ref)
         if db:
             lines.append('🗄️ %s (%s)' % (db.db_name, db.server_id.name))
         if who:
             lines.append('Sent by %s' % who)
         return '\n'.join(lines)
+
+    @staticmethod
+    def _legacy_about(kpi):
+        """What the client gave about their old-system requirement, in their
+        own words: "REQ-012 — Leave screen (old system)", else the name, else
+        what they attached ("old system — 📷 1 photo, 🎤 1 voice note")."""
+        ref, name = kpi.legacy_req_ref or '', kpi.legacy_req_name or ''
+        if ref or name:
+            return '%s (old system)' % ' — '.join(x for x in (ref, name) if x)
+        counts = {}
+        for f in kpi._legacy_client_files():
+            n, mime = f['name'], f['mime']
+            kind = ('🎤 voice note' if is_audio(n, mime) else
+                    '🎥 video' if (mime or '').startswith('video/') or n.lower().endswith(
+                        ('.mp4', '.mov', '.mkv', '.avi', '.3gp', '.m4v')) else
+                    '📷 photo' if is_image_or_video(n, mime) else '📎 file')
+            counts[kind] = counts.get(kind, 0) + 1
+        sent = ', '.join('%d %s%s' % (c, k, 's' if c > 1 else '') for k, c in counts.items())
+        if not sent and kpi.legacy_note:
+            sent = '💬 message'
+        return 'old system — %s' % sent if sent else 'old system'
 
     def _post_in_group(self, st, text):
         """Not instantly: 10-30 s later, like a person who read it first."""

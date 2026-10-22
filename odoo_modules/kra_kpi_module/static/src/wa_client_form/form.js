@@ -72,6 +72,7 @@
     function onDb(keepParent) {
         preview();
         if (!reqs) { return Promise.resolve(); }
+        loadKids(null);                  // another database: its own requirements
         if (!db.value) {
             reqs.innerHTML = '<span class="mini">Choose the server and database first.</span>';
             return Promise.resolve();
@@ -87,12 +88,14 @@
             reqs.innerHTML = list.map(function (t) {
                 return '<label><input type="radio" name="parent_id" value="' + t.id + '"' +
                     (String(t.id) === String(keepParent || '') ? ' checked' : '') +
-                    ' data-ref="' + esc(t.ref) + '" data-name="' + esc(t.name) + '"/>' +
+                    ' data-ref="' + esc(t.ref) + '" data-name="' + esc(t.name) + '"' +
+                    ' data-deliv="' + esc(t.deliverable || '') + '" data-deliv-other="' + esc(t.deliverable_other || '') + '"/>' +
                     '<span><span class="ref">' + esc(t.ref) + '</span>' + esc(t.name) +
                     (t.old ? ' <b class="old-badge">Old DB</b>' : '') +
                     '<small>' + esc(t.date) + '</small></span></label>';
             }).join('');
             filterReqs();
+            loadKids(parent());          // a fix link opens with its requirement picked
             preview();
         });
     }
@@ -113,7 +116,42 @@
         if (KIND === 'newdb') { checkDbName(); preview(); } else { loadDbs(); }
     });
     if (db) { db.addEventListener('change', function () { onDb(); }); }
-    if (reqs) { reqs.addEventListener('change', preview); }
+    if (reqs) {
+        reqs.addEventListener('change', function () {
+            // One or the other: picking a task turns "from the old system" off.
+            if (oldChk && oldChk.checked && parent()) { oldChk.checked = false; showOld(); }
+            preTickType(parent());
+            loadKids(parent());
+            preview();
+        });
+    }
+
+    // ---- earlier bugs / updates under the picked requirement --------------
+    // "BUG001-REQ-012 — Save button · ✅ Completed", then "This one will be
+    // BUG003-REQ-012", so a 3rd bug is not a repeat of the 1st.
+    var kids = $('kfKids'), nextRef = '', kidsSeq = 0;
+    function loadKids(radio) {
+        nextRef = '';
+        if (!kids) { return; }
+        if (!radio) { kids.hidden = true; kids.innerHTML = ''; return; }
+        var seq = ++kidsSeq, ref = radio.getAttribute('data-ref');
+        var noun = KIND === 'bug' ? 'bugs' : 'updates';
+        kids.hidden = false;
+        kids.innerHTML = '<span class="mini">Checking earlier ' + noun + ' under ' + esc(ref) + '…</span>';
+        rpc('children', { server_id: +server.value, db_id: +db.value, parent_id: +radio.value }).then(function (res) {
+            if (seq !== kidsSeq) { return; }                // picked another one meanwhile
+            var items = res.items || [];
+            nextRef = res.next_ref || '';
+            var head = items.length
+                ? '<h5>' + (KIND === 'bug' ? '🐞' : '🔧') + ' Already raised under ' + esc(ref) + ':</h5>'
+                : '<h5>No ' + noun + ' under ' + esc(ref) + ' yet.</h5>';
+            kids.innerHTML = head + items.map(function (k) {
+                return '<div class="kid"><b>' + esc(k.ref) + '</b>' + esc(k.name) +
+                    '<small>' + esc(k.status) + (k.date ? ' · ' + esc(k.date) : '') + '</small></div>';
+            }).join('') + (nextRef ? '<div class="next">➜ This one will be ' + esc(nextRef) + '</div>' : '');
+            preview();
+        }).catch(function () { if (seq === kidsSeq) { kids.hidden = true; } });
+    }
 
     // ---- task name: first letter capital ----------------------------------
     if (name) {
@@ -243,6 +281,10 @@
         if (n.length >= 15 || n.split(' ').length >= 3) { return ''; }
         if (oldNote.value.replace(/\s+/g, ' ').trim().length >= 30) { return ''; }
         if (picked.some(function (f) { return f.size && isMedia(f); })) { return ''; }
+        // Fixing a declined request: what was sent the first time still counts.
+        var before = B.existing || [];
+        if (before.some(function (f) { return f.kind === 'image' || f.kind === 'video'; })) { return ''; }
+        if (before.some(function (f) { var s = f.kind === 'audio' ? voiceSecs(f) : 0; return s === null || s >= 5; })) { return ''; }
         var audio = picked.filter(isAudio);
         if (audio.some(function (f) { var s = voiceSecs(f); return s === null ? f.size >= 16000 : s >= 5; })) { return ''; }
         return audio.length ? 'The voice note is too short (5 seconds or more) — add a photo or video if you can, if not possible record again or type a message.'
@@ -269,6 +311,7 @@
             if (oldOn()) {
                 var r = parent();
                 if (r) { r.checked = false; }
+                loadKids(null);
             }
             preview();
         };
@@ -295,12 +338,25 @@
             picked.forEach(function (f) { dt.items.add(f); });
             files.files = dt.files;
         } catch (e) { /* old browser: whatever is in the input is sent */ }
-        var chips = $('kfChips');
-        chips.innerHTML = picked.map(function (f, i) {
-            return '<span class="chip"><button type="button" class="open" data-view="' + i +
+        // One pill per file, in the files section AND in the old-DB box (so a
+        // photo taken there shows where it was taken). The pill's % fills in
+        // while the form is sending (xhr.upload.onprogress).
+        var html = picked.map(function (f, i) {
+            var k = kindOf(f), icon = k === 'image' ? '📷' : k === 'video' ? '🎥' : k === 'audio' ? '🎤' : '📎';
+            return '<span class="chip">' + icon + ' <button type="button" class="open" data-view="' + i +
                 '" title="Tap to view">' + esc(f.name) + '</button> · ' + size(f.size) +
+                ' <span class="pct">✓ added</span>' +
                 ' <button type="button" data-i="' + i + '" aria-label="Remove">×</button></span>';
         }).join('');
+        // Files already on a declined request: kept on it, shown first.
+        html = (B.existing || []).map(function (f) {
+            var icon = ({ image: '📷', video: '🎥', audio: '🎤' })[f.kind] || '📎';
+            return '<span class="chip">' + icon + ' <a class="open" href="' + esc(f.url) +
+                '" target="_blank" rel="noopener" title="Tap to view">' + esc(f.name) +
+                '</a> <span class="kept">✓ already attached</span></span>';
+        }).join('') + html;
+        $('kfChips').innerHTML = html;
+        if ($('kfOldChips')) { $('kfOldChips').innerHTML = html; }
         preview();
     }
 
@@ -581,16 +637,31 @@
         // first; only Attach adds the result to the main list (syncFiles copies it in).
         setupCamera();
         setupVoice();
-        $('kfChips').addEventListener('click', function (e) {
-            var v = e.target.getAttribute('data-view');
-            if (v !== null) { openViewer(picked[+v]); return; }
-            var i = e.target.getAttribute('data-i');
-            if (i !== null) { picked.splice(+i, 1); syncFiles(); }
+        ['kfChips', 'kfOldChips'].forEach(function (id) {
+            if (!$(id)) { return; }
+            $(id).addEventListener('click', function (e) {
+                var v = e.target.getAttribute('data-view');
+                if (v !== null) { openViewer(picked[+v]); return; }
+                var i = e.target.getAttribute('data-i');
+                if (i !== null) { picked.splice(+i, 1); syncFiles(); }
+            });
         });
     }
 
     // ---- type / urgency / needed by ------------------------------------------
     var otherBox = $('kfDelivOther');
+    // Bug / Update: tick the picked requirement's type; the client can change it.
+    function preTickType(radio) {
+        if (!radio || !otherBox) { return; }
+        var codes = (radio.getAttribute('data-deliv') || '').split(',').filter(Boolean);
+        form.querySelectorAll('input[name="deliverable_type"]').forEach(function (c) {
+            c.checked = codes.indexOf(c.value) >= 0;
+        });
+        otherBox.value = radio.getAttribute('data-deliv-other') || '';
+        var oc = $('kfDeliv_other');
+        otherBox.style.display = oc.checked ? '' : 'none';
+        otherBox.disabled = !oc.checked;
+    }
     function typeText() {
         var out = [];
         form.querySelectorAll('input[name="deliverable_type"]:checked').forEach(function (c) {
@@ -606,10 +677,13 @@
     if (otherBox) {
         var otherChk = $('kfDeliv_other');
         var showOther = function () {
+            // Typing only with "Other" ticked; otherwise hidden and not sent.
             otherBox.style.display = otherChk.checked ? '' : 'none';
+            otherBox.disabled = !otherChk.checked;
             if (otherChk.checked) { otherBox.focus(); }
             preview();
         };
+        otherBox.disabled = !otherChk.checked;
         otherChk.addEventListener('change', showOther);
         otherBox.addEventListener('input', preview);
         form.querySelectorAll('input[name="deliverable_type"]').forEach(function (c) {
@@ -645,9 +719,9 @@
         } else if (KIND === 'bug' || KIND === 'update') {
             var p = parent();
             r.push(['About task', p ? p.getAttribute('data-ref') + ' — ' + p.getAttribute('data-name') : '', true]);
-            r.push(['New ref', p ? (KIND === 'bug' ? 'BUG' : 'UPT') + '### under ' + p.getAttribute('data-ref') : '', false]);
+            r.push(['New ref', p ? (nextRef || (KIND === 'bug' ? 'BUG' : 'UPT') + '### under ' + p.getAttribute('data-ref')) : '', false]);
         }
-        if (KIND === 'requirement') { r.push(['Type', typeText(), true]); }
+        if (KIND === 'requirement' || KIND === 'bug' || KIND === 'update') { r.push(['Type', typeText(), true]); }
         if (KIND !== 'dbdisconnect') {
             var pr = form.querySelector('input[name="priority"]:checked');
             r.push(['Urgency', pr ? form.querySelector('label[for="' + pr.id + '"]').textContent : 'Regular', false]);
@@ -712,6 +786,9 @@
             if (!e.lengthComputable) { return; }
             var pct = Math.floor(e.loaded / e.total * 100);
             b.textContent = pct < 100 ? 'Sending… ' + pct + '%' : 'Saving…';
+            document.querySelectorAll('.chip .pct').forEach(function (el) {
+                el.textContent = pct < 100 ? '⬆ ' + pct + '%' : '✓ uploaded';
+            });
         };
         xhr.onload = function () {
             document.open(); document.write(xhr.responseText); document.close();
@@ -734,12 +811,13 @@
     if (V.needed_by && $('kfNeeded')) { $('kfNeeded').value = V.needed_by; }
     (V.deliverable || []).forEach(function (code) { var c = $('kfDeliv_' + code); if (c) { c.checked = true; } });
     if (otherBox && V.deliverable_other) { otherBox.value = V.deliverable_other; }
+    if ((B.existing || []).length && files) { syncFiles(); }
     if (oldChk && V.legacy_on) {
         oldChk.checked = true;
         oldRef.value = V.legacy_ref || ''; oldName.value = V.legacy_name || ''; oldNote.value = V.legacy_note || '';
         $('kfPick').hidden = true; $('kfOldBox').hidden = false;
     }
-    if (otherBox && $('kfDeliv_other').checked) { otherBox.style.display = ''; }
+    if (otherBox && $('kfDeliv_other').checked) { otherBox.style.display = ''; otherBox.disabled = false; }
     var only = (B.servers || []).length === 1 ? String(B.servers[0].id) : '';
     server.value = V.server_id || only;
     if (KIND === 'newdb') { checkDbName(); preview(); }

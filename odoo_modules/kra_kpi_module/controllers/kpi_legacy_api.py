@@ -105,6 +105,28 @@ class KpiLegacyAPI(http.Controller):
         return {'status': True, 'sends': sends, 'legacy': _card(kpi),
                 'can_edit': can_edit, 'locked_reason': locked}
 
+    @http.route('/kpi_client_portal/children', type='json', auth='user', methods=['POST'], csrf=False)
+    def client_portal_children(self, parent_id=None, kind=None, **kw):
+        """Web portal / Odoo client dashboard: the bugs (or updates) already
+        raised under a requirement in the user's projects, and the next ref."""
+        if kind not in ('bug', 'update'):
+            return {'status': False, 'message': 'Kind must be bug or update.'}
+        try:
+            parent = request.env['kra.kpi'].sudo().browse(int(parent_id or 0)).exists()
+        except (TypeError, ValueError):
+            parent = None
+        if not parent or not (parent.external_ref or '').upper().startswith('REQ-'):
+            return {'status': False, 'message': 'Requirement not found.'}
+        # The user's own projects only -- same rule as /kpi_client_portal/parent_tasks.
+        allowed = set()
+        for k in request.env['kra.master'].sudo().search(
+                [('client_user_ids', 'in', [request.env.user.id])]):
+            allowed.update(k._get_descendant_ids())
+        if parent.kra_id.id not in allowed and not request.env['kra.kpi'].sudo()._user_is_kpi_admin(
+                request.env.user):
+            return {'status': False, 'message': 'You are not authorized for this project.'}
+        return dict(parent._child_requests(kind), status=True, parent=parent.external_ref)
+
     @http.route('/kra_kpi/legacy/pending', type='json', auth='user', methods=['POST'], csrf=False)
     def legacy_pending(self, client_kra_id=None, **kw):
         """Needs linking: From-old-DB tasks still waiting for their Request ID,
