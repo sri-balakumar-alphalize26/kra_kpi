@@ -160,6 +160,7 @@ _STEPS = [
     # My Requests (read-only)
     ('myreq_pick', 'My requests: picking one'),
     # 💬 Discuss (kpi_chat.py): which request, the message, then send it.
+    ('discuss_kind', 'Discuss: about a request, or something else'),
     ('discuss_pick', 'Discuss: picking a request'),
     ('discuss_text', 'Discuss: typing the message'),
     ('discuss_confirm', 'Discuss: confirming the message'),
@@ -822,16 +823,24 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             return False
 
         # ---- 💬 discuss a request (kpi_chat.py) --------------------------- #
+        if step == 'discuss_kind':
+            pick = self._resolve_rows(tapped, low, self._DISCUSS_KINDS)
+            if not pick:
+                return False
+            if pick == 'general':
+                return self._discuss_general(message, state, group)
+            return self._discuss_requests(message, state, group)
+
         if step == 'discuss_pick':
             pick = self._resolve_rows(tapped, low, self._myreq_options(state, group))
             if not pick:
                 return False
             if pick == _LIVEDB_MORE_ID:
                 state._touch(livedb_page=state.livedb_page + 1)
-                return self._discuss_begin(message, state, group)
+                return self._discuss_requests(message, state, group)
             if pick == _LIVEDB_BACK_ID:
                 state._touch(livedb_page=max(0, state.livedb_page - 1))
-                return self._discuss_begin(message, state, group)
+                return self._discuss_requests(message, state, group)
             task = self.env['kra.kpi'].sudo().browse(int(pick)).exists()
             if not task or task.kra_id.id not in self._client_kra_ids(group):
                 return False
@@ -861,7 +870,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                     return True
                 state._reset()
                 self._text(message, _('📨 Sent to the team. The reply will come here, under *%s*.')
-                           % (task.external_ref or task.id))
+                           % task._chat_ref())
                 return True
             if ans in ('retype', 'edit') or low == '2':
                 return self._discuss_ask_text(message, state, task)
@@ -2116,13 +2125,29 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
     # ------------------------------------------------------------------
     # 💬 Discuss -- a message to the team about one request (kpi_chat.py)
     # ------------------------------------------------------------------
+    _DISCUSS_KINDS = [('request', '📌 About one of my requests'),
+                      ('general', '💬 Something else (general question)')]
+
     def _discuss_begin(self, message, state, group):
+        """About a request, or something else? With no open request there is
+        nothing to pick, so it goes straight to a general question."""
+        if not self._myreq_open(group):
+            return self._discuss_general(message, state, group)
+        state._touch(step='discuss_kind', action_type='discuss', livedb_page=0,
+                     menu_csv=','.join(c for c, _l in self._DISCUSS_KINDS))
+        self._poll(message, _('💬 *Discuss* — what is it about?'), [l for _c, l in self._DISCUSS_KINDS])
+        return True
+
+    def _discuss_general(self, message, state, group):
+        """💬 Something else: the client's general-questions task (kpi_chat.py)."""
+        task = self.env['kra.kpi']._chat_general_task(group.kra_id)
+        return self._discuss_ask_text(message, state, task)
+
+    def _discuss_requests(self, message, state, group):
         """Which request? The same list and paging as 📋 My Requests."""
         open_ = self._myreq_open(group)
         if not open_:
-            state._reset()
-            self._text(message, _('💬 You have no open requests to discuss. Send *hi* to raise something new.'))
-            return True
+            return self._discuss_general(message, state, group)
         if len(open_) == 1:
             return self._discuss_ask_text(message, state, open_)
         opts = self._myreq_options(state, group)
@@ -2140,7 +2165,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                      discuss_text=False)
         self._text(message, _('💬 *%(ref)s — %(title)s*\nType your message to the team (one message).'
                               '\n\n_Or reply CANCEL to stop._') % {
-            'ref': task.external_ref or task.id, 'title': task.name or ''})
+            'ref': task._chat_ref(), 'title': task.name or ''})
         return True
 
     def _discuss_confirm(self, message, state, body):
@@ -2149,7 +2174,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         task = state.discuss_kpi_id
         state._touch(step='discuss_confirm', discuss_text=text)
         self._poll(message, _('💬 *%(ref)s* — your message:\n\n"%(text)s"\n\nSend it to the team?') % {
-            'ref': task.external_ref or task.id, 'text': text},
+            'ref': task._chat_ref(), 'text': text},
             [_('✅ Send'), _('✏️ Retype'), _('❌ Cancel')])
         return True
 
