@@ -177,7 +177,7 @@ class KpiDoubt(models.Model):
         if self.kind == 'client_msg':
             client = self.kpi_id.client_kra_id.name or self.kpi_id.kra_id.name or ''
             question = _('💬 %(client)s%(who)s wants to discuss %(ref)s\n%(title)s\n\n%(body)s\n\n'
-                         'Your answer goes to their group as "our team".') % {
+                         'Your answer goes to their group as "the Alphalize team".') % {
                 'client': client, 'who': (' (%s)' % self.raised_by_name) if self.raised_by_name else '',
                 'ref': ref, 'title': self.kpi_id.name or '', 'body': self.question or ''}
             # The manager opens it straight away (their own page link, else
