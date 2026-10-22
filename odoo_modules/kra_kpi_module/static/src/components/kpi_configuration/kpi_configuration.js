@@ -73,7 +73,7 @@ export class KpiConfiguration extends Component {
                 <h2 class="mb-0"><i class="fa fa-cog me-2 text-secondary"></i> Configuration</h2>
                 <span class="badge bg-light text-muted border">Changes save automatically</span>
             </div>
-            <p class="text-muted small mb-4">Approval timers, urgent-pause recipients, and per-developer WhatsApp numbers.</p>
+            <p class="text-muted small mb-4">Approval timers, the approval chain, daily report, and per-developer WhatsApp numbers.</p>
 
             <t t-if="state.loading"><div class="text-muted">Loading…</div></t>
             <t t-elif="state.error"><div class="alert alert-danger" t-esc="state.error"/></t>
@@ -210,59 +210,14 @@ export class KpiConfiguration extends Component {
                     </div>
                 </div>
 
-                <!-- 369 AI Assistant: API keys (ir.config_parameter, write-only) -->
+                <!-- AI keys live in ONE place: Settings > AI & Transcription (kpi.ai.config),
+                     which saves the same kra_kpi.* parameters and has the Test buttons. -->
                 <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #8b5cf6 !important; border-left-style: solid;">
-                    <div class="card-header bg-white fw-bold d-flex align-items-center">
-                        <i class="fa fa-magic me-2" style="color:#8b5cf6;"></i> 369 AI Assistant
-                        <t t-if="!state.aiError">
-                            <span t-if="aiOn()" class="badge bg-success ms-2">AI on</span>
-                            <span t-else="" class="badge bg-light text-muted border ms-2">AI off</span>
-                        </t>
-                    </div>
-                    <div class="card-body">
-                        <t t-if="state.aiError"><div class="text-muted small" t-esc="state.aiError"/></t>
-                        <t t-else="">
-                            <p class="text-muted small mb-3">With a key, the assistant on the Dashboard answers any
-                                question in plain words, remembers the conversation, and adds a short summary to
-                                its answers. Names and numbers always come from the live board. Without a key it
-                                still answers the questions it knows, from its built-in rules. If more than one
-                                key is saved they are tried in this order, and the next one takes over when one
-                                fails. A saved key is never shown again.</p>
-                            <t t-foreach="state.ai" t-as="p" t-key="p.provider">
-                                <div class="border rounded p-3 mb-2">
-                                    <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
-                                        <b t-esc="AI_LABEL[p.provider]"/>
-                                        <span t-if="p.key_set" class="badge bg-white text-success border border-success">Key saved ✓</span>
-                                        <span t-else="" class="badge bg-light text-muted border">Not set</span>
-                                    </div>
-                                    <div class="d-flex gap-2 flex-wrap">
-                                        <input type="password" class="form-control form-control-sm" style="max-width:340px;"
-                                               autocomplete="new-password" spellcheck="false"
-                                               t-att-placeholder="p.key_set ? 'Paste a new key to replace it' : 'Paste the API key'"
-                                               t-model="p.keyInput"
-                                               t-on-keydown="(e) => e.key === 'Enter' and this.aiSaveKey(p)"/>
-                                        <button class="btn btn-sm btn-primary" t-att-disabled="!p.keyInput or p.busy"
-                                                t-on-click="() => this.aiSaveKey(p)">Save key</button>
-                                        <button class="btn btn-sm btn-outline-secondary" t-att-disabled="!p.key_set or p.busy"
-                                                t-on-click="() => this.aiTest(p)">
-                                            <i t-if="p.testing" class="fa fa-circle-o-notch fa-spin me-1"/>Test</button>
-                                        <button class="btn btn-sm btn-outline-danger" t-att-disabled="!p.key_set or p.busy"
-                                                t-on-click="() => this.aiRemove(p)">Remove</button>
-                                    </div>
-                                    <div class="d-flex align-items-center gap-2 mt-2">
-                                        <span class="small text-muted">Model</span>
-                                        <input type="text" class="form-control form-control-sm" style="max-width:260px;"
-                                               spellcheck="false" t-att-placeholder="p.default_model + ' (default)'"
-                                               t-model="p.model" t-on-change="() => this.aiSaveModel(p)"/>
-                                        <span t-if="p.savedModel" class="text-success small">✓</span>
-                                    </div>
-                                    <div t-if="p.msg" t-att-class="'small mt-2 ' + (p.msgOk ? 'text-success' : 'text-danger')" t-esc="p.msg"/>
-                                </div>
-                            </t>
-                            <small class="text-muted d-block mt-2">Keys come from the provider's console:
-                                Google AI Studio (Gemini), console.groq.com (Groq) or console.anthropic.com (Claude).
-                                The module's other AI features use the same keys.</small>
-                        </t>
+                    <div class="card-body d-flex align-items-center gap-2 flex-wrap">
+                        <i class="fa fa-magic" style="color:#8b5cf6;"></i>
+                        <span>AI keys (369 AI Assistant), meetings and transcription are in
+                            <b>Settings → AI &amp; Transcription</b>.</span>
+                        <button class="btn btn-sm btn-outline-primary ms-auto" t-on-click="() => this.openAiConfig()">Open</button>
                     </div>
                 </div>
 
@@ -672,20 +627,12 @@ export class KpiConfiguration extends Component {
             download_retention_number: 30,
             download_retention_unit: "days",
             savedDownloadRetention: false,
-            // 369 AI Assistant keys: [{provider, key_set, model, default_model,
-            // keyInput, busy, testing, msg, msgOk, savedModel}] in cascade order.
-            ai: [],
-            aiError: "",
             // Approval chain rows: [{id, name, minutes, use_task_manager, people: [names], saved}]
             tiers: [],
             staff: [],   // internal users for "+ Add person": [{id, name, number}]
         });
-        this.AI_LABEL = { gemini: "Google Gemini", groq: "Groq (Llama)", anthropic: "Anthropic Claude" };
         onWillStart(async () => {
             await this.loadTiers();
-            // Admins only; anyone else sees a note instead of the card's fields.
-            try { this._aiFill(await rpc("/kpi_config/ai_get", {})); }
-            catch (e) { this.state.aiError = "Could not load the AI settings."; }
             try {
                 const cfg = await rpc("/kpi_config/get", {});
                 if (cfg?.status) {
@@ -774,63 +721,9 @@ export class KpiConfiguration extends Component {
         setTimeout(() => { try { obj[key] = false; } catch (e) { /* unmounted */ } }, 1500);
     }
 
-    // ---- 369 AI Assistant keys. A key is write-only: the server only ever
-    // says whether one is saved, so the input is cleared after saving.
-    _aiFill(res) {
-        if (!res?.status) { this.state.aiError = res?.message === "Not authorized" ? "Only admins can change the AI keys." : (res?.message || "Could not load the AI settings."); return; }
-        const old = Object.fromEntries(this.state.ai.map((p) => [p.provider, p]));
-        this.state.aiError = "";
-        this.state.ai = (res.providers || []).map((p) => ({
-            keyInput: "", busy: false, testing: false, msg: "", msgOk: false, savedModel: false,
-            ...(old[p.provider] || {}), ...p,
-        }));
+    openAiConfig() {
+        this.action.doAction("kra_kpi_module.action_kpi_ai_config");
     }
-    aiOn() { return this.state.ai.some((p) => p.key_set); }
-    async _aiSet(p, args, okMsg) {
-        p.busy = true; p.msg = "";
-        try {
-            const res = await rpc("/kpi_config/set_ai", { provider: p.provider, ...args });
-            if (!res?.status) { p.msg = res?.message || "Not authorized."; p.msgOk = false; return false; }
-            this._aiFill(res);
-            const fresh = this.state.ai.find((x) => x.provider === p.provider);
-            if (fresh && okMsg) { fresh.msg = okMsg; fresh.msgOk = true; }
-            return true;
-        } catch (e) { p.msg = e?.data?.message || "Failed to save."; p.msgOk = false; return false; }
-        finally { const fresh = this.state.ai.find((x) => x.provider === p.provider); if (fresh) fresh.busy = false; }
-    }
-    async aiSaveKey(p) {
-        const key = (p.keyInput || "").trim();
-        if (!key || p.busy) return;
-        if (await this._aiSet(p, { key }, "Key saved. Press Test to check it works.")) {
-            const fresh = this.state.ai.find((x) => x.provider === p.provider);
-            if (fresh) fresh.keyInput = "";
-        }
-    }
-    async aiSaveModel(p) {
-        if (await this._aiSet(p, { model: (p.model || "").trim() }, "")) {
-            const fresh = this.state.ai.find((x) => x.provider === p.provider);
-            if (fresh) this._flash(fresh, "savedModel");
-        }
-    }
-    aiRemove(p) {
-        this.dialog.add(ConfirmationDialog, {
-            title: "Remove the key?",
-            body: `Remove the ${this.AI_LABEL[p.provider]} key? The assistant then uses the other saved keys, or its built-in rules if none is left.`,
-            confirmLabel: "Remove",
-            confirm: () => this._aiSet(p, { key: "" }, "Key removed."),
-            cancel: () => {},
-        });
-    }
-    async aiTest(p) {
-        p.busy = true; p.testing = true; p.msg = "";
-        try {
-            const res = await rpc("/kpi_config/test_ai", { provider: p.provider });
-            p.msgOk = !!res?.status;
-            p.msg = res?.status ? `Works: the AI answered in ${((res.ms || 0) / 1000).toFixed(1)} s.` : (res?.message || "The test failed.");
-        } catch (e) { p.msgOk = false; p.msg = e?.data?.message || "The test failed."; }
-        finally { p.busy = false; p.testing = false; }
-    }
-
 
     // Drives admin_accept_deadline_at (kpi_workflow.py _admin_accept_minutes) —
     // how long a task waits for a human Accept before the cron does it.
