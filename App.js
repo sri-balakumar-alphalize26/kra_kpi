@@ -38,6 +38,7 @@ import ClientTasks from './screens/ClientTasks';
 import GenerateClientFiles from './screens/GenerateClientFiles';
 import ReassignmentHistory from './screens/ReassignmentHistory';
 import ClientTaskQueue from './screens/ClientTaskQueue';
+import NeedsLinking from './screens/NeedsLinking';
 import UserManual from './screens/UserManual';
 import Reminders from './screens/Reminders';
 import AttendanceScreen from './screens/AttendanceScreen';
@@ -1058,6 +1059,8 @@ function AppInner() {
       return <ReassignmentHistory onBack={goBack} />;
     if (appScreen === 'taskqueue')
       return <ClientTaskQueue onBack={goBack} />;
+    if (appScreen === 'needslinking')
+      return <NeedsLinking onBack={goBack} />;
     if (appScreen === 'usermanual')
       // Every role: role-tagged PDF manuals (server-filtered). The screen
       // self-gates admin add/edit/delete via app_bundle.can_edit.
