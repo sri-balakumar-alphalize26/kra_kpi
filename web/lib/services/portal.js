@@ -63,7 +63,10 @@ export const addClientTask = ({ subKraId, kind, name, description, priority, del
 
 /* The requirements a Bug / Update can be about, newest first: [{id, ref, name, date, db, old}]
    (old: an old-DB requirement already added here). */
-export const fetchParentTasks = (subKraId) => rpc("/kpi_client_portal/parent_tasks", { sub_kra_id: subKraId ? Number(subKraId) : 0 }).then((r) => (r?.status ? r.tasks || [] : []));
+/* Bugs / updates already raised under a requirement, and the next ref:
+   {items: [{ref, name, status, date}], next_ref, parent}. */
+export const fetchChildren = (parentId, kind) => rpc("/kpi_client_portal/children", { parent_id: Number(parentId), kind }).then((r) => (r?.status ? r : null));
+export const fetchParentTasks =(subKraId) => rpc("/kpi_client_portal/parent_tasks", { sub_kra_id: subKraId ? Number(subKraId) : 0 }).then((r) => (r?.status ? r.tasks || [] : []));
 
 /* Invoices (client view). */
 export const INVOICES_PATH = "/kpi_client_invoice/list";

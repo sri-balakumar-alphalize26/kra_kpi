@@ -375,6 +375,44 @@ class KraKpiLegacy(models.Model):
                 rec.sudo().write({'legacy_transcript': '\n\n'.join(texts)[:8000]})
 
     # ------------------------------------------------------------------
+    # earlier bugs / updates under a requirement (the client forms show them
+    # when the requirement is picked, so a 3rd bug is not a repeat of the 1st)
+    # ------------------------------------------------------------------
+    def _child_status(self):
+        """Where a bug / update is, in the client's words."""
+        self.ensure_one()
+        if not self.active:
+            return '❌ Not taken forward' if self.decline_mode else '❌ Closed'
+        st = self.task_state or ''
+        if st == 'completed':
+            return '✅ Completed'
+        if st == 'awaiting_client':
+            return '👀 Ready for you to check'
+        if not (self.published or self.admin_accepted) or st in ('queue_waiting', 'pre_approval_pending',
+                                                               'pre_approval_partial'):
+            return '⏳ Waiting for approval'
+        return '🔧 In progress'
+
+    def _child_requests(self, kind):
+        """The bugs (or updates) already raised under this requirement, oldest
+        first, and the ref the next one gets:
+        {'items': [{ref, name, status, date}], 'next_ref': 'BUG003-REQ-012'}."""
+        self.ensure_one()
+        prefix = REF_PREFIX_FOR_DOC_TYPE[kind]
+        req = self.external_ref or ''
+        if not req:
+            return {'items': [], 'next_ref': ''}
+        Kpi = self.env['kra.kpi'].sudo().with_context(active_test=False)
+        rows = Kpi.search([('external_ref', '=ilike', '%s%%-%s' % (prefix, req))], order='id')
+        rx = re.compile(r'^%s\d{1,9}-%s$' % (re.escape(prefix), re.escape(req)), re.I)
+        return {
+            'items': [{'ref': k.external_ref, 'name': k.name or '', 'status': k._child_status(),
+                       'date': k.create_date.strftime('%d %b') if k.create_date else ''}
+                      for k in rows if rx.match((k.external_ref or '').strip())],
+            'next_ref': '%s%03d-%s' % (prefix, self._next_child_number(prefix, req), req),
+        }
+
+    # ------------------------------------------------------------------
     # every time the client sent this request (the task's Client tab)
     # ------------------------------------------------------------------
     def _client_send_copy(self, done_ids):

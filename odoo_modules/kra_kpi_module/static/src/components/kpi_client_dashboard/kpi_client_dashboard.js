@@ -80,7 +80,7 @@ export class KpiClientDashboard extends Component {
                 <div class="row g-3">
                     <div class="col-md-3">
                         <label class="form-label fw-bold">Type</label>
-                        <select class="form-select" t-model="state.newTask.kind">
+                        <select class="form-select" t-att-value="state.newTask.kind" t-on-change="onKindChange">
                             <option value="requirement">Requirement</option>
                             <option value="update">Update / Amendment</option>
                             <option value="bug">Bug</option>
@@ -88,7 +88,7 @@ export class KpiClientDashboard extends Component {
                     </div>
                     <div class="col-md-6">
                         <label class="form-label fw-bold">Project</label>
-                        <select class="form-select" t-model="state.newTask.sub_kra_id">
+                        <select class="form-select" t-att-value="state.newTask.sub_kra_id" t-on-change="onProjectChange">
                             <option value="">-- Select Project --</option>
                             <t t-foreach="state.projects" t-as="p" t-key="p.id">
                                 <option t-att-value="p.id" t-esc="p.display"/>
@@ -103,13 +103,43 @@ export class KpiClientDashboard extends Component {
                             <option value="regular">Regular</option>
                         </select>
                     </div>
-                    <div class="col-md-9">
+                    <!-- Bug / Update: always about ONE requirement, numbered under it
+                         (BUG001-REQ-012) -- the server refuses one without it. -->
+                    <div class="col-12" t-if="state.newTask.kind !== 'requirement'">
+                        <label class="form-label fw-bold">Which requirement is it about? <span class="text-danger">*</span></label>
+                        <select class="form-select" t-att-value="state.newTask.parent_id" t-on-change="onParentChange"
+                                t-att-disabled="!state.newTask.sub_kra_id or !state.parents.length">
+                            <option value="" t-esc="!state.newTask.sub_kra_id ? '-- Select the project first --'
+                                : (state.parentsLoading ? 'Loading…'
+                                : (state.parents.length ? '-- Select the requirement --' : 'No requirements in this project yet'))"/>
+                            <t t-foreach="state.parents" t-as="pt" t-key="pt.id">
+                                <option t-att-value="pt.id"
+                                        t-esc="pt.ref + ' — ' + pt.name + (pt.old ? ' · Old DB' : '') + (pt.date ? ' (' + pt.date + ')' : '')"/>
+                            </t>
+                        </select>
+                        <!-- The bugs / updates already raised under it, and this one's ref. -->
+                        <div t-if="state.kids" class="card p-2 mt-2 bg-light small">
+                            <t t-if="state.kids.loading">Checking earlier ones…</t>
+                            <t t-else="">
+                                <div class="fw-bold" t-esc="state.kids.items.length
+                                    ? (state.newTask.kind === 'bug' ? '🐞' : '🔧') + ' Already raised under ' + state.kids.parent + ':'
+                                    : 'No ' + (state.newTask.kind === 'bug' ? 'bugs' : 'updates') + ' under ' + state.kids.parent + ' yet.'"/>
+                                <div t-foreach="state.kids.items" t-as="kd" t-key="kd.ref">
+                                    <b class="text-primary me-1" t-esc="kd.ref"/><t t-esc="kd.name"/>
+                                    <span class="text-muted"> · <t t-esc="kd.status"/><t t-if="kd.date"> · <t t-esc="kd.date"/></t></span>
+                                </div>
+                                <div t-if="state.kids.next_ref" class="fw-bold mt-1">➜ This one will be <t t-esc="state.kids.next_ref"/></div>
+                            </t>
+                        </div>
+                    </div>
+                    <div t-att-class="state.newTask.kind === 'requirement' ? 'col-md-9' : 'col-12'">
                         <label class="form-label fw-bold">Task Name <span class="text-danger">*</span></label>
                         <input type="text" class="form-control" t-model="state.newTask.name"
                                placeholder="What needs to be done?"/>
                     </div>
-                    <!-- What is being built. Separate from the Type above. -->
-                    <div class="col-md-3">
+                    <!-- What is being built. Separate from the Type above. Requirement
+                         only: a Bug / Update takes its requirement's (server side). -->
+                    <div class="col-md-3" t-if="state.newTask.kind === 'requirement'">
                         <label class="form-label fw-bold">Type (Module / App / EXE / Other) <span class="text-danger">*</span></label>
                         <select class="form-select" t-model="state.newTask.deliverable_type">
                             <option value="">— choose —</option>
@@ -596,8 +626,12 @@ export class KpiClientDashboard extends Component {
                 kind: 'requirement', sub_kra_id: '', name: '',
                 external_ref: '', related_req_ref: '',
                 description: '', priority: 'regular',
-                deliverable_type: '', deliverable_other: '',
+                deliverable_type: '', deliverable_other: '', parent_id: '',
             },
+            // Bug / Update: the requirements of the chosen project to pick from.
+            parents: [],
+            parentsLoading: false,
+            kids: null,         // earlier bugs / updates under the picked requirement
             approval: {
                 open: false,
                 data: null,
@@ -647,10 +681,57 @@ export class KpiClientDashboard extends Component {
         this.state.dashboard = r;
     }
 
+    onKindChange(ev) {
+        this.state.newTask.kind = ev.target.value;
+        this.state.newTask.parent_id = '';
+        this.loadParents();
+    }
+    onProjectChange(ev) {
+        this.state.newTask.sub_kra_id = ev.target.value;
+        this.state.newTask.parent_id = '';
+        this.loadParents();
+    }
+    async onParentChange(ev) {
+        const pid = ev.target.value;
+        this.state.newTask.parent_id = pid;
+        this.state.kids = pid ? { loading: true } : null;
+        if (!pid) { return; }
+        const r = await rpc('/kpi_client_portal/children', { parent_id: Number(pid), kind: this.state.newTask.kind });
+        if (this.state.newTask.parent_id !== pid) { return; }      // picked another meanwhile
+        this.state.kids = (r && r.status) ? r : null;
+    }
+    // Same list the web portal and the WhatsApp form use: the project's
+    // requirements, newest first (old-DB ones already added included).
+    async loadParents() {
+        const t = this.state.newTask;
+        this.state.parents = [];
+        this.state.kids = null;
+        if (t.kind === 'requirement' || !t.sub_kra_id) { return; }
+        const want = t.sub_kra_id;
+        this.state.parentsLoading = true;
+        const r = await rpc('/kpi_client_portal/parent_tasks', { sub_kra_id: Number(want) });
+        this.state.parentsLoading = false;
+        if (this.state.newTask.sub_kra_id !== want) { return; }   // changed meanwhile
+        this.state.parents = (r && r.status) ? (r.tasks || []) : [];
+    }
+
     async submitNewTask() {
         const t = this.state.newTask;
         if (!t.name || !t.sub_kra_id) {
             this._toast('Project and Task Name are required.', 'warning');
+            return;
+        }
+        if (t.kind !== 'requirement') {
+            if (!t.parent_id) {
+                this._toast('Pick the requirement this bug or update is about.', 'warning');
+                return;
+            }
+            const r = await rpc('/kpi_client_portal/add_task', {
+                ...t, parent_id: Number(t.parent_id), deliverable_type: '', deliverable_other: '' });
+            if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
+            this._toast(`Task submitted: ${r.name}. Your admin will review and assign it.`, 'warning');
+            this._resetNewTask();
+            await this.refresh();
             return;
         }
         if (!t.deliverable_type) {
@@ -665,14 +746,20 @@ export class KpiClientDashboard extends Component {
         const r = await rpc('/kpi_client_portal/add_task', { ...t, deliverable_other: other });
         if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
         this._toast(`Task submitted: ${r.name}. Your admin will review and assign it.`, 'warning');
+        this._resetNewTask();
+        await this.refresh();
+    }
+
+    _resetNewTask() {
         this.state.newTask = {
             kind: 'requirement', sub_kra_id: '', name: '',
             external_ref: '', related_req_ref: '',
             description: '', priority: 'regular',
-            deliverable_type: '', deliverable_other: '',
+            deliverable_type: '', deliverable_other: '', parent_id: '',
         };
+        this.state.parents = [];
+        this.state.kids = null;
         this.state.showAdd = false;
-        await this.refresh();
     }
 
     async openApproval(kpiId) {
