@@ -18,7 +18,9 @@
         return a && a.href && /\/kpi\/wa\/[^?]*\/file\?/.test(a.href);
     }
     function fileName(a) {
-        var t = (a.getAttribute('data-name') || a.textContent || '').trim();
+        // A link around a picture has no text: fall back to the picture's alt.
+        var img = a.querySelector('img');
+        var t = (a.getAttribute('data-name') || a.textContent || (img && img.alt) || '').trim();
         return t.replace(/^[^\w(]+/, '').trim() || 'file';   // drop a leading 📎 / 📄
     }
     function el(tag, cls, html) {

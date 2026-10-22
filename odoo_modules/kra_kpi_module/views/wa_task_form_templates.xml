@@ -102,7 +102,7 @@
                 <body>
                     <div class="card"><t t-out="0"/></div>
                     <script src="/kra_kpi_module/static/src/wa_client_form/picker.js?v=1"></script>
-                    <script src="/kra_kpi_module/static/src/wa_client_form/viewer.js?v=1"></script>
+                    <script src="/kra_kpi_module/static/src/wa_client_form/viewer.js?v=2"></script>
                     <script src="/kra_kpi_module/static/src/wa_client_form/links.js?v=2"></script>
                     <script src="/kra_kpi_module/static/src/wa_client_form/filepick.js?v=1"></script>
                     <script src="/kra_kpi_module/static/src/wa_client_form/dialog.js?v=1"></script>
