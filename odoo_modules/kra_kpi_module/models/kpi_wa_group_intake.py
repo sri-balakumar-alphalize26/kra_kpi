@@ -2368,9 +2368,6 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             question = '%s %s — %s' % (mark, owner_name, question)
         try:
             sent = s.sudo().send_poll(message.phone, question, options, selectable=1)
-            if owner_state and isinstance(sent, str):
-                ids = [i for i in (owner_state.staff_poll_ids or '').split(',') if i][-19:]
-                owner_state.sudo().write({'staff_poll_ids': ','.join(ids + [sent])})
         except Exception as exc:
             _logger.warning('group poll failed, sending text instead: %s', exc)
             try:
@@ -2379,3 +2376,13 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                     _('Reply with the number.')))
             except Exception as exc2:
                 _logger.warning('group poll text fallback failed: %s', exc2)
+            return
+        # Bookkeeping AFTER the poll went out, kept apart: if this write fails
+        # (e.g. the server shutting down mid-request), the poll was still sent,
+        # so it must not also send the numbered text copy.
+        if owner_state and isinstance(sent, str):
+            try:
+                ids = [i for i in (owner_state.staff_poll_ids or '').split(',') if i][-19:]
+                owner_state.sudo().write({'staff_poll_ids': ','.join(ids + [sent])})
+            except Exception as exc:
+                _logger.warning('group poll sent, but its id was not kept: %s', exc)
