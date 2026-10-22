@@ -171,8 +171,10 @@ class KpiWorkflow(models.Model):
         # the field directly found nobody and closed finished work as unbillable.
         return client_kra._effective_client_users() if client_kra else self.env['res.users'].sudo()
 
-    def _release_without_client(self):
+    def _release_without_client(self, reason='KRA has no client users linked'):
         """No client is linked to this KRA → nothing to wait for, so don't wait.
+        Also used for a task the client raised themselves (see
+        request_client_pre_approval): the admin's accept is enough.
 
         A KRA with no client_user_ids has nobody who could ever answer. Putting
         the task into 'pre_approval_pending' anyway sent the developer to the
@@ -202,7 +204,7 @@ class KpiWorkflow(models.Model):
         })
         self._log_action(
             'pre_approval_skipped_no_client', source='system',
-            payload={'reason': 'KRA has no client users linked',
+            payload={'reason': reason,
                      'kra': (self.kra_id.name if self.kra_id else '')})
 
     def request_client_pre_approval(self):
@@ -241,6 +243,14 @@ class KpiWorkflow(models.Model):
             # really pending.
             if not rec._client_approvers():
                 rec._release_without_client()
+                continue
+            # The client raised it themselves (portal, WhatsApp form, app):
+            # they asked for this work, so once the admin accepts it and gives
+            # it a developer it may start -- no second wait for their approval.
+            # Only tasks the TEAM creates for a client (KPI Action ▸ New Task)
+            # still ask the client to approve.
+            if rec.client_submitted:
+                rec._release_without_client(reason='raised by the client; admin accepted')
                 continue
             token = rec._generate_approval_token()
             now = fields.Datetime.now()

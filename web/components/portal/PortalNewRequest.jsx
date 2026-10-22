@@ -115,7 +115,7 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
           <span className="icbox" style={{ background: "var(--tint-green-bg)", color: "var(--tint-green)" }}><Icon n="check" size={18} /></span>
           <b style={{ color: "var(--navy)", fontSize: 16 }}>{sent.name}</b>
           <span className="mini">{sent.neededBy ? `Needed by ${sent.neededBy}` : "No needed-by date"}{sent.files ? ` · ${sent.files} file${sent.files === 1 ? "" : "s"} attached` : ""}</span>
-          <p className="note" style={{ margin: 0 }}>Your request is with the team. It waits for an admin to accept it, and it appears under Requests once accepted. You'll then be asked to approve the estimate.</p>
+          <p className="note" style={{ margin: 0 }}>Your request is with the team. It waits for an admin to accept it, and it appears under Requests once accepted. Work starts as soon as the team assigns it.</p>
           <div className="row" style={{ flexWrap: "wrap" }}><Button kind="primary" onClick={another}>Send another request</Button><Button kind="ghost" onClick={() => router.push("/portal")}>Back to home</Button></div>
         </div>
       </div>
@@ -216,7 +216,7 @@ export default function PortalNewRequest({ type: initial = "requirement" }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div className="cardbox"><h2>Have a list?</h2><p className="mini" style={{ margin: 0 }}>Upload an XLSX or CSV with many requests at once; each becomes a task.</p><Link className="btn" href="/portal/requests/bulk" style={{ alignSelf: "flex-start" }}>Upload a list</Link></div>
           <div className="cardbox"><h2>What happens next</h2>
-            <div className="steps" style={{ flexDirection: "column", alignItems: "flex-start", gap: 10 }}><span className="on"><b>1</b>You send the request</span><span><b>2</b>The team estimates and assigns it (usually the same day)</span><span><b>3</b>You approve the estimate on WhatsApp or here</span><span><b>4</b>Work happens — you see progress live</span><span><b>5</b>You sign off · certificate issued · invoiced</span></div>
+            <div className="steps" style={{ flexDirection: "column", alignItems: "flex-start", gap: 10 }}><span className="on"><b>1</b>You send the request</span><span><b>2</b>An admin accepts it, estimates and assigns it (usually the same day)</span><span><b>3</b>Work happens — you see progress live</span><span><b>4</b>You sign off · certificate issued · invoiced</span></div>
           </div>
         </div>
       </div>

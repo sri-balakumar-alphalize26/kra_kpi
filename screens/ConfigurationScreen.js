@@ -508,7 +508,8 @@ export default function ConfigurationScreen({ onBack }) {
               {<SaveMark k="clientApproval" />}
             </View>
             <Text style={s.hint}>How long a client has to approve the developer assigned to their task.
-              If they don't respond in time it is approved automatically.</Text>
+              If they don't respond in time it is approved automatically. Only for tasks the team
+              creates: a request the client raised themselves starts once an admin accepts it.</Text>
 
             <Text style={[s.label, { marginTop: 16 }]}>Queue re-nudge gap (minutes)</Text>
             <View style={s.inlineRow}>

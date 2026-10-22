@@ -1,8 +1,9 @@
 // CLIENT TASK QUEUE (admin-only) — mobile port of the web kpi_pending_queue.
 // Client-submitted tasks land here unpublished and INVISIBLE to the team. The
 // admin fills in the missing details (Ref ID, estimate, developer) and hits
-// Save & Publish, which releases the task AND asks the client to approve the
-// assigned developer (auto-approves after the configured window).
+// Save & Publish, which releases the task for work. The client raised it
+// themselves, so they are not asked to approve the developer
+// (kpi_workflow.request_client_pre_approval skips client_submitted tasks).
 //
 // Layout: a drill-down rather than a wall of full-width cards —
 //   Date  ▸  Client  ▸  Task  ▸  the full editable form (one task at a time)

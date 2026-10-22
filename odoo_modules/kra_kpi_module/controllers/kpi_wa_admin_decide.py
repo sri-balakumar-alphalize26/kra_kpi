@@ -347,7 +347,11 @@ class KpiWaAdminDecide(http.Controller):
                 if not res.get('status'):
                     return False, res.get('message'), ''
                 dev = request.env['res.users'].sudo().browse(int(post['user_id']))
-                return True, 'accepted → %s. The client is asked to approve it.' % dev.name, 'accepted'
+                # A request the client raised starts now; only a team-made task
+                # still waits for the client (kpi_workflow.request_client_pre_approval).
+                tail = ('The client is asked to approve it.' if k.task_state == 'pre_approval_pending'
+                        else 'It can start now.')
+                return True, 'accepted → %s. %s' % (dev.name, tail), 'accepted'
             if not (note or reason_id):
                 return False, 'Pick a reason or write one — the client is told.', ''
             res = reports.pending_queue_decline(kpi_id=k.id, mode='decline',

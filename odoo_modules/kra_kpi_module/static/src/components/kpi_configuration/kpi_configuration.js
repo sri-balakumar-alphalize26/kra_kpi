@@ -125,7 +125,9 @@ export class KpiConfiguration extends Component {
                         <small class="text-muted d-block mt-2">How long a client has to approve the developer
                             assigned to their task before the task is <b>released</b> for work. Drives the
                             countdown the client sees in the app. Releasing is not approving: the client can
-                            still object, and nothing is billable until they sign off at completion.</small>
+                            still object, and nothing is billable until they sign off at completion.
+                            Only for tasks the team creates: a request the client raised themselves starts
+                            once an admin accepts it.</small>
 
                         <label class="form-label fw-semibold mt-4">Queue re-nudge gap (minutes)</label>
                         <div class="input-group" style="max-width:180px;">

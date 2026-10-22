@@ -690,10 +690,12 @@ class KpiManagerDmRouter(models.AbstractModel):
         except Exception:
             pass
         conv.reset()
-        self._reply(phone, _(
-            '✅ %(ref)s is with %(dev)s.\n'
-            'The client has been asked to approve the assignment.') % {
-                'ref': ref, 'dev': dev.name})
+        # A request the client raised starts now; only a team-made task still
+        # waits for the client (kpi_workflow.request_client_pre_approval).
+        tail = (_('The client has been asked to approve the assignment.')
+                if kpi.sudo().task_state == 'pre_approval_pending' else _('It can start now.'))
+        self._reply(phone, _('✅ %(ref)s is with %(dev)s.\n%(tail)s') % {
+            'ref': ref, 'dev': dev.name, 'tail': tail})
         return True
 
     @api.model
