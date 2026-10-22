@@ -17,6 +17,7 @@ Driven by:
 """
 
 import logging
+import re
 from datetime import datetime, time, timedelta
 
 import pytz
@@ -588,6 +589,51 @@ class KpiWorkSession(models.Model):
         return bool(self._ended_session_today(user=user))
 
     @api.model
+    def _task_summaries_today(self, user, kpi_ids):
+        """{kpi_id: latest summary this user wrote on it today} — the End
+        Workday page shows it as "already added" instead of asking again."""
+        today = fields.Date.context_today(self.with_user(user))
+        rows = self.env['kpi.progress'].sudo().search([
+            ('user_id', '=', user.id), ('kpi_id', 'in', list(kpi_ids)),
+            ('create_date', '>=', _local_day_start_utc(today, user)),
+            ('create_date', '<=', _local_day_end_utc(today, user)),
+            ('from_client', '=', False),
+        ], order='create_date asc')
+        out = {}
+        for p in rows:
+            if (p.summary or '').strip():
+                out[p.kpi_id.id] = p.summary.strip()
+        return out
+
+    def _today_work_blocks(self, user, kpi_ids):
+        """[(task heading, [today's summaries, oldest first])] for the End
+        Workday "What did you work on today?" box, in the order of kpi_ids.
+        Every summary this user wrote on each task today (not the client's
+        attachment notes)."""
+        today = fields.Date.context_today(self.with_user(user))
+        rows = self.env['kpi.progress'].sudo().search([
+            ('user_id', '=', user.id), ('kpi_id', 'in', list(kpi_ids)),
+            ('create_date', '>=', _local_day_start_utc(today, user)),
+            ('create_date', '<=', _local_day_end_utc(today, user)),
+            ('from_client', '=', False),
+        ], order='create_date asc')
+        said = {}
+        for p in rows:
+            text = (p.summary or '').strip()
+            if text:
+                said.setdefault(p.kpi_id.id, []).append(text)
+        out = []
+        for k in self.env['kra.kpi'].sudo().browse([i for i in kpi_ids if i in said]):
+            head = ' — '.join(x for x in (k.external_ref, k.name) if x) or '#%s' % k.id
+            out.append((head, said[k.id]))
+        return out
+
+    @api.model
+    def _today_work_note(self, blocks):
+        """The blocks as the day's note: *heading* (bold on WhatsApp), the
+        summaries under it, a blank line between tasks."""
+        return '\n\n'.join('*%s*\n%s' % (head, '\n'.join(texts)) for head, texts in blocks)
+
     def _tasks_missing_progress_today(self, user=None):
         """Tasks this user worked on today with no progress summary from them today.
 
@@ -632,6 +678,10 @@ class KpiWorkSession(models.Model):
             ('kpi_id', 'in', list(worked_ids)),
             ('create_date', '>=', start),
             ('create_date', '<=', end),
+            # The client's own attachment note ("Attached by … on the WhatsApp
+            # form.") is not a work summary, even when a staff member sent the
+            # request as the client (REQ-010, 22 Oct 2026).
+            ('from_client', '=', False),
         ])
         covered = {p.kpi_id.id for p in done if (p.summary or '').strip()}
 
@@ -1212,7 +1262,39 @@ class KpiWorkSession(models.Model):
                 snapshot=snap)
         except Exception as exc:
             _logger.warning("wa group end report failed for session %s: %s", self.id, exc)
+        self._send_day_to_ceo(payload)
         return payload
+
+    def _send_day_to_ceo(self, payload):
+        """WhatsApp the day's "What did you work on today?" to the CEO number(s)
+        set in Settings > Configuration. Through the delayed queue (sent after
+        the commit, retried by the cron), so it never holds up or breaks an
+        End Workday. Never raises."""
+        self.ensure_one()
+        try:
+            raw = self.env.company.sudo().kpi_ceo_wa_numbers or ''
+            numbers = [n for n in re.split(r'[,\s;]+', raw) if n]
+            if not numbers:
+                return 0
+            note = (payload.get('note') or '').strip() or '_No task summaries today._'
+            day = fields.Datetime.context_timestamp(self, fields.Datetime.now()).strftime('%a %d %b')
+            body = ('🌙 *%(dev)s* ended the day — %(day)s\n'
+                    'Login %(login)s · Productive %(prod)s · Presence %(pres)s · %(n)s task(s)\n\n'
+                    '*What did you work on today?*\n%(note)s') % {
+                'dev': payload.get('dev') or self.user_id.name or '',
+                'day': day,
+                'login': (payload.get('login_at') or '—')[11:16] or '—',
+                'prod': payload.get('productive_display') or '0m',
+                'pres': payload.get('presence_display') or '0m',
+                'n': payload.get('task_count') or 0,
+                'note': note}
+            Q = self.env['kpi.notification.queue'].sudo()
+            for num in numbers:
+                Q.enqueue_delayed(num, body, event='ceo_day_note', seconds=1, role='owner')
+            return len(numbers)
+        except Exception as exc:
+            _logger.warning("day note to CEO failed for session %s: %s", self.id, exc)
+            return 0
 
     # ------------------------------------------------------------------ #
     # Revert — admin reopens a day that was explicitly ended               #

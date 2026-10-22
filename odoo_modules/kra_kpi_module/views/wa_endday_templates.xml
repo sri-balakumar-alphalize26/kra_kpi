@@ -19,6 +19,18 @@
                     .warn .redline { color:var(--danger); font-weight:800; margin:0 0 10px; }
                     .mp { margin-bottom:10px; }
                     .mp form { display:flex; gap:6px; margin-top:6px; }
+                    .redline { color:var(--danger); font-weight:800; margin:0 0 10px; }
+                    .tk { padding:8px 0; border-bottom:1px dashed var(--border); }
+                    .tk .row { border:0; padding:0; }
+                    form.mp { display:flex; gap:6px; margin:8px 0 0; }
+                    form.mp .input { flex:1; border-color:#FCA5A5; background:#FEF2F2; }
+                    .said { margin-top:6px; padding:8px 10px; border-radius:var(--r); background:var(--ok-bg);
+                            color:var(--ok); font-size:13px; display:flex; flex-direction:column; gap:2px; }
+                    .said span { color:var(--text); white-space:pre-wrap; }
+                    .worked { padding:12px 14px; border:1px solid var(--border); border-radius:var(--r);
+                              background:var(--input); display:flex; flex-direction:column; gap:14px; }
+                    .wb b { display:block; color:var(--text); }
+                    .wb-line { margin-top:3px; color:var(--subtle); white-space:pre-wrap; padding-left:12px; }
                     .flash { margin:12px 20px 0; padding:10px 12px; border-radius:var(--r); font-weight:700; font-size:13px; }
                     .flash.ok { background:var(--ok-bg); color:var(--ok); }
                     .flash.err { background:#FEE2E2; color:var(--danger); }
@@ -42,37 +54,47 @@
                     </div>
                 </div>
 
-                <div class="sec" t-if="missing">
-                    <div class="warn">
-                        <h3><t t-esc="len(missing)"/> task(s) you worked on today have no summary</h3>
-                        <p class="redline">Add a summary for each task you worked on today — the day ends only after that.</p>
-                        <div t-foreach="missing" t-as="m" class="mp">
-                            <span class="ref" t-esc="m.get('external_ref') or ('#%s' % m['kpi_id'])"/><t t-esc="m.get('name')"/>
-                            <form method="post" t-att-action="'/kpi/wa/endday/%s/summary' % token">
-                                <input type="hidden" name="kpi_id" t-att-value="m['kpi_id']"/>
-                                <input class="input" name="summary" maxlength="500" placeholder="What did you do on this today?"/>
-                                <button type="submit" class="btn primary">Save</button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-
+                <!-- Every task worked today: today's summary if it has one (written
+                     here or in KPI details), otherwise a box for it. A summary saved
+                     here becomes the task's progress note for today. -->
                 <div class="sec">
-                    <h3>Tasks worked today (<t t-esc="d.get('task_count') or len(d.get('tasks') or [])"/>)</h3>
-                    <div t-foreach="d.get('tasks') or []" t-as="tk" class="row">
-                        <span><span class="ref" t-esc="tk.get('ref') or ''"/><t t-esc="tk.get('name')"/></span>
-                        <b t-esc="tk.get('duration_display') or ''"/>
+                    <h3>Tasks worked today (<t t-esc="len(tasks)"/>)</h3>
+                    <p t-if="missing" class="redline">Add a summary for each task you worked on today — the day ends only after that.</p>
+                    <div t-foreach="tasks" t-as="tk" class="tk">
+                        <div class="row">
+                            <span><span class="ref" t-esc="tk.get('ref') or ''"/><t t-esc="tk.get('name')"/></span>
+                            <b t-esc="tk.get('duration_display') or ''"/>
+                        </div>
+                        <t t-set="said" t-value="summaries.get(tk.get('kpi_id'))"/>
+                        <div t-if="said" class="said">
+                            <b>✓ Summary already added today</b>
+                            <span t-esc="said"/>
+                        </div>
+                        <form t-elif="tk.get('kpi_id') in missing_ids" method="post" class="mp"
+                              t-att-action="'/kpi/wa/endday/%s/summary' % token">
+                            <input type="hidden" name="kpi_id" t-att-value="tk['kpi_id']"/>
+                            <input class="input" name="summary" maxlength="500" required="required"
+                                   placeholder="What did you do on this task today?"/>
+                            <button type="submit" class="btn primary">Save</button>
+                        </form>
                     </div>
-                    <p t-if="not d.get('tasks')" class="mini">No task time logged today.</p>
+                    <p t-if="not tasks" class="mini">No task time logged today.</p>
                 </div>
 
-                <form method="post" t-att-action="'/kpi/wa/endday/%s/end' % token">
+                <form method="post" id="kpEndForm" t-att-action="'/kpi/wa/endday/%s/end' % token">
                     <div class="sec">
+                        <!-- Filled from today's task summaries above, not typed here:
+                             the task in bold, what was written under it. -->
                         <div class="field">
-                            <span class="lbl">What did you work on today? (optional)</span>
-                            <textarea name="note" maxlength="2000"
-                                      placeholder="e.g. Finished the login screen, fixed the invoice total bug, started on reports."/>
-                            <span class="hint">Saved with your workday snapshot and sent in the daily summary.</span>
+                            <span class="lbl">What did you work on today?</span>
+                            <div class="worked">
+                                <div t-foreach="work_blocks" t-as="wb" class="wb">
+                                    <b t-esc="wb[0]"/>
+                                    <div t-foreach="wb[1]" t-as="line" class="wb-line" t-esc="line"/>
+                                </div>
+                                <span t-if="not work_blocks" class="mini">Nothing yet — add a summary on each task above and it shows here.</span>
+                            </div>
+                            <span class="hint">Made from your task summaries. Saved with your workday snapshot and sent in the daily summary.</span>
                         </div>
                     </div>
                     <div class="ft">
@@ -80,6 +102,30 @@
                             End workday &amp; send summary</button>
                     </div>
                 </form>
+                <!-- Ask first (our popup, dialog.js), then send once: the button is
+                     switched off so a second tap cannot end the day twice. -->
+                <script>
+                    (function () {
+                        var f = document.getElementById('kpEndForm');
+                        if (!f) { return; }
+                        var sent = false;
+                        f.addEventListener('submit', function (e) {
+                            e.preventDefault();
+                            if (sent) { return; }
+                            var go = window.kpiConfirm
+                                ? window.kpiConfirm('End your workday?\nYour day closes and the summary is sent. Only an admin can reopen it.',
+                                                    {ok: 'End workday', danger: true})
+                                : Promise.resolve(true);
+                            go.then(function (ok) {
+                                if (!ok || sent) { return; }
+                                sent = true;
+                                var b = f.querySelector('button[type=submit]');
+                                if (b) { b.disabled = true; b.textContent = 'Ending…'; }
+                                f.submit();
+                            });
+                        });
+                    })();
+                </script>
             </t>
         </template>
 

@@ -127,6 +127,13 @@ class ResCompany(models.Model):
              "the Client Task Queue with no developer. Nudging stops once an admin "
              "reads the notification. Read by kra.kpi._cron_nudge_queued_tasks.")
 
+    # Settings > Configuration: who gets each person's "What did you work on
+    # today?" on WhatsApp when they end their day. Comma-separated digits.
+    kpi_ceo_wa_numbers = fields.Char(
+        string='CEO WhatsApp number(s)',
+        help="Each End Workday's \"What did you work on today?\" is sent here on WhatsApp. "
+             "Several numbers can be separated by commas.")
+
     urgent_nudge_minutes = fields.Integer(
         string='Urgent Re-nudge Gap (minutes)',
         default=5,

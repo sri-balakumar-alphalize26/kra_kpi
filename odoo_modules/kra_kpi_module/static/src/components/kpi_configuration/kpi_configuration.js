@@ -12,13 +12,16 @@ export class KpiConfiguration extends Component {
                 ["name", "sequence", "minutes", "use_task_manager", "user_ids"], { order: "sequence, id" });
             if (!this.state.staff.length) {
                 const staff = await this.orm.searchRead("res.users", [["share", "=", false]],
-                    ["name", "kpi_wa_number", "kpi_mobile_number"], { order: "name" });
-                this.state.staff = staff.map((u) => ({ id: u.id, name: u.name, number: u.kpi_wa_number || u.kpi_mobile_number || "" }));
+                    ["name", "kpi_wa_number", "kpi_mobile_number", "kpi_role"], { order: "name" });
+                // Only admins / coordinators can decide; others are listed only to name them on a step.
+                this.state.staff = staff.map((u) => ({ id: u.id, name: u.name, number: u.kpi_wa_number || u.kpi_mobile_number || "",
+                    canDecide: u.kpi_role === "admin" || u.kpi_role === "coordinator" }));
             }
             this.state.tiers = rows.map((r) => ({ ...r, saved: false }));
         } catch (e) { this.state.tiers = []; }
     }
     userName(id) { return (this.state.staff.find((u) => u.id === id) || {}).name || "#" + id; }
+    canDecide(id) { return !!(this.state.staff.find((u) => u.id === id) || {}).canDecide; }
     userNumber(id) { return (this.state.staff.find((u) => u.id === id) || {}).number || ""; }
     async saveTier(t, vals) {
         if ("name" in vals && !String(vals.name || "").trim()) { await this.loadTiers(); return; }
@@ -191,7 +194,8 @@ export class KpiConfiguration extends Component {
                                 </div>
                                 <div class="d-flex flex-wrap gap-2 mt-2 align-items-stretch">
                                     <t t-foreach="tier.user_ids" t-as="uid" t-key="uid">
-                                        <div class="border rounded px-2 py-1 d-flex align-items-start gap-2" style="background:#fffbeb;">
+                                        <div class="border rounded px-2 py-1 d-flex align-items-start gap-2"
+                                             style="background:#fffbeb;">
                                             <div class="lh-sm">
                                                 <div class="fw-semibold small" t-esc="userName(uid)"/>
                                                 <div class="text-muted" style="font-size:11.5px;" t-esc="userNumber(uid) or 'no WhatsApp number'"/>
@@ -215,6 +219,29 @@ export class KpiConfiguration extends Component {
                                 </div>
                             </div>
                         </t>
+                    </div>
+                </div>
+
+                <!-- CEO daily summary: each End Workday's "What did you work on today?"
+                     goes to these WhatsApp numbers (res.company.kpi_ceo_wa_numbers). -->
+                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #10b981 !important; border-left-style: solid;">
+                    <div class="card-header bg-white fw-bold d-flex align-items-center">
+                        <i class="fa fa-whatsapp me-2 text-success"></i> CEO daily summary
+                    </div>
+                    <div class="card-body">
+                        <label class="form-label fw-semibold">CEO WhatsApp number(s)</label>
+                        <div class="input-group" style="max-width:520px;">
+                            <input type="text" class="form-control" t-model="state.ceo_wa_numbers"
+                                   t-on-change="() => this.saveCeoNumbers()"
+                                   placeholder="e.g. 9876543210, 971501234567"/>
+                            <span t-if="state.savedCeo" class="input-group-text text-success bg-white border-success">✓</span>
+                        </div>
+                        <div t-if="state.ceoError" class="text-danger small fw-bold mt-1" t-esc="state.ceoError"/>
+                        <small class="text-muted d-block mt-2">When anyone ends their workday, their
+                            <b>What did you work on today?</b> (each task with the summary written on it) is sent
+                            here on WhatsApp, with their login time and productive time. Separate several numbers
+                            with commas. A number without a country code gets this company's code. Leave empty to
+                            send nothing.</small>
                     </div>
                 </div>
 
@@ -637,6 +664,7 @@ export class KpiConfiguration extends Component {
             savedDownloadRetention: false,
             // Approval chain rows: [{id, name, minutes, use_task_manager, people: [names], saved}]
             tiers: [],
+            ceo_wa_numbers: "", savedCeo: false, ceoError: "",
             staff: [],   // internal users for "+ Add person": [{id, name, number}]
         });
         onWillStart(async () => {
@@ -646,6 +674,7 @@ export class KpiConfiguration extends Component {
                 if (cfg?.status) {
                     if (cfg.admin_accept_minutes != null) this.state.admin_accept_minutes = cfg.admin_accept_minutes;
                     if (cfg.client_approval_minutes != null) this.state.client_approval_minutes = cfg.client_approval_minutes;
+                    this.state.ceo_wa_numbers = (cfg.ceo_wa_numbers || "").split(",").filter(Boolean).join(", ");
                     if (cfg.queue_nudge_minutes != null) this.state.queue_nudge_minutes = cfg.queue_nudge_minutes;
                     if (cfg.urgent_nudge_minutes != null) this.state.urgent_nudge_minutes = cfg.urgent_nudge_minutes;
                     this.state.country_id = cfg.country_id || false;
@@ -727,6 +756,16 @@ export class KpiConfiguration extends Component {
     _flash(obj, key) {
         obj[key] = true;
         setTimeout(() => { try { obj[key] = false; } catch (e) { /* unmounted */ } }, 1500);
+    }
+
+    async saveCeoNumbers() {
+        this.state.ceoError = "";
+        try {
+            const r = await rpc("/kpi_config/set_ceo_numbers", { numbers: this.state.ceo_wa_numbers || "" });
+            if (!r?.status) { this.state.ceoError = r?.message || "Could not save."; return; }
+            this.state.ceo_wa_numbers = (r.numbers || "").split(",").filter(Boolean).join(", ");
+            this._flash(this.state, "savedCeo");
+        } catch (e) { this.state.ceoError = e?.data?.message || "Could not save."; }
     }
 
     openAiConfig() {

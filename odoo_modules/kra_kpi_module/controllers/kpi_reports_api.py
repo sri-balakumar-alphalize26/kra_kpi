@@ -3340,8 +3340,9 @@ class KpiReportsAPI(http.Controller):
                                            ', '.join(f[0] for f in files))
                     if files else ''))
                 kpi._schedule_queue_nudge()
-                # And a private decision link on each admin's WhatsApp.
-                kpi._wa_ask_admins()
+                # And the private decision links (approval chain), sent after
+                # the commit in the background: WhatsApp sends are slow.
+                kpi._after_commit_in_background('_wa_ask_admins')
             except Exception as exc:
                 import logging
                 logging.getLogger(__name__).warning(
@@ -4795,6 +4796,15 @@ class KpiReportsAPI(http.Controller):
                 import logging
                 logging.getLogger(__name__).warning("missing_progress failed: %s", exc)
                 payload['missing_progress'] = []
+            # "What did you work on today?" -- filled from today's task summaries
+            # (task in bold, what was written under it), not typed.
+            try:
+                ids = [t.get('kpi_id') for t in (payload.get('tasks') or []) if t.get('kpi_id')]
+                blocks = Session._today_work_blocks(user, ids)
+                payload['work_blocks'] = [{'head': h, 'lines': lines} for h, lines in blocks]
+                payload['work_note'] = Session._today_work_note(blocks)
+            except Exception:
+                payload['work_blocks'], payload['work_note'] = [], ''
             return payload
         except ConcurrencyError:
             raise  # see workday_ping
@@ -4952,7 +4962,15 @@ class KpiReportsAPI(http.Controller):
                                    'only after that: %s' % ', '.join(
                                        m.get('external_ref') or m.get('name') or '' for m in missing),
                     }
-            payload = sess.action_end_day(note=note)
+            # The day's note is made from today's task summaries (what the End
+            # Workday box shows); a typed note is only used if there are none.
+            try:
+                d = sess._daily_summary_payload(full_day=True)
+                ids = [t.get('kpi_id') for t in (d.get('tasks') or []) if t.get('kpi_id')]
+                auto = Session._today_work_note(Session._today_work_blocks(user, ids))
+            except Exception:
+                auto = ''
+            payload = sess.action_end_day(note=(auto or note)[:WORKDAY_NOTE_MAX])
             payload['status'] = True
             return payload
         except ConcurrencyError:
@@ -8457,10 +8475,10 @@ class KpiReportsAPI(http.Controller):
                 # Same treatment as the client portal: a legacy text receipt is
                 # rendered into the branded PDF, an uploaded scan is served as-is.
                 data, fname, mime = self._certificate_payload(kpi, data, fname)
-            return request.make_response(data, headers=[
-                ('Content-Type', mime),
-                ('Content-Disposition', f'attachment; filename="{fname}"'),
-            ])
+            # ?inline=1: show it in the browser (the View popup) instead of saving.
+            from .kra_api import serve_file, _guess_mime
+            return serve_file(data, fname, _guess_mime(fname, mime or ''),
+                              inline=kw.get('inline') in ('1', 'true'))
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"download_kpi_doc: {str(e)}")
