@@ -213,13 +213,18 @@ export class KpiAction extends Component {
                             <label class="form-label fw-bold">🔗 Related Links</label>
                             <div class="input-group mb-2">
                                 <input type="url" class="form-control"
+                                       t-att-class="linkBad(state.progressEdit.link_input, 'link') ? 'is-invalid' : ''"
                                        t-model="state.progressEdit.link_input"
                                        placeholder="https://github.com/repo or https://drive.google.com/..."/>
                                 <button class="btn btn-outline-primary" type="button"
+                                        t-att-disabled="linkBad(state.progressEdit.link_input, 'link')"
                                         t-on-click="addEditLink">
                                     <i class="fa fa-plus"/> Add Link
                                 </button>
                             </div>
+                                <div t-if="linkBad(state.progressEdit.link_input, 'link')" class="text-danger small fw-bold mb-1">
+                                    <i class="fa fa-times-circle me-1"/><t t-esc="linkBad(state.progressEdit.link_input, 'link')"/>
+                                </div>
                             <t t-if="state.progressEdit.related_links.length">
                                 <ul class="list-group">
                                     <t t-foreach="state.progressEdit.related_links" t-as="link" t-key="link_index">
@@ -507,6 +512,12 @@ export class KpiAction extends Component {
                                             <tr t-if="state.detailData.file_url">
                                                 <td><b>Uploaded File</b></td>
                                                 <td>
+                                                    <!-- No download attribute: kpi_file_viewer opens it in the popup. -->
+                                                    <a class="btn btn-info btn-sm me-1"
+                                                       t-att-href="state.detailData.file_url"
+                                                       t-att-title="state.detailData.file_name || 'File'">
+                                                        <i class="fa fa-eye"></i> View
+                                                    </a>
                                                     <a class="btn btn-primary btn-sm"
                                                        t-att-href="state.detailData.file_url"
                                                        t-att-download="state.detailData.file_name || 'file'">
@@ -674,8 +685,8 @@ export class KpiAction extends Component {
                                                                 <t t-foreach="manual.files.slice(1)" t-as="mfile" t-key="mfile.id">
                                                                     <div class="d-inline-flex flex-column align-items-start">
                                                                         <a t-att-href="mfile.url" target="_blank"
-                                                                           class="btn btn-sm btn-outline-secondary">
-                                                                            <i class="fa fa-download"></i> <t t-esc="mfile.file_name"/>
+                                                                           class="btn btn-sm btn-outline-secondary" title="Tap to view">
+                                                                            <i class="fa fa-eye"></i> <t t-esc="mfile.file_name"/>
                                                                         </a>
                                                                         <small t-if="mfile.uploaded_at" class="text-muted" style="font-size:.72rem;">
                                                                             Saved <t t-esc="formatDate(mfile.uploaded_at)"/>
@@ -837,17 +848,21 @@ export class KpiAction extends Component {
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">🔗 Related Links (optional)</label>
                                             <div class="input-group mb-2">
-                                                <input type="url" 
-                                                    class="form-control" 
+                                                <input type="url"
+                                                    class="form-control"
+                                                    t-att-class="linkBad(state.manualForm.link_input, 'link') ? 'is-invalid' : ''"
                                                     t-model="state.manualForm.link_input"
                                                     placeholder="https://docs.google.com/..."/>
                                                 <button class="btn btn-outline-primary"
                                                         type="button"
-                                                        t-att-disabled="linkDup('manual')"
+                                                        t-att-disabled="linkDup('manual') or linkBad(state.manualForm.link_input, 'link')"
                                                         t-on-click="addManualLink">
                                                     <i class="fa fa-plus"></i> Add Link
                                                 </button>
                                             </div>
+                                <div t-if="linkBad(state.manualForm.link_input, 'link')" class="text-danger small fw-bold mb-1">
+                                    <i class="fa fa-times-circle me-1"/><t t-esc="linkBad(state.manualForm.link_input, 'link')"/>
+                                </div>
                                             <div t-if="linkDup('manual')" class="text-danger small mb-1 fw-bold">
                                                 <i class="fa fa-exclamation-triangle me-1"/><t t-esc="linkDup('manual')"/>
                                             </div>
@@ -913,16 +928,21 @@ export class KpiAction extends Component {
                             <div class="mb-3">
                                 <label class="form-label fw-bold">🔗 Related Links (optional)</label>
                                 <div class="input-group mb-2">
-                                    <input type="url" 
-                                           class="form-control" 
+                                    <input type="url"
+                                           class="form-control"
+                                           t-att-class="linkBad(state.progressForm.link_input, 'link') ? 'is-invalid' : ''"
                                            t-model="state.progressForm.link_input"
                                            placeholder="https://github.com/repo or https://drive.google.com/..."/>
                                     <button class="btn btn-outline-primary"
                                             type="button"
-                                            t-att-disabled="linkDup('progress')"
+                                            t-att-disabled="linkDup('progress') or linkBad(state.progressForm.link_input, 'link')"
                                             t-on-click="addLink">
                                         <i class="fa fa-plus"></i> Add Link
                                     </button>
+                                </div>
+                                <!-- Red while the pasted text is not a web link. -->
+                                <div t-if="linkBad(state.progressForm.link_input, 'link')" class="text-danger small fw-bold mb-1">
+                                    <i class="fa fa-times-circle me-1"/><t t-esc="linkBad(state.progressForm.link_input, 'link')"/>
                                 </div>
                                 <!-- Red while pasting a link that is already on this task. -->
                                 <div t-if="linkDup('progress')" class="text-danger small mb-1 fw-bold">
@@ -1041,8 +1061,12 @@ export class KpiAction extends Component {
                                 <div class="col-md-6 mb-2">
                                     <label class="form-label fw-bold">Repository URL</label>
                                     <input type="url" class="form-control"
+                                           t-att-class="linkBad(state.progressForm.github_url, 'github') ? 'is-invalid' : ''"
                                            t-model="state.progressForm.github_url"
                                            placeholder="https://github.com/username/repository"/>
+                                <div t-if="linkBad(state.progressForm.github_url, 'github')" class="text-danger small fw-bold mb-1">
+                                    <i class="fa fa-times-circle me-1"/><t t-esc="linkBad(state.progressForm.github_url, 'github')"/>
+                                </div>
                                     <small class="text-muted">Only GitHub repository URLs are accepted</small>
                                 </div>
                                 <div class="col-md-6 mb-2">
@@ -1170,8 +1194,8 @@ export class KpiAction extends Component {
                                                         <div class="d-inline-flex flex-column align-items-start">
                                                             <a t-att-href="cf.url"
                                                                class="btn btn-sm btn-outline-primary"
-                                                               target="_blank">
-                                                                <i class="fa fa-download"></i> <t t-esc="cf.file_name"/>
+                                                               target="_blank" title="Tap to view">
+                                                                <i class="fa fa-eye"></i> <t t-esc="cf.file_name"/>
                                                             </a>
                                                             <small t-if="cf.uploaded_at" class="text-muted" style="font-size:.72rem;">
                                                                 Saved <t t-esc="formatDate(cf.uploaded_at)"/>
@@ -1493,8 +1517,8 @@ export class KpiAction extends Component {
                                                         <div class="d-inline-flex flex-column align-items-start">
                                                             <a t-att-href="uf.url"
                                                                class="btn btn-sm btn-outline-primary"
-                                                               target="_blank">
-                                                                <i class="fa fa-download"></i> <t t-esc="uf.file_name"/>
+                                                               target="_blank" title="Tap to view">
+                                                                <i class="fa fa-eye"></i> <t t-esc="uf.file_name"/>
                                                             </a>
                                                             <small t-if="uf.uploaded_at" class="text-muted" style="font-size:.72rem;">
                                                                 Saved <t t-esc="formatDate(uf.uploaded_at)"/>
@@ -4874,16 +4898,17 @@ export class KpiAction extends Component {
                                  A real day's summary runs ~400 characters over a dozen lines.
                                  Still optional; just big enough to write in, and it now says
                                  where the note ends up. -->
-                            <label class="form-label mt-2">
-                                What did you work on today? <span class="text-muted">(optional)</span>
-                            </label>
+                            <label class="form-label mt-2">What did you work on today?</label>
                             <!-- The example is a real note from this team, kept in their own
                                  shorthand (-> bullets, + to chain items). People copy the
                                  shape of whatever example you show them, so showing polished
                                  prose here would just make the box feel like homework. -->
-                            <textarea id="endWorkdayNote" class="form-control" rows="6" maxlength="2000"
+                            <!-- Filled from today's task summaries (task in bold, what was written
+                                 under it), not typed: /kpi_workday/end builds the note from them. -->
+                            <div id="endWorkdayWork" class="border rounded p-3 bg-light">${this._workBlocksHTML(data.work_blocks)}</div>
+                            <textarea id="endWorkdayNote" class="d-none" rows="1" maxlength="2000"
                                       placeholder="Module documents&#10;->Signage scan module doc&#10;&#10;App documents&#10;->Van sale doc&#10;->Price checker doc(Need to add screenshots)&#10;&#10;Chats server connecting issue + Dark/light mode switch bug + Build taken for testing&#10;&#10;KRA KPI checked for client side invoice generate + found 4 bugs fixed"></textarea>
-                            <div class="form-text">Saved with your workday snapshot and sent in the daily summary.</div>
+                            <div class="form-text">Made from your task summaries. Saved with your workday snapshot and sent in the daily summary.</div>
                             <div id="endWorkdayNoteErr" class="small text-danger mt-1 d-none"></div>
                             ${autoNote}
                             <p class="text-muted small mt-2 mb-0">
@@ -4963,6 +4988,7 @@ export class KpiAction extends Component {
                         if (row) row.style.opacity = '.6';
                         // Every task has its summary now: End unlocks.
                         m._saved = true;
+                        this._refreshWorkBlocks();
                         if ((this._missingProgress || []).every((x) => x._saved)) {
                             const end = document.getElementById("endWorkdayConfirmBtn");
                             if (end) { end.disabled = false; end.removeAttribute('title'); }
@@ -4981,7 +5007,7 @@ export class KpiAction extends Component {
             });
         });
         document.getElementById("endWorkdayConfirmBtn").addEventListener("click", async () => {
-            const note = document.getElementById("endWorkdayNote")?.value || '';
+            const note = '';
             // Same rule as utils/workdayNote.js in the mobile app — kept in step by hand
             // because the Odoo asset bundle and the Metro bundle share no code. If you
             // change one, change the other.
@@ -6394,6 +6420,25 @@ export class KpiAction extends Component {
 
     /** "Use main" is offered only for an actual GitHub repo link: a Drive or
      *  other link has no branch to pick. */
+    /** The red line under a link box while something is typed / pasted:
+     *  '' when empty or fine, else what is wrong with it. kind: 'link' | 'github'. */
+    linkBad(value, kind) {
+        const v = (value || '').trim();
+        if (!v) return '';
+        if (/\s/.test(v)) return 'One link at a time — no spaces.';
+        let u;
+        try { u = new URL(v); } catch (e) { u = null; }
+        if (!u || !/^https?:$/.test(u.protocol) || !u.hostname.includes('.')) {
+            return 'This is not a web link. It must start with https:// — e.g. https://drive.google.com/…';
+        }
+        if (kind === 'github' && !this.isGithubRepo(v)) {
+            return u.hostname.replace(/^www\./, '') === 'github.com'
+                ? 'Not a repository link — it should look like https://github.com/username/repository'
+                : 'This is not a GitHub link — it should look like https://github.com/username/repository';
+        }
+        return '';
+    }
+
     isGithubRepo(url) {
         return /^github\.com\/[^/]+\/[^/]+/.test(this._githubKey(url));
     }
@@ -7325,6 +7370,26 @@ export class KpiAction extends Component {
 
     // Undo a Start made by mistake. Asked first: it deletes today's time on the
     // task, and that cannot be put back.
+    /** "What did you work on today?" on End Workday: each task in bold, the
+     *  summaries written on it today under it, a blank line between tasks. */
+    _workBlocksHTML(blocks) {
+        const esc = (t) => String(t || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        if (!(blocks || []).length) {
+            return '<span class="text-muted small">Nothing yet. Add a summary on each task above and it shows here.</span>';
+        }
+        return blocks.map((b) => '<div class="mb-3"><b>' + esc(b.head) + '</b>' +
+            (b.lines || []).map((l) => '<div class="ms-3" style="white-space:pre-wrap;">' + esc(l) + '</div>').join('') +
+            '</div>').join('');
+    }
+
+    async _refreshWorkBlocks() {
+        try {
+            const d = await rpc("/kpi_workday/today_summary", {});
+            const el = document.getElementById("endWorkdayWork");
+            if (el && d) el.innerHTML = this._workBlocksHTML(d.work_blocks);
+        } catch (e) { /* the block just stays as it was */ }
+    }
+
     async undoStartTask(task) {
         const label = (task.external_ref ? task.external_ref + ' ' : '') + (task.name || '');
         // today_seconds is the viewer's own time — an admin undoing a developer's
@@ -7333,11 +7398,14 @@ export class KpiAction extends Component {
         const time = secs > 0 ? `the ${this.formatTime(secs)} logged on it today` : 'the time logged on it today';
         const by = task.undo_start_by ? ` (started by ${task.undo_start_by})` : '';
         const back = task.undo_start_prev_state_label || 'where it was';
+        // What STAYS: today's updates, links, files... (kra.kpi._undo_keeps_line).
+        let keeps = '';
+        try { keeps = (await rpc('/kra_kpi/task/undo_start_info', { kpi_id: task.id }))?.keeps || ''; } catch (e) { /* the confirm still works */ }
         const ok = await this._confirm(
             'Undo starting this task?',
             `"${label}"${by} goes back to ${back}, and ${time} is removed. ` +
             'It leaves your Today list, and that time may show as idle on your Workday Map. ' +
-            'This cannot be undone.',
+            'This cannot be undone.' + (keeps ? `\n\n✅ ${keeps}` : ''),
             'Undo start', 'btn-danger');
         if (!ok) return;
         try {

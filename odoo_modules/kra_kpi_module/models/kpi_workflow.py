@@ -21,13 +21,14 @@ two pieces can be tested independently.
 
 import hashlib
 import hmac
+import json
 import logging
 import re
 import secrets
 import uuid
 from datetime import timedelta
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools.sql import column_exists
 
@@ -1320,6 +1321,48 @@ class KpiWorkflow(models.Model):
                                  ('start_time', '>=', self.undo_start_at)]):
             return "No time was logged on this task today, so there is nothing to undo."
         return ''
+
+    def _undo_keeps_line(self):
+        """The line on the Undo-start confirmation that says what STAYS.
+
+        Undo takes back time and status only; the updates, links, files,
+        manuals and GitHub branches added since the start are real work and
+        are kept. Saying so stops anyone thinking they are about to lose them.
+        '' when nothing was added since the start.
+        """
+        self.ensure_one()
+        rec = self.sudo()
+        since, who = rec.undo_start_at, rec.undo_start_user_id
+        if not since or not who:
+            return ''
+        prog = self.env['kpi.progress'].sudo().search([
+            ('kpi_id', '=', rec.id), ('user_id', '=', who.id),
+            ('create_date', '>=', since), ('from_client', '=', False)])
+        links = 0
+        for p in prog:
+            try:
+                links += len(json.loads(p.related_links or '[]') or [])
+            except (ValueError, TypeError):
+                pass
+        Att = self.env['kpi.file.attachment'].sudo()
+        files = len(prog.filtered('uploaded_file')) + (
+            Att.search_count([('progress_id', 'in', prog.ids)]) if prog else 0)
+        manuals = self.env['kpi.user.manual'].sudo().search_count([
+            ('kpi_id', '=', rec.id), ('create_date', '>=', since)]) \
+            if 'kpi.user.manual' in self.env else 0
+        github = self.env['kpi.github.link'].sudo().search_count([
+            ('kpi_id', '=', rec.id), ('create_date', '>=', since)]) \
+            if 'kpi.github.link' in self.env else 0
+        updates = len(prog.filtered(lambda p: (p.summary or '').strip()))
+
+        def n(count, word):
+            return '%d %s%s' % (count, word, '' if count == 1 else 's')
+        parts = [n(c, w) for c, w in ((updates, 'update'), (links, 'link'), (files, 'file'),
+                                      (manuals, 'manual'), (github, 'GitHub link')) if c]
+        if not parts:
+            return ''
+        what = ', '.join(parts[:-1]) + (' and ' if len(parts) > 1 else '') + parts[-1]
+        return _('Today\'s %s on this task are kept. Only the time and status are undone.') % what
 
     def undo_today_start(self):
         """Put the task back as it was before today's first Start / Resume, and
