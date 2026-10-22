@@ -68,7 +68,7 @@ export class KpiConfiguration extends Component {
     }
 
     static template = xml/* xml */`
-        <div class="o_kpi_configuration p-4" style="max-width: 860px; margin: 0 auto;">
+        <div class="o_kpi_configuration p-4" style="max-width: 1400px; margin: 0 auto;">
             <div class="d-flex align-items-center justify-content-between mb-1">
                 <h2 class="mb-0"><i class="fa fa-cog me-2 text-secondary"></i> Configuration</h2>
                 <span class="badge bg-light text-muted border">Changes save automatically</span>
@@ -79,141 +79,10 @@ export class KpiConfiguration extends Component {
             <t t-elif="state.error"><div class="alert alert-danger" t-esc="state.error"/></t>
             <t t-else="">
 
-                <!-- Timers -->
-                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #0ea5e9 !important; border-left-style: solid;">
-                    <div class="card-header bg-white fw-bold d-flex align-items-center">
-                        <i class="fa fa-clock-o me-2 text-info"></i> Timers
-                    </div>
-                    <div class="card-body">
-                        <!-- "Away after (minutes)" used to lead this card. Idle
-                             auto-pause is retired — a sleeping machine is not evidence
-                             that someone stopped working — so there is nothing left to
-                             configure for it. -->
-                        <label class="form-label fw-semibold">Admin accept window (minutes)</label>
-                        <div class="input-group" style="max-width:180px;">
-                            <input type="number" min="0" class="form-control"
-                                   t-model.number="state.admin_accept_minutes"
-                                   t-on-change="() => this.saveAdminAccept()"/>
-                            <span class="input-group-text">min</span>
-                            <span t-if="state.savedAdminAccept" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <small class="text-muted d-block mt-2">How long a new task waits for a coordinator to
-                            <b>Accept</b> it before it is accepted automatically and sent to the client for
-                            approval. You keep every power afterwards — re-categorise (Requirement / Update /
-                            Bug) or reject it. This only stops an un-triaged task blocking its developer.
-                            <b>Set 0</b> to switch auto-accept off and require a human Accept.</small>
-
-                        <label class="form-label fw-semibold mt-4">Client approval window (minutes)</label>
-                        <div class="input-group" style="max-width:180px;">
-                            <input type="number" min="1" class="form-control"
-                                   t-model.number="state.client_approval_minutes"
-                                   t-on-change="() => this.saveClientApproval()"/>
-                            <span class="input-group-text">min</span>
-                            <span t-if="state.savedClientApproval" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <small class="text-muted d-block mt-2">How long a client has to approve the developer
-                            assigned to their task before the task is <b>released</b> for work. Drives the
-                            countdown the client sees in the app. Releasing is not approving: the client can
-                            still object, and nothing is billable until they sign off at completion.</small>
-
-                        <label class="form-label fw-semibold mt-4">Queue re-nudge gap (minutes)</label>
-                        <div class="input-group" style="max-width:180px;">
-                            <input type="number" min="1" class="form-control"
-                                   t-model.number="state.queue_nudge_minutes"
-                                   t-on-change="() => this.saveQueueNudge()"/>
-                            <span class="input-group-text">min</span>
-                            <span t-if="state.savedQueueNudge" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <small class="text-muted d-block mt-2">Gap between re-notifying admins about a client task
-                            still sitting in the Client Task Queue with no developer.</small>
-
-                        <label class="form-label fw-semibold mt-4">Urgent re-nudge gap (minutes)</label>
-                        <div class="input-group" style="max-width:180px;">
-                            <input type="number" min="1" class="form-control"
-                                   t-model.number="state.urgent_nudge_minutes"
-                                   t-on-change="() => this.saveUrgentNudge()"/>
-                            <span class="input-group-text">min</span>
-                            <span t-if="state.savedUrgentNudge" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <small class="text-muted d-block mt-2">When a developer taps 🚨 <b>Urgent</b> in the Pause
-                            dialog, the owner + coordinators are notified in the app and re-nudged this often
-                            <b>until one of them reads it</b> (also stops when the task resumes).</small>
-                    </div>
-                </div>
-
-                <!-- Approval chain: who decides a new client request, in order (kpi.escalation.tier).
-                     Everything is edited right here: name, minutes, people, order. -->
-                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #f59e0b !important; border-left-style: solid;">
-                    <div class="card-header bg-white fw-bold d-flex align-items-center">
-                        <i class="fa fa-sitemap me-2" style="color:#f59e0b;"></i> Approval Chain
-                        <button class="btn btn-sm btn-outline-primary ms-auto" t-on-click="() => this.addTier()">
-                            <i class="fa fa-plus me-1"/>Add step</button>
-                    </div>
-                    <div class="card-body">
-                        <p class="text-muted small mb-3">A new client request goes to step 1. If nobody there decides
-                            within its minutes, the next step is asked, and so on. After the last step it keeps waiting
-                            and the last step is reminded every 30 minutes. <b>Nothing is accepted automatically.</b>
-                            Each person gets a private WhatsApp link on the number shown under their name.</p>
-                        <t t-if="!state.tiers.length"><div class="text-muted small">No steps — every manager is asked at once.</div></t>
-                        <t t-foreach="state.tiers" t-as="tier" t-key="tier.id">
-                            <div class="border rounded p-2 mb-2">
-                                <div class="d-flex align-items-center gap-2 flex-wrap">
-                                    <span class="badge bg-light text-dark border" t-esc="tier_index + 1"/>
-                                    <input class="form-control form-control-sm fw-bold" style="max-width:180px;"
-                                           t-model="tier.name" t-on-change="() => this.saveTier(tier, {name: tier.name})"/>
-                                    <div class="input-group input-group-sm" style="max-width:130px;">
-                                        <input type="number" min="1" class="form-control" t-model.number="tier.minutes"
-                                               t-on-change="() => this.saveTier(tier, {minutes: Math.max(1, parseInt(tier.minutes, 10) || 1)})"/>
-                                        <span class="input-group-text">min</span>
-                                    </div>
-                                    <label class="small d-flex align-items-center gap-1 mb-0" title="Also ask the task's own manager">
-                                        <input type="checkbox" t-att-checked="tier.use_task_manager"
-                                               t-on-change="(e) => this.saveTier(tier, {use_task_manager: e.target.checked})"/>
-                                        Task's manager
-                                    </label>
-                                    <span t-if="tier.saved" class="text-success small">✓ saved</span>
-                                    <span class="ms-auto d-flex gap-1">
-                                        <button class="btn btn-sm btn-light border" title="Move up" t-att-disabled="tier_first"
-                                                t-on-click="() => this.moveTier(tier_index, -1)"><i class="fa fa-arrow-up"/></button>
-                                        <button class="btn btn-sm btn-light border" title="Move down" t-att-disabled="tier_last"
-                                                t-on-click="() => this.moveTier(tier_index, 1)"><i class="fa fa-arrow-down"/></button>
-                                        <button class="btn btn-sm btn-light border text-danger" title="Delete step"
-                                                t-on-click="() => this.deleteTier(tier)"><i class="fa fa-trash"/></button>
-                                    </span>
-                                </div>
-                                <div class="d-flex flex-wrap gap-2 mt-2 align-items-stretch">
-                                    <t t-foreach="tier.user_ids" t-as="uid" t-key="uid">
-                                        <div class="border rounded px-2 py-1 d-flex align-items-start gap-2" style="background:#fffbeb;">
-                                            <div class="lh-sm">
-                                                <div class="fw-semibold small" t-esc="userName(uid)"/>
-                                                <div class="text-muted" style="font-size:11.5px;" t-esc="userNumber(uid) or 'no WhatsApp number'"/>
-                                            </div>
-                                            <button class="btn btn-link btn-sm p-0 text-danger" title="Remove"
-                                                    t-on-click="() => this.removePerson(tier, uid)"><i class="fa fa-times"/></button>
-                                        </div>
-                                    </t>
-                                    <div t-if="tier.use_task_manager or !tier.user_ids.length"
-                                         class="border rounded px-2 py-1 lh-sm text-muted small" style="border-style:dashed !important;">
-                                        the task's manager<div style="font-size:11.5px;">from the task</div>
-                                    </div>
-                                    <select class="form-select form-select-sm" style="max-width:220px; align-self:center;"
-                                            t-on-change="(e) => this.addPerson(tier, e)">
-                                        <option value="">+ Add person…</option>
-                                        <t t-foreach="state.staff" t-as="u" t-key="u.id">
-                                            <option t-if="!tier.user_ids.includes(u.id)" t-att-value="u.id"
-                                                    t-esc="u.name + (u.number ? ' · ' + u.number : '')"/>
-                                        </t>
-                                    </select>
-                                </div>
-                            </div>
-                        </t>
-                    </div>
-                </div>
-
                 <!-- AI keys live in ONE place: Settings > AI & Transcription (kpi.ai.config),
                      which saves the same kra_kpi.* parameters and has the Test buttons. -->
                 <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #8b5cf6 !important; border-left-style: solid;">
-                    <div class="card-body d-flex align-items-center gap-2 flex-wrap">
+                    <div class="card-body py-2 d-flex align-items-center gap-2 flex-wrap">
                         <i class="fa fa-magic" style="color:#8b5cf6;"></i>
                         <span>AI keys (369 AI Assistant), meetings and transcription are in
                             <b>Settings → AI &amp; Transcription</b>.</span>
@@ -221,104 +90,310 @@ export class KpiConfiguration extends Component {
                     </div>
                 </div>
 
-                <!-- Daily Task Report & Retention -->
-                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #f59e0b !important; border-left-style: solid;">
-                    <div class="card-header bg-white fw-bold d-flex align-items-center">
-                        <i class="fa fa-file-text-o me-2 text-warning"></i> Daily Task Report &amp; Retention
+                <!-- Two columns on a wide screen, one on a narrow one. -->
+                <div class="row g-4 mb-4">
+                    <div class="col-xl-6 d-flex flex-column gap-4">
+                    <!-- Timers -->
+                    <div class="card shadow-sm border-0" style="border-left: 4px solid #0ea5e9 !important; border-left-style: solid;">
+                        <div class="card-header bg-white fw-bold d-flex align-items-center">
+                            <i class="fa fa-clock-o me-2 text-info"></i> Timers
+                        </div>
+                        <div class="card-body">
+                            <!-- "Away after (minutes)" used to lead this card. Idle
+                                 auto-pause is retired — a sleeping machine is not evidence
+                                 that someone stopped working — so there is nothing left to
+                                 configure for it. -->
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Admin accept window (minutes)</label>
+                                    <div class="input-group" style="max-width:180px;">
+                                        <input type="number" min="0" class="form-control"
+                                               t-model.number="state.admin_accept_minutes"
+                                               t-on-change="() => this.saveAdminAccept()"/>
+                                        <span class="input-group-text">min</span>
+                                        <span t-if="state.savedAdminAccept" class="input-group-text text-success bg-white border-success">✓</span>
+                                    </div>
+                                    <small class="text-muted d-block mt-1" style="font-size:12px;">How long a new task waits for a coordinator to
+                                        <b>Accept</b> it before it is accepted automatically and sent to the client for
+                                        approval. You keep every power afterwards — re-categorise (Requirement / Update /
+                                        Bug) or reject it. This only stops an un-triaged task blocking its developer.
+                                        <b>Set 0</b> to switch auto-accept off and require a human Accept.</small>
+
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Client approval window (minutes)</label>
+                                    <div class="input-group" style="max-width:180px;">
+                                        <input type="number" min="1" class="form-control"
+                                               t-model.number="state.client_approval_minutes"
+                                               t-on-change="() => this.saveClientApproval()"/>
+                                        <span class="input-group-text">min</span>
+                                        <span t-if="state.savedClientApproval" class="input-group-text text-success bg-white border-success">✓</span>
+                                    </div>
+                                    <small class="text-muted d-block mt-1" style="font-size:12px;">How long a client has to approve the developer
+                                        assigned to their task before the task is <b>released</b> for work. Drives the
+                                        countdown the client sees in the app. Releasing is not approving: the client can
+                                        still object, and nothing is billable until they sign off at completion.</small>
+
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Queue re-nudge gap (minutes)</label>
+                                    <div class="input-group" style="max-width:180px;">
+                                        <input type="number" min="1" class="form-control"
+                                               t-model.number="state.queue_nudge_minutes"
+                                               t-on-change="() => this.saveQueueNudge()"/>
+                                        <span class="input-group-text">min</span>
+                                        <span t-if="state.savedQueueNudge" class="input-group-text text-success bg-white border-success">✓</span>
+                                    </div>
+                                    <small class="text-muted d-block mt-1" style="font-size:12px;">Gap between re-notifying admins about a client task
+                                        still sitting in the Client Task Queue with no developer.</small>
+
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Urgent re-nudge gap (minutes)</label>
+                                    <div class="input-group" style="max-width:180px;">
+                                        <input type="number" min="1" class="form-control"
+                                               t-model.number="state.urgent_nudge_minutes"
+                                               t-on-change="() => this.saveUrgentNudge()"/>
+                                        <span class="input-group-text">min</span>
+                                        <span t-if="state.savedUrgentNudge" class="input-group-text text-success bg-white border-success">✓</span>
+                                    </div>
+                                    <small class="text-muted d-block mt-1" style="font-size:12px;">When a developer taps 🚨 <b>Urgent</b> in the Pause
+                                        dialog, the owner + coordinators are notified in the app and re-nudged this often
+                                        <b>until one of them reads it</b> (also stops when the task resumes).</small>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <div class="form-check form-switch mb-2">
-                            <input type="checkbox" class="form-check-input" role="switch"
-                                   t-att-checked="state.daily_report_enabled"
-                                   t-on-change="() => this.toggleDailyReport()"/>
-                            <label class="form-check-label fw-semibold">Send daily employee task report (PDF) to admins</label>
-                            <span t-if="state.savedDailyReport" class="text-success small ms-2">✓ Saved</span>
+
+                    <!-- Daily Task Report & Retention -->
+                    <div class="card shadow-sm border-0" style="border-left: 4px solid #f59e0b !important; border-left-style: solid;">
+                        <div class="card-header bg-white fw-bold d-flex align-items-center">
+                            <i class="fa fa-file-text-o me-2 text-warning"></i> Daily Task Report &amp; Retention
                         </div>
-                        <div class="row g-3" t-if="state.daily_report_enabled">
-                            <div class="col-md-4">
-                                <label class="form-label fw-semibold">Send time (IST)</label>
-                                <input type="time" class="form-control" style="max-width:160px;"
-                                       t-att-value="state.daily_report_time"
-                                       t-on-change="(ev) => this.saveDailyReportTime(ev)"/>
+                        <div class="card-body">
+                            <div class="form-check form-switch mb-2">
+                                <input type="checkbox" class="form-check-input" role="switch"
+                                       t-att-checked="state.daily_report_enabled"
+                                       t-on-change="() => this.toggleDailyReport()"/>
+                                <label class="form-check-label fw-semibold">Send daily employee task report (PDF) to admins</label>
+                                <span t-if="state.savedDailyReport" class="text-success small ms-2">✓ Saved</span>
                             </div>
-                            <div class="col-md-5">
-                                <label class="form-label fw-semibold">Report covers</label>
-                                <select class="form-select" style="max-width:200px;"
-                                        t-on-change="(ev) => this.saveDailyReportCoverage(ev)">
-                                    <option value="yesterday" t-att-selected="state.daily_report_coverage === 'yesterday'">Previous day</option>
-                                    <option value="today" t-att-selected="state.daily_report_coverage === 'today'">Same day</option>
-                                </select>
+                            <div class="row g-3" t-if="state.daily_report_enabled">
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold">Send time (IST)</label>
+                                    <input type="time" class="form-control" style="max-width:160px;"
+                                           t-att-value="state.daily_report_time"
+                                           t-on-change="(ev) => this.saveDailyReportTime(ev)"/>
+                                </div>
+                                <div class="col-md-5">
+                                    <label class="form-label fw-semibold">Report covers</label>
+                                    <select class="form-select" style="max-width:200px;"
+                                            t-on-change="(ev) => this.saveDailyReportCoverage(ev)">
+                                        <option value="yesterday" t-att-selected="state.daily_report_coverage === 'yesterday'">Previous day</option>
+                                        <option value="today" t-att-selected="state.daily_report_coverage === 'today'">Same day</option>
+                                    </select>
+                                </div>
                             </div>
-                        </div>
-                        <small class="text-muted d-block mt-2">One PDF with every employee's task details for the day,
-                            delivered to admins in-app at the time above. Previous day suits a morning send (everyone has
-                            ended their workday).</small>
+                            <small class="text-muted d-block mt-2">One PDF with every employee's task details for the day,
+                                delivered to admins in-app at the time above. Previous day suits a morning send (everyone has
+                                ended their workday).</small>
 
-                        <hr class="my-4"/>
+                            <hr class="my-4"/>
 
-                        <label class="form-label fw-semibold">Keep workday snapshot images for</label>
-                        <div class="input-group" style="max-width:280px;">
-                            <input type="number" min="0" class="form-control"
-                                   t-model.number="state.snapshot_retention_number"
-                                   t-on-change="() => this.saveSnapshotRetention()"/>
-                            <select class="form-select" t-on-change="(ev) => this.saveSnapshotRetentionUnit(ev)">
-                                <option value="days" t-att-selected="state.snapshot_retention_unit === 'days'">Days</option>
-                                <option value="months" t-att-selected="state.snapshot_retention_unit === 'months'">Months</option>
-                                <option value="years" t-att-selected="state.snapshot_retention_unit === 'years'">Years</option>
-                            </select>
-                            <span t-if="state.savedSnapRetention" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <small class="text-muted d-block mt-2">Old End-Workday summary images are cleared automatically
-                            (the day's stats are kept). <b>0 = keep forever.</b></small>
-
-                        <label class="form-label fw-semibold mt-4">Keep generated report PDFs for</label>
-                        <div class="input-group" style="max-width:280px;">
-                            <input type="number" min="0" class="form-control"
-                                   t-model.number="state.report_retention_number"
-                                   t-on-change="() => this.saveReportRetention()"/>
-                            <select class="form-select" t-on-change="(ev) => this.saveReportRetentionUnit(ev)">
-                                <option value="days" t-att-selected="state.report_retention_unit === 'days'">Days</option>
-                                <option value="months" t-att-selected="state.report_retention_unit === 'months'">Months</option>
-                                <option value="years" t-att-selected="state.report_retention_unit === 'years'">Years</option>
-                            </select>
-                            <span t-if="state.savedReportRetention" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <small class="text-muted d-block mt-2">Reports stay viewable and downloadable until deleted.
-                            <b>0 = keep forever.</b></small>
-
-                        <!-- Presets rather than the bare number+unit above, because
-                             this is the setting people actually reach for: these are
-                             the largest files the module keeps, and "30 days" is a
-                             decision, not an arithmetic exercise. Custom still exposes
-                             the same two fields underneath. -->
-                        <label class="form-label fw-semibold mt-4">Keep downloaded KRA reports for</label>
-                        <div class="input-group" style="max-width:280px;">
-                            <select class="form-select" t-on-change="(ev) => this.saveDownloadPreset(ev)">
-                                <option value="7" t-att-selected="downloadPreset() === '7'">7 days</option>
-                                <option value="30" t-att-selected="downloadPreset() === '30'">30 days</option>
-                                <option value="45" t-att-selected="downloadPreset() === '45'">45 days</option>
-                                <option value="60" t-att-selected="downloadPreset() === '60'">60 days</option>
-                                <option value="90" t-att-selected="downloadPreset() === '90'">90 days</option>
-                                <option value="0" t-att-selected="downloadPreset() === '0'">Keep forever</option>
-                                <option value="custom" t-att-selected="downloadPreset() === 'custom'">Custom…</option>
-                            </select>
-                            <span t-if="state.savedDownloadRetention" class="input-group-text text-success bg-white border-success">✓</span>
-                        </div>
-                        <t t-if="downloadPreset() === 'custom'">
-                            <div class="input-group mt-2" style="max-width:280px;">
+                            <label class="form-label fw-semibold">Keep workday snapshot images for</label>
+                            <div class="input-group" style="max-width:280px;">
                                 <input type="number" min="0" class="form-control"
-                                       t-model.number="state.download_retention_number"
-                                       t-on-change="() => this.saveDownloadRetention()"/>
-                                <select class="form-select" t-on-change="(ev) => this.saveDownloadRetentionUnit(ev)">
-                                    <option value="days" t-att-selected="state.download_retention_unit === 'days'">Days</option>
-                                    <option value="months" t-att-selected="state.download_retention_unit === 'months'">Months</option>
-                                    <option value="years" t-att-selected="state.download_retention_unit === 'years'">Years</option>
+                                       t-model.number="state.snapshot_retention_number"
+                                       t-on-change="() => this.saveSnapshotRetention()"/>
+                                <select class="form-select" t-on-change="(ev) => this.saveSnapshotRetentionUnit(ev)">
+                                    <option value="days" t-att-selected="state.snapshot_retention_unit === 'days'">Days</option>
+                                    <option value="months" t-att-selected="state.snapshot_retention_unit === 'months'">Months</option>
+                                    <option value="years" t-att-selected="state.snapshot_retention_unit === 'years'">Years</option>
                                 </select>
+                                <span t-if="state.savedSnapRetention" class="input-group-text text-success bg-white border-success">✓</span>
                             </div>
-                        </t>
-                        <small class="text-muted d-block mt-2">Copies of the ZIP/PDF/Excel packs an admin
-                            downloads from the KRA Report. These are the largest files the module stores.
-                            <b>Keep forever will grow without limit.</b></small>
+                            <small class="text-muted d-block mt-2">Old End-Workday summary images are cleared automatically
+                                (the day's stats are kept). <b>0 = keep forever.</b></small>
+
+                            <label class="form-label fw-semibold mt-4">Keep generated report PDFs for</label>
+                            <div class="input-group" style="max-width:280px;">
+                                <input type="number" min="0" class="form-control"
+                                       t-model.number="state.report_retention_number"
+                                       t-on-change="() => this.saveReportRetention()"/>
+                                <select class="form-select" t-on-change="(ev) => this.saveReportRetentionUnit(ev)">
+                                    <option value="days" t-att-selected="state.report_retention_unit === 'days'">Days</option>
+                                    <option value="months" t-att-selected="state.report_retention_unit === 'months'">Months</option>
+                                    <option value="years" t-att-selected="state.report_retention_unit === 'years'">Years</option>
+                                </select>
+                                <span t-if="state.savedReportRetention" class="input-group-text text-success bg-white border-success">✓</span>
+                            </div>
+                            <small class="text-muted d-block mt-2">Reports stay viewable and downloadable until deleted.
+                                <b>0 = keep forever.</b></small>
+
+                            <!-- Presets rather than the bare number+unit above, because
+                                 this is the setting people actually reach for: these are
+                                 the largest files the module keeps, and "30 days" is a
+                                 decision, not an arithmetic exercise. Custom still exposes
+                                 the same two fields underneath. -->
+                            <label class="form-label fw-semibold mt-4">Keep downloaded KRA reports for</label>
+                            <div class="input-group" style="max-width:280px;">
+                                <select class="form-select" t-on-change="(ev) => this.saveDownloadPreset(ev)">
+                                    <option value="7" t-att-selected="downloadPreset() === '7'">7 days</option>
+                                    <option value="30" t-att-selected="downloadPreset() === '30'">30 days</option>
+                                    <option value="45" t-att-selected="downloadPreset() === '45'">45 days</option>
+                                    <option value="60" t-att-selected="downloadPreset() === '60'">60 days</option>
+                                    <option value="90" t-att-selected="downloadPreset() === '90'">90 days</option>
+                                    <option value="0" t-att-selected="downloadPreset() === '0'">Keep forever</option>
+                                    <option value="custom" t-att-selected="downloadPreset() === 'custom'">Custom…</option>
+                                </select>
+                                <span t-if="state.savedDownloadRetention" class="input-group-text text-success bg-white border-success">✓</span>
+                            </div>
+                            <t t-if="downloadPreset() === 'custom'">
+                                <div class="input-group mt-2" style="max-width:280px;">
+                                    <input type="number" min="0" class="form-control"
+                                           t-model.number="state.download_retention_number"
+                                           t-on-change="() => this.saveDownloadRetention()"/>
+                                    <select class="form-select" t-on-change="(ev) => this.saveDownloadRetentionUnit(ev)">
+                                        <option value="days" t-att-selected="state.download_retention_unit === 'days'">Days</option>
+                                        <option value="months" t-att-selected="state.download_retention_unit === 'months'">Months</option>
+                                        <option value="years" t-att-selected="state.download_retention_unit === 'years'">Years</option>
+                                    </select>
+                                </div>
+                            </t>
+                            <small class="text-muted d-block mt-2">Copies of the ZIP/PDF/Excel packs an admin
+                                downloads from the KRA Report. These are the largest files the module stores.
+                                <b>Keep forever will grow without limit.</b></small>
+                        </div>
+                    </div>
+
+                    </div>
+                    <div class="col-xl-6 d-flex flex-column gap-4">
+                    <!-- Approval chain: who decides a new client request, in order (kpi.escalation.tier).
+                         Everything is edited right here: name, minutes, people, order. -->
+                    <div class="card shadow-sm border-0" style="border-left: 4px solid #f59e0b !important; border-left-style: solid;">
+                        <div class="card-header bg-white fw-bold d-flex align-items-center">
+                            <i class="fa fa-sitemap me-2" style="color:#f59e0b;"></i> Approval Chain
+                            <button class="btn btn-sm btn-outline-primary ms-auto" t-on-click="() => this.addTier()">
+                                <i class="fa fa-plus me-1"/>Add step</button>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-3">A new client request goes to step 1. If nobody there decides
+                                within its minutes, the next step is asked, and so on. After the last step it keeps waiting
+                                and the last step is reminded every 30 minutes. <b>Nothing is accepted automatically.</b>
+                                Each person gets a private WhatsApp link on the number shown under their name.</p>
+                            <t t-if="!state.tiers.length"><div class="text-muted small">No steps — every manager is asked at once.</div></t>
+                            <t t-foreach="state.tiers" t-as="tier" t-key="tier.id">
+                                <div class="border rounded p-2 mb-2">
+                                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                                        <span class="badge bg-light text-dark border" t-esc="tier_index + 1"/>
+                                        <input class="form-control form-control-sm fw-bold" style="max-width:180px;"
+                                               t-model="tier.name" t-on-change="() => this.saveTier(tier, {name: tier.name})"/>
+                                        <div class="input-group input-group-sm" style="max-width:130px;">
+                                            <input type="number" min="1" class="form-control" t-model.number="tier.minutes"
+                                                   t-on-change="() => this.saveTier(tier, {minutes: Math.max(1, parseInt(tier.minutes, 10) || 1)})"/>
+                                            <span class="input-group-text">min</span>
+                                        </div>
+                                        <label class="small d-flex align-items-center gap-1 mb-0" title="Also ask the task's own manager">
+                                            <input type="checkbox" t-att-checked="tier.use_task_manager"
+                                                   t-on-change="(e) => this.saveTier(tier, {use_task_manager: e.target.checked})"/>
+                                            Task's manager
+                                        </label>
+                                        <span t-if="tier.saved" class="text-success small">✓ saved</span>
+                                        <span class="ms-auto d-flex gap-1">
+                                            <button class="btn btn-sm btn-light border" title="Move up" t-att-disabled="tier_first"
+                                                    t-on-click="() => this.moveTier(tier_index, -1)"><i class="fa fa-arrow-up"/></button>
+                                            <button class="btn btn-sm btn-light border" title="Move down" t-att-disabled="tier_last"
+                                                    t-on-click="() => this.moveTier(tier_index, 1)"><i class="fa fa-arrow-down"/></button>
+                                            <button class="btn btn-sm btn-light border text-danger" title="Delete step"
+                                                    t-on-click="() => this.deleteTier(tier)"><i class="fa fa-trash"/></button>
+                                        </span>
+                                    </div>
+                                    <div class="d-flex flex-wrap gap-2 mt-2 align-items-stretch">
+                                        <t t-foreach="tier.user_ids" t-as="uid" t-key="uid">
+                                            <div class="border rounded px-2 py-1 d-flex align-items-start gap-2" style="background:#fffbeb;">
+                                                <div class="lh-sm">
+                                                    <div class="fw-semibold small" t-esc="userName(uid)"/>
+                                                    <div class="text-muted" style="font-size:11.5px;" t-esc="userNumber(uid) or 'no WhatsApp number'"/>
+                                                </div>
+                                                <button class="btn btn-link btn-sm p-0 text-danger" title="Remove"
+                                                        t-on-click="() => this.removePerson(tier, uid)"><i class="fa fa-times"/></button>
+                                            </div>
+                                        </t>
+                                        <div t-if="tier.use_task_manager or !tier.user_ids.length"
+                                             class="border rounded px-2 py-1 lh-sm text-muted small" style="border-style:dashed !important;">
+                                            the task's manager<div style="font-size:11.5px;">from the task</div>
+                                        </div>
+                                        <select class="form-select form-select-sm" style="max-width:220px; align-self:center;"
+                                                t-on-change="(e) => this.addPerson(tier, e)">
+                                            <option value="">+ Add person…</option>
+                                            <t t-foreach="state.staff" t-as="u" t-key="u.id">
+                                                <option t-if="!tier.user_ids.includes(u.id)" t-att-value="u.id"
+                                                        t-esc="u.name + (u.number ? ' · ' + u.number : '')"/>
+                                            </t>
+                                        </select>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+
+                    <!-- Developers -->
+                    <div class="card shadow-sm border-0" style="border-left: 4px solid #6366f1 !important; border-left-style: solid;">
+                        <div class="card-header bg-white fw-bold d-flex align-items-center">
+                            <i class="fa fa-users me-2 text-primary"></i> Developers — Multi-task &amp; WhatsApp
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted small">Multi-task ON lets a developer run more than one task at once (default OFF).
+                                The WhatsApp number identifies them in Urgent / auto-away messages (falls back to their partner phone).</p>
+                            <table class="table table-hover align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Developer</th>
+                                        <th class="text-center" style="width:110px;">Multi-task</th>
+                                        <th style="width:430px;">Country &amp; WhatsApp number</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr t-foreach="state.developers" t-as="dev" t-key="dev.id">
+                                        <td>
+                                            <div class="fw-semibold" t-esc="dev.name"/>
+                                            <small class="text-muted" t-esc="dev.login"/>
+                                        </td>
+                                        <td class="text-center">
+                                            <div class="form-check form-switch d-inline-block">
+                                                <input type="checkbox" class="form-check-input" role="switch"
+                                                       t-att-checked="dev.allow_multitask" t-on-change="() => this.toggleDev(dev)"/>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <select class="form-select form-select-sm mb-1" style="max-width:260px;"
+                                                    title="Country code for this developer"
+                                                    t-on-change="(ev) => this.saveDevCountry(dev, ev)">
+                                                <option value="" t-att-selected="!dev.country_id">Default (+<t t-esc="state.dial"/>)</option>
+                                                <t t-foreach="state.countries" t-as="co" t-key="co.id">
+                                                    <option t-att-value="co.id" t-att-selected="co.id === dev.country_id" t-esc="co.name + ' (+' + co.phone_code + ')'"/>
+                                                </t>
+                                            </select>
+                                            <div class="input-group input-group-sm" style="max-width:260px;">
+                                                <span class="input-group-text">+<t t-esc="dev.dial || state.dial"/></span>
+                                                <input type="tel" inputmode="numeric" class="form-control"
+                                                       t-att-placeholder="(dev.mobile_length || state.mobileLength) + ' digits'"
+                                                       t-att-maxlength="dev.mobile_length || state.mobileLength"
+                                                       t-att-value="this.localPart(dev)"
+                                                       t-on-input="(ev) => this.onDevWaInput(dev, ev)"
+                                                       t-on-change="(ev) => this.saveDevWa(dev, ev)"/>
+                                                <span t-if="dev._saved" class="input-group-text text-success bg-white border-success">✓</span>
+                                            </div>
+                                            <small t-if="dev._savedCountry" class="text-success">✓ Country saved</small>
+                                            <small t-if="dev._invalid" class="text-danger">Enter <t t-esc="dev.mobile_length || state.mobileLength"/> digits</small>
+                                        </td>
+                                    </tr>
+                                    <tr t-if="!state.developers.length"><td colspan="3" class="text-muted">No developers found.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
                     </div>
                 </div>
 
@@ -326,63 +401,6 @@ export class KpiConfiguration extends Component {
                      those numbers had no user account, so they could only ever be reached over
                      WhatsApp — and task WhatsApp is now off by default. Urgent goes to
                      owner + coordinators in the app instead, re-nudged until read. -->
-
-                <!-- Developers -->
-                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #6366f1 !important; border-left-style: solid;">
-                    <div class="card-header bg-white fw-bold d-flex align-items-center">
-                        <i class="fa fa-users me-2 text-primary"></i> Developers — Multi-task &amp; WhatsApp
-                    </div>
-                    <div class="card-body">
-                        <p class="text-muted small">Multi-task ON lets a developer run more than one task at once (default OFF).
-                            The WhatsApp number identifies them in Urgent / auto-away messages (falls back to their partner phone).</p>
-                        <table class="table table-hover align-middle mb-0">
-                            <thead class="table-light">
-                                <tr>
-                                    <th>Developer</th>
-                                    <th class="text-center" style="width:110px;">Multi-task</th>
-                                    <th style="width:430px;">Country &amp; WhatsApp number</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr t-foreach="state.developers" t-as="dev" t-key="dev.id">
-                                    <td>
-                                        <div class="fw-semibold" t-esc="dev.name"/>
-                                        <small class="text-muted" t-esc="dev.login"/>
-                                    </td>
-                                    <td class="text-center">
-                                        <div class="form-check form-switch d-inline-block">
-                                            <input type="checkbox" class="form-check-input" role="switch"
-                                                   t-att-checked="dev.allow_multitask" t-on-change="() => this.toggleDev(dev)"/>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <select class="form-select form-select-sm mb-1" style="max-width:260px;"
-                                                title="Country code for this developer"
-                                                t-on-change="(ev) => this.saveDevCountry(dev, ev)">
-                                            <option value="" t-att-selected="!dev.country_id">Default (+<t t-esc="state.dial"/>)</option>
-                                            <t t-foreach="state.countries" t-as="co" t-key="co.id">
-                                                <option t-att-value="co.id" t-att-selected="co.id === dev.country_id" t-esc="co.name + ' (+' + co.phone_code + ')'"/>
-                                            </t>
-                                        </select>
-                                        <div class="input-group input-group-sm" style="max-width:260px;">
-                                            <span class="input-group-text">+<t t-esc="dev.dial || state.dial"/></span>
-                                            <input type="tel" inputmode="numeric" class="form-control"
-                                                   t-att-placeholder="(dev.mobile_length || state.mobileLength) + ' digits'"
-                                                   t-att-maxlength="dev.mobile_length || state.mobileLength"
-                                                   t-att-value="this.localPart(dev)"
-                                                   t-on-input="(ev) => this.onDevWaInput(dev, ev)"
-                                                   t-on-change="(ev) => this.saveDevWa(dev, ev)"/>
-                                            <span t-if="dev._saved" class="input-group-text text-success bg-white border-success">✓</span>
-                                        </div>
-                                        <small t-if="dev._savedCountry" class="text-success">✓ Country saved</small>
-                                        <small t-if="dev._invalid" class="text-danger">Enter <t t-esc="dev.mobile_length || state.mobileLength"/> digits</small>
-                                    </td>
-                                </tr>
-                                <tr t-if="!state.developers.length"><td colspan="3" class="text-muted">No developers found.</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
 
                 <!-- WhatsApp group reporting. Sits here because this screen already
                      owns the res.company settings, and because the developer numbers
