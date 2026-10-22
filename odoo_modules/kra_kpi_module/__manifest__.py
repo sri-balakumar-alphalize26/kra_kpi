@@ -162,6 +162,9 @@
             "kra_kpi_module/static/src/img/alphalize_logo.png",
             "kra_kpi_module/static/src/css/kra_style.scss",
             "kra_kpi_module/static/src/css/kpi_reports.css",
+            # Tap a task file -> it opens in a popup instead of downloading.
+            "kra_kpi_module/static/src/js/kpi_file_viewer.js",
+            "kra_kpi_module/static/src/css/kpi_file_viewer.css",
         ],
     },
 

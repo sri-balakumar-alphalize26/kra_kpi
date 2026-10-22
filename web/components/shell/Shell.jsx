@@ -10,6 +10,7 @@ import { useMe } from "@/lib/me";
 import { TOP_NAV, PORTAL_TABS, allowed, allowedMenu, activeKey } from "@/lib/nav";
 import KraLoader from "@/components/ui/KraLoader";
 import UploadMonitor from "@/components/ui/UploadMonitor";
+import { FileViewerHost } from "@/components/ui/FileViewer";
 import { countOpenDoubts, waitingCounts } from "@/lib/services/approvals";
 import { useResource } from "@/lib/useFetch";
 import { getPref, setPref } from "@/lib/prefs";
@@ -28,6 +29,7 @@ export default function Shell({ variant = "work", children }) {
         <DialogHost>
           <Frame variant={variant}>{children}</Frame>
           <UploadMonitor />
+          <FileViewerHost />
         </DialogHost>
       </FlagHost>
     </PortalGuard>
