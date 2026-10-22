@@ -103,8 +103,10 @@
                     </span>
                 </div>
                 <p t-if="is_final" class="wa-meta" style="margin-top:12px;">
-                    The coordinator has approved this work and it's ready for your sign-off.
-                    Approving generates the invoice.
+                    Our team has finished this. Please check it on your side, then tap
+                    Finished, or send it back and write what is still wrong.
+                    <t t-if="task.review_due_at">If we don't hear back by
+                        <t t-esc="task.review_due_at.strftime('%d %b')"/>, we'll close it.</t>
                 </p>
                 <div t-if="task.description" class="wa-desc">
                     <t t-esc="task.description[:280]"/>
@@ -120,12 +122,12 @@
                     <div class="wa-grid">
                         <button class="wa-btn" type="submit" name="action" value="approve"
                                 t-attf-style="background: {{colors['approve']}}">
-                            <t t-if="is_final">✓  Approve &amp; Sign</t>
+                            <t t-if="is_final">✓  Finished</t>
                             <t t-if="not is_final">✓  Approve</t>
                         </button>
                         <button class="wa-btn" type="submit" name="action" value="reject"
                                 t-attf-style="background: {{colors['reject']}}">
-                            <t t-if="is_final">✕  Reject (Rework)</t>
+                            <t t-if="is_final">↩  Send back</t>
                             <t t-if="not is_final">✕  Reject</t>
                         </button>
                         <button t-if="not is_final" class="wa-btn" type="submit" name="action" value="hold"
@@ -137,7 +139,28 @@
                             💬  Clarify
                         </button>
                     </div>
+                    <p id="wa-need-reason" class="wa-meta" style="display:none;color:#dc3545;margin-top:8px;">
+                        Please write what is still wrong (or your question) in the box above.
+                    </p>
                 </form>
+                <script>
+                    (function () {
+                        var f = document.getElementById('wa-decide-form');
+                        if (!f) { return; }
+                        var by = null;
+                        f.querySelectorAll('button[name=action]').forEach(function (b) {
+                            b.addEventListener('click', function () { by = b.value; });
+                        });
+                        f.addEventListener('submit', function (e) {
+                            var fb = f.querySelector('[name=feedback]');
+                            if ((by === 'reject' || by === 'clarify') &amp;&amp; fb.value.trim().length &lt; 3) {
+                                e.preventDefault();
+                                document.getElementById('wa-need-reason').style.display = 'block';
+                                fb.focus();
+                            }
+                        });
+                    })();
+                </script>
             </t>
         </template>
 

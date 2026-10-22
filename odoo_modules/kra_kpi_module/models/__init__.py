@@ -91,3 +91,5 @@ from . import kpi_client_updates
 # LAST: overrides _notify, _next_ref_for_prefix and the related-req link
 # from kpi_notify / kpi / kpi_decline (old DB requirement, kpi_legacy.py).
 from . import kpi_legacy
+from . import kpi_finish
+from . import kpi_billing

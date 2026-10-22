@@ -287,9 +287,10 @@ class KpiClientInvoice(models.Model):
             ('work_date', '>=', self.from_date),
             ('work_date', '<=', self.to_date),
             ('kpi_id.kra_id', 'in', kra_ids),
-            # Only bill work on tasks the CLIENT has signed off as complete.
+            # Only bill work on tasks that are FULLY complete (kpi_finish.py:
+            # the client said finished or the review ran out, and the manual is in).
             ('kpi_id.task_state', '=', 'completed'),
-            ('kpi_id.client_final_approved', '=', True),
+            ('kpi_id.full_complete_at', '!=', False),
             ('kpi_id', 'not in', already_billed_ids),
         ]
         if self.filter_user_ids:
@@ -371,7 +372,7 @@ class KpiClientInvoice(models.Model):
         # re-offered every task the client had ever signed off, on every invoice, forever.
         task_domain = [('kra_id', 'in', kra_ids), ('active', '=', True),
                        ('task_state', '=', 'completed'),
-                       ('client_final_approved', '=', True),
+                       ('full_complete_at', '!=', False),
                        ('id', 'not in', already_billed_ids)]
         if self.filter_kpi_ids:
             task_domain.append(('id', 'in', self.filter_kpi_ids.ids))
@@ -387,7 +388,7 @@ class KpiClientInvoice(models.Model):
         # timestamp, fall back to its completion date instead of silently dropping it.
         # Dropping a billable task is a worse failure than including a borderline one.
         def _in_period(t):
-            stamp = t.client_signed_datetime or t.completion_date
+            stamp = t.full_complete_at or t.client_signed_datetime or t.completion_date
             if not stamp:
                 return True
             return self.from_date <= stamp.date() <= self.to_date
@@ -442,7 +443,7 @@ class KpiClientInvoice(models.Model):
         unsigned = billed = out_of_period = wrong_type = 0
         holders = {}   # invoice name -> state, so the message can name what to delete
         for t in tasks:
-            if t.task_state != 'completed' or not t.client_final_approved:
+            if t.task_state != 'completed' or not t.full_complete_at:
                 unsigned += 1
             elif t.id in already_billed_ids:
                 billed += 1
@@ -452,15 +453,15 @@ class KpiClientInvoice(models.Model):
             elif type_allowed_ids is not None and t.id not in type_allowed_ids:
                 wrong_type += 1
             else:
-                stamp = t.client_signed_datetime or t.completion_date
+                stamp = t.full_complete_at or t.client_signed_datetime or t.completion_date
                 if stamp and not (self.from_date <= stamp.date() <= self.to_date):
                     out_of_period += 1
 
         reasons = []
         if unsigned:
             reasons.append(
-                "%s task%s still waiting for the client to sign off — they become "
-                "billable as soon as the client approves them in their portal."
+                "%s task%s not fully complete yet — they become billable once the "
+                "client review is over and the user manual is in (🏁 Full Complete)."
                 % (unsigned, '' if unsigned == 1 else 's'))
         if billed:
             # Name the holders: "already on another invoice" is true but useless if

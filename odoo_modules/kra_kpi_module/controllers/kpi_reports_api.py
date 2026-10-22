@@ -7178,7 +7178,9 @@ class KpiReportsAPI(http.Controller):
                 return {'status': False, 'message': 'Task not found.'}
             if not self._is_client_authorized_for_kpi(kpi):
                 return {'status': False, 'message': 'You are not authorized.'}
-            reason = (params.get('reason') or '').strip() or 'Client requested changes.'
+            reason = (params.get('reason') or '').strip()
+            if len(reason) < 3:
+                return {'status': False, 'message': 'Please write what is still wrong, so the developer knows what to fix.'}
             # This used to call kpi.reject_task(reason), which raises unless the task is
             # 'partially_completed'. By sign-off time the coordinator has already run
             # approve_task, so the task is 'awaiting_client' and the call ALWAYS raised —
