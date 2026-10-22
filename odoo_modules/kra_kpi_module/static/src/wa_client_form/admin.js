@@ -56,8 +56,11 @@
                 r.push(['Estimate', ($('adH').value || 0) + 'h ' + ($('adM').value || 0) + 'm', false]);
                 r.push(['Urgency', radio('priority'), false]);
                 var t = [];
+                // Other shows what was typed for it ("Website"), as the client form does.
+                var other = form.querySelector('input[name="deliverable_other"]');
                 form.querySelectorAll('input[name="deliverable_type"]:checked').forEach(function (c) {
-                    t.push(c.parentNode.textContent.trim());
+                    var typed = c.value === 'other' && other ? other.value.trim() : '';
+                    t.push(c.value === 'other' ? 'Other: ' + (typed || '—') : c.parentNode.textContent.trim());
                 });
                 r.push(['Type', t.join(', ') || '—', false]);
             }
