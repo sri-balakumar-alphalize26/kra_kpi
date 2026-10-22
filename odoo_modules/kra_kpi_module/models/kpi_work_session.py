@@ -1249,27 +1249,23 @@ class KpiWorkSession(models.Model):
         # notification can point at a row that already exists.
         snap = self._capture_snapshot(payload)
         self._fire_daily_summary(payload, snapshot=snap)
-        # Same contract as the start hook: never let a group report affect the
-        # workday. Ending a day is one-way, so a raise here would be unrecoverable.
-        try:
-            self.env['kpi.wa.group.report'].post_workday_end(
-                self.user_id,
-                fields.Datetime.context_timestamp(
-                    self, fields.Datetime.now()).strftime('%I:%M %p · %a %d %b'),
-                payload.get('productive_seconds') or 0,
-                tasks_touched=payload.get('task_count') or 0,
-                note=payload.get('note') or '',
-                snapshot=snap)
-        except Exception as exc:
-            _logger.warning("wa group end report failed for session %s: %s", self.id, exc)
-        self._send_day_to_ceo(payload)
+        # The day's summary AND its snapshot image go to the CEO number(s) only
+        # (Settings > Configuration). The snapshot used to go to the person and
+        # every admin privately (kpi.wa.group.report.post_workday_end); that
+        # send is retired -- one place gets each person's day.
+        self._send_day_to_ceo(payload, snapshot=snap)
         return payload
 
-    def _send_day_to_ceo(self, payload):
-        """WhatsApp the day's "What did you work on today?" to the CEO number(s)
-        set in Settings > Configuration. Through the delayed queue (sent after
-        the commit, retried by the cron), so it never holds up or breaks an
-        End Workday. Never raises."""
+    # A WhatsApp image caption holds about 1,000 characters.
+    CEO_CAPTION_MAX = 1000
+
+    def _send_day_to_ceo(self, payload, snapshot=None):
+        """WhatsApp each person's day to the CEO number(s) set in Settings >
+        Configuration: the Workday Snapshot image with the summary ("What did
+        you work on today?") as its caption. Without an image -- or when the
+        image cannot be sent -- the summary goes as text through the delayed
+        queue (sent after the commit, retried by the cron). A summary too long
+        for a caption follows the image as text. Never raises."""
         self.ensure_one()
         try:
             raw = self.env.company.sudo().kpi_ceo_wa_numbers or ''
@@ -1289,8 +1285,22 @@ class KpiWorkSession(models.Model):
                 'n': payload.get('task_count') or 0,
                 'note': note}
             Q = self.env['kpi.notification.queue'].sudo()
+            img = snapshot.image if snapshot and snapshot.image else None
+            if isinstance(img, bytes):
+                img = img.decode('ascii')
+            session = self.env['kpi.wa.group.report'].sudo()._session() if img else None
+            fits = len(body) <= self.CEO_CAPTION_MAX
             for num in numbers:
-                Q.enqueue_delayed(num, body, event='ceo_day_note', seconds=1, role='owner')
+                digits = ''.join(ch for ch in num if ch.isdigit())
+                sent_img = False
+                if session and digits:
+                    try:
+                        sent_img = bool(session.send_image(
+                            digits, img, caption=body if fits else body.split('\n\n*What did you work on')[0]))
+                    except Exception as exc:
+                        _logger.warning("CEO snapshot to %s failed: %s", digits, exc)
+                if not sent_img or not fits:
+                    Q.enqueue_delayed(num, body, event='ceo_day_note', seconds=1, role='owner')
             return len(numbers)
         except Exception as exc:
             _logger.warning("day note to CEO failed for session %s: %s", self.id, exc)
