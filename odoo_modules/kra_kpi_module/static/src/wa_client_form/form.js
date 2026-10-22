@@ -91,9 +91,22 @@
                     '<span><span class="ref">' + esc(t.ref) + '</span>' + esc(t.name) +
                     '<small>' + esc(t.date) + '</small></span></label>';
             }).join('');
+            filterReqs();
             preview();
         });
     }
+
+    // Search the parent list (already newest first) by ref or name.
+    var reqSearch = $('kfReqSearch');
+    function filterReqs() {
+        if (!reqs || !reqSearch) { return; }
+        var q = reqSearch.value.trim().toLowerCase();
+        reqs.querySelectorAll('label').forEach(function (l) {
+            // style, not [hidden]: .req-list label sets display:flex.
+            l.style.display = q && l.textContent.toLowerCase().indexOf(q) === -1 ? 'none' : '';
+        });
+    }
+    if (reqSearch) { reqSearch.addEventListener('input', filterReqs); }
 
     server.addEventListener('change', function () {
         if (KIND === 'newdb') { checkDbName(); preview(); } else { loadDbs(); }
@@ -544,6 +557,11 @@
             return r;
         }
         r.push(['Database', db && db.value ? (db.options[db.selectedIndex].getAttribute('data-name') || text(db)) : '', true]);
+        if (KIND === 'dbdisconnect') {
+            r.push(['Database URL', $('kfDbUrl').value.trim(), true]);
+            r.push(['User ID', $('kfDUser').value.trim(), true]);
+            r.push(['Password', $('kfDPass').value ? '••••••' : '', true]);
+        }
         if (KIND === 'requirement') { r.push(['Task name', name.value.trim(), true]); }
         if (KIND === 'bug' || KIND === 'update') {
             var p = parent();
@@ -569,6 +587,9 @@
         }).join('');
     }
     function preview() { $('kfPreview').innerHTML = html(rows()); }
+    ['kfDbUrl', 'kfDUser', 'kfDPass'].forEach(function (id) {
+        if ($(id)) { $(id).addEventListener('input', preview); }
+    });
 
     // ---- create → confirm popup → send ------------------------------------
     function problems() {
@@ -585,10 +606,16 @@
         err.hidden = !p.length;
         if (p.length) { err.textContent = 'Please fill in: ' + p.join(', ') + '.'; return; }
         $('kfModalPreview').innerHTML = html(rows());
+        agree.checked = false;
+        $('kfConfirm').disabled = true;
         modal.hidden = false;
     });
+    // Confirm stays off until the client ticks "all details are accurate".
+    var agree = $('kfAgree');
+    agree.addEventListener('change', function () { $('kfConfirm').disabled = !agree.checked; });
     $('kfBack').addEventListener('click', function () { modal.hidden = true; });
     $('kfConfirm').addEventListener('click', function () {
+        if (!agree.checked) { return; }
         var b = $('kfConfirm');
         b.disabled = true; b.textContent = 'Sending…';
         form.submit();
@@ -599,6 +626,8 @@
     if (V.description && desc) { desc.value = V.description; lastTidy = V.description.trim(); }
     if (V.db_name && dbName) { dbName.value = V.db_name; }
     if (V.username && user) { user.value = V.username; }
+    if (V.db_url && $('kfDbUrl')) { $('kfDbUrl').value = V.db_url; }
+    if (V.username && $('kfDUser')) { $('kfDUser').value = V.username; }
     if (V.priority && $('kfPrio_' + V.priority)) { $('kfPrio_' + V.priority).checked = true; }
     if (V.needed_by && $('kfNeeded')) { $('kfNeeded').value = V.needed_by; }
     (V.deliverable || []).forEach(function (code) { var c = $('kfDeliv_' + code); if (c) { c.checked = true; } });

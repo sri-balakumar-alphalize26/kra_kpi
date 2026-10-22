@@ -348,6 +348,9 @@ class KpiWaGroupIntake(models.Model):
     client_form_token = fields.Char(index=True, copy=False)
     client_form_kind = fields.Char(copy=False)
     client_form_expires = fields.Datetime(copy=False)
+    # Set when this form session is the client fixing a DECLINED task
+    # (/kpi/wa/fix/<token>): submit updates that task instead of creating one.
+    client_form_fix_kpi_id = fields.Many2one('kra.kpi', ondelete='set null', copy=False)
     # 📂 Live Databases: which server, and which page of its databases.
     livedb_server_id = fields.Many2one('kpi.server', ondelete='set null', copy=False)
     livedb_page = fields.Integer(default=0, copy=False)
@@ -1789,6 +1792,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         state._reset()
         state.sudo().write({
             'client_form_token': token, 'client_form_kind': kind,
+            'client_form_fix_kpi_id': False,
             'client_form_expires': fields.Datetime.now()
             + timedelta(minutes=CLIENT_FORM_TTL_MINUTES)})
         base = self.env['whatsapp.config'].sudo().get_config().get_kpi_public_base_url()

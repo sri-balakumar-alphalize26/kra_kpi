@@ -79,6 +79,10 @@ class KraKpiProvisioning(models.Model):
         string='Password', copy=False,
         groups='kra_kpi_module.group_kra_developer,kra_kpi_module.group_kra_admin,base.group_system')
 
+    # Handover: where the finished database lives. Also used by a Destroy
+    # request for the URL of the database to delete.
+    provision_url = fields.Char(string='Database URL', copy=False)
+
     provision_chk_db_created = fields.Boolean('Database created')
     provision_chk_modules_installed = fields.Boolean('Modules installed')
     provision_chk_company_set = fields.Boolean('Company / branding set')
@@ -143,13 +147,43 @@ class KraKpiProvisioning(models.Model):
                 'total': len(PROVISION_FIELDS),
                 'registered': registered}
 
+    def set_provision_handover(self, url='', db_name=None, username=None, password=None):
+        """Save the handover details: URL, database name, user ID, password."""
+        self.ensure_one()
+        u = self.env.user
+        if not any(u.has_group(g) for g in (
+                'kra_kpi_module.group_kra_developer', 'kra_kpi_module.group_kra_admin',
+                'base.group_system')):
+            raise ValidationError(_('Only the team can fill in the handover.'))
+        vals = {'provision_url': (url or '').strip()[:255]}
+        if db_name is not None:
+            vals['provision_db_name'] = (db_name or '').strip()[:63]
+        if username is not None:
+            vals['provision_username'] = (username or '').strip()[:64]
+        if password is not None:
+            vals['provision_password'] = (password or '')[:128]
+        self.sudo().write(vals)
+        self.sudo()._log_action(
+            'provision_handover', source='web', actor_user_id=self.env.user.id,
+            payload={'url': vals['provision_url'], 'db_name': self.provision_db_name or ''})
+        return {'status': True}
+
     def provision_payload(self):
         """What the action screen needs to draw the card."""
         self.ensure_one()
+        u = self.env.user
+        staff = any(u.has_group(g) for g in (
+            'kra_kpi_module.group_kra_developer', 'kra_kpi_module.group_kra_admin',
+            'base.group_system'))
+        rec = self.sudo() if staff else self.browse()
         return {
             'category': self.request_category,
             'server': self.provision_server_label,
             'db_name': self.provision_db_name or '',
+            'url': self.provision_url or '',
+            # Staff only: the fields are group-restricted, the screen is too.
+            'username': rec.provision_username or '',
+            'password': rec.provision_password or '',
             'preset': self.provision_preset or '',
             'modules': self.provision_modules or '',
             'progress': self.provision_progress,
@@ -175,6 +209,12 @@ class KraKpiProvisioning(models.Model):
                         '%(done)s done.') % {
                             'total': len(PROVISION_FIELDS),
                             'done': rec.provision_progress})
+                if rec.request_category == 'new_database' and not (
+                        rec.provision_url and rec.provision_db_name
+                        and rec.sudo().provision_username and rec.sudo().provision_password):
+                    raise ValidationError(_(
+                        'Fill in the handover first: database URL, database '
+                        'name, user ID and password.'))
             except ValidationError:
                 raise
             except Exception:

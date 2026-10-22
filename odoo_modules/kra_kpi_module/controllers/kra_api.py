@@ -1322,6 +1322,12 @@ class KraKpiAPI(http.Controller):
                 # itself instead of sending someone to the audit log.
                 'estimate_extend_reason': k.estimate_extend_reason or '',
                 'estimate_extension_count': k.estimate_extension_count or 0,
+                # "Declined N×" badge, the parent REQ a bug / update sits under,
+                # and New-DB / Destroy (call notes, 19.0.7.44).
+                'decline_count': k.decline_count or 0,
+                'parent_ref': k.related_req_ref or '',
+                'parent_kpi_id': k.related_req_kpi_id.id or False,
+                'request_category': k.request_category or 'standard',
                 'estimate_extended_by_name': (k.estimate_extended_by_id.name
                                               if k.estimate_extended_by_id else ''),
                 'timer_total_seconds': k.timer_total_seconds or 0,
@@ -1544,6 +1550,10 @@ class KraKpiAPI(http.Controller):
             # serializer /kra_kpi/task/details uses.
             'estimate_extend_reason': k.estimate_extend_reason or '',
             'estimate_extension_count': k.estimate_extension_count or 0,
+            'decline_count': k.decline_count or 0,
+            'parent_ref': k.related_req_ref or '',
+            'parent_kpi_id': k.related_req_kpi_id.id or False,
+            'request_category': k.request_category or 'standard',
             'timer_total_seconds': k.timer_total_seconds or 0,
             'today_seconds': round(_today_secs, 2),
             # Same Undo-start keys map_rec sends, so a refetched card keeps its button.

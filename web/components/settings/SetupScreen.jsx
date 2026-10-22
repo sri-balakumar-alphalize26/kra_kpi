@@ -71,6 +71,13 @@ export const SCREENS = {
     list: ["sequence", "name", "months", "days", "is_perpetual", "length_display"],
     form: ["name", "is_perpetual", "months", "days", "length_display", "sequence", "notes"],
   },
+  "approval-chain": {
+    title: "Approval Chain", meta: "Who decides a new client request, in order, and for how long", model: "kpi.escalation.tier", noun: "tier",
+    archive: true, create: true, del: true, order: "sequence, id",
+    intro: "A new client request goes to the first tier. If nobody there decides within its minutes, the next tier is asked, and so on. After the last tier it keeps waiting and the last tier is reminded every 30 minutes. Nothing is accepted automatically.",
+    list: ["sequence", "name", "minutes", "use_task_manager", "user_ids"],
+    form: ["name", "sequence", "minutes", "use_task_manager", "user_ids"],
+  },
   "disconnect-reasons": {
     title: "Disconnect Reasons", meta: "Reasons a client gives for disconnecting a database", model: "kpi.db.disconnect.reason", noun: "reason",
     archive: true, create: true, del: true, order: "sequence, name",

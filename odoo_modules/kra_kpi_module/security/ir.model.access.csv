@@ -180,3 +180,7 @@ access_kpi_ai_config_system,kpi.ai.config.system,model_kpi_ai_config,base.group_
 access_kpi_wa_admin_link_admin,kpi.wa.admin.link.admin,model_kpi_wa_admin_link,kra_kpi_module.group_kra_admin,1,0,0,0
 access_kpi_wa_admin_link_owner,kpi.wa.admin.link.owner,model_kpi_wa_admin_link,kra_kpi_module.group_kra_owner,1,0,0,0
 access_kpi_wa_admin_link_system,kpi.wa.admin.link.system,model_kpi_wa_admin_link,base.group_system,1,1,1,1
+access_kpi_escalation_tier_admin,kpi.escalation.tier.admin,model_kpi_escalation_tier,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_escalation_tier_owner,kpi.escalation.tier.owner,model_kpi_escalation_tier,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_escalation_tier_system,kpi.escalation.tier.system,model_kpi_escalation_tier,base.group_system,1,1,1,1
+access_kpi_escalation_tier_user,kpi.escalation.tier.user,model_kpi_escalation_tier,base.group_user,1,0,0,0

@@ -355,3 +355,17 @@
 .rs-ro{display:block;padding:8px 0;color:var(--subtle);word-break:break-word}
 .rs-html{grid-column:1/-1;font-size:13px;line-height:19px;color:var(--text)}
 @media (max-width:640px){.rs-form{grid-template-columns:minmax(0,1fr)}}
+
+/* Request form warning (call notes): red, pulsing, scrolling. */
+.warn-banner{overflow:hidden;border-radius:10px;background:var(--danger);color:#fff;font-weight:800;font-size:13.5px;padding:9px 0;animation:warnpulse 1.6s ease-in-out infinite}
+.warn-banner span{display:inline-block;white-space:nowrap;padding-left:100%;animation:warnscroll 16s linear infinite}
+@keyframes warnpulse{50%{box-shadow:0 0 0 4px rgba(220,38,38,.25)}}
+@keyframes warnscroll{to{transform:translateX(-100%)}}
+@media (prefers-reduced-motion:reduce){.warn-banner,.warn-banner span{animation:none}.warn-banner span{padding-left:12px;white-space:normal}}
+/* Bug / Update: pick the parent requirement. */
+.parent-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;margin-top:6px;padding:6px;border:1px solid var(--border);border-radius:10px}
+.parent-list label{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:8px;border:1px solid var(--border);cursor:pointer;font-size:13px}
+.parent-list label.on{border-color:var(--brand);background:var(--hover)}
+.parent-list input{margin-top:3px}
+.parent-list b{color:var(--brand);margin-right:4px}
+.parent-list small{display:block;color:var(--subtlest)}

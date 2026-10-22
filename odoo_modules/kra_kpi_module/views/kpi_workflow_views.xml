@@ -78,6 +78,52 @@
             </field>
         </record>
 
+        <!-- New Database handover + Destroy details, and how often the client
+             was declined (call notes, Oct 2026). -->
+        <record id="view_kra_kpi_form_handover_inherit" model="ir.ui.view">
+            <field name="name">kra.kpi.form.handover.inherit</field>
+            <field name="model">kra.kpi</field>
+            <field name="inherit_id" ref="kra_kpi_module.view_kra_kpi_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//notebook" position="inside">
+                    <page string="Database Handover" name="page_db_handover"
+                          invisible="request_category not in ('new_database', 'db_disconnect')"
+                          groups="kra_kpi_module.group_kra_developer,kra_kpi_module.group_kra_admin,base.group_system">
+                        <group>
+                            <group string="Way in">
+                                <field name="request_category" readonly="1"/>
+                                <field name="provision_server_id"/>
+                                <field name="provision_url" widget="url"/>
+                                <field name="provision_db_name"/>
+                                <field name="provision_username"/>
+                                <field name="provision_password" password="True"/>
+                            </group>
+                            <group string="Steps" invisible="request_category != 'new_database'">
+                                <field name="provision_progress" readonly="1"/>
+                                <field name="provision_chk_db_created"/>
+                                <field name="provision_chk_modules_installed"/>
+                                <field name="provision_chk_company_set"/>
+                                <field name="provision_chk_users_created"/>
+                                <field name="provision_chk_data_loaded"/>
+                                <field name="provision_chk_backup_configured"/>
+                                <field name="provision_chk_handed_over"/>
+                                <field name="provision_chk_registered" readonly="1"
+                                       help="Ticked from the web task screen: ticking it adds the database to the client database list."/>
+                            </group>
+                        </group>
+                    </page>
+                    <page string="Declines" name="page_declines" invisible="not decline_count">
+                        <group>
+                            <field name="decline_count" readonly="1"/>
+                            <field name="decline_note" readonly="1"/>
+                            <field name="correction_round" readonly="1"/>
+                            <field name="previous_external_ref" readonly="1"/>
+                        </group>
+                    </page>
+                </xpath>
+            </field>
+        </record>
+
         <!-- ============================================================
              kpi.action.log — backend list + form view + menu.
              ACL'd to admin + owner (read-only via ir.model.access.csv).

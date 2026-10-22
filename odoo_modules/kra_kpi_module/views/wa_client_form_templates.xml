@@ -71,12 +71,44 @@
                     .btn[disabled] { opacity:.5; cursor:not-allowed; }
                     .btn.danger { background:var(--danger); color:#fff; }
                     .input:disabled { opacity:.6; }
+                    /* The call notes: a warning nobody can miss, about clear task names. */
+                    .warn-banner { overflow:hidden; border-radius:var(--r); background:var(--danger); color:#fff;
+                                   font-weight:800; font-size:13.5px; padding:9px 0; animation:warnpulse 1.6s ease-in-out infinite; }
+                    .warn-banner span { display:inline-block; white-space:nowrap; padding-left:100%;
+                                        animation:warnscroll 16s linear infinite; }
+                    @keyframes warnpulse { 50% { box-shadow:0 0 0 4px rgba(220,38,38,.25); } }
+                    @keyframes warnscroll { to { transform:translateX(-100%); } }
+                    @media (prefers-reduced-motion: reduce) {
+                        .warn-banner, .warn-banner span { animation:none; }
+                        .warn-banner span { padding-left:12px; white-space:normal; }
+                    }
+                    .fix-box { border:1.5px solid var(--danger); border-radius:var(--r); padding:10px 12px;
+                               background:var(--input); display:flex; flex-direction:column; gap:6px; }
+                    .fix-box b { color:var(--danger); }
+                    .kind-tabs { display:flex; gap:6px; flex-wrap:wrap; }
+                    .kind-tabs a { padding:6px 12px; border-radius:999px; border:1px solid var(--border);
+                                   text-decoration:none; color:inherit; font-weight:700; font-size:13px; }
+                    .kind-tabs a.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+                    .agree { display:flex; gap:8px; align-items:flex-start; font-weight:700; }
+                    .agree input { margin-top:3px; accent-color:var(--brand); }
                 </style>
                 <form id="kf" method="post" enctype="multipart/form-data"
                       t-att-action="'/kpi/wa/client/%s/submit' % token">
                     <div class="hd"><span class="emo" t-esc="emoji"/><t t-esc="title"/>
                         <small><t t-esc="client"/><t t-if="who"> · for <t t-esc="who"/></t> · this link works once</small></div>
                     <div class="bd">
+                        <div class="warn-banner" role="alert" t-if="kind in ('requirement', 'bug', 'update')"><span>⚠️ Write a clear, proper task name and description. No random or confusing text — the developer must understand exactly what you need.</span></div>
+                        <div class="fix-box" t-if="fix_ref">
+                            <b>✏️ Fixing <t t-esc="fix_ref"/> — it was not taken forward</b>
+                            <span t-esc="fix_reason"/>
+                            <span class="hint">Your earlier answers are filled in below. Change what is needed and send it again. Wrong type? Switch it here:</span>
+                            <span class="kind-tabs">
+                                <t t-foreach="fix_kinds" t-as="fk">
+                                    <a t-att-href="'/kpi/wa/client/%s?kind=%s' % (token, fk[0])"
+                                       t-att-class="'on' if fk[0] == kind else None" t-esc="fk[1]"/>
+                                </t>
+                            </span>
+                        </div>
                         <div t-if="error" class="err" t-esc="error"/>
 
                         <div class="grid2">
@@ -99,6 +131,8 @@
                         <!-- Bug / Update: about one existing requirement -->
                         <div class="field" t-if="kind in ('bug', 'update')">
                             <span class="lbl">Which task is it about? <span class="req">*</span></span>
+                            <input class="input" id="kfReqSearch" type="search" autocomplete="off"
+                                   placeholder="🔍 Search by number or name (newest first)"/>
                             <div id="kfReqs" class="req-list"><span class="mini">Choose the server and database first.</span></div>
                             <span class="hint">Pick one. The new request is numbered under it, e.g. <t t-esc="'BUG001' if kind == 'bug' else 'UPT001'"/>-REQ-012.</span>
                         </div>
@@ -128,6 +162,27 @@
                                     </div>
                                 </div>
                             </div>
+                        </t>
+
+                        <!-- Destroy: the way in, so the team can do the deletion. -->
+                        <t t-if="kind == 'dbdisconnect'">
+                            <div class="field">
+                                <span class="lbl">Database URL <span class="req">*</span></span>
+                                <input class="input" id="kfDbUrl" name="db_url" maxlength="255" autocomplete="off"
+                                       inputmode="url" placeholder="https://yourcompany.example.com"/>
+                            </div>
+                            <div class="grid2">
+                                <div class="field">
+                                    <span class="lbl">User ID <span class="req">*</span></span>
+                                    <input class="input" id="kfDUser" name="username" maxlength="64" autocomplete="off"/>
+                                </div>
+                                <div class="field">
+                                    <span class="lbl">Password <span class="req">*</span></span>
+                                    <input class="input" id="kfDPass" name="password" type="password" maxlength="128"
+                                           autocomplete="off"/>
+                                </div>
+                            </div>
+                            <span class="hint">Only our team sees these. Nothing is deleted until the team checks the request.</span>
                         </t>
 
                         <!-- Type: Requirement only (Bug / Update take it from the requirement). -->
@@ -210,7 +265,9 @@
                     <div class="box">
                         <div class="hd"><t t-esc="'Destroy this database?' if kind == 'dbdisconnect' else 'Send this request?'"/>
                             <small>Check everything once more.</small></div>
-                        <div class="bd"><div class="pv"><dl id="kfModalPreview"></dl></div></div>
+                        <div class="bd"><div class="pv"><dl id="kfModalPreview"></dl></div>
+                            <label class="agree"><input type="checkbox" id="kfAgree"/>
+                                <span>Are you sure all details are accurate? I agree to submit.</span></label></div>
                         <div class="ft">
                             <button type="button" class="btn ghost" id="kfBack">Back</button>
                             <button type="button" id="kfConfirm"
