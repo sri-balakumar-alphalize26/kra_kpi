@@ -29,6 +29,54 @@ import re
 _logger = logging.getLogger(__name__)
 
 
+def _guess_mime(file_name, stored=''):
+    """The file's real type, so a browser can show it."""
+    if stored and stored != 'application/octet-stream':
+        return stored
+    mime, _enc = mimetypes.guess_type(file_name or '')
+    if mime:
+        return mime
+    low = (file_name or '').lower()
+    for ext, m in (('.webm', 'video/webm'), ('.m4a', 'audio/mp4'), ('.ogg', 'audio/ogg'),
+                   ('.opus', 'audio/ogg'), ('.heic', 'image/heic'), ('.mov', 'video/quicktime')):
+        if low.endswith(ext):
+            return m
+    return 'application/octet-stream'
+
+
+def serve_file(content, file_name, mime=None, inline=False):
+    """A file response that can be viewed in the browser (inline) or saved.
+
+    Honours HTTP Range so a video or voice note can be scrubbed / seeked
+    without downloading the whole thing first: phones (Safari especially)
+    refuse to play a <video> whose server ignores Range.
+    """
+    name = (file_name or 'file').replace('"', "'").replace('\r', ' ').replace('\n', ' ')
+    mime = mime or _guess_mime(name)
+    disp = '%s; filename="%s"' % ('inline' if inline else 'attachment', name)
+    size = len(content)
+    headers = [('Content-Type', mime if inline else (mime or 'application/octet-stream')),
+               ('Content-Disposition', disp), ('Accept-Ranges', 'bytes'),
+               ('Cache-Control', 'private, max-age=300')]
+    rng = request.httprequest.headers.get('Range', '')
+    m = re.match(r'bytes=(\d*)-(\d*)$', rng.strip()) if rng else None
+    if m and size and (m.group(1) or m.group(2)):
+        if m.group(1):
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else size - 1
+        else:                                   # "bytes=-500": the last 500 bytes
+            start = max(0, size - int(m.group(2)))
+            end = size - 1
+        end = min(end, size - 1)
+        if start > end or start >= size:
+            return request.make_response(b'', headers + [('Content-Range', 'bytes */%d' % size)], status=416)
+        part = content[start:end + 1]
+        return request.make_response(part, headers + [
+            ('Content-Range', 'bytes %d-%d/%d' % (start, end, size)),
+            ('Content-Length', str(len(part)))], status=206)
+    return request.make_response(content, headers + [('Content-Length', str(size))])
+
+
 def _log_day_end_utc(log):
     """The instant an unclosed kpi.time.log stops being allowed to accrue.
 
@@ -492,6 +540,15 @@ class KraKpiAPI(http.Controller):
                     'reason': block[0] if block else 'multitask'}
         return {'status': True, 'message': 'Task started', 'id': rec.id,
                 'new_state': rec.task_state}
+
+    @http.route('/kra_kpi/task/undo_start_info', type='json', auth='user', methods=['POST'], csrf=False)
+    def task_undo_start_info(self, kpi_id=None, **params):
+        """For the Undo-start confirmation: what is KEPT (today's updates,
+        links, files...). Read-only."""
+        rec = request.env['kra.kpi'].sudo().browse(int(kpi_id or 0)).exists()
+        if not rec:
+            return {'status': False, 'keeps': ''}
+        return {'status': True, 'keeps': rec._undo_keeps_line()}
 
     @http.route('/kra_kpi/task/undo_start', type='json', auth='user', methods=['POST'], csrf=False)
     def task_undo_start(self, **params):
@@ -3153,6 +3210,8 @@ class KraKpiAPI(http.Controller):
                                          if c.admin_accept_minutes not in (None, False, '')
                                          else 5),
                 'client_approval_minutes': c.client_approval_minutes or 5,
+                # Who gets each End Workday's "What did you work on today?".
+                'ceo_wa_numbers': c.kpi_ceo_wa_numbers or '',
                 'queue_nudge_minutes': c.queue_nudge_minutes or 30,
                 'urgent_nudge_minutes': c.urgent_nudge_minutes or 5,
                 'standard_workday_hours': c.standard_workday_hours or 9.0,
@@ -3289,6 +3348,28 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Not authorized'}
         request.env.company.sudo().client_approval_minutes = max(1, int(params.get('minutes') or 5))
         return {'status': True}
+
+    @http.route('/kpi_config/set_ceo_numbers', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_config_set_ceo_numbers(self, numbers='', **params):
+        """The WhatsApp number(s) each End Workday's day note is sent to.
+        Comma-separated; each is cleaned the way every other number here is
+        (the company's dial code is added to a bare local number)."""
+        user = request.env.user
+        if not self._is_kra_admin(user):
+            return {'status': False, 'message': 'Not authorized'}
+        c = request.env.company.sudo()
+        dial, length = c._kpi_mobile_cfg()
+        out = []
+        for raw in re.split(r'[,;\s]+', str(numbers or '')):
+            n = normalize_wa(raw.strip(), dial, length)
+            if not n:
+                continue
+            if len(n) < 8 or len(n) > 15:
+                return {'status': False, 'message': '%s does not look like a WhatsApp number.' % raw.strip()}
+            if n not in out:
+                out.append(n)
+        c.kpi_ceo_wa_numbers = ','.join(out) or False
+        return {'status': True, 'numbers': ','.join(out)}
 
     @http.route('/kpi_config/set_admin_accept', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_config_set_admin_accept(self, **params):
@@ -4537,27 +4618,8 @@ class KraKpiAPI(http.Controller):
                     and self._may_view_kpi_details(progress.kpi_id)):
                 return request.not_found()
             
-            file_content = base64.b64decode(progress.uploaded_file)
-            file_name = progress.file_name or 'file'
-            
-            # Determine MIME type
-            mime_type, _ = mimetypes.guess_type(file_name)
-            if not mime_type:
-                if file_name.lower().endswith('.pdf'):
-                    mime_type = 'application/pdf'
-                elif file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    mime_type = 'image/jpeg'
-                else:
-                    mime_type = 'application/octet-stream'
-            
-            # Use 'inline' to view in browser
-            headers = [
-                ('Content-Type', mime_type),
-                ('Content-Disposition', f'inline; filename="{file_name}"'),
-                ('Content-Length', len(file_content)),
-            ]
-            
-            return request.make_response(file_content, headers)
+            return serve_file(base64.b64decode(progress.uploaded_file),
+                              progress.file_name or 'file', inline=True)
             
         except Exception as e:
             _logger.error(f"Error viewing progress file: {str(e)}")
@@ -4578,15 +4640,10 @@ class KraKpiAPI(http.Controller):
                     and self._may_view_kpi_details(progress.kpi_id)):
                 return request.not_found()
             
-            file_content = base64.b64decode(progress.uploaded_file)
-            file_name = progress.file_name or 'download'
-            
-            headers = [
-                ('Content-Type', 'application/octet-stream'),
-                ('Content-Disposition', f'attachment; filename="{file_name}"'),
-            ]
-            
-            return request.make_response(file_content, headers)
+            # ?inline=1: show it in the browser (the View popup) instead of saving.
+            return serve_file(base64.b64decode(progress.uploaded_file),
+                              progress.file_name or 'download',
+                              inline=kwargs.get('inline') in ('1', 'true'))
         except Exception as e:
             _logger.error(f"Error downloading file: {str(e)}")
             return request.not_found()
@@ -4752,12 +4809,10 @@ class KraKpiAPI(http.Controller):
                 return request.not_found()
             if self._may_view_kpi_details(parent.kpi_id):
                 return request.not_found()
-            file_name = att.file_name or 'download'
-            headers = [
-                ('Content-Type', att.mimetype or 'application/octet-stream'),
-                ('Content-Disposition', f'attachment; filename="{file_name}"'),
-            ]
-            return request.make_response(base64.b64decode(att.file), headers)
+            # ?inline=1: show it in the browser (the View popup) instead of saving.
+            return serve_file(base64.b64decode(att.file), att.file_name or 'download',
+                              _guess_mime(att.file_name, att.mimetype or ''),
+                              inline=kwargs.get('inline') in ('1', 'true'))
         except Exception as e:
             _logger.error("download_entry_attachment failed: %s", str(e))
             return request.not_found()
@@ -5023,19 +5078,8 @@ class KraKpiAPI(http.Controller):
             if not manual.exists() or not manual.manual_file:
                 return request.not_found()
             
-            file_content = base64.b64decode(manual.manual_file)
-            file_name = manual.file_name or 'manual.pdf'
-            
-            mime_type, _ = mimetypes.guess_type(file_name)
-            if not mime_type:
-                mime_type = 'application/octet-stream'
-            
-            headers = [
-                ('Content-Type', mime_type),
-                ('Content-Disposition', f'inline; filename="{file_name}"'),
-            ]
-            
-            return request.make_response(file_content, headers)
+            return serve_file(base64.b64decode(manual.manual_file),
+                              manual.file_name or 'manual.pdf', inline=True)
         except Exception as e:
             _logger.error(f"Error viewing manual: {str(e)}")
             return request.not_found()

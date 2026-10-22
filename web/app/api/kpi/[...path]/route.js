@@ -82,7 +82,10 @@ async function handle(req, ctx) {
 
   /* ---- downloads and views: stream bytes through ---- */
   if (method === "GET") {
-    const r = await odooRaw(target, { session });
+    /* Range passes through so a video / voice note can be seeked in the
+       View popup (Odoo answers 206 for it: kra_api.serve_file). */
+    const range = req.headers.get("range");
+    const r = await odooRaw(target, { session, headers: range ? { Range: range } : {} });
     if (!r) return NextResponse.json({ ok: false, error: OFFLINE }, { status: 503 });
     if (r.status >= 300 && r.status < 400) {
       const loc = r.headers.get("location") || "";
@@ -100,6 +103,8 @@ async function handle(req, ctx) {
         "Content-Type": type,
         "Content-Disposition": r.headers.get("content-disposition") || "inline",
         "Cache-Control": "no-store",
+        ...Object.fromEntries(["content-length", "content-range", "accept-ranges"]
+          .map((h) => [h, r.headers.get(h)]).filter(([, v]) => v)),
       },
     });
   }

@@ -1,0 +1,14 @@
+/* Popup file viewer (static/src/js/kpi_file_viewer.js). */
+.kfv { position: fixed; inset: 0; z-index: 2000; background: rgba(16, 24, 40, .6);
+       display: flex; align-items: center; justify-content: center; padding: 16px; }
+.kfv-card { background: #fff; border-radius: 12px; width: 100%; max-width: 980px; max-height: 94vh;
+            display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 18px 50px rgba(0, 0, 0, .3); }
+.kfv-hd { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #E5E9F0; }
+.kfv-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kfv-acts { display: flex; gap: 6px; flex-shrink: 0; }
+.kfv-bd { flex: 1; min-height: 200px; display: flex; align-items: center; justify-content: center;
+          background: #0b0f17; overflow: auto; }
+.kfv-bd img, .kfv-bd video { max-width: 100%; max-height: 82vh; display: block; }
+.kfv-bd audio { width: 90%; margin: 32px 0; }
+.kfv-bd iframe { width: 100%; height: 82vh; border: 0; background: #fff; }
+.kfv-none { color: #fff; text-align: center; padding: 40px 16px; line-height: 1.6; }
