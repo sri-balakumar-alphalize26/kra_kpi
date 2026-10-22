@@ -839,6 +839,9 @@ class KpiWaStaffTask(models.AbstractModel):
                   files=None, replace_same=False):
         """Add an update ('progress') or a user manual ('manual') from the page.
         Returns (ok, message)."""
+        locked = task._details_locked_for(user)
+        if locked:
+            return False, locked
         if task.task_state not in STARTED_STATES:
             return False, ('Start %s first — updates, files, manuals and GitHub links are added once '
                            'a task has been started.' % self._ref(task))
@@ -901,6 +904,9 @@ class KpiWaStaffTask(models.AbstractModel):
     def page_entry(self, user, task, kind, entry_id):
         """The page's Edit / Delete target: (record, error). Own entry or an admin
         (_entry_rec, the chat flow's rule), on THIS task, once it has started."""
+        locked = task._details_locked_for(user)
+        if locked:
+            return None, locked
         if task.task_state not in STARTED_STATES:
             return None, ('Start %s first — what was added can be changed once the task has started.'
                           % self._ref(task))

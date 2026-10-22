@@ -1383,6 +1383,7 @@ class KraKpiAPI(http.Controller):
                 # and New-DB / Destroy (call notes, 19.0.7.44).
                 'decline_count': k.decline_count or 0,
                 'parent_ref': k.related_req_ref or '',
+                'legacy_req_link': bool(getattr(k, 'legacy_req_link', False)), 'legacy_status': getattr(k, 'legacy_status', '') or '',
                 'parent_kpi_id': k.related_req_kpi_id.id or False,
                 'request_category': k.request_category or 'standard',
                 'estimate_extended_by_name': (k.estimate_extended_by_id.name
@@ -1608,7 +1609,10 @@ class KraKpiAPI(http.Controller):
             'estimate_extend_reason': k.estimate_extend_reason or '',
             'estimate_extension_count': k.estimate_extension_count or 0,
             'decline_count': k.decline_count or 0,
+            # Signed off by the client: why its details can't change ('' = editable).
+            'details_locked': k._details_locked_for(request.env.user),
             'parent_ref': k.related_req_ref or '',
+            'legacy_req_link': bool(getattr(k, 'legacy_req_link', False)), 'legacy_status': getattr(k, 'legacy_status', '') or '',
             'parent_kpi_id': k.related_req_kpi_id.id or False,
             'request_category': k.request_category or 'standard',
             'timer_total_seconds': k.timer_total_seconds or 0,
@@ -3963,6 +3967,8 @@ class KraKpiAPI(http.Controller):
             "has_started": kpi.task_state in ('in_progress', 'paused', 'partially_completed',
                                               'awaiting_client', 'completed'),
             "is_assignee": bool(kpi.user_id and kpi.user_id.id == user.id),
+            # Signed off by the client: why nothing more can be added ("" = can).
+            "details_locked": kpi._details_locked_for(user),
             "available_kras": available_kras,
             "priority": kpi.priority or "",
             "estimate": f"{kpi.estimate_hours:02d}:{kpi.estimate_minutes:02d}",
@@ -4190,6 +4196,13 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': str(e)}
 
     # PROGRESS UPDATE ENDPOINTS
+    def _locked(self, kpi):
+        """'' or why this task's details can no longer be changed (signed off by
+        the client; admins excepted). kra.kpi._details_locked_for."""
+        if not kpi:
+            return ''
+        return kpi.sudo()._details_locked_for(request.env.user)
+
     @http.route('/kpi/progress/create', type='json', auth='user', methods=['POST'], csrf=False)
     def create_progress_update(self, **params):
         """Create a new progress update for a KPI task"""
@@ -4202,10 +4215,12 @@ class KraKpiAPI(http.Controller):
             
             if not kpi_id or not summary:
                 return {'status': False, 'message': 'KPI ID and summary are required'}
-            
+
             kpi = request.env['kra.kpi'].browse(int(kpi_id))
             if not kpi.exists():
                 return {'status': False, 'message': 'KPI not found'}
+            if self._locked(kpi):
+                return {'status': False, 'message': self._locked(kpi)}
             
             progress = request.env['kpi.progress'].create({
                 'kpi_id': int(kpi_id),
@@ -4251,6 +4266,9 @@ class KraKpiAPI(http.Controller):
             uploads = request.httprequest.files.getlist('file')
             if not kpi_id:
                 return request.make_json_response({'status': False, 'message': 'kpi_id missing'})
+            locked = self._locked(request.env['kra.kpi'].sudo().browse(int(kpi_id)).exists())
+            if locked:
+                return request.make_json_response({'status': False, 'message': locked})
             if not uploads:
                 return request.make_json_response({'status': False, 'message': 'No file received'})
             files = []
@@ -4361,6 +4379,8 @@ class KraKpiAPI(http.Controller):
                 return {'status': False, 'message': 'Progress update not found'}
             if not self._may_edit_progress(progress):
                 return {'status': False, 'message': 'Not authorized to edit this update.'}
+            if self._locked(progress.kpi_id):
+                return {'status': False, 'message': self._locked(progress.kpi_id)}
 
             vals = {}
             if 'summary' in params:
@@ -4496,6 +4516,8 @@ class KraKpiAPI(http.Controller):
                 return {'status': False, 'message': 'Progress update not found'}
             if not self._may_edit_progress(progress):
                 return {'status': False, 'message': 'Not authorized to delete this update.'}
+            if self._locked(progress.kpi_id):
+                return {'status': False, 'message': self._locked(progress.kpi_id)}
             progress.unlink()
             return {'status': True, 'message': 'Progress update deleted'}
         except Exception as e:
@@ -4518,7 +4540,7 @@ class KraKpiAPI(http.Controller):
             if not ids:
                 return {'status': False, 'message': 'No entries selected.'}
             records = request.env['kpi.progress'].sudo().browse(ids).exists()
-            allowed = records.filtered(lambda p: self._may_edit_progress(p))
+            allowed = records.filtered(lambda p: self._may_edit_progress(p) and not self._locked(p.kpi_id))
             refused = len(records) - len(allowed)
             deleted = len(allowed)
             if allowed:
@@ -4874,6 +4896,10 @@ class KraKpiAPI(http.Controller):
             file_name = params.get('file_name')
             description = params.get('description', '')
             related_links = params.get('related_links', '[]')
+            if kpi_id:
+                locked = self._locked(request.env['kra.kpi'].sudo().browse(int(kpi_id)).exists())
+                if locked:
+                    return {'status': False, 'message': locked}
 
             # Accepts the new `files: [{file_data, file_name}, ...]` list as well as
             # the original scalar pair, so the mobile app's single-file posts keep
@@ -4942,6 +4968,8 @@ class KraKpiAPI(http.Controller):
                 kpi, err = self._check_manual_upload(kpi_id, f.filename, len(data))
                 if err:
                     return request.make_json_response({'status': False, 'message': err})
+                if self._locked(kpi):
+                    return request.make_json_response({'status': False, 'message': self._locked(kpi)})
                 files.append((f.filename, data))
 
             manual = request.env['kpi.user.manual'].create({
@@ -5228,6 +5256,8 @@ class KraKpiAPI(http.Controller):
                 return {'status': False, 'message': 'Manual not found'}
             if not self._may_edit_manual(manual):
                 return {'status': False, 'message': 'Not authorized'}
+            if self._locked(manual.kpi_id):
+                return {'status': False, 'message': self._locked(manual.kpi_id)}
 
             manual.unlink()
             
@@ -5531,7 +5561,10 @@ class KraKpiAPI(http.Controller):
             
             if not kpi_id:
                 return {'status': False, 'message': 'KPI ID is required'}
-            
+            locked = self._locked(request.env['kra.kpi'].sudo().browse(int(kpi_id)).exists())
+            if locked:
+                return {'status': False, 'message': locked}
+
             if not github_url:
                 return {'status': False, 'message': 'GitHub URL is required'}
             
@@ -5622,7 +5655,9 @@ class KraKpiAPI(http.Controller):
             link = request.env['kpi.github.link'].browse(int(link_id))
             if not link.exists():
                 return {'status': False, 'message': 'GitHub link not found'}
-            
+            if self._locked(link.sudo().kpi_id):
+                return {'status': False, 'message': self._locked(link.sudo().kpi_id)}
+
             link.unlink()
             
             return {
@@ -6074,6 +6109,7 @@ class KraKpiAPI(http.Controller):
                 'task': {
                     'external_ref': kpi.external_ref or '',
                     'related_req_ref': kpi.related_req_ref or '',
+                    'legacy_req_link': bool(getattr(kpi, 'legacy_req_link', False)), 'legacy_status': getattr(kpi, 'legacy_status', '') or '',
                     'delivery_version': kpi.delivery_version or '',
                     'description': kpi.description or '',
                 },

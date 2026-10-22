@@ -53,6 +53,28 @@ class KraKpiTimeAdjust(models.Model):
     # The estimate is what the client signed off against once it is with them.
     ESTIMATE_LOCKED = ('awaiting_client', 'completed')
 
+    @staticmethod
+    def _is_kpi_admin_user(user):
+        return any(user.has_group(g) for g in (
+            'kra_kpi_module.group_kra_owner', 'kra_kpi_module.group_kra_admin', 'base.group_system'))
+
+    def _details_locked_for(self, user):
+        """'' when `user` may add / change this task's updates, files, manuals
+        and GitHub links, else why not.
+
+        Locked once the CLIENT has signed off: that is what was billed. Before
+        that (waiting for the admin's check, or with the client) fixes are
+        still possible. Admins can always change it."""
+        self.ensure_one()
+        rec = self.sudo()
+        if not rec.client_final_approved or (user and self._is_kpi_admin_user(user)):
+            return ''
+        when = ''
+        if 'client_final_approved_date' in rec._fields and rec.client_final_approved_date:
+            when = ' on %s' % fields.Date.to_string(fields.Datetime.to_datetime(rec.client_final_approved_date).date())
+        return _('This task was signed off by the client%s — its details can\'t be changed now. '
+                 'Ask an admin if something must change.') % when
+
     def _may_extend_estimate(self, user):
         """'' when `user` may add time to this task's estimate, else why not.
         The board's rule (/kra_kpi/task/add_time): the person on the task or an
