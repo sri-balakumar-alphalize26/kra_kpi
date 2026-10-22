@@ -39,7 +39,8 @@ import {
   deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime, deleteProgressBulk,
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
   fetchActivity, updateProgress, deleteProgress, updateTaskMeta, fetchProjects,
-  fetchLegacy, saveLegacy, legacyVoiceSource,
+  fetchLegacy, saveLegacy, legacyVoiceSource, fetchClientSends, parseServerTs,
+  fetchChat, sendChat,
 } from '../services/kpiActions';
 import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
 import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
@@ -48,6 +49,7 @@ import { createLogger } from '../api/logger';
 import useBackHandler from '../components/useBackHandler';
 import { taskDeliverableLabel } from '../utils/deliverableType';
 import { completeMissing } from '../utils/completeMissing';
+import { sendHeading, sendStatus, fileIcon, sendFileSource, hasClientSends } from '../utils/clientSends';
 
 const log = createLogger('KpiDetail');
 
@@ -155,6 +157,13 @@ function normalizeUrl(raw) {
 }
 
 const isImageName = (n = '') => /\.(png|jpe?g|gif|webp|bmp)$/i.test(n);
+
+// The server's UTC 'YYYY-MM-DD HH:MM:SS' as the phone's local "22 Oct, 10:15".
+function localWhen(utc) {
+  const ms = parseServerTs(utc);
+  if (!ms) return utc || '';
+  return new Date(ms).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
 
 function Section({ icon, title, subtitle, children, tint, right }) {
   return (
@@ -300,8 +309,18 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const [legacyEdit, setLegacyEdit] = useState(null); // { ref, name, note } while editing
   const [legacyBusy, setLegacyBusy] = useState(false);
   const [legacyErr, setLegacyErr] = useState('');
+  // 👤 Client — every time the client sent it, oldest first. The same call
+  // brings the old-system card, so it is one round trip; an older server
+  // without the route still gets the card from fetchLegacy.
+  const [clientSends, setClientSends] = useState([]);
   async function loadLegacy() {
-    const r = await fetchLegacy(task.id);
+    let r = await fetchClientSends(task.id);
+    if (r?.status) {
+      setClientSends(Array.isArray(r.sends) ? r.sends : []);
+    } else {
+      log.warn('client sends not loaded', r?.message);
+      r = await fetchLegacy(task.id);
+    }
     if (!r?.status) { log.warn('legacy card not loaded', r?.message); return; }
     setLegacy(r.legacy || null);
     setLegacyCanEdit(!!r.can_edit);
@@ -326,6 +345,35 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
       setLegacyErr(e?.message || 'Could not save the KPI Details');
     } finally {
       setLegacyBusy(false);
+    }
+  }
+
+  // ---- 💬 Chat with the client ---------------------------------------------
+  // Same thread as the web task panel's Chat tab: the client's 💬 Discuss
+  // messages, and the team's replies (sent to the client's WhatsApp group).
+  // Refreshed every 15 s while the screen is open.
+  const [chat, setChat] = useState(null);           // the route's answer
+  const [chatText, setChatText] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const pull = () => fetchChat(task.id).then((r) => { if (live) setChat(r); });
+    pull();
+    const t = setInterval(pull, 15000);
+    return () => { live = false; clearInterval(t); };
+  }, [task.id]);
+  async function onSendChat() {
+    const text = chatText.trim();
+    if (!text || chatBusy) return;
+    setChatBusy(true);
+    try {
+      const r = await sendChat(task.id, text);
+      if (!r?.status) { flash('err', r?.message || 'Could not send it'); return; }
+      log.info('chat sent', { kpi_id: task.id });
+      setChatText('');
+      setChat(r);
+    } finally {
+      setChatBusy(false);
     }
   }
 
@@ -933,6 +981,14 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     } finally { setFileBusy(null); }
   }
 
+  // A file chip in the 👤 Client card. Its url is the web's type='http' route,
+  // so read the ids out of it and open it like any other file here.
+  function onViewSendFile(f, key) {
+    const src = sendFileSource(f);
+    if (!src) { flash('err', 'Could not find that file'); return; }
+    onViewFile({ key, id: src.progressId, attachment_id: src.attachmentId, file_name: f.name || 'file' });
+  }
+
   // "View note" — jump to the progress update this file came from and flash it.
   // The file's id IS its kpi.progress id, so they match directly.
   function onViewNote(f) {
@@ -967,6 +1023,8 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // count as the team's progress summary (the server refuses Complete on them).
   const teamProgress = (data?.progress || []).filter((p) => !p.from_client);
   const clientProgress = (data?.progress || []).filter((p) => p.from_client);
+  // 👤 Client: only when the client sent something (files or text).
+  const showClientSends = hasClientSends(clientSends);
   const teamFiles = (data?.files || []).filter((f) => !f.from_client);
   const clientProgressIds = new Set(clientProgress.map((p) => p.id));
   const hasProgress = teamProgress.length > 0;
@@ -1626,6 +1684,96 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                       </Text>
                     )}
                   </>
+                )}
+              </Section>
+            )}
+
+            {/* ── 👤 Client — every send, oldest first ───────────────── */}
+            {/* Same as the web task panel's Client tab: each time the client
+                sent this request, its files, and what became of it. */}
+            {showClientSends && (() => {
+              const sends = clientSends;
+              const single = sends.length === 1;
+              return (
+                <Section icon="person-outline" title={`👤 Client${single ? '' : ` (${sends.length} sends)`}`}>
+                  {sends.map((sd, i) => {
+                    const isNew = !single && i === sends.length - 1;
+                    const st = sendStatus(sd, localWhen);
+                    return (
+                      <View key={`send-${sd.round}-${i}`} style={[s.histRow, isNew && s.sendNew]}>
+                        <View style={s.histTop}>
+                          <Text style={[s.histWhen, { flex: 1 }]}>
+                            {single ? [localWhen(sd.sent_at), sd.sent_by ? `by ${sd.sent_by}` : ''].filter(Boolean).join(' · ') : sendHeading(sd, localWhen)}
+                          </Text>
+                          {isNew && <View style={s.sendNewTag}><Text style={s.sendNewTagTxt}>NEW</Text></View>}
+                        </View>
+                        {(!!sd.ref || sd.old_db) && (
+                          <Text style={s.cardSub}>{[sd.ref, sd.old_db ? '🗄️ Old DB' : ''].filter(Boolean).join(' · ')}</Text>
+                        )}
+                        {!!(sd.name || '').trim() && <Text style={s.sendName}>{sd.name}</Text>}
+                        {!!(sd.description || '').trim() && <Text style={s.body}>{sd.description}</Text>}
+                        {(sd.files || []).length > 0 && (
+                          <View style={s.sendFiles}>
+                            {sd.files.map((f, j) => {
+                              const key = `send-${i}-${j}`;
+                              return (
+                                <TouchableOpacity key={key} style={[s.linkChip, s.sendFile]}
+                                  onPress={() => onViewSendFile(f, key)} disabled={fileBusy === key}>
+                                  <Text>{fileIcon(f.name)}</Text>
+                                  <Text style={s.sendFileTxt} numberOfLines={1}>{f.name || 'file'}</Text>
+                                  {fileBusy === key && <ActivityIndicator size="small" color={COLORS.primary} />}
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        )}
+                        <Text style={[s.sendStatus, sd.status === 'refused' && { color: COLORS.red }, sd.status === 'accepted' && { color: COLORS.green }]}>
+                          {st.icon} {st.text}
+                        </Text>
+                        {!!st.reason && <Text style={s.sendReason}>Reason: {st.reason}</Text>}
+                      </View>
+                    );
+                  })}
+                </Section>
+              );
+            })()}
+
+            {/* ── 💬 Chat with the client ─────────────────────────────── */}
+            {/* Team side only (a reply posts as the team). Shown once there is a
+                message, or when a reply can be sent. */}
+            {(data?.meta?.is_manager || data?.meta?.is_assignee) && chat?.status
+              && ((chat.messages || []).length > 0 || (chat.can_send && !chat.locked)) && (
+              <Section icon="chatbubbles-outline" title={`💬 Chat with ${chat.client || 'the client'}`}
+                subtitle="The client sees team messages as “Reply from our team”">
+                {(chat.messages || []).length === 0 && (
+                  <Text style={s.cardSub}>No messages yet. When the client sends 💬 Discuss from their WhatsApp group, it shows here.</Text>
+                )}
+                {(chat.messages || []).map((m) => {
+                  const team = m.side === 'team';
+                  return (
+                    <View key={`chat-${m.id}`} style={[s.chatBubble, team ? s.chatOut : s.chatIn]}>
+                      <Text style={s.chatWho}>{team ? m.who : `${m.who} · client`}</Text>
+                      <Text style={s.body}>{m.body}</Text>
+                      <Text style={s.chatTime}>{localWhen(m.at)}</Text>
+                    </View>
+                  );
+                })}
+                {chat.locked ? (
+                  <Text style={[s.cardSub, { marginTop: 6 }]}>🔒 {chat.locked}</Text>
+                ) : !chat.can_send ? (
+                  <Text style={[s.cardSub, { marginTop: 6 }]}>This client has no WhatsApp group linked, so messages can't be sent.</Text>
+                ) : (
+                  <View style={s.chatFoot}>
+                    <TextInput
+                      style={[s.oldInput, { flex: 1, minHeight: 42, textAlignVertical: 'top', paddingTop: 9 }]} multiline
+                      value={chatText} onChangeText={setChatText}
+                      placeholder="Type a message" placeholderTextColor={COLORS.faint}
+                    />
+                    <TouchableOpacity style={[s.attDl, { height: 42 }, (chatBusy || !chatText.trim()) && s.btnOff]}
+                      onPress={onSendChat} disabled={chatBusy || !chatText.trim()}>
+                      {chatBusy ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={15} color="#fff" />}
+                    </TouchableOpacity>
+                  </View>
                 )}
               </Section>
             )}
@@ -2438,6 +2586,21 @@ const s = StyleSheet.create({
   linkAdd: { width: 44, height: 40, borderRadius: 9, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
   linkChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#EEF3FF', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 7, marginTop: 6 },
   linkChipTxt: { flex: 1, fontSize: 12, color: COLORS.ink },
+  sendNew: { borderWidth: 1.5, borderColor: COLORS.primary, backgroundColor: '#F5F8FF' },
+  sendNewTag: { backgroundColor: COLORS.primary, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  sendNewTagTxt: { fontSize: 10.5, fontWeight: '900', color: '#fff' },
+  sendName: { fontSize: 13.5, fontWeight: '800', color: COLORS.navy, marginBottom: 3 },
+  sendFiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  sendFile: { maxWidth: '100%' },
+  sendFileTxt: { fontSize: 12, color: COLORS.ink, flexShrink: 1 },
+  sendStatus: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy, marginTop: 8 },
+  sendReason: { fontSize: 12.5, color: COLORS.ink, marginTop: 2, lineHeight: 17 },
+  chatBubble: { borderRadius: 12, padding: 9, marginBottom: 7, maxWidth: '88%' },
+  chatIn: { alignSelf: 'flex-start', backgroundColor: '#F1F5F9' },
+  chatOut: { alignSelf: 'flex-end', backgroundColor: '#E3F0FF' },
+  chatWho: { fontSize: 11.5, fontWeight: '900', color: COLORS.navy, marginBottom: 2 },
+  chatTime: { fontSize: 10.5, color: COLORS.faint, marginTop: 3, alignSelf: 'flex-end' },
+  chatFoot: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 6 },
 
   barTrack: { height: 6, borderRadius: 3, backgroundColor: '#E5E7EB', overflow: 'hidden' },
   barFill: { height: 6, borderRadius: 3, backgroundColor: COLORS.primary },

@@ -784,6 +784,67 @@ export async function fetchLegacy(kpiId) {
   }
 }
 
+// The task's Client tab: every time the client sent this request, oldest first —
+// { status, sends:[{ round, sent_at (UTC), sent_by, ref, name, description,
+// old_db, status: refused|retyped|replaced|accepted|waiting, refused_by,
+// refused_at, reason, files:[{ name, entry, att, url }] }], legacy, can_edit }.
+// `legacy` is the same card fetchLegacy returns. Never throws, like fetchLegacy.
+export async function fetchClientSends(kpiId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: true, sends: [], legacy: false, can_edit: false };
+  try {
+    const res = await jsonRpc(serverUrl, '/kra_kpi/client_sends', { kpi_id: kpiId });
+    return res || { status: false, sends: [], legacy: false };
+  } catch (e) {
+    log.warn('fetchClientSends failed', e?.message);
+    return { status: false, sends: [], legacy: false, message: 'Could not load what the client sent' };
+  }
+}
+
+// 💬 The task's chat with the client (the web task panel's Chat tab):
+// { status, messages:[{ id, side:'team'|'client', who, body, at }], waiting,
+//   can_send, locked, client }. Never throws.
+export async function fetchChat(kpiId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, messages: [], message: 'Not connected to a server.' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi_action/chat', { kpi_id: kpiId });
+    return res || { status: false, messages: [] };
+  } catch (e) {
+    log.warn('fetchChat failed', e?.message);
+    return { status: false, messages: [], message: 'Could not load the chat' };
+  }
+}
+
+// Send a team message to the client's WhatsApp group. Answers like fetchChat.
+// The route takes 'odoo' | 'web' only; the app counts as web.
+export async function sendChat(kpiId, text) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'Not connected to a server.' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi_action/chat/send', { kpi_id: kpiId, text, source: 'web' });
+    return res || { status: false, message: 'Could not send it' };
+  } catch (e) {
+    log.warn('sendChat failed', e?.message);
+    return { status: false, message: e?.message || 'Could not send it' };
+  }
+}
+
+// Needs linking (admins / managers): old-DB bugs / updates still waiting for
+// their Request ID, oldest first → { status, tasks:[{ id, ref, name, client,
+// client_id, db, legacy_name, note, transcript, voice_notes, by, date }] }.
+export async function fetchNeedsLinking() {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, tasks: [], message: 'Not connected to a server.' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kra_kpi/legacy/pending', {});
+    return res || { status: false, tasks: [] };
+  } catch (e) {
+    log.warn('fetchNeedsLinking failed', e?.message);
+    return { status: false, tasks: [], message: 'Could not load the list' };
+  }
+}
+
 // Save the KPI Details (admins / managers). A Request ID renumbers the task
 // under that old requirement (BUG-031 → BUG001-REQ-012) and marks it Confirmed
 // with client. → { status, legacy, ref, message }.
