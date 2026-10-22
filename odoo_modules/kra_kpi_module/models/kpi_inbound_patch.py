@@ -1218,6 +1218,18 @@ def _process_kpi_reply_instant(pool, uid, session_id, phone_clean, msg_text):
                                 "reply 1 to approve, 2 to reject, or 4 for clarification.")
                     cr.commit()
                     return True
+                if action == 'reject':
+                    # Sending finished work back needs what is still wrong
+                    # (kpi_finish.py); a bare "2" can't carry it.
+                    try:
+                        link = kpi._build_approval_url()
+                    except Exception:
+                        link = ''
+                    _send_reply(pool, uid, session_id, phone_clean,
+                                f"To send {kpi.external_ref or kpi.name} back, please tell us what is still wrong"
+                                + (f" here: {link}" if link else " — reply in your group or ask the team."))
+                    cr.commit()
+                    return True
                 result = kpi.record_client_final_decision(
                     action=action,
                     partner_name=partner_name,

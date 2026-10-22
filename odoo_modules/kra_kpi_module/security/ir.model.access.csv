@@ -188,3 +188,6 @@ access_kpi_escalation_tier_admin,kpi.escalation.tier.admin,model_kpi_escalation_
 access_kpi_escalation_tier_owner,kpi.escalation.tier.owner,model_kpi_escalation_tier,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_escalation_tier_system,kpi.escalation.tier.system,model_kpi_escalation_tier,base.group_system,1,1,1,1
 access_kpi_escalation_tier_user,kpi.escalation.tier.user,model_kpi_escalation_tier,base.group_user,1,0,0,0
+access_kpi_billing_rate_owner,kpi.billing.rate.owner,model_kpi_billing_rate,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_billing_rate_system,kpi.billing.rate.system,model_kpi_billing_rate,base.group_system,1,1,1,1
+access_kpi_billing_rate_user,kpi.billing.rate.user,model_kpi_billing_rate,base.group_user,1,0,0,0

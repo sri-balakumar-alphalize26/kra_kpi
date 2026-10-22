@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Every 15 minutes: close client reviews nobody answered within
+             kra_kpi.client_review_days (default 3). The task then waits for
+             Full Complete (user manual) and the developer is asked.
+             See models/kpi_finish.py _cron_client_review_timeout. -->
+        <record id="ir_cron_kpi_client_review_timeout" model="ir.cron">
+            <field name="name">KRA/KPI: Close client reviews with no reply</field>
+            <field name="model_id" ref="model_kra_kpi"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_client_review_timeout()</field>
+            <field name="interval_number">15</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>
