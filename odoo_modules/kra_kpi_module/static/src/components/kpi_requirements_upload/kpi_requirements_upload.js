@@ -159,7 +159,20 @@ const TEMPLATE = xml/* xml */`
                                    title="Auto-assigned at create time. Final number may shift if other users add tasks first."/>
                         </td>
                         <td t-if="docType !== 'requirement'">
-                            <input type="text" class="form-control form-control-sm"
+                            <!-- 🗄️ The requirement is in the old database: say what it is about instead. -->
+                            <label class="small d-flex align-items-center gap-1 mb-1 text-nowrap" style="cursor:pointer"
+                                   title="The requirement is in the old database, not in this one">
+                                <input type="checkbox" class="form-check-input m-0" t-model="t.legacy_on"/>🗄️ Old DB
+                            </label>
+                            <t t-if="t.legacy_on">
+                                <input type="text" class="form-control form-control-sm mb-1"
+                                       t-model="t.legacy_ref" placeholder="Request ID, e.g. REQ-012"/>
+                                <input type="text" class="form-control form-control-sm mb-1"
+                                       t-model="t.legacy_name" placeholder="Task name"/>
+                                <textarea class="form-control form-control-sm" rows="2"
+                                          t-model="t.legacy_note" placeholder="Message about it"/>
+                            </t>
+                            <input t-else="" type="text" class="form-control form-control-sm"
                                    t-model="t.related_req_ref"
                                    placeholder="REQ-001"/>
                         </td>
@@ -516,6 +529,7 @@ class _BaseUpload extends Component {
             name: name || '',
             external_ref: external_ref || '',
             related_req_ref: related_req_ref || '',
+            legacy_on: false, legacy_ref: '', legacy_name: '', legacy_note: '',
             estimate_hours: this.state.def_hours || 0,
             estimate_minutes: this.state.def_minutes || 0,
             priority: this.state.def_priority || 'regular',
@@ -734,6 +748,13 @@ class _BaseUpload extends Component {
                 name: (t.name || '').trim(),
                 external_ref: (t.external_ref || '').trim(),
                 related_req_ref: (t.related_req_ref || '').trim(),
+                // Old DB (Bug / Update only): the server checks it says enough.
+                ...(t.legacy_on && this.docType !== 'requirement' ? {
+                    legacy_on: true, related_req_ref: '',
+                    legacy_ref: (t.legacy_ref || '').trim(),
+                    legacy_name: (t.legacy_name || '').trim(),
+                    legacy_note: (t.legacy_note || '').trim(),
+                } : {}),
                 estimate_hours: t.estimate_hours || 0,
                 estimate_minutes: t.estimate_minutes || 0,
                 priority: t.priority || 'regular',
