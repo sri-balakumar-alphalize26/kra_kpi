@@ -310,12 +310,15 @@ class KpiWaStaffTask(models.AbstractModel):
             'switch_pick': self._fl_switch_pick, 'switch_search': self._fl_switch_search,
             'pause_which': self._fl_pause_which, 'switch_from_which': self._fl_switch_from_which,
             'day_pick': self._fl_day_pick,
+            # Smart typing's ✅ Yes / ❌ No and "what next" polls (kpi_wa_smart).
+            'smart_pick': self._fl_smart_pick,
         }.get(at)
         if not handler:
             state._reset()
             return False
         task = state.staff_kpi_id
-        needs_task = not (at in ('meet_menu', 'meet_client', 'day_pausemenu', 'pause_which', 'day_pick')
+        needs_task = not (at in ('meet_menu', 'meet_client', 'day_pausemenu', 'pause_which', 'day_pick',
+                                 'smart_pick')
                           or (at or '').startswith('mt_')
                           or (at in ('pause_code', 'pause_note', 'pause_meet') and d.get('all'))
                           or (at in ('meet_who', 'meet_note') and d.get('purpose') in ('nontask', 'pauseall')))
