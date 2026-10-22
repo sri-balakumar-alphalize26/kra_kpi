@@ -113,6 +113,11 @@ export const declineQueueTask = (kpiId, { mode, reasonId, reasonText, docType })
   kpi_id: Number(kpiId), mode: mode || "decline", reason_id: reasonId ? Number(reasonId) : false, reason_text: reasonText || "", doc_type: docType || false,
 }, { timeout: 45000 });
 
+/* 🚫 Refused: declined client requests, archived with their reason
+   (kpi_decline). Restore puts one back in the queue (Pending). */
+export const REFUSED_PATH = "/kpi_pending_queue/refused";
+export const restoreRefused = (kpiId) => rpc("/kpi_pending_queue/restore", { kpi_id: Number(kpiId) }, { timeout: 45000 });
+
 /* ---- client sign-off (client approves the finished work) ----
    The pre-approval list/decide routes (/kpi_pre_approval/*) are the client's
    own and refuse admins: see lib/services/portal.js. Admins follow

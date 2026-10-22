@@ -177,6 +177,53 @@ class KraKpiDecline(models.Model):
             "wording. The reference is unchanged."
         ) % (self.external_ref or self.id)
 
+    def _is_refused(self):
+        """Refused and still archived -- what the 🚫 Refused list shows."""
+        self.ensure_one()
+        return bool(not self.active and self.declined_at and self.decline_mode == 'decline')
+
+    def action_restore_declined(self, by_user=None):
+        """↩️ Restore from the 🚫 Refused list: back in the client queue, where
+        a fresh submission sits, for the admin to publish or refuse again.
+
+        Same writes as the client-fix path (apply_client_correction /
+        _resubmit). The refusal itself -- reason, note, who, when, count --
+        stays on the task as history. The client is not messaged here: they
+        hear the usual notices when it is published."""
+        self.ensure_one()
+        if not self._is_refused():
+            raise ValidationError(_('%s is not a refused request.') % (self.external_ref or self.id))
+        user = by_user or self.env.user
+        self.sudo().write({
+            'active': True,
+            'published': False,
+            'task_state': 'queue_waiting',
+            'admin_accept_deadline_at': False,
+            'client_dispute': False,
+            'client_reconfirm_state': False,
+            # The old fix link stops working; old-DB items stop reading "refused".
+            'client_fix_token': False,
+            'decline_mode': False,
+        })
+        # The client's WhatsApp may still be waiting on the refusal question:
+        # a late "disagree" or "withdraw" must not act on a restored request.
+        Intake = self.env['kpi.wa.group.intake'].sudo()
+        for st in Intake.search([('pending_decline_kpi_id', '=', self.id)]):
+            st._touch(step='idle' if st.step in ('decline_reconfirm', 'ask_correction') else st.step,
+                      pending_decline_kpi_id=False)
+        self.sudo()._log_action('restored', source='web', actor_user_id=user.id,
+                                payload={'from': 'refused'})
+        try:
+            self.sudo()._notify('client_task_queued')
+            self.sudo()._schedule_queue_nudge()
+        except Exception as exc:
+            _logger.warning('restore notify failed for %s: %s', self.id, exc)
+        try:
+            self.sudo().ask_manager_to_decide()
+        except Exception as exc:
+            _logger.warning('could not re-ask the manager for %s: %s', self.id, exc)
+        return True
+
     # ------------------------------------------------------------------
     def _kind_now(self):
         """Current doc type, derived the way the rest of the module derives it:

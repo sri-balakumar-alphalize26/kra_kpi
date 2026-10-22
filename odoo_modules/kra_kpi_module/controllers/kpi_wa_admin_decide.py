@@ -79,6 +79,36 @@ class KpiWaAdminDecide(http.Controller):
                 [('progress_id', '=', p.id)], order='sequence') if a.file_name]
         return names
 
+    # Photos, videos and voice notes are shown on the page, not just named.
+    _IMAGE_EXT = ('jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif')
+    _VIDEO_EXT = ('mp4', 'webm', 'mov', 'm4v', '3gp', 'mkv', 'avi')
+    _AUDIO_EXT = ('mp3', 'm4a', 'ogg', 'oga', 'opus', 'wav', 'aac', 'amr')
+
+    def _media(self, token, k):
+        """Every file on the task, each with a link through THIS admin link
+        (/kpi/wa/admin/<token>/file) and what it is: image / video / audio / file."""
+        out = []
+        Att = request.env['kpi.file.attachment'].sudo()
+
+        def add(name, kind, entry, att):
+            ext = (name or '').rsplit('.', 1)[-1].lower() if '.' in (name or '') else ''
+            typ = ('image' if ext in self._IMAGE_EXT else 'video' if ext in self._VIDEO_EXT
+                   else 'audio' if ext in self._AUDIO_EXT else 'file')
+            out.append({'name': name, 'type': typ,
+                        'url': '/kpi/wa/admin/%s/file?kind=%s&entry=%s&att=%s' % (token, kind, entry, att)})
+
+        for p in request.env['kpi.progress'].sudo().search([('kpi_id', '=', k.id)], order='id'):
+            if p.file_name:
+                add(p.file_name, 'progress', p.id, 0)
+            for a in Att.search([('progress_id', '=', p.id)], order='sequence'):
+                add(a.file_name, 'progress', p.id, a.id)
+        for m in k.user_manual_ids:
+            if m.file_name:
+                add(m.file_name, 'manual', m.id, 0)
+            for a in Att.search([('manual_id', '=', m.id)], order='sequence'):
+                add(a.file_name, 'manual', m.id, a.id)
+        return out
+
     def _details(self, link):
         """[(label, value)] for the top of the page. Admin eyes only."""
         k = link.kpi_id.sudo()
@@ -119,9 +149,10 @@ class KpiWaAdminDecide(http.Controller):
                 [('kpi_id', '=', k.id), ('summary', '!=', False)], order='id desc', limit=1)
             if last:
                 rows.append(('Last update', last.summary))
-        files = self._files(k)
+        files = self._files(k) + [m.file_name for m in k.user_manual_ids if m.file_name]
         if files:
-            rows.append(('Attachments', ', '.join(files)))
+            # The photos / videos themselves are shown below the details (_media).
+            rows.append(('Attachments', '%d file(s) — shown below' % len(files)))
         if k.description:
             rows.append(('Description', re.sub(r'<[^>]+>', '', k.description or '').strip()[:1500]))
         return rows
@@ -136,7 +167,7 @@ class KpiWaAdminDecide(http.Controller):
         return _render('kra_kpi_module.wa_admin_decide', {
             'token': token, 'kind': link.kind, 'emoji': emoji, 'title': title,
             'yes': yes, 'no': no, 'admin': link.user_id.name or '',
-            'rows': self._details(link), 'error': error,
+            'rows': self._details(link), 'error': error, 'media': self._media(token, k),
             'developers': self._developers() if link.kind in ('new_request', 'new_database') else [],
             'reasons': reasons, 'priorities': PRIORITIES, 'doc_types': DOC_TYPES,
             'deliverables': DELIVERABLE_TYPES,
@@ -193,6 +224,41 @@ class KpiWaAdminDecide(http.Controller):
         if link.expires < fields.Datetime.now():
             return link, None, self._closed(link, 'This link has expired. Decide it on the web, or wait for the next reminder.')
         return link, admin, None
+
+    @http.route('/kpi/wa/admin/<string:token>/file', type='http', auth='public',
+                methods=['GET'], csrf=False, website=False)
+    def file(self, token, kind='', entry=0, att=0, **kw):
+        """One of the task's files, shown in the page (inline). Only files of
+        THIS link's task, and only while the link has not expired."""
+        import base64
+        import mimetypes
+        link = _link_for(token)
+        if not link or link.expires < fields.Datetime.now():
+            return request.not_found()
+        kpi = link.kpi_id.sudo().with_context(active_test=False)
+        model, field = {'progress': ('kpi.progress', 'uploaded_file'),
+                        'manual': ('kpi.user.manual', 'manual_file')}.get(kind, (None, None))
+        if not model:
+            return request.not_found()
+        rec = request.env[model].sudo().browse(int(entry or 0)).exists()
+        if not rec or rec.kpi_id.id != kpi.id:
+            return request.not_found()
+        if int(att or 0):
+            a = request.env['kpi.file.attachment'].sudo().browse(int(att)).exists()
+            link_field = 'progress_id' if kind == 'progress' else 'manual_id'
+            if not a or a[link_field].id != rec.id:
+                return request.not_found()
+            data, name, mime = a.file, a.file_name, a.mimetype
+        else:
+            data, name, mime = rec[field], rec.file_name, ''
+        if not data:
+            return request.not_found()
+        raw = base64.b64decode(data)
+        mime = mime or mimetypes.guess_type(name or '')[0] or 'application/octet-stream'
+        return request.make_response(raw, headers=[
+            ('Content-Type', mime), ('Content-Length', str(len(raw))),
+            ('Content-Disposition', 'inline; filename="%s"' % (name or 'file').replace('"', '')),
+            ('Cache-Control', 'private, max-age=600')])
 
     @http.route('/kpi/wa/admin/<string:token>', type='http', auth='public',
                 methods=['GET'], csrf=False, website=False)

@@ -46,6 +46,28 @@
                             </t>
                         </dl>
 
+                        <!-- The client's photos / videos / voice notes, shown, not just named. -->
+                        <div t-if="media" class="adm-media">
+                            <t t-foreach="media" t-as="m">
+                                <figure>
+                                    <a t-if="m['type'] == 'image'" t-att-href="m['url']" target="_blank">
+                                        <img t-att-src="m['url']" t-att-alt="m['name']" loading="lazy"/></a>
+                                    <video t-elif="m['type'] == 'video'" t-att-src="m['url']" controls="controls" preload="metadata" playsinline="playsinline"/>
+                                    <audio t-elif="m['type'] == 'audio'" t-att-src="m['url']" controls="controls" preload="metadata"/>
+                                    <a t-else="" class="adm-file" t-att-href="m['url']" target="_blank">📄 Open</a>
+                                    <figcaption t-esc="m['name']"/>
+                                </figure>
+                            </t>
+                        </div>
+                        <style>
+                            .adm-media { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px; margin:12px 0; }
+                            .adm-media figure { margin:0; border:1px solid var(--border, #dfe1e6); border-radius:8px; overflow:hidden; background:#f4f5f7; }
+                            .adm-media img, .adm-media video { display:block; width:100%; max-height:260px; object-fit:contain; background:#111; }
+                            .adm-media audio { display:block; width:100%; margin:10px 0 0; }
+                            .adm-media .adm-file { display:block; padding:24px 0; text-align:center; font-weight:700; }
+                            .adm-media figcaption { font-size:12px; padding:6px 8px; color:#5e6c84; word-break:break-all; }
+                        </style>
+
                         <div class="choice">
                             <input type="radio" name="action" id="adYes" value="yes"/>
                             <label for="adYes" class="y">✓ <t t-esc="yes"/></label>
