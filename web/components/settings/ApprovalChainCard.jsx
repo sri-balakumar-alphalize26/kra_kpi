@@ -19,9 +19,10 @@ export default function ApprovalChainCard() {
     try {
       const [rows, users] = await Promise.all([
         callKw(M, "search_read", [[]], { fields: ["name", "sequence", "minutes", "use_task_manager", "user_ids"], order: "sequence, id" }),
-        staff.length ? Promise.resolve(null) : callKw("res.users", "search_read", [[["share", "=", false]]], { fields: ["name", "kpi_wa_number", "kpi_mobile_number"], order: "name" }),
+        staff.length ? Promise.resolve(null) : callKw("res.users", "search_read", [[["share", "=", false]]], { fields: ["name", "kpi_wa_number", "kpi_mobile_number", "kpi_role"], order: "name" }),
       ]);
-      if (users) setStaff(users.map((u) => ({ id: u.id, name: u.name, number: u.kpi_wa_number || u.kpi_mobile_number || "" })));
+      if (users) /* Only admins / coordinators can decide; the rest are kept only to name them on a step. */
+      setStaff(users.map((u) => ({ id: u.id, name: u.name, number: u.kpi_wa_number || u.kpi_mobile_number || "", canDecide: u.kpi_role === "admin" || u.kpi_role === "coordinator" })));
       setTiers(rows || []);
     } catch (e) { flags.err(e.message); setTiers([]); }
   };
@@ -45,7 +46,7 @@ export default function ApprovalChainCard() {
     if (!(await dlg.confirm({ title: "Delete this step?", text: `"${t.name}" is removed from the approval chain.`, confirmLabel: "Delete", danger: true }))) return;
     try { await callKw(M, "unlink", [[t.id]]); await load(); } catch (e) { flags.err(e.message); }
   };
-  const person = (id) => staff.find((u) => u.id === id) || { name: `#${id}`, number: "" };
+  const person = (id) => staff.find((u) => u.id === id) || { name: `#${id}`, number: "", canDecide: false };
 
   return (
     <div className="cardbox" id="approval-chain" style={{ scrollMarginTop: 72, gap: 10 }}>

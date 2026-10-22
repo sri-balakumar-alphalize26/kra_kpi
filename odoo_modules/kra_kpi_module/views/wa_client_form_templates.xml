@@ -270,7 +270,9 @@
                                 <span>Are you sure all details are accurate? I agree to submit.</span></label></div>
                         <div class="ft">
                             <button type="button" class="btn ghost" id="kfBack">Back</button>
-                            <button type="button" id="kfConfirm"
+                            <!-- Off until "I agree" is ticked (form.js). Off in the HTML too, so it
+                                 is never clickable while the script is still loading. -->
+                            <button type="button" id="kfConfirm" disabled="disabled" title="Tick “I agree” first"
                                     t-att-class="'btn danger' if kind == 'dbdisconnect' else 'btn primary'">Confirm</button>
                         </div>
                     </div>
@@ -322,7 +324,7 @@
                     </div>
                 </div>
                 <script>window.KF_BOOT = <t t-out="boot"/>;</script>
-                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=5"></script>
+                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=7"></script>
             </t>
         </template>
 

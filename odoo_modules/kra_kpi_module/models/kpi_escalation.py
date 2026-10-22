@@ -37,6 +37,7 @@ class KpiEscalationTier(models.Model):
     minutes = fields.Integer(default=5, help='How long this tier has before the next one is asked.')
     user_ids = fields.Many2many('res.users', 'kpi_escalation_tier_user_rel',
                                 'tier_id', 'user_id', string='People',
+                                # Anyone with a login; being on a step lets them decide.
                                 domain=[('share', '=', False)])
     use_task_manager = fields.Boolean(
         string="Task's manager",
@@ -56,11 +57,24 @@ class KraKpiEscalation(models.Model):
     esc_due_at = fields.Datetime(string='Next Tier At', copy=False, index=True, readonly=True)
 
     def _esc_tier_users(self, tier):
+        """Who this step asks: exactly the people named on it, admin or not.
+        Being named on a step is the permission to decide
+        (kpi_wa_admin_decide._check). A step with nobody named, or with
+        "Task's manager" ticked, also asks the task's managers."""
+        from .kpi_wa_admin_link import _is_admin
         self.ensure_one()
         users = tier.user_ids.filtered(lambda u: u.active)
         if tier.use_task_manager or not users:
-            users |= self._manager_users()
+            users |= self._manager_users().filtered(_is_admin)
+        if not users:
+            users = self._wa_admin_recipients()
         return users.filtered(lambda u: u._kpi_wa_target())
+
+    @api.model
+    def _is_chain_decider(self, user):
+        """Named on an approval chain step: may decide a client request."""
+        return bool(user) and bool(self.env['kpi.escalation.tier'].sudo().search_count(
+            [('user_ids', 'in', user.ids)]))
 
     def _esc_needs_decision(self):
         """Still waiting for an admin? (accepted = published; refused = archived)"""
@@ -81,7 +95,7 @@ class KraKpiEscalation(models.Model):
             return None
         return self._esc_ask(tiers[0], kind)
 
-    def _esc_ask(self, tier, kind):
+    def _esc_ask(self, tier, kind, note=''):
         self.ensure_one()
         users = self._esc_tier_users(tier)
         tiers = self.env['kpi.escalation.tier'].chain()
@@ -89,10 +103,20 @@ class KraKpiEscalation(models.Model):
         wait = max(tier.minutes, 1) if not last else max(tier.minutes, LAST_TIER_REMIND_MIN)
         self.sudo().write({'esc_tier_id': tier.id,
                            'esc_due_at': fields.Datetime.now() + timedelta(minutes=wait)})
-        self.sudo()._wa_send_admin_links(kind, users)
+        self.sudo()._wa_send_admin_links(kind, users, note)
         self.sudo()._log_action('approval_tier', source='cron', payload={
-            'tier': tier.name, 'users': users.mapped('name'), 'kind': kind})
+            'tier': tier.name, 'users': users.mapped('name'), 'kind': kind, 'note': note})
         return users
+
+    def _esc_asked_names(self):
+        """Everyone sent a decision link for this task so far, in order."""
+        self.ensure_one()
+        names = []
+        for link in self.env['kpi.wa.admin.link'].sudo().search(
+                [('kpi_id', '=', self.id)], order='id'):
+            if link.user_id.name not in names:
+                names.append(link.user_id.name)
+        return names
 
     @api.model
     def _cron_escalate_tiers(self):
@@ -111,7 +135,16 @@ class KraKpiEscalation(models.Model):
                 after = tiers.filtered(lambda t: (t.sequence, t.id) > (
                     rec.esc_tier_id.sequence, rec.esc_tier_id.id)) if rec.esc_tier_id else tiers
                 # Past the last tier: remind the last one again. Never auto-accept.
-                rec._esc_ask(after[:1] or tiers[-1:], kind)
+                # Either way the message says who did not answer before.
+                prev = rec.esc_tier_id
+                who = ', '.join(rec._esc_tier_users(prev).mapped('name')) if prev else ''
+                if after[:1]:
+                    note = ('⏰ No reply from %s (%s) in %d min — now asking you.' % (
+                        who or 'the previous step', prev.name, prev.minutes or 0)) if prev else ''
+                else:
+                    note = '🔁 Reminder: still no decision. Already asked: %s.' % (
+                        ', '.join(rec._esc_asked_names()) or who or '—')
+                rec._esc_ask(after[:1] or tiers[-1:], kind, note)
                 moved += 1
             except Exception as exc:
                 _logger.warning('approval chain step failed for %s: %s', rec.id, exc)

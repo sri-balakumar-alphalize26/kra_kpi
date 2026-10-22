@@ -1755,13 +1755,10 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                 if member and member.user_id else False}
         vals.update(post or {})
         kpi.write(vals)
-        try:
-            kpi._notify('client_task_queued')
-            kpi._schedule_queue_nudge()
-        except Exception as exc:
-            _logger.warning('group intake notify failed: %s', exc)
-        # The admins' private decision link (kpi_wa_admin_link.py). Never raises.
-        kpi._wa_ask_admins()
+        # Queue notice + the admins' private decision links (approval chain).
+        # In the background after commit: those are WhatsApp sends, one per
+        # admin, and they used to hold the client's Submit for ~5 seconds.
+        kpi._after_commit_in_background('_announce_new_client_ticket')
         log = {'group': group.jid, 'participant': state.participant_key,
                'number': self._participant_number(state)}
         log.update(payload or {})

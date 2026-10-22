@@ -26,6 +26,7 @@ from .kpi_reports_api import KpiReportsAPI
 from .kra_api import KraKpiAPI
 from ..models.kpi import DELIVERABLE_TYPES, deliverable_type_label
 from ..models.kpi_wa_admin_link import _is_admin
+from ..models.kpi_escalation import CHAIN_KINDS
 
 _logger = logging.getLogger(__name__)
 
@@ -149,12 +150,27 @@ class KpiWaAdminDecide(http.Controller):
 
     def _closed(self, link, why=''):
         last = link._last_decision()
+        detail = ''
         if last:
-            why = why or 'Already handled — %s by %s, %s.' % (
-                last.decision or 'decided', last.decided_by_id.name or '—', _fmt_dt(last.used_at, link.user_id))
+            why = why or '%s %s by %s, %s.' % (
+                '✅' if last.decision in ('accepted', 'approved') else '❌' if last.decision in ('refused', 'sent back') else 'ℹ️',
+                (last.decision or 'decided').capitalize(), last.decided_by_id.name or '—',
+                _fmt_dt(last.used_at, link.user_id))
+            detail = last.decision_note or ''
+            if not detail and last.decision == 'refused':
+                # Decided before decision_note existed: the task kept the reason.
+                k = link.kpi_id.sudo().with_context(active_test=False)
+                detail = ('Reason: %s' % k.decline_note) if k.decline_note else ''
+        else:
+            # Decided on the web: the task itself still says who refused and why.
+            k = link.kpi_id.sudo().with_context(active_test=False)
+            if not why and k.decline_note and k.declined_by_id:
+                why = '❌ Refused by %s, %s.' % (k.declined_by_id.name, _fmt_dt(k.declined_at, link.user_id))
+                detail = 'Reason: %s' % k.decline_note
         return _render('kra_kpi_module.wa_admin_decide_closed', {
             'ref': link.kpi_id.external_ref or '', 'name': link.kpi_id.name or '',
-            'why': why or 'Already handled on the web. Nothing more to do here.'})
+            'why': why or 'Already handled on the web. Nothing more to do here.',
+            'detail': detail})
 
     def _check(self, token):
         """-> (link, admin, response). response is set when the page must not be used."""
@@ -165,7 +181,10 @@ class KpiWaAdminDecide(http.Controller):
                 'reason': 'This link is not valid.',
                 'hint': 'Decide it on the web — Queue or Approvals.'})
         admin = link.user_id
-        if not admin.active or not _is_admin(admin):
+        # Admins, and anyone named on an approval chain step for a client
+        # request (kpi_escalation.py): being on the step is the permission.
+        chain_ok = link.kind in CHAIN_KINDS and request.env['kra.kpi'].sudo()._is_chain_decider(admin)
+        if not admin.active or not (_is_admin(admin) or chain_ok):
             return link, None, self._closed(link, 'This link was for an admin account that can no longer decide.')
         if not link._still_open():
             return link, None, self._closed(link)
@@ -195,7 +214,11 @@ class KpiWaAdminDecide(http.Controller):
         action = post.get('action')
         if action not in ('yes', 'no'):
             return self._page(token, link, 'Choose what to do.', post)
-        request.update_env(user=admin.id)
+        # The decision runs through the web's own routes, which check admin
+        # rights. A chain decider who is not an admin runs it as the
+        # Administrator; the link and the task log still name the real person.
+        acting = admin if _is_admin(admin) else request.env.ref('base.user_admin')
+        request.update_env(user=acting.id)
         try:
             ok, msg, label = self._apply(link, action, post)
         except UserError as exc:
@@ -207,8 +230,21 @@ class KpiWaAdminDecide(http.Controller):
             request.env.cr.rollback()
             return self._page(token, link, msg or 'That could not be saved.', post)
 
-        link._close_all(label, admin)
+        # What they picked and typed, for anyone who opens a link after them.
+        if action == 'no':
+            rid = int(post.get('reason_id') or 0)
+            reason = request.env['kpi.decline.reason'].sudo().browse(rid).exists() if rid else None
+            typed = (post.get('note') or '').strip()
+            note = '\n'.join(p for p in (
+                ('Reason: %s' % reason.name) if reason else '',
+                ('Note: %s' % typed) if typed else '') if p)
+        else:
+            note = msg[:1].upper() + msg[1:] if msg else ''
+        link._close_all(label, admin, note)
         k = link.kpi_id.sudo()
+        if acting != admin:
+            k._log_action('chain_decision', source='whatsapp', actor_label=admin.name,
+                          payload={'decision': label, 'by': admin.name, 'kind': link.kind})
         done = '%s — %s' % (k.external_ref or '#%s' % k.id, msg)
         try:
             request.env['kpi.wa.group.report'].sudo().post_text_to_user(admin, '✅ Done: ' + done)

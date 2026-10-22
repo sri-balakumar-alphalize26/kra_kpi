@@ -194,6 +194,10 @@
                     <div class="big">ℹ️</div>
                     <div style="font-size:18px; font-weight:800;"><t t-esc="ref"/><t t-if="ref"> — </t><t t-esc="name"/></div>
                     <p style="margin-top:16px; font-weight:700;" t-esc="why"/>
+                    <!-- What the person who decided picked and typed. -->
+                    <p t-if="detail" style="margin:10px auto 0; max-width:440px; padding:10px 14px; text-align:left;
+                       white-space:pre-wrap; background:var(--input); border:1px solid var(--border);
+                       border-radius:var(--r);" t-esc="detail"/>
                 </div>
             </t>
         </template>

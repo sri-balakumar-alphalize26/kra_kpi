@@ -618,7 +618,24 @@
         if (!agree.checked) { return; }
         var b = $('kfConfirm');
         b.disabled = true; b.textContent = 'Sending…';
-        form.submit();
+        $('kfBack').disabled = true;
+        // Sent by XHR so the upload of photos / videos shows its progress on
+        // the button. The server's answer is the next page, drawn in place.
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', form.action);
+        xhr.upload.onprogress = function (e) {
+            if (!e.lengthComputable) { return; }
+            var pct = Math.floor(e.loaded / e.total * 100);
+            b.textContent = pct < 100 ? 'Sending… ' + pct + '%' : 'Saving…';
+        };
+        xhr.onload = function () {
+            document.open(); document.write(xhr.responseText); document.close();
+        };
+        xhr.onerror = function () {
+            // No connection: fall back to a plain submit, which the browser retries.
+            form.submit();
+        };
+        xhr.send(new FormData(form));
     });
 
     // ---- start: refill after a server-side error ---------------------------

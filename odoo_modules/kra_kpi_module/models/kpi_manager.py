@@ -33,10 +33,22 @@ no manager at all is a configuration fault that needs saying out loud.
 """
 
 import logging
+import threading
 
-from odoo import _, api, fields, models
+from odoo import SUPERUSER_ID, _, api, fields, models
 
 _logger = logging.getLogger(__name__)
+
+
+def _announce_in_background(dbname, ids):
+    """Thread body: post the team-group announcement with a fresh cursor."""
+    try:
+        from odoo.modules.registry import Registry
+        with Registry(dbname).cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            env['kra.kpi'].browse(ids).exists()._announce_assignment()
+    except Exception as exc:
+        _logger.warning('assignment announcement failed for %s: %s', ids, exc)
 
 
 class KraKpiManager(models.Model):
@@ -130,11 +142,23 @@ class KraKpiManager(models.Model):
         res = super().write(vals)
         # Only on the transition into being assigned. 'user_id' in vals is
         # not enough on its own -- clearing an assignee also writes that key.
+        #
+        # Posted AFTER the commit, once per transaction. Posting inside the
+        # request meant a serialization retry (Odoo re-runs the whole request)
+        # sent the same announcement twice -- REQ-010, 22 Oct 2026.
         if vals.get('user_id'):
-            try:
-                self._announce_assignment()
-            except Exception as exc:
-                _logger.warning('assignment announcement failed: %s', exc)
+            ids = self.filtered(lambda r: r.user_id and not r.assignment_announced_at).ids
+            if ids:
+                pending = self.env.cr.postcommit.data.setdefault('kpi_announce_ids', set())
+                first = not pending
+                pending.update(ids)
+                if first:
+                    dbname = self.env.cr.dbname
+
+                    def _start():
+                        threading.Thread(target=_announce_in_background,
+                                         args=(dbname, sorted(pending)), daemon=True).start()
+                    self.env.cr.postcommit.add(_start)
         return res
 
     def _manager_wa_targets(self):
