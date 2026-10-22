@@ -73,7 +73,7 @@ export default function ApprovalChainCard() {
             {t.user_ids.map((id) => { const u = person(id); return (
               <div key={id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "4px 8px", display: "flex", gap: 8, alignItems: "flex-start", background: "var(--hover)" }}>
                 <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}><b style={{ fontSize: 13 }}>{u.name}</b><span className="mini">{u.number || "no WhatsApp number"}</span></span>
-                <button type="button" className="icon-btn" style={{ width: 20, height: 20 }} aria-label={`Remove ${u.name}`} onClick={() => write(t.id, { user_ids: [[3, id]] })}><Icon n="x" size={12} /></button>
+                <button type="button" className="icon-btn" style={{ width: 20, height: 20 }} aria-label={`Remove ${u.name}`} onClick={async () => { if (await dlg.confirm({ title: "Remove this person?", text: `${u.name} will no longer be asked at step "${t.name}".`, confirmLabel: "Remove", danger: true })) write(t.id, { user_ids: [[3, id]] }); }}><Icon n="x" size={12} /></button>
               </div>
             ); })}
             {(t.use_task_manager || !t.user_ids.length) && <div className="mini" style={{ border: "1px dashed var(--border)", borderRadius: 8, padding: "4px 8px", lineHeight: 1.25 }}>the task&apos;s manager<br />from the task</div>}

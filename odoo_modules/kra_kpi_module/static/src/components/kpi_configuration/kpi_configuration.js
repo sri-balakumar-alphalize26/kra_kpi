@@ -36,11 +36,19 @@ export class KpiConfiguration extends Component {
         t.saved = true;
         setTimeout(() => { t.saved = false; }, 1500);
     }
-    async removePerson(t, id) {
-        t.user_ids = t.user_ids.filter((x) => x !== id);
-        await this.orm.write("kpi.escalation.tier", [t.id], { user_ids: [[3, id]] });
-        t.saved = true;
-        setTimeout(() => { t.saved = false; }, 1500);
+    removePerson(t, id) {
+        this.dialog.add(ConfirmationDialog, {
+            title: "Remove this person?",
+            body: `${this.userName(id)} will no longer be asked at step "${t.name}".`,
+            confirmLabel: "Remove",
+            confirm: async () => {
+                t.user_ids = t.user_ids.filter((x) => x !== id);
+                await this.orm.write("kpi.escalation.tier", [t.id], { user_ids: [[3, id]] });
+                t.saved = true;
+                setTimeout(() => { t.saved = false; }, 1500);
+            },
+            cancel: () => {},
+        });
     }
     async moveTier(i, dir) {
         const list = [...this.state.tiers];
@@ -1131,7 +1139,16 @@ export class KpiConfiguration extends Component {
         this._waSay(`Saved — reports will go to "${this.state.waGroupName}".`, "success");
     }
 
-    async waClear() {
+    waClear() {
+        this.dialog.add(ConfirmationDialog, {
+            title: "Turn off group reports?",
+            body: "Nothing will be posted to the WhatsApp group until you choose a group again.",
+            confirmLabel: "Turn off",
+            confirm: () => this._waClear(),
+            cancel: () => {},
+        });
+    }
+    async _waClear() {
         const r = await rpc("/kpi_wa_group/select", { jid: "" });
         if (!r || !r.status) { this._waSay((r && r.message) || "Could not clear.", "danger"); return; }
         this.state.waGroupJid = "";
