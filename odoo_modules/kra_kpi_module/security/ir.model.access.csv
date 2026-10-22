@@ -168,6 +168,10 @@ access_kpi_doubt_dev,kpi.doubt.dev,model_kpi_doubt,kra_kpi_module.group_kra_deve
 access_kpi_doubt_admin,kpi.doubt.admin,model_kpi_doubt,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_doubt_owner,kpi.doubt.owner,model_kpi_doubt,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_doubt_system,kpi.doubt.system,model_kpi_doubt,base.group_system,1,1,1,1
+access_kpi_chat_message_dev,kpi.chat.message.dev,model_kpi_chat_message,kra_kpi_module.group_kra_developer,1,0,0,0
+access_kpi_chat_message_admin,kpi.chat.message.admin,model_kpi_chat_message,kra_kpi_module.group_kra_admin,1,1,1,1
+access_kpi_chat_message_owner,kpi.chat.message.owner,model_kpi_chat_message,kra_kpi_module.group_kra_owner,1,1,1,1
+access_kpi_chat_message_system,kpi.chat.message.system,model_kpi_chat_message,base.group_system,1,1,1,1
 access_kpi_ai_chat_admin,kpi.ai.chat.admin,model_kpi_ai_chat,kra_kpi_module.group_kra_admin,1,1,1,1
 access_kpi_ai_chat_owner,kpi.ai.chat.owner,model_kpi_ai_chat,kra_kpi_module.group_kra_owner,1,1,1,1
 access_kpi_ai_chat_system,kpi.ai.chat.system,model_kpi_ai_chat,base.group_system,1,1,1,1

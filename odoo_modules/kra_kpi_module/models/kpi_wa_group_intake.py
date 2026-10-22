@@ -68,6 +68,8 @@ _TYPE_ROWS = [
      'Remove a database you no longer need'),
     ('livedb', '📂 Live Databases', 'See your databases and their details'),
     ('myreq', '📋 My Requests', 'Where each of your requests is'),
+    # Ten rows with this one -- the most a poll holds (POLL_MAX_OPTIONS).
+    ('discuss', '💬 Discuss', 'Talk to the team about one of your requests'),
     ('waiting', '✍️ Waiting for me', 'Approvals and sign-offs you need to give'),
 ]
 
@@ -157,6 +159,12 @@ _STEPS = [
     ('livedb_db', 'Live databases: picking a database'),
     # My Requests (read-only)
     ('myreq_pick', 'My requests: picking one'),
+    # 💬 Discuss (kpi_chat.py): which request, the message, then send it.
+    ('discuss_pick', 'Discuss: picking a request'),
+    ('discuss_text', 'Discuss: typing the message'),
+    ('discuss_confirm', 'Discuss: confirming the message'),
+    # Smart typing: a request type typed ("bug") is asked about first.
+    ('type_confirm', 'Confirming a typed choice'),
 ]
 _STEP_CODES = tuple(c for c, _l in _STEPS)
 
@@ -380,6 +388,9 @@ class KpiWaGroupIntake(models.Model):
     # 📂 Live Databases: which server, and which page of its databases.
     livedb_server_id = fields.Many2one('kpi.server', ondelete='set null', copy=False)
     livedb_page = fields.Integer(default=0, copy=False)
+    # 💬 Discuss: the request it is about and the message, until it is sent.
+    discuss_kpi_id = fields.Many2one('kra.kpi', ondelete='set null', copy=False)
+    discuss_text = fields.Text(copy=False)
     staff_poll_ids = fields.Char(
         string='Polls sent to this person',
         help='WhatsApp ids of the last polls the bot sent this person in the '
@@ -475,6 +486,7 @@ class KpiWaGroupIntake(models.Model):
                            'staff_action': False, 'staff_kpi_id': False,
                            'staff_draft': False,
                            'livedb_server_id': False, 'livedb_page': 0,
+                           'discuss_kpi_id': False, 'discuss_text': False,
                            'last_activity': fields.Datetime.now()})
         # Files a developer sent mid-update are parked as attachments on this
         # row until they press Save. A reset means they were never saved.
@@ -593,32 +605,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                 if low in _GREETINGS:
                     return self._show_types(message, state, group)
                 return False
-            # Requirement / Bug / Update / New DB / Destroy: a private form
-            # link with dropdowns, media and a preview, instead of the polls.
-            if choice in _FORM_TYPES:
-                return self._client_form_begin(message, state, group, choice)
-            if choice == 'livedb':
-                return self._livedb_begin(message, state, group)
-            if choice == 'myreq':
-                state._touch(livedb_page=0)
-                return self._myreq_show(message, state, group)
-            if choice == 'waiting':
-                self._text(message, self._waiting_text(group))
-                state._reset()
-                return True
-            if choice == 'newdb':
-                # Skip the area picker: a new database is unambiguously
-                # Server / Hosting. One less turn.
-                state._touch(step='pick_server', action_type='newdb',
-                             work_area='server')
-                return self._show_servers(message, state)
-            if choice == 'dbdisconnect':
-                state._touch(action_type='dbdisconnect', work_area='server')
-                return self._show_disc_dbs(message, state, group)
-            state._touch(action_type=choice)
-            # Which database is this about? Asked BEFORE the area, because it
-            # decides which KRA the ticket is filed against.
-            return self._begin_db_scope(message, state, group)
+            return self._run_type(message, state, group, choice)
 
         if step == 'pick_server':
             opts = self._server_options_from_state(state)
@@ -813,6 +800,79 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             self._text(message, self._myreq_details(task))
             state._reset()
             return True
+
+        # ---- a typed choice, asked about first (kpi_wa_smart.py) ---------- #
+        if step == 'type_confirm':
+            ans = _strip_emoji(tapped or body)
+            choice = (state.menu_csv or '').strip()
+            if ans in ('yes', 'ok', 'y') or low == '1':
+                if choice not in [r[0] for r in self._type_rows_for(group)]:
+                    state._reset()
+                    return self._show_types(message, state, group)
+                state._touch(step='pick_type')
+                return self._run_type(message, state, group, choice)
+            if ans in ('no', 'n') or low == '2':
+                if state.pending_decline_kpi_id:
+                    # Asked in the middle of a decline question: back to it.
+                    state._touch(step='decline_reconfirm', menu_csv=False)
+                else:
+                    state._reset()
+                self._text(message, _('OK — nothing changed.'))
+                return True
+            return False
+
+        # ---- 💬 discuss a request (kpi_chat.py) --------------------------- #
+        if step == 'discuss_pick':
+            pick = self._resolve_rows(tapped, low, self._myreq_options(state, group))
+            if not pick:
+                return False
+            if pick == _LIVEDB_MORE_ID:
+                state._touch(livedb_page=state.livedb_page + 1)
+                return self._discuss_begin(message, state, group)
+            if pick == _LIVEDB_BACK_ID:
+                state._touch(livedb_page=max(0, state.livedb_page - 1))
+                return self._discuss_begin(message, state, group)
+            task = self.env['kra.kpi'].sudo().browse(int(pick)).exists()
+            if not task or task.kra_id.id not in self._client_kra_ids(group):
+                return False
+            return self._discuss_ask_text(message, state, task)
+
+        if step == 'discuss_text':
+            if tapped or not body:
+                return False          # a late vote on the previous poll is not the message
+            return self._discuss_confirm(message, state, body)
+
+        if step == 'discuss_confirm':
+            task = state.discuss_kpi_id
+            if not task or not task.exists() or task.kra_id.id not in self._client_kra_ids(group):
+                state._reset()
+                return False
+            # Whole answers only: a retyped message that starts with "no…" is
+            # a message, not a cancel.
+            ans = _strip_emoji(tapped or body)
+            if ans in ('send', 'yes', 'ok', 'send it') or low == '1':
+                try:
+                    task.chat_post_client(state.discuss_text or '', name=state.participant_name or '',
+                                          number=self._participant_number(state) or '')
+                except Exception as exc:
+                    _logger.exception('discuss: could not send for %s: %s', task.id, exc)
+                    state._reset()
+                    self._text(message, _('Sorry — that could not be sent. Please try again.'))
+                    return True
+                state._reset()
+                self._text(message, _('📨 Sent to the team. The reply will come here, under *%s*.')
+                           % (task.external_ref or task.id))
+                return True
+            if ans in ('retype', 'edit') or low == '2':
+                return self._discuss_ask_text(message, state, task)
+            if ans in ('cancel', 'no') or low == '3':
+                state._reset()
+                self._text(message, _('Cancelled — nothing was sent.'))
+                return True
+            if tapped:
+                return False
+            # Typed again instead of tapping: that is the new version of the message.
+            return self._discuss_confirm(message, state, body)
 
         # ---- 📂 live databases (read-only) -------------------------------- #
         if step == 'livedb_server':
@@ -1135,6 +1195,39 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         return '%s\n%s · %s, %s\n\n%s' % (
             hello, group.kra_id.name or '', day, clock,
             _('What do you need?'))
+
+    def _run_type(self, message, state, group, choice):
+        """What a main-menu choice does -- tapped, or typed and confirmed
+        (kpi_wa_smart: "🐞 Report a Bug? ✅ Yes / ❌ No")."""
+        # Requirement / Bug / Update / New DB / Destroy: a private form
+        # link with dropdowns, media and a preview, instead of the polls.
+        if choice in _FORM_TYPES:
+            return self._client_form_begin(message, state, group, choice)
+        if choice == 'livedb':
+            return self._livedb_begin(message, state, group)
+        if choice == 'myreq':
+            state._touch(livedb_page=0)
+            return self._myreq_show(message, state, group)
+        if choice == 'discuss':
+            state._touch(livedb_page=0)
+            return self._discuss_begin(message, state, group)
+        if choice == 'waiting':
+            self._text(message, self._waiting_text(group))
+            state._reset()
+            return True
+        if choice == 'newdb':
+            # Skip the area picker: a new database is unambiguously
+            # Server / Hosting. One less turn.
+            state._touch(step='pick_server', action_type='newdb',
+                         work_area='server')
+            return self._show_servers(message, state)
+        if choice == 'dbdisconnect':
+            state._touch(action_type='dbdisconnect', work_area='server')
+            return self._show_disc_dbs(message, state, group)
+        state._touch(action_type=choice)
+        # Which database is this about? Asked BEFORE the area, because it
+        # decides which KRA the ticket is filed against.
+        return self._begin_db_scope(message, state, group)
 
     def _type_rows_for(self, group):
         """The main menu for THIS client.
@@ -2018,6 +2111,46 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         self._poll(message, summary + _('\n\nWhich one do you want to see?%s') % (
             (_(' (page %d of %d)') % (page + 1, pages)) if pages > 1 else ''),
             [l for _o, l in opts])
+        return True
+
+    # ------------------------------------------------------------------
+    # 💬 Discuss -- a message to the team about one request (kpi_chat.py)
+    # ------------------------------------------------------------------
+    def _discuss_begin(self, message, state, group):
+        """Which request? The same list and paging as 📋 My Requests."""
+        open_ = self._myreq_open(group)
+        if not open_:
+            state._reset()
+            self._text(message, _('💬 You have no open requests to discuss. Send *hi* to raise something new.'))
+            return True
+        if len(open_) == 1:
+            return self._discuss_ask_text(message, state, open_)
+        opts = self._myreq_options(state, group)
+        pages = max(1, -(-len(open_) // _MYREQ_PAGE_ROWS))
+        page = min(max(state.livedb_page, 0), pages - 1)
+        state._touch(step='discuss_pick', action_type='discuss', livedb_page=page,
+                     menu_csv=','.join(o for o, _l in opts))
+        self._poll(message, _('💬 *Discuss* — which request is it about?%s') % (
+            (_(' (page %d of %d)') % (page + 1, pages)) if pages > 1 else ''),
+            [l for _o, l in opts])
+        return True
+
+    def _discuss_ask_text(self, message, state, task):
+        state._touch(step='discuss_text', action_type='discuss', discuss_kpi_id=task.id,
+                     discuss_text=False)
+        self._text(message, _('💬 *%(ref)s — %(title)s*\nType your message to the team (one message).'
+                              '\n\n_Or reply CANCEL to stop._') % {
+            'ref': task.external_ref or task.id, 'title': task.name or ''})
+        return True
+
+    def _discuss_confirm(self, message, state, body):
+        """Show the message back and ask before it goes."""
+        text = (body or '').strip()[:1000]
+        task = state.discuss_kpi_id
+        state._touch(step='discuss_confirm', discuss_text=text)
+        self._poll(message, _('💬 *%(ref)s* — your message:\n\n"%(text)s"\n\nSend it to the team?') % {
+            'ref': task.external_ref or task.id, 'text': text},
+            [_('✅ Send'), _('✏️ Retype'), _('❌ Cancel')])
         return True
 
     @api.model

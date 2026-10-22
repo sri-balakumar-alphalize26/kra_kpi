@@ -72,6 +72,8 @@ from . import kpi_manager
 from . import kpi_manager_dm
 # AFTER kpi_meeting and kpi_wa_group_capture: kpi.doubt points at both.
 from . import kpi_doubt
+# AFTER kpi_doubt: a client message opens a kpi.doubt for the manager.
+from . import kpi_chat
 # AFTER kpi_wa_group_intake: it inherits that router and imports _strip_emoji.
 from . import kpi_wa_staff_menu
 from . import kpi_wa_staff_task

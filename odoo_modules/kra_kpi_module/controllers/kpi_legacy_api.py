@@ -45,6 +45,13 @@ def _voice_notes(kpi):
     return out
 
 
+def _edit_state(kpi, user):
+    """(can_edit, locked_reason) for the KPI Details card: managers only, and
+    not once the task is fully completed (admins excepted)."""
+    locked = kpi.sudo()._details_locked_for(user)
+    return bool(_may_edit(user) and not locked), locked or ''
+
+
 def _card(kpi):
     data = kpi.sudo().legacy_details()
     if not data:
@@ -60,7 +67,8 @@ class KpiLegacyAPI(http.Controller):
         kpi = _readable(kpi_id)
         if not kpi:
             return {'status': False, 'message': 'Task not found.'}
-        return {'status': True, 'legacy': _card(kpi), 'can_edit': _may_edit(request.env.user)}
+        can_edit, locked = _edit_state(kpi, request.env.user)
+        return {'status': True, 'legacy': _card(kpi), 'can_edit': can_edit, 'locked_reason': locked}
 
     @http.route('/kra_kpi/legacy/save', type='json', auth='user', methods=['POST'], csrf=False)
     def legacy_save(self, kpi_id=None, ref=None, name=None, note=None, **kw):
@@ -73,13 +81,29 @@ class KpiLegacyAPI(http.Controller):
             return {'status': False, 'message': 'Task not found.'}
         try:
             with request.env.cr.savepoint():
-                kpi.sudo().legacy_save_details(ref=ref, name=name, note=note)
+                kpi.sudo().legacy_save_details(ref=ref, name=name, note=note, user=request.env.user)
         except UserError as exc:
             return {'status': False, 'message': str(exc)}
         kpi.sudo()._log_action('legacy_details_saved', source='web', payload={
             'ref': kpi.sudo().legacy_req_ref or '', 'new_ref': kpi.sudo().external_ref or ''})
         return {'status': True, 'legacy': _card(kpi), 'ref': kpi.sudo().external_ref or '',
                 'message': 'KPI Details saved.'}
+
+    @http.route('/kra_kpi/client_sends', type='json', auth='user', methods=['POST'], csrf=False)
+    def client_sends(self, kpi_id=None, **kw):
+        """The task's Client tab: every time the client sent it, oldest first,
+        each with its files and -- for a refused one -- who refused and why."""
+        kpi = _readable(kpi_id)
+        if not kpi:
+            return {'status': False, 'message': 'Task not found.'}
+        sends = kpi.sudo().client_sends()
+        for s in sends:
+            for f in s.get('files', []):
+                f['url'] = ('/kpi/attachment/download?attachment_id=%s' % f['att'] if f['att']
+                            else '/kpi/progress/view?progress_id=%s' % f['entry'])
+        can_edit, locked = _edit_state(kpi, request.env.user)
+        return {'status': True, 'sends': sends, 'legacy': _card(kpi),
+                'can_edit': can_edit, 'locked_reason': locked}
 
     @http.route('/kra_kpi/legacy/pending', type='json', auth='user', methods=['POST'], csrf=False)
     def legacy_pending(self, client_kra_id=None, **kw):

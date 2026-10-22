@@ -3820,6 +3820,10 @@ class KraKpiAPI(http.Controller):
         'priority_changed': 'Priority changed',
         'start_undone': 'Start undone',
         'time_reduced': "Yesterday's time reduced",
+        # 💬 Chat with the client (models/kpi_chat.py)
+        'client_chat_message': 'Client message (Discuss)',
+        'client_chat_reply': 'Reply to the client',
+        'client_chat_forwarded': 'Client question sent to the developer',
     }
 
     def _activity_log(self, kpi, kind='all'):
@@ -3881,6 +3885,56 @@ class KraKpiAPI(http.Controller):
             return payload
         except Exception as e:
             _logger.error("get_kpi_activity failed: %s", e)
+            return {'status': False, 'message': str(e)}
+
+    # ------------------------------------------------------------------
+    # 💬 Chat with the client (models/kpi_chat.py): the KPI details window
+    # on Odoo, the web task panel (and the app later). Same check as the
+    # details themselves.
+    # ------------------------------------------------------------------
+    def _chat_kpi(self, params):
+        kpi_id = int(params.get('kpi_id') or 0)
+        kpi = request.env['kra.kpi'].sudo().browse(kpi_id).exists() if kpi_id else None
+        if not kpi:
+            return None, 'Task not found.'
+        denied = self._may_view_kpi_details(kpi)
+        if denied:
+            return None, denied
+        return kpi, None
+
+    def _chat_payload(self, kpi):
+        Report = request.env['kpi.wa.group.report'].sudo()
+        return {'status': True, 'messages': kpi.chat_rows(viewer=request.env.user),
+                'waiting': kpi.chat_waiting(),
+                'can_send': bool(Report._group_for_kpi(kpi)),
+                'locked': kpi._details_locked_for(request.env.user),
+                'client': kpi.client_kra_id.name or kpi.kra_id.name or ''}
+
+    @http.route('/kpi_action/chat', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_chat_list(self, **params):
+        try:
+            kpi, err = self._chat_kpi(params)
+            if err:
+                return {'status': False, 'message': err}
+            return self._chat_payload(kpi)
+        except Exception as e:
+            _logger.error("kpi_chat_list failed: %s", e)
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_action/chat/send', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_chat_send(self, **params):
+        try:
+            kpi, err = self._chat_kpi(params)
+            if err:
+                return {'status': False, 'message': err}
+            locked = kpi._details_locked_for(request.env.user)
+            if locked:
+                return {'status': False, 'message': locked}
+            source = params.get('source') if params.get('source') in ('odoo', 'web') else 'odoo'
+            kpi.chat_post_team(params.get('text') or '', request.env.user, source=source)
+            return self._chat_payload(kpi)
+        except Exception as e:
+            _logger.warning("kpi_chat_send failed: %s", e)
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_action/details', type='json', auth='user')

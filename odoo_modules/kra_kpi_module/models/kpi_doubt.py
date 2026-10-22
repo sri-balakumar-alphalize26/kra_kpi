@@ -52,6 +52,9 @@ KINDS = [
     ('meet_admin', 'Meeting with the manager'),
     ('meet_client', 'Meeting with the client'),
     ('escalation', 'Escalated'),
+    # A client's 💬 Discuss message (kpi_chat.py). Answered into the CLIENT
+    # group through kra.kpi.chat_post_team, never into the team group.
+    ('client_msg', 'Client message'),
 ]
 
 
@@ -83,6 +86,9 @@ class KpiDoubt(models.Model):
     raised_by_id = fields.Many2one(
         'res.users', string='Raised By', readonly=True,
         default=lambda self: self.env.user, ondelete='set null')
+    raised_by_name = fields.Char(
+        string='Client Name', readonly=True,
+        help="A client message: the client's WhatsApp name (clients have no user).")
     # Where it came from, so the answer goes back to the same place rather
     # than to wherever the code happens to be looking.
     raised_group_id = fields.Many2one(
@@ -168,7 +174,27 @@ class KpiDoubt(models.Model):
             'what': label, 'ref': ref, 'title': self.kpi_id.name or '',
             'body': self.question or ''}
 
-        if self.kind == 'meet_client':
+        if self.kind == 'client_msg':
+            client = self.kpi_id.client_kra_id.name or self.kpi_id.kra_id.name or ''
+            question = _('💬 %(client)s%(who)s wants to discuss %(ref)s\n%(title)s\n\n%(body)s\n\n'
+                         'Your answer goes to their group as "our team".') % {
+                'client': client, 'who': (' (%s)' % self.raised_by_name) if self.raised_by_name else '',
+                'ref': ref, 'title': self.kpi_id.name or '', 'body': self.question or ''}
+            # The manager opens it straight away (their own page link, else
+            # the task in Odoo).
+            link = self.kpi_id._chat_page_link(self.manager_user_id) if self.manager_user_id else ''
+            question += '\n\n' + _('Open: %s') % (link or self.kpi_id._staff_task_url())
+            # No word "client" in these: _doubt_verb reads "client" as "ask the client".
+            options = ['✍️ D%s — I will answer it' % self.id]
+            # Pick who replies: the people on the task first, then the
+            # Developer role. The developer is told privately, our group says
+            # who was picked, and the client gets their chat link
+            # (kpi_chat.chat_ask_developer).
+            options += ['👨‍💻 D%s → %s' % (self.id, (u.name or '')[:40])
+                        for u in self.kpi_id._chat_dev_candidates()]
+            options += ['📅 D%s — Arrange a meeting' % self.id,
+                        '❌ D%s — Not now' % self.id]
+        elif self.kind == 'meet_client':
             options = ['📅 D%s — Set up the meeting' % self.id,
                        '✅ D%s — I will answer instead' % self.id,
                        '❌ D%s — Not now' % self.id]
@@ -242,6 +268,13 @@ class KpiDoubt(models.Model):
         body = (text or '').strip()
         if not body:
             raise UserError(_('Write the answer first.'))
+        if self.kind == 'client_msg':
+            # To the CLIENT group, as "our team"; chat_post_team closes this.
+            if self.state != 'open':
+                raise UserError(_('Already answered by %(who)s: "%(answer)s"') % {
+                    'who': self.answered_by_id.name or _('the team'), 'answer': (self.answer or '')[:200]})
+            self.kpi_id.chat_post_team(body, user, source='whatsapp')
+            return True
         self.sudo().write({'answer': body, 'answered_by_id': user.id,
                            'answered_at': fields.Datetime.now(),
                            'state': 'answered'})
@@ -323,7 +356,7 @@ class KpiDoubt(models.Model):
         meeting = Meeting.create({
             'name': self.kpi_id.name or _('Meeting'),
             'kpi_id': self.kpi_id.id,
-            'requested_by_name': self.raised_by_id.name or '',
+            'requested_by_name': self.raised_by_id.name or self.raised_by_name or '',
             'requested_text': self.question or '',
             'is_internal': internal,
             'state': 'requested',
@@ -333,6 +366,10 @@ class KpiDoubt(models.Model):
                            'answered_at': fields.Datetime.now()})
         ref = self.kpi_id.external_ref or ('#%s' % self.kpi_id.id)
 
+        if self.kind == 'client_msg':
+            self.kpi_id.chat_post_team(_("📅 Let's talk this through in a meeting — we'll send you a time "
+                                         "shortly."), user, source='whatsapp')
+            return meeting
         if not internal:
             self._tell_the_team(_(
                 '📅 *%(ref)s* — a client meeting is being arranged. %(who)s, '
@@ -362,6 +399,13 @@ class KpiDoubt(models.Model):
     def action_reject(self, note='', by_user=None):
         self.ensure_one()
         user = self._decider(by_user)
+        if self.kind == 'client_msg':
+            # The client is not left without an answer: a holding line, in the chat too.
+            ref = self.kpi_id.external_ref or ('#%s' % self.kpi_id.id)
+            self.kpi_id.chat_post_team(note or _("Thanks — we'll get back to you on %s soon.") % ref,
+                                       user, source='whatsapp')
+            self.sudo().write({'state': 'rejected'})
+            return True
         self.sudo().write({'state': 'rejected', 'answer': note or '',
                            'answered_by_id': user.id,
                            'answered_at': fields.Datetime.now()})

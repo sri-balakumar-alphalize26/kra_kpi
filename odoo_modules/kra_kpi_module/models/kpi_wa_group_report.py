@@ -55,12 +55,19 @@ class KpiWaGroupReport(models.AbstractModel):
             return '@%s' % num
         return user.name or user.login or 'Someone'
 
-    def _post(self, text, jid=None):
+    def _mention_digits(self, user):
+        """The number _mention() wrote as "@<digits>", or '' when it wrote a name."""
+        num = self._digits(user.kpi_wa_number
+                           or (user.partner_id.phone if user.partner_id else ''))
+        return num if len(num) >= _MIN_INTL_DIGITS else ''
+
+    def _post(self, text, jid=None, mentions=None):
         """True if it went out. Never raises.
 
         `jid` lets a caller name the destination; without it the message goes to
         the single company-wide group (`res.company.kpi_wa_group_jid`), which is
-        what every workday report wants.
+        what every workday report wants. `mentions` (phone digits) makes the
+        "@<digits>" in the text real mentions.
         """
         jid = (jid or self._group_jid() or '').strip()
         if not jid:
@@ -70,6 +77,8 @@ class KpiWaGroupReport(models.AbstractModel):
             _logger.info("wa group report skipped: no connected session")
             return False
         try:
+            if mentions:
+                return bool(session.send_message(jid, text, mentions=mentions))
             return bool(session.send_message(jid, text))
         except Exception as e:
             _logger.error("wa group report failed: %s", e)
@@ -228,7 +237,7 @@ class KpiWaGroupReport(models.AbstractModel):
         return Group
 
     @api.private
-    def post_for_kpi(self, kpi, text):
+    def post_for_kpi(self, kpi, text, mentions=None):
         """Post `text` into the group belonging to `kpi`'s client.
 
         Returns True only if it actually went somewhere, so callers can tell the
@@ -240,7 +249,7 @@ class KpiWaGroupReport(models.AbstractModel):
                          kpi.external_ref or kpi.id,
                          kpi.client_kra_id.name or kpi.kra_id.name or '-')
             return False
-        return self._post(text, jid=grp.jid)
+        return self._post(text, jid=grp.jid, mentions=mentions)
 
     # ---- the reports -------------------------------------------------------- #
 
