@@ -170,6 +170,31 @@ class KraMasterInvoiceGroup(models.Model):
     kpi_invoice_group_jid = fields.Char(string='Invoice WhatsApp group')
     kpi_invoice_group_name = fields.Char(string='Invoice group name')
     kpi_send_invoice = fields.Boolean(string='Send invoices', default=False)
+    # The client's own details under "Bill To" on its invoices, with its logo
+    # (kra.master.logo). Set in Settings › Billing.
+    kpi_bill_address = fields.Text(string='Billing address')
+    kpi_bill_phone = fields.Char(string='Billing phone')
+    kpi_bill_email = fields.Char(string='Billing email')
+    kpi_bill_tax_id = fields.Char(string='Tax number (VAT / TRN / GST)')
+
+    def _bill_to(self):
+        """{name, logo_b64, lines} for an invoice's Bill To, from this client or
+        the nearest parent that has details set."""
+        node, seen = self, set()
+        while node and node.id not in seen:
+            seen.add(node.id)
+            if node.logo or node.kpi_bill_address or node.kpi_bill_phone or node.kpi_bill_email \
+                    or node.kpi_bill_tax_id or not node.parent_id:
+                break
+            node = node.parent_id
+        logo = node.logo or False
+        if isinstance(logo, bytes):
+            logo = logo.decode()
+        lines = [x for x in ((node.kpi_bill_address or '').strip(),
+                             node.kpi_bill_phone and 'Phone: %s' % node.kpi_bill_phone,
+                             node.kpi_bill_email and 'Email: %s' % node.kpi_bill_email,
+                             node.kpi_bill_tax_id and 'Tax no: %s' % node.kpi_bill_tax_id) if x]
+        return {'logo_b64': logo or '', 'lines': lines}
 
     def _invoice_target(self):
         """(send, jid, name) for this client: its own, else the nearest

@@ -4139,7 +4139,11 @@ class KraKpiAPI(http.Controller):
         k = kpi.sudo()
         out = {'completion_rules': k._completion_rules(), 'is_db_task': k._is_db_task(),
                'app_link': k.app_link or '', 'user_manual_url': k.user_manual_url or '',
-               'website_url': k.website_url or ''}
+               'website_url': k.website_url or '',
+               # Who decided on the client's sign-off page (Client sign-off box).
+               'client_decision': k._client_decision()}
+        if out['client_decision'].get('has_signature'):
+            out['client_decision']['signature_url'] = '/web/image/kra.kpi/%d/client_signature_image' % k.id
         if out['is_db_task']:
             out['db_details'] = {'url': k.provision_url or '', 'db_name': k.provision_db_name or '',
                                  'username': k.provision_username or '', 'password': k.provision_password or ''}

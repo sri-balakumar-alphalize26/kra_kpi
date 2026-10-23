@@ -68,6 +68,35 @@ export class KpiBillingSettings extends Component {
                                      class="px-3 py-1 small text-danger fw-semibold border-bottom" style="background:#fef2f2;">
                                     <i class="fa fa-exclamation-circle me-1"/>Invoices are on, but no invoice group is picked: bills are made but not sent.
                                 </div>
+                                <!-- The client's logo and details, printed under Bill To on its invoices. -->
+                                <details t-if="!sec.isDefault" class="px-3 py-2 border-bottom">
+                                    <summary class="small fw-semibold" style="cursor:pointer;">
+                                        Invoice details (logo, address, tax no)
+                                        <span t-if="sec.client.bill_logo or sec.client.bill_address" class="text-success ms-1">✓</span>
+                                    </summary>
+                                    <div class="d-flex flex-wrap gap-3 mt-2 align-items-start">
+                                        <div class="text-center" style="width:140px;">
+                                            <div class="border rounded d-flex align-items-center justify-content-center bg-white" style="height:70px;">
+                                                <img t-if="sec.client.bill_logo" t-att-src="sec.client.bill_logo" alt="Client logo" style="max-height:64px; max-width:130px;"/>
+                                                <span t-else="" class="small text-muted">No logo</span>
+                                            </div>
+                                            <label class="btn btn-sm btn-link p-0 mt-1">Upload logo
+                                                <input type="file" accept="image/*" class="d-none" t-on-change="(ev) => this.billPickLogo(sec.client, ev)"/></label>
+                                            <button t-if="sec.client.bill_logo" class="btn btn-sm btn-link text-danger p-0 ms-2"
+                                                    t-on-click="() => this._billClientSet(sec.client, { details: { logo: '' } })">Remove</button>
+                                        </div>
+                                        <div class="flex-grow-1" style="min-width:260px;">
+                                            <textarea class="form-control form-control-sm mb-1" rows="2" placeholder="Address"
+                                                      t-model="sec.client.bill_address"/>
+                                            <div class="d-flex gap-1 flex-wrap">
+                                                <input class="form-control form-control-sm" style="flex:1 1 140px;" placeholder="Phone" t-model="sec.client.bill_phone"/>
+                                                <input class="form-control form-control-sm" style="flex:1 1 180px;" placeholder="Email" t-model="sec.client.bill_email"/>
+                                                <input class="form-control form-control-sm" style="flex:1 1 140px;" placeholder="Tax no (VAT / TRN / GST)" t-model="sec.client.bill_tax_id"/>
+                                            </div>
+                                            <button class="btn btn-sm btn-primary mt-2" t-on-click="() => this.billSaveDetails(sec.client)">Save details</button>
+                                        </div>
+                                    </div>
+                                </details>
                                 <table class="table table-sm align-middle mb-0">
                                     <tbody>
                                         <t t-foreach="sec.types" t-as="ty" t-key="ty.key">
@@ -391,7 +420,22 @@ export class KpiBillingSettings extends Component {
             client.invoice_group_jid = r.invoice_group_jid;
             client.invoice_group_name = r.invoice_group_name;
             client.send_invoice = r.send_invoice;
+            Object.assign(client, { bill_address: r.bill_address, bill_phone: r.bill_phone, bill_email: r.bill_email,
+                                    bill_tax_id: r.bill_tax_id, bill_logo: r.bill_logo });
         } catch (e) { this.state.bill.error = e?.data?.message || "Could not save."; }
+    }
+    // The client's invoice details (Bill To): logo picked from a file, the rest typed.
+    billPickLogo(client, ev) {
+        const f = ev.target.files && ev.target.files[0];
+        ev.target.value = "";
+        if (!f) return;
+        const rd = new FileReader();
+        rd.onload = () => this._billClientSet(client, { details: { logo: rd.result } });
+        rd.readAsDataURL(f);
+    }
+    billSaveDetails(client) {
+        return this._billClientSet(client, { details: { address: client.bill_address || "", phone: client.bill_phone || "",
+                                                        email: client.bill_email || "", tax_id: client.bill_tax_id || "" } });
     }
     billSetGroup(client, jid) {
         const g = this.state.bill.groups.find((x) => x.jid === jid);

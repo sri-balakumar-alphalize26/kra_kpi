@@ -54,6 +54,9 @@ class KraKpiFinish(models.Model):
     finish_partial = fields.Boolean(
         string='Finished as Partial', copy=False, readonly=True,
         help='The last finish was a Partial Finish (summary only): the client is sent that summary.')
+    client_signature_image = fields.Binary(
+        string='Client Signature', attachment=True, copy=False,
+        help='What the client signed with on the sign-off page (✓ Accept & Sign).')
     partial_finish_count = fields.Integer(
         string='Partial Finishes', copy=False, readonly=True,
         help='How many times this task was sent as a Partial Finish. Each one is in the '
@@ -288,6 +291,103 @@ class KraKpiFinish(models.Model):
             _logger.warning('dm for %s failed: %s', self.id, exc)
             return False
 
+    # ------------------------------------------------------------------ #
+    # Who may sign off on the client's page, and their signature           #
+    # ------------------------------------------------------------------ #
+    def _client_root(self):
+        """The task's client in KRA Master: client_kra_id, else the first
+        node up from kra_id marked as a client (else the top node)."""
+        self.ensure_one()
+        node, seen = (self.client_kra_id or self.kra_id).sudo(), set()
+        while node and node.id not in seen:
+            seen.add(node.id)
+            if node.is_client or not node.parent_id:
+                return node
+            node = node.parent_id
+        return node
+
+    def _client_signers(self):
+        """[{key, name, partner_id, sig}] -- only THIS client's people: its
+        Client Users in KRA Master and the members of its WhatsApp group(s)
+        marked as this client. Client 1's link never lists Client 2's people."""
+        self.ensure_one()
+        client = self._client_root()
+        if not client:
+            return []
+        tree = client._get_descendant_ids()
+        out, users_seen = [], set()
+
+        def sig_of(partner, user):
+            return (partner and partner.kpi_signature_image) or (user and user.kpi_signature_image) or False
+
+        for u in client.sudo().client_user_ids:
+            users_seen.add(u.id)
+            out.append({'key': 'u%d' % u.id, 'name': u.name or u.login, 'partner_id': u.partner_id.id,
+                        'sig': sig_of(u.partner_id, u)})
+        Member = self.env['kpi.wa.group.member'].sudo()
+        members = Member.search([('is_client', '=', True), '|', '|',
+                                 ('group_id.kra_id', 'in', tree),
+                                 ('client_kra_ids', 'in', tree),
+                                 ('manual_client_kra_id', 'in', tree)])
+        for m in members:
+            # Marked as some OTHER client (e.g. sits in two groups): not ours.
+            mine = (m.manual_client_kra_id.id in tree) if m.manual_client_kra_id else \
+                (not m.client_kra_ids or bool(set(m.client_kra_ids.ids) & set(tree)))
+            if not mine or (m.user_id and m.user_id.id in users_seen):
+                continue
+            digits = ''.join(ch for ch in (m.phone or '') if ch.isdigit())
+            name = (m.user_id.name or m.partner_id.name or m.wa_name or '').strip() \
+                or ('…%s' % digits[-4:] if digits else '')
+            if not name:
+                continue
+            out.append({'key': 'm%d' % m.id, 'name': name, 'partner_id': m.partner_id.id or m.user_id.partner_id.id,
+                        'sig': sig_of(m.partner_id or m.user_id.partner_id, m.user_id)})
+        seen, uniq = set(), []
+        for e in sorted(out, key=lambda e: e['name'].lower()):
+            if e['name'].lower() not in seen:
+                seen.add(e['name'].lower())
+                uniq.append(e)
+        return uniq
+
+    def _save_client_signature(self, key, png_b64):
+        """Keep the signature on the task and on the signer's own contact
+        (created for a WhatsApp member who has none), so it is there next time."""
+        self.ensure_one()
+        if not png_b64:
+            return
+        self.sudo().write({'client_signature_image': png_b64})
+        Partner = self.env['res.partner'].sudo()
+        partner = Partner
+        if key.startswith('u'):
+            partner = self.env['res.users'].sudo().browse(int(key[1:])).partner_id
+        elif key.startswith('m'):
+            m = self.env['kpi.wa.group.member'].sudo().browse(int(key[1:])).exists()
+            if m:
+                partner = m.partner_id or m.user_id.partner_id
+                if not partner:
+                    partner = Partner.create({'name': m.wa_name or m.phone or 'Client',
+                                              'phone': m.phone or False})
+                    m.write({'partner_id': partner.id})
+        if partner:
+            partner.write({'kpi_signature_image': png_b64})
+
+    def _client_decision(self):
+        """KPI Details › Client sign-off: who decided on the client's page, how,
+        when, and the note. {} until the client acts."""
+        self.ensure_one()
+        k = self.sudo()
+        if k.client_signature_text and k.client_final_approved:
+            return {'name': k.client_signature_text, 'action': 'finished',
+                    'at': fields.Datetime.to_string(k.client_signed_datetime) if k.client_signed_datetime else '',
+                    'note': k.client_approval_notes or '', 'has_signature': bool(k.client_signature_image)}
+        if k.pre_approval_decision in ('reject', 'clarify') and k.pre_approval_decided_by_name \
+                and (k.review_started_at or k.client_revert_count):
+            return {'name': k.pre_approval_decided_by_name,
+                    'action': 'sent_back' if k.pre_approval_decision == 'reject' else 'asked',
+                    'at': fields.Datetime.to_string(k.pre_approval_decided_at) if k.pre_approval_decided_at else '',
+                    'note': k.pre_approval_feedback or '', 'has_signature': False}
+        return {}
+
     def _finish_team_people(self):
         """Who hears about this task's client: its developer, else the first
         Approval Chain step. (users, is_developer)."""
@@ -409,3 +509,11 @@ class KraKpiFinish(models.Model):
                 rec._auto_bill()
             except Exception as exc:
                 _logger.warning('auto bill for %s failed: %s', rec.id, exc)
+
+
+class ResPartnerKpiSignature(models.Model):
+    _inherit = 'res.partner'
+
+    # The client person's own signature (sign-off page ✓ Accept & Sign), so
+    # it is ready the next time they sign. One per person, not per company.
+    kpi_signature_image = fields.Binary(string='Sign-off Signature', attachment=True, copy=False)

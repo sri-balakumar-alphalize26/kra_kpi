@@ -77,6 +77,19 @@ def _lookup_task(token):
     return candidates
 
 
+def _signers_for_page(task):
+    """The Full Name list for the page: key, name and the saved signature as a
+    data URL (so picking a name shows it at once)."""
+    out = []
+    for e in task.sudo()._client_signers():
+        sig = e.get('sig')
+        if isinstance(sig, bytes):
+            sig = sig.decode()
+        out.append({'key': e['key'], 'name': e['name'],
+                    'sig': ('data:image/png;base64,%s' % sig) if sig else ''})
+    return out
+
+
 def _media_kind(name):
     """'image' / 'video' / 'audio' / 'doc' from the file name."""
     from .kra_api import _guess_mime
@@ -157,6 +170,9 @@ class KpiWaApproval(http.Controller):
             'partial_n': task.sudo().partial_finish_count if partial else 0,
             # The team's photos, videos and documents, viewable like KPI Details.
             'team_files': _team_files(task, token) if stage == 'final' else [],
+            # Full Name: only this task's client's people (KRA Master client users
+            # + its WhatsApp group's client members), each with a saved signature.
+            'signers': _signers_for_page(task),
         })
 
     # ------------------------------------------------------------------ #
@@ -208,6 +224,23 @@ class KpiWaApproval(http.Controller):
         final = task.task_state == 'awaiting_client'
         done = lambda icon, title, msg: _render('kra_kpi_module.wa_signoff_done', {  # noqa: E731
             'task': task, 'icon': icon, 'title': title, 'message': msg})
+        # Full Name picked from this client's people: never someone else's.
+        signers = {e['key']: e for e in task.sudo()._client_signers()}
+        signer_key, partner_id = (post.get('signer') or '').strip(), None
+        if signers:
+            pick = signers.get(signer_key)
+            if not pick:
+                return done('⚠️', "Couldn't save", 'Pick your name from the list.') if final else                     _render('kra_kpi_module.wa_approval_expired', {'reason': 'Pick your name from the list.'})
+            partner_name, partner_id = pick['name'], pick['partner_id'] or None
+        # ✓ Accept & Sign needs a signature (a PNG from the sign box).
+        sig_b64 = ''
+        raw_sig = post.get('signature') or ''
+        if raw_sig.startswith('data:image/png;base64,'):
+            sig_b64 = raw_sig.split(',', 1)[1]
+        if final and action == 'approve':
+            if not sig_b64 or len(sig_b64) > 3 * 1024 * 1024:
+                return done('✍️', 'Please sign', 'Go back, sign in the box, then tap Accept & Sign.')
+            task.sudo()._save_client_signature(signer_key, sig_b64)
         try:
             if task.task_state == 'awaiting_client':
                 # Final sign-off — only approve / reject / clarify make sense
@@ -224,12 +257,14 @@ class KpiWaApproval(http.Controller):
                     source='web',
                     ip=ip,
                     user_agent=ua,
+                    partner_id=partner_id,
                     files=chat_upload_files() if action == 'reject' else None,
                     sendback_source='whatsapp',
                 )
             else:
                 result = task.sudo().record_client_pre_decision(
                     action=action,
+                    partner_id=partner_id,
                     partner_name=partner_name,
                     feedback=feedback,
                     source='web',

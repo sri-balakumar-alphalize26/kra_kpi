@@ -1591,14 +1591,29 @@ class _BaseInvoiceComponent extends Component {
         // ── Bill To (= root KRA) + Project (= sub-KRA) ──
         doc.setFont('times', 'bold'); doc.text('Bill To:', M, y);
         doc.setFont('times', 'normal'); y += 15;
+        // The client's logo (Settings › Billing) to the left of its name and details.
+        const btTop = y;
+        let tx = M;
+        if (pdf.bill_to_logo_b64) {
+            try {
+                const lp = doc.getImageProperties('data:image/png;base64,' + pdf.bill_to_logo_b64);
+                const lh = 46, lw = Math.min(lh * lp.width / (lp.height || 1), 120);
+                doc.addImage('data:image/png;base64,' + pdf.bill_to_logo_b64, lp.fileType || 'PNG', M, y - 10, lw, lh);
+                tx = M + lw + 12;
+            } catch (e) { /* a bad image: no logo */ }
+        }
         doc.setFont('times', 'bold'); doc.setFontSize(12);
-        doc.text(pdf.bill_to_name || pdf.client_name || '', M, y);
+        doc.text(pdf.bill_to_name || pdf.client_name || '', tx, y);
         doc.setFont('times', 'normal'); doc.setFontSize(11);
         y += 15;
+        for (const line of (pdf.bill_to_lines || [])) {
+            for (const part of String(line).split('\n')) { doc.text(part, tx, y); y += 14; }
+        }
         if (pdf.project_name) {
-            doc.text(`Project: ${pdf.project_name}`, M, y);
+            doc.text(`Project: ${pdf.project_name}`, tx, y);
             y += 15;
         }
+        if (tx !== M) y = Math.max(y, btTop + 46);
         y += 10;
         // Line items table — per_task shows a Type + Price column; hourly shows
         // Hours × Rate = Amount (the original layout).

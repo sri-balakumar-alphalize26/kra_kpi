@@ -20,6 +20,16 @@ def _no():
     return {'status': False, 'message': 'Only an admin can change billing.'}
 
 
+def _bill_details(k):
+    """The client's invoice details for Settings › Billing."""
+    logo = k.logo
+    if isinstance(logo, bytes):
+        logo = logo.decode()
+    return {'bill_address': k.kpi_bill_address or '', 'bill_phone': k.kpi_bill_phone or '',
+            'bill_email': k.kpi_bill_email or '', 'bill_tax_id': k.kpi_bill_tax_id or '',
+            'bill_logo': ('data:image/png;base64,%s' % logo) if logo else ''}
+
+
 class KpiBillingApi(http.Controller):
 
     @http.route('/kpi_billing/config', type='json', auth='user', methods=['POST'], csrf=False)
@@ -41,7 +51,8 @@ class KpiBillingApi(http.Controller):
                          'currency': k.currency_id.name or '',
                          'invoice_group_jid': k.kpi_invoice_group_jid or '',
                          'invoice_group_name': k.kpi_invoice_group_name or '',
-                         'send_invoice': bool(k.kpi_send_invoice)} for k in clients],
+                         'send_invoice': bool(k.kpi_send_invoice),
+                         **_bill_details(k)} for k in clients],
             'currencies': [{'id': cur.id, 'name': cur.name, 'symbol': cur.symbol or '',
                             'active': cur.active} for cur in currencies],
             'work_types': [{'key': k, 'label': v} for k, v in WORK_TYPES],
@@ -131,7 +142,7 @@ class KpiBillingApi(http.Controller):
         return {'status': True, 'numbers': ','.join(out)}
 
     @http.route('/kpi_billing/client_invoice_set', type='json', auth='user', methods=['POST'], csrf=False)
-    def client_invoice_set(self, client_id=None, jid=None, name=None, send=None, **kw):
+    def client_invoice_set(self, client_id=None, jid=None, name=None, send=None, details=None, **kw):
         """Per client: the WhatsApp group its invoices go to, and the
         "Send invoices" switch. Only the keys given are changed."""
         if not _is_admin(request.env.user):
@@ -148,11 +159,23 @@ class KpiBillingApi(http.Controller):
             vals['kpi_invoice_group_name'] = (name or '').strip()[:120] or False
         if send is not None:
             vals['kpi_send_invoice'] = bool(send)
+        # Invoice details under Bill To: logo (base64, '' removes it), address,
+        # phone, email, tax number.
+        if isinstance(details, dict):
+            for key, field in (('address', 'kpi_bill_address'), ('phone', 'kpi_bill_phone'),
+                               ('email', 'kpi_bill_email'), ('tax_id', 'kpi_bill_tax_id')):
+                if key in details:
+                    vals[field] = (details.get(key) or '').strip() or False
+            if 'logo' in details:
+                logo = (details.get('logo') or '').split(',', 1)[-1].strip()
+                if logo and len(logo) > 4 * 1024 * 1024:
+                    return {'status': False, 'message': 'That logo is too big (keep it under 3 MB).'}
+                vals['logo'] = logo or False
         if vals:
             client.write(vals)
         return {'status': True, 'invoice_group_jid': client.kpi_invoice_group_jid or '',
                 'invoice_group_name': client.kpi_invoice_group_name or '',
-                'send_invoice': bool(client.kpi_send_invoice)}
+                'send_invoice': bool(client.kpi_send_invoice), **_bill_details(client)}
 
     def _task(self, kpi_id):
         try:
