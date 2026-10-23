@@ -50,7 +50,41 @@ class KraKpiClientUpdates(models.Model):
                 rec._schedule_queue_nudge()
             except Exception as exc:
                 _logger.warning('client ticket notify failed for %s: %s', rec.id, exc)
+            rec._post_db_request_to_team()
             rec._wa_ask_admins()
+
+    def _post_db_request_to_team(self):
+        """A new database / destroy request goes to our team group as well
+        (the 'new_database' / 'db_destroy' events, switched and worded in
+        Configuration > WhatsApp Group Reports). The client's own group already
+        has its receipt from the form. Never raises."""
+        self.ensure_one()
+        event = {'new_database': 'new_database', 'db_disconnect': 'db_destroy'}.get(
+            self.request_category or '')
+        if not event:
+            return False
+        try:
+            Report = self.env['kpi.wa.group.report'].sudo()
+            db = self.client_db_id
+            if event == 'db_destroy' and not db:
+                db = self.env['kpi.client.db'].sudo().search(
+                    [('disconnect_request_kpi_id', '=', self.id)], limit=1)
+            values = {
+                'client': (self.client_kra_id or self.kra_id).name or '',
+                'ref': self.external_ref or '#%s' % self.id,
+                'server': (self.provision_server_id.name if event == 'new_database'
+                           else db.server_id.name) or self.provision_server_other or '—',
+                'db': (self.provision_db_name if event == 'new_database' else db.db_name) or '—',
+                'notes': self.provision_modules or '—',
+                'reason': (db.disconnect_reason_text if db else '') or '—',
+                'by': self.submitted_by_uid.name or (
+                    db.disconnect_requested_by_name if db and event == 'db_destroy' else '') or '—',
+            }
+            body = Report._render_event(event, values)
+            return bool(body.strip()) and bool(Report._post(body))
+        except Exception as exc:
+            _logger.warning('team group post (%s) for %s failed: %s', event, self.id, exc)
+            return False
 
     client_started_told_at = fields.Datetime(
         string='Client Told Work Started', copy=False, readonly=True)

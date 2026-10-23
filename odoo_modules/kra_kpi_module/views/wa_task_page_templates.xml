@@ -302,41 +302,63 @@
                     <div t-if="finish['done']" class="have">🏁 Fully complete on <t t-esc="finish['done']"/>. It has gone to billing.</div>
                     <details t-if="can_complete" class="act" id="completeBox">
                         <summary>✅ Completed</summary>
+                        <!-- What this task's type needs (kpi_workflow._completion_rules): App = app link,
+                             manual, GitHub; Module = manual, GitHub; database task = URL, database
+                             name, username, password; Bug fix and others = the summary only. -->
                         <form class="in js-send" method="post" enctype="multipart/form-data" data-kind="complete"
                               data-max-mb="25" t-att-data-has-manual="'1' if has_manual else ''"
                               t-att-data-has-update="'1' if has_update else ''"
-                              t-att-data-gh-required="'1' if github_required and not has_github else ''"
+                              t-att-data-need="need_keys"
                               t-att-data-ref="t['ref']" t-att-action="'/kpi/wa/task/%s/complete' % token">
+                            <div class="have" t-if="not need_keys">✅ Everything this task needs is in — add a summary if you like, then send it.</div>
+                            <div class="warn" t-else="">This task still needs: <t t-esc="', '.join(r['label'] for r in rules if r['required'] and not r['done'])"/></div>
                             <div class="field"><span class="lbl">Summary — what did you do?
-                                    <span t-if="not has_update" class="req">*</span></span>
+                                    <span t-if="'summary' in need_keys" class="req">*</span>
+                                    <t t-elif="is_db_task">(optional)</t></span>
                                 <textarea name="summary" t-att-placeholder="('Leave empty to use your last update: “%s”' % last_update[:120]) if has_update else 'This is what your manager reads.'"/></div>
-                            <div class="field"><span class="lbl">User manual — PDF, DOC or DOCX, up to 25 MB
-                                    <span t-if="not has_manual" class="req">*</span></span>
-                                <div t-if="has_manual" class="have">📘 A user manual is already on this task — add another only if needed.</div>
-                                <input class="input" type="file" name="files" multiple="multiple" accept=".pdf,.doc,.docx"/></div>
-                            <div class="field"><span class="lbl">Links (optional)</span>
+                            <t t-if="is_db_task">
+                                <div class="grid2">
+                                    <div class="field"><span class="lbl">Database URL <span t-if="'db_url' in need_keys" class="req">*</span></span>
+                                        <input class="input" type="url" name="provision_url" t-att-value="cf['provision_url']" placeholder="https://"/></div>
+                                    <div class="field"><span class="lbl">Database name <span t-if="'db_name' in need_keys" class="req">*</span></span>
+                                        <input class="input" name="provision_db_name" t-att-value="cf['provision_db_name']"/></div>
+                                    <div class="field"><span class="lbl">Username <span t-if="'db_user' in need_keys" class="req">*</span></span>
+                                        <input class="input" name="provision_username" t-att-value="cf['provision_username']" autocomplete="off"/></div>
+                                    <div class="field"><span class="lbl">Password <span t-if="'db_password' in need_keys" class="req">*</span></span>
+                                        <input class="input" type="password" name="provision_password" autocomplete="new-password"
+                                               t-att-placeholder="'Saved — type only to change it' if 'db_password' not in need_keys else ''"/></div>
+                                </div>
+                            </t>
+                            <div t-if="'app_link' in rule_keys" class="field"><span class="lbl">App link — Play Store / App Store / APK
+                                    <span t-if="'app_link' in need_keys" class="req">*</span></span>
+                                <input class="input" type="url" name="app_link" t-att-value="cf['app_link']" placeholder="https://"/></div>
+                            <div t-if="'website_url' in rule_keys" class="field"><span class="lbl">Website URL (optional)</span>
+                                <input class="input" type="url" name="website_url" t-att-value="cf['website_url']" placeholder="https://"/></div>
+                            <div t-if="'manual' in rule_keys" class="field"><span class="lbl">User manual — a PDF, DOC or DOCX file (up to 25 MB), or a link
+                                    <span t-if="'manual' in need_keys" class="req">*</span></span>
+                                <div t-if="has_manual or cf['user_manual_url']" class="have">📘 A user manual is already on this task — add another only if needed.</div>
+                                <input class="input" type="file" name="files" multiple="multiple" accept=".pdf,.doc,.docx"/>
+                                <input class="input" type="url" name="user_manual_url" t-att-value="cf['user_manual_url']"
+                                       placeholder="or paste a link (Google Doc, Drive…)" style="margin-top:6px;"/></div>
+                            <div t-if="not is_db_task" class="field"><span class="lbl">Links (optional)</span>
                                 <input class="input" name="links" placeholder="Paste one or more links, separated by spaces"/></div>
-                            <div t-if="has_github" class="have">🐙 A GitHub link is already on this task — add another only if needed.</div>
-                            <div t-elif="github_required" class="warn">🐙 This is a Module / App task — the GitHub link (repository + branch) is required to complete it.</div>
-                            <div t-else="" class="warn">💡 Optional: add the GitHub link — once it's uploaded, the code is safe.</div>
-                            <div class="grid2">
+                            <t t-if="'github' in rule_keys">
+                                <div t-if="has_github" class="have">🐙 A GitHub link is already on this task — add another only if needed.</div>
+                                <div t-else="" class="warn">🐙 This is a Module / App task — the GitHub link (repository + branch) is required to complete it.</div>
+                            </t>
+                            <div t-if="not is_db_task" class="grid2">
                                 <div class="field"><span class="lbl">GitHub repo URL
-                                        <t t-if="github_required and not has_github"><span class="req">*</span></t>
+                                        <t t-if="'github' in need_keys"><span class="req">*</span></t>
                                         <t t-else="">(optional)</t></span>
                                     <input class="input" name="gh_url" placeholder="https://github.com/org/repo"/></div>
                                 <div class="field"><span class="lbl">Branch</span>
                                     <input class="input" name="gh_branch" placeholder="main"/></div>
                             </div>
-                            <span class="lbl">Tick everything that applies — at least one is needed to send this for approval. Your manager sees exactly which: <span class="req">*</span></span>
-                            <t t-foreach="checklist" t-as="c">
-                                <label class="chk"><input type="checkbox" name="check" t-att-value="c[0]" t-att-checked="c[3] or None"/>
-                                    <span><b t-esc="c[1]"/><small t-esc="c[2]"/></span></label>
-                            </t>
                             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                                 <button type="submit" name="mode" value="full" class="btn primary">Submit for approval</button>
                                 <button type="submit" name="mode" value="partial" class="btn ghost">🏁 Partial finish — summary only</button>
                             </div>
-                            <span class="hint">Partial finish sends the task for review with just the summary — no manual or checkboxes needed.</span>
+                            <span class="hint">Partial finish sends the task for review with just the summary.</span>
                         </form>
                     </details>
                 </div>
@@ -528,21 +550,26 @@
                             return '';
                         }
                         // Everything a full Complete still needs, all at once: [{text, el}].
+                        // data-need: what this task's type still needs (server rules).
                         function missing(f) {
                             var out = [], el = f.elements;
+                            var need = (f.getAttribute('data-need') || '').split(',');
+                            var has = function (k) { return need.indexOf(k) &gt; -1; };
                             var input = el.files, nFiles = input ? input.files.length : 0;
-                            if (!(val(f, 'summary') || f.getAttribute('data-has-update'))) {
+                            if (has('summary') ? !(val(f, 'summary') || f.getAttribute('data-has-update')) : false) {
                                 out.push({text: 'A summary of what you did', el: el.summary});
                             }
-                            if (!nFiles ? !f.getAttribute('data-has-manual') : false) {
-                                out.push({text: 'The user manual (PDF, DOC or DOCX)', el: input});
+                            if (has('manual') ? !(nFiles || val(f, 'user_manual_url')) : false) {
+                                out.push({text: 'The user manual (a PDF, DOC or DOCX file, or a link)', el: input});
                             }
-                            if (f.getAttribute('data-gh-required') ? !val(f, 'gh_url') : false) {
+                            if (has('github') ? !val(f, 'gh_url') : false) {
                                 out.push({text: 'The GitHub link + branch (this is a Module / App task)', el: el.gh_url});
                             }
-                            if (!f.querySelectorAll('input[name=check]:checked').length) {
-                                out.push({text: 'At least one ticked checkbox', el: f.querySelector('input[name=check]')});
-                            }
+                            [['app_link', 'app_link', 'The app link'], ['db_url', 'provision_url', 'The database URL'],
+                             ['db_name', 'provision_db_name', 'The database name'], ['db_user', 'provision_username', 'The username'],
+                             ['db_password', 'provision_password', 'The password']].forEach(function (x) {
+                                if (has(x[0]) ? !val(f, x[1]) : false) { out.push({text: x[2], el: el[x[1]]}); }
+                            });
                             return out;
                         }
                         function question(f, mode) {
@@ -576,8 +603,11 @@
                             if (kind === 'manual') { return 'Save this user manual?\n\n' + what; }
                             var ref = f.getAttribute('data-ref') || 'this task';
                             if (mode === 'partial') { return 'Send ' + ref + ' for review as a partial finish?\n\n' + (what || 'Your last update is used as the summary.'); }
-                            var ticks = f.querySelectorAll('input[name=check]:checked').length;
-                            return 'Submit ' + ref + ' for approval?\n\n' + (what ? what + ' · ' : '') + ticks + ' ticked';
+                            if (val(f, 'provision_url')) { bits.push('database ' + (val(f, 'provision_db_name') || val(f, 'provision_url'))); }
+                            if (val(f, 'user_manual_url')) { bits.push('manual link'); }
+                            if (val(f, 'app_link')) { bits.push('app link'); }
+                            what = bits.join(' · ');
+                            return 'Submit ' + ref + ' for approval?' + (what ? '\n\n' + what : '');
                         }
                         Array.prototype.forEach.call(document.querySelectorAll('form.js-send'), function (f) {
                             var clicked = null;

@@ -7,7 +7,7 @@ name, and goes out 10-30 s after the event instead of instantly (see
 kpi.notification.queue.enqueue_delayed).
 
 The team name is an ICP so it can change without a release:
-    kra_kpi.wa_team_name   (default "Alpha Internal Software Team")
+    kra_kpi.wa_team_name   (default "Alphalize Technologies")
 """
 
 import random
@@ -15,7 +15,7 @@ import random
 from odoo import api, models
 
 PARAM_TEAM = 'kra_kpi.wa_team_name'
-DEFAULT_TEAM = 'Alpha Internal Software Team'
+DEFAULT_TEAM = 'Alphalize Technologies'
 PARAM_LAST = 'kra_kpi.wa_ack_last.%s'
 
 # A request (requirement / bug / update / new DB / destroy) was received.

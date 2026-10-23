@@ -42,7 +42,7 @@ export class KpiBillingSettings extends Component {
                                     <span t-if="sec.isDefault" class="small text-muted ms-2">used for any client without its own price</span>
                                     <span t-if="sec.missing" class="badge text-bg-danger ms-2"><t t-esc="sec.missing"/> missing</span>
                                     <span t-elif="!sec.isDefault" class="badge text-bg-success ms-2">✓ complete</span>
-                                    <!-- Each new bill goes to this client's invoice group while Send invoices is on. -->
+                                    <!-- Invoices on: each fully complete task makes a bill, posted in this client's invoice group. Off: no bill (Bill now by hand). -->
                                     <div t-if="!sec.isDefault" class="ms-auto d-flex align-items-center gap-2 flex-wrap">
                                         <span class="small text-muted">Invoice group</span>
                                         <select class="form-select form-select-sm" style="width:auto; min-width:200px;"
@@ -56,17 +56,17 @@ export class KpiBillingSettings extends Component {
                                             </t>
                                         </select>
                                         <button class="btn btn-sm btn-link p-0" title="Refresh the group list" t-on-click="() => this.loadGroups()"><i class="fa fa-refresh"/></button>
-                                        <div class="form-check form-switch m-0 d-flex align-items-center gap-1" t-att-title="sec.client.send_invoice ? 'On: each new bill is posted in the invoice group' : 'Off: invoices are not sent'">
+                                        <div class="form-check form-switch m-0 d-flex align-items-center gap-1" t-att-title="sec.client.send_invoice ? 'On: each fully complete task makes a bill and posts it in the invoice group' : 'Off: no bill is made (Bill now on the task makes one by hand)'">
                                             <input class="form-check-input" type="checkbox" role="switch" t-att-checked="sec.client.send_invoice"
                                                    t-on-change="(ev) => this.billSetSend(sec.client, ev.target.checked)"/>
                                             <span t-att-class="'small fw-semibold ' + (sec.client.send_invoice ? 'text-success' : 'text-muted')"
-                                                  t-esc="sec.client.send_invoice ? 'Send invoices: on' : 'Send invoices: off'"/>
+                                                  t-esc="sec.client.send_invoice ? 'Invoices: on' : 'Invoices: off'"/>
                                         </div>
                                     </div>
                                 </div>
                                 <div t-if="!sec.isDefault and sec.client.send_invoice and !sec.client.invoice_group_jid"
                                      class="px-3 py-1 small text-danger fw-semibold border-bottom" style="background:#fef2f2;">
-                                    <i class="fa fa-exclamation-circle me-1"/>Send invoices is on, but no invoice group is picked: nothing will be sent.
+                                    <i class="fa fa-exclamation-circle me-1"/>Invoices are on, but no invoice group is picked: bills are made but not sent.
                                 </div>
                                 <table class="table table-sm align-middle mb-0">
                                     <tbody>

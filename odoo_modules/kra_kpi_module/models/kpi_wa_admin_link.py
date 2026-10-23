@@ -167,8 +167,24 @@ class KraKpiAdminWa(models.Model):
                     continue
             except Exception as exc:
                 _logger.warning('approval chain start for %s failed: %s', rec.id, exc)
-            sent += rec._wa_send_admin_links(k, rec._wa_admin_recipients())
+            admins = rec._wa_admin_recipients()
+            # A destroy request is the client's manager's alone. When that
+            # manager has no WhatsApp number, the coordinators / owners who do
+            # get it instead, so the link never goes to nobody.
+            if not admins and k == 'disconnect':
+                admins = rec._wa_reachable_coordinators()
+            sent += rec._wa_send_admin_links(k, admins)
         return sent
+
+    def _wa_reachable_coordinators(self):
+        """Every coordinator / owner who can be reached on WhatsApp."""
+        users = self.env['res.users']
+        for xmlid in ('kra_kpi_module.group_kra_admin', 'kra_kpi_module.group_kra_owner'):
+            grp = self.env.ref(xmlid, raise_if_not_found=False)
+            if grp:
+                grp = grp.sudo()
+                users |= grp.all_user_ids if 'all_user_ids' in grp._fields else grp.user_ids
+        return users.filtered(lambda u: u.active and not u.share and u._kpi_wa_target())
 
     def _wa_send_admin_links(self, kind, admins, note=''):
         """One private decision link per admin in `admins`. Never raises.

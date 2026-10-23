@@ -988,46 +988,7 @@ export class KpiAction extends Component {
                                     <span class="badge bg-light text-dark ms-auto"><t t-esc="hd.items.length"/> <t t-esc="hd.items.length === 1 ? 'entry' : 'entries'"/></span>
                                 </div>
                                 <t t-if="isHistoryDayOpen(hd.label)" t-foreach="hd.items" t-as="hi" t-key="hi.key">
-                                    <!-- A talk with the client: one row, closed until tapped; open, it shows
-                                         the bubbles as in Client Talks › Discussions. -->
-                                    <div t-if="hi.kind === 'talk'" class="py-1">
-                                        <div class="d-flex align-items-center flex-wrap gap-2 rounded-2 px-2 py-2 bg-light" style="cursor:pointer;"
-                                             role="button" t-att-aria-expanded="isHistoryTalkOpen(hi.key) ? 'true' : 'false'"
-                                             t-on-click="() => this.toggleHistoryTalk(hi.key)">
-                                            <i t-att-class="'fa ' + (isHistoryTalkOpen(hi.key) ? 'fa-chevron-down' : 'fa-chevron-right') + ' text-muted'"/>
-                                            <span class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 text-white"
-                                                  style="width:28px;height:28px;background:#00a884"><i class="fa fa-comments"/></span>
-                                            <b t-esc="hi.title"/>
-                                            <span class="small text-muted"><t t-esc="hi.count"/> message<t t-if="hi.count !== 1">s</t></span>
-                                            <span t-if="hi.badge" class="ms-auto small fw-semibold"
-                                                  t-att-style="'color:' + (hi.badge.startsWith('●') ? '#B42318' : '#0F5E2D')" t-esc="hi.badge"/>
-                                        </div>
-                                        <div t-if="isHistoryTalkOpen(hi.key)" class="rounded-2 p-2 mt-1 d-flex flex-column gap-2"
-                                             style="background:#EAF6F1; box-shadow: inset 4px 0 0 #00a884;">
-                                            <div t-foreach="hi.messages" t-as="msg" t-key="msg.id"
-                                                 t-att-class="'rounded-2 px-2 py-1 ' + (msg.side === 'team' ? 'align-self-end' : 'align-self-start')"
-                                                 t-att-style="'max-width:75%; background:' + (msg.side === 'team' ? '#D9FDD3' : '#FFFFFF') + ';'">
-                                                <div class="d-flex gap-2" style="font-size:12px;">
-                                                    <b t-att-style="'color:' + (msg.side === 'team' ? '#1D4FA8' : '#B45309')"><t t-esc="msg.who"/><t t-if="msg.side === 'client'"> · client</t></b>
-                                                    <span class="ms-auto text-muted" t-esc="msg.time"/>
-                                                </div>
-                                                <div t-if="msg.body" style="white-space: pre-wrap;" t-esc="msg.body"/>
-                                                <div t-foreach="msg.files or []" t-as="f" t-key="f.id" class="my-1">
-                                                    <a t-if="f.kind === 'image'" t-att-href="f.url" target="_blank" t-att-title="f.name">
-                                                        <img t-att-src="f.url" t-att-alt="f.name" loading="lazy"
-                                                             style="display:block; max-width:240px; max-height:240px; border-radius:6px;"/></a>
-                                                    <video t-elif="f.kind === 'video'" t-att-src="f.url" controls="" preload="metadata"
-                                                           style="display:block; max-width:280px; max-height:240px; border-radius:6px;"/>
-                                                    <a t-elif="f.kind === 'document'" t-att-href="f.url" target="_blank" rel="noopener"
-                                                       class="d-flex gap-2 align-items-center px-2 py-2 rounded text-reset text-decoration-none"
-                                                       style="background:rgba(0,0,0,.05); min-width:200px; word-break:break-all;">
-                                                        <i class="fa fa-file-text-o"/><b t-esc="f.name"/></a>
-                                                    <audio t-else="" t-att-src="f.url" controls="" preload="metadata" style="display:block; width:240px;"/>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div t-else="" class="d-flex gap-3 py-2">
+                                    <div class="d-flex gap-3 py-2">
                                         <span class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 text-white"
                                               t-att-style="'width:32px;height:32px;background:' + historyColor(hi.kind)">
                                             <i t-att-class="'fa ' + historyIcon(hi.kind)"/>
@@ -1041,7 +1002,6 @@ export class KpiAction extends Component {
                                                       t-esc="hi.badge"/>
                                             </div>
                                             <div t-if="hi.body" class="mt-1"
-                                                 t-att-class="hi.kind === 'talk' ? 'bg-light rounded px-3 py-2 d-inline-block' : ''"
                                                  style="white-space: pre-wrap; max-width: 75ch;" t-esc="hi.body"/>
                                         </div>
                                     </div>
@@ -3109,7 +3069,8 @@ export class KpiAction extends Component {
                                                     <t t-elif="task.full_complete_at and state.isAdmin">
                                                         <div class="mt-1 p-2 rounded small" style="background:#fffbeb; border:1px solid #fde68a;">
                                                             <div class="fw-bold" style="color:#92400e;">🏁 Fully complete: no bill yet</div>
-                                                            <div class="text-muted">Usually no price matches. Add it in Configuration → Billing, then:</div>
+                                                            <div t-if="task.bill_off" class="text-muted">Invoices are off for this client (Settings → Billing). Make one by hand:</div>
+                                                            <div t-else="" class="text-muted">Usually no price matches. Add it in Configuration → Billing, then:</div>
                                                             <button class="btn btn-sm btn-warning mt-1" t-att-disabled="state.finishBusy === task.id"
                                                                     t-on-click.stop="() => this.billNow(task)">🧾 Bill now</button>
                                                         </div>
@@ -3951,9 +3912,8 @@ export class KpiAction extends Component {
             chatPhoto: null,                  // the photo open full screen
             chatEmojiOpen: false,             // the 😊 panel above the type box
             chatRec: null,                    // 🎤 { paused, time, url } while recording a voice note
-            chatKpiId: null,                  // a chat opened from 💬 General questions (not the open task)
-            generalChats: { open: false, rows: [], waiting: 0 },
-            history: { items: [], filter: 'all', shown: 30, loading: false, openDays: {}, openTalks: {} },   // KPI Details › History; openDays: day label → open
+            chatKpiId: null,                  // a chat opened from Client Talks ("Open chat"), not the open task
+            history: { items: [], filter: 'all', shown: 30, loading: false, openDays: {} },   // KPI Details › History; openDays: day label → open
             // 📅 Meetings in KPI details (controllers/kpi_talks_api.py), by date.
             detailMeetings: { days: [], count: 0 },
             activityExpanded: {},     // which day sections are open, keyed by date
@@ -4140,7 +4100,6 @@ export class KpiAction extends Component {
         this.openStartModal = this.openStartModal.bind(this);
         this.openPauseModal = this.openPauseModal.bind(this);
         this.openResumeModal = this.openResumeModal.bind(this);
-        this.openCompleteModal = this.openCompleteModal.bind(this);
         this.openReassignModal = this.openReassignModal.bind(this);
         this.openApproveModal = this.openApproveModal.bind(this);  // 🆕 NEW
         this.openRejectModal = this.openRejectModal.bind(this);    // 🆕 NEW
@@ -4154,7 +4113,6 @@ export class KpiAction extends Component {
         this.confirmStart = this.confirmStart.bind(this);
         this.confirmPause = this.confirmPause.bind(this);
         this.confirmResume = this.confirmResume.bind(this);
-        this.confirmComplete = this.confirmComplete.bind(this);
         // Switch task. Bound like every other template-invoked method: OWL calls
         // these off the context, so an unbound one arrives with `this` undefined
         // and dies on the first this.* it touches.
@@ -4387,9 +4345,9 @@ export class KpiAction extends Component {
                             
                             <!-- Employee Checklist Display -->
                             <div class="card p-3 mb-3 bg-light" id="employeeChecklistDisplay">
-                                <h6 class="fw-bold mb-3">📝 Employee Checklist (Submitted):</h6>
+                                <h6 class="fw-bold mb-3">📝 What this task needed:</h6>
                                 <div class="text-muted text-center">
-                                    <span class="spinner-border spinner-border-sm"></span> Loading employee checklist...
+                                    <span class="spinner-border spinner-border-sm"></span> Loading...
                                 </div>
                             </div>
                             
@@ -4628,150 +4586,6 @@ export class KpiAction extends Component {
             this._toast("Failed to reject task. Please try again.", 'danger');
         }
     }
-    openCompleteModal(task) {
-        this.state.selectedKpi = task;
-        
-        // Initialize employee checklist state
-        this.state.employeeChecklist = {
-            verify_github: false,
-            deployed_task: false,
-            user_manual: false,
-            documentation: false,
-            tested_code: false,
-        };
-        
-        const modalHTML = `
-            <div class="modal-backdrop fade show"></div>
-            <div class="modal d-block" tabindex="-1">
-                <div class="modal-dialog modal-lg">
-                    <div class="modal-content">
-                        <div class="modal-header bg-info text-white">
-                            <h5 class="modal-title">✅ Complete Task - Employee Checklist</h5>
-                            <button type="button" class="btn-close btn-close-white" id="closeModalBtn"></button>
-                        </div>
-                        <div class="modal-body">
-                            <p><strong>Task:</strong> ${task.name}</p>
-                            
-                            <div class="alert alert-info">
-                                <i class="fa fa-info-circle"></i> <strong>Before submitting:</strong>
-                                <p class="mb-0 mt-2">Please confirm you have completed the following checklist items. Your task will be sent to your manager for approval.</p>
-                            </div>
-                            
-                            <div class="card p-3 mb-3">
-                                <h6 class="fw-bold mb-3">📋 Employee Completion Checklist:</h6>
-                                
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="check_verify_github">
-                                    <label class="form-check-label" for="check_verify_github">
-                                        <strong>1. Verify Github URL</strong>
-                                        <small class="d-block text-muted">Confirmed all code is pushed to the correct repository</small>
-                                    </label>
-                                </div>
-                                
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="check_deployed_task">
-                                    <label class="form-check-label" for="check_deployed_task">
-                                        <strong>2. Deployed the Task</strong>
-                                        <small class="d-block text-muted">Task has been deployed to staging/production</small>
-                                    </label>
-                                </div>
-                                
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="check_user_manual">
-                                    <label class="form-check-label" for="check_user_manual">
-                                        <strong>3. User Manual Uploaded</strong>
-                                        <small class="d-block text-muted">Documentation is uploaded and accessible</small>
-                                    </label>
-                                </div>
-                                
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="check_documentation">
-                                    <label class="form-check-label" for="check_documentation">
-                                        <strong>4. Documentation Submission</strong>
-                                        <small class="d-block text-muted">All technical documentation is complete</small>
-                                    </label>
-                                </div>
-                                
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="check_tested_code">
-                                    <label class="form-check-label" for="check_tested_code">
-                                        <strong>5. Manually Tested the Code</strong>
-                                        <small class="d-block text-muted">All features tested and working as expected</small>
-                                    </label>
-                                </div>
-                            </div>
-                            
-                            <p class="text-muted"><small><i class="fa fa-clock-o"></i> Time Spent: ${this.formatTime(task.timer_total_seconds)}</small></p>
-                        </div>
-                        <div class="modal-footer">
-                            <button class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
-                            <button class="btn btn-danger" id="confirmModalBtn">
-                                <i class="fa fa-paper-plane"></i> Submit for Approval
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-        this._renderModal(modalHTML, this.confirmComplete);
-    }
-
-    async confirmComplete() {
-        // Collect checklist values from checkboxes
-        const employeeChecklist = {
-            verify_github: document.getElementById("check_verify_github")?.checked || false,
-            deployed_task: document.getElementById("check_deployed_task")?.checked || false,
-            user_manual: document.getElementById("check_user_manual")?.checked || false,
-            documentation: document.getElementById("check_documentation")?.checked || false,
-            tested_code: document.getElementById("check_tested_code")?.checked || false,
-        };
-        
-        // Count checked items
-        const checkedCount = Object.values(employeeChecklist).filter(v => v).length;
-        
-        // Optional: Warn if not all items are checked
-        if (checkedCount < 5) {
-            const proceed = await this._confirm(
-                'Checklist incomplete',
-                `You have checked ${checkedCount} of 5 items.
-
-`
-                + 'You can send it for approval anyway, but the reviewer sees which '
-                + 'items you skipped.',
-                'Send anyway', 'btn-warning');
-            if (!proceed) {
-                return; // Don't close modal, let them check more items
-            }
-        }
-        
-        const kpi_id = this.state.selectedKpi.id;
-        this.closeModal();
-        
-        try {
-            const result = await rpc("/kra_kpi/task/complete", { 
-                kpi_id: kpi_id,
-                employee_checklist: employeeChecklist
-            });
-            
-            if (result.status) {
-                this._toast(`✅ Task marked as complete and sent for approval!\n\nChecklist completed: ${checkedCount}/5 items`, 'success');
-                await this.refresh();
-            } else {
-                this._toast("❌ Error: " + result.message, 'danger');
-            }
-        } catch (error) {
-            console.error("Error completing task:", error);
-            this._toast("Failed to complete task. Please try again.", 'danger');
-        }
-    }
-
-    // =========================================================
-    // 🆕 Part B — Wrap-up actions
-    //   • Partial Finish: submit a summary only → task goes to review, no checklist.
-    //   • Complete: redirect to Details view and enforce summary + full checklist.
-    // =========================================================
-
-    // Card "Complete" → open the Details view where the enforced checklist lives.
     async openCompleteFromCard(task) {
         this.state.completeChecklist = {
             verify_github: false, deployed_task: false, user_manual: false,
@@ -4890,22 +4704,7 @@ export class KpiAction extends Component {
                  missing: req.filter((r) => !r.done).map((r) => r.label) };
     }
     canCompleteDetail() {
-        const hasSummary = this.teamProgress().length > 0;
-        const c = this.state.completeChecklist || {};
-        // ONE tick is enough, not all five.
-        //
-        // Requiring every box meant a task with no user manual to upload, or
-        // nothing to deploy, could not be completed at all — the developer either
-        // ticked boxes that weren't true, or used Partial Finish to get around it.
-        // A checklist people are forced to lie to is worse than no checklist: the
-        // stored flags are what the manager reviews.
-        //
-        // Each box is still recorded individually, so "deployed but not
-        // documented" stays visible to whoever approves it.
-        const anyTicked = !!(c.verify_github || c.deployed_task || c.user_manual
-                             || c.documentation || c.tested_code);
         // What this task's type needs (completeRows): no box to tick by hand.
-        void hasSummary; void anyTicked;
         return !this.completeRows().missing.length && !this.state.completeSubmitting;
     }
 
@@ -6681,56 +6480,21 @@ export class KpiAction extends Component {
             const result = await rpc("/kra_kpi/task/checklists", { kpi_id: kpi_id });
             
             if (result.status) {
-                const empChecklist = result.employee_checklist;
-                
-                // Count checked items
-                const checkedCount = Object.values(empChecklist).filter(v => v).length;
-                
-                // Update the display
+                // What this task's type needed to be completed (server rules,
+                // kpi_workflow._completion_rules): ✓ done, ✗ required and
+                // missing, — optional and left empty.
+                const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const rows = (result.completion_rules || []).map((r) => {
+                    const mark = r.done ? '<span class="badge bg-success ms-2">✓</span>'
+                        : (r.required ? '<span class="badge bg-danger ms-2">✗</span>'
+                                      : '<span class="badge bg-light text-dark border ms-2">— optional</span>');
+                    return `<div class="mb-1"><strong>${esc(r.label)}</strong>${r.required ? ' <span class="text-danger">✱</span>' : ''}${mark}</div>`;
+                }).join('');
                 const displayDiv = document.getElementById("employeeChecklistDisplay");
                 if (displayDiv) {
                     displayDiv.innerHTML = `
-                        <h6 class="fw-bold mb-3">📝 Employee Checklist (${checkedCount}/5 completed):</h6>
-                        
-                        <div class="form-check mb-2">
-                            <input class="form-check-input" type="checkbox" ${empChecklist.verify_github ? 'checked' : ''} disabled>
-                            <label class="form-check-label">
-                                <strong>1. Verify Github URL</strong>
-                                ${empChecklist.verify_github ? '<span class="badge bg-success ms-2">✓</span>' : '<span class="badge bg-secondary ms-2">✗</span>'}
-                            </label>
-                        </div>
-                        
-                        <div class="form-check mb-2">
-                            <input class="form-check-input" type="checkbox" ${empChecklist.deployed_task ? 'checked' : ''} disabled>
-                            <label class="form-check-label">
-                                <strong>2. Deployed the Task</strong>
-                                ${empChecklist.deployed_task ? '<span class="badge bg-success ms-2">✓</span>' : '<span class="badge bg-secondary ms-2">✗</span>'}
-                            </label>
-                        </div>
-                        
-                        <div class="form-check mb-2">
-                            <input class="form-check-input" type="checkbox" ${empChecklist.user_manual ? 'checked' : ''} disabled>
-                            <label class="form-check-label">
-                                <strong>3. User Manual Uploaded</strong>
-                                ${empChecklist.user_manual ? '<span class="badge bg-success ms-2">✓</span>' : '<span class="badge bg-secondary ms-2">✗</span>'}
-                            </label>
-                        </div>
-                        
-                        <div class="form-check mb-2">
-                            <input class="form-check-input" type="checkbox" ${empChecklist.documentation ? 'checked' : ''} disabled>
-                            <label class="form-check-label">
-                                <strong>4. Documentation Submission</strong>
-                                ${empChecklist.documentation ? '<span class="badge bg-success ms-2">✓</span>' : '<span class="badge bg-secondary ms-2">✗</span>'}
-                            </label>
-                        </div>
-                        
-                        <div class="form-check mb-2">
-                            <input class="form-check-input" type="checkbox" ${empChecklist.tested_code ? 'checked' : ''} disabled>
-                            <label class="form-check-label">
-                                <strong>5. Manually Tested the Code</strong>
-                                ${empChecklist.tested_code ? '<span class="badge bg-success ms-2">✓</span>' : '<span class="badge bg-secondary ms-2">✗</span>'}
-                            </label>
-                        </div>
+                        <h6 class="fw-bold mb-3">📝 What this task needed:</h6>
+                        ${rows || '<div class="text-muted">Nothing beyond the summary.</div>'}
                     `;
                 }
             }
@@ -7481,20 +7245,10 @@ export class KpiAction extends Component {
         const o = this.state.history.openDays;
         return label in o ? !!o[label] : label === 'Today';
     }
-    // A talk row in History: closed until tapped.
-    toggleHistoryTalk(key) {
-        this.state.history.openTalks[key] = !this.state.history.openTalks[key];
-    }
-    isHistoryTalkOpen(key) {
-        return !!this.state.history.openTalks[key];
-    }
     async loadHistory(kpiId) {
         const id = kpiId || this.state.detailKpiId;
         if (!id) return;
-        if (kpiId) {   // another task: start closed
-            this.state.history.openDays = {};
-            this.state.history.openTalks = {};
-        }
+        if (kpiId) this.state.history.openDays = {};   // another task: start closed
         this.state.history.loading = true;
         try {
             const res = await rpc('/kpi_action/history', { kpi_id: id });
@@ -7554,11 +7308,11 @@ export class KpiAction extends Component {
         return this.chatTime(at);
     }
     historyIcon(kind) {
-        return { talk: 'fa-comments', question: 'fa-question', progress: 'fa-pencil', meeting: 'fa-calendar',
+        return { question: 'fa-question', progress: 'fa-pencil', meeting: 'fa-calendar',
                  code: 'fa-github', document: 'fa-file-text-o', activity: 'fa-history' }[kind] || 'fa-circle';
     }
     historyColor(kind) {
-        return { talk: '#00a884', question: '#714b67', progress: '#017e84', meeting: '#6f42c1',
+        return { question: '#714b67', progress: '#017e84', meeting: '#6f42c1',
                  code: '#374151', document: '#b7791f', activity: '#6c757d' }[kind] || '#6c757d';
     }
     // The left column's buttons: bring that form into view, and focus it when it is a field.
@@ -7571,26 +7325,13 @@ export class KpiAction extends Component {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         if (typeof el.focus === 'function' && /^(TEXTAREA|INPUT)$/.test(el.tagName)) el.focus();
     }
-    // The task whose chat is open: one picked from 💬 General questions, else
-    // the task open in KPI Details.
+    // The task whose chat is open: one opened from Client Talks, else the task
+    // open in KPI Details.
     _chatTaskId() {
         return this.state.chatKpiId || this.state.detailKpiId;
     }
-    async loadGeneralChats() {
-        try {
-            const res = await rpc('/kpi_action/chat/general_list', {});
-            if (res && res.status) {
-                this.state.generalChats.rows = res.rows || [];
-                this.state.generalChats.waiting = res.waiting || 0;
-            }
-        } catch (e) { /* the button just shows no count */ }
-    }
-    async openGeneralChats() {
-        this.state.generalChats.open = true;
-        await this.loadGeneralChats();
-    }
+    // Client Talks › "Open chat" (context open_chat_kpi_id): that task's chat.
     async openGeneralChat(g) {
-        this.state.generalChats.open = false;
         this.state.chatKpiId = g.kpi_id;
         this.state.chatInfo = { ref: g.code || g.ref, client: g.client };
         await this.openChat(true);

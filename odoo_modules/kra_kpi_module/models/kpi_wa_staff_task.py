@@ -1032,7 +1032,7 @@ class KpiWaStaffTask(models.AbstractModel):
                       'github': 'GitHub link deleted.'}[kind]
 
     def page_complete(self, user, task, ticks, partial=False, summary='', raw_links='',
-                      gh_url='', gh_branch='', files=None):
+                      gh_url='', gh_branch='', files=None, extra=None):
         """The page's Complete form: /kra_kpi/task/complete's rules, plus what
         the form brings with it -- a summary (with optional links / GitHub) and
         the user manual file(s).
@@ -1059,18 +1059,30 @@ class KpiWaStaffTask(models.AbstractModel):
             return False, ("The client's files don't count as your summary — write what you did."
                            if client_only else 'Write a summary of what you did — this is what your manager reads.')
         checklist = {} if partial else {k: (k in ticks) for k, _l in CHECKLIST}
+        # What the form brings for this task's type: app link, manual link,
+        # website, database details (saved with the rest, inside the savepoint).
+        extra = {k: (v or '').strip() for k, v in (extra or {}).items()}
+        field_of = {'app_link': 'app_link', 'website_url': 'website_url', 'db_url': 'provision_url',
+                    'db_name': 'provision_db_name', 'db_user': 'provision_username',
+                    'db_password': 'provision_password'}
         if not partial:
             # Everything missing at once, so one reply says all of it (the same
             # list the page's "you still need" popup shows).
             missing = []
             if no_summary:
                 missing.append(summary_item)
-            if not files and task._manual_required_refusal():
-                missing.append('the user manual (PDF, DOC or DOCX, or a manual link in KPI details)')
+            if not files and not extra.get('user_manual_url') and task._manual_required_refusal():
+                missing.append('the user manual (a PDF, DOC or DOCX file, or a link)')
             if not (gh_url or '').strip() and task._github_required_refusal():
                 missing.append('the GitHub link + branch (this is a Module / App task)')
             # The rest this task's type asks for (app link, database details).
-            missing += task._completion_missing(skip=('summary', 'manual', 'github'))
+            for r in task._completion_rules():
+                if (r['required'] and not r['done'] and r['key'] not in ('summary', 'manual', 'github')
+                        and not extra.get(field_of.get(r['key'], ''))):
+                    missing.append(r['label'])
+            for f in ('app_link', 'user_manual_url', 'website_url', 'provision_url'):
+                if extra.get(f) and not extra[f].lower().startswith(('http://', 'https://')):
+                    return False, '%s must start with http:// or https://' % task._fields[f].string
             if missing:
                 return False, ('Before completing, you still need: %s. Or use Partial finish to send a '
                                'summary only.' % '; '.join(missing))
@@ -1080,6 +1092,9 @@ class KpiWaStaffTask(models.AbstractModel):
 
         try:
             with self.env.cr.savepoint():
+                vals = {k: v for k, v in extra.items() if v}
+                if vals:
+                    task.sudo().write(vals)
                 if summary:
                     ok, msg = self.page_save(user, task, 'progress', summary, raw_links, gh_url, gh_branch)
                     if not ok:
@@ -1092,6 +1107,9 @@ class KpiWaStaffTask(models.AbstractModel):
                     refused = task._completion_refusal()
                     if refused:
                         raise _Refused(refused)
+                    done = {r['key'] for r in task._completion_rules() if r['done']}
+                    checklist.update(user_manual=checklist.get('user_manual') or 'manual' in done,
+                                     verify_github=checklist.get('verify_github') or 'github' in done)
                 task.with_user(user).sudo().complete_task(employee_checklist=checklist)
         except _Refused as exc:
             return False, str(exc)
@@ -1152,8 +1170,7 @@ class KpiWaStaffTask(models.AbstractModel):
             or _('nothing more')
         self._send_page_link(message, state, user, task, group_note=_(
             '⏳ %(ref)s is not completed yet, %(who)s. Open the link in your private chat, fill in '
-            'the mandatory items (%(needed)s), tick the checkboxes, then tap '
-            '*Submit for approval*.') % {'ref': self._ref(task), 'who': user.name or '', 'needed': needed})
+            'what this task needs (%(needed)s), then tap *Submit for approval*.') % {'ref': self._ref(task), 'who': user.name or '', 'needed': needed})
         return True
 
     # The in-chat finish below is no longer started (✅ Completed sends the page
@@ -1547,10 +1564,10 @@ class KpiWaStaffTask(models.AbstractModel):
             lines.append(_('💬 Questions to the manager: %(n)d · answered %(a)d — tap 💬 Manager answers') % {
                 'n': len(doubts), 'a': len([x for x in doubts if x['answer']])})
         if task.task_state == 'partially_completed':
-            ticks = [l for k, l in CHECKLIST if task['employee_checklist_%s' % {
-                'verify_github': 'github', 'deployed_task': 'deployed', 'user_manual': 'manual',
-                'documentation': 'docs', 'tested_code': 'tested'}[k]]]
-            lines += ['', _('Your checklist: %s') % (', '.join(ticks) or '—')]
+            # What this task's type needed, as sent for review.
+            lines += ['', _('Sent with: %s') % (', '.join(
+                '%s %s' % ('✓' if r['done'] else '✗', r['label'])
+                for r in task._completion_rules() if r['required']) or '—')]
         self._text(message, '\n'.join(lines))
         if not then_menu:
             return True

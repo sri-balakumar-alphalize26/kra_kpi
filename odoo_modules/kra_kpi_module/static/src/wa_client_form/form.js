@@ -189,7 +189,8 @@
         desc.addEventListener('input', preview);
         desc.addEventListener('blur', function () {
             var raw = desc.value.trim();
-            if (raw.length < 3 || raw === lastTidy) { return; }
+            // A module list is kept in the client's own words: a rewrite can rename a module.
+            if (KIND === "newdb" || raw.length < 3 || raw === lastTidy) { return; }
             note.textContent = '✨ Tidying…';
             rpc('polish', { text: raw }).then(function (res) {
                 if (desc.value.trim() !== raw) { note.textContent = ''; return; }   // typed again meanwhile
@@ -714,6 +715,7 @@
             r.push(['Database name', dbName.value.trim() + (dbName.value.trim() && !dbNameOk ? '  (not valid yet)' : ''), true]);
             r.push(['Username', user.disabled ? '' : user.value.trim(), true]);
             r.push(['Password', pass.value ? pass.value : '', true]);
+            r.push(['Modules / notes', desc.value.trim(), true]);
             return r;
         }
         r.push(['Database', db && db.value ? (db.options[db.selectedIndex].getAttribute('data-name') || text(db)) : '', true]);

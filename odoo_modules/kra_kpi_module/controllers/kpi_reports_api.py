@@ -6288,6 +6288,9 @@ class KpiReportsAPI(http.Controller):
                     'when_raw':      (e.create_date.isoformat() + 'Z') if e.create_date else False,
                     'success':       bool(e.success),
                     'device_ip':     e.device_ip or '',
+                    # Odoo's Action Log form shows these two as well.
+                    'user_agent':    e.user_agent or '',
+                    'contact':       e.actor_partner_id.display_name if e.actor_partner_id else '',
                     'payload':       payload,
                 })
             return {'status': True, 'count': len(rows), 'entries': rows}
