@@ -1342,6 +1342,21 @@ try:
             # except Exception as exc:
             #     _logger.warning("Conversation trigger raised: %s", exc)
 
+            # (0a) 💬 Client chat: "CHAT <ref> <code>" sent from the chat page's
+            # "Confirm on WhatsApp" button. The sender's own number proves the
+            # phone / laptop that showed the code (models/kpi_chat.py
+            # _chat_confirm_from_wa). Anything else falls through untouched.
+            try:
+                with pool.cursor() as cr:
+                    env = api.Environment(cr, uid, {})
+                    reply = env['kra.kpi'].sudo()._chat_confirm_from_wa(phone_clean, msg_text)
+                    if reply is not None:
+                        cr.commit()
+                        env['kpi.manager.dm'].sudo()._reply(phone_clean, reply)
+                        return True
+            except Exception as exc:
+                _logger.exception("Chat confirm handler raised: %s", exc)
+
             # (0) MANAGER approvals — approve / reject / assign, privately.
             #
             # First in the chain on purpose. It must run before

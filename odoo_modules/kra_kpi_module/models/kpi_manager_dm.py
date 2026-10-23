@@ -36,6 +36,7 @@ this codebase. The conversation row here only ever carries the FOLLOW-UP ("the
 next line you type is the reason"), never the binding.
 """
 
+import json
 import logging
 import re
 
@@ -63,8 +64,12 @@ REJECT_WORDS = ('reject', 'rejected', 'refuse', 'decline', 'no')
 # Evolution truncates each poll option at 100 characters without complaining.
 # Titles are trimmed to leave room for the ref and the verb, which must survive.
 TITLE_IN_LABEL = 38
-# A poll holds 12 options; anything past that is dropped in silence.
-MAX_DEV_ROWS = 10
+# A poll holds 10 options here (Evolution refuses more). The developer list
+# pages: 7 names + ➡️ More + 🔍 Search + ↩️ Back; up to 8 fit with just Back.
+DEV_PAGE = 7
+MORE_LABEL = '➡️ More'
+SEARCH_LABEL = '🔍 Search'
+BACK_LABEL = '↩️ Back'
 
 
 class KpiWaConversationManager(models.Model):
@@ -76,6 +81,7 @@ class KpiWaConversationManager(models.Model):
         ('mgr_pick_dev', 'Manager: pick a developer'),
         ('mgr_pick_reason', 'Manager: pick a decline reason'),
         ('mgr_type_reason', 'Manager: type a decline reason'),
+        ('mgr_dev_search', 'Manager: search a developer'),
         ('mgr_doubt_decide', 'Manager: decide on a question'),
         ('mgr_doubt_answer', 'Manager: answer a question'),
         # 💬 Discuss: a developer the manager asked to reply to the client,
@@ -86,6 +92,7 @@ class KpiWaConversationManager(models.Model):
         'mgr_pick_dev': 'set default',
         'mgr_pick_reason': 'set default',
         'mgr_type_reason': 'set default',
+        'mgr_dev_search': 'set default',
         'mgr_doubt_decide': 'set default',
         'mgr_doubt_answer': 'set default',
         'dev_client_reply': 'set default',
@@ -93,6 +100,8 @@ class KpiWaConversationManager(models.Model):
     })
     # The developer's reply, between typing it and tapping ✅ Send.
     chat_draft = fields.Text(copy=False)
+    # The manager's developer list: {"page": n, "query": "..."} (_offer_developers).
+    pick_state = fields.Char(copy=False)
 
     decline_reason_id = fields.Many2one(
         'kpi.decline.reason', string='Chosen decline reason', ondelete='set null')
@@ -146,7 +155,6 @@ class KraKpiManagerAsk(models.Model):
         """
         self.ensure_one()
         Report = self.env['kpi.wa.group.report'].sudo()
-        ref = self._ref()
 
         people = self._manager_users()
         if escalate:
@@ -157,15 +165,7 @@ class KraKpiManagerAsk(models.Model):
                     lambda u: u.active and not u.share)
                 people = owners or people
 
-        question = _('%(ref)s — %(title)s\n%(client)s%(who)s') % {
-            'ref': ref,
-            'title': self.name or '',
-            'client': (self.client_kra_id.name + '\n')
-                      if self.client_kra_id else '',
-            'who': _('Raised by %s') % self.submitted_by_uid.name
-                   if self.submitted_by_uid else '',
-        }
-        options = ['✅ %s — Approve' % ref, '❌ %s — Reject' % ref]
+        question, options = self._mgr_decide_poll()
 
         reached = self.env['res.users']
         for user in people:
@@ -187,6 +187,21 @@ class KraKpiManagerAsk(models.Model):
             _logger.warning('kra.kpi %s: no manager reachable for approval',
                             ref)
         return reached
+
+    def _mgr_decide_poll(self):
+        """(question, options) of the ✅ Approve / ❌ Reject poll -- also sent
+        again when the manager taps ↩️ Back further in."""
+        self.ensure_one()
+        ref = self._ref()
+        question = _('%(ref)s — %(title)s\n%(client)s%(who)s') % {
+            'ref': ref,
+            'title': self.name or '',
+            'client': (self.client_kra_id.name + '\n')
+                      if self.client_kra_id else '',
+            'who': _('Raised by %s') % self.submitted_by_uid.name
+                   if self.submitted_by_uid else '',
+        }
+        return question, ['✅ %s — Approve' % ref, '❌ %s — Reject' % ref]
 
     # ------------------------------------------------------------------
     def _already_decided(self):
@@ -346,11 +361,15 @@ class KpiManagerDmRouter(models.AbstractModel):
         if not mid_flow and not (kpi and verb) and not (doubt and doubt_verb):
             return False            # not ours; let the chain keep walking
 
+        # Someone the Approval Chain asked about a question may answer it too,
+        # admin or not (kpi_doubt._may_decide).
         if doubt and doubt_verb:
-            if not user or not allowed:
+            if not user or not (allowed or user in doubt.sudo().esc_asked_ids):
                 self._reply(phone, _('Only a manager can decide that.'))
                 return True
             return self._decide_doubt(phone, user, doubt, doubt_verb, text=text)
+        if user and not allowed and live and live.target_doubt_id and (live.step or '').startswith('mgr_doubt'):
+            allowed = user in live.target_doubt_id.sudo().esc_asked_ids
 
         if not user or not allowed:
             # Loud, not quiet. A manager verb arriving from a number that is
@@ -375,6 +394,14 @@ class KpiManagerDmRouter(models.AbstractModel):
     def _decide_doubt(self, phone, user, doubt, verb, text=''):
         """What the manager chose to do with a developer's question."""
         ref = doubt.kpi_id.external_ref or ('#%s' % doubt.kpi_id.id)
+        # First answer wins: a developer's "Yes, I will reply" (kpi_doubt
+        # _dev_poll_vote) or another manager may have just taken it.
+        self.env.cr.execute('SELECT id FROM kpi_doubt WHERE id = %s FOR UPDATE', (doubt.id,))
+        doubt.invalidate_recordset()
+        if doubt.state == 'open' and doubt.assigned_dev_id and verb == 'developer':
+            self._reply(phone, _('%(ref)s — already taken: %(who)s is replying to the client.') % {
+                'ref': ref, 'who': doubt.assigned_dev_id.name})
+            return True
         if doubt.state not in ('open',) and doubt.kind == 'client_msg':
             self._reply(phone, _('%(ref)s — already answered by %(who)s: "%(answer)s"') % {
                 'ref': ref, 'who': doubt.answered_by_id.name or _('the team'),
@@ -407,6 +434,28 @@ class KpiManagerDmRouter(models.AbstractModel):
                 'What should I tell %(who)s about %(ref)s? It goes to the '
                 'team group, not to the client.') % {
                     'who': doubt.raised_by_id.name or _('them'), 'ref': ref})
+            return True
+
+        if doubt.kind == 'client_meet' and verb in ('developer', 'meeting'):
+            # 📅 A client's meeting request: "👨‍💻 D12 → Karthick" runs it, or
+            # "📅 I will take the meeting" — the manager runs it.
+            conv.reset()
+            owner = user
+            if verb == 'developer' and '→' in (text or ''):
+                name = text.split('→', 1)[1].strip().lower()
+                owner = doubt.kpi_id._chat_dev_candidates().filtered(
+                    lambda u: (u.name or '').strip().lower()[:40] == name[:40])[:1] or user
+            try:
+                doubt._meeting_owner(owner, user)
+            except Exception as exc:
+                self._reply(phone, _('That did not go through: %s') % str(exc).strip()[:200])
+                return True
+            if owner == user:
+                self._reply(phone, _('📅 You run the meeting for %s — set the time and confirm it on '
+                                     'the Meetings screen.') % ref)
+            else:
+                self._reply(phone, _('📅 %(who)s runs the meeting for %(ref)s — they set the time and '
+                                     'confirm it on the Meetings screen.') % {'who': owner.name, 'ref': ref})
             return True
 
         if verb == 'developer' and doubt.kind == 'client_msg':
@@ -535,7 +584,7 @@ class KpiManagerDmRouter(models.AbstractModel):
         return self._offer_reasons(phone, conv, kpi)
 
     @api.model
-    def _offer_developers(self, phone, conv, kpi):
+    def _offer_developers(self, phone, conv, kpi, page=0, query=None, note=''):
         # EXPLICIT members (user_ids), and this is the one place in this
         # feature where that is the right choice rather than the usual trap.
         # Everywhere else -- "may this person approve?" -- implied membership
@@ -548,20 +597,51 @@ class KpiManagerDmRouter(models.AbstractModel):
                              raise_if_not_found=False)
         devs = (group.sudo().user_ids.filtered(
             lambda u: u.active and not u.share).sorted('name')
-            if group else self.env['res.users'])[:MAX_DEV_ROWS]
+            if group else self.env['res.users'])
         if not devs:
             self._reply(phone, _(
                 'There are no developers to assign %s to. Add somebody to the '
                 'Developer role first.') % kpi._ref())
             conv.reset()
             return True
+        if query:
+            found = devs.filtered(lambda u: query.lower() in (u.name or '').lower())
+            if not found:
+                note = _('🔍 No developer matches "%s".') % query
+                query = None
+            else:
+                devs = found
 
+        # Up to 8 fit with just ↩️ Back; more page with ➡️ More and 🔍 Search.
+        many = len(devs) > DEV_PAGE + 1
+        per = DEV_PAGE if many else DEV_PAGE + 1
+        pages = max(1, (len(devs) + per - 1) // per)
+        page = page % pages
+        chunk = devs[page * per:(page + 1) * per]
         ref = kpi._ref()
-        options = ['%s → %s' % (ref, u.name) for u in devs]
+        options = ['%s → %s' % (ref, u.name) for u in chunk]
+        if pages > 1:
+            options.append('%s (%d/%d)' % (MORE_LABEL, page + 1, pages))
+        if many or query:
+            options.append(SEARCH_LABEL)
+        options.append(BACK_LABEL)
         conv.write({'step': 'mgr_pick_dev',
-                    'user_choices_csv': ','.join(str(u.id) for u in devs)})
-        self.env['kpi.wa.group.report'].sudo()._post_poll(
-            phone, _('%(ref)s — who should do it?') % {'ref': ref}, options)
+                    'user_choices_csv': ','.join(str(u.id) for u in chunk),
+                    'pick_state': json.dumps({'page': page, 'query': query})})
+        question = _('%(ref)s — who should do it?') % {'ref': ref}
+        if query:
+            question += '\n' + _('🔍 "%(q)s": %(n)d found') % {'q': query, 'n': len(devs)}
+        if note:
+            question = '%s\n\n%s' % (note, question)
+        self.env['kpi.wa.group.report'].sudo()._post_poll(phone, question, options)
+        return True
+
+    @api.model
+    def _back_to_decide(self, phone, conv, kpi):
+        """↩️ Back: the ✅ Approve / ❌ Reject poll again, to this manager."""
+        conv.reset()
+        question, options = kpi._mgr_decide_poll()
+        self.env['kpi.wa.group.report'].sudo()._post_poll(phone, question, options)
         return True
 
     @api.model
@@ -575,7 +655,7 @@ class KpiManagerDmRouter(models.AbstractModel):
                 'Why are you refusing %s? The client is shown what you type.')
                 % ref)
             return True
-        options = ['%s · %s' % (ref, r.name) for r in reasons]
+        options = ['%s · %s' % (ref, r.name) for r in reasons[:9]] + [BACK_LABEL]
         conv.write({'step': 'mgr_pick_reason',
                     'task_choices_csv': ','.join(str(r.id) for r in reasons)})
         self.env['kpi.wa.group.report'].sudo()._post_poll(
@@ -619,13 +699,43 @@ class KpiManagerDmRouter(models.AbstractModel):
 
         stop = kpi._already_decided()
         if stop and conv.step in ('mgr_pick_dev', 'mgr_pick_reason',
-                                  'mgr_type_reason'):
+                                  'mgr_type_reason', 'mgr_dev_search'):
             conv.reset()
             self._reply(phone, stop)
             return True
 
+        word = re.sub(r'[^a-z ]', '', (text or '').lower()).strip()
+        if conv.step == 'mgr_dev_search':
+            if not text.strip():
+                return True
+            if word in ('cancel', 'stop', 'exit', 'back'):
+                return self._offer_developers(phone, conv, kpi)
+            return self._offer_developers(phone, conv, kpi, query=text.strip())
+        if conv.step in ('mgr_pick_dev', 'mgr_pick_reason') and (BACK_LABEL in (text or '') or word == 'back'):
+            try:
+                st = json.loads(conv.pick_state or '{}')
+            except ValueError:
+                st = {}
+            if conv.step == 'mgr_pick_dev' and st.get('query'):      # Back from results → the whole list
+                return self._offer_developers(phone, conv, kpi)
+            return self._back_to_decide(phone, conv, kpi)
+
         if conv.step == 'mgr_pick_dev':
+            try:
+                st = json.loads(conv.pick_state or '{}')
+            except ValueError:
+                st = {}
+            if MORE_LABEL in (text or '') or word == 'more':
+                return self._offer_developers(phone, conv, kpi, page=(st.get('page') or 0) + 1,
+                                              query=st.get('query'))
+            if SEARCH_LABEL in (text or '') or word == 'search':
+                conv.write({'step': 'mgr_dev_search'})
+                self._reply(phone, _('🔍 Type part of the developer\'s name. (Type cancel to stop.)'))
+                return True
             dev = self._pick(text, conv.user_choices_csv, 'res.users')
+            if not dev and text.strip() and not text.strip().isdigit() and '→' not in text:
+                # Typed a name instead of tapping: search for it.
+                return self._offer_developers(phone, conv, kpi, query=text.strip())
             if not dev:
                 self._reply(phone, _(
                     'I could not tell which developer that was. Tap one of '

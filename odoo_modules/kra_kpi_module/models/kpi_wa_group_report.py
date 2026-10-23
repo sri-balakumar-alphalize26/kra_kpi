@@ -112,7 +112,9 @@ class KpiWaGroupReport(models.AbstractModel):
             _logger.info('wa poll skipped: no connected session')
             return False
         try:
-            return bool(session.send_poll(target, question, list(options)))
+            # The WhatsApp id when Evolution gives one (send_poll returns it),
+            # so a caller can match the votes later; otherwise just True.
+            return session.send_poll(target, question, list(options)) or False
         except Exception as exc:
             _logger.error('wa poll to %s failed: %s', target, exc)
             return False
