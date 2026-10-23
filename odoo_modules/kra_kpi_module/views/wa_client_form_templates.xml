@@ -268,11 +268,12 @@
                             </div>
                         </div>
 
-                        <!-- Summary / description: every kind but New Database -->
-                        <div class="field" t-if="kind != 'newdb'">
-                            <span class="lbl"><t t-esc="'Why should it be destroyed?' if kind == 'dbdisconnect' else 'Summary / description'"/> <span class="req">*</span></span>
+                        <!-- Summary / description: every kind. New Database asks what
+                             to install and anything else the team needs first. -->
+                        <div class="field">
+                            <span class="lbl"><t t-esc="'Why should it be destroyed?' if kind == 'dbdisconnect' else ('Modules to install / notes' if kind == 'newdb' else 'Summary / description')"/> <span class="req">*</span></span>
                             <textarea id="kfDesc" name="description" maxlength="4000" rows="5"
-                                      placeholder="Write it in your own words — it is tidied up when you finish typing."></textarea>
+                                      t-att-placeholder="'Which modules to install, and anything else the team should know before creating this database…' if kind == 'newdb' else 'Write it in your own words — it is tidied up when you finish typing.'"></textarea>
                             <span id="kfDescNote" class="note-ai"></span>
                         </div>
 
@@ -376,7 +377,7 @@
                     </div>
                 </div>
                 <script>window.KF_BOOT = <t t-out="boot"/>;</script>
-                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=14"></script>
+                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=15"></script>
             </t>
         </template>
 

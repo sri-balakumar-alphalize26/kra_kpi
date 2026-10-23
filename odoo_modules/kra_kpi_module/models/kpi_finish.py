@@ -46,8 +46,8 @@ class KraKpiFinish(models.Model):
     client_revert_count = fields.Integer(string='Sent Back by Client', copy=False, readonly=True)
     full_complete_pending = fields.Boolean(
         string='Waiting for Full Complete', copy=False, readonly=True, index=True,
-        help='The client review is over; the user manual (and GitHub link for a '
-             'module / app) must be added and Full Complete tapped.')
+        help='The client review is over; what this task type needs (for a module / app: '
+             'the user manual and the GitHub link) must be in, then Full Complete tapped.')
     full_complete_at = fields.Datetime(string='Full Complete On', copy=False, readonly=True, index=True)
     full_complete_by_id = fields.Many2one('res.users', string='Full Complete By', copy=False,
                                           readonly=True, ondelete='set null')

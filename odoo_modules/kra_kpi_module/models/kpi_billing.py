@@ -253,17 +253,27 @@ class KraKpiBilling(models.Model):
         out = super()._finish_payload()
         if self.full_complete_at:
             out['bill'] = self._bill_info()
+            # No bill because this client's invoices are switched off
+            # (Settings › Billing): the task still offers 🧾 Bill now.
+            client = self.sudo().client_kra_id
+            out['bill_off'] = bool(not out['bill'] and client and not client._invoice_target()[0])
         return out
 
-    def _auto_bill(self):
+    def _auto_bill(self, manual=False):
         """Make and lock this task's bill. True when one was made (or already
-        exists); False when it can't be priced -- the admins are told why."""
+        exists); False when it can't be priced -- the admins are told why --
+        or, unless `manual` (🧾 Bill now), when the client's invoices are
+        switched off on Settings › Billing."""
         self.ensure_one()
         rec = self.sudo()
         if not rec.full_complete_at:
             return False
         if rec._already_billed():
             return True
+        if not manual and not (rec.client_kra_id and rec.client_kra_id._invoice_target()[0]):
+            rec._log_action('auto_bill_off', source='system',
+                            payload={'client': rec.client_kra_id.name or ''})
+            return False
         rate, amount, hours, why = rec._billing_quote()
         ref = rec.external_ref or '#%s' % rec.id
         if not rate:
@@ -338,7 +348,7 @@ class KraKpiBilling(models.Model):
             rate, _a, _h, why = rec._billing_quote()
             if not rate:
                 raise UserError(why)
-            rec._auto_bill()
+            rec._auto_bill(manual=True)
         return True
 
 

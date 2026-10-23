@@ -1688,8 +1688,8 @@ class KpiWorkflow(models.Model):
             rec._wrap_lifecycle('resume')
         return result
 
-    MANUAL_REQUIRED_MSG = ('Upload a user manual (PDF, DOC or DOCX) before completing this task '
-                           '— or use Partial Finish to send a summary only.')
+    MANUAL_REQUIRED_MSG = ('This is a Module / App task — add the user manual (a PDF, DOC or DOCX '
+                           'file, or a link) before completing, or use Partial Finish to send a summary only.')
 
     def _manual_required_refusal(self):
         """A full Complete of a Module / App task needs a user manual: a file

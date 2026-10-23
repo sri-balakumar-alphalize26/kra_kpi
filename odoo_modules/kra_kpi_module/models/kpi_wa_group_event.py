@@ -87,6 +87,26 @@ WA_GROUP_EVENTS = [
         'tokens': ['dev', 'title', 'ref', 'elapsed'],
         'default': "⏵ *Task resumed*\n{title} ({ref})\n{dev}",
     },
+    # A client's database requests, so the team hears of them at once, whoever
+    # is deciding (kpi_client_updates._post_db_request_to_team).
+    {
+        'key': 'new_database',
+        'label': 'New database asked',
+        'help': 'When a client asks for a new database (with the modules / notes they wrote).',
+        'default_enabled': True,
+        'tokens': ['client', 'ref', 'server', 'db', 'notes', 'by'],
+        'default': ("🗄️ *New database asked*\n{client} · {ref}\n{server} / {db}\n"
+                    "Modules / notes: {notes}\nAsked by {by}"),
+    },
+    {
+        'key': 'db_destroy',
+        'label': 'Destroy database asked',
+        'help': "When a client asks for a database to be destroyed. It goes to the client's manager only.",
+        'default_enabled': True,
+        'tokens': ['client', 'ref', 'server', 'db', 'reason', 'by'],
+        'default': ("🗑️ *Destroy database asked*\n{client} · {ref}\n{db} ({server})\n"
+                    "Reason: {reason}\nAsked by {by}"),
+    },
 ]
 
 WA_GROUP_EVENTS_BY_KEY = {e['key']: e for e in WA_GROUP_EVENTS}
@@ -114,6 +134,11 @@ PREVIEW_SAMPLES = {
     'elapsed': '2h 15m',
     'pause_reason': 'Waiting on client',
     'now': '09:02 AM',
+    'server': 'Cloud 2',
+    'db': 'SILKS_STORE',
+    'notes': 'POS, Inventory, Accounting · branch printers',
+    'reason': 'Moving to a new system',
+    'by': 'Priya (client)',
 }
 
 

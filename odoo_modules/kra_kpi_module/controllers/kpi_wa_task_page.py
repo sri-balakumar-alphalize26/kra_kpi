@@ -226,15 +226,9 @@ class KpiWaTaskPage(http.Controller):
             'can_complete': task.task_state in ('in_progress', 'paused', 'hold', 'rework'),
             # ⏱️ Ask for more time: pickers instead of typing "2h 30m reason".
             'can_time': not task._may_extend_estimate(user),
-            # The board's "Complete This Task" boxes, word for word, pre-ticked
-            # the way openCompleteFromCard does (GitHub links -> 1, a manual -> 3, 4).
-            'checklist': [
-                ('verify_github', '1. Verify GitHub URL', 'All code pushed to the correct repository', bool(github)),
-                ('deployed_task', '2. Deployed the Task', 'Deployed to staging/production', False),
-                ('user_manual', '3. User Manual Uploaded', 'Documentation uploaded and accessible', bool(manuals)),
-                ('documentation', '4. Documentation Submission', 'Technical documentation complete', bool(manuals)),
-                ('tested_code', '5. Manually Tested the Code', 'All features tested and working', False),
-            ],
+            # What Complete needs for this task's type (kpi_workflow._completion_rules),
+            # the same list the Odoo board and the web app show.
+            **self._complete_form(task),
             'has_manual': bool(manuals),
             'has_github': bool(github),
             'github_required': task._github_required(),
@@ -412,6 +406,26 @@ class KpiWaTaskPage(http.Controller):
                 task.external_ref or task.id))
         return self._back(token, ok=msg if ok else '', err='' if ok else msg)
 
+    @staticmethod
+    def _complete_form(task):
+        k = task.sudo()
+        rules = k._completion_rules()
+        keys = {r['key'] for r in rules}
+        return {
+            'rules': rules,
+            'rule_keys': keys,
+            # Required and not on the task yet: the page asks for these before sending.
+            'need_keys': ','.join(r['key'] for r in rules if r['required'] and not r['done']),
+            'is_db_task': k._is_db_task(),
+            'cf': {'app_link': k.app_link or '', 'user_manual_url': k.user_manual_url or '',
+                   'website_url': k.website_url or '', 'provision_url': k.provision_url or '',
+                   'provision_db_name': k.provision_db_name or '',
+                   'provision_username': k.provision_username or ''},
+        }
+
+    COMPLETE_EXTRA = ('app_link', 'user_manual_url', 'website_url', 'provision_url', 'provision_db_name',
+                      'provision_username', 'provision_password')
+
     @http.route('/kpi/wa/task/<string:token>/complete', type='http', auth='public',
                 methods=['POST'], csrf=False, website=False)
     def complete(self, token, **post):
@@ -425,7 +439,8 @@ class KpiWaTaskPage(http.Controller):
             summary=post.get('summary'), raw_links=post.get('links'),
             gh_url=post.get('gh_url'), gh_branch=post.get('gh_branch'),
             # Partial finish needs no manual; files chosen there are not sent.
-            files=[] if partial else self._uploads())
+            files=[] if partial else self._uploads(),
+            extra={} if partial else {f: post.get(f) for f in self.COMPLETE_EXTRA if f in post})
         if ok:
             self._notify(st, user, ('🏁 %s finished %s as a partial finish — sent for review with the summary.'
                                     if partial else '✅ %s finished %s. It is with a manager to check.')

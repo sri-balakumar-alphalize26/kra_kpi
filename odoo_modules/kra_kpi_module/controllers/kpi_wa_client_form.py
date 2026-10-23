@@ -144,7 +144,8 @@ class KpiWaClientForm(http.Controller):
         if kpi.request_category == 'new_database':
             return {'server_id': kpi.provision_server_id.id or '',
                     'db_name': kpi.provision_db_name or '',
-                    'username': kpi.provision_username or ''}
+                    'username': kpi.provision_username or '',
+                    'description': kpi.provision_modules or ''}
         db = kpi.client_db_id
         parent = kpi.related_req_kpi_id if 'related_req_kpi_id' in kpi._fields else False
         desc = kpi.original_client_text or kpi.description or ''
@@ -435,6 +436,9 @@ class KpiWaClientForm(http.Controller):
                 return None, 'Type the username.', ''
             if not password:
                 return None, 'Type or generate the password.', ''
+            # Which modules to install and anything the team needs to know first.
+            if not text:
+                return None, 'Write which modules to install / notes.', ''
             children = client.child_ids.filtered('active')
             target = children[0] if len(children) == 1 else client
             kpi = Kpi.browse(Kpi.with_context(kpi_no_admin_arm=True).create_kpi({
@@ -442,7 +446,8 @@ class KpiWaClientForm(http.Controller):
                 'kra_id': target.id, 'doc_type': 'requirement',
                 'description': ('— New database —\nServer: %s\nDatabase name: %s\n'
                                 'Login: %s\nPassword: set on the request (Login / '
-                                'Password fields)%s') % (server.name, clean, username, footer),
+                                'Password fields)\nModules / notes: %s%s') % (
+                                    server.name, clean, username, text, footer),
             }))
             router._finish_client_ticket(kpi, group, st, {
                 'request_category': 'new_database',
@@ -450,6 +455,7 @@ class KpiWaClientForm(http.Controller):
                 'provision_db_name': clean,
                 'provision_username': username,
                 'provision_password': password,
+                'provision_modules': text,
             }, {'form': kind, 'db_name': clean, 'server': server.name},
                 action='wa_client_form')
             return kpi, '', ''
@@ -647,6 +653,9 @@ class KpiWaClientForm(http.Controller):
             return None, 'Type the username.', ''
         if not password:
             return None, 'Type or generate the password.', ''
+        notes = (post.get('description') or '').strip()[:TEXT_MAX]
+        if not notes:
+            return None, 'Write which modules to install / notes.', ''
         who = st.participant_name or st.participant_key
         footer = '\n\n— Sent again from the WhatsApp form by %s after a decline.' % who
         old_ref = kpi.external_ref or ''
@@ -654,8 +663,9 @@ class KpiWaClientForm(http.Controller):
             'name': '[New DB] New DB %s on %s' % (clean, server.poll_label() or server.name),
             'description': ('— New database —\nServer: %s\nDatabase name: %s\n'
                             'Login: %s\nPassword: set on the request (Login / '
-                            'Password fields)%s') % (server.poll_label() or server.name, clean, username, footer),
-            'provision_server_id': server.id, 'provision_db_name': clean,
+                            'Password fields)\nModules / notes: %s%s') % (
+                                server.poll_label() or server.name, clean, username, notes, footer),
+            'provision_server_id': server.id, 'provision_db_name': clean, 'provision_modules': notes,
             'provision_username': username, 'provision_password': password,
             'active': True, 'published': False, 'user_id': False,
             'task_state': 'queue_waiting', 'admin_accept_deadline_at': False,
@@ -816,9 +826,11 @@ class KpiWaClientForm(http.Controller):
         who = st.participant_name or ''
         ref = kpi.external_ref or str(kpi.id)
         if kind == 'newdb':
-            return ('🗄️ *New Database* — *%s*\nDatabase: *%s*\nServer: %s\nLogin: %s') % (
+            return ('🗄️ *New Database* — *%s*\nDatabase: *%s*\nServer: %s\nLogin: %s\n'
+                    'Notes: %s') % (
                 ref, kpi.provision_db_name or '',
-                kpi.provision_server_id.name or '', post.get('username') or '')
+                kpi.provision_server_id.name or '', post.get('username') or '',
+                kpi.provision_modules or '—')
         db = kpi.client_db_id
         emoji, title = _TITLES.get(kind, ('', ''))
         lines = ['%s *%s* — *%s*' % (emoji, title, ref), kpi.name or '']

@@ -3940,36 +3940,7 @@ class KraKpiAPI(http.Controller):
         return user in (doubts.mapped('assigned_dev_id') | doubts.mapped('esc_asked_ids')
                         | doubts.mapped('manager_user_id'))
 
-    @http.route('/kpi_action/chat/general_list', type='json', auth='user', methods=['POST'], csrf=False)
-    def kpi_chat_general_list(self, **params):
-        """💬 General questions: one row per client chat (the hidden GEN tasks)
-        this person may open, the waiting ones first."""
-        try:
-            Kpi = request.env['kra.kpi'].sudo().with_context(active_test=False)
-            Msg = request.env['kpi.chat.message'].sudo()
-            rows = []
-            for kpi in Kpi.search([('is_chat_general', '=', True)]):
-                if not self._general_chat_ok(kpi):
-                    continue
-                last = Msg.search([('kpi_id', '=', kpi.id), ('deleted_at', '=', False)], order='id desc', limit=1)
-                if not last:
-                    continue
-                said = last.body or ('📎 ' + ', '.join(last.file_ids.mapped('file_name')))
-                rows.append({'kpi_id': kpi.id, 'ref': kpi._chat_ref(), 'code': kpi.external_ref or '',
-                             'client': kpi.client_kra_id.name or kpi.kra_id.name or '',
-                             'last': ' '.join((said or '').split())[:120], 'last_side': last.side,
-                             'last_who': (last.author_user_id.name if last.side == 'team' else last.author_name) or '',
-                             'at': fields.Datetime.to_string(last.create_date),
-                             'waiting': kpi.chat_waiting()})
-            # Waiting chats first, then the latest.
-            rows.sort(key=lambda r: r['at'], reverse=True)
-            rows.sort(key=lambda r: r['waiting'] == 0)
-            return {'status': True, 'rows': rows, 'waiting': sum(1 for r in rows if r['waiting'])}
-        except Exception as e:
-            _logger.warning("kpi_chat_general_list failed: %s", e)
-            return {'status': False, 'message': str(e)}
-
-    # Events that already show as their own History items (chat, progress …),
+    # Events that already show elsewhere (the Chat tab, their own History items),
     # so the Activity filter lists only what is not anywhere else.
     _HISTORY_SKIP_EVENTS = ('client_chat_message', 'client_chat_reply', 'client_chat_forwarded',
                             'client_chat_edited', 'client_chat_deleted')
@@ -6100,6 +6071,8 @@ class KraKpiAPI(http.Controller):
         
         return {
             'status': True,
+            # What this task's type needed (the approve popup shows these).
+            'completion_rules': rec._completion_rules(),
             'employee_checklist': {
                 'verify_github': rec.employee_checklist_github,
                 'deployed_task': rec.employee_checklist_deployed,

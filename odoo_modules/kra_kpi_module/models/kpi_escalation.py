@@ -1,7 +1,8 @@
 """Approval chain for new client requests (call notes, Oct 2026).
 
-A new client request (requirement / bug / update / new database / destroy)
-first goes to tier 1. If nobody there decides within that tier's minutes, the
+A new client request (requirement / bug / update / new database) first goes
+to tier 1. A destroy-database request does not climb: it goes straight to the
+client's manager in the KRA tree (kpi_wa_admin_link._wa_admin_recipients). If nobody there decides within that tier's minutes, the
 decision link goes to tier 2, then 3, then 4. After the last tier nothing is
 accepted automatically: the last tier is reminded every LAST_TIER_REMIND_MIN
 until somebody decides. Anyone who got a link can decide at any time.
@@ -24,7 +25,8 @@ _logger = logging.getLogger(__name__)
 LAST_TIER_REMIND_MIN = 30
 # Which decisions climb the chain. Finished work (qa) and a developer's own
 # task (self_task) keep going to the task's managers straight away.
-CHAIN_KINDS = ('new_request', 'new_database', 'disconnect')
+# A destroy request ('disconnect') is the client's manager's alone: no chain.
+CHAIN_KINDS = ('new_request', 'new_database')
 
 
 class KpiEscalationTier(models.Model):
@@ -132,7 +134,12 @@ class KraKpiEscalation(models.Model):
                     rec.write({'esc_due_at': False})
                     continue
                 kind = rec._wa_admin_kind()
-                after = tiers.filtered(lambda t: (t.sequence, t.id) > (
+                # Not a chain decision (any more): a destroy request already
+                # waiting on a tier stays with whoever has it, never climbs.
+                if kind not in CHAIN_KINDS:
+                    rec.write({'esc_due_at': False})
+                    continue
+                after =tiers.filtered(lambda t: (t.sequence, t.id) > (
                     rec.esc_tier_id.sequence, rec.esc_tier_id.id)) if rec.esc_tier_id else tiers
                 # Past the last tier: remind the last one again. Never auto-accept.
                 # Either way the message says who did not answer before.
