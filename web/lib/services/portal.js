@@ -1,6 +1,6 @@
 /* Client portal services (port of services/clientPortal.js, preApproval.js
    and the client side of clientInvoices.js). */
-import { rpc, read, href, assertOk } from "@/lib/api";
+import { rpc, read, href, assertOk, upload } from "@/lib/api";
 
 export const DASH_PATH = "/kpi_client_portal/dashboard";
 /* state: 'all' | a task_state. Answers { authorized, message, kpis, totals, by_type, pending_approvals, clients }. */
@@ -14,11 +14,28 @@ export const fetchClientProjects = () => read("/kpi_client_portal/get_projects",
    developer,deadline_at,server_now,auto_releases,auto_released,released_at,held}]}. */
 export const PRE_LIST_PATH = "/kpi_pre_approval/list";
 
+/* The client's WhatsApp-only pages, from here (controllers/kpi_client_links.py).
+   info → { has_group, declined:[{id, ref, name, reason, declined_at, declined_by, url}],
+   live_dbs:[{id, name, label, server, created, expires}], can_destroy }.
+   dbFormLink / chatLink → { url } (a fresh link to the same page WhatsApp sends). */
+export const LINKS_PATH = "/kpi_client_portal/links/info";
+export const dbFormLink = (kind) => rpc("/kpi_client_portal/links/db_form", { kind }).then(assertOk);
+export const chatLink = (kpiId) => rpc("/kpi_client_portal/links/chat", kpiId ? { kpi_id: kpiId } : {}).then(assertOk);
+
 /* Sign-off on a finished task (client_approval), and the developer/estimate
    pre-approval (pre_approval/decide: approve | reject | hold | resume). */
 export const signOff = (kpiId, { signatureText, notes } = {}) =>
   rpc("/kpi_client_approval/approve", { kpi_id: kpiId, signature_text: (signatureText || "").trim(), chk_delivered: true, chk_works: true, chk_authorized: true, notes: notes || "" });
-export const sendBack = (kpiId, reason) => rpc("/kpi_client_approval/reject", { kpi_id: kpiId, reason: (reason || "").trim() });
+/* ↩ Send back. With proof (photos / videos / voice notes) it is one multipart
+   post, the files as repeated `files`; without, the plain JSON route. */
+export const sendBack = (kpiId, reason, files = []) => (files.length
+  ? upload("/kpi_client_approval/reject_files", (() => {
+    const fd = new FormData();
+    fd.append("kpi_id", String(kpiId)); fd.append("reason", (reason || "").trim()); fd.append("source", "web");
+    for (const f of files) fd.append("files", f, f.name);
+    return fd;
+  })(), { timeout: 300000 })
+  : rpc("/kpi_client_approval/reject", { kpi_id: kpiId, reason: (reason || "").trim(), source: "web" }));
 /* approve/reject go through record_client_pre_decision, whose status is a
    STRING (ok | already_decided | expired | invalid) spread over the route's
    boolean — so "already_decided" would read as success. Only true/"ok" pass. */

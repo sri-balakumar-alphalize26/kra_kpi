@@ -55,7 +55,12 @@ export function stateTone(state) {
     case "urgent": return ["danger", "Urgent"];
     case "important": return ["paused", "Important"];
     case "regular": return ["todo", "To do"];
-    default: return ["todo", state || "—"];
+    case "assigned": case "queue_waiting": return ["todo", "To do"];
+    case "pre_approval_approved": return ["todo", "Ready to start"];
+    case "pre_approval_pending": return ["review", "Waiting for client"];
+    case "hold": return ["paused", "On hold"];
+    /* Anything else: readable words, never the raw code. */
+    default: return ["todo", state ? state.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) : "—"];
   }
 }
 

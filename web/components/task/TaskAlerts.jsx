@@ -18,12 +18,13 @@ import * as S from "@/lib/services/kpiActions";
 
 /* Rejection alert (Odoo checkForRejectedTasks): the caller's own paused tasks
    whose paused_reason carries the "🔴 REJECTED" marker an admin's Reject
-   writes. Each is shown once per page session, like the Odoo board. */
+   writes, or "🔴 CLIENT REJECTED" from a client's send back. Each is shown
+   once per page session, like the Odoo board. */
 const seenRejections = new Set();
 const BOARD_PARAMS = { my_tasks_only: false };
 const MINE_PARAMS = { my_tasks_only: true };
-const REJECT_MARK = "🔴 REJECTED";
-const rejectionText = (r) => String(r || "").replace("🔴 REJECTED - Manager Feedback: ", "").replace("🔴 REJECTED -", "").replace("Manager Feedback:", "").trim();
+const REJECT_MARK = /🔴 (CLIENT )?REJECTED/;
+const rejectionText = (r) => String(r || "").replace(/^🔴 CLIENT REJECTED\s*[—-]\s*/, "").replace("🔴 REJECTED - Manager Feedback: ", "").replace("🔴 REJECTED -", "").replace("Manager Feedback:", "").trim();
 
 export default function TaskAlerts() {
   const [rejected, setRejected] = useState(null); /* tasks to show */
@@ -41,7 +42,7 @@ export default function TaskAlerts() {
 
   useEffect(() => {
     if (rejected || !me?.uid) return;
-    const fresh = (board.data?.tasks || []).filter((t) => t.user_id === me.uid && t.task_state === "paused" && String(t.paused_reason || "").includes(REJECT_MARK) && !seenRejections.has(t.id));
+    const fresh = (board.data?.tasks || []).filter((t) => t.user_id === me.uid && t.task_state === "paused" && REJECT_MARK.test(String(t.paused_reason || "")) && !seenRejections.has(t.id));
     if (fresh.length) { fresh.forEach((t) => seenRejections.add(t.id)); setRejected(fresh); }
   }, [board.data, me?.uid, rejected]);
 

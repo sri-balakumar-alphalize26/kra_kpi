@@ -128,6 +128,31 @@
 .k-app .panel-scrim { position: fixed; inset: 56px 0 0; z-index: 45; }
 @media (max-width: 900px) { .k-app .panel { border-radius: 0; } .k-app .col { min-width: 240px; flex: 0 0 240px; } }
 
+/* Task panel layout: name on top, icon rail + one section, actions at the bottom. */
+.k-app .panel { width: min(680px, 100vw); }
+.k-app .tp-top { flex: none; padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border); }
+.k-app .tp-body { flex: 1; min-height: 0; display: flex; }
+.k-app .tp-rail { width: 84px; flex: none; display: flex; flex-direction: column; gap: 4px; padding: 10px 8px; background: var(--hover); border-right: 1px solid var(--border); overflow-y: auto; }
+.k-app .tp-rail button { position: relative; height: 62px; flex: none; border: 0; border-radius: 12px; background: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--subtle); cursor: pointer; }
+.k-app .tp-rail button:hover { background: var(--surface); color: var(--text); }
+.k-app .tp-rail button.on { background: var(--sel-bg); color: var(--sel-text); box-shadow: inset 0 0 0 1.5px var(--brand); }
+.k-app .tp-rail .n { position: absolute; top: 6px; right: 10px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--danger); color: #fff; font-size: 10.5px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.k-app .tp-rail .n.soft { background: var(--surface); color: var(--subtle); box-shadow: inset 0 0 0 1px var(--border); }
+.k-app .tp-main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-width: thin; overscroll-behavior: contain; padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+.k-app .tp-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.k-app .tp-fact { min-width: 0; background: var(--hover); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 5px; }
+.k-app .tp-fact small { font-size: 11px; font-weight: 700; color: var(--subtlest); text-transform: uppercase; letter-spacing: .03em; }
+.k-app .tp-fact b { font-size: 13.5px; color: var(--text); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.k-app .tp-foot { flex: none; padding: 10px 20px 12px; border-top: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
+/* Phone: the rail turns into a row of icons under the name. */
+@media (max-width: 700px) {
+  .k-app .tp-body { flex-direction: column; }
+  .k-app .tp-rail { width: auto; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 6px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .k-app .tp-rail button { min-width: 66px; height: 54px; }
+  .k-app .tp-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .k-app .tp-main { padding: 14px 16px; }
+}
+
 /* Reason chips in dialogs */
 .k-app .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .k-app .chips .pill { height: 34px; }

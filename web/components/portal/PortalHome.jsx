@@ -1,6 +1,7 @@
 "use client";
+import { useState } from "react";
 import Link from "next/link";
-import { Avatar, ErrorState, Icon, PageHeader, Skeleton } from "@/components/ui";
+import { Avatar, Button, ErrorState, Icon, Modal, PageHeader, Skeleton, useFlags } from "@/components/ui";
 import { useMe } from "@/lib/me";
 import { useResource } from "@/lib/useFetch";
 import * as P from "@/lib/services/portal";
@@ -24,6 +25,21 @@ export default function PortalHome() {
   const count = (states) => kpis.filter((k) => states.includes(k.task_state)).length;
   const recent = [...kpis].sort((a, b) => ((b.completion_date || "") > (a.completion_date || "") ? 1 : -1)).slice(0, 6);
   const clientName = d?.clients?.[0]?.name || d?.kpis?.[0]?.client_name || "";
+  /* Fix / databases / chat: the client's WhatsApp pages (P.LINKS_PATH). Fix and the
+     database forms need the client's WhatsApp group, so they show only with one. */
+  const flags = useFlags();
+  const linksRes = useResource(P.LINKS_PATH, {}, { pollMs: 120000, ttl: 30000 });
+  const links = linksRes.data?.status ? linksRes.data : null;
+  const [panel, setPanel] = useState(""); /* '' | 'fix' | 'dbs' */
+  /* The tab is opened inside the click and pointed at the link afterwards, so no pop-up block. */
+  const openLink = async (get) => {
+    const w = window.open("", "_blank");
+    try {
+      const r = await get();
+      if (w) w.location = r.url; else window.location = r.url;
+    } catch (e) { if (w) w.close(); flags.err(e.message); }
+  };
+  const tile = { textDecoration: "none", alignItems: "flex-start", gap: 8, cursor: "pointer", textAlign: "left", font: "inherit" };
 
   return (
     <>
@@ -54,6 +70,39 @@ export default function PortalHome() {
                 <Link href="/portal/requests/new/bug" className="cardbox" style={{ textDecoration: "none", alignItems: "flex-start", gap: 8 }}><span className="icbox" style={{ background: "var(--tint-red-bg)", color: "var(--tint-red)" }}><Icon n="warn" size={18} /></span><b style={{ color: "var(--navy)", fontSize: 15 }}>Report a bug</b><span className="mini">Something is not working</span></Link>
               </div>
             </div>
+            {links && (
+              <div className="cardbox"><h2>More you can do</h2>
+                <div className="grid3">
+                  {links.declined.length > 0 && <button type="button" className="cardbox" style={{ ...tile, borderColor: "var(--tint-red)" }} onClick={() => setPanel("fix")}><span className="icbox" style={{ background: "var(--tint-red-bg)", color: "var(--tint-red)" }}><Icon n="refresh" size={18} /></span><b style={{ color: "var(--navy)", fontSize: 15 }}>Fix a declined request ({links.declined.length})</b><span className="mini">Change it and send it again</span></button>}
+                  {links.has_group && <button type="button" className="cardbox" style={tile} onClick={() => openLink(() => P.dbFormLink("newdb"))}><span className="icbox" style={{ background: "var(--tint-blue-bg)", color: "var(--tint-blue)" }}><Icon n="plus" size={18} /></span><b style={{ color: "var(--navy)", fontSize: 15 }}>New database</b><span className="mini">Ask for a new database</span></button>}
+                  {links.can_destroy && <button type="button" className="cardbox" style={tile} onClick={() => openLink(() => P.dbFormLink("dbdisconnect"))}><span className="icbox" style={{ background: "var(--tint-red-bg)", color: "var(--tint-red)" }}><Icon n="trash" size={18} /></span><b style={{ color: "var(--navy)", fontSize: 15 }}>Destroy a database</b><span className="mini">Ask to remove one you no longer need</span></button>}
+                  <button type="button" className="cardbox" style={tile} onClick={() => setPanel("dbs")}><span className="icbox" style={{ background: "var(--tint-green-bg)", color: "var(--tint-green)" }}><Icon n="list" size={18} /></span><b style={{ color: "var(--navy)", fontSize: 15 }}>Live databases ({links.live_dbs.length})</b><span className="mini">Your databases that are running</span></button>
+                  <button type="button" className="cardbox" style={tile} onClick={() => openLink(() => P.chatLink())}><span className="icbox" style={{ background: "var(--tint-violet-bg)", color: "var(--tint-violet)" }}><Icon n="people" size={18} /></span><b style={{ color: "var(--navy)", fontSize: 15 }}>Chat with the team</b><span className="mini">Ask a question, get a reply</span></button>
+                </div>
+              </div>
+            )}
+            <Modal open={panel === "fix"} onClose={() => setPanel("")} title="Declined requests" footer={<Button kind="ghost" onClick={() => setPanel("")}>Close</Button>}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {(links?.declined || []).map((x) => (
+                  <div key={x.id} className="cardbox" style={{ gap: 4, padding: 10 }}>
+                    <span><b style={{ color: "var(--brand)", marginRight: 6 }}>{x.ref}</b>{x.name}</span>
+                    {x.reason && <span className="mini" style={{ whiteSpace: "pre-wrap" }}>Reason: {x.reason}</span>}
+                    <a className="btn btn-primary" href={x.url} target="_blank" rel="noreferrer" style={{ alignSelf: "flex-start", height: 30 }}>Fix it</a>
+                  </div>
+                ))}
+              </div>
+            </Modal>
+            <Modal open={panel === "dbs"} onClose={() => setPanel("")} title="Live databases" footer={<Button kind="ghost" onClick={() => setPanel("")}>Close</Button>}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {!(links?.live_dbs || []).length && <span className="mini">No live databases yet.</span>}
+                {(links?.live_dbs || []).map((x) => (
+                  <div key={x.id} className="cardbox" style={{ gap: 2, padding: 10 }}>
+                    <b style={{ color: "var(--navy)" }}>{x.name}{x.label && x.label !== x.name ? ` · ${x.label}` : ""}</b>
+                    <span className="mini">🖥️ {x.server || "—"}{x.created ? ` · 📅 ${x.created}` : ""}{x.expires ? ` · ⏳ expires ${x.expires}` : ""}</span>
+                  </div>
+                ))}
+              </div>
+            </Modal>
             <div className="cardbox"><h2>Recent activity</h2>
               {recent.map((k) => (
                 <Link key={k.id} href={`/portal/requests?focus=${k.id}`} className="notif" style={{ textDecoration: "none", color: "inherit" }}>

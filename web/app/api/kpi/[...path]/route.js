@@ -32,7 +32,7 @@ export const dynamic = "force-dynamic";
    kpi_cleanup (destructive maintenance) is NOT in this list: it goes through
    SYSTEM_ONLY below, which asks Odoo who the caller is before forwarding. */
 const PREFIXES = new Set([
-  "kra_kpi", "kpi", "kpi_action", "kpi_attendance", "kpi_client_approval", "kpi_client_invoice",
+  "kra_kpi", "kpi", "kpi_action", "kpi_attendance", "kpi_billing", "kpi_meeting", "kpi_client_approval", "kpi_client_invoice",
   "kpi_client_portal", "kpi_client_workspace", "kpi_completion_cert", "kpi_config",
   "kpi_daily_report", "kpi_multitask", "kpi_notifications", "kpi_owner",
   "kpi_pending_queue", "kpi_pre_approval", "kpi_project", "kpi_reports", "kpi_requirements",
