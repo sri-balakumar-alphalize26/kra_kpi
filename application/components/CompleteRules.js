@@ -25,12 +25,12 @@ export default function CompleteRules({ rules, filled = {}, onChange, readOnly =
           <View key={r.key} style={s.row}>
             <View style={s.line}>
               <Ionicons
-                name={done ? 'checkmark-circle' : (r.required ? 'close-circle' : 'ellipse-outline')}
-                size={18} color={done ? COLORS.green : (r.required ? COLORS.red : COLORS.faint)} />
+                name={done ? 'checkmark-circle' : (r.required ? 'close-circle' : (r.warn ? 'alert-circle' : 'ellipse-outline'))}
+                size={18} color={done ? COLORS.green : (r.required ? COLORS.red : (r.warn ? COLORS.amber : COLORS.faint))} />
               <Text style={s.label}>
                 {r.label}{r.required ? <Text style={s.req}> *</Text> : null}
               </Text>
-              {!done && !r.required ? <Text style={s.opt}>optional</Text> : null}
+              {!done && !r.required ? <Text style={[s.opt, r.warn && { color: COLORS.amber }]}>{r.warn ? 'recommended' : 'optional'}</Text> : null}
             </View>
             {field ? (
               <TextInput

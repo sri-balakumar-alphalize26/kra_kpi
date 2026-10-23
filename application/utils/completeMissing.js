@@ -47,6 +47,22 @@ export function completeMissing(rules, { hasSummary, filled = {} } = {}) {
     .map((r) => MISSING_TEXT[r.key] || r.label);
 }
 
+// Recommended but not added (rules with `warn`: the user manual, the GitHub
+// link). Complete still goes through; the confirm popup lists these.
+export function completeWarnings(rules, { filled = {} } = {}) {
+  return (rules || [])
+    .filter((r) => r.warn && !r.done && !typed(filled[r.key]))
+    .map((r) => r.label);
+}
+
+// The confirm popup's lines, the same on every screen:
+//   ⚠️ Not added — you can still complete:
+//   • GitHub link — needed
+//   • User manual — needed
+export function warningText(warns) {
+  return `⚠️ Not added — you can still complete:\n${warns.map((w) => `• ${w} — needed`).join('\n')}`;
+}
+
 // The typed values as /kra_kpi/task/complete parameters (empty ones left out).
 export function completeExtras(filled = {}) {
   const out = {};
