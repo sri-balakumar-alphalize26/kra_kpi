@@ -1412,6 +1412,10 @@ class KpiMaster(models.Model):
                 'external_ref': self.external_ref or '',
                 'client_signature_text': self.client_signature_text or '',
                 'client_signed_datetime': _datetime(self.client_signed_datetime),
+                # Drawn / auto signature from the sign-off page (kpi_finish), base64.
+                'client_signature_image': (self.client_signature_image.decode()
+                                           if isinstance(self.client_signature_image, bytes)
+                                           else (self.client_signature_image or '')),
                 'client_approval_notes': self.client_approval_notes or '',
                 'client_chk_delivered': bool(self.client_chk_delivered),
                 'client_chk_works': bool(self.client_chk_works),

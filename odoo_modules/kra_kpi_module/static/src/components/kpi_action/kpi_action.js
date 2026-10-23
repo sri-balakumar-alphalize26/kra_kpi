@@ -935,6 +935,19 @@ export class KpiAction extends Component {
                             <button type="button" class="btn btn-secondary"
                                     t-on-click="() => this.historyJump('kpiCompletePanel')">Complete this task</button>
                         </div>
+                        <!-- What the client did on the sign-off page: who, how, when, the note and the signature. -->
+                        <t t-set="cdec" t-value="state.detailData.client_decision or {}"/>
+                        <div t-if="cdec.name" class="card p-3 mb-3">
+                            <h5 class="fw-bold mb-2">Client sign-off</h5>
+                            <div>
+                                <t t-esc="cdec.action === 'finished' ? '✅ Finished by ' : (cdec.action === 'sent_back' ? '↩ Sent back by ' : '💬 Asked by ')"/>
+                                <b t-esc="cdec.name"/>
+                                <span t-if="cdec.at" class="text-muted small"> · <t t-esc="cdec.at"/></span>
+                            </div>
+                            <div t-if="cdec.note" class="text-muted small mt-1" style="white-space:pre-wrap;" t-esc="cdec.note"/>
+                            <img t-if="cdec.signature_url" t-att-src="cdec.signature_url" alt="Client signature"
+                                 class="mt-2 border rounded bg-white" style="max-height:70px; max-width:100%;"/>
+                        </div>
                         <!-- A database task: its four details, the password masked until Show. -->
                         <div t-if="state.detailData.is_db_task and state.detailData.db_details" class="card p-3 mb-3">
                             <h5 class="fw-bold mb-2">Database</h5>

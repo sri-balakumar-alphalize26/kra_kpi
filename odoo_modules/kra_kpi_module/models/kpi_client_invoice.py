@@ -782,7 +782,8 @@ class KpiClientInvoice(models.Model):
         # uploaded a Company Branding logo falls through to the bundled brand logo
         # rather than printing the "Your logo" placeholder.
         branding_logo = company.logo if not company.uses_default_logo else False
-        for candidate in (branding_logo, root.logo):
+        # The client's logo is now theirs, under Bill To (_bill_to), not ours.
+        for candidate in (branding_logo,):
             if candidate:
                 logo_b64 = candidate.decode() if isinstance(candidate, bytes) else candidate
                 break
@@ -794,6 +795,8 @@ class KpiClientInvoice(models.Model):
                     logo_b64 = base64.b64encode(f.read()).decode()
             except Exception:
                 logo_b64 = ''
+
+        bill_to = (self.client_kra_id or root).sudo()._bill_to()
 
         # Currency info
         cur = self._resolve_currency()
@@ -814,6 +817,9 @@ class KpiClientInvoice(models.Model):
             'company_name': company.name or '',
             'company_logo_b64': logo_b64,
             'bill_to_name': root.name or '',
+            # The client's logo and details (Settings › Billing), under Bill To.
+            'bill_to_logo_b64': bill_to['logo_b64'],
+            'bill_to_lines': bill_to['lines'],
             'project_name': self.client_kra_id.name if is_project else '',
             'client_name': root.name or '',  # back-compat for older OWL builds
             'has_rate': bool(self.hourly_rate and self.hourly_rate > 0),

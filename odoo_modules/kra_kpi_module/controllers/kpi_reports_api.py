@@ -2075,6 +2075,18 @@ class KpiReportsAPI(http.Controller):
         story.append(tbl)
         story.append(Spacer(1, 12))
 
+        # The client's signature from the sign-off page (✓ Accept & Sign).
+        if k.get('client_signature_image'):
+            try:
+                sig = base64.b64decode(k['client_signature_image'])
+                iw, ih = ImageReader(io.BytesIO(sig)).getSize()
+                w = min(70 * mm, iw)
+                story.append(Paragraph('Client signature:', s_lbl))
+                story.append(Image(io.BytesIO(sig), width=w, height=w * ih / float(iw or 1)))
+                story.append(Spacer(1, 10))
+            except Exception:
+                pass
+
         # The three confirmations are what the client actually agreed to — the whole
         # point of the document, so they are printed as statements, not a tick count.
         story.append(Paragraph('The client confirmed:', s_lbl))
@@ -2237,9 +2249,29 @@ class KpiReportsAPI(http.Controller):
             story.append(Paragraph('Currency: %s' % cur_name, s_meta))
         story.append(Spacer(1, 8))
         story.append(Paragraph('Bill To:', s_lbl))
-        story.append(Paragraph('<b>%s</b>' % _esc(data.get('bill_to_name') or ''), s_meta))
+        # The client's block: its logo (Settings › Billing) beside its name and
+        # details; empty lines are left out.
+        bt = [Paragraph('<b>%s</b>' % _esc(data.get('bill_to_name') or ''), s_meta)]
+        bt += [Paragraph(_esc(x).replace('\n', '<br/>'), s_meta) for x in (data.get('bill_to_lines') or [])]
         if data.get('project_name'):
-            story.append(Paragraph('Project: %s' % _esc(data.get('project_name')), s_meta))
+            bt.append(Paragraph('Project: %s' % _esc(data.get('project_name')), s_meta))
+        bt_logo = None
+        if data.get('bill_to_logo_b64'):
+            try:
+                raw = base64.b64decode(data['bill_to_logo_b64'])
+                iw, ih = ImageReader(io.BytesIO(raw)).getSize()
+                lh = 16 * mm
+                bt_logo = Image(io.BytesIO(raw), width=min(lh * iw / float(ih or 1), 40 * mm), height=lh)
+            except Exception:
+                bt_logo = None
+        if bt_logo:
+            btt = Table([[bt_logo, bt]], colWidths=[44 * mm, content_w - 44 * mm])
+            btt.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                     ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 4)]))
+            story.append(btt)
+        else:
+            for p in bt:
+                story.append(p)
         story.append(Spacer(1, 12))
 
         billing = inv.get('billing_method') or 'hourly'

@@ -182,8 +182,12 @@
 
                 <form id="wa-decide-form" method="POST" enctype="multipart/form-data" t-attf-action="/kpi/wa/{{token}}/decide">
                     <div class="wa-sec">
-                    <label class="wa-lbl" for="wa-name">Your name</label>
-                    <input id="wa-name" class="wa-field" type="text" name="partner_name"
+                    <label class="wa-lbl" for="wa-name">Full Name</label>
+                    <select t-if="signers" id="wa-name" class="wa-field" name="signer" required="required">
+                        <option value="">Choose your name…</option>
+                        <t t-foreach="signers" t-as="p"><option t-att-value="p['key']" t-esc="p['name']"/></t>
+                    </select>
+                    <input t-else="" id="wa-name" class="wa-field" type="text" name="partner_name"
                            placeholder="Your name" required="required" maxlength="120"/>
                     <label class="wa-lbl" for="wa-fb"><t t-if="is_final">What is still wrong?</t><t t-else="">Comment</t></label>
                     <textarea id="wa-fb" class="wa-field" name="feedback" rows="3"
@@ -493,6 +497,14 @@
                     .aud { display:flex; align-items:center; gap:8px; background:var(--input); border-radius:var(--r); padding:6px 8px; }
                     .aud audio { flex:1; min-width:0; height:36px; }
                     .aud button { border:0; background:none; color:var(--danger); cursor:pointer; }
+                    @font-face { font-family:'KpiSign'; src:url('/web/static/fonts/sign/LaBelleAurore-Regular.ttf'); }
+                    .sg-tabs { display:flex; gap:4px; align-items:center; }
+                    .sg-tabs button { border:1px solid var(--border); background:#fff; color:var(--subtle); border-radius:6px;
+                                      padding:5px 12px; font:inherit; font-size:13px; font-weight:700; cursor:pointer; }
+                    .sg-tabs button.on { background:var(--sel-bg); color:var(--sel-text); border-color:var(--brand); }
+                    .sg-tabs .sg-clear { margin-left:auto; border:0; background:none; color:var(--subtlest); font-weight:600; }
+                    .sg-canvas { width:100%; height:120px; border:1px dashed var(--border); border-radius:var(--r);
+                                 background:#fff; touch-action:none; cursor:crosshair; }
                     .wa-view { position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.92); display:none;
                                align-items:center; justify-content:center; padding:16px; }
                     .wa-view.on { display:flex; }
@@ -543,8 +555,35 @@
                                     <t t-esc="'🎵' if f['kind'] == 'audio' else '📄'"/> <t t-esc="f['name']"/></a>
                             </t>
                         </div>
-                        <div class="field"><span class="lbl">Your name <span class="req">*</span></span>
-                            <input class="input" type="text" name="partner_name" required="required" maxlength="120"/></div>
+                        <!-- Full Name: only this client's people (KRA Master client users and
+                             its WhatsApp group's client members); a free box when none are set. -->
+                        <div class="field"><span class="lbl">Full Name <span class="req">*</span></span>
+                            <t t-if="signers">
+                                <select class="input" name="signer" id="so-signer" required="required">
+                                    <option value="">Choose your name…</option>
+                                    <t t-foreach="signers" t-as="p">
+                                        <option t-att-value="p['key']" t-att-data-sig="p['sig']" t-esc="p['name']"/>
+                                    </t>
+                                </select>
+                            </t>
+                            <input t-else="" class="input" type="text" name="partner_name" id="so-name" required="required" maxlength="120"/>
+                        </div>
+                        <!-- Signature for Accept and Sign: the chosen name written as a
+                             signature (Auto), signed by hand (Draw) or a picture (Load). -->
+                        <div class="field" id="so-signbox">
+                            <span class="lbl">Signature <span class="req">*</span>
+                                <span class="hint">(needed for Accept &amp; Sign only)</span></span>
+                            <div class="sg-tabs">
+                                <button type="button" data-mode="auto" class="on">Auto</button>
+                                <button type="button" data-mode="draw">Draw</button>
+                                <button type="button" data-mode="load">Load</button>
+                                <button type="button" id="sg-clear" class="sg-clear">↺ Clear</button>
+                            </div>
+                            <canvas id="sg-canvas" class="sg-canvas" width="900" height="240"/>
+                            <input type="file" id="sg-file" accept="image/*" style="display:none;"/>
+                            <input type="hidden" name="signature" id="sg-data"/>
+                            <span id="sg-saved" class="hint" style="display:none;">Your saved signature. Tap Auto, Draw or Load to change it.</span>
+                        </div>
                         <div class="field"><span class="lbl">What is still wrong, or your question</span>
                             <textarea name="feedback" placeholder="Needed to send it back or to ask a question"/>
                             <span id="so-need" class="err" style="display:none;">Write what is still wrong (or your question) here first.</span></div>
@@ -560,11 +599,103 @@
                             <span class="hint">Up to 10 files, 50 MB each. They go with Send back only.</span></div>
                     </div>
                     <div class="ft">
-                        <button class="btn ok" type="submit" name="action" value="approve">✓ Finished</button>
+                        <button class="btn ok" type="submit" name="action" value="approve">✓ Accept &amp; Sign</button>
                         <button class="btn back" type="submit" name="action" value="reject">↩ Send back</button>
                         <button class="btn ghost" type="submit" name="action" value="clarify">💬 Ask a question</button>
                     </div>
                 </form>
+                <script>
+                    (function () {
+                        // Signature box: Auto writes the chosen name in a handwriting
+                        // font, Draw signs by hand, Load takes a picture. A saved one
+                        // (that person's contact) is shown first.
+                        var cv = document.getElementById('sg-canvas');
+                        if (!cv) { return; }
+                        var ctx = cv.getContext('2d'), mode = 'auto', inked = false, drawing = false, last = null;
+                        var who = document.getElementById('so-signer') || document.getElementById('so-name');
+                        var saved = document.getElementById('sg-saved'), file = document.getElementById('sg-file');
+                        var tabs = document.querySelectorAll('.sg-tabs button[data-mode]');
+                        function clear() { ctx.clearRect(0, 0, cv.width, cv.height); inked = false; }
+                        function name() {
+                            if (!who) { return ''; }
+                            if (who.tagName === 'SELECT') { var o = who.options[who.selectedIndex]; return o &amp;&amp; o.value ? o.text : ''; }
+                            return who.value.trim();
+                        }
+                        function auto() {
+                            clear();
+                            var n = name();
+                            if (!n) { return; }
+                            var size = 110;
+                            ctx.fillStyle = '#1F2937'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+                            do { ctx.font = size + 'px KpiSign, cursive'; size -= 6; } while (ctx.measureText(n).width &gt; cv.width - 60 &amp;&amp; size &gt; 30);
+                            ctx.fillText(n, cv.width / 2, cv.height / 2);
+                            inked = true;
+                        }
+                        function image(src) {
+                            var im = new Image();
+                            im.onload = function () {
+                                clear();
+                                var r = Math.min((cv.width - 20) / im.width, (cv.height - 20) / im.height);
+                                ctx.drawImage(im, (cv.width - im.width * r) / 2, (cv.height - im.height * r) / 2, im.width * r, im.height * r);
+                                inked = true;
+                            };
+                            im.src = src;
+                        }
+                        function setMode(m) {
+                            mode = m;
+                            tabs.forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-mode') === m); });
+                            saved.style.display = 'none';
+                            if (m === 'auto') { auto(); }
+                            else if (m === 'draw') { clear(); }
+                            else { file.click(); }
+                        }
+                        tabs.forEach(function (b) { b.addEventListener('click', function () { setMode(b.getAttribute('data-mode')); }); });
+                        document.getElementById('sg-clear').addEventListener('click', function () { clear(); if (mode !== 'draw') { setMode('draw'); } });
+                        file.addEventListener('change', function () {
+                            var f = file.files &amp;&amp; file.files[0];
+                            if (!f) { return; }
+                            var rd = new FileReader(); rd.onload = function () { image(rd.result); }; rd.readAsDataURL(f);
+                            file.value = '';
+                        });
+                        function pickName() {
+                            var o = who &amp;&amp; who.tagName === 'SELECT' ? who.options[who.selectedIndex] : null;
+                            var sig = o ? o.getAttribute('data-sig') : '';
+                            if (sig) {
+                                mode = 'saved'; tabs.forEach(function (b) { b.classList.remove('on'); });
+                                image(sig); saved.style.display = 'block';
+                            } else { setMode('auto'); }
+                        }
+                        if (who) { who.addEventListener(who.tagName === 'SELECT' ? 'change' : 'input', pickName); }
+                        function pos(e) {
+                            var r = cv.getBoundingClientRect(), t = e.touches ? e.touches[0] : e;
+                            return { x: (t.clientX - r.left) * cv.width / r.width, y: (t.clientY - r.top) * cv.height / r.height };
+                        }
+                        function down(e) { if (mode !== 'draw') { return; } e.preventDefault(); drawing = true; last = pos(e); }
+                        function move(e) {
+                            if (!drawing) { return; }
+                            e.preventDefault();
+                            var p = pos(e);
+                            ctx.strokeStyle = '#1F2937'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+                            ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+                            last = p; inked = true;
+                        }
+                        function up() { drawing = false; }
+                        cv.addEventListener('mousedown', down); cv.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+                        cv.addEventListener('touchstart', down, { passive: false }); cv.addEventListener('touchmove', move, { passive: false });
+                        cv.addEventListener('touchend', up);
+                        if (document.fonts &amp;&amp; document.fonts.load) { document.fonts.load('40px KpiSign').then(function () { if (mode === 'auto') { auto(); } }); }
+                        window.soSign = {
+                            empty: function () { return !inked; },
+                            png: function () { return cv.toDataURL('image/png'); },
+                            need: function () {
+                                var b = document.getElementById('so-signbox');
+                                b.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                cv.style.borderColor = 'var(--danger)';
+                                setTimeout(function () { cv.style.borderColor = ''; }, 2000);
+                            }
+                        };
+                    })();
+                </script>
                 <div id="so-view" class="wa-view" role="dialog" aria-modal="true">
                     <button type="button" class="close" aria-label="Close">✕</button>
                     <div class="body"/>
@@ -663,6 +794,14 @@
                                 e.preventDefault(); document.getElementById('so-need').style.display = 'block'; fb.focus(); return;
                             }
                             if (rec &amp;&amp; rec.state === 'recording') { e.preventDefault(); say('Stop the recording first (⏹).'); return; }
+                            if (by === 'approve' &amp;&amp; window.soSign) {
+                                var who = document.getElementById('so-signer') || document.getElementById('so-name');
+                                if (who &amp;&amp; !who.value.trim()) { e.preventDefault(); who.focus(); return; }
+                                if (window.soSign.empty()) {
+                                    e.preventDefault(); window.soSign.need(); return;
+                                }
+                                document.getElementById('sg-data').value = window.soSign.png();
+                            }
                             var dt = new DataTransfer();
                             if (by === 'reject') { proof.forEach(function (x) { dt.items.add(x); }); }
                             hidden.files = dt.files;
