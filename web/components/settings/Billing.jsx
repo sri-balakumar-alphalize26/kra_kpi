@@ -99,7 +99,9 @@ function BillingCard({ flags }) {
   const clientSet = async (c, vals) => {
     const r = await S.billing.clientInvoice(c.id, vals).catch((e) => ({ status: false, message: e.message }));
     if (!r?.status) { flags.err(r?.message || "Could not save."); return; }
-    setData((d) => ({ ...d, clients: d.clients.map((x) => (x.id === c.id ? { ...x, invoice_group_jid: r.invoice_group_jid, invoice_group_name: r.invoice_group_name, send_invoice: r.send_invoice } : x)) }));
+    setData((d) => ({ ...d, clients: d.clients.map((x) => (x.id === c.id ? { ...x, invoice_group_jid: r.invoice_group_jid, invoice_group_name: r.invoice_group_name, send_invoice: r.send_invoice,
+      bill_address: r.bill_address, bill_phone: r.bill_phone, bill_email: r.bill_email, bill_tax_id: r.bill_tax_id, bill_logo: r.bill_logo } : x)) }));
+    return true;
   };
   const curLabel = (c) => `${c.name}${c.symbol ? ` (${c.symbol})` : ""}`;
   const bad = dup ? { borderColor: "var(--danger)" } : undefined;
@@ -145,6 +147,7 @@ function BillingCard({ flags }) {
             {!sec.isDefault && sec.client.send_invoice && !sec.client.invoice_group_jid && (
               <div role="alert" style={{ padding: "6px 12px", background: "var(--over-bg)", color: "var(--danger)", fontWeight: 600, fontSize: 13 }}>⚠ Invoices are on, but no invoice group is picked: bills are made but not sent.</div>
             )}
+            {!sec.isDefault && <BillDetails client={sec.client} save={(details) => clientSet(sec.client, { details })} />}
             <div style={{ overflowX: "auto" }}>
               <table className="table" style={{ width: "100%", minWidth: 620, margin: 0 }}>
                 <tbody>
@@ -227,5 +230,41 @@ function BillingCard({ flags }) {
       </div>
 
     </>
+  );
+}
+
+/* The client's logo and details, printed under Bill To on its invoices
+   (kra.master logo + kpi_bill_*; /kpi_billing/client_invoice_set details). */
+function BillDetails({ client, save }) {
+  const [f, setF] = useState(() => ({ address: client.bill_address || "", phone: client.bill_phone || "", email: client.bill_email || "", tax_id: client.bill_tax_id || "" }));
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const pick = (e) => {
+    const file = e.target.files && e.target.files[0]; e.target.value = "";
+    if (!file) return;
+    const rd = new FileReader(); rd.onload = () => save({ logo: rd.result }); rd.readAsDataURL(file);
+  };
+  const IN = { border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", font: "inherit", flex: "1 1 160px", minWidth: 0 };
+  return (
+    <details style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
+      <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Invoice details (logo, address, tax no){client.bill_logo || client.bill_address ? " ✓" : ""}</summary>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 8, alignItems: "flex-start" }}>
+        <div style={{ width: 140, textAlign: "center" }}>
+          <div style={{ height: 70, border: "1px solid var(--border)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
+            {client.bill_logo ? <img src={client.bill_logo} alt="Client logo" style={{ maxHeight: 64, maxWidth: 130 }} /> : <span className="mini">No logo</span>}
+          </div>
+          <label className="mini" style={{ cursor: "pointer", color: "var(--brand)", display: "inline-block", marginTop: 4 }}>Upload logo<input type="file" accept="image/*" hidden onChange={pick} /></label>
+          {client.bill_logo && <button type="button" className="mini" style={{ marginLeft: 8, color: "var(--danger)", background: "none", border: 0, cursor: "pointer" }} onClick={() => save({ logo: "" })}>Remove</button>}
+        </div>
+        <div style={{ flex: "1 1 280px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <textarea rows={2} placeholder="Address" value={f.address} onChange={set("address")} style={{ ...IN, resize: "vertical" }} />
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <input placeholder="Phone" value={f.phone} onChange={set("phone")} style={IN} />
+            <input placeholder="Email" value={f.email} onChange={set("email")} style={IN} />
+            <input placeholder="Tax no (VAT / TRN / GST)" value={f.tax_id} onChange={set("tax_id")} style={IN} />
+          </div>
+          <div><Button kind="primary" onClick={() => save(f)}>Save details</Button></div>
+        </div>
+      </div>
+    </details>
   );
 }
