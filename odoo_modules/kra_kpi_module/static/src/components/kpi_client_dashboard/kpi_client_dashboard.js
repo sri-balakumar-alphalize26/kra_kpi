@@ -77,6 +77,46 @@ export class KpiClientDashboard extends Component {
 
         <t t-if="state.dashboard and state.dashboard.authorized">
 
+            <!-- What a client can also do from WhatsApp: the same pages, opened from here
+                 (controllers/kpi_client_links.py). Fix and the database forms need the
+                 client's WhatsApp group, so they show only when there is one. -->
+            <div t-if="state.links" class="d-flex flex-wrap gap-2 mb-3">
+                <button t-if="state.links.declined.length" class="btn btn-outline-danger btn-sm"
+                        t-on-click="() => this.togglePanel('fix')">
+                    🔧 Fix a declined request <span class="badge bg-danger ms-1" t-esc="state.links.declined.length"/>
+                </button>
+                <button t-if="state.links.has_group" class="btn btn-outline-primary btn-sm"
+                        t-on-click="() => this.openDbForm('newdb')">🗄️ New Database</button>
+                <button t-if="state.links.can_destroy" class="btn btn-outline-primary btn-sm"
+                        t-on-click="() => this.openDbForm('dbdisconnect')">💥 Destroy a Database</button>
+                <button class="btn btn-outline-primary btn-sm" t-on-click="() => this.togglePanel('dbs')">
+                    📋 Live Databases <span class="badge bg-secondary ms-1" t-esc="state.links.live_dbs.length"/>
+                </button>
+                <button class="btn btn-outline-primary btn-sm" t-on-click="() => this.openChat()">💬 Chat with the team</button>
+            </div>
+            <div t-if="state.links and state.panel === 'fix'" class="card p-3 mb-3 border-danger">
+                <h6 class="fw-bold mb-2">🔧 Declined requests: fix one and send it again</h6>
+                <div t-foreach="state.links.declined" t-as="d" t-key="d.id" class="d-flex align-items-start gap-2 py-2 border-top">
+                    <div class="flex-grow-1">
+                        <b class="text-primary me-1" t-esc="d.ref"/><t t-esc="d.name"/>
+                        <div t-if="d.reason" class="small text-muted" style="white-space:pre-wrap">Reason: <t t-esc="d.reason"/></div>
+                    </div>
+                    <a class="btn btn-sm btn-danger" t-att-href="d.url" target="_blank" rel="noopener">Fix</a>
+                </div>
+            </div>
+            <div t-if="state.links and state.panel === 'dbs'" class="card p-3 mb-3">
+                <h6 class="fw-bold mb-2">📋 Your live databases</h6>
+                <div t-if="!state.links.live_dbs.length" class="text-muted small">No live databases yet.</div>
+                <div t-foreach="state.links.live_dbs" t-as="d" t-key="d.id" class="py-2 border-top">
+                    <b t-esc="d.name"/><span t-if="d.label and d.label !== d.name" class="text-muted ms-1" t-esc="'· ' + d.label"/>
+                    <div class="small text-muted">
+                        🖥️ <t t-esc="d.server or '—'"/>
+                        <t t-if="d.created"> · 📅 <t t-esc="d.created"/></t>
+                        <t t-if="d.expires"> · ⏳ expires <t t-esc="d.expires"/></t>
+                    </div>
+                </div>
+            </div>
+
             <!-- Add Task card (collapsible) -->
             <div t-if="state.showAdd" class="card p-3 mb-4 shadow-sm border-success">
                 <h5 class="fw-bold mb-3"><i class="fa fa-plus-circle me-2 text-success"/> Submit a New Task</h5>
@@ -546,14 +586,48 @@ export class KpiClientDashboard extends Component {
                                    placeholder="Your full name"/>
                         </div>
                     </div>
+                    <!-- Send back with proof: what is still wrong, plus photos, videos and
+                         a voice note that show it (models/kpi_client_sendback.py). -->
+                    <div t-if="state.approval.sending" class="modal-body border-top" style="background:#fff5f5;">
+                        <h6 class="fw-bold text-danger mb-2">↩ Send this back to the team</h6>
+                        <label class="form-label fw-bold">What is still wrong? <span class="text-danger">*</span></label>
+                        <textarea class="form-control mb-2" rows="3" t-model="state.approval.reason"
+                                  placeholder="Tell the developer exactly what to fix"/>
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            <label class="btn btn-outline-primary btn-sm mb-0">📷 Photo
+                                <input type="file" accept="image/*" multiple="multiple" class="d-none" t-on-change="onAddFiles"/></label>
+                            <label class="btn btn-outline-primary btn-sm mb-0">🎥 Video
+                                <input type="file" accept="video/*" class="d-none" t-on-change="onAddFiles"/></label>
+                            <button type="button" t-att-class="'btn btn-sm ' + (state.rec ? 'btn-danger' : 'btn-outline-primary')" t-on-click="onVoice">
+                                <t t-if="state.rec">⏹ Stop and attach (<t t-esc="state.rec.secs"/>s)</t><t t-else="">🎤 Voice note</t>
+                            </button>
+                            <span class="small text-muted" t-esc="state.files.length ? state.files.length + ' file(s) · ' + fmtSize(filesTotal()) : 'optional: show the problem (up to 25 MB in total)'"/>
+                        </div>
+                        <div t-if="state.files.length" class="d-flex flex-wrap gap-2 mt-2">
+                            <t t-foreach="state.files" t-as="f" t-key="f_index">
+                                <span class="badge text-bg-light border d-inline-flex align-items-center gap-1 fw-normal">
+                                    <t t-esc="f.name"/> · <t t-esc="fmtSize(f.size)"/>
+                                    <a href="#" class="text-danger ms-1" t-on-click.prevent="() => this.removeFile(f_index)">✕</a>
+                                </span>
+                            </t>
+                        </div>
+                    </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger me-auto" t-on-click="submitReject">
-                            <i class="fa fa-times me-1"/> Reject &amp; Send Back
-                        </button>
-                        <button type="button" class="btn btn-secondary" t-on-click="closeApproval">Cancel</button>
-                        <button type="button" class="btn btn-success" t-on-click="submitApprove">
-                            <i class="fa fa-check me-1"/> Approve &amp; Sign
-                        </button>
+                        <t t-if="state.approval.sending">
+                            <button type="button" class="btn btn-secondary me-auto" t-on-click="() => { this._stopVoice(false); this.state.approval.sending = false; }">Back</button>
+                            <button type="button" class="btn btn-danger" t-att-disabled="state.approval.busy or state.rec" t-on-click="submitReject">
+                                <i t-att-class="'fa me-1 ' + (state.approval.busy ? 'fa-spinner fa-spin' : 'fa-undo')"/> Send back
+                            </button>
+                        </t>
+                        <t t-else="">
+                            <button type="button" class="btn btn-danger me-auto" t-on-click="() => { this.state.files = []; this.state.approval.reason = ''; this.state.approval.sending = true; }">
+                                <i class="fa fa-times me-1"/> Reject &amp; Send Back
+                            </button>
+                            <button type="button" class="btn btn-secondary" t-on-click="closeApproval">Cancel</button>
+                            <button type="button" class="btn btn-success" t-on-click="submitApprove">
+                                <i class="fa fa-check me-1"/> Approve &amp; Sign
+                            </button>
+                        </t>
                     </div>
                 </div>
                 <div class="modal-content" t-if="!state.approval.data">
@@ -684,6 +758,9 @@ export class KpiClientDashboard extends Component {
             // Picked files (File objects) and the running voice recording, if any.
             files: [],
             rec: null,          // { secs } while recording
+            // /kpi_client_portal/links/info: declined requests, live DBs, has_group.
+            links: null,
+            panel: '',          // '' | 'fix' | 'dbs'
             // Bug / Update: the requirements of the chosen project to pick from.
             parents: [],
             parentsLoading: false,
@@ -692,6 +769,7 @@ export class KpiClientDashboard extends Component {
                 open: false,
                 data: null,
                 chk_delivered: false, chk_works: false, chk_authorized: false,
+                sending: false, reason: "", busy: false,   // ↩ send back with proof
                 notes: '', signature_text: '',
             },
             // The client's saved signature image. This screen never loaded it, so it
@@ -709,10 +787,32 @@ export class KpiClientDashboard extends Component {
             await this.loadSignatureInfo();
             const rp = await rpc('/kpi_client_portal/get_projects', {});
             if (rp && rp.status) this.state.projects = rp.projects || [];
+            await this.loadLinks();
         });
         this._voiceCount = 0;
         onWillUnmount(() => this._stopVoice(false));
     }
+
+    // ---- Fix / databases / chat: the client's WhatsApp pages ---------------------
+    async loadLinks() {
+        const r = await rpc('/kpi_client_portal/links/info', {});
+        this.state.links = (r && r.status) ? r : null;
+    }
+    togglePanel(name) { this.state.panel = this.state.panel === name ? '' : name; }
+    // The link comes back from the server, so the tab is opened first (inside the
+    // click) and pointed at it afterwards; a pop-up blocker would stop a late open.
+    async _openLink(route, params) {
+        const w = window.open('', '_blank');
+        const r = await rpc(route, params);
+        if (!r || !r.status) {
+            if (w) w.close();
+            this._toast((r && r.message) || 'Could not open it.', 'danger');
+            return;
+        }
+        if (w) { w.location = r.url; } else { window.location = r.url; }
+    }
+    openDbForm(kind) { return this._openLink('/kpi_client_portal/links/db_form', { kind }); }
+    openChat() { return this._openLink('/kpi_client_portal/links/chat', {}); }
 
     // ---- Attachments (photo / video / voice / files) --------------------------
     fmtSize(n) {
@@ -936,6 +1036,8 @@ export class KpiClientDashboard extends Component {
         this.state.approval.chk_authorized = false;
         this.state.approval.notes = '';
         this.state.approval.signature_text = '';
+        this.state.approval.sending = false;
+        this.state.approval.reason = '';
         const r = await rpc('/kpi_client_approval/get', { kpi_id: kpiId });
         if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); this.closeApproval(); return; }
         this.state.approval.data = r.data;
@@ -971,21 +1073,27 @@ export class KpiClientDashboard extends Component {
         await this.refresh();
     }
     async submitReject() {
-        const reason = await this._dialog({
-            title: 'Send this back to the team',
-            message: 'Tell them what needs changing before you can sign it off.',
-            input: true, inputLabel: 'What needs changing', required: true,
-            okLabel: 'Send back', okClass: 'btn-danger',
-        });
-        if (!reason) return;
-        const r = await rpc('/kpi_client_approval/reject', {
-            kpi_id: this.state.approval.data.kpi.id,
-            reason: reason,
-        });
-        if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
-        this._toast('Sent back to the team for changes.', 'warning');
-        this.closeApproval();
-        await this.refresh();
+        const a = this.state.approval;
+        const reason = (a.reason || '').trim();
+        if (reason.length < 3) {
+            this._toast('Please write what is still wrong, so the developer knows what to fix.', 'warning');
+            return;
+        }
+        a.busy = true;
+        try {
+            const r = await rpc('/kpi_client_approval/reject', {
+                kpi_id: a.data.kpi.id,
+                reason: reason,
+                source: 'odoo',
+                attachments: await this._attachmentsPayload(),
+            });
+            if (!r.status) { this._toast('Error: ' + (r.message || 'unknown'), 'danger'); return; }
+            const n = this.state.files.length;
+            this._toast(n ? `Sent back to the team with ${n} file(s).` : 'Sent back to the team for changes.', 'warning');
+            this.state.files = [];
+            this.closeApproval();
+            await this.refresh();
+        } finally { a.busy = false; }
     }
 
     // Errors stay until dismissed — an error that vanishes before it is read is the

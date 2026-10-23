@@ -149,6 +149,9 @@ class KpiWaApproval(http.Controller):
                 # here; map a stray 'hold' to 'clarify' so the URL never 500s.
                 if action == 'hold':
                     action = 'clarify'
+                # 📎 Send back with proof: photos / videos / voice notes come
+                # in the same multipart form, as `files`.
+                from .kpi_client_chat import chat_upload_files
                 result = task.sudo().record_client_final_decision(
                     action=action,
                     partner_name=partner_name,
@@ -156,6 +159,8 @@ class KpiWaApproval(http.Controller):
                     source='web',
                     ip=ip,
                     user_agent=ua,
+                    files=chat_upload_files() if action == 'reject' else None,
+                    sendback_source='whatsapp',
                 )
             else:
                 result = task.sudo().record_client_pre_decision(
