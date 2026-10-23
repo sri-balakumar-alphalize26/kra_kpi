@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Every minute: a client chat message nobody on the team has seen
+             5 minutes after it came in is raised again, once, in our team group
+             (@developer @manager) and privately to the developer.
+             See models/kpi_chat.py _cron_chat_escalate. -->
+        <record id="ir_cron_kpi_chat_escalate" model="ir.cron">
+            <field name="name">KRA/KPI: Chat, client still waiting</field>
+            <field name="model_id" ref="model_kra_kpi"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_chat_escalate()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>
