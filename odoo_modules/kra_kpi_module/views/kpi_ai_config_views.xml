@@ -31,6 +31,11 @@
                                 <group string="Or your own Jitsi">
                                     <field name="meet_base_url"
                                            placeholder="https://meet.yourdomain.com"/>
+                                    <field name="meet_jwt_app_id"
+                                           placeholder="JWT_APP_ID from the server setup"/>
+                                    <field name="meet_jwt_secret"
+                                           password="True"
+                                           placeholder="JWT_APP_SECRET from the server setup"/>
                                 </group>
                                 <div class="alert alert-info" role="status">
                                     All three 8x8 values are needed together.

@@ -49,6 +49,9 @@ _TEXT_PARAMS = {
     'jaas_api_key_id': 'kra_kpi.jaas_api_key_id',
     'jaas_private_key': 'kra_kpi.jaas_private_key',
     'meet_base_url': 'kra_kpi.meet_base_url',
+    # Our own Jitsi with token login: both needed together.
+    'meet_jwt_app_id': 'kra_kpi.meet_jwt_app_id',
+    'meet_jwt_secret': 'kra_kpi.meet_jwt_secret',
 }
 
 # Must match kpi_ai.py. Both the old defaults were retired models that
@@ -162,6 +165,14 @@ class KpiAiConfig(models.TransientModel):
     meet_base_url = fields.Char(
         string='Self-hosted Jitsi URL',
         help='Only for a Jitsi of your own. Leave empty when using 8x8.')
+    meet_jwt_app_id = fields.Char(
+        string='Jitsi App ID',
+        help="The JWT_APP_ID your Jitsi server was set up with. With the "
+             "secret below, every link carries a short-lived pass and people "
+             "without one are refused.")
+    meet_jwt_secret = fields.Char(
+        string='Jitsi App Secret',
+        help="The JWT_APP_SECRET from the same server setup.")
     meet_server_html = fields.Html(readonly=True, sanitize=False)
 
     # ---- read-only status ----------------------------------------------- #
@@ -211,7 +222,14 @@ class KpiAiConfig(models.TransientModel):
         base = self.env['ir.config_parameter'].sudo().get_param(
             'kra_kpi.meet_base_url', '')
         if base and 'meet.jit.si' not in base:
-            return ('<p>Meetings run on your own Jitsi at <b>%s</b>.</p>'
+            if Meeting._self_jwt()[0]:
+                return ('<p>Meetings run on your own Jitsi at <b>%s</b>. '
+                        'Every link carries a pass, so only people Odoo lets '
+                        'in can join, and the recorder joins by itself.</p>'
+                        % base)
+            return ('<p class="text-warning">Meetings run on your own Jitsi '
+                    'at <b>%s</b>, but without passes: anyone who has a room '
+                    'address can join. Fill in the App ID and Secret.</p>'
                     % base)
         return (
             '<p class="text-danger"><b>Meetings are pointed at the public '
@@ -322,6 +340,8 @@ class KpiAiConfig(models.TransientModel):
         self.action_save()
         Meeting = self.env['kpi.meeting']
         app, kid, pem = Meeting._jaas()
+        if not app and Meeting._self_jwt()[0]:
+            return self._test_own_jitsi()
         if not app:
             base = self.meet_base_url or ''
             if base and 'meet.jit.si' not in base:
@@ -378,6 +398,47 @@ class KpiAiConfig(models.TransientModel):
                 'mod': claims.get('context', {}).get('user', {}).get(
                     'moderator'),
                 'hours': 6})
+
+    def _test_own_jitsi(self):
+        """Sign a pass for our own Jitsi, check it, and check the server answers."""
+        Meeting = self.env['kpi.meeting']
+        own_app, secret = Meeting._self_jwt()
+        probe = Meeting.new({'name': 'token test', 'room_name': 'tokentest'})
+        token = probe.meet_jwt('Token test', moderator=True)
+        if not token:
+            raise UserError(_(
+                'The pass could not be signed. The Odoo log has the exact '
+                'error — search it for "meeting token".'))
+        try:
+            import jwt as _jwt
+            claims = _jwt.decode(token, secret, algorithms=['HS256'],
+                                 audience='jitsi')
+        except Exception as exc:
+            raise UserError(_('The pass was signed but will not verify: %s')
+                            % exc)
+        domain = Meeting.meet_domain()
+        try:
+            import urllib.request
+            with urllib.request.urlopen(
+                    'https://%s/external_api.js' % domain, timeout=15) as resp:
+                reachable = resp.status == 200
+        except Exception as exc:
+            raise UserError(_(
+                'The pass works, but the server at %(domain)s did not answer: '
+                '%(err)s\n\nCheck the meeting server is running and the '
+                'address is right.') % {'domain': domain, 'err': exc})
+        raise UserError(_(
+            'Your own Jitsi is ready.\n\n'
+            'Server: %(domain)s (answering: %(ok)s)\n'
+            'App ID in the pass: %(iss)s\n'
+            'Admitted as moderator: %(mod)s\n'
+            'Valid for: 6 hours\n\n'
+            'If a real meeting still shows a log-in box, the App ID or '
+            'Secret here does not match the server.') % {
+                'domain': domain, 'ok': 'yes' if reachable else 'no',
+                'iss': claims.get('iss'),
+                'mod': claims.get('context', {}).get('user', {}).get(
+                    'moderator')})
 
     def action_test_transcribe(self):
         """Send a real, tiny WAV and see whether words come back.

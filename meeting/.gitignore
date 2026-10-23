@@ -1,0 +1,5 @@
+# Secrets and things setup-meeting.ps1 downloads or Jitsi writes.
+server/.env
+server/.env.bak
+server/jitsi/
+server/data/
