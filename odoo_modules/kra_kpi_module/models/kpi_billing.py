@@ -15,6 +15,7 @@ the admins are told; 🧾 Bill now retries it.
 
 import json
 import logging
+from datetime import date
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
@@ -22,6 +23,9 @@ from odoo.exceptions import UserError, ValidationError
 from .kpi_client_invoice import _kind_from_ref
 
 _logger = logging.getLogger(__name__)
+
+# A price with no "From" date applies always: it is stored from this day.
+ALWAYS_FROM = date(2000, 1, 1)
 
 WORK_TYPES = [
     ('database', 'New Database'),
@@ -49,7 +53,8 @@ class KpiBillingRate(models.Model):
     amount = fields.Float(required=True, digits=(16, 2))
     currency_id = fields.Many2one('res.currency', required=True,
                                   default=lambda s: s.env.company.currency_id)
-    date_from = fields.Date(string='From', required=True, default=fields.Date.today)
+    date_from = fields.Date(string='From', required=True, default=ALWAYS_FROM,
+                            help='2000-01-01 = always (no start date was set).')
     date_to = fields.Date(string='To', help='Empty = no end date.')
     active = fields.Boolean(default=True)
     note = fields.Char()
@@ -72,15 +77,29 @@ class KpiBillingRate(models.Model):
             for o in others:
                 if r.date_from <= (o.date_to or far) and o.date_from <= (r.date_to or far):
                     raise ValidationError(_(
-                        'Two %(type)s rates for %(client)s cover the same days (%(a)s and %(b)s). '
-                        'Give the older one an end date first.') % {
+                        '%(client)s already has a %(type)s price (%(price)s, %(range)s). '
+                        'Edit that one instead.') % {
                         'type': dict(WORK_TYPES)[r.work_type],
-                        'client': r.client_kra_id.name or _('Default'),
-                        'a': r._range_label(), 'b': o._range_label()})
+                        'client': r.client_kra_id.name or _('The Default'),
+                        'price': o._price_label(), 'range': o._range_label()})
+
+    def _is_always(self):
+        self.ensure_one()
+        return self.date_from <= ALWAYS_FROM and not self.date_to
 
     def _range_label(self):
         self.ensure_one()
-        return '%s → %s' % (self.date_from, self.date_to or _('no end'))
+        if self._is_always():
+            return _('always')
+        start = _('from %s') % self.date_from if self.date_from > ALWAYS_FROM else _('from the start')
+        return '%s %s' % (start, (_('to %s') % self.date_to) if self.date_to else _('with no end'))
+
+    def _price_label(self):
+        self.ensure_one()
+        sym = self.currency_id.symbol or self.currency_id.name or ''
+        amt = '{:,.2f}'.format(self.amount or 0)
+        money = ('%s %s' % (amt, sym)) if self.currency_id.position == 'after' else ('%s%s' % (sym, amt))
+        return '%s %s' % (money, _('per hour') if self.method == 'hourly' else _('per task'))
 
     @api.model
     def _rate_for(self, client, work_type, on_date):
@@ -109,7 +128,11 @@ class KpiBillingRate(models.Model):
             'currency_id': self.currency_id.id,
             'currency': self.currency_id.name or '',
             'currency_symbol': self.currency_id.symbol or '',
-            'date_from': fields.Date.to_string(self.date_from) if self.date_from else '',
+            # '' when it applies from the start (stored as ALWAYS_FROM).
+            'date_from': fields.Date.to_string(self.date_from) if self.date_from and self.date_from > ALWAYS_FROM else '',
+            'always': self._is_always(),
+            'range_label': self._range_label(),
+            'price_label': self._price_label(),
             'date_to': fields.Date.to_string(self.date_to) if self.date_to else '',
             'note': self.note or '',
         }
@@ -135,6 +158,28 @@ class ResCompanyBilling(models.Model):
         string='Bill alert WhatsApp numbers',
         help='Comma-separated. Each new bill and each payment is sent here. '
              'Empty = the CEO day-note numbers.')
+
+
+class KraMasterInvoiceGroup(models.Model):
+    _inherit = 'kra.master'
+
+    # 🧾 Settings › Billing, per client: each new bill is posted in this
+    # WhatsApp group while "Send invoices" is on. Off (the default) = no
+    # invoice message at all. A project uses its client's setting.
+    kpi_invoice_group_jid = fields.Char(string='Invoice WhatsApp group')
+    kpi_invoice_group_name = fields.Char(string='Invoice group name')
+    kpi_send_invoice = fields.Boolean(string='Send invoices', default=False)
+
+    def _invoice_target(self):
+        """(send, jid, name) for this client: its own, else the nearest
+        parent that has an invoice group set."""
+        node, seen = self, set()
+        while node and node.id not in seen:
+            seen.add(node.id)
+            if node.kpi_invoice_group_jid or node.kpi_send_invoice:
+                return bool(node.kpi_send_invoice), node.kpi_invoice_group_jid or '', node.kpi_invoice_group_name or ''
+            node = node.parent_id
+        return False, '', ''
 
 
 class KraKpiBilling(models.Model):
@@ -223,9 +268,8 @@ class KraKpiBilling(models.Model):
         ref = rec.external_ref or '#%s' % rec.id
         if not rate:
             rec._log_action('auto_bill_skipped', source='system', payload={'why': why})
-            rec._finish_alpha(_('🧾 %(ref)s is fully complete but has no bill yet: %(why)s\n'
-                                'Add the rate in Configuration → Billing, then tap 🧾 Bill now on the task.')
-                              % {'ref': ref, 'why': why})
+            # No WhatsApp for this: the Billing page shows the missing price in
+            # red and the task offers 🧾 Bill now.
             return False
         _q, actual, contributors = rec._billing_hours()
         day = fields.Datetime.to_datetime(rec.full_complete_at).date()
@@ -266,27 +310,23 @@ class KraKpiBilling(models.Model):
         return ('%s %s' % (txt, sym)) if currency.position == 'after' else ('%s%s' % (sym, txt))
 
     def _bill_tell(self, inv):
-        """The bill went out: the team, the client group, the owner numbers."""
+        """The bill goes to the client's invoice WhatsApp group, only while
+        that client's "Send invoices" is on (Settings › Billing). Nothing
+        private, nothing in the team / client chat groups (they were told
+        just "complete" in kpi_finish._finish_after_full)."""
         self.ensure_one()
+        send, jid, _name = (inv.client_kra_id or self.client_kra_id)._invoice_target()
+        if not send:
+            return False
+        if not jid:
+            _logger.warning('invoice %s not sent: "Send invoices" is on but no invoice group is picked', inv.name)
+            return False
         ref = self.external_ref or '#%s' % self.id
         money = self._money(inv.total_amount, inv.currency_id)
-        self._finish_alpha(_('🧾 *%(inv)s* — %(ref)s %(name)s — %(money)s. Queued for billing.') % {
-            'inv': inv.name, 'ref': ref, 'name': self.name or '', 'money': money})
-        self._finish_client_group(_('✅ *%(ref)s* — %(name)s is complete and closed.\n🧾 Bill %(inv)s: %(money)s. '
-                                    'You can see it in your portal under Invoices.') % {
-            'ref': ref, 'name': self.name or '', 'inv': inv.name, 'money': money})
-        text = _('🧾 New bill %(inv)s\nClient: %(client)s\nTask: %(ref)s — %(name)s\nAmount: %(money)s') % {
+        text = _('🧾 *%(inv)s*\nClient: %(client)s\nTask: %(ref)s — %(name)s\nAmount: *%(money)s*') % {
             'inv': inv.name, 'client': inv.client_kra_id.name or '', 'ref': ref,
             'name': self.name or '', 'money': money}
-        self._bill_to_owners(text, 'bill_created')
-
-    def _bill_to_owners(self, text, event):
-        Queue = self.env['kpi.notification.queue'].sudo()
-        for num in self._billing_numbers():
-            try:
-                Queue.enqueue_delayed(num, text, event=event, seconds=1, role='owner')
-            except Exception as exc:
-                _logger.warning('bill alert to %s failed: %s', num, exc)
+        return self.env['kpi.wa.group.report'].sudo()._post(text, jid=jid)
 
     def action_bill_now(self):
         """🧾 Bill now: retry a fully complete task that had no rate."""
@@ -306,21 +346,6 @@ class KpiClientInvoicePaidTell(models.Model):
     _inherit = 'kpi.client.invoice'
 
     def action_mark_paid(self, *args, **kwargs):
-        was = {inv.id: inv.payment_status for inv in self}
-        res = super().action_mark_paid(*args, **kwargs)
-        for inv in self:
-            if was.get(inv.id) == 'paid' or inv.payment_status != 'paid' or inv.source != 'auto':
-                continue
-            try:
-                task = inv.line_ids.mapped('kpi_id')[:1].with_context(active_test=False)
-                if not task:
-                    continue
-                money = task._money(inv.total_amount, inv.currency_id)
-                task._finish_alpha(_('✅ %(inv)s settled — %(money)s.') % {'inv': inv.name, 'money': money})
-                task._finish_client_group(_('✅ Payment for %(inv)s received (%(money)s). Thank you!')
-                                          % {'inv': inv.name, 'money': money})
-                task._bill_to_owners(_('✅ Paid: %(inv)s — %(client)s — %(money)s') % {
-                    'inv': inv.name, 'client': inv.client_kra_id.name or '', 'money': money}, 'bill_paid')
-            except Exception as exc:
-                _logger.warning('paid message for %s failed: %s', inv.name, exc)
-        return res
+        # No WhatsApp for a payment: only the invoice itself is sent
+        # (_bill_tell). The in-app notices of kpi_client_invoice stay.
+        return super().action_mark_paid(*args, **kwargs)

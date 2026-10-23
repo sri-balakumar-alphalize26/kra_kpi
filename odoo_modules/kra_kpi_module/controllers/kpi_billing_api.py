@@ -7,7 +7,7 @@ from odoo import fields, http
 from odoo.exceptions import UserError, ValidationError
 from odoo.http import request
 
-from ..models.kpi_billing import WORK_TYPES
+from ..models.kpi_billing import ALWAYS_FROM, WORK_TYPES
 
 _logger = logging.getLogger(__name__)
 
@@ -29,15 +29,21 @@ class KpiBillingApi(http.Controller):
         env = request.env
         Rate = env['kpi.billing.rate'].sudo()
         clients = env['kra.master'].sudo().search([('is_client', '=', True)], order='name')
-        currencies = env['res.currency'].sudo().search([('active', '=', True)], order='name')
+        # Every currency, the ones already in use first: INR / OMR / ... may be
+        # switched off in Odoo; choosing one on a price switches it on.
+        currencies = env['res.currency'].sudo().with_context(active_test=False).search([], order='active desc, name')
         c = env.company.sudo()
         Kpi = env['kra.kpi']
         return {
             'status': True,
             'rates': [r._serialize() for r in Rate.search([])],
             'clients': [{'id': k.id, 'name': k.name,
-                         'currency': k.currency_id.name or ''} for k in clients],
-            'currencies': [{'id': cur.id, 'name': cur.name, 'symbol': cur.symbol or ''} for cur in currencies],
+                         'currency': k.currency_id.name or '',
+                         'invoice_group_jid': k.kpi_invoice_group_jid or '',
+                         'invoice_group_name': k.kpi_invoice_group_name or '',
+                         'send_invoice': bool(k.kpi_send_invoice)} for k in clients],
+            'currencies': [{'id': cur.id, 'name': cur.name, 'symbol': cur.symbol or '',
+                            'active': cur.active} for cur in currencies],
             'work_types': [{'key': k, 'label': v} for k, v in WORK_TYPES],
             'company_currency_id': c.currency_id.id,
             'numbers': c.kpi_billing_wa_numbers or '',
@@ -61,8 +67,8 @@ class KpiBillingApi(http.Controller):
             return {'status': False, 'message': 'The amount must be a number.'}
         if not currency_id:
             return {'status': False, 'message': 'Pick a currency.'}
-        if not date_from:
-            return {'status': False, 'message': 'Pick the "From" date.'}
+        # No "From" = the price applies always.
+        date_from = date_from or fields.Date.to_string(ALWAYS_FROM)
         vals = {
             'client_kra_id': int(client_id) if client_id else False,
             'work_type': work_type, 'method': method, 'amount': amt,
@@ -71,6 +77,11 @@ class KpiBillingApi(http.Controller):
             'note': (note or '').strip()[:200] or False,
         }
         Rate = request.env['kpi.billing.rate'].sudo()
+        cur = request.env['res.currency'].sudo().with_context(active_test=False).browse(int(currency_id)).exists()
+        if not cur:
+            return {'status': False, 'message': 'Pick a currency.'}
+        if not cur.active:
+            cur.active = True
         try:
             with request.env.cr.savepoint():
                 rate = Rate.browse(int(id)) if id else Rate
@@ -118,6 +129,30 @@ class KpiBillingApi(http.Controller):
                 out.append(n)
         c.kpi_billing_wa_numbers = ','.join(out) or False
         return {'status': True, 'numbers': ','.join(out)}
+
+    @http.route('/kpi_billing/client_invoice_set', type='json', auth='user', methods=['POST'], csrf=False)
+    def client_invoice_set(self, client_id=None, jid=None, name=None, send=None, **kw):
+        """Per client: the WhatsApp group its invoices go to, and the
+        "Send invoices" switch. Only the keys given are changed."""
+        if not _is_admin(request.env.user):
+            return _no()
+        client = request.env['kra.master'].sudo().browse(int(client_id or 0)).exists()
+        if not client:
+            return {'status': False, 'message': 'Client not found.'}
+        vals = {}
+        if jid is not None:
+            jid = (jid or '').strip()
+            if jid and not jid.endswith('@g.us'):
+                return {'status': False, 'message': 'Pick a WhatsApp group.'}
+            vals['kpi_invoice_group_jid'] = jid or False
+            vals['kpi_invoice_group_name'] = (name or '').strip()[:120] or False
+        if send is not None:
+            vals['kpi_send_invoice'] = bool(send)
+        if vals:
+            client.write(vals)
+        return {'status': True, 'invoice_group_jid': client.kpi_invoice_group_jid or '',
+                'invoice_group_name': client.kpi_invoice_group_name or '',
+                'send_invoice': bool(client.kpi_send_invoice)}
 
     def _task(self, kpi_id):
         try:
