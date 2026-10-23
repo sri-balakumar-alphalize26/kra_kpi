@@ -362,7 +362,6 @@ class KpiMeeting(models.Model):
         if kind == 'm':
             # The name in Odoo (user, else contact), never the WhatsApp one.
             return rec.user_id.name or rec.partner_id.name or rec.wa_name or rec.phone or ''
-
         return rec.name or ''
 
     def _pass_url(self, kind, rid):
@@ -592,6 +591,24 @@ class KpiMeeting(models.Model):
         return (app, kid, pem) if (app and kid and pem) else ('', '', '')
 
     @api.model
+    def _self_jwt(self):
+        """-> (app_id, secret) for our own Jitsi with token login, or ('', '').
+
+        Both are needed, and only count when meet_base_url points at a Jitsi
+        of our own: signing passes for the public meet.jit.si gets nobody in.
+        8x8 wins when both are configured.
+        """
+        if self._jaas()[0]:
+            return ('', '')
+        p = self.env['ir.config_parameter'].sudo()
+        base = (p.get_param('kra_kpi.meet_base_url', '') or '').strip()
+        app = (p.get_param('kra_kpi.meet_jwt_app_id', '') or '').strip()
+        secret = (p.get_param('kra_kpi.meet_jwt_secret', '') or '').strip()
+        if not (base and 'meet.jit.si' not in base and app and secret):
+            return ('', '')
+        return (app, secret)
+
+    @api.model
     def meet_domain(self):
         """The Jitsi host, as a bare domain for the external API."""
         if self._jaas()[0]:
@@ -635,7 +652,8 @@ class KpiMeeting(models.Model):
         """
         self.ensure_one()
         app, kid, pem = self._jaas()
-        if not app:
+        own_app, own_secret = self._self_jwt()
+        if not app and not own_app:
             return ''
         try:
             import time as _time
@@ -644,8 +662,11 @@ class KpiMeeting(models.Model):
             now = int(_time.time())
             payload = {
                 'aud': 'jitsi',
-                'iss': 'chat',
-                'sub': 'vpaas-magic-cookie-%s' % app,
+                # Our own Jitsi checks iss against its JWT_APP_ID and sub
+                # against its domain; 8x8 wants its fixed 'chat' + tenant.
+                'iss': 'chat' if app else own_app,
+                'sub': ('vpaas-magic-cookie-%s' % app) if app
+                       else self.meet_domain(),
                 # Scoped to THIS room, not '*': a token for every room is a
                 # token worth stealing.
                 'room': self.room_name or '*',
@@ -669,6 +690,9 @@ class KpiMeeting(models.Model):
                     },
                 },
             }
+            if not app:
+                # Self-hosted token auth is a shared secret, not a key pair.
+                return _jwt.encode(payload, own_secret, algorithm='HS256')
             return _jwt.encode(payload, pem, algorithm='RS256',
                                headers={'kid': kid})
         except Exception as exc:
@@ -890,6 +914,7 @@ class KpiMeeting(models.Model):
                 '--base', base,
                 '--token', me._ensure_bot_token(),
                 '--meeting', str(me.id),
+                '--domain', me.meet_domain(),
                 '--alone-seconds', str(max(1, me._param('meet_bot_alone_min', 2)) * 60),
                 '--max-seconds', str(max(1, me._param('meet_rec_max_h', 6)) * 3600)]
         try:

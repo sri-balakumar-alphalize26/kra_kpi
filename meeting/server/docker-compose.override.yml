@@ -1,0 +1,10 @@
+# Our additions on top of the official Jitsi docker-compose.yml (which
+# setup-meeting.ps1 downloads into ./jitsi and which we never edit).
+# Paths are relative to meeting\server. The page port comes from the
+# official file (HTTP_PORT); Windows Firewall keeps it off the network and
+# the world reaches it only through the Cloudflare tunnel.
+services:
+  web:
+    volumes:
+      # Our logo, named in ../branding/custom-interface_config.js.
+      - ../branding/images/alphalize-logo.png:/usr/share/jitsi-meet/images/alphalize-logo.png:ro

@@ -14,13 +14,13 @@ import SettingsNav from "./SettingsNav";
 const M = "kpi.ai.config";
 const FORM = [
   { section: "Status" }, "status_html",
-  { section: "Meeting server (8x8 / Jitsi)" }, "meet_server_html", "meet_base_url", "jaas_app_id", "jaas_api_key_id", "jaas_private_key",
+  { section: "Meeting server (8x8 / Jitsi)" }, "meet_server_html", "meet_base_url", "meet_jwt_app_id", "meet_jwt_secret", "jaas_app_id", "jaas_api_key_id", "jaas_private_key",
   { section: "Custom AI endpoint (OpenAI-compatible, tried first)" }, "custom_api_url", "custom_api_key", "custom_model",
   { section: "Providers" }, "gemini_api_key", "gemini_model", "groq_api_key", "groq_model", "anthropic_api_key", "anthropic_model",
   { section: "Speech to text" }, "transcribe_provider", "whisper_model", "openai_api_key",
   { section: "Meeting recording" }, "segment_minutes", "record_keep_days", "bot_alone_seconds", "idle_seconds", "auto_summary", "auto_post_summary",
 ];
-const SECRET = ["jaas_private_key", "custom_api_key", "gemini_api_key", "groq_api_key", "anthropic_api_key", "openai_api_key"];
+const SECRET = ["meet_jwt_secret", "jaas_private_key", "custom_api_key", "gemini_api_key", "groq_api_key", "anthropic_api_key", "openai_api_key"];
 const TESTS = [["action_test_summary", "Test Summaries"], ["action_test_meeting_server", "Test Meeting Server"], ["action_test_transcribe", "Test Speech To Text"]];
 const names = FORM.filter((f) => typeof f === "string");
 

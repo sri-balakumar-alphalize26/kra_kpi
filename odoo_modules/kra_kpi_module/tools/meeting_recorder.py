@@ -122,7 +122,14 @@ BLOCKERS = (
 )
 
 
-def jitsi_frame(page, domain_hint='jit'):
+# Set from --domain. The old hard-coded 'jit' only ever matched meet.jit.si
+# and 8x8.vc never; on our own meet.alphalize.com it found no frame at all,
+# so the prejoin click and the blocker text both silently did nothing.
+DOMAIN_HINT = 'jit'
+
+
+def jitsi_frame(page, domain_hint=None):
+    domain_hint = domain_hint or DOMAIN_HINT
     for fr in page.frames:
         url = fr.url or ''
         if url and domain_hint in url and 'localhost' not in url:
@@ -183,7 +190,12 @@ def main(argv=None):
     ap.add_argument('--idle-seconds', type=int, default=0)
     ap.add_argument('--max-seconds', type=int, default=MAX_MEETING_SECONDS)
     ap.add_argument('--log')
+    # The Jitsi host the room runs on, e.g. meet.alphalize.com.
+    ap.add_argument('--domain', default='')
     args = ap.parse_args(argv)
+    global DOMAIN_HINT
+    if args.domain:
+        DOMAIN_HINT = args.domain
 
     logging.basicConfig(
         filename=args.log or None, level=logging.INFO,
