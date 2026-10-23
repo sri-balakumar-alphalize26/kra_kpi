@@ -1,7 +1,7 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useFlags } from "@/components/ui";
+import { Button, Modal, useFlags } from "@/components/ui";
 import { useMe } from "@/lib/me";
 import { invalidate, mutate } from "@/lib/api";
 import { useResource } from "@/lib/useFetch";
@@ -53,19 +53,38 @@ export function TaskActionsProvider({ children }) {
   /* Heartbeat while the workday is open (what Live Tracking and the auto-away
      cron read). Every 15 s like the Odoo board, and whether or not the tab is
      visible: a developer working in another window is still at work. */
-  useEffect(() => {
-    if (!workdayOpen) return;
-    S.sendHeartbeat().catch(() => {});
-    const id = setInterval(() => { S.sendHeartbeat().catch(() => {}); }, 15000);
-    return () => clearInterval(id);
-  }, [workdayOpen]);
-
   const workdayRefresh = workday.refresh, liveRefresh = live.refresh;
   const refreshAll = useCallback(() => {
     for (const p of REFRESH_PREFIXES) invalidate(p);
     workdayRefresh(); liveRefresh();
     window.dispatchEvent(new CustomEvent("kpi:refresh"));
   }, [workdayRefresh, liveRefresh]);
+
+  /* The heartbeat reply says when auto-away paused a task while the developer
+     was gone (Odoo sendHeartbeat → _showAwayReturnNudge): show "Welcome back"
+     with Not yet / Resume now, and refresh. */
+  const [awayTask, setAwayTask] = useState(null); /* { id, name } */
+  useEffect(() => {
+    if (!workdayOpen) return;
+    const beat = () => S.sendHeartbeat().then((res) => {
+      if (res && res.was_away && res.awayed_task_id) {
+        setAwayTask({ id: res.awayed_task_id, name: res.awayed_task_name || "your task" });
+        refreshAll();
+      }
+    }).catch(() => {});
+    beat();
+    const id = setInterval(beat, 15000);
+    return () => clearInterval(id);
+  }, [workdayOpen, refreshAll]);
+  const resumeAway = useCallback(async () => {
+    const t = awayTask;
+    setAwayTask(null);
+    try {
+      const res = await S.resumeTask(t.id);
+      if (res && res.status) refreshAll();
+      else flags.err((res && res.message) || "Could not resume the task.");
+    } catch (e) { flags.err(e.message || "Could not resume the task."); }
+  }, [awayTask, flags, refreshAll]);
 
   /* After a create, fetch just THAT task and slot it into the cached board
      (Odoo _addTaskCard), instead of re-downloading every task. Anything else
@@ -110,7 +129,7 @@ export function TaskActionsProvider({ children }) {
       case "pause": return S.pauseTask(task.id, p.reason, p.reasonCode, p.meetingWithIds);
       case "complete": {
         if (p.summary) { const r = await S.createProgress(task.id, p.summary); S.assertOk(r, "Could not save the progress note."); }
-        return S.completeTask(task.id, p.employeeChecklist, p.partial);
+        return S.completeTask(task.id, p.employeeChecklist, p.partial, p.extra || {});
       }
       case "approve": return S.approveTask(task.id, p.managerChecklist);
       case "reject": return S.rejectTask(task.id, p.reason);
@@ -213,6 +232,17 @@ export function TaskActionsProvider({ children }) {
         <CreateTaskDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={addCreated} />
         {openId && <TaskPanel id={+openId} onClose={closePanel} />}
         <TaskAlerts />
+        {awayTask && (
+          <Modal open onClose={() => setAwayTask(null)} title="Welcome back" width={480}
+            footer={<>
+              <Button onClick={() => setAwayTask(null)}>Not yet</Button>
+              <Button kind="ok" icon="play" onClick={resumeAway} autoFocus>Resume now</Button>
+            </>}>
+            <p style={{ margin: 0 }}>You were away, so your task was auto-paused:</p>
+            <b>"{awayTask.name}"</b>
+            <span className="mini">That away time is logged as <b>Away</b> — never counted as Productive. Resume when you're ready.</span>
+          </Modal>
+        )}
       </LiveCtx.Provider>
     </ActsCtx.Provider>
   );

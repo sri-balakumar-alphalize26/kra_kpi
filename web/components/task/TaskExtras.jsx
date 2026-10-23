@@ -896,6 +896,31 @@ function describe(a) {
   if (p.from != null && p.to != null && typeof p.from !== "object") return `${p.from} → ${p.to}${p.reason ? ` — ${p.reason}` : ""}`;
   return p.reason || p.note || p.message || p.error || "";
 }
+/* `at` is already in the user's time zone ("2026-10-23 12:20:56"), so its
+   first 10 characters are the local day. */
+const histYmd = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+function histDay(key) {
+  if (!key) return "No date";
+  const now = new Date();
+  if (key === histYmd(now)) return "Today";
+  if (key === histYmd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))) return "Yesterday";
+  const [y, m, dd] = key.split("-").map(Number);
+  const dt = new Date(y, m - 1, dd);
+  return Number.isNaN(dt.getTime()) ? key : dt.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/* One day of a history list, closed until tapped: "▸ Today · 6 entries"
+   (Odoo's Activity popup). Shared by the History tab and "Everything on this task". */
+function DayRow({ label, count, open, onToggle }) {
+  return (
+    <button type="button" aria-expanded={open} onClick={onToggle}
+      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", border: 0, borderBottom: "1px solid var(--border, #e9edef)", background: "none", padding: "8px 2px", font: "inherit", fontWeight: 600, color: "inherit", textAlign: "left", cursor: "pointer" }}>
+      <span aria-hidden="true" style={{ width: 12, color: "var(--subtle)" }}>{open ? "▾" : "▸"}</span>
+      <span style={{ flex: 1 }}>{label}</span>
+      <span className="mini">{count} entr{count === 1 ? "y" : "ies"}</span>
+    </button>
+  );
+}
 
 export function HistoryTab({ kpiId, d }) {
   const [kind, setKind] = useState("all");
@@ -903,6 +928,9 @@ export function HistoryTab({ kpiId, d }) {
   const [err, setErr] = useState("");
   const [tries, setTries] = useState(0); /* Retry after a dropped request reloads the log */
   const [all, setAll] = useState(false);
+  /* Day rows the person opened or closed, by "YYYY-MM-DD"; until tapped,
+     Today is open and every other day closed. */
+  const [dayOpen, setDayOpen] = useState({});
   /* previous_state / was_paused / pause_reason live only on this route. */
   const [reh, setReh] = useState(null);
   const reCount = (d.reassignments || []).length;
@@ -914,6 +942,7 @@ export function HistoryTab({ kpiId, d }) {
   }, [kpiId, reCount]);
   useEffect(() => {
     setAll(false);
+    setDayOpen({});
     if (kind === "all") { setLog(null); return; }
     let live = true;
     setLog(undefined); setErr("");
@@ -923,18 +952,34 @@ export function HistoryTab({ kpiId, d }) {
   const src = kind === "all" ? d : log || { activity_log: [], activity_total: 0, activity_limit: 0 };
   const rows = src.activity_log || [];
   const shown = all ? rows : rows.slice(0, SHOWN);
+  /* The rows come newest first, so the days do too. */
+  const days = [];
+  for (const a of shown) {
+    const key = String(a.at || "").slice(0, 10);
+    if (!days.length || days[days.length - 1].key !== key) days.push({ key, rows: [] });
+    days[days.length - 1].rows.push(a);
+  }
+  const isOpen = (key) => (key in dayOpen ? dayOpen[key] : histDay(key) === "Today");
   const est = d.estimate_history || [];
   return (
     <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <Tabs items={KINDS} value={kind} onChange={setKind} />
       {log === undefined && <span className="mini" style={{ padding: "8px 0" }}>Loading…</span>}
       {err && <span style={{ display: "flex", alignItems: "center", gap: 8 }}><Err>{err}</Err><Button size="sm" kind="ghost" onClick={() => setTries((n) => n + 1)}>Retry</Button></span>}
-      {shown.map((a) => {
-        const txt = describe(a);
+      {days.map((g) => {
+        const open = isOpen(g.key);
         return (
-          <div key={a.id} className="notif" style={{ padding: "8px 0" }}>
-            <span className="icbox" style={{ background: a.success === false ? "var(--over-bg)" : "var(--hover)", color: a.success === false ? "var(--over)" : "var(--subtle)", width: 28, height: 28 }}><Icon n={a.success === false ? "warn" : eventIcon(a.event)} size={14} /></span>
-            <div style={{ minWidth: 0 }}><p style={{ overflowWrap: "anywhere" }}>{a.label}{txt ? <span style={{ color: "var(--subtle)" }}> — {txt}</span> : null}</p><small>{a.at}{a.actor ? ` · ${a.actor}` : ""}</small></div>
+          <div key={g.key || "none"}>
+            <DayRow label={histDay(g.key)} count={g.rows.length} open={open} onToggle={() => setDayOpen((o) => ({ ...o, [g.key]: !open }))} />
+            {open && g.rows.map((a) => {
+              const txt = describe(a);
+              return (
+                <div key={a.id} className="notif" style={{ padding: "8px 0" }}>
+                  <span className="icbox" style={{ background: a.success === false ? "var(--over-bg)" : "var(--hover)", color: a.success === false ? "var(--over)" : "var(--subtle)", width: 28, height: 28 }}><Icon n={a.success === false ? "warn" : eventIcon(a.event)} size={14} /></span>
+                  <div style={{ minWidth: 0 }}><p style={{ overflowWrap: "anywhere" }}>{a.label}{txt ? <span style={{ color: "var(--subtle)" }}> — {txt}</span> : null}</p><small>{a.at}{a.actor ? ` · ${a.actor}` : ""}</small></div>
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -1101,39 +1146,743 @@ const CHAT_DAY = (d) => {
 };
 const chatDate = (at) => (at ? new Date(String(at).replace(" ", "T") + "Z") : null);
 
-export function ChatTab({ kpiId, onSeen }) {
+/* "Everything on this task": one list, newest first, by day, with the same
+   filters as Odoo's KPI Details › History. Activity (pauses, renames …) is its
+   own filter so it doesn't bury the conversation. */
+const TL_FILTERS = [
+  ["all", "All", null],
+  ["talks", "Questions", ["question"]],
+  ["progress", "Progress", ["progress"]],
+  ["meetings", "Meetings", ["meeting"]],
+  ["code", "Code", ["code"]],
+  ["documents", "Documents", ["document"]],
+  ["activity", "Activity", ["activity"]],
+];
+const TL_ICON = { talk: "chat", question: "info", progress: "pen", meeting: "cal", code: "link", document: "paperclip", activity: "clock" };
+/* One talk with the client (a back-and-forth), as on Client Talks ›
+   Discussions: one row, closed until tapped; open, the bubbles. */
+function TalkRow({ it }) {
+  const [open, setOpen] = useState(false);
+  const waiting = (it.badge || "").startsWith("●");
+  return (
+    <div className="tl-talk">
+      <button type="button" className="tl-talk-head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+        <span className="tl-ic" aria-hidden="true"><Icon n="chat" size={15} /></span>
+        <b>{it.title}</b>
+        <span className="mini">{it.count} message{it.count === 1 ? "" : "s"}</span>
+        {it.badge && <span className={`tl-talk-st${waiting ? " wait" : ""}`}>{it.badge}</span>}
+      </button>
+      {open && (
+        <div className="tl-msgs">
+          {(it.messages || []).map((m) => (
+            <div key={m.id} className={`tl-msg ${m.side === "team" ? "team" : "client"}`}>
+              <div className="tl-msg-top"><b>{m.who}{m.side === "client" ? " · client" : ""}</b><span>{m.time}</span></div>
+              {m.body && <p>{m.body}</p>}
+              {(m.files || []).map((f) => f.kind === "image"
+                ? <a key={f.id} href={href(f.url)} target="_blank" rel="noreferrer" title={f.name}><img src={href(f.url)} alt={f.name} loading="lazy" /></a>
+                : f.kind === "video" ? <video key={f.id} controls preload="metadata" src={href(f.url)} />
+                  : f.kind === "audio" ? <audio key={f.id} controls preload="metadata" src={href(f.url)} />
+                    : <a key={f.id} className="chat-doc" href={href(f.url)} target="_blank" rel="noreferrer">📄 <b>{f.name}</b></a>)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function TaskTimeline({ kpiId }) {
+  const [items, setItems] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const [shown, setShown] = useState(30);
+  const [tries, setTries] = useState(0);
+  /* Day rows the person opened or closed, by label; until tapped, Today is
+     open and every other day closed. */
+  const [openDays, setOpenDays] = useState({});
+  useEffect(() => {
+    let live = true;
+    setItems(null);
+    setOpenDays({});
+    S.fetchHistory(kpiId).then((r) => { if (live) setItems(r.status ? r.items || [] : []); }).catch(() => { if (live) setItems([]); });
+    return () => { live = false; };
+  }, [kpiId, tries]);
+  const dayIsOpen = (label) => (label in openDays ? openDays[label] : label === "Today");
+  const all = items || [];
+  const kindsOf = (f) => TL_FILTERS.find(([k]) => k === f)?.[2];
+  const pick = (f) => { const ks = kindsOf(f); return all.filter((i) => (ks ? ks.includes(i.kind) : i.kind !== "activity")); };
+  const list = pick(filter);
+  const days = [];
+  for (const it of list.slice(0, shown)) {
+    const d = chatDate(it.at);
+    const label = !d ? "" : d.toDateString() === new Date().toDateString() ? "Today"
+      : d.toDateString() === new Date(Date.now() - 864e5).toDateString() ? "Yesterday"
+        : d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+    if (!days.length || days[days.length - 1].label !== label) days.push({ label, items: [] });
+    days[days.length - 1].items.push(it);
+  }
+  return (
+    <div className="sec tl">
+      <div className="tl-head">
+        <h3>Everything on this task</h3>
+        <IconButton icon="refresh" label="Refresh" size={14} onClick={() => setTries((n) => n + 1)} />
+      </div>
+      <div className="pillset">
+        {TL_FILTERS.map(([k, l]) => (
+          <button key={k} type="button" className={`pill${filter === k ? " on" : ""}`} aria-pressed={filter === k}
+            onClick={() => { setFilter(k); setShown(30); setOpenDays({}); }}>{l} <span className="mini">{pick(k).length}</span></button>
+        ))}
+      </div>
+      {items === null ? <p className="mini">Loading…</p> : !days.length ? <p className="mini">Nothing here yet.</p> : days.map((day) => (
+        <div key={day.label}>
+          <DayRow label={day.label} count={day.items.length} open={dayIsOpen(day.label)} onToggle={() => setOpenDays((o) => ({ ...o, [day.label]: !dayIsOpen(day.label) }))} />
+          {dayIsOpen(day.label) && day.items.map((it) => it.kind === "talk" ? <TalkRow key={it.key} it={it} /> : (
+            <div key={it.key} className={`tl-row k-${it.kind}`}>
+              <span className="tl-ic" aria-hidden="true"><Icon n={TL_ICON[it.kind] || "clock"} size={15} /></span>
+              <div style={{ minWidth: 0 }}>
+                <div className="tl-top">
+                  <b>{it.title}</b>
+                  <span className="mini">{it.who ? `${it.who} · ` : ""}{chatDate(it.at)?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  {it.badge && <span className={`chip-sm${it.badge === "waiting for reply" ? " tl-wait" : ""}`}>{it.badge}</span>}
+                </div>
+                {it.body && <p className={it.kind === "talk" ? "tl-bubble" : "tl-body"}>{it.body}</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+      {list.length > shown && <Button size="sm" kind="ghost" onClick={() => setShown((n) => n + 30)}>Load older</Button>}
+    </div>
+  );
+}
+
+/* What a message's files come to, for the reply banner and a quote with no
+   text: "📷 1 photo", "🎥 2 videos · 🎵 1 audio". */
+const chatFilesLabel = (files) => {
+  const n = { image: 0, video: 0, audio: 0, document: 0 };
+  for (const f of files || []) if (n[f.kind] !== undefined) n[f.kind] += 1;
+  return [n.image && `📷 ${n.image} photo${n.image > 1 ? "s" : ""}`, n.video && `🎥 ${n.video} video${n.video > 1 ? "s" : ""}`, n.audio && `🎵 ${n.audio} audio`,
+    n.document && `📄 ${n.document} document${n.document > 1 ? "s" : ""}`]
+    .filter(Boolean).join(" · ") || ((files || []).length ? "📎 file" : "");
+};
+const chatWho = (m) => (m.side === "team" ? m.who : `${m.who} · client`);
+const CHAT_KINDS = /^(image|video|audio)\//;
+/* 📄 Documents, as in WhatsApp's 📎 Document (same list as the server). */
+const CHAT_DOCS = /\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z)$/i;
+const chatFileOk = (f) => CHAT_KINDS.test(f.type || "") || CHAT_DOCS.test(f.name || "");
+/* The pin menu: what each choice lets the file picker show. */
+const CHAT_PICK = [
+  ["camera", "📷 Camera", "image/*,video/*"],
+  ["media", "🖼 Photos & videos", "image/*,video/*"],
+  ["audio", "🎵 Audio", "audio/*"],
+  ["doc", "📄 Document", ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.csv,.zip,.rar,.7z"],
+];
+
+/* One picture, video or voice note in a bubble; its name and size under it.
+   f.url is an Odoo path, served through the proxy with the session. A photo
+   opens full screen in the page (onView), not in a new tab. */
+function ChatMedia({ f, onView, msg }) {
+  const url = href(f.url);
+  /* msg: the message it came in, for "who · when" and its words in the viewer. */
+  const view = () => onView?.({ url, name: f.name || "photo", who: msg ? chatWho(msg) : "", at: msg?.at, body: msg?.body || "" });
+  return (
+    <div className="chat-media">
+      {f.kind === "image" ? <img src={url} alt={f.name || "photo"} loading="lazy" role="button" tabIndex={0} title="Open photo"
+        onClick={view} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); view(); } }} />
+        : f.kind === "video" ? <video controls preload="metadata" src={url} />
+          : f.kind === "audio" ? <audio controls preload="metadata" src={url} />
+            : <a href={url} target="_blank" rel="noreferrer" className="chat-doc">{f.kind === "document" ? "📄" : "📎"} <b>{f.name || "file"}</b></a>}
+      <div className="chat-fname">{f.name}{f.size ? ` · ${fmtBytes(f.size)}` : ""}</div>
+    </div>
+  );
+}
+
+/* The tick on our own bubbles, as in WhatsApp: ✓ saved · ✓✓ reached the
+   client's group · blue ✓✓ the client opened the chat · ⚠ WhatsApp refused
+   it (click to retry). */
+function ChatTick({ m, onRetry }) {
+  const failed = m.status === "failed";
+  const title = failed ? `${m.error || "Not delivered."} Click to retry.`
+    : m.status === "seen" ? "Seen by the client" : m.status === "sent" ? "Delivered to the client's WhatsApp group" : "Sending…";
+  return (
+    <span title={title} onClick={failed ? onRetry : undefined} role={failed ? "button" : undefined}
+      style={{ marginLeft: 4, letterSpacing: -2, cursor: failed ? "pointer" : "default", color: m.status === "seen" ? "#53bdeb" : failed ? "var(--danger, #c23b3b)" : "inherit" }}>
+      {failed ? "⚠" : m.status === "pending" ? "✓" : "✓✓"}
+    </span>
+  );
+}
+
+/* The reactions on the long-press card: six quick ones, "+" opens the grid. */
+const CHAT_QUICK = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+const CHAT_EMOJIS = ["👍", "👎", "❤️", "🔥", "🎉", "👏", "🙏", "💯", "😂", "🤣", "😅", "😊", "😍", "😎", "🤔", "😐", "😮", "😢", "😭", "😡", "🥳", "🤝", "💪", "✅", "❌", "⚠️", "👀", "🚀", "⭐", "💡", "⏰", "📌"];
+const CHAT_DELETED = "This message was deleted";
+/* Clipboard first; the hidden-textarea copy for browsers / http pages without it. */
+const chatCopy = async (s) => {
+  try { await navigator.clipboard.writeText(s); return true; } catch (e) { /* fall back below */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = s; ta.setAttribute("readonly", "");
+    ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+};
+
+/* WhatsApp's own icons (material paths), drawn in the text colour. */
+const CHAT_SVG = {
+  reply: "M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z",
+  smiley: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z",
+  down: "M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z",
+  clip: "M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z",
+  send: "M2.01 21L23 12 2.01 3 2 10l15 2-15 2z",
+  mic: "M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z",
+};
+/* Voice notes: the first format this browser records, the 15 minute cap and
+   the mm:ss on the recording bar. */
+const VOICE_TYPES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"];
+const VOICE_MAX_MS = 15 * 60 * 1000;
+const VOICE_NA = "Microphone not available";
+const voiceClock = (ms) => { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
+const voiceName = (type) => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const ext = /ogg/.test(type) ? "ogg" : /mp4|m4a|aac/.test(type) ? "m4a" : "webm";
+  return `voice-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+};
+const ChatSvg = ({ d, size = 24 }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" focusable="false"><path fill="currentColor" d={CHAT_SVG[d]} /></svg>
+);
+/* The composer's emoji panel: common ones, inserted at the cursor. */
+const CHAT_PANEL = ["😀", "😁", "😂", "😊", "😍", "😘", "🤔", "😅", "😉", "🙂", "😎", "😢", "😭", "😡", "👍", "👎", "🙏", "👏", "💪", "🤝",
+  "👌", "✌️", "🙌", "❤️", "🔥", "🎉", "✅", "❌", "⚠️", "⭐", "💯", "👀", "🚀", "💡", "📌", "⏰", "📷", "📎", "📝", "💬"];
+
+/* Long-press (held 450 ms, under 8 px of movement; touch or mouse) or a
+   right-click opens a bubble's action card, as in WhatsApp. Returns the props
+   for one bubble; the click that follows a long-press is swallowed so the
+   quote / media under the finger isn't opened too. */
+function useLongPress(onOpen, delay = 450) {
+  const timer = useRef(null);
+  const start = useRef(null);
+  const fired = useRef(false);
+  const clear = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
+  useEffect(() => clear, []);
+  return (m) => ({
+    onPointerDown: (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      clear();
+      fired.current = false;
+      start.current = { x: e.clientX, y: e.clientY };
+      timer.current = setTimeout(() => { timer.current = null; fired.current = true; onOpen(m); }, delay);
+    },
+    onPointerMove: (e) => {
+      if (!timer.current || !start.current) return;
+      if (Math.abs(e.clientX - start.current.x) > 8 || Math.abs(e.clientY - start.current.y) > 8) clear();
+    },
+    onPointerUp: clear,
+    onPointerCancel: clear,
+    onPointerLeave: clear,
+    onContextMenu: (e) => { e.preventDefault(); clear(); fired.current = true; onOpen(m); },
+    onClickCapture: (e) => { if (fired.current) { fired.current = false; e.preventDefault(); e.stopPropagation(); } },
+  });
+}
+
+/* The action card over a dimmed scrim: the quick reactions (or the full grid
+   after "+"), then Reply / Edit / Info / Copy / Delete, each only when allowed.
+   Click the scrim or press Esc to close. */
+function ChatActionCard({ m, canReact, actions, onPick, onClose }) {
+  const [grid, setGrid] = useState(false);
+  const opened = useRef(Date.now());
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const mine = (m.reactions || []).find((r) => r.mine)?.emoji;
+  /* The pointer-up that ends the long-press lands on the scrim: not a close. */
+  const scrimClick = (e) => { if (e.target === e.currentTarget && Date.now() - opened.current > 400) onClose(); };
+  const emoji = (e) => (
+    <button key={e} type="button" className={e === mine ? "on" : ""} title={e === mine ? "Remove reaction" : "React"} onClick={() => onPick("react", e)}>{e}</button>
+  );
+  return (
+    <div className="chat-scrim" role="presentation" onClick={scrimClick}>
+      <div className="chat-card" role="dialog" aria-modal="true" aria-label="Message actions">
+        {canReact && (grid ? (
+          <div className="chat-emoji-grid">
+            <button type="button" className="chat-emoji-back" aria-label="Back" title="Back" onClick={() => setGrid(false)}>←</button>
+            {CHAT_EMOJIS.map(emoji)}
+          </div>
+        ) : (
+          <div className="chat-react-strip">
+            {CHAT_QUICK.map(emoji)}
+            <button type="button" className="chat-react-more" aria-label="More reactions" title="More reactions" onClick={() => setGrid(true)}>+</button>
+          </div>
+        ))}
+        {!grid && (
+          <div className="chat-card-list">
+            {actions.map((a) => (
+              <button key={a.key} type="button" className={a.danger ? "danger" : ""} onClick={() => onPick(a.key)}><span aria-hidden="true">{a.icon}</span>{a.label}</button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* Message info: three plain lines, Sent / Delivered / Seen, each with its
+   local time ("07:35 pm"), the date in front when it was not today
+   ("22 Oct, 07:35 pm"), or "not yet". */
+const CHAT_EVENTS = [
+  ["at", "✓", "Sent", ""],
+  ["delivered_at", "✓✓", "Delivered to the client's group", ""],
+  ["seen_at", "✓✓", "Seen by the client", "#2E90FA"],
+];
+const chatInfoTime = (d) => {
+  const t = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true }).toLowerCase();
+  if (d.toDateString() === new Date().toDateString()) return t;
+  const now = new Date();
+  const day = d.toLocaleDateString("en-GB", d.getFullYear() === now.getFullYear() ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+  return `${day}, ${t}`;
+};
+function ChatInfoLog({ m }) {
+  return (
+    <div className="chat-log">
+      {CHAT_EVENTS.map(([k, tick, label, color]) => {
+        const d = chatDate(k === "at" ? m.at : m.info?.[k]);
+        const ok = d && !Number.isNaN(d.getTime());
+        return (
+          <div key={k} className="chat-log-row">
+            <span className="chat-log-tick" style={color ? { color } : undefined}>{tick}</span>
+            <span className="chat-log-label">{label}</span>
+            <span className="chat-log-time">{ok ? chatInfoTime(d) : "not yet"}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* A chat photo full screen inside the page: dark backdrop, the file name, an
+   open / download link and ✕. A click outside the picture or Esc closes it. */
+function ChatPhotoViewer({ photo, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  const out = (e) => { if (e.target === e.currentTarget) onClose(); };
+  /* As in WhatsApp: who sent it and when on top, its words under the photo. */
+  const d = chatDate(photo.at);
+  const when = d ? `${d.toDateString() === new Date().toDateString() ? "Today" : d.toLocaleDateString([], { day: "numeric", month: "short" })} at ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+  return (
+    <div className="chat-viewer" role="dialog" aria-modal="true" aria-label={photo.name} onClick={out}>
+      <div className="chat-viewer-bar">
+        <span className="chat-viewer-name"><b>{photo.who || photo.name}</b>{when && <small>{when}</small>}</span>
+        <a href={photo.url} target="_blank" rel="noreferrer" download={photo.name} title="Open / download" aria-label="Open / download">⤓</a>
+        <button type="button" title="Close" aria-label="Close" onClick={onClose}>✕</button>
+      </div>
+      <div className="chat-viewer-stage" onClick={out}>
+        <img src={photo.url} alt={photo.name} />
+      </div>
+      {photo.body && <div className="chat-viewer-cap">{photo.body}</div>}
+    </div>
+  );
+}
+
+/* A new client message while this browser tab is in the background or the
+   window is not focused: a soft two-note "pop" (Web Audio, no files) and
+   "(N) New message · <task>" in the tab title until the person comes back.
+   Browsers block sound before a gesture, so the audio is opened on the
+   first click, key or touch anywhere on the page. */
+let chatAudio = null;
+function chatAudioWake() {
+  try {
+    if (!chatAudio) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      chatAudio = new Ctx();
+    }
+    if (chatAudio.state === "suspended") chatAudio.resume().catch(() => {});
+  } catch { /* no sound then */ }
+}
+function chatPop() {
+  const ctx = chatAudio;
+  if (!ctx) return;
+  try {
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime;
+    [[880, 0], [1320, 0.08]].forEach(([hz, at]) => {
+      const t = t0 + at;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = hz;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.12, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start(t);
+      o.stop(t + 0.12);
+    });
+  } catch { /* no sound then */ }
+}
+const chatAway = () => document.hidden || !document.hasFocus();
+function useChatAlert(kpiId, messages, label) {
+  /* lastClient: newest client message id already shown; null until the
+     chat's first load, which only sets it (no alert for old messages). */
+  const lastClient = useRef(null);
+  const unseen = useRef(0);
+  const savedTitle = useRef(null);
+  const restore = () => {
+    if (savedTitle.current !== null) document.title = savedTitle.current;
+    savedTitle.current = null;
+    unseen.current = 0;
+  };
+  useEffect(() => { lastClient.current = null; }, [kpiId]);
+  useEffect(() => {
+    const evs = ["pointerdown", "keydown", "touchstart"];
+    evs.forEach((e) => document.addEventListener(e, chatAudioWake, { passive: true }));
+    const back = () => { if (!chatAway()) restore(); };
+    document.addEventListener("visibilitychange", back);
+    window.addEventListener("focus", back);
+    return () => {
+      evs.forEach((e) => document.removeEventListener(e, chatAudioWake, { passive: true }));
+      document.removeEventListener("visibilitychange", back);
+      window.removeEventListener("focus", back);
+      restore();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!messages) return;
+    const ids = messages.filter((m) => m.side === "client").map((m) => Number(m.id)).filter(Number.isFinite);
+    const top = ids.length ? Math.max(...ids) : 0;
+    if (lastClient.current === null) { lastClient.current = top; return; }
+    const fresh = ids.filter((id) => id > lastClient.current).length;
+    if (top > lastClient.current) lastClient.current = top;
+    if (!fresh || !chatAway()) return;
+    chatPop();
+    if (savedTitle.current === null) savedTitle.current = document.title;
+    unseen.current += fresh;
+    document.title = `(${unseen.current}) New message · ${label || "Chat"}`;
+  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+export function ChatTab({ kpiId, onSeen, taskRef }) {
   const flags = useFlags();
   const [res, setRes] = useState(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  /* A send in flight: the 3 s poll stands aside so its answer cannot wipe the
+     provisional bubble before the send's own answer lands. */
+  const sendingRef = useRef(false);
+  /* Picked files as {file, url}: url is an object URL for an image's thumbnail. */
+  const [picked, setPicked] = useState([]);
+  const [pickErr, setPickErr] = useState("");
+  const [menu, setMenu] = useState(false);
+  const [reply, setReply] = useState(null);
+  /* card: the message whose long-press card is open. info: the message whose
+     Sent / Delivered / Seen panel is open. editing: {m, draft} — the message
+     being edited and the box's text from before, put back on cancel. */
+  const [card, setCard] = useState(null);
+  const [info, setInfo] = useState(null);
+  const [editing, setEditing] = useState(null);
+  /* photo: {url, name} of the picture open full screen. */
+  const [photo, setPhoto] = useState(null);
+  const dlg = useDialogs();
+  const up = useUpload();
   const body = useRef(null);
   const count = useRef(0);
-  const load = () => S.fetchChat(kpiId).then((r) => {
-    if (r.status === false) { setRes({ messages: [], error: r.message }); return; }
-    setRes(r);
-  }).catch((e) => setRes({ messages: [], error: e.message }));
+  const inputs = useRef({});
+  const menuRef = useRef(null);
+  /* emo: the composer's emoji panel is open. */
+  const [emo, setEmo] = useState(false);
+  const emoRef = useRef(null);
+  const inputRef = useRef(null);
+  const pickedRef = useRef(picked);
+  pickedRef.current = picked;
+  /* markSeen: the tab is on screen, so the client's messages count as seen
+     (blue ✓✓ on their page). active: also touched in the last minute. */
+  const touchRef = useRef(Date.now());
+  useEffect(() => {
+    const touch = () => { touchRef.current = Date.now(); };
+    const evs = ["pointerdown", "keydown", "touchstart", "wheel", "mousemove"];
+    evs.forEach((n) => document.addEventListener(n, touch, { passive: true, capture: true }));
+    return () => evs.forEach((n) => document.removeEventListener(n, touch, { capture: true }));
+  }, []);
+  const load = () => {
+    if (sendingRef.current) return Promise.resolve();
+    const visible = document.visibilityState === "visible";
+    const active = visible && Date.now() - touchRef.current < 60000;
+    return S.fetchChat(kpiId, { markSeen: visible, active }).then((r) => {
+      if (sendingRef.current) return;
+      if (r.status === false) { setRes({ messages: [], error: r.message }); return; }
+      setRes(r);
+    }).catch((e) => setRes({ messages: [], error: e.message }));
+  };
   useEffect(() => {
     load();
-    const t = setInterval(load, 10000);
+    const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, [kpiId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const retry = async (m) => {
+    const r = await S.retryChat(kpiId, m.id);
+    if (r.status === false) flags.err(r.message); else setRes(r);
+  };
+  /* Thumbnails still held when the tab closes are let go. */
+  useEffect(() => () => pickedRef.current.forEach((p) => p.url && URL.revokeObjectURL(p.url)), []);
+  /* The pin menu closes on a click anywhere else. */
+  useEffect(() => {
+    if (!menu) return undefined;
+    const off = (e) => { if (!menuRef.current?.contains(e.target)) setMenu(false); };
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [menu]);
+  /* The emoji panel closes on a click anywhere else or Esc. */
+  useEffect(() => {
+    if (!emo) return undefined;
+    const off = (e) => { if (!emoRef.current?.contains(e.target)) setEmo(false); };
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEmo(false); } };
+    document.addEventListener("mousedown", off);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("mousedown", off); document.removeEventListener("keydown", onKey, true); };
+  }, [emo]);
+  /* An emoji from the panel goes in at the cursor; the box keeps focus. */
+  const insertEmoji = (em) => {
+    const el = inputRef.current;
+    const a = el ? el.selectionStart ?? text.length : text.length;
+    const b = el ? el.selectionEnd ?? a : a;
+    setText((t) => t.slice(0, a) + em + t.slice(b));
+    requestAnimationFrame(() => { if (el) { el.focus(); el.setSelectionRange(a + em.length, a + em.length); } });
+  };
   /* Scroll to the newest only when a message arrives, not on every refresh. */
   useEffect(() => {
     const n = res?.messages?.length || 0;
     if (n !== count.current && body.current) body.current.scrollTop = body.current.scrollHeight;
     count.current = n;
   }, [res]);
+  useChatAlert(kpiId, res && !res.error ? res.messages : null, taskRef);
+  /* Checked before anything is uploaded: photos, videos, audio and documents,
+     up to 10 files, 50 MB each. A bad pick adds nothing and says why. */
+  const addFiles = (list) => {
+    const bad = list.find((f) => !chatFileOk(f));
+    if (bad) { setPickErr(`“${bad.name}” can't be sent in the chat: photos, videos, audio and documents (PDF, Word, Excel …) only.`); return; }
+    const big = list.find((f) => f.size > S.CHAT_MAX_BYTES);
+    if (big) { setPickErr(`“${big.name}” is ${fmtBytes(big.size)}. Each file can be at most 50 MB.`); return; }
+    if (picked.length + list.length > S.CHAT_MAX_FILES) { setPickErr(`At most ${S.CHAT_MAX_FILES} files in one message.`); return; }
+    setPickErr("");
+    setPicked((all) => [...all, ...list.map((file) => ({ file, url: file.type.startsWith("image/") ? URL.createObjectURL(file) : "" }))]);
+  };
+  const dropFile = (i) => {
+    const gone = picked[i];
+    if (gone?.url) URL.revokeObjectURL(gone.url);
+    setPicked((all) => all.filter((_, j) => j !== i));
+    setPickErr("");
+  };
+  const choose = (k) => { setMenu(false); inputs.current[k]?.click(); };
+  /* Tap a quote: the original bubble scrolls into view and flashes. */
+  const jumpTo = (id) => {
+    const el = document.getElementById(`chat-msg-${id}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.remove("chat-flash");
+    void el.offsetWidth;
+    el.classList.add("chat-flash");
+    setTimeout(() => el.classList.remove("chat-flash"), 1600);
+  };
+  /* Long-press card actions. The server answers every one with the whole
+     chat, like fetchChat. */
+  const canAct = !!(res && !res.error && res.can_act);
+  const act = async (m, action, extra) => {
+    const r = await S.chatAct(kpiId, m.id, action, extra);
+    if (r.status === false) { flags.err(r.message); return false; }
+    setRes(r);
+    return true;
+  };
+  const openCard = (m) => { if (!m.deleted && !String(m.id).startsWith("tmp")) setCard(m); };
+  const press = useLongPress(openCard);
+  const cancelEdit = () => { if (editing) { setText(editing.draft); setEditing(null); } };
+  const canSend = !!(res && !res.error && res.can_send && !res.locked);
+  /* The hover ↩ beside a bubble: the same as the card's Reply. */
+  const quickReply = (m) => { cancelEdit(); setReply(m); requestAnimationFrame(() => inputRef.current?.focus()); };
+  const cardActions = (m) => {
+    return [
+      canAct && canSend && { key: "reply", icon: "↩", label: "Reply" },
+      canAct && m.can_edit && { key: "edit", icon: "✎", label: "Edit" },
+      m.info && { key: "info", icon: "ⓘ", label: "Info" },
+      m.body && { key: "copy", icon: "⧉", label: "Copy" },
+      canAct && m.can_delete && { key: "delete", icon: "🗑", label: "Delete", danger: true },
+    ].filter(Boolean);
+  };
+  const pick = async (action, emoji) => {
+    const m = card;
+    setCard(null);
+    if (!m) return;
+    if (action === "react") { await act(m, "react", { emoji }); return; }
+    if (action === "reply") { cancelEdit(); setReply(m); return; }
+    if (action === "edit") { setReply(null); setEditing({ m, draft: editing ? editing.draft : text }); setText(m.body || ""); return; }
+    if (action === "info") { setInfo(m); return; }
+    if (action === "copy") { if (await chatCopy(m.body || "")) flags.ok("Copied."); else flags.err("Could not copy."); return; }
+    if (action === "delete") {
+      if (!(await dlg.confirm({ title: "Delete this message for everyone?", confirmLabel: "Delete", danger: true }))) return;
+      await act(m, "delete");
+    }
+  };
   const send = async () => {
     const t = text.trim();
-    if (!t || busy) return;
+    if ((!t && !picked.length) || busy) return;
+    /* Editing: the box holds the new text for the message in the bar. */
+    if (editing) {
+      if (!t) return;
+      setBusy(true);
+      try { if (await act(editing.m, "edit", { text: t })) { setText(editing.draft); setEditing(null); } }
+      finally { setBusy(false); }
+      return;
+    }
     setBusy(true);
+    sendingRef.current = true;
+    /* A text message shows at once with a single ✓ and the box clears; the
+       server's answer replaces it. Files keep the progress bar. */
+    let temp = null;
+    if (!picked.length) {
+      temp = {
+        id: `tmp${Date.now()}`, side: "team", who: "You", body: t, files: [], status: "pending", error: "",
+        at: new Date().toISOString().slice(0, 19).replace("T", " "),
+        reply: reply ? { id: reply.id, side: reply.side, who: reply.who, text: reply.body || chatFilesLabel(reply.files) } : false,
+      };
+      setRes((r) => ({ ...(r || {}), messages: [...(r?.messages || []), temp] }));
+      setText(""); setReply(null);
+    }
+    const unsend = () => {
+      if (!temp) return;
+      setRes((r) => ({ ...(r || {}), messages: (r?.messages || []).filter((m) => m.id !== temp.id) }));
+      setText(t); setReply(reply);
+    };
     try {
-      const r = await S.sendChat(kpiId, t);
-      if (r.status === false) { flags.err(r.message); return; }
+      const r = picked.length
+        ? await S.sendChatFiles(kpiId, { text: t, replyTo: reply?.id, files: picked.map((p) => p.file) }, up.start(true))
+        : await S.sendChat(kpiId, t, reply?.id);
+      if (r.status === false) { unsend(); flags.err(r.message); return; }
+      picked.forEach((p) => p.url && URL.revokeObjectURL(p.url));
+      setPicked([]); setPickErr(""); setReply(null);
       setText("");
       setRes(r);
       onSeen?.();   /* the tab's waiting count drops once the team has replied */
-    } catch (e) { flags.err(e.message); } finally { setBusy(false); }
+    } catch (e) {
+      unsend();
+      if (e.message === UPLOAD_CANCELLED) flags.warn(UPLOAD_CANCELLED); else flags.err(e.message);
+    } finally { up.finish(); setBusy(false); sendingRef.current = false; }
+  };
+  /* 🎙 Voice note, WhatsApp style: the mic records (MediaRecorder, a chunk
+     every 250 ms); ⏸ pauses the same recording, ▶ plays what is there so far,
+     🎙 goes on recording, 🗑 throws it away. Nothing leaves until ➤, which
+     sends it as one audio file through the normal upload. rec (shown):
+     {paused, ms, url}; recRef (working): {mr, stream, chunks, mime, ms, since,
+     timer, url} where since is when the running stretch began (0 = paused). */
+  const [rec, setRec] = useState(null);
+  const recRef = useRef(null);
+  const aliveRef = useRef(true);
+  const recMs = (r) => r.ms + (r.since ? Date.now() - r.since : 0);
+  const recClose = (r) => {
+    if (!r) return;
+    clearInterval(r.timer);
+    try { if (r.mr.state !== "inactive") r.mr.stop(); } catch (e) { /* already stopped */ }
+    try { r.stream.getTracks().forEach((t) => t.stop()); } catch (e) { /* no tracks */ }
+    if (r.url) URL.revokeObjectURL(r.url);
+  };
+  const recClear = () => { const r = recRef.current; recRef.current = null; recClose(r); setRec(null); };
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; const r = recRef.current; recRef.current = null; recClose(r); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const pauseRec = () => {
+    const r = recRef.current;
+    if (!r || !r.since) return;
+    try { r.mr.pause(); } catch (e) { /* not recording */ }
+    try { r.mr.requestData(); } catch (e) { /* the last chunk comes with the next one */ }
+    r.ms = Math.min(recMs(r), VOICE_MAX_MS); r.since = 0;
+    setRec({ paused: true, ms: r.ms, url: "" });
+  };
+  const resumeRec = () => {
+    const r = recRef.current;
+    if (!r || r.since || r.ms >= VOICE_MAX_MS) return;
+    if (r.url) { URL.revokeObjectURL(r.url); r.url = ""; }
+    try { r.mr.resume(); } catch (e) { return; }
+    r.since = Date.now();
+    setRec({ paused: false, ms: r.ms, url: "" });
+  };
+  const playRec = () => {
+    const r = recRef.current;
+    if (!r || r.since || !r.chunks.length) return;
+    if (r.url) URL.revokeObjectURL(r.url);
+    r.url = URL.createObjectURL(new Blob(r.chunks, { type: r.mime.split(";")[0] }));
+    setRec((x) => (x ? { ...x, url: r.url } : x));
+  };
+  const startRec = async () => {
+    if (busy || recRef.current) return;
+    const MR = typeof window !== "undefined" ? window.MediaRecorder : undefined;
+    /* Browsers offer the microphone only on a secure address (https or
+       localhost); on http://<ip>:3100 there is no permission prompt at all. */
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setPickErr("🔒 The browser allows the microphone only on a secure address. Open the app over https (or on this computer as localhost) to record voice notes.");
+      return;
+    }
+    if (!MR || !navigator.mediaDevices?.getUserMedia) { setPickErr(VOICE_NA); return; }
+    let stream;
+    /* This call is what makes the browser ask "Allow microphone?". */
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (e) {
+      const why = e && e.name;
+      setPickErr(why === "NotAllowedError" || why === "SecurityError"
+        ? "🎤 The microphone is blocked for this site. Click the 🔒 / 🎤 icon in the address bar, choose Allow, then tap the mic again."
+        : why === "NotFoundError" ? "No microphone found on this device." : VOICE_NA);
+      return;
+    }
+    if (!aliveRef.current || recRef.current) { stream.getTracks().forEach((t) => t.stop()); return; }
+    const mime = VOICE_TYPES.find((t) => { try { return MR.isTypeSupported(t); } catch (e) { return false; } }) || "";
+    let mr;
+    try { mr = new MR(stream, mime ? { mimeType: mime } : undefined); } catch (e) { stream.getTracks().forEach((t) => t.stop()); setPickErr(VOICE_NA); return; }
+    const r = { mr, stream, chunks: [], mime: mr.mimeType || mime || "audio/webm", ms: 0, since: 0, timer: 0, url: "" };
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) r.chunks.push(e.data); };
+    try { mr.start(250); } catch (e) { recClose(r); setPickErr(VOICE_NA); return; }
+    r.since = Date.now();
+    recRef.current = r;
+    /* At 15 minutes it pauses by itself; ➤ or 🗑 from there. */
+    r.timer = setInterval(() => {
+      if (recRef.current !== r || !r.since) return;
+      const ms = recMs(r);
+      if (ms >= VOICE_MAX_MS) { pauseRec(); return; }
+      setRec((x) => (x ? { ...x, ms } : x));
+    }, 250);
+    setPickErr(""); setMenu(false); setEmo(false);
+    setRec({ paused: false, ms: 0, url: "" });
+  };
+  const sendRec = async () => {
+    const r = recRef.current;
+    if (!r || busy) return;
+    clearInterval(r.timer);
+    /* stop() hands over the last chunk, then fires onstop. */
+    if (r.mr.state !== "inactive") {
+      const stopped = new Promise((ok) => { r.mr.onstop = ok; });
+      try { r.mr.stop(); } catch (e) { /* already stopped */ }
+      await Promise.race([stopped, new Promise((ok) => setTimeout(ok, 3000))]);
+    }
+    const type = r.mime.split(";")[0] || "audio/webm";
+    const file = new File(r.chunks, voiceName(type), { type });
+    recClear();
+    if (!file.size) { flags.err("Nothing was recorded."); return; }
+    setBusy(true);
+    sendingRef.current = true;
+    try {
+      const out = await S.sendChatFiles(kpiId, { text: "", replyTo: reply?.id, files: [file] }, up.start(true));
+      if (out.status === false) { flags.err(out.message); return; }
+      setReply(null);
+      setRes(out);
+      onSeen?.();
+    } catch (e) {
+      if (e.message === UPLOAD_CANCELLED) flags.warn(UPLOAD_CANCELLED); else flags.err(e.message);
+    } finally { up.finish(); setBusy(false); sendingRef.current = false; }
   };
   const groups = [];
   for (const m of res?.messages || []) {
@@ -1152,28 +1901,225 @@ export function ChatTab({ kpiId, onSeen }) {
         {groups.map((g) => (
           <div key={g.day}>
             <div className="chat-day"><span>{g.day}</span></div>
-            {g.msgs.map((m) => (
-              <div key={m.id} className={`chat-row ${m.side === "team" ? "out" : "in"}`}>
-                <div className="chat-bubble">
-                  <div className="chat-who">{m.side === "team" ? m.who : `${m.who} · client`}</div>
-                  <div className="chat-text">{m.body}</div>
-                  <div className="chat-time">{chatDate(m.at)?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+            {g.msgs.map((m, i) => {
+              const reacts = m.deleted ? [] : (m.reactions || []);
+              const live = !m.deleted && !String(m.id).startsWith("tmp");
+              /* The tail: only on the first bubble of a run from one side. */
+              const tail = !i || g.msgs[i - 1].side !== m.side;
+              return (
+                <div key={m.id} className={`chat-row ${m.side === "team" ? "out" : "in"}${tail ? " tail" : ""}${reacts.length ? " has-react" : ""}`}>
+                  <div className={`chat-bubble${m.deleted ? " deleted" : ""}`} id={`chat-msg-${m.id}`} {...press(m)}>
+                    {live && (
+                      <button type="button" className="chat-arrow" aria-label="Message menu" title="Menu"
+                        onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); openCard(m); }}><ChatSvg d="down" size={20} /></button>
+                    )}
+                    <div className="chat-who">{chatWho(m)}</div>
+                    {m.reply && (
+                      <button type="button" className={`chat-quote ${m.reply.side === "team" ? "out" : "in"}`} onClick={() => jumpTo(m.reply.id)}>
+                        <b>{m.reply.side === "team" ? m.reply.who : `${m.reply.who} · client`}</b>
+                        <span className={m.reply.text === CHAT_DELETED ? "chat-deleted" : ""}>{m.reply.text || "📎 media"}</span>
+                      </button>
+                    )}
+                    {m.deleted ? <div className="chat-text chat-deleted">⊘ {CHAT_DELETED}</div> : (
+                      <>
+                        {(m.files || []).map((f) => <ChatMedia key={f.id || f.url} f={f} msg={m} onView={setPhoto} />)}
+                        {m.body && <div className="chat-text">{m.body}{m.edited && <span className="chat-edited">edited</span>}</div>}
+                      </>
+                    )}
+                    <div className="chat-time">
+                      {!m.deleted && m.edited && !m.body && <span className="chat-edited" style={{ marginLeft: 0, marginRight: 6 }}>edited</span>}
+                      {chatDate(m.at)?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {m.side === "team" && m.status && <ChatTick m={m} onRetry={() => retry(m)} />}
+                    </div>
+                    {reacts.length > 0 && (
+                      <div className="chat-reacts" onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                        {reacts.map((r) => (
+                          <button key={r.emoji} type="button" className={`chat-react${r.mine ? " mine" : ""}`} disabled={!canAct}
+                            title={r.mine ? "Remove your reaction" : "React too"} onClick={() => act(m, "react", { emoji: r.emoji })}>
+                            {r.emoji}{r.count > 1 && <span>{r.count}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {live && (
+                    <div className="chat-quick">
+                      {canAct && canSend && (
+                        <button type="button" aria-label="Reply" title="Reply" onClick={() => quickReply(m)}><ChatSvg d="reply" size={18} /></button>
+                      )}
+                      <button type="button" aria-label="React" title="React" onClick={() => openCard(m)}><ChatSvg d="smiley" size={18} /></button>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ))}
       </div>
+      {card && <ChatActionCard m={card} canReact={canAct} actions={cardActions(card)} onPick={pick} onClose={() => setCard(null)} />}
+      <Modal open={!!info} onClose={() => setInfo(null)} title="Message info" width={340}>
+        {info && <ChatInfoLog m={info} />}
+      </Modal>
+      {photo && <ChatPhotoViewer photo={photo} onClose={() => setPhoto(null)} />}
       {res && !res.error && (res.locked ? <div className="chat-foot mini">🔒 {res.locked}</div>
         : !res.can_send ? <div className="chat-foot mini">This client has no WhatsApp group linked, so messages can’t be sent.</div>
           : (
-            <div className="chat-foot">
-              <textarea className="chat-input" rows={2} value={text} placeholder="Type a message"
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
-              <button type="button" className="chat-send" title="Send" disabled={busy || !text.trim()} onClick={send}>➤</button>
+            <div className="chat-compose">
+              {editing && (
+                <div className="chat-replying edit">
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <b>✎ Editing message</b>
+                    <span>{(editing.m.body || "").slice(0, 100)}</span>
+                  </div>
+                  <IconButton icon="x" label="Cancel edit" size={14} onClick={cancelEdit} />
+                </div>
+              )}
+              {reply && !editing && (
+                <div className={`chat-replying ${reply.side === "team" ? "out" : "in"}`}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <b>{chatWho(reply)}</b>
+                    <span>{(reply.body || chatFilesLabel(reply.files)).slice(0, 100)}</span>
+                  </div>
+                  <IconButton icon="x" label="Cancel reply" size={14} onClick={() => setReply(null)} />
+                </div>
+              )}
+              {picked.length > 0 && (
+                <div className="chat-chips">
+                  {picked.map((p, i) => (
+                    <span key={`${p.file.name}${i}`} className="chip-sm" style={CHIP} title={`${p.file.name} · ${fmtBytes(p.file.size)}`}>
+                      {p.url ? <img src={p.url} alt="" className="chat-thumb" /> : <span aria-hidden="true">{p.file.type.startsWith("audio/") ? "🎵" : p.file.type.startsWith("video/") ? "🎥" : "📄"}</span>}
+                      <span style={ELLIPSIS}>{p.file.name}</span><span className="mini">{fmtBytes(p.file.size)}</span>
+                      {!busy && <IconButton icon="x" label={`Remove ${p.file.name}`} size={12} onClick={() => dropFile(i)} />}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {pickErr && <div className="chat-strip"><Err>{pickErr}</Err></div>}
+              {up.prog && <div className="chat-strip"><UploadBar prog={up.prog} onCancel={up.cancel} /></div>}
+              {rec ? (
+                <div className="chat-foot chat-rec">
+                  <button type="button" className="chat-pin" title="Delete recording" aria-label="Delete recording" onClick={recClear}>🗑</button>
+                  <span className="chat-rec-time"><span className={`chat-rec-dot${rec.paused ? " paused" : ""}`} aria-hidden="true" />{voiceClock(rec.ms)}</span>
+                  {rec.paused ? (
+                    <button type="button" className="chat-pin" title={rec.ms >= VOICE_MAX_MS ? "15 minutes is the most one voice note can be" : "Go on recording"} aria-label="Go on recording" disabled={rec.ms >= VOICE_MAX_MS} onClick={resumeRec}>🎙</button>
+                  ) : (
+                    <button type="button" className="chat-pin" title="Pause" aria-label="Pause recording" onClick={pauseRec}>⏸</button>
+                  )}
+                  <span className="chat-rec-mid">
+                    {rec.paused && (rec.url
+                      ? <audio className="chat-rec-audio" controls autoPlay src={rec.url} />
+                      : <button type="button" className="chat-pin" title="Listen to it so far" aria-label="Play recording" onClick={playRec}>▶</button>)}
+                  </span>
+                  <button type="button" className="chat-send" title="Send voice note" aria-label="Send voice note" disabled={busy} onClick={sendRec}><ChatSvg d="send" /></button>
+                </div>
+              ) : (
+              <div className="chat-foot">
+                {CHAT_PICK.map(([k, , accept]) => (
+                  <input key={k} ref={(el) => { inputs.current[k] = el; }} type="file" hidden accept={accept}
+                    multiple={k !== "camera"} capture={k === "camera" ? "environment" : undefined}
+                    onChange={(e) => { const add = [...(e.target.files || [])]; e.target.value = ""; if (add.length) addFiles(add); }} />
+                ))}
+                <div className="chat-pin-wrap" ref={emoRef}>
+                  <button type="button" className="chat-pin" title="Emoji" aria-label="Emoji" aria-expanded={emo} onClick={() => setEmo((v) => !v)}><ChatSvg d="smiley" /></button>
+                  {emo && (
+                    <div className="chat-emo-panel" role="menu" aria-label="Emoji">
+                      {CHAT_PANEL.map((em) => (
+                        <button key={em} type="button" role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => insertEmoji(em)}>{em}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="chat-pin-wrap" ref={menuRef}>
+                  <button type="button" className="chat-pin chat-clip" title="Attach photos, videos or audio" aria-label="Attach" aria-expanded={menu} disabled={busy || !!editing} onClick={() => setMenu((v) => !v)}><ChatSvg d="clip" /></button>
+                  {menu && (
+                    <div className="chat-pin-menu" role="menu">
+                      {CHAT_PICK.map(([k, label]) => <button key={k} type="button" role="menuitem" onClick={() => choose(k)}>{label}</button>)}
+                    </div>
+                  )}
+                </div>
+                <textarea ref={inputRef} className="chat-input" rows={2} value={text} placeholder={editing ? "Edit your message" : picked.length ? "Add a caption (optional)" : "Type a message"}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } else if (e.key === "Escape" && editing) cancelEdit(); else if (e.key === "Escape" && reply) setReply(null); }} />
+                {!editing && !text.trim() && !picked.length
+                  ? <button type="button" className="chat-send" title="Record a voice note" aria-label="Record a voice note" disabled={busy} onClick={startRec}><ChatSvg d="mic" /></button>
+                  : <button type="button" className="chat-send" title={editing ? "Save" : "Send"} disabled={busy || (!text.trim() && (editing || !picked.length))} onClick={send}>{editing ? "✓" : <ChatSvg d="send" />}</button>}
+              </div>
+              )}
             </div>
           ))}
+    </div>
+  );
+}
+
+/* After the client's check: 👍 Client said finished → 🏁 Full Complete (what is
+   still missing is listed) → the bill; 🧾 Bill now when no price matched.
+   Renders nothing for tasks that are not that far. */
+export function FinishBox({ task, canFinish, isAdmin, onChanged }) {
+  const flags = useFlags();
+  const [busy, setBusy] = useState("");
+  const t = task || {};
+  const bill = t.bill && t.bill.id ? t.bill : null;
+  if (!t.full_complete_pending && !t.full_complete_at) return null;
+  const run = async (key, fn, ok) => {
+    setBusy(key);
+    try {
+      const r = await fn(t.id);
+      if (r.status === false) {
+        flags.err(r.missing?.length ? `Before Full Complete: ${r.missing.join(" ")}` : r.message);
+        return;
+      }
+      flags.ok(ok(r));
+      onChanged?.();
+    } catch (e) { flags.err(e.message); } finally { setBusy(""); }
+  };
+  if (t.full_complete_pending) {
+    const missing = t.full_complete_missing || [];
+    return (
+      <div className="callout" style={{ borderColor: "var(--lz-done, #16a34a)" }}>
+        <b>👍 The client said it's finished: needs 🏁 Full Complete</b>
+        {missing.length > 0 && <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{missing.map((m) => <li key={m}>{m}</li>)}</ul>}
+        {canFinish && <div style={{ marginTop: 8 }}><Button kind="ok" busy={busy === "fc"} onClick={() => run("fc", S.fullComplete, (r) => r.message || "Fully complete.")}>🏁 Full Complete</Button></div>}
+      </div>
+    );
+  }
+  if (bill) {
+    return (
+      <div className="callout">
+        <b>🧾 {bill.name} · {bill.money}</b>{" "}
+        <Lozenge tone={bill.paid ? "done" : "paused"}>{bill.paid ? "Paid" : bill.client_says_paid ? "Client says paid" : "Unpaid"}</Lozenge>
+      </div>
+    );
+  }
+  if (!isAdmin) return null;
+  return (
+    <div className="callout" style={{ borderColor: "var(--warn, #f59e0b)" }}>
+      <b>🏁 Fully complete: no bill yet</b>
+      <div className="mini">Usually no price matches this client and work type. Add it in Settings → Configuration → Billing, then:</div>
+      <div style={{ marginTop: 8 }}><Button kind="primary" busy={busy === "bn"} onClick={() => run("bn", S.billNow, (r) => (r.bill?.name ? `Bill ${r.bill.name} made: ${r.bill.money}` : "Bill made."))}>🧾 Bill now</Button></div>
+    </div>
+  );
+}
+
+/* ↩ Every time the client sent the work back, newest first: what is still
+   wrong and the photos / videos / voice notes that show it
+   (models/kpi_client_sendback.py, task.sendbacks). */
+export function SendBackHistory({ task }) {
+  const rounds = task?.sendbacks || [];
+  if (!rounds.length) return null;
+  return (
+    <div className="sec">
+      <h3 style={{ color: "var(--over)" }}>↩ Client sent it back {rounds.length}×</h3>
+      {rounds.map((sb) => {
+        const d = chatDate(sb.at);
+        return (
+          <div key={sb.id} className="callout" style={{ marginBottom: 8, borderColor: "var(--over)" }}>
+            <div className="mini">Round {sb.round}{sb.by ? ` · ${sb.by}` : ""}{d ? ` · ${d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{sb.reason}</div>
+            {sb.files?.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>{sb.files.map((f) => <ChatMedia key={f.id} f={f} />)}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }

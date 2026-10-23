@@ -12,6 +12,7 @@ export default function DbHandover({ kpiId, canEdit, onChanged }) {
   const flags = useFlags();
   const [p, setP] = useState(null);
   const [f, setF] = useState({ url: "", db_name: "", username: "", password: "" });
+  const [showPass, setShowPass] = useState(false);   /* masked until Show */
   const [busy, setBusy] = useState("");
   const load = () => callKw("kra.kpi", "provision_payload", [[Number(kpiId)]]).then((r) => {
     setP(r);
@@ -45,7 +46,8 @@ export default function DbHandover({ kpiId, canEdit, onChanged }) {
         <Field label="Database URL" required><Input id={`dbh-url-${kpiId}`} value={f.url} onChange={set("url")} disabled={!canEdit} placeholder="https://…" /></Field>
         <Field label="Database name" required><Input id={`dbh-db-${kpiId}`} value={f.db_name} onChange={set("db_name")} disabled={!canEdit} /></Field>
         <Field label="User ID" required><Input id={`dbh-user-${kpiId}`} value={f.username} onChange={set("username")} disabled={!canEdit} autoComplete="off" /></Field>
-        <Field label="Password" required><Input id={`dbh-pass-${kpiId}`} value={f.password} onChange={set("password")} disabled={!canEdit} autoComplete="off" /></Field>
+        <Field label="Password" required><Input id={`dbh-pass-${kpiId}`} type={showPass ? "text" : "password"} value={f.password} onChange={set("password")} disabled={!canEdit} autoComplete="new-password"
+          right={<button type="button" className="mini" style={{ border: 0, background: "none", cursor: "pointer" }} onClick={() => setShowPass((v) => !v)}>{showPass ? "Hide" : "Show"}</button>} /></Field>
       </div>
       {canEdit && <Button size="sm" kind="primary" busy={busy === "save"} onClick={save} style={{ alignSelf: "flex-start" }}>Save handover</Button>}
       {newDb && (
