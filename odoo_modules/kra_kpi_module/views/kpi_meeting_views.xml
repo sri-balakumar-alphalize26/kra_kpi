@@ -48,6 +48,10 @@
                     <button name="action_open_now" type="object"
                             string="Open Now" class="btn-secondary"
                             invisible="state != 'confirmed'"/>
+                    <!-- Opens the room as the logged-in user, with their name from Odoo. -->
+                    <button name="action_join_meeting" type="object"
+                            string="Join" class="btn-success"
+                            invisible="state not in ('confirmed', 'live')"/>
                     <button name="action_mark_done" type="object"
                             string="Finished" class="btn-secondary"
                             invisible="state != 'live'"/>
@@ -197,10 +201,12 @@
                             <group string="Who was actually in the room">
                                 <field name="participant_ids" nolabel="1" readonly="1">
                                     <list string="Participants" create="false" delete="false">
-                                        <field name="person_name" string="Name (as they typed it)"/>
+                                        <field name="person_name" string="Name"/>
+                                        <field name="user_id" optional="show"/>
                                         <field name="joined_at"/>
                                         <field name="left_at"/>
                                         <field name="minutes"/>
+                                        <field name="removed_no_reply" optional="show"/>
                                     </list>
                                 </field>
                             </group>

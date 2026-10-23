@@ -239,6 +239,24 @@ class KpiMeeting(models.Model):
         readonly=True,
         help='The last thing we heard from inside the room. Used to close a '
              'meeting whose browser went away without saying goodbye.')
+    # Silence check (Configuration › Meetings): after meet_ask_after_min with
+    # no speech everyone gets a "Continue?" popup; whoever does not answer in
+    # meet_reply_sec is taken out, and if nobody answers the meeting ends.
+    last_speech_at = fields.Datetime(readonly=True, copy=False,
+                                     help='Last time anyone was heard speaking.')
+    ask_started_at = fields.Datetime(readonly=True, copy=False,
+                                     help='When the "Continue?" popup went out (empty = none open).')
+    last_seen_at = fields.Datetime(readonly=True, copy=False,
+                                   help="Last heartbeat from anybody's meeting page.")
+
+    # Every meeting is recorded unless switched off (Configuration › Meetings).
+    @api.model_create_multi
+    def create(self, vals_list):
+        record_all = self._param_bool('meet_record_all', True)
+        for vals in vals_list:
+            if 'record_meeting' not in vals:
+                vals['record_meeting'] = record_all
+        return super().create(vals_list)
 
     @api.depends('participant_ids.person_name', 'participant_ids.is_recorder')
     def _compute_participant_summary(self):
@@ -303,6 +321,129 @@ class KpiMeeting(models.Model):
             return rec
         return self.browse()
 
+    # ------------------------------------------------------------------
+    # Who is joining: the name always comes from Odoo, never typed.
+    #
+    # A pass is "<kind>.<id>.<signature>": kind is u (res.users), m
+    # (kpi.wa.group.member) or p (res.partner), signed with the database
+    # secret for THIS meeting, so it cannot be edited into someone else and
+    # is useless on another meeting. Logged-in screens (web, app, Odoo) get
+    # one for their own user; the WhatsApp link gets one after the visitor's
+    # number is matched to a person in Odoo (who_by_phone).
+    # ------------------------------------------------------------------
+    def _pass_sig(self, kind, rid):
+        import hashlib
+        import hmac
+        secret = self.env['ir.config_parameter'].sudo().get_param('database.secret') or ''
+        msg = 'kpi-meet-pass:%s:%s:%s' % (self.id, kind, rid)
+        return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:32]
+
+    def _make_pass(self, kind, rid):
+        self.ensure_one()
+        return '%s.%s.%s' % (kind, int(rid), self._pass_sig(kind, int(rid)))
+
+    def _read_pass(self, value):
+        """(kind, record) for a valid pass of this meeting, else (None, None)."""
+        import hmac
+        self.ensure_one()
+        try:
+            kind, rid, sig = (value or '').split('.')
+            rid = int(rid)
+        except (ValueError, AttributeError):
+            return None, None
+        model = {'u': 'res.users', 'm': 'kpi.wa.group.member', 'p': 'res.partner'}.get(kind)
+        if not model or not hmac.compare_digest(sig, self._pass_sig(kind, rid)):
+            return None, None
+        rec = self.env[model].sudo().browse(rid).exists()
+        return (kind, rec) if rec else (None, None)
+
+    @staticmethod
+    def _pass_name(kind, rec):
+        if kind == 'm':
+            # The name in Odoo (user, else contact), never the WhatsApp one.
+            return rec.user_id.name or rec.partner_id.name or rec.wa_name or rec.phone or ''
+
+        return rec.name or ''
+
+    def _pass_url(self, kind, rid):
+        url = self.page_url()
+        if '/kpi/meet/' not in url:
+            return url
+        return '%s?p=%s' % (url, self._make_pass(kind, rid))
+
+    @staticmethod
+    def _phone_key(value):
+        import re
+        return re.sub(r'\D', '', value or '')
+
+    @classmethod
+    def _same_phone(cls, a, b):
+        ka, kb = cls._phone_key(a), cls._phone_key(b)
+        if not ka or not kb:
+            return False
+        return ka == kb or (len(ka) >= 8 and len(kb) >= 8 and (ka.endswith(kb) or kb.endswith(ka)))
+
+    def _meeting_group(self):
+        """The WhatsApp group this meeting belongs to (the team group when internal)."""
+        self.ensure_one()
+        if self.is_internal:
+            return self.env['kpi.wa.group'].sudo()._staff_group()
+        try:
+            return self.env['kpi.wa.group.report'].sudo()._group_for_kpi(self.kpi_id)
+        except Exception:
+            return self.env['kpi.wa.group']
+
+    def _who_by_phone(self, phone):
+        """Match a WhatsApp number to a person in Odoo: (kind, record) or (None, None).
+
+        Searched in this order, first match wins:
+          1. a member of this meeting's WhatsApp group (their Odoo user's name,
+             else their WhatsApp name)
+          2. a user whose app or WhatsApp number it is
+          3. a contact of this meeting's client
+        """
+        self.ensure_one()
+        if len(self._phone_key(phone)) < 8:
+            return None, None
+        group = self._meeting_group()
+        if group:
+            # Only a member who is someone in Odoo (linked to a user or a
+            # contact): an unknown number in the group does not get in.
+            for mem in self.env['kpi.wa.group.member'].sudo().search([
+                    ('group_id', '=', group.id), '|', ('user_id', '!=', False), ('partner_id', '!=', False)]):
+                if self._same_phone(mem.phone, phone) or self._same_phone(mem.lid, phone):
+                    return 'm', mem
+        Users = self.env['res.users'].sudo()
+        for u in Users.search(['|', ('kpi_mobile_number', '!=', False), ('kpi_wa_number', '!=', False)]):
+            if self._same_phone(u.kpi_mobile_number, phone) or self._same_phone(u.kpi_wa_number, phone):
+                return 'u', u
+        client = self.client_kra_id if 'client_kra_id' in self._fields else False
+        partners = client.client_user_ids.mapped('partner_id') if client and 'client_user_ids' in client._fields else self.env['res.partner']
+        for p in partners:
+            if self._same_phone(p.phone, phone):
+                return 'p', p
+        return None, None
+
+    def _user_can_join(self, user):
+        """Organizer, attendee, an admin, or a user of this meeting's client."""
+        self.ensure_one()
+        if user in (self.organizer_id | self.attendee_user_ids):
+            return True
+        if any(user.has_group(g) for g in ('kra_kpi_module.group_kra_admin', 'base.group_system',
+                                           'kra_kpi_module.group_kra_owner')):
+            return True
+        client = self.client_kra_id if 'client_kra_id' in self._fields else False
+        return bool(not self.is_internal and client and 'client_user_ids' in client._fields
+                    and user in client.client_user_ids)
+
+    def action_join_meeting(self):
+        """Odoo form: open the room as the logged-in user, with their own name."""
+        self.ensure_one()
+        if not self._user_can_join(self.env.user):
+            raise UserError(_('You are not invited to this meeting.'))
+        return {'type': 'ir.actions.act_url', 'target': 'new',
+                'url': self._pass_url('u', self.env.user.id)}
+
     @api.model
     def _from_bot_token(self, token):
         """Resolve the recorder's token, and ONLY the recorder's token.
@@ -337,17 +478,32 @@ class KpiMeeting(models.Model):
         if kind in ('joined', 'peer_joined'):
             if self.state in ('requested', 'confirmed'):
                 vals['state'] = 'live'
+            elif self.state == 'done' and self._can_reopen():
+                # Someone came back (a reload, a dropped connection, or the
+                # meeting closed too soon): carry on with the same meeting.
+                vals.update(state='live', ended_at=False, ask_started_at=False)
+                self._log('meeting_reopened', {'by': name or pid})
             if not self.opened_at:
                 vals['opened_at'] = now
+            # Our own recorder, seen from a person's page: never a person.
+            is_bot = bool(name) and name == self._recorder_display_name()
             row = Part.search([('meeting_id', '=', self.id),
                                ('jitsi_id', '=', pid)], limit=1) if pid else Part
             if row:
-                row.write({'left_at': False,
+                row.write({'left_at': False, 'last_seen_at': now,
+                           'removed_no_reply': False,
                            'person_name': name or row.person_name})
             else:
                 Part.create({'meeting_id': self.id, 'jitsi_id': pid,
                              'person_name': name or _('Guest'),
-                             'joined_at': now})
+                             'is_recorder': is_bot,
+                             'joined_at': now, 'last_seen_at': now})
+            # The silence clock starts when people arrive.
+            if not self.last_speech_at:
+                vals['last_speech_at'] = now
+            vals['last_seen_at'] = now
+        elif kind == 'speech':
+            vals['last_speech_at'] = now
         elif kind == 'name' and pid:
             row = Part.search([('meeting_id', '=', self.id),
                                ('jitsi_id', '=', pid)], limit=1)
@@ -360,14 +516,11 @@ class KpiMeeting(models.Model):
                                    ('left_at', '=', False)], limit=1)
                 if row:
                     row.write({'left_at': now})
-            # The recorder bot does not count towards the room being busy.
-            # While it sits in the call the room would never look empty, and
-            # a meeting everyone had left would stay 'live' until the stale
-            # cron noticed.
-            still_in = Part.search_count([('meeting_id', '=', self.id),
-                                          ('left_at', '=', False),
-                                          ('is_recorder', '=', False)])
-            close_now = not still_in and self.state == 'live'
+            # NOT closed here any more. A reload, a pagehide or a Jitsi
+            # reconnect also says "left", and closing on it ended meetings
+            # seconds after people joined. The 1-minute cron closes a room
+            # that has stayed empty for EMPTY_GRACE_SECONDS
+            # (_cron_close_stale_meetings).
 
         self.sudo().write(vals)
 
@@ -384,14 +537,19 @@ class KpiMeeting(models.Model):
                 _logger.warning('meeting %s: recorder did not start: %s',
                                 self.id, exc)
 
-        if close_now:
-            # Everybody has gone. Close through the ONE path that posts the
-            # recap and writes the task log. This used to set state='done'
-            # inline, which is why a meeting that simply emptied out left no
-            # trace in the group and no entry on the task -- it closed
-            # silently.
-            self.close_meeting(quiet=True, at=now)
         return True
+
+    # A room nobody is in closes after this long (a reload or reconnect
+    # comes back well within it). A finished meeting can be rejoined (and
+    # reopened) for REOPEN_MINUTES after it ended.
+    EMPTY_GRACE_SECONDS = 90
+    REOPEN_MINUTES = 30
+
+    def _can_reopen(self):
+        from datetime import timedelta
+        self.ensure_one()
+        return bool(self.state == 'done' and self.ended_at and
+                    fields.Datetime.now() - self.ended_at <= timedelta(minutes=self.REOPEN_MINUTES))
 
     # ------------------------------------------------------------------
     # the recorder
@@ -674,14 +832,24 @@ class KpiMeeting(models.Model):
                 total = me.active_seconds + secs
                 me.write({'active_seconds': total,
                           'active_minutes': int(round(total / 60.0)),
-                          'last_event_at': now})
+                          'last_event_at': now, 'last_speech_at': now})
+
+        elif kind == 'sound':
+            # The recorder hears voices in the call (audio level, reported
+            # at most every ~20 s). This is what the silence check trusts.
+            me.write({'last_speech_at': now, 'last_event_at': now})
+
+        elif kind in ('rec_paused', 'rec_resumed'):
+            # Recording pauses on long silence and picks up when someone
+            # talks (Configuration › Meetings). Bookkeeping only.
+            me.write({'recording_detail': ('paused: silence' if kind == 'rec_paused'
+                                           else 'recording')[:200]})
 
         elif kind == 'idle':
-            # The room went quiet. Close as of the last thing that actually
-            # happened, never as of now -- inventing minutes here would feed
-            # straight into what people read when deciding what to bill.
-            me.write({'recording_state': 'stopped'})
-            me.close_meeting(quiet=True, at=me.last_event_at)
+            # Silence never ends a meeting any more: the "Continue?" popup
+            # (_silence_tick) decides who stays. Kept as a no-op so an older
+            # recorder that still sends it does nothing harmful.
+            pass
 
         elif kind == 'bot_left':
             row = Part.search([('meeting_id', '=', me.id),
@@ -722,8 +890,8 @@ class KpiMeeting(models.Model):
                 '--base', base,
                 '--token', me._ensure_bot_token(),
                 '--meeting', str(me.id),
-                '--alone-seconds', str(me._param('meet_bot_alone_seconds', 120)),
-                '--idle-seconds', str(me._param('meet_idle_seconds', 300))]
+                '--alone-seconds', str(max(1, me._param('meet_bot_alone_min', 2)) * 60),
+                '--max-seconds', str(max(1, me._param('meet_rec_max_h', 6)) * 3600)]
         try:
             flags = 0
             if os.name == 'nt':
@@ -868,6 +1036,46 @@ class KpiMeeting(models.Model):
                         'segments_kept': len(rec.recording_ids)})
         return res
 
+    def _attendance(self):
+        """One entry per person: [{name, user, minutes, removed, absent}].
+
+        People who joined twice are added up. Invited staff (organizer and
+        attendees) who never joined are listed as absent.
+        """
+        self.ensure_one()
+        rows = {}
+        for p in self.sudo().participant_ids.filtered(lambda r: not r.is_recorder):
+            key = ('u', p.user_id.id) if p.user_id else ('n', (p.person_name or '').strip().lower())
+            r = rows.setdefault(key, {'name': (p.user_id.name if p.user_id else p.person_name) or _('Guest'),
+                                      'user': p.user_id.id or False, 'minutes': 0,
+                                      'removed': False, 'absent': False})
+            r['minutes'] += p.minutes or 0
+            r['removed'] = r['removed'] or p.removed_no_reply
+        joined_users = {r['user'] for r in rows.values() if r['user']}
+        for u in (self.organizer_id | self.attendee_user_ids):
+            if u.id not in joined_users:
+                rows[('u', u.id)] = {'name': u.name, 'user': u.id, 'minutes': 0,
+                                     'removed': False, 'absent': True}
+        return list(rows.values())
+
+    def attendance_sheet(self):
+        """For the screens (web dialog): the same list the recap uses.
+        Read-only, and only for someone who can read this meeting."""
+        self.ensure_one()
+        self.check_access('read')
+        return self._attendance()
+
+    def _attendance_lines(self):
+        out = []
+        for r in self._attendance():
+            if r['absent']:
+                out.append(_('❌ %s: absent') % r['name'])
+            elif r['removed']:
+                out.append(_('⚠️ %(n)s: %(m)s min (removed, no reply)') % {'n': r['name'], 'm': r['minutes']})
+            else:
+                out.append(_('✅ %(n)s: %(m)s min') % {'n': r['name'], 'm': r['minutes']})
+        return ([_('👥 Attendance:')] + out) if out else []
+
     def _recap_body(self, closed_by=None, quiet=False):
         """What the room actually did: how long, and who was in it."""
         self.ensure_one()
@@ -882,8 +1090,9 @@ class KpiMeeting(models.Model):
             self.name or '',
             '',
             _('⏱️ Ran for %s') % ran,
-            _('👥 In the room: %s') % who,
         ]
+        lines += self._attendance_lines() or [_('👥 In the room: %s') % who]
+        lines.append('')
         if self.active_minutes:
             lines.append(_('🗣️ Talking for %d min') % self.active_minutes)
         if self.opened_at:
@@ -905,11 +1114,33 @@ class KpiMeeting(models.Model):
                        or _('the recorder could not capture anything')))
         if quiet:
             lines.append('')
-            lines.append(_('_Closed automatically — the room went quiet._'))
+            lines.append(_('_Closed automatically: everyone left, or nobody answered "Continue"._'))
         elif closed_by:
             lines.append('')
             lines.append(_('_Closed by %s_') % (closed_by.name or ''))
         return '\n'.join(l for l in lines if l is not None)
+
+    def _post_recap(self, closed_by=None, quiet=False):
+        """The recap -- attendance, minutes, recording, how it closed -- is
+        ours: it goes to our team group, with a link to the meeting's page.
+        The client group is only thanked."""
+        self.ensure_one()
+        body = self._recap_body(closed_by=closed_by, quiet=quiet)
+        # The meeting details page (meeting logs); left out until it exists.
+        url = self._details_url() if hasattr(self, '_details_url') else ''
+        if url:
+            body += '\n\n' + _('🔗 View: %s') % url
+        if self.is_internal:
+            return self._post(body)
+        staff = self.env['kpi.wa.group'].sudo()._staff_group()
+        if staff and staff.jid:
+            try:
+                self.env['kpi.wa.group.report'].sudo()._post(body, jid=staff.jid)
+            except Exception as exc:
+                _logger.warning('meeting %s: could not post the recap: %s', self.id, exc)
+        return self._post(_("🏁 *Meeting finished*%(ref)s\n%(name)s\n\nThank you! We'll share the summary soon.") % {
+            'ref': (' — %s' % self.kpi_id.external_ref) if self.kpi_id.external_ref else '',
+            'name': self.name or ''})
 
     def close_meeting(self, closed_by=None, quiet=False, at=None):
         """End the room, post what happened, and write it on the task.
@@ -950,7 +1181,7 @@ class KpiMeeting(models.Model):
                 _logger.warning('meeting %s: could not stop the recorder: %s',
                                 self.id, exc)
 
-        self._post(self._recap_body(closed_by=closed_by, quiet=quiet))
+        self._post_recap(closed_by=closed_by, quiet=quiet)
 
         # Write the summary, if a provider is configured and this is wanted.
         # AFTER the recap, and never allowed to interfere with it: a meeting
@@ -986,29 +1217,130 @@ class KpiMeeting(models.Model):
         })
         return True
 
+    # ------------------------------------------------------------------
+    # Who is still in the room, and the silence check
+    #
+    # A meeting no longer ends just because the room is quiet. It ends when:
+    #   * everyone has left (record_room_event, at once), or
+    #   * no page has sent a heartbeat for meet_gone_min (every browser died), or
+    #   * after meet_ask_after_min with no speech, nobody tapped Continue on
+    #     the popup within meet_reply_sec.
+    # Whoever does not tap Continue is taken out (their page hangs up); the
+    # ones who did stay and the silence clock starts again.
+    # ------------------------------------------------------------------
+    def _present(self):
+        return self.participant_ids.filtered(lambda p: not p.left_at and not p.is_recorder)
+
+    def _silence_tick(self):
+        """Open or settle the "Continue?" question. Safe to call often."""
+        from datetime import timedelta
+        self.ensure_one()
+        me = self.sudo()
+        if me.state != 'live':
+            return
+        now = fields.Datetime.now()
+        ask_after = timedelta(minutes=max(1, me._param('meet_ask_after_min', 5)))
+        reply = timedelta(seconds=max(10, me._param('meet_reply_sec', 30)))
+        if not me.ask_started_at:
+            last = me.last_speech_at or me.opened_at or now
+            if now - last >= ask_after and me._present():
+                me._present().write({'answered_ask': False})
+                me.write({'ask_started_at': now})
+                me._log('meeting_ask_continue', {'silent_since': fields.Datetime.to_string(last)})
+            return
+        # Settle a few seconds after the deadline, so a tap made in the last
+        # second still arrives.
+        if now - me.ask_started_at < reply + timedelta(seconds=3):
+            return
+        present = me._present()
+        stayed = present.filtered('answered_ask')
+        gone = present - stayed
+        deadline = me.ask_started_at + reply
+        if gone:
+            gone.write({'left_at': deadline, 'removed_no_reply': True})
+            me._log('meeting_removed_no_reply', {'who': ', '.join(gone.mapped('person_name'))})
+        if not stayed:
+            me.write({'ask_started_at': False})
+            end = me.last_speech_at or deadline
+            if me.opened_at and end < me.opened_at:
+                end = me.opened_at
+            me.close_meeting(quiet=True, at=end)
+        else:
+            me.write({'ask_started_at': False, 'last_speech_at': now})
+            stayed.write({'answered_ask': False})
+
+    def _room_beat(self, pid):
+        """A page's heartbeat. -> what that page should do now."""
+        from datetime import timedelta
+        self.ensure_one()
+        me = self.sudo()
+        now = fields.Datetime.now()
+        row = me.participant_ids.filtered(lambda p: p.jitsi_id == (pid or '')[:64])[:1]
+        if row and not row.left_at:
+            row.write({'last_seen_at': now})
+        if me.state == 'live':
+            me.write({'last_seen_at': now})
+            me._silence_tick()
+        left = 0
+        if me.ask_started_at and row and not row.left_at and not row.answered_ask:
+            reply = timedelta(seconds=max(10, me._param('meet_reply_sec', 30)))
+            left = max(0, int((me.ask_started_at + reply - now).total_seconds()))
+        return {
+            'ask': bool(me.ask_started_at and row and not row.left_at and not row.answered_ask),
+            'seconds_left': left,
+            'silent_min': max(1, me._param('meet_ask_after_min', 5)),
+            'leave': bool(row and row.removed_no_reply),
+            'ended': me.state == 'done',
+        }
+
+    def _room_continue(self, pid):
+        """The person tapped Continue on the popup."""
+        self.ensure_one()
+        me = self.sudo()
+        row = me.participant_ids.filtered(lambda p: p.jitsi_id == (pid or '')[:64] and not p.left_at)[:1]
+        if row and me.ask_started_at:
+            row.write({'answered_ask': True, 'last_seen_at': fields.Datetime.now()})
+        return True
+
     @api.model
     def _cron_close_stale_meetings(self):
-        """Close a room whose browser vanished without saying goodbye.
+        """Settle silence questions, and close rooms every browser left.
 
         A tab killed, a laptop shut, a phone losing signal: no leave event
-        ever arrives and the meeting would sit at 'live' forever. The end
-        time used is the LAST THING WE HEARD, not now -- recording a meeting
-        as having run until the cron noticed would invent minutes.
+        ever arrives. When no page has sent a heartbeat for meet_gone_min the
+        meeting closes as of the last heartbeat, never as of now: inventing
+        minutes would feed what people read when deciding what to bill.
+        Silence alone never closes a meeting (see _silence_tick).
         """
         from datetime import timedelta
-        quiet = self._param('meet_silence_minutes', 10)
-        cutoff = fields.Datetime.now() - timedelta(minutes=quiet)
-        stale = self.sudo().search([('state', '=', 'live'),
-                                    ('last_event_at', '!=', False),
-                                    ('last_event_at', '<', cutoff)])
-        for rec in stale:
-            # Through the shared path, so a quietly-closed meeting gets the
-            # same recap and the same task-log entry as one somebody ended.
-            # It used to only write a log line, which is why a meeting could
-            # finish and nobody was told anything.
-            rec.close_meeting(quiet=True, at=rec.last_event_at)
-        if stale:
-            _logger.info('kpi.meeting: closed %s silent room(s)', len(stale))
+        now = fields.Datetime.now()
+        gone = timedelta(minutes=max(1, self._param('meet_gone_min', 3)))
+        closed = 0
+        for rec in self.sudo().search([('state', '=', 'live')]):
+            try:
+                rec._silence_tick()
+                if rec.state != 'live':
+                    closed += 1
+                    continue
+                present = rec._present()
+                if not present:
+                    # Everyone left. Close once the room has stayed empty for
+                    # the grace period (nobody came back), as of the last leave.
+                    lefts = [p.left_at for p in rec.participant_ids if p.left_at and not p.is_recorder]
+                    last_left = max(lefts) if lefts else (rec.last_event_at or rec.opened_at)
+                    if last_left and now - (rec.last_event_at or last_left) >= timedelta(seconds=rec.EMPTY_GRACE_SECONDS):
+                        rec.close_meeting(quiet=True, at=last_left)
+                        closed += 1
+                    continue
+                seen = [p.last_seen_at or p.joined_at for p in present if (p.last_seen_at or p.joined_at)]
+                last = max(seen) if seen else (rec.last_seen_at or rec.last_event_at or rec.opened_at)
+                if last and now - last >= gone:
+                    rec.close_meeting(quiet=True, at=last)
+                    closed += 1
+            except Exception as exc:
+                _logger.warning('meeting %s: tick failed: %s', rec.id, exc)
+        if closed:
+            _logger.info('kpi.meeting: closed %s room(s)', closed)
         return True
 
 
@@ -1367,10 +1699,24 @@ class KpiMeeting(models.Model):
         return True, _('Summary written by %s.') % provider
 
     def action_draft_summary(self):
-        """The button. Same work, but it tells you what happened."""
+        """The button. Same work, but it tells you what happened.
+
+        Success comes back as a notification, never a UserError: raising
+        rolls the transaction back and the summary just written is lost.
+        """
         self.ensure_one()
         ok, msg = self.draft_summary(raise_on_problem=True)
-        raise UserError(msg if ok else msg)
+        if not ok:
+            raise UserError(msg)
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'message': msg,
+                'type': 'success',
+                'next': {'type': 'ir.actions.client', 'tag': 'soft_reload'},
+            },
+        }
 
     def action_open_now(self):
         """Post the link immediately, whatever the clock says."""
@@ -2051,6 +2397,14 @@ class KpiMeetingParticipant(models.Model):
     # Seconds this person was the dominant speaker. Summed from the bot's
     # reports, so it is 0 for a meeting nobody recorded.
     talk_seconds = fields.Integer(readonly=True, default=0)
+    # Who it really was, from Odoo (the page's pass), never what was typed.
+    user_id = fields.Many2one('res.users', string='Employee', readonly=True)
+    partner_id = fields.Many2one('res.partner', string='Contact', readonly=True)
+    phone = fields.Char(readonly=True)
+    # Heartbeat from this person's page, and the silence popup.
+    last_seen_at = fields.Datetime(readonly=True)
+    answered_ask = fields.Boolean(readonly=True, default=False)
+    removed_no_reply = fields.Boolean(string='Removed: no reply', readonly=True, default=False)
 
     @api.depends('joined_at', 'left_at')
     def _compute_minutes(self):

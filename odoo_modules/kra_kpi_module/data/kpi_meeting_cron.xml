@@ -44,14 +44,16 @@
              recording a meeting as having run until the cron noticed would
              invent minutes onto the record.
 
-             Silence window: ir.config_parameter kra_kpi.meet_silence_minutes
-             (default 10). See models/kpi_meeting.py _cron_close_stale_meetings. -->
+             Every minute it also settles the silence popup ("Continue?").
+             Timings: Configuration > Meetings (kra_kpi.meet_gone_min,
+             meet_ask_after_min, meet_reply_sec). Silence alone never closes a
+             meeting. See models/kpi_meeting.py _cron_close_stale_meetings. -->
         <record id="ir_cron_kpi_meeting_close_quiet" model="ir.cron">
-            <field name="name">KRA/KPI: Close meetings that went quiet</field>
+            <field name="name">KRA/KPI: Meetings: silence check and closing empty rooms</field>
             <field name="model_id" ref="model_kpi_meeting"/>
             <field name="state">code</field>
             <field name="code">model._cron_close_stale_meetings()</field>
-            <field name="interval_number">5</field>
+            <field name="interval_number">1</field>
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
