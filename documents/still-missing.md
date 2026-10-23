@@ -31,32 +31,34 @@ Also done (23 Oct, later):
 - [x] **Odoo "Draft with AI" now keeps the summary** (live 7.78).
 - [x] **Upload Requirements "Add photos / video" works** in Odoo, the app and the web (live 7.81). New route `/kpi_requirements/attach_media`. These photos never count as the user manual.
 
-**Admin lists (web has less than Odoo)**
-- [ ] Setup screens: search box, filters, group-by (all of them).
-- [ ] Databases: filters (Suspended, Disconnected, Expiring in 30 days, Expired, No client, Archived), bulk Suspend / Disconnect / Reactivate, form rules and alerts, hide "Tell the client" when refusing.
-- [ ] WhatsApp Groups: client per member row, Sub-clients and Client Users tabs, Ours / Client lock each other.
-- [ ] Approvals desk: search, "Waiting over a week", group by client or day, Open on database items.
-- [ ] Login Management: role filter, login under each name.
-- [ ] Action Log: source and Successful filters, user agent and contact.
-- [ ] AI Assistant Chats: full answer, time, search, My chats / Today.
-- [ ] Invoices list: PDF, Mark paid and Revert per row; Invoice Date and Quoted / Adjust columns; date presets on New invoice.
-- [ ] Backups: incremental reference date, last full backup, restored by. (Access stays System-only on purpose.)
+**Done on the web, 23 Oct (evening): admin lists, task board and small items, the same as Odoo**
+
+**Admin lists**
+- [x] Setup screens: search box, filters, group-by (all of them).
+- [x] Databases: filters (Suspended, Disconnected, Expiring in 30 days, Expired, No client, Archived), bulk Suspend / Disconnect / Reactivate, form rules and alerts, hide "Tell the client" when refusing.
+- [x] WhatsApp Groups: client per member row, Sub-clients and Client Users tabs, Ours / Client lock each other.
+- [x] Approvals desk: search, "Waiting over a week", group by client or day, Open on database items.
+- [x] Login Management: role filter, login under each name.
+- [x] Action Log: source and Successful filters, user agent and contact.
+- [x] AI Assistant Chats: full answer, time, search, My chats / Today.
+- [x] Invoices list: PDF, Mark paid and Revert per row; Invoice Date and Quoted / Adjust columns; date presets on New invoice.
+- [x] Backups: incremental reference date, last full backup, restored by. (Access stays System-only on purpose.)
 
 **Task board (small)**
-- [ ] More buttons on the card itself (Switch, Undo start, Reassign, Approve / Reject, Add time, Delete).
-- [ ] Switch on any running task and to any startable task.
-- [ ] Card: "Client sent it back N×" with media, Full complete prompt, Bill now.
-- [ ] Files tab: sort menus, "View note", View for the task's own file, "Show more" on long notes.
-- [ ] Wording of Undo start and Revert sign-off; admin delete reason and self-created send-back note optional.
-- [ ] Search in the "Not on a task?" meeting picker; presence line in the End Workday summary.
+- [x] More buttons on the card itself (Switch, Undo start, Reassign, Approve / Reject, Add time, Delete).
+- [x] Switch on any running task and to any startable task.
+- [x] Card: "Client sent it back N×" with media, Full complete prompt, Bill now.
+- [x] Files tab: sort menus, "View note", View for the task's own file, "Show more" on long notes.
+- [x] Wording of Undo start and Revert sign-off; admin delete reason and self-created send-back note optional.
+- [x] Search in the "Not on a task?" meeting picker; presence line in the End Workday summary.
 
 **Other small items**
-- [ ] Reminders: link to a whole client; Owner field for System users.
-- [ ] Meetings list: Upcoming and No time set filters, search, group by client.
-- [ ] Attention report: Oldest pause and Recent pauses tiles, Clear filters.
-- [ ] Employee tracker: Sessions column and sessions table.
-- [ ] Daily reports: see older than the last 90.
-- [ ] Refresh buttons on Snapshots and My Workday.
+- [x] Reminders: link to a whole client; Owner field for System users.
+- [x] Meetings list: Upcoming and No time set filters, search, group by client.
+- [x] Attention report: Oldest pause and Recent pauses tiles, Clear filters.
+- [x] Employee tracker: Sessions column and sessions table.
+- [x] Daily reports: see older than the last 90.
+- [x] Refresh buttons on Snapshots and My Workday.
 
 ## Left out on purpose
 
