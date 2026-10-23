@@ -1123,7 +1123,7 @@ class KpiWaStaffTask(models.AbstractModel):
         except Exception as exc:
             return False, str(exc).strip()[:300]
         return True, ('Finished as a partial finish — the client is sent your summary.' if partial
-                      else 'Finished — it is with a manager to check.')
+                      else ('Finished — it is with the client to check.' if task._skip_admin_qa() else 'Finished — it is with a manager to check.'))
 
     def log_rows(self, task, user, key):
         """One log, newest first, as text lines (📋 KPI details › Logs and the page)."""

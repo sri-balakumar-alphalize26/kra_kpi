@@ -288,6 +288,27 @@ class KraKpiFinish(models.Model):
             _logger.warning('dm for %s failed: %s', self.id, exc)
             return False
 
+    def _finish_team_people(self):
+        """Who hears about this task's client: its developer, else the first
+        Approval Chain step. (users, is_developer)."""
+        self.ensure_one()
+        if self.user_id:
+            return self.user_id, True
+        tiers = self.env['kpi.escalation.tier'].sudo().chain()
+        users = self._esc_tier_users(tiers[0]) if tiers else self.env['res.users']
+        return users, False
+
+    def _client_question_to_team(self, who, text):
+        """💬 Clarify on the sign-off page: a private WhatsApp to the developer
+        only (no group, no admins). True when it went to the developer."""
+        self.ensure_one()
+        users, is_dev = self._finish_team_people()
+        msg = _('💬 %(who)s asked about *%(ref)s* — %(name)s:\n\n%(q)s\n\nReply in 💬 Chat with client.') % {
+            'who': who or _('The client'), 'ref': self._finish_ref(), 'name': self.name or '', 'q': text}
+        for u in users:
+            self._finish_dm(u, msg)
+        return is_dev
+
     def _finish_partial_summary(self):
         """A Partial Finish's summary for the client. Empty for a full Complete."""
         self.ensure_one()
@@ -304,13 +325,14 @@ class KraKpiFinish(models.Model):
 
     def _finish_tell_review(self):
         Report = self.env['kpi.wa.group.report'].sudo()
-        Intake = self.env['kpi.wa.group.intake'].sudo()
         days = self._review_days()
         for rec in self:
             if rec.task_state != 'awaiting_client':
                 continue
             ref, dev = rec._finish_ref(), rec.user_id
-            link = Intake._approval_link(rec) if hasattr(Intake, '_approval_link') else ''
+            # The sign-off page link lives on the router (kpi_wa_group_intake.py),
+            # not on the intake state -- asking the intake always gave ''.
+            link = self.env['kpi.wa.group.router'].sudo()._approval_link(rec)
             text = _('✅ *%(ref)s* — %(name)s\n\nOur team has finished this. Please check it on your side.\n') % {
                 'ref': ref, 'name': rec.name or ''}
             summary = rec._finish_partial_summary()

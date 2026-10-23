@@ -315,7 +315,7 @@
                         <form class="in js-send" method="post" enctype="multipart/form-data" data-kind="complete"
                               data-max-mb="25" t-att-data-has-manual="'1' if has_manual else ''"
                               t-att-data-has-update="'1' if has_update else ''"
-                              t-att-data-need="need_keys"
+                              t-att-data-need="need_keys" t-att-data-warn="warn_labels"
                               t-att-data-ref="t['ref']" t-att-action="'/kpi/wa/task/%s/complete' % token">
                             <!-- Completed: everything this task type needs. Partially completed:
                                  the summary only, and the client is sent it. -->
@@ -364,7 +364,7 @@
                                 <input class="input" name="links" placeholder="Paste one or more links, separated by spaces"/></div>
                             <t t-if="'github' in rule_keys">
                                 <div t-if="has_github" class="have">🐙 A GitHub link is already on this task — add another only if needed.</div>
-                                <div t-else="" class="warn">🐙 This is a Module / App task — the GitHub link (repository + branch) is required to complete it.</div>
+                                <div t-else="" class="warn">🐙 Module / App task — add the GitHub link (repository + branch). You can still complete without it.</div>
                             </t>
                             <div t-if="not is_db_task" class="grid2">
                                 <div class="field"><span class="lbl">GitHub repo URL
@@ -654,7 +654,15 @@
                             if (val(f, 'user_manual_url')) { bits.push('manual link'); }
                             if (val(f, 'app_link')) { bits.push('app link'); }
                             what = bits.join(' · ');
-                            return 'Submit ' + ref + ' for approval?' + (what ? '\n\n' + what : '');
+                            // Recommended but not added (user manual, GitHub link): warn, never block.
+                            var warn = (f.getAttribute('data-warn') || '').split(' · ').filter(function (w) {
+                                if (!w) { return false; }
+                                if (/github/i.test(w)) { return !val(f, 'gh_url'); }
+                                if (/manual/i.test(w)) { return !(val(f, 'user_manual_url') || n); }
+                                return true;
+                            }).map(function (w) { return '• ' + w + ' — needed'; }).join('\n');
+                            return 'Submit ' + ref + ' for approval?' + (what ? '\n\n' + what : '')
+                                + (warn ? '\n\n⚠️ Not added — you can still complete:\n' + warn : '');
                         }
                         Array.prototype.forEach.call(document.querySelectorAll('form.js-send'), function (f) {
                             var clicked = null;

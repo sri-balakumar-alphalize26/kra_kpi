@@ -465,7 +465,10 @@ class KpiWorkflow(models.Model):
         self.invalidate_recordset(['approval_token_used', 'approval_token_expires',
                                    'pre_approval_decision', 'task_state'])
 
-        if self.approval_token_expires and self.approval_token_expires < fields.Datetime.now():
+        # The sign-off link has no timer while the task waits for the client: it
+        # ends only when the client acts (or the review closes on its own).
+        if (self.task_state != 'awaiting_client' and self.approval_token_expires
+                and self.approval_token_expires < fields.Datetime.now()):
             return {'status': 'expired', 'message': 'Sign-off link expired.'}
 
         # Final sign-off only valid while task is awaiting the client.
@@ -633,19 +636,15 @@ class KpiWorkflow(models.Model):
             user_agent=user_agent,
             payload={'action': 'clarify', 'feedback': note, 'stage': 'client_final'},
         )
-        try:
-            self._notify('internal_rejected',
-                         decision='clarify',
-                         decided_by=signer,
-                         feedback=note or 'Client requested clarification before signing off.',
-                         source=source)
-        except Exception:
-            pass
+        # The question goes to this task's developer only (else the first
+        # Approval Chain step) -- kpi_finish._client_question_to_team.
+        to_dev = self._client_question_to_team(signer, note or 'Client asked for clarification before signing off.')
         return {
             'status': 'ok',
             'state': 'awaiting_client',
             'decision': 'clarify',
-            'message': 'Clarification request sent — coordinator will reach out.',
+            'message': ('Your question was sent to the developer.' if to_dev
+                        else 'Your question was sent to our team.'),
         }
 
     # ------------------------------------------------------------------ #
@@ -1723,8 +1722,11 @@ class KpiWorkflow(models.Model):
         me = self.sudo()
         rules = []
 
-        def add(key, label, required, done):
-            rules.append({'key': key, 'label': label, 'required': bool(required), 'done': bool(done)})
+        # warn: not needed to complete, but every Complete screen warns when it
+        # is missing (the user manual and the GitHub link, Oct 2026).
+        def add(key, label, required, done, warn=False):
+            rules.append({'key': key, 'label': label, 'required': bool(required), 'done': bool(done),
+                          'warn': bool(warn)})
 
         has_summary = bool(self.env['kpi.progress'].sudo().search_count(
             [('kpi_id', '=', self.id), ('from_client', '=', False)]))
@@ -1742,11 +1744,11 @@ class KpiWorkflow(models.Model):
         if 'app' in types:
             add('app_link', _('App link'), True, me.app_link)
         if types & {'module', 'app'}:
-            add('manual', _('User manual'), True,
+            add('manual', _('User manual'), False,
                 me.user_manual_url or self.env['kpi.user.manual'].sudo().search_count(
-                    [('kpi_id', '=', self.id), ('is_intake_media', '=', False)]))
-            add('github', _('GitHub link'), True,
-                self.env['kpi.github.link'].sudo().search_count([('kpi_id', '=', self.id)]))
+                    [('kpi_id', '=', self.id), ('is_intake_media', '=', False)]), warn=True)
+            add('github', _('GitHub link'), False,
+                self.env['kpi.github.link'].sudo().search_count([('kpi_id', '=', self.id)]), warn=True)
         if 'website' in types:
             add('website_url', _('Website URL'), False, me.website_url)
         return rules
@@ -1759,6 +1761,12 @@ class KpiWorkflow(models.Model):
         self.ensure_one()
         return [r['label'] for r in self._completion_rules()
                 if r['required'] and not r['done'] and r['key'] not in skip]
+
+    def _completion_warnings(self):
+        """Labels of what is recommended but not added (user manual, GitHub
+        link): Complete still goes through, the screens warn."""
+        self.ensure_one()
+        return [r['label'] for r in self._completion_rules() if r.get('warn') and not r['done']]
 
     def _completion_refusal(self, skip=()):
         """The message for a full Complete that is missing something, else False."""

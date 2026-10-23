@@ -37,17 +37,17 @@
                 <header>
                     <button name="action_test_connection" type="object"
                             string="Test Connection" class="btn-secondary"
-                            invisible="(fetch_method == 'url' and not url) or (fetch_method == 'postgres' and not host)"/>
+                            invisible="fetch_method == 'postgres' and not host"/>
                     <button name="action_fetch_databases" type="object"
-                            string="Fetch Databases" class="btn-primary"
-                            invisible="(fetch_method == 'url' and not url) or (fetch_method == 'postgres' and not host)"/>
+                            string="🔄 Refresh list" class="btn-primary"
+                            invisible="fetch_method == 'postgres' and not host"/>
                 </header>
                 <sheet>
                     <widget name="web_ribbon" title="Archived"
                             bg_color="text-bg-danger" invisible="active"/>
                     <div class="oe_title">
                         <label for="name" string="Server"/>
-                        <h1><field name="name" placeholder="e.g. nexgennpos2"/></h1>
+                        <h1><field name="name" placeholder="e.g. https://nexgennpos2.alphalizedns.com"/></h1>
                     </div>
                     <group>
                         <group>
@@ -76,9 +76,16 @@
                     <group invisible="fetch_method != 'url'">
                         <group>
                             <field name="url"
-                                   placeholder="https://nexgennpos2.com"/>
+                                   placeholder="Empty = the server name above, when it is the address"/>
                             <field name="url_verify_ssl"/>
                         </group>
+                    </group>
+                    <!-- Typed the address: what that Odoo lists, straight away
+                         (the app's Connect screen / web sign-in). Saved, they are
+                         added to Setup > Databases with no client yet. -->
+                    <group invisible="fetch_method != 'url'">
+                        <field name="db_preview" readonly="1" nolabel="1" colspan="2"
+                               class="text-break"/>
                     </group>
                     <div class="alert alert-info" role="status"
                          invisible="fetch_method != 'url'">

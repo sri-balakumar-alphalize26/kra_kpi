@@ -20,6 +20,8 @@
                   decoration-danger="track_term and expires_on and days_left &lt; 0"
                   decoration-warning="disconnect_state == 'requested'">
                 <header>
+                    <button name="action_fetch_all_servers" type="object" display="always"
+                            string="🔄 Fetch from servers" class="btn-secondary"/>
                     <button name="action_open_suspend" type="object"
                             string="Suspend" class="btn-secondary"/>
                     <button name="action_open_disconnect" type="object"
@@ -29,7 +31,7 @@
                 </header>
                 <field name="client_kra_id" string="Client"/>
                 <field name="server_id"/>
-                <field name="db_name"/>
+                <field name="db_name" widget="kpi_db_pick"/>
                 <field name="label" optional="hide"/>
                 <field name="kra_id" string="Files Under" optional="hide"/>
                 <field name="state" widget="badge"
@@ -87,7 +89,7 @@
                             bg_color="text-bg-danger" invisible="active"/>
                     <div class="oe_title">
                         <label for="db_name" string="Database"/>
-                        <h1><field name="db_name" placeholder="e.g. aoc"/></h1>
+                        <h1><field name="db_name" widget="kpi_db_pick" placeholder="e.g. aoc"/></h1>
                         <field name="label" placeholder="Friendly name for the WhatsApp menu, e.g. Al Khuwair shop"/>
                     </div>
 

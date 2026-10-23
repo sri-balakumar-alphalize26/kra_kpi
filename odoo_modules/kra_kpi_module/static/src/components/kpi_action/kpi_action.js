@@ -1583,6 +1583,7 @@ export class KpiAction extends Component {
                                         <div class="flex-grow-1" style="min-width:0;">
                                             <div class="fw-semibold"><t t-esc="row.label"/>
                                                 <span t-if="row.required" class="text-danger fw-bold"> ✱</span>
+                                                <span t-elif="row.warn" class="badge text-bg-warning ms-1">recommended</span>
                                                 <span t-else="" class="badge text-bg-light border ms-1">optional</span>
                                             </div>
                                             <div t-if="row.key === 'summary'" class="small text-muted">
@@ -1613,8 +1614,8 @@ export class KpiAction extends Component {
                                                    autocomplete="new-password" t-model="state.completeForm.provision_password"/>
                                         </div>
                                         <span class="badge rounded-pill align-self-center"
-                                              t-att-class="row.done ? (row.auto ? 'text-bg-info' : 'text-bg-success') : (row.required ? 'text-bg-danger' : 'text-bg-light border')"
-                                              t-esc="row.done ? (row.auto ? 'Ticked by itself' : 'Done') : (row.required ? 'Missing' : 'Optional')"/>
+                                              t-att-class="row.done ? (row.auto ? 'text-bg-info' : 'text-bg-success') : (row.required ? 'text-bg-danger' : (row.warn ? 'text-bg-warning' : 'text-bg-light border'))"
+                                              t-esc="row.done ? (row.auto ? 'Ticked by itself' : 'Done') : (row.required ? 'Missing' : (row.warn ? '⚠ Not added' : 'Optional'))"/>
                                     </div>
                                 </t>
                                 <div class="border-top pt-3 mb-2 small text-muted" t-esc="cr.missing.length ? ('Still needed: ' + cr.missing.join(', ')) : 'Everything needed is in.'"/>
@@ -4819,7 +4820,9 @@ export class KpiAction extends Component {
         // The summary before Complete: what is provided, and optional items left empty.
         const cr = this.completeRows();
         const provided = cr.rows.filter((r) => r.done).map((r) => esc(r.label)).join(' · ') || '—';
-        const empty = cr.rows.filter((r) => !r.done && !r.required).map((r) => esc(r.label)).join(' · ');
+        const empty = cr.rows.filter((r) => !r.done && !r.required && !r.warn).map((r) => esc(r.label)).join(' · ');
+        // Recommended but not added (user manual, GitHub link): a warning, not a block.
+        const warn = cr.rows.filter((r) => !r.done && r.warn).map((r) => `<li>${esc(r.label)} — needed</li>`).join('');
         this._renderModal(`
             <div class="modal-backdrop fade show"></div>
             <div class="modal d-block" tabindex="-1">
@@ -4832,6 +4835,7 @@ export class KpiAction extends Component {
                         <div class="modal-body">
                             <p class="mb-2">Submit <strong>${ref}</strong> for approval?</p>
                             <div class="mb-1"><b class="text-success">✓ Provided</b><div class="text-muted">${provided}</div></div>
+                            ${warn ? `<div class="alert alert-warning py-2 mt-2 mb-1">⚠️ <b>Not added — you can still complete:</b><ul class="mb-0 mt-1">${warn}</ul></div>` : ''}
                             ${empty ? `<div><b>— Left empty (optional)</b><div class="text-muted">${empty}</div></div>` : ''}
                         </div>
                         <div class="modal-footer">

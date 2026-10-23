@@ -120,11 +120,86 @@ class KpiServer(models.Model):
         ('name_uniq', 'unique(name)', 'That server is already listed.'),
     ]
 
+    # What the address shows right now, under the address field while it is
+    # typed (like the app's Connect screen and the web sign-in).
+    db_preview = fields.Text(string='Databases on this server', compute='_compute_db_preview')
+
     def _compute_db_count(self):
         Db = self.env['kpi.client.db'].sudo()
         for rec in self:
             rec.db_count = Db.search_count(
                 [('server_id', '=', rec.id)]) if rec.id else 0
+
+    def _web_address(self):
+        """The Odoo address: `url`, else the name when the name is one
+        (both live servers are named by their address)."""
+        self.ensure_one()
+        for raw in (self.url, self.name):
+            raw = (raw or '').strip().rstrip('/')
+            if raw.lower().startswith(('http://', 'https://')):
+                return raw
+        raw = (self.url or '').strip().rstrip('/')
+        return ('https://%s' % raw) if raw else ''
+
+    @api.depends('url', 'name', 'fetch_method', 'url_verify_ssl')
+    def _compute_db_preview(self):
+        for rec in self:
+            if rec.fetch_method != 'url' or not rec._web_address():
+                rec.db_preview = False
+                continue
+            try:
+                names = rec._read_database_names_via_url(timeout=(4, 8))
+                rec.db_preview = (_('%(n)s found: %(list)s') % {'n': len(names), 'list': ', '.join(names)}
+                                  if names else _('No databases found on that server.'))
+            except UserError as exc:
+                rec.db_preview = '⚠️ %s' % exc
+
+    def _fetch_quietly(self):
+        """Fetch the list without ever blocking a save; the reason is kept in
+        last_fetch_error when it fails."""
+        for rec in self:
+            if rec.fetch_method != 'url' or not rec._web_address():
+                continue
+            try:
+                with self.env.cr.savepoint():
+                    rec.action_fetch_databases()
+            except Exception as exc:
+                rec.sudo().write({'last_fetch_error': str(exc)[:500],
+                                  'last_fetch_at': fields.Datetime.now()})
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        recs = super().create(vals_list)
+        recs._fetch_quietly()
+        return recs
+
+    def write(self, vals):
+        res = super().write(vals)
+        if {'url', 'name', 'fetch_method'} & set(vals) and not self.env.context.get('kpi_server_fetching'):
+            self.with_context(kpi_server_fetching=True)._fetch_quietly()
+        return res
+
+    @api.model
+    def databases_for_pick(self, server_id):
+        """Setup > Databases › Database name dropdown: the databases that
+        server lists, the ones not added yet first. {'names', 'added', 'error'}."""
+        srv = self.browse(int(server_id or 0)).exists()
+        if not srv:
+            return {'names': [], 'added': [], 'error': ''}
+        try:
+            names = srv._read_database_names(timeout=(4, 10))
+        except UserError as exc:
+            return {'names': [], 'added': [], 'error': str(exc)}
+        known = {(n or '').lower() for n in self.env['kpi.client.db'].sudo().with_context(active_test=False)
+                 .search([('server_id', '=', srv.id), ('client_kra_id', '!=', False)]).mapped('db_name')}
+        return {'names': [n for n in names if n.lower() not in known] + [n for n in names if n.lower() in known],
+                'added': [n for n in names if n.lower() in known], 'error': ''}
+
+    @api.model
+    def _cron_fetch_databases(self):
+        """Daily: refresh every server's database list (new ones added, gone
+        ones archived -- action_fetch_databases)."""
+        self.search([])._fetch_quietly()
 
     def poll_label(self):
         self.ensure_one()
@@ -258,7 +333,7 @@ class KpiServer(models.Model):
             raise UserError(_('Could not connect to %(srv)s:\n\n%(err)s') % {
                 'srv': self.name, 'err': str(exc).strip()})
 
-    def _read_database_names_via_url(self):
+    def _read_database_names_via_url(self, timeout=(5, 20)):
         """Ask the Odoo running on that server for its own database list.
 
         `/web/database/list` is Odoo's own endpoint behind the database
@@ -275,11 +350,9 @@ class KpiServer(models.Model):
         import json
         import requests
 
-        base = (self.url or '').strip().rstrip('/')
+        base = self._web_address()
         if not base:
             raise UserError(_('Set the Odoo address for %s first.') % self.name)
-        if not base.startswith(('http://', 'https://')):
-            base = 'https://%s' % base
         endpoint = '%s/web/database/list' % base
         try:
             resp = requests.post(
@@ -287,13 +360,23 @@ class KpiServer(models.Model):
                 data=json.dumps({'jsonrpc': '2.0', 'method': 'call',
                                  'params': {}}),
                 headers={'Content-Type': 'application/json'},
-                timeout=(5, 20),
+                timeout=timeout,
                 verify=bool(self.url_verify_ssl),
             )
         except Exception as exc:
             raise UserError(_(
-                'Could not reach %(url)s:\n\n%(err)s') % {
-                    'url': endpoint, 'err': str(exc).strip()[:500]})
+                "Can't reach %(url)s. Check the address and that Odoo is running.\n\n%(err)s") % {
+                    'url': base, 'err': str(exc).strip()[:300]})
+        # Like the app's Connect screen: some servers answer only a GET.
+        if resp.status_code != 200:
+            try:
+                got = requests.get(endpoint, timeout=timeout, verify=bool(self.url_verify_ssl))
+                data = got.json() if got.status_code == 200 else None
+                names = data if isinstance(data, list) else (data or {}).get('result')
+                if isinstance(names, list):
+                    return [str(n) for n in names if n and str(n) not in RESERVED_DB_NAMES]
+            except Exception:
+                pass
         if resp.status_code != 200:
             raise UserError(_(
                 '%(url)s answered %(code)s.\n\nIf that is a 404, this server '
@@ -314,16 +397,15 @@ class KpiServer(models.Model):
         names = (data or {}).get('result')
         if not isinstance(names, list):
             raise UserError(_(
-                '%s answered, but not with a database list. The database '
-                'manager is probably disabled there (list_db = False).')
-                % endpoint)
+                '%s hides its database list (list_db = False in odoo.conf). '
+                'Turn it on, or use the Postgres method.') % base)
         return [str(n) for n in names if n and str(n) not in RESERVED_DB_NAMES]
 
-    def _read_database_names(self):
+    def _read_database_names(self, timeout=None):
         """The database names on this server, by whichever method is set."""
         self.ensure_one()
         if self.fetch_method == 'url':
-            return self._read_database_names_via_url()
+            return self._read_database_names_via_url(timeout=timeout or (5, 20))
         return self._read_database_names_via_pg()
 
     def _read_database_names_via_pg(self):
@@ -378,7 +460,7 @@ class KpiServer(models.Model):
         Never deletes. A name that has vanished is archived, because tickets
         still point at it and the history has to stay readable.
         """
-        Db = self.env['kpi.client.db'].sudo()
+        Db = self.env['kpi.client.db'].sudo().with_context(kpi_db_fetched=True)
         summary = []
         for rec in self:
             try:
