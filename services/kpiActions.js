@@ -9,7 +9,8 @@
 //     admin_accepted, ... }
 
 import { getConnection } from '../api/session';
-import { jsonRpc, httpUpload } from '../api/odooApi';
+import axios from 'axios';
+import { jsonRpc, httpUpload, normalizeUrl } from '../api/odooApi';
 import { createLogger } from '../api/logger';
 import { getKraTree } from './kraKpi';
 
@@ -804,11 +805,14 @@ export async function fetchClientSends(kpiId) {
 // 💬 The task's chat with the client (the web task panel's Chat tab):
 // { status, messages:[{ id, side:'team'|'client', who, body, at }], waiting,
 //   can_send, locked, client }. Never throws.
-export async function fetchChat(kpiId) {
+// markSeen: the chat is on screen, so the client's messages count as seen
+// (blue ✓✓ on their page). Each message carries `status`:
+// 'pending' ✓ · 'sent' ✓✓ · 'seen' blue ✓✓ · 'failed' ⚠ (retryChat).
+export async function fetchChat(kpiId, { markSeen = false } = {}) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: false, messages: [], message: 'Not connected to a server.' };
   try {
-    const res = await jsonRpc(serverUrl, '/kpi_action/chat', { kpi_id: kpiId });
+    const res = await jsonRpc(serverUrl, '/kpi_action/chat', { kpi_id: kpiId, mark_seen: !!markSeen });
     return res || { status: false, messages: [] };
   } catch (e) {
     log.warn('fetchChat failed', e?.message);
@@ -816,17 +820,128 @@ export async function fetchChat(kpiId) {
   }
 }
 
-// Send a team message to the client's WhatsApp group. Answers like fetchChat.
-// The route takes 'odoo' | 'web' only; the app counts as web.
-export async function sendChat(kpiId, text) {
+// ⚠ on a team bubble: the WhatsApp note failed; send it again. Answers like fetchChat.
+export async function retryChat(kpiId, messageId) {
   const { serverUrl } = await getConnection();
   if (!serverUrl) return { status: false, message: 'Not connected to a server.' };
   try {
-    const res = await jsonRpc(serverUrl, '/kpi_action/chat/send', { kpi_id: kpiId, text, source: 'web' });
+    const res = await jsonRpc(serverUrl, '/kpi_action/chat/retry', { kpi_id: kpiId, message_id: messageId });
+    return res || { status: false, message: 'Could not retry' };
+  } catch (e) {
+    log.warn('retryChat failed', e?.message);
+    return { status: false, message: e?.message || 'Could not retry' };
+  }
+}
+
+// Send a team message to the client's WhatsApp group. Answers like fetchChat.
+// The route takes 'odoo' | 'web' only; the app counts as web.
+// `replyTo` is the id of the message being answered (↩ Reply), or 0.
+export async function sendChat(kpiId, text, replyTo = 0) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'Not connected to a server.' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi_action/chat/send', {
+      kpi_id: kpiId, text, source: 'web', reply_to: replyTo || false,
+    });
     return res || { status: false, message: 'Could not send it' };
   } catch (e) {
     log.warn('sendChat failed', e?.message);
     return { status: false, message: e?.message || 'Could not send it' };
+  }
+}
+
+// Per-message actions from the long-press card. The chat payload says whether
+// the user may act at all (`can_act`); each row carries `can_edit`, `can_delete`,
+// `edited`, `deleted`, `reactions:[{ emoji, count, mine }]` and `info`
+// (false | { delivered_at, seen_at }).
+//   'react'  toggles `emoji` on the row (the server adds or removes it)
+//   'edit'   replaces the row's words with `text`
+//   'delete' withdraws the row for everyone
+// Answers like fetchChat, or { status:false, message }. Never throws.
+export async function chatAct(kpiId, msgId, action, { emoji, text } = {}) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'Not connected to a server.' };
+  try {
+    const params = { kpi_id: kpiId, msg_id: msgId, action };
+    if (emoji !== undefined) params.emoji = emoji;
+    if (text !== undefined) params.text = text;
+    const res = await jsonRpc(serverUrl, '/kpi_action/chat/act', params);
+    return res || { status: false, message: 'Could not do that' };
+  } catch (e) {
+    log.warn('chatAct failed', e?.message);
+    return { status: false, message: e?.message || 'Could not do that' };
+  }
+}
+
+// 📎 What the chat accepts: photos, videos and audio, up to 10 at a time, 50 MB
+// each. Checked BEFORE uploading, so a refusal never costs an upload.
+export const CHAT_MAX_FILES = 10;
+export const CHAT_MAX_BYTES = 50 * 1024 * 1024;
+export const chatFileKind = (mime = '') => {
+  const m = String(mime || '').toLowerCase();
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('audio/')) return 'audio';
+  return '';
+};
+
+// 📎 Send photos / videos / audio (with an optional caption and ↩ reply) to the
+// client's group. Multipart, like a progress upload — the files stream from disk.
+// files: [{ uri, name, mimeType, size }]. Answers like fetchChat. Never throws.
+export async function sendChatFiles(kpiId, { text, replyTo, files } = {}, onProgress = null) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'Not connected to a server.' };
+  const picked = (files || []).filter((f) => f?.uri);
+  if (!picked.length) return { status: false, message: 'No files picked' };
+  if (picked.length > CHAT_MAX_FILES) return { status: false, message: `Up to ${CHAT_MAX_FILES} files at a time` };
+  const bad = picked.find((f) => !chatFileKind(f.mimeType));
+  if (bad) return { status: false, message: `${bad.name || 'That file'} is not a photo, video or audio file` };
+  const tooBig = picked.find((f) => f.size && f.size > CHAT_MAX_BYTES);
+  if (tooBig) return { status: false, message: `${tooBig.name || 'A file'} is over the 50 MB limit` };
+  try {
+    const fd = new FormData();
+    fd.append('kpi_id', String(kpiId));
+    fd.append('text', text || '');
+    fd.append('source', 'web');
+    if (replyTo) fd.append('reply_to', String(replyTo));
+    // The SAME key once per file — the route reads every 'files' part.
+    for (const f of picked) {
+      fd.append('files', { uri: f.uri, name: f.name || 'file', type: f.mimeType || 'application/octet-stream' });
+    }
+    const res = await httpUpload(serverUrl, '/kpi_action/chat/send_files', fd, 300000, onProgress);
+    return res || { status: false, message: 'Could not send it' };
+  } catch (e) {
+    log.warn('sendChatFiles failed', e?.message);
+    return { status: false, message: e?.message || 'Could not send it' };
+  }
+}
+
+// One 📎 chat file's bytes as base64, from its server path ("/kpi/chat/file/123").
+// That route is type='http' auth='user' with no base64 sibling. An <Image> or the
+// browser would not carry the session, but axios does (the same cookie httpUpload
+// rides on), so the bytes come down here and the screen caches them as a file.
+// → { status, data_b64, mimetype } | { status:false, message }. Never throws.
+export async function fetchChatFile(url) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl || !url) return { status: false, message: 'No server connection' };
+  try {
+    const res = await axios.get(`${normalizeUrl(serverUrl)}${url}`, {
+      responseType: 'blob', withCredentials: true, timeout: 120000,
+    });
+    const mimetype = String(res.headers?.['content-type'] || '').split(';')[0].trim();
+    // A lost session answers with the login page, not the file.
+    if (mimetype === 'text/html') return { status: false, message: 'Please sign in again to open this file' };
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error('Could not read the file'));
+      r.readAsDataURL(res.data);
+    });
+    const comma = dataUrl.indexOf(',');
+    return { status: true, data_b64: comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl, mimetype };
+  } catch (e) {
+    log.warn('fetchChatFile failed', e?.message);
+    return { status: false, message: 'Could not fetch the file' };
   }
 }
 

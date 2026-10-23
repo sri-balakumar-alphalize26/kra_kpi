@@ -26,6 +26,33 @@ export async function getClientDashboard(state) {
   };
 }
 
+// The client's WhatsApp-only pages, from the app (controllers/kpi_client_links.py):
+// { has_group, declined:[{ id, ref, name, reason, url }], live_dbs:[{ id, name,
+// label, server, created, expires }], can_destroy }. Never throws.
+export async function getClientLinks() {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl) return null;
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi_client_portal/links/info', {}, undefined, db);
+    return res && res.status ? res : null;
+  } catch (e) {
+    log.warn('links info failed', e?.message);
+    return null;
+  }
+}
+
+// A fresh link to the New ('newdb') / Destroy ('dbdisconnect') database form,
+// or to the chat page (kpiId optional). → url, or throws with the reason.
+async function linkFrom(route, params) {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl) throw new Error('Not connected to a server.');
+  const res = await jsonRpc(serverUrl, route, params, undefined, db);
+  if (!res || res.status === false || !res.url) throw new Error(res?.message || 'Could not open it');
+  return res.url;
+}
+export const getDbFormLink = (kind) => linkFrom('/kpi_client_portal/links/db_form', { kind });
+export const getChatLink = (kpiId) => linkFrom('/kpi_client_portal/links/chat', kpiId ? { kpi_id: kpiId } : {});
+
 // The client's own project(s) — [{ id, display }]. Used to auto-fill the upload
 // project (read-only) for a client. `id` is exactly the sub_kra_id the create
 // route wants.

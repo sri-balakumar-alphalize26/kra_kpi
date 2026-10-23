@@ -22,10 +22,11 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, TouchableOpacity, TextInput, StyleSheet, StatusBar as RNStatusBar,
   ActivityIndicator, Animated, Easing, Linking, KeyboardAvoidingView, Platform,
-  Modal, Image, ScrollView, FlatList,
+  Modal, Image, ScrollView, FlatList, Pressable, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 // SDK 54: the classic writeAsStringAsync + EncodingType live under /legacy.
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -40,7 +41,8 @@ import {
   CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
   fetchActivity, updateProgress, deleteProgress, updateTaskMeta, fetchProjects,
   fetchLegacy, saveLegacy, legacyVoiceSource, fetchClientSends, parseServerTs,
-  fetchChat, sendChat,
+  fetchChat, sendChat, sendChatFiles, retryChat, fetchChatFile, chatFileKind, CHAT_MAX_FILES, CHAT_MAX_BYTES,
+  chatAct,
 } from '../services/kpiActions';
 import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
 import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
@@ -163,6 +165,46 @@ function localWhen(utc) {
   const ms = parseServerTs(utc);
   if (!ms) return utc || '';
   return new Date(ms).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// 💬 Chat: the server's UTC 'YYYY-MM-DD HH:MM:SS' as a local Date (or null).
+function chatDate(utc) {
+  if (!utc) return null;
+  const d = new Date(`${String(utc).replace(' ', 'T')}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+// The day pill: "Today" / "Yesterday" / "12 Oct 2026".
+function chatDayLabel(d) {
+  if (!d) return '';
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (day === today) return 'Today';
+  if (day === today - 86400000) return 'Yesterday';
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+const chatHhmm = (d) => (d
+  ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '');
+const CHAT_KIND_ICON = { image: '🖼', video: '🎬', audio: '🎵' };
+// A row's text for a ↩ quote / reply banner: its words, or what it carries.
+function chatSnippet(m) {
+  const t = String(m?.text ?? m?.body ?? '').trim();
+  if (t) return t;
+  const n = (m?.files || []).length;
+  return n ? `📎 ${n} file${n > 1 ? 's' : ''}` : '';
+}
+// The long-press card: six quick reactions, and the full grid behind "+".
+const CHAT_QUICK_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const CHAT_ALL_EMOJI = [
+  '👍', '👎', '❤️', '🔥', '🎉', '👏', '🙏', '💯', '😂', '🤣', '😅', '😊', '😍', '😎', '🤔', '😐',
+  '😮', '😢', '😭', '😡', '🥳', '🤝', '💪', '✅', '❌', '⚠️', '👀', '🚀', '⭐', '💡', '⏰', '📌',
+];
+// Info popup: a UTC stamp as a full local date-time, or "—" when it never happened.
+function chatWhenFull(utc) {
+  const d = chatDate(utc);
+  return d ? d.toLocaleString('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }) : '—';
 }
 
 function Section({ icon, title, subtitle, children, tint, right }) {
@@ -351,30 +393,222 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   // ---- 💬 Chat with the client ---------------------------------------------
   // Same thread as the web task panel's Chat tab: the client's 💬 Discuss
   // messages, and the team's replies (sent to the client's WhatsApp group).
-  // Refreshed every 15 s while the screen is open.
+  // Refreshed every 3 s while the screen is open; the screen being open marks
+  // the client's messages as seen (blue ✓✓ on their page).
   const [chat, setChat] = useState(null);           // the route's answer
   const [chatText, setChatText] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
+  const chatBusyRef = useRef(false);                // a send in flight: the poll stands aside
+  const [chatFiles, setChatFiles] = useState([]);   // 📎 picked, not yet sent
+  const [chatReply, setChatReply] = useState(null); // ↩ the row being answered
+  const [chatPct, setChatPct] = useState(null);     // upload progress 0..100
+  const [chatSheet, setChatSheet] = useState(null); // { title, options:[{label, onPress}] }
+  const [chatCard, setChatCard] = useState(null);   // { m, grid } the long-pressed row's action card
+  const [chatInfo, setChatInfo] = useState(null);   // the row whose ⓘ Info popup is open
+  const [chatEdit, setChatEdit] = useState(null);   // ✎ the row being edited (the box holds its words)
+  // The send button: while editing only words count (no files go with an edit).
+  const chatSendOff = chatBusy || (chatEdit ? !chatText.trim() : (!chatText.trim() && !chatFiles.length));
   useEffect(() => {
     let live = true;
-    const pull = () => fetchChat(task.id).then((r) => { if (live) setChat(r); });
+    const pull = () => {
+      if (chatBusyRef.current) return;
+      fetchChat(task.id, { markSeen: true }).then((r) => { if (live && !chatBusyRef.current) setChat(r); });
+    };
     pull();
-    const t = setInterval(pull, 15000);
+    const t = setInterval(pull, 3000);
     return () => { live = false; clearInterval(t); };
   }, [task.id]);
   async function onSendChat() {
     const text = chatText.trim();
-    if (!text || chatBusy) return;
+    if (chatSendOff) return;
     setChatBusy(true);
-    try {
-      const r = await sendChat(task.id, text);
-      if (!r?.status) { flash('err', r?.message || 'Could not send it'); return; }
-      log.info('chat sent', { kpi_id: task.id });
+    chatBusyRef.current = true;
+    // ✎ Editing: the same box and button, but the words replace an old row.
+    if (chatEdit) {
+      try {
+        const r = await chatAct(task.id, chatEdit.id, 'edit', { text });
+        if (!r?.status) { flash('err', r?.message || 'Could not edit it'); return; }
+        log.info('chat edited', { kpi_id: task.id, msg_id: chatEdit.id });
+        setChatEdit(null);
+        setChatText('');
+        setChat(r);
+      } catch (e) {
+        flash('err', e?.message || 'Could not edit it');
+      } finally {
+        setChatBusy(false);
+        chatBusyRef.current = false;
+      }
+      return;
+    }
+    const replyTo = chatReply?.id || 0;
+    const reply = chatReply;
+    // A text message shows at once with a single ✓ and the box clears; the
+    // server's answer replaces it. Files keep the progress bar.
+    let temp = null;
+    if (!chatFiles.length) {
+      temp = {
+        id: `tmp${Date.now()}`, side: 'team', who: 'You', body: text, files: [], status: 'pending', error: '',
+        at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        reply: reply ? { id: reply.id, side: reply.side, who: reply.who, text: reply.body || '' } : false,
+      };
+      setChat((c) => ({ ...(c || {}), messages: [...(c?.messages || []), temp] }));
       setChatText('');
+      setChatReply(null);
+    }
+    const unsend = () => {
+      if (!temp) return;
+      setChat((c) => ({ ...(c || {}), messages: (c?.messages || []).filter((m) => m.id !== temp.id) }));
+      setChatText(text);
+      setChatReply(reply);
+    };
+    try {
+      let r;
+      if (chatFiles.length) {
+        setChatPct(0);
+        r = await sendChatFiles(task.id, { text, replyTo, files: chatFiles },
+          (loaded, total) => { if (total) setChatPct(Math.min(100, Math.round((loaded / total) * 100))); });
+      } else {
+        r = await sendChat(task.id, text, replyTo);
+      }
+      if (!r?.status) { unsend(); flash('err', r?.message || 'Could not send it'); return; }
+      log.info('chat sent', { kpi_id: task.id, files: chatFiles.length, reply_to: replyTo });
+      setChatText('');
+      setChatFiles([]);
+      setChatReply(null);
       setChat(r);
+    } catch (e) {
+      unsend();
+      flash('err', e?.message || 'Could not send it');
     } finally {
       setChatBusy(false);
+      chatBusyRef.current = false;
+      setChatPct(null);
     }
+  }
+  // ⚠ on a bubble: WhatsApp refused the note; send it again.
+  async function onChatRetry(m) {
+    const r = await retryChat(task.id, m.id);
+    if (!r?.status) { flash('err', r?.message || 'Could not retry'); return; }
+    setChat(r);
+  }
+
+  // 📎 Add picked files to the chips, holding the chat's limits: image / video /
+  // audio only, 50 MB each, 10 at a time. Refused here, before any upload.
+  function addChatFiles(picked) {
+    const ok = [];
+    const refused = [];
+    for (const f of picked) {
+      if (!chatFileKind(f.mimeType)) refused.push(`${f.name} is not a photo, video or audio file`);
+      else if (f.size && f.size > CHAT_MAX_BYTES) refused.push(`${f.name} is over 50 MB`);
+      else ok.push(f);
+    }
+    setChatFiles((cur) => {
+      const room = Math.max(0, CHAT_MAX_FILES - cur.length);
+      if (ok.length > room) refused.push(`Up to ${CHAT_MAX_FILES} files at a time`);
+      return [...cur, ...ok.slice(0, room)];
+    });
+    if (refused.length) flash('err', refused[0]);
+  }
+  // An image-picker asset as a chip. Some providers leave mimeType / fileName
+  // empty, so fall back on the asset type.
+  const assetToFile = (a) => {
+    const isVideo = a.type === 'video' || (a.mimeType || '').startsWith('video/');
+    const mimeType = a.mimeType || (isVideo ? 'video/mp4' : 'image/jpeg');
+    const name = a.fileName || `${isVideo ? 'video' : 'photo'}_${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`;
+    return { uri: a.uri, name, size: a.fileSize || 0, mimeType };
+  };
+  async function onChatCamera() {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync().catch(() => null);
+      if (!perm?.granted) { flash('err', 'Camera permission is needed'); return; }
+      const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], quality: 0.8 });
+      if (res.canceled || !res.assets?.length) return;
+      addChatFiles(res.assets.map(assetToFile));
+    } catch (e) {
+      log.warn('chat camera failed', e?.message);
+      flash('err', 'Could not open the camera');
+    }
+  }
+  async function onChatLibrary() {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'], allowsMultipleSelection: true,
+        selectionLimit: Math.max(1, CHAT_MAX_FILES - chatFiles.length), quality: 0.8,
+      });
+      if (res.canceled || !res.assets?.length) return;
+      addChatFiles(res.assets.map(assetToFile));
+    } catch (e) {
+      log.warn('chat library failed', e?.message);
+      flash('err', 'Could not open your photos');
+    }
+  }
+  async function onChatAudio() {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, type: 'audio/*', multiple: true });
+      if (res.canceled) return;
+      addChatFiles((res.assets || []).filter(Boolean).map((f) => ({
+        uri: f.uri, name: f.name || 'audio', size: f.size || 0, mimeType: f.mimeType || 'audio/mpeg',
+      })));
+    } catch (e) {
+      log.warn('chat audio pick failed', e?.message);
+      flash('err', 'Could not open your files');
+    }
+  }
+  const openChatPin = () => setChatSheet({
+    title: 'Attach',
+    options: [
+      { label: '📷 Camera', onPress: onChatCamera },
+      { label: '🖼 Photos & videos', onPress: onChatLibrary },
+      { label: '🎵 Audio', onPress: onChatAudio },
+    ],
+  });
+  // Long-press on a bubble → the action card (reactions · Reply · Edit · Info ·
+  // Delete). Not for a withdrawn row, nor for a message still on its way up.
+  const openChatRowMenu = (m) => {
+    if (m.deleted || String(m.id).startsWith('tmp')) return;
+    setChatCard({ m, grid: false });
+  };
+  // One per-message action; the server answers with the whole chat again.
+  async function onChatAct(m, action, extra = {}) {
+    const r = await chatAct(task.id, m.id, action, extra);
+    if (!r?.status) { flash('err', r?.message || 'Could not do that'); return; }
+    log.info('chat act', { kpi_id: task.id, msg_id: m.id, action });
+    setChat(r);
+  }
+  const onChatReact = (m, emoji) => { setChatCard(null); onChatAct(m, 'react', { emoji }); };
+  // The card is a Modal: let it close before the Alert / keyboard comes up, as
+  // the attach sheet does, or iOS can swallow the second presentation.
+  const onChatDelete = (m) => {
+    setChatCard(null);
+    setTimeout(() => Alert.alert('Delete message', 'Delete this message for everyone?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => onChatAct(m, 'delete') },
+    ]), 250);
+  };
+  const startChatEdit = (m) => {
+    setChatCard(null);
+    setChatReply(null);
+    setChatEdit(m);
+    setChatText(m.body || '');
+  };
+  const cancelChatEdit = () => { setChatEdit(null); setChatText(''); };
+  const startChatReply = (m) => {
+    setChatCard(null);
+    if (chatEdit) cancelChatEdit();
+    setChatReply(m);
+  };
+  const openChatInfo = (m) => { setChatCard(null); setTimeout(() => setChatInfo(m), 250); };
+
+  // ↩ Tap a quote → scroll to the message it answers (if it is on screen).
+  const chatY = useRef(0);             // y of the chat section in the scroll view
+  const chatRowY = useRef({});         // y of each bubble, within that section
+  const [chatFocus, setChatFocus] = useState(null);
+  function onChatQuote(id) {
+    const y = chatRowY.current[id];
+    if (y === undefined) return;
+    scrollRef.current?.scrollTo({ y: Math.max(0, chatY.current + y - 70), animated: true });
+    setChatFocus(id);
+    setTimeout(() => setChatFocus(null), 1500);
   }
 
   useEffect(() => {
@@ -978,6 +1212,89 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     } catch (e) {
       log.error('play voice failed', e?.message);
       flash('err', 'Could not play that voice note');
+    } finally { setFileBusy(null); }
+  }
+
+  // 📎 Chat files. f.url is a type='http' route; fetchChatFile pulls the bytes
+  // with the session and they are cached as a local file, like every other file
+  // on this screen. Photos load as thumbnails on their own; videos and audio wait
+  // for a tap.
+  const [chatMedia, setChatMedia] = useState({});   // file id -> local file:// uri
+  const chatMediaPending = useRef(new Set());
+  async function cacheChatFile(f, quiet = false) {
+    if (chatMedia[f.id]) return chatMedia[f.id];
+    const res = await fetchChatFile(f.url);
+    if (!res?.status) {
+      if (!quiet) flash('err', res?.message || 'Could not fetch the file');
+      return null;
+    }
+    const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+    let name = f.name || 'file';
+    try { name = decodeURIComponent(name); } catch (_) {}
+    name = name.split(/[\\/]/).pop() || 'file';
+    const uri = `${dir}chat_${f.id}_${name}`;
+    await FileSystem.writeAsStringAsync(uri, res.data_b64, { encoding: FileSystem.EncodingType.Base64 });
+    setChatMedia((cur) => ({ ...cur, [f.id]: uri }));
+    return uri;
+  }
+  useEffect(() => {
+    const imgs = [];
+    for (const m of chat?.messages || []) {
+      for (const f of m.files || []) {
+        if (f.kind === 'image' && f.url && !chatMedia[f.id] && !chatMediaPending.current.has(f.id)) imgs.push(f);
+      }
+    }
+    if (!imgs.length) return;
+    imgs.forEach((f) => chatMediaPending.current.add(f.id));
+    (async () => {
+      // One at a time: a chat full of photos should not fire twenty downloads.
+      for (const f of imgs) {
+        try { await cacheChatFile(f, true); } catch (e) { log.warn('chat thumb failed', e?.message); }
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat?.messages]);
+
+  async function onOpenChatFile(f) {
+    if (f.kind === 'audio' && playing === f.url) { stopVoice(); return; }
+    setFileBusy(`chat-${f.id}`);
+    try {
+      const uri = await cacheChatFile(f);
+      if (!uri) return;
+      if (f.kind === 'image') {
+        setViewer({ name: f.name, uri, mimetype: f.mime, isImage: true });
+        return;
+      }
+      if (f.kind === 'audio') {
+        let audio = null;
+        try {
+          // eslint-disable-next-line global-require
+          audio = require('expo-audio');
+          await audio.setAudioModeAsync({ playsInSilentMode: true });
+        } catch (e) {
+          log.warn('in-app audio not available', e?.message);
+          audio = null;
+        }
+        if (audio) {
+          stopVoice();
+          const p = audio.createAudioPlayer(uri);
+          playerRef.current = p;
+          p.addListener('playbackStatusUpdate', (st) => { if (st?.didJustFinish) stopVoice(); });
+          p.play();
+          setPlaying(f.url);
+          return;
+        }
+      }
+      // Video (no in-app player in this build), or audio without expo-audio:
+      // hand it to the device's own player.
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: f.mime || undefined, dialogTitle: `Open ${f.name}` });
+      } else {
+        flash('err', 'No app available to open this file');
+      }
+    } catch (e) {
+      log.error('open chat file failed', e?.message);
+      flash('err', 'Could not open that file');
     } finally { setFileBusy(null); }
   }
 
@@ -1743,39 +2060,189 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 message, or when a reply can be sent. */}
             {(data?.meta?.is_manager || data?.meta?.is_assignee) && chat?.status
               && ((chat.messages || []).length > 0 || (chat.can_send && !chat.locked)) && (
+              <View onLayout={(e) => { chatY.current = e.nativeEvent.layout.y; }}>
               <Section icon="chatbubbles-outline" title={`💬 Chat with ${chat.client || 'the client'}`}
-                subtitle="The client sees team messages as “Reply from our team”">
+                subtitle="The client sees team messages as “Reply from our team”. Long-press a message to react, reply, edit or delete.">
                 {(chat.messages || []).length === 0 && (
                   <Text style={s.cardSub}>No messages yet. When the client sends 💬 Discuss from their WhatsApp group, it shows here.</Text>
                 )}
-                {(chat.messages || []).map((m) => {
-                  const team = m.side === 'team';
-                  return (
-                    <View key={`chat-${m.id}`} style={[s.chatBubble, team ? s.chatOut : s.chatIn]}>
-                      <Text style={s.chatWho}>{team ? m.who : `${m.who} · client`}</Text>
-                      <Text style={s.body}>{m.body}</Text>
-                      <Text style={s.chatTime}>{localWhen(m.at)}</Text>
-                    </View>
-                  );
-                })}
+                {(() => {
+                  // A date pill at the top of each day, then that day's bubbles.
+                  const out = [];
+                  let lastDay = null;
+                  for (const m of chat.messages || []) {
+                    const d = chatDate(m.at);
+                    const day = chatDayLabel(d);
+                    if (day && day !== lastDay) {
+                      out.push(
+                        <View key={`chatday-${m.id}`} style={s.chatDayPill}>
+                          <Text style={s.chatDayTxt}>{day}</Text>
+                        </View>,
+                      );
+                      lastDay = day;
+                    }
+                    const team = m.side === 'team';
+                    const reacts = m.deleted ? [] : (m.reactions || []);
+                    out.push(
+                      <View
+                        key={`chat-${m.id}`}
+                        onLayout={(e) => { chatRowY.current[m.id] = e.nativeEvent.layout.y; }}
+                        style={[s.chatRow, team ? s.chatRowOut : s.chatRowIn, reacts.length > 0 && s.chatRowReacted]}
+                      >
+                      <Pressable
+                        delayLongPress={220} onLongPress={() => openChatRowMenu(m)}
+                        style={({ pressed }) => [s.chatBubble, team ? s.chatOut : s.chatIn,
+                          chatFocus === m.id && s.chatFocus, pressed && { opacity: 0.85 }]}
+                      >
+                        <Text style={s.chatWho}>{team ? m.who : `${m.who} · client`}</Text>
+                        {m.deleted ? (
+                          <Text style={s.chatDeleted}>⊘ This message was deleted</Text>
+                        ) : (
+                        <>
+                        {!!m.reply && (
+                          <TouchableOpacity activeOpacity={0.7} onPress={() => onChatQuote(m.reply.id)}
+                            style={[s.chatQuote, { borderLeftColor: m.reply.side === 'team' ? '#16A34A' : COLORS.primary }]}>
+                            <Text style={s.chatQuoteWho} numberOfLines={1}>{m.reply.who}</Text>
+                            <Text style={s.chatQuoteTxt} numberOfLines={2}>{m.reply.text}</Text>
+                          </TouchableOpacity>
+                        )}
+                        {(m.files || []).map((f) => {
+                          const busy = fileBusy === `chat-${f.id}`;
+                          const meta = [f.name, f.size ? humanSize(f.size) : ''].filter(Boolean).join(' · ');
+                          if (f.kind === 'image') {
+                            const uri = chatMedia[f.id];
+                            return (
+                              <View key={`cf-${f.id}`} style={s.chatFile}>
+                                <TouchableOpacity activeOpacity={0.85} onPress={() => onOpenChatFile(f)}>
+                                  {uri ? (
+                                    <Image source={{ uri }} style={s.chatThumb} resizeMode="cover" />
+                                  ) : (
+                                    <View style={[s.chatThumb, s.chatThumbWait]}><ActivityIndicator color={COLORS.primary} /></View>
+                                  )}
+                                </TouchableOpacity>
+                                <Text style={s.chatFileMeta} numberOfLines={1}>{meta}</Text>
+                              </View>
+                            );
+                          }
+                          const isPlaying = f.kind === 'audio' && playing === f.url;
+                          const label = f.kind === 'video' ? '▶ Play video'
+                            : f.kind === 'audio' ? (isPlaying ? '⏸ Pause' : '▶ Play audio')
+                              : `${CHAT_KIND_ICON[f.kind] || '📎'} Open`;
+                          return (
+                            <View key={`cf-${f.id}`} style={s.chatFile}>
+                              <TouchableOpacity style={s.chatMediaRow} activeOpacity={0.7} disabled={busy}
+                                onPress={() => onOpenChatFile(f)}>
+                                {busy ? <ActivityIndicator size="small" color={COLORS.primary} />
+                                  : <Text style={s.chatMediaIcon}>{CHAT_KIND_ICON[f.kind] || '📎'}</Text>}
+                                <Text style={s.chatMediaTxt}>{label}</Text>
+                              </TouchableOpacity>
+                              <Text style={s.chatFileMeta} numberOfLines={1}>{meta}</Text>
+                            </View>
+                          );
+                        })}
+                        {!!m.body && (
+                          <Text style={s.body}>
+                            {m.body}
+                            {!!m.edited && <Text style={s.chatEdited}>  edited</Text>}
+                          </Text>
+                        )}
+                        </>
+                        )}
+                        <View style={s.chatMeta}>
+                          <Text style={s.chatTime}>{chatHhmm(d) || localWhen(m.at)}</Text>
+                          {/* ✓ saved · ✓✓ reached the client's group · blue ✓✓ the client
+                              opened the chat · ⚠ WhatsApp refused it (tap to retry) */}
+                          {team && !m.deleted && !!m.status && (
+                            <Text onPress={m.status === 'failed' ? () => onChatRetry(m) : undefined}
+                              style={[s.chatTick, m.status === 'seen' && { color: '#53BDEB' }, m.status === 'failed' && { color: '#DC2626' }]}>
+                              {m.status === 'failed' ? ' ⚠' : m.status === 'pending' ? ' ✓' : ' ✓✓'}
+                            </Text>
+                          )}
+                        </View>
+                      </Pressable>
+                      {/* Reaction chips, overlapping the bubble's bottom edge on its
+                          side. Tap one to add / take back your own. */}
+                      {reacts.length > 0 && (
+                        <View style={[s.chatReacts, team ? { right: 6 } : { left: 6 }]}>
+                          {reacts.map((r) => (
+                            <TouchableOpacity key={`${m.id}-${r.emoji}`} activeOpacity={0.7}
+                              disabled={!chat.can_act} onPress={() => onChatAct(m, 'react', { emoji: r.emoji })}
+                              style={[s.chatReact, r.mine && s.chatReactMine]}>
+                              <Text style={s.chatReactTxt}>{r.emoji}{r.count > 1 ? ` ${r.count}` : ''}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+                      </View>,
+                    );
+                  }
+                  return out;
+                })()}
                 {chat.locked ? (
                   <Text style={[s.cardSub, { marginTop: 6 }]}>🔒 {chat.locked}</Text>
                 ) : !chat.can_send ? (
                   <Text style={[s.cardSub, { marginTop: 6 }]}>This client has no WhatsApp group linked, so messages can't be sent.</Text>
                 ) : (
-                  <View style={s.chatFoot}>
-                    <TextInput
-                      style={[s.oldInput, { flex: 1, minHeight: 42, textAlignVertical: 'top', paddingTop: 9 }]} multiline
-                      value={chatText} onChangeText={setChatText}
-                      placeholder="Type a message" placeholderTextColor={COLORS.faint}
-                    />
-                    <TouchableOpacity style={[s.attDl, { height: 42 }, (chatBusy || !chatText.trim()) && s.btnOff]}
-                      onPress={onSendChat} disabled={chatBusy || !chatText.trim()}>
-                      {chatBusy ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={15} color="#fff" />}
-                    </TouchableOpacity>
+                  <View>
+                    {/* ↩ Replying to … / ✎ Editing message — the same banner; ✕ drops it. */}
+                    {(!!chatReply || !!chatEdit) && (
+                      <View style={s.chatReplyBar}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.chatQuoteWho} numberOfLines={1}>
+                            {chatEdit ? '✎ Editing message' : `↩ Replying to ${chatReply.who}`}
+                          </Text>
+                          <Text style={s.chatQuoteTxt} numberOfLines={1}>{chatSnippet(chatEdit || chatReply)}</Text>
+                        </View>
+                        <TouchableOpacity onPress={() => (chatEdit ? cancelChatEdit() : setChatReply(null))}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                          <Ionicons name="close" size={18} color={COLORS.faint} />
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    {chatFiles.length > 0 && (
+                      <View style={s.chatChips}>
+                        {chatFiles.map((f, i) => (
+                          <View key={`${f.uri}-${i}`} style={s.chatChip}>
+                            <Text style={s.chatChipTxt} numberOfLines={1}>
+                              {CHAT_KIND_ICON[chatFileKind(f.mimeType)] || '📎'} {f.name}{f.size ? ` · ${humanSize(f.size)}` : ''}
+                            </Text>
+                            {!chatBusy && (
+                              <TouchableOpacity onPress={() => setChatFiles((cur) => cur.filter((_, j) => j !== i))}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                <Ionicons name="close" size={15} color={COLORS.faint} />
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                    {chatPct !== null && (
+                      <View style={{ marginTop: 6 }}>
+                        <View style={s.barTrack}><View style={[s.barFill, { width: `${chatPct}%` }]} /></View>
+                        <Text style={s.pctTxt}>Uploading… {chatPct}%</Text>
+                      </View>
+                    )}
+                    <View style={s.chatFoot}>
+                      <TouchableOpacity style={s.chatPin} onPress={openChatPin}
+                        disabled={chatBusy || !!chatEdit || chatFiles.length >= CHAT_MAX_FILES}>
+                        <Text style={{ fontSize: 18, opacity: chatBusy || chatEdit || chatFiles.length >= CHAT_MAX_FILES ? 0.4 : 1 }}>📎</Text>
+                      </TouchableOpacity>
+                      <TextInput
+                        style={[s.oldInput, { flex: 1, minHeight: 42, textAlignVertical: 'top', paddingTop: 9 }]} multiline
+                        value={chatText} onChangeText={setChatText}
+                        placeholder={chatEdit ? 'Edit your message' : chatFiles.length ? 'Add a caption (optional)' : 'Type a message'}
+                        placeholderTextColor={COLORS.faint}
+                      />
+                      <TouchableOpacity
+                        style={[s.attDl, { height: 42 }, chatSendOff && s.btnOff]}
+                        onPress={onSendChat} disabled={chatSendOff}>
+                        {chatBusy ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={15} color="#fff" />}
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 )}
               </Section>
+              </View>
             )}
 
             {/* ── From the client (only when there is any) ───────────── */}
@@ -2343,6 +2810,112 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
           )}
         </Modal>
 
+        {/* 💬 Long-pressed message: the action card. Quick reactions (or the full
+            grid behind "+"), then Reply · Edit · Info · Delete — each only when
+            the server allows it. Tap the dimmed scrim to close. */}
+        <Modal visible={!!chatCard} transparent animationType="fade" onRequestClose={() => setChatCard(null)}>
+          <Pressable style={s.chatCardBg} onPress={() => setChatCard(null)}>
+            {!!chatCard?.m && (() => {
+              const m = chatCard.m;
+              const canAct = !!chat?.can_act;
+              const rows = [];
+              if (canAct && chat?.can_send && !chat?.locked) rows.push({ label: '↩  Reply', onPress: () => startChatReply(m) });
+              if (canAct && m.can_edit) rows.push({ label: '✎  Edit', onPress: () => startChatEdit(m) });
+              if (m.info) rows.push({ label: 'ⓘ  Info', onPress: () => openChatInfo(m) });
+              if (canAct && m.can_delete) rows.push({ label: '🗑  Delete', red: true, onPress: () => onChatDelete(m) });
+              return (
+                <Pressable style={s.chatCard} onPress={() => {}}>
+                  <Text style={s.chatCardWho} numberOfLines={1}>{m.who}</Text>
+                  {!!chatSnippet(m) && <Text style={s.chatCardSnip} numberOfLines={2}>{chatSnippet(m)}</Text>}
+                  {canAct && !chatCard.grid && (
+                    <View style={s.chatQuickRow}>
+                      {CHAT_QUICK_EMOJI.map((e) => (
+                        <TouchableOpacity key={e} style={s.chatQuick} activeOpacity={0.6} onPress={() => onChatReact(m, e)}>
+                          <Text style={s.chatQuickTxt}>{e}</Text>
+                        </TouchableOpacity>
+                      ))}
+                      <TouchableOpacity style={[s.chatQuick, s.chatQuickMore]} activeOpacity={0.6}
+                        onPress={() => setChatCard({ m, grid: true })}>
+                        <Ionicons name="add" size={20} color={COLORS.navy} />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                  {canAct && chatCard.grid && (
+                    <View>
+                      <TouchableOpacity style={s.chatGridBack} activeOpacity={0.6} onPress={() => setChatCard({ m, grid: false })}>
+                        <Ionicons name="arrow-back" size={16} color={COLORS.navy} />
+                        <Text style={s.chatGridBackTxt}>Back</Text>
+                      </TouchableOpacity>
+                      <View style={s.chatGrid}>
+                        {CHAT_ALL_EMOJI.map((e) => (
+                          <TouchableOpacity key={e} style={s.chatGridCell} activeOpacity={0.6} onPress={() => onChatReact(m, e)}>
+                            <Text style={s.chatQuickTxt}>{e}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                  {rows.length > 0 && !chatCard.grid && (
+                    <View style={s.chatCardRows}>
+                      {rows.map((o, i) => (
+                        <TouchableOpacity key={o.label} activeOpacity={0.7} onPress={o.onPress}
+                          style={[s.chatSheetOpt, i === rows.length - 1 && { borderBottomWidth: 0 }]}>
+                          <Text style={[s.chatSheetOptTxt, o.red && { color: '#DC2626' }]}>{o.label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                  {!canAct && rows.length === 0 && (
+                    <Text style={[s.cardSub, { marginTop: 8 }]}>Nothing to do with this message.</Text>
+                  )}
+                </Pressable>
+              );
+            })()}
+          </Pressable>
+        </Modal>
+
+        {/* ⓘ Message info: when it was sent, reached the client's group, and was seen. */}
+        <Modal visible={!!chatInfo} transparent animationType="fade" onRequestClose={() => setChatInfo(null)}>
+          <Pressable style={s.chatCardBg} onPress={() => setChatInfo(null)}>
+            {!!chatInfo && (
+              <Pressable style={s.chatCard} onPress={() => {}}>
+                <Text style={s.chatCardWho}>Message info</Text>
+                {[
+                  ['Sent', chatWhenFull(chatInfo.at)],
+                  ['Delivered', chatWhenFull(chatInfo.info?.delivered_at)],
+                  ['Seen', chatWhenFull(chatInfo.info?.seen_at)],
+                ].map(([k, v]) => (
+                  <View key={k} style={s.chatInfoRow}>
+                    <Text style={s.chatInfoKey}>{k}</Text>
+                    <Text style={s.chatInfoVal}>{v}</Text>
+                  </View>
+                ))}
+                <TouchableOpacity style={[s.chatSheetOpt, { borderBottomWidth: 0, alignItems: 'center' }]} onPress={() => setChatInfo(null)}>
+                  <Text style={[s.chatSheetOptTxt, { color: COLORS.primary }]}>Close</Text>
+                </TouchableOpacity>
+              </Pressable>
+            )}
+          </Pressable>
+        </Modal>
+
+        {/* 💬 Chat attach menu: 📎 Camera / Photos & videos / Audio. */}
+        <Modal visible={!!chatSheet} transparent animationType="fade" onRequestClose={() => setChatSheet(null)}>
+          <TouchableOpacity style={s.chatSheetBg} activeOpacity={1} onPress={() => setChatSheet(null)}>
+            <View style={s.chatSheet}>
+              {!!chatSheet?.title && <Text style={s.chatSheetTitle} numberOfLines={1}>{chatSheet.title}</Text>}
+              {(chatSheet?.options || []).map((o) => (
+                <TouchableOpacity key={o.label} style={s.chatSheetOpt} activeOpacity={0.7}
+                  onPress={() => { setChatSheet(null); setTimeout(o.onPress, 250); }}>
+                  <Text style={s.chatSheetOptTxt}>{o.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity style={[s.chatSheetOpt, { borderBottomWidth: 0 }]} onPress={() => setChatSheet(null)}>
+                <Text style={[s.chatSheetOptTxt, { color: COLORS.faint }]}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
         {/* Image viewer — the bytes were fetched over the authenticated channel
             and cached, so this points at a local file:// uri. An <Image> aimed at
             /kpi/progress/view would render the login page instead. */}
@@ -2595,12 +3168,70 @@ const s = StyleSheet.create({
   sendFileTxt: { fontSize: 12, color: COLORS.ink, flexShrink: 1 },
   sendStatus: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy, marginTop: 8 },
   sendReason: { fontSize: 12.5, color: COLORS.ink, marginTop: 2, lineHeight: 17 },
-  chatBubble: { borderRadius: 12, padding: 9, marginBottom: 7, maxWidth: '88%' },
-  chatIn: { alignSelf: 'flex-start', backgroundColor: '#F1F5F9' },
-  chatOut: { alignSelf: 'flex-end', backgroundColor: '#E3F0FF' },
+  // A row holds the bubble and its reaction chips; the chips hang over the
+  // bubble's bottom edge, so a reacted row leaves them room underneath.
+  chatRow: { maxWidth: '88%', marginBottom: 7 },
+  chatRowIn: { alignSelf: 'flex-start' },
+  chatRowOut: { alignSelf: 'flex-end' },
+  chatRowReacted: { marginBottom: 20 },
+  chatBubble: { borderRadius: 12, padding: 9 },
+  chatIn: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB' },
+  chatOut: { backgroundColor: '#DCF8C6' },
+  chatFocus: { borderWidth: 2, borderColor: '#F59E0B' },
+  chatDeleted: { fontSize: 13, fontStyle: 'italic', color: COLORS.faint, lineHeight: 19 },
+  chatEdited: { fontSize: 10.5, color: COLORS.faint },
+  chatReacts: { position: 'absolute', bottom: -13, flexDirection: 'row', gap: 4 },
+  chatReact: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB',
+    borderRadius: 11, paddingHorizontal: 6, paddingVertical: 2, shadowColor: '#000', shadowOpacity: 0.08,
+    shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 1,
+  },
+  chatReactMine: { borderColor: COLORS.primary, backgroundColor: '#EEF3FF' },
+  chatReactTxt: { fontSize: 12, color: COLORS.navy, fontWeight: '800' },
+  // The long-press action card and the ⓘ Info popup: centred over a dim scrim.
+  chatCardBg: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  chatCard: { width: '100%', maxWidth: 340, backgroundColor: '#fff', borderRadius: 16, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8 },
+  chatCardWho: { fontSize: 13, fontWeight: '900', color: COLORS.navy },
+  chatCardSnip: { fontSize: 12.5, color: COLORS.faint, marginTop: 2 },
+  chatQuickRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
+  chatQuick: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  chatQuickMore: { backgroundColor: '#E2E8F0' },
+  chatQuickTxt: { fontSize: 21 },
+  chatGridBack: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 10, paddingVertical: 4, paddingRight: 8 },
+  chatGridBackTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy },
+  chatGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4, marginBottom: 6 },
+  chatGridCell: { width: '12.5%', height: 40, alignItems: 'center', justifyContent: 'center' },
+  chatCardRows: { marginTop: 8 },
+  chatInfoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#EEF2F8' },
+  chatInfoKey: { fontSize: 13, fontWeight: '800', color: COLORS.navy },
+  chatInfoVal: { fontSize: 12.5, color: COLORS.ink },
   chatWho: { fontSize: 11.5, fontWeight: '900', color: COLORS.navy, marginBottom: 2 },
   chatTime: { fontSize: 10.5, color: COLORS.faint, marginTop: 3, alignSelf: 'flex-end' },
+  chatMeta: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end' },
+  chatTick: { fontSize: 11, color: COLORS.faint, marginTop: 3, letterSpacing: -1.5 },
   chatFoot: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 6 },
+  chatDayPill: { alignSelf: 'center', backgroundColor: '#E2E8F0', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 3, marginVertical: 6 },
+  chatDayTxt: { fontSize: 11, fontWeight: '800', color: COLORS.navy },
+  chatQuote: { backgroundColor: 'rgba(15,23,42,0.06)', borderLeftWidth: 3, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 5, marginBottom: 5 },
+  chatQuoteWho: { fontSize: 11.5, fontWeight: '900', color: COLORS.navy },
+  chatQuoteTxt: { fontSize: 12, color: COLORS.ink, marginTop: 1 },
+  chatFile: { marginBottom: 5 },
+  chatThumb: { width: 200, height: 150, borderRadius: 8, backgroundColor: '#E5E7EB' },
+  chatThumbWait: { alignItems: 'center', justifyContent: 'center' },
+  chatFileMeta: { fontSize: 10.5, color: COLORS.faint, marginTop: 2, maxWidth: 220 },
+  chatMediaRow: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(15,23,42,0.06)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, minWidth: 160 },
+  chatMediaIcon: { fontSize: 16 },
+  chatMediaTxt: { fontSize: 13, fontWeight: '800', color: COLORS.navy },
+  chatReplyBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F1F5F9', borderLeftWidth: 3, borderLeftColor: COLORS.primary, borderRadius: 8, padding: 8, marginTop: 6 },
+  chatChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  chatChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#EEF3FF', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 6, maxWidth: '100%' },
+  chatChipTxt: { fontSize: 12, color: COLORS.ink, flexShrink: 1 },
+  chatPin: { width: 40, height: 42, borderRadius: 9, backgroundColor: '#EEF2F8', alignItems: 'center', justifyContent: 'center' },
+  chatSheetBg: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'flex-end' },
+  chatSheet: { backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 },
+  chatSheetTitle: { fontSize: 13, fontWeight: '900', color: COLORS.faint, marginBottom: 4 },
+  chatSheetOpt: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EEF2F8' },
+  chatSheetOptTxt: { fontSize: 15.5, fontWeight: '700', color: COLORS.navy },
 
   barTrack: { height: 6, borderRadius: 3, backgroundColor: '#E5E7EB', overflow: 'hidden' },
   barFill: { height: 6, borderRadius: 3, backgroundColor: COLORS.primary },

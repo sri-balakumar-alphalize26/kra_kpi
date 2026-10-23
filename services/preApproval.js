@@ -7,7 +7,7 @@
 // Wraps /kpi_pre_approval/* in controllers/kpi_reports_api.py. Both routes are
 // caller-scoped SERVER-SIDE, so a client only ever sees / decides their own tasks.
 import { getConnection } from '../api/session';
-import { jsonRpc } from '../api/odooApi';
+import { jsonRpc, httpUpload } from '../api/odooApi';
 import { createLogger } from '../api/logger';
 
 const log = createLogger('PreApproval');
@@ -94,9 +94,26 @@ export async function submitClientSignoff(kpiId, { signatureText, notes } = {}) 
 // Distinct from decidePreApproval('reject') above, which is stage 1 (rejecting WHO was
 // assigned, before any work). This one rejects the DELIVERED work. Sending a stage-2
 // rejection to the stage-1 route would be recorded against the wrong decision entirely.
-export async function submitClientRejection(kpiId, reason) {
+//
+// files: [{ uri, name, mimeType }] -- photos / videos / voice notes that show what
+// is still wrong. With files it is one multipart post (/reject_files), like a chat
+// upload; without, the plain JSON route.
+export async function submitClientRejection(kpiId, reason, files = []) {
   const { serverUrl, db } = await getConnection();
   if (!serverUrl) return { status: true, state: 'rework' };
+  if (files && files.length) {
+    const fd = new FormData();
+    fd.append('kpi_id', String(kpiId));
+    fd.append('reason', (reason || '').trim());
+    fd.append('source', 'app');
+    for (const f of files) {
+      fd.append('files', { uri: f.uri, name: f.name || 'file', type: f.mimeType || 'application/octet-stream' });
+    }
+    const up = await httpUpload(serverUrl, '/kpi_client_approval/reject_files', fd, 300000);
+    if (!up || up.status === false) throw new Error(up?.message || 'Could not send this back');
+    log.info('reject with proof ←', { kpiId, files: files.length, state: up.state });
+    return up;
+  }
   const res = await jsonRpc(
     serverUrl, '/kpi_client_approval/reject',
     { kpi_id: kpiId, reason: (reason || '').trim() }, undefined, db,
