@@ -20,7 +20,8 @@ from odoo.exceptions import ValidationError
 # 'other' is for anything the three do not name (a plugin, a website, a report…).
 # What was typed lives in deliverable_other, NOT in this list: the list stays
 # codes only, so the comma-join and the canonical order still hold.
-DELIVERABLE_TYPES = [('module', 'Module'), ('app', 'App'), ('exe', 'EXE'), ('other', 'Other')]
+DELIVERABLE_TYPES = [('module', 'Module'), ('app', 'App'), ('exe', 'EXE'), ('website', 'Website'),
+                     ('database', 'Database'), ('other', 'Other')]
 DELIVERABLE_TYPE_CODES = tuple(c for c, _ in DELIVERABLE_TYPES)
 DELIVERABLE_OTHER_MAX = 40
 
@@ -48,7 +49,7 @@ def clean_deliverable_type(raw):
     if not codes:
         return False, None
     if not codes <= set(DELIVERABLE_TYPE_CODES):
-        return False, 'Type must be Module, App, EXE or Other.'
+        return False, 'Type must be Module, App, EXE, Website, Database or Other.'
     return ','.join(c for c in DELIVERABLE_TYPE_CODES if c in codes), None
 
 
@@ -228,8 +229,25 @@ class KpiMaster(models.Model):
                 clean, err = clean_deliverable_type(rec.deliverable_type)
                 if err or clean != rec.deliverable_type:
                     raise ValidationError(
-                        "Type must be module, app, exe or other — or several, comma-separated "
-                        "in that order (e.g. module,app).")
+                        "Type must be module, app, exe, website, database or other — or several, "
+                        "comma-separated in that order (e.g. module,app).")
+
+    # What Complete asks for, by type (kpi_workflow._completion_rules): an App's
+    # store / download link, a user manual given as a link instead of a file,
+    # and a website's live address.
+    app_link = fields.Char(string='App Link', help='Play Store / App Store / APK download link.')
+    user_manual_url = fields.Char(string='User Manual Link',
+                                  help='A link to the user manual (Google Doc, Drive, website) — counts '
+                                       'as the manual, like an uploaded file.')
+    website_url = fields.Char(string='Website URL', help="The website's live address.")
+
+    @api.constrains('app_link', 'user_manual_url', 'website_url')
+    def _check_complete_links(self):
+        for rec in self:
+            for fname in ('app_link', 'user_manual_url', 'website_url'):
+                v = (rec[fname] or '').strip()
+                if v and not v.lower().startswith(('http://', 'https://')):
+                    raise ValidationError('%s must start with http:// or https://' % rec._fields[fname].string)
 
     user_group_id = fields.Many2one('res.groups', string='User Group')
     # Indexed: the developer board, the running-task lookups and the record

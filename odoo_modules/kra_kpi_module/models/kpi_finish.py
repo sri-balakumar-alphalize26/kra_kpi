@@ -198,15 +198,14 @@ class KraKpiFinish(models.Model):
     def _full_complete_missing(self):
         """What Full Complete still needs, as plain sentences (empty = ready)."""
         self.ensure_one()
-        out = []
-        # A photo / video from Upload Requirements is not a user manual.
-        if not self.env['kpi.user.manual'].sudo().search_count([('kpi_id', '=', self.id),
-                                                                ('is_intake_media', '=', False)]):
-            out.append(_('Upload the user manual (PDF, DOC or DOCX).'))
-        if self._github_required() and not self.env['kpi.github.link'].sudo().search_count(
-                [('kpi_id', '=', self.id)]):
-            out.append(_('Add the GitHub link (repository + branch) — this is a Module / App task.'))
-        return out
+        # The same rules as Complete (kpi_workflow._completion_rules): a bug fix
+        # or a database task never waits for a manual. A photo / video from
+        # Upload Requirements is never a user manual.
+        say = {'manual': _('Upload the user manual (PDF, DOC or DOCX) or add a manual link.'),
+               'github': _('Add the GitHub link (repository + branch) — this is a Module / App task.'),
+               'app_link': _('Add the app link (Play Store / App Store / APK).')}
+        return [say.get(r['key'], _('Add: %s') % r['label']) for r in self._completion_rules()
+                if r['required'] and not r['done'] and r['key'] != 'summary']
 
     def _may_full_complete(self, user):
         """'' when `user` may tap Full Complete on this task, else why not."""
@@ -331,12 +330,12 @@ class KraKpiFinish(models.Model):
             head = (_('⏰ The client hasn\'t closed %s in %d days.') % (ref, rec._review_days())) if timeout \
                 else (_('👍 The client said %s is finished.') % ref)
             if dev:
-                rec._finish_dm(dev, _('%(head)s\n\nUpload the user manual and tap 🏁 Full Complete so it moves to '
+                rec._finish_dm(dev, _('%(head)s\n\nAdd what is missing and tap 🏁 Full Complete so it moves to '
                                       'billing.\nNeeded: %(need)s\n\nIn WhatsApp: 📋 My tasks → %(ref)s → '
                                       '📋 KPI details → open the page → 🏁 Full Complete.') % {
                     'head': head, 'need': ' '.join(rec._full_complete_missing()), 'ref': ref})
             who = Report._mention(dev) if dev else _('team')
-            rec._finish_alpha(_('%(head)s %(who)s, upload the user manual → 🏁 Full Complete.') % {
+            rec._finish_alpha(_('%(head)s %(who)s, add what is missing → 🏁 Full Complete.') % {
                 'head': head, 'who': who}, users=dev)
 
     def _finish_after_full(self):

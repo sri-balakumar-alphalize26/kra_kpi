@@ -9,6 +9,19 @@ import { uploadWithProgress } from "@kra_kpi_module/utils/upload_with_progress";
 import { renderTimelineHtml } from "@kra_kpi_module/components/kpi_workday_timeline/workday_timeline";
 import { KpiMeetingDays } from "@kra_kpi_module/components/kpi_client_talks/kpi_client_talks";
 
+// The popups are drawn into #modalContainer, which only the board list has.
+// KPI Details (and any other view) gets one made on the spot, so a popup
+// opened there is never a "cannot set innerHTML of null" crash.
+function modalHost() {
+    let el = document.getElementById("modalContainer");
+    if (!el) {
+        el = document.createElement("div");
+        el.id = "modalContainer";
+        document.body.appendChild(el);
+    }
+    return el;
+}
+
 // How long a never-started card stays red before dropping back to its lane
 // colour. Mirrors FRESH_MAX_AGE_MS in the app's services/kpiActions.js — the two
 // boards agreeing on this number is the whole point of naming it.
@@ -922,6 +935,27 @@ export class KpiAction extends Component {
                             <button type="button" class="btn btn-secondary"
                                     t-on-click="() => this.historyJump('kpiCompletePanel')">Complete this task</button>
                         </div>
+                        <!-- A database task: its four details, the password masked until Show. -->
+                        <div t-if="state.detailData.is_db_task and state.detailData.db_details" class="card p-3 mb-3">
+                            <h5 class="fw-bold mb-2">Database</h5>
+                            <table class="table table-borderless table-sm mb-0">
+                                <tbody>
+                                    <tr><td style="width:35%;"><b>URL</b></td><td class="text-break">
+                                        <a t-if="state.detailData.db_details.url" t-att-href="state.detailData.db_details.url" target="_blank" rel="noopener" t-esc="state.detailData.db_details.url"/>
+                                        <span t-else="" class="text-danger">not added</span></td></tr>
+                                    <tr><td><b>Database</b></td><td t-esc="state.detailData.db_details.db_name or '—'"/></tr>
+                                    <tr><td><b>Username</b></td><td t-esc="state.detailData.db_details.username or '—'"/></tr>
+                                    <tr><td><b>Password</b></td><td>
+                                        <t t-if="state.detailData.db_details.password">
+                                            <span class="me-2" t-esc="state.showDbPassword ? state.detailData.db_details.password : '••••••••'"/>
+                                            <button type="button" class="btn btn-sm btn-light border py-0" t-on-click="() => { this.state.showDbPassword = !this.state.showDbPassword; }"
+                                                    t-esc="state.showDbPassword ? 'Hide' : 'Show'"/>
+                                        </t>
+                                        <span t-else="" class="text-danger">not added</span></td></tr>
+                                </tbody>
+                            </table>
+                            <div class="small text-muted mt-1">Only the team sees the password.</div>
+                        </div>
                         </div>
 
                         <div class="col-lg-8">
@@ -1540,44 +1574,63 @@ export class KpiAction extends Component {
                         <!-- 🆕 Part B: Complete This Task (enforced summary + checklist) -->
                         <t t-if="(state.detailData.task_state === 'in_progress' or state.detailData.task_state === 'paused') and (state.detailData.is_assignee or state.detailData.is_manager)">
                             <div class="card p-4 mb-3 border-danger" id="kpiCompletePanel">
-                                <h4 class="fw-bold mb-3 text-danger"><i class="fa fa-check-circle"></i> Complete This Task</h4>
-                                <div t-if="teamProgress().length === 0" class="alert alert-warning py-2">
-                                    <i class="fa fa-info-circle"></i> Submit a <strong>Progress Summary</strong> above before you can complete this task.
+                                <!-- What THIS task's type needs (server: kpi_workflow._completion_rules).
+                                     Each row ticks itself from what is on the task or typed here. -->
+                                <t t-set="cr" t-value="completeRows()"/>
+                                <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+                                    <h4 class="fw-bold mb-0 text-danger"><i class="fa fa-check-circle"></i> Complete This Task</h4>
+                                    <span class="ms-auto text-muted">Required done: <b class="text-dark"><t t-esc="cr.done"/> of <t t-esc="cr.total"/></b></span>
                                 </div>
-                                <div t-if="!(state.manualsList or []).length" class="alert alert-warning py-2">
-                                    <i class="fa fa-book"></i> Upload a <strong>User Manual</strong> (PDF, DOC or DOCX) above before you can complete this task — or use Partial Finish to send a summary only.
+                                <div class="progress mb-2" style="height:8px;">
+                                    <div class="progress-bar" t-att-style="'width:' + cr.pct + '%; background:#017e84;'"/>
                                 </div>
-                                <!-- Module / App tasks can't be fully completed without a GitHub
-                                     link (the server refuses too); for any other type it's only a nudge. -->
-                                <t t-if="!(state.githubLinks or []).length">
-                                    <div t-if="state.detailData.github_required" class="alert alert-warning py-2">
-                                        <i class="fa fa-github"></i> This is a <strong>Module / App</strong> task — add the GitHub link (repository + branch) above before completing.
-                                    </div>
-                                    <div t-else="" class="alert alert-warning py-2 small">
-                                        <i class="fa fa-github"></i> Optional: add the GitHub link — once it's uploaded, the code is safe.
+                                <div t-if="state.detailData.is_db_task" class="alert alert-info py-2 small mb-2">
+                                    Database task: only URL, database name, username and password are needed. No manual, GitHub or documents.
+                                </div>
+                                <t t-foreach="cr.rows" t-as="row" t-key="row.key">
+                                    <div class="d-flex gap-3 align-items-start py-2 border-top">
+                                        <span class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 fw-bold"
+                                              t-att-style="'width:26px;height:26px;font-size:13px;' + (row.done ? 'background:#e3f4ea;color:#15803d;' : (row.required ? 'background:#fdecea;color:#b42318;' : 'background:#eef0f2;color:#6b7280;'))">
+                                            <t t-esc="row.done ? '✓' : (row.required ? '!' : '–')"/>
+                                        </span>
+                                        <div class="flex-grow-1" style="min-width:0;">
+                                            <div class="fw-semibold"><t t-esc="row.label"/>
+                                                <span t-if="row.required" class="text-danger fw-bold"> ✱</span>
+                                                <span t-else="" class="badge text-bg-light border ms-1">optional</span>
+                                            </div>
+                                            <div t-if="row.key === 'summary'" class="small text-muted">
+                                                <t t-if="row.done"><t t-esc="teamProgress().length"/> update(s) added</t>
+                                                <a t-else="" href="#" t-on-click.prevent="() => this.historyJump('progressSummary')">Add a progress update</a>
+                                            </div>
+                                            <div t-if="row.key === 'github'" class="small text-muted">
+                                                <t t-if="row.done"><t t-esc="(state.githubLinks or []).length"/> link(s)</t>
+                                                <a t-else="" href="#" t-on-click.prevent="() => this.historyJump('kpiGithubCard')">Add the GitHub link</a>
+                                            </div>
+                                            <div t-if="row.key === 'manual'" class="d-flex flex-wrap gap-2 align-items-center mt-1">
+                                                <button type="button" class="btn btn-sm btn-secondary" t-on-click="() => this.historyJump('kpiManualCard')">Upload PDF / DOC</button>
+                                                <span class="small text-muted">or link</span>
+                                                <input type="url" class="form-control form-control-sm" style="max-width:360px;" placeholder="https:// (Google Doc, Drive…)"
+                                                       t-model="state.completeForm.user_manual_url"/>
+                                            </div>
+                                            <input t-if="row.key === 'app_link'" type="url" class="form-control form-control-sm mt-1" style="max-width:480px;"
+                                                   placeholder="Play Store / App Store / APK link" t-model="state.completeForm.app_link"/>
+                                            <input t-if="row.key === 'website_url'" type="url" class="form-control form-control-sm mt-1" style="max-width:480px;"
+                                                   placeholder="https:// live website address" t-model="state.completeForm.website_url"/>
+                                            <input t-if="row.key === 'db_url'" type="url" class="form-control form-control-sm mt-1" style="max-width:480px;"
+                                                   placeholder="https://" t-model="state.completeForm.provision_url"/>
+                                            <input t-if="row.key === 'db_name'" type="text" class="form-control form-control-sm mt-1" style="max-width:480px;"
+                                                   t-model="state.completeForm.provision_db_name"/>
+                                            <input t-if="row.key === 'db_user'" type="text" class="form-control form-control-sm mt-1" style="max-width:480px;"
+                                                   autocomplete="off" t-model="state.completeForm.provision_username"/>
+                                            <input t-if="row.key === 'db_password'" type="password" class="form-control form-control-sm mt-1" style="max-width:480px;"
+                                                   autocomplete="new-password" t-model="state.completeForm.provision_password"/>
+                                        </div>
+                                        <span class="badge rounded-pill align-self-center"
+                                              t-att-class="row.done ? (row.auto ? 'text-bg-info' : 'text-bg-success') : (row.required ? 'text-bg-danger' : 'text-bg-light border')"
+                                              t-esc="row.done ? (row.auto ? 'Ticked by itself' : 'Done') : (row.required ? 'Missing' : 'Optional')"/>
                                     </div>
                                 </t>
-                                <p class="text-muted mb-2">Tick everything that applies — at least one is needed to send this for approval. Your manager sees exactly which:</p>
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="cc_github" t-model="state.completeChecklist.verify_github"/>
-                                    <label class="form-check-label" for="cc_github"><strong>1. Verify GitHub URL</strong><small class="d-block text-muted">All code pushed to the correct repository</small></label>
-                                </div>
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="cc_deploy" t-model="state.completeChecklist.deployed_task"/>
-                                    <label class="form-check-label" for="cc_deploy"><strong>2. Deployed the Task</strong><small class="d-block text-muted">Deployed to staging/production</small></label>
-                                </div>
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="cc_manual" t-model="state.completeChecklist.user_manual"/>
-                                    <label class="form-check-label" for="cc_manual"><strong>3. User Manual Uploaded</strong><small class="d-block text-muted">Documentation uploaded and accessible</small></label>
-                                </div>
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="cc_docs" t-model="state.completeChecklist.documentation"/>
-                                    <label class="form-check-label" for="cc_docs"><strong>4. Documentation Submission</strong><small class="d-block text-muted">Technical documentation complete</small></label>
-                                </div>
-                                <div class="form-check mb-3">
-                                    <input class="form-check-input" type="checkbox" id="cc_tested" t-model="state.completeChecklist.tested_code"/>
-                                    <label class="form-check-label" for="cc_tested"><strong>5. Manually Tested the Code</strong><small class="d-block text-muted">All features tested and working</small></label>
-                                </div>
+                                <div class="border-top pt-3 mb-2 small text-muted" t-esc="cr.missing.length ? ('Still needed: ' + cr.missing.join(', ')) : 'Everything needed is in.'"/>
                                 <!-- Only disabled while submitting: a click with something missing
                                      opens a "what did we miss?" list instead of a dead button. -->
                                 <button class="btn btn-danger"
@@ -4009,6 +4062,9 @@ export class KpiAction extends Component {
                 documentation: false, tested_code: false,
             },
             completeSubmitting: false,
+            // The Complete form's own fields (links, database details), filled from the task.
+            completeForm: {},
+            showDbPassword: false,
             // 🆕 Part C: live activity strip + auto-away
             liveStatus: null,       // {active_task, login_raw, productive_base, workday_open, nontask, idle_prompt}
             liveBreak: null,        // active break {type, start_raw, start_display, source_task_name, reason_note}
@@ -4813,6 +4869,26 @@ export class KpiAction extends Component {
     }
 
     // In-detail Complete is allowed only with a submitted summary + all 5 items ticked.
+    // The Complete rows for this task's type (server rules), with what is on the
+    // page right now: a summary or GitHub link just added, a link just typed.
+    completeRows() {
+        const d = this.state.detailData || {};
+        const f = this.state.completeForm || {};
+        const typed = { app_link: f.app_link, website_url: f.website_url, db_url: f.provision_url,
+                        db_name: f.provision_db_name, db_user: f.provision_username, db_password: f.provision_password };
+        const rows = (d.completion_rules || []).map((r) => {
+            let done = !!r.done;
+            if (r.key === 'summary') done = this.teamProgress().length > 0;
+            else if (r.key === 'github') done = done || (this.state.githubLinks || []).length > 0;
+            else if (r.key === 'manual') done = done || !!(f.user_manual_url || '').trim() || (this.state.manualsList || []).length > 0;
+            else if (r.key in typed) done = !!(typed[r.key] || '').trim();
+            return { ...r, done, auto: done && !['summary', 'db_url', 'db_name', 'db_user', 'db_password'].includes(r.key) };
+        });
+        const req = rows.filter((r) => r.required);
+        const done = req.filter((r) => r.done).length;
+        return { rows, total: req.length, done, pct: req.length ? Math.round((done / req.length) * 100) : 100,
+                 missing: req.filter((r) => !r.done).map((r) => r.label) };
+    }
     canCompleteDetail() {
         const hasSummary = this.teamProgress().length > 0;
         const c = this.state.completeChecklist || {};
@@ -4828,27 +4904,16 @@ export class KpiAction extends Component {
         // documented" stays visible to whoever approves it.
         const anyTicked = !!(c.verify_github || c.deployed_task || c.user_manual
                              || c.documentation || c.tested_code);
-        // A full Complete also needs a real user manual on the task (the server
-        // refuses without one too); Partial Finish is the way through without.
-        const hasManual = (this.state.manualsList || []).length > 0;
-        return !!(hasSummary && hasManual && anyTicked && !this.state.completeSubmitting);
+        // What this task's type needs (completeRows): no box to tick by hand.
+        void hasSummary; void anyTicked;
+        return !this.completeRows().missing.length && !this.state.completeSubmitting;
     }
 
     // Everything still missing before a full Complete, in the order the
     // sections appear on the page. Mirrors the server's own refusals.
     _completeMissing() {
-        const missing = [];
-        const c = this.state.completeChecklist || {};
-        const d = this.state.detailData || {};
-        if (!this.teamProgress().length) missing.push('A progress summary');
-        if (!(this.state.manualsList || []).length) missing.push('The user manual (PDF, DOC or DOCX)');
-        if (d.github_required && !(this.state.githubLinks || []).length) {
-            missing.push('The GitHub link + branch (this is a Module / App task)');
-        }
-        if (!(c.verify_github || c.deployed_task || c.user_manual || c.documentation || c.tested_code)) {
-            missing.push('At least one ticked checkbox');
-        }
-        return missing;
+        // The rows still missing for this task's type (completeRows()).
+        return this.completeRows().missing;
     }
 
     // Complete click: list what's missing ("what did we miss?"), or ask once
@@ -4860,7 +4925,7 @@ export class KpiAction extends Component {
         if (missing.length) {
             const canPartial = this.teamProgress().length > 0;
             const items = missing.map(m => `<li>${esc(m)}</li>`).join('');
-            const container = document.getElementById("modalContainer");
+            const container = modalHost();
             if (!container) { this._toast('Before completing, you still need: ' + missing.join(', '), 'warning'); return; }
             // Built by hand rather than via _renderModal: that one needs a confirm
             // button, and "Partial Finish instead" only exists with a summary.
@@ -4885,10 +4950,10 @@ export class KpiAction extends Component {
             document.getElementById("cancelModalBtn").addEventListener("click", () => {
                 this.closeModal();
                 // Take them to the first section that still needs something.
-                const first = missing[0];
-                const id = first === 'A progress summary' ? 'progressSummary'
-                    : first.startsWith('The user manual') ? 'kpiManualCard'
-                    : first.startsWith('The GitHub link') ? 'kpiGithubCard'
+                const first = (this.completeRows().rows.find((r) => r.required && !r.done) || {}).key;
+                const id = first === 'summary' ? 'progressSummary'
+                    : first === 'manual' ? 'kpiCompletePanel'
+                    : first === 'github' ? 'kpiGithubCard'
                     : 'kpiCompletePanel';
                 const el = document.getElementById(id);
                 if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -4902,16 +4967,24 @@ export class KpiAction extends Component {
             return;
         }
         const ref = esc(this.state.detailData?.name || 'this task');
+        // The summary before Complete: what is provided, and optional items left empty.
+        const cr = this.completeRows();
+        const provided = cr.rows.filter((r) => r.done).map((r) => esc(r.label)).join(' · ') || '—';
+        const empty = cr.rows.filter((r) => !r.done && !r.required).map((r) => esc(r.label)).join(' · ');
         this._renderModal(`
             <div class="modal-backdrop fade show"></div>
             <div class="modal d-block" tabindex="-1">
                 <div class="modal-dialog modal-dialog-centered">
                     <div class="modal-content">
                         <div class="modal-header bg-danger text-white">
-                            <h5 class="modal-title"><i class="fa fa-paper-plane me-2"></i>Complete task</h5>
+                            <h5 class="modal-title"><i class="fa fa-paper-plane me-2"></i>Before Complete</h5>
                             <button type="button" class="btn-close btn-close-white" id="closeModalBtn"></button>
                         </div>
-                        <div class="modal-body"><p class="mb-0">Submit <strong>${ref}</strong> for approval?</p></div>
+                        <div class="modal-body">
+                            <p class="mb-2">Submit <strong>${ref}</strong> for approval?</p>
+                            <div class="mb-1"><b class="text-success">✓ Provided</b><div class="text-muted">${provided}</div></div>
+                            ${empty ? `<div><b>— Left empty (optional)</b><div class="text-muted">${empty}</div></div>` : ''}
+                        </div>
                         <div class="modal-footer">
                             <button class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
                             <button class="btn btn-danger" id="confirmModalBtn">Yes</button>
@@ -4927,12 +5000,24 @@ export class KpiAction extends Component {
         if (this.state.completeSubmitting) return;
         const kpi_id = this.state.detailKpiId;
         const employee_checklist = { ...this.state.completeChecklist };
+        // The links / database details typed in the Complete panel go with it.
+        const f = this.state.completeForm || {};
+        const keys = new Set(((this.state.detailData || {}).completion_rules || []).map((r) => r.key));
+        const extra = {};
+        if (keys.has('app_link')) extra.app_link = f.app_link || '';
+        if (keys.has('manual')) extra.user_manual_url = f.user_manual_url || '';
+        if (keys.has('website_url')) extra.website_url = f.website_url || '';
+        if (keys.has('db_url')) {
+            Object.assign(extra, { provision_url: f.provision_url || '', provision_db_name: f.provision_db_name || '',
+                                   provision_username: f.provision_username || '', provision_password: f.provision_password || '' });
+        }
         this.state.completeSubmitting = true;
         try {
             const result = await rpc("/kra_kpi/task/complete", {
                 kpi_id: kpi_id,
                 partial: false,
                 employee_checklist: employee_checklist,
+                ...extra,
             });
             if (result.status) {
                 this.backToList();
@@ -5260,7 +5345,7 @@ export class KpiAction extends Component {
     }
 
     _renderModal(html, confirmCallback) {
-        const container = document.getElementById("modalContainer");
+        const container = modalHost();
         container.innerHTML = html;
         
         document.getElementById("closeModalBtn").addEventListener("click", () => this.closeModal());
@@ -5269,7 +5354,7 @@ export class KpiAction extends Component {
     }
 
     closeModal() {
-        document.getElementById("modalContainer").innerHTML = "";
+        modalHost().innerHTML = "";
         this.state.pauseReason = '';
         this.state.reassignReason = '';
     }
@@ -5280,7 +5365,7 @@ export class KpiAction extends Component {
     _showAlert(message, title = "Heads up", variant = "warning") {
         const safe = (message || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const icon = variant === 'danger' ? 'exclamation-triangle' : 'exclamation-circle';
-        const container = document.getElementById("modalContainer");
+        const container = modalHost();
         if (!container) { this._toast(message, 'warning'); return; }
         container.innerHTML = `
             <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
@@ -5677,7 +5762,7 @@ export class KpiAction extends Component {
                 </div>
             </div>
         `;
-        document.getElementById("modalContainer").innerHTML = modalHTML;
+        modalHost().innerHTML = modalHTML;
         document.getElementById("closeModalBtn").addEventListener("click", () => this.closeModal());
         document.getElementById("continueWorkdayBtn").addEventListener("click", () => this.closeModal());
         // Optional chaining because the button is not rendered on an already
@@ -7426,7 +7511,7 @@ export class KpiAction extends Component {
         const n = (kinds) => items.filter((i) => kinds.includes(i.kind)).length;
         return [
             { key: 'all', label: 'All', count: items.filter((i) => i.kind !== 'activity').length },
-            { key: 'talks', label: 'Client talks', count: n(['talk', 'question']) },
+            { key: 'talks', label: 'Questions', count: n(['question']) },
             { key: 'progress', label: 'Progress', count: n(['progress']) },
             { key: 'meetings', label: 'Meetings', count: n(['meeting']) },
             { key: 'code', label: 'Code', count: n(['code']) },
@@ -7436,7 +7521,7 @@ export class KpiAction extends Component {
     }
     _historyShown() {
         const f = this.state.history.filter;
-        const want = { talks: ['talk', 'question'], progress: ['progress'], meetings: ['meeting'],
+        const want = { talks: ['question'], progress: ['progress'], meetings: ['meeting'],
                        code: ['code'], documents: ['document'], activity: ['activity'] }[f];
         return (this.state.history.items || []).filter((i) => (want ? want.includes(i.kind) : i.kind !== 'activity'));
     }
@@ -8103,6 +8188,14 @@ export class KpiAction extends Component {
             
             if (result && result.name) {
                 this.state.detailData = result;
+                const dbd = result.db_details || {};
+                this.state.completeForm = {
+                    app_link: result.app_link || '', user_manual_url: result.user_manual_url || '',
+                    website_url: result.website_url || '', provision_url: dbd.url || '',
+                    provision_db_name: dbd.db_name || '', provision_username: dbd.username || '',
+                    provision_password: dbd.password || '',
+                };
+                this.state.showDbPassword = false;
                 this.state.detailError = null;
             } else {
                 this.state.detailError = "Failed to load KPI details";
@@ -8471,7 +8564,7 @@ export class KpiAction extends Component {
         const user_id = parseInt((g('ntUser') && g('ntUser').value) || '0', 10) || 0;
         if (!name) { this._toast('Please enter a task name.', 'warning'); return; }
         if (!kra_id) { this._toast('Please choose a project (KRA).', 'warning'); return; }
-        if (!deliverable_type) { this._toast('Tick at least one type — Module, App, EXE or Other.', 'warning'); return; }
+        if (!deliverable_type) { this._toast('Tick at least one type — Module, App, EXE, Website, Database or Other.', 'warning'); return; }
         if (deliverable_type.split(',').includes('other') && !deliverable_other) {
             this._toast('Type what the Other type is (e.g. Plugin, Website).', 'warning'); return;
         }
@@ -8643,8 +8736,8 @@ export class KpiAction extends Component {
                       </div>`;
         return `
                     <div class="mb-2" id="${id}">
-                      <label class="form-label fw-bold d-block">Type (Module / App / EXE / Other) *</label>
-                      ${box('module', 'Module')}${box('app', 'App')}${box('exe', 'EXE')}${box('other', 'Other')}
+                      <label class="form-label fw-bold d-block">Type (Module / App / EXE / Website / Database / Other) *</label>
+                      ${box('module', 'Module')}${box('app', 'App')}${box('exe', 'EXE')}${box('website', 'Website')}${box('database', 'Database')}${box('other', 'Other')}
                       <input type="text" id="${id}_otherText" class="form-control mt-1 d-none" maxlength="40"
                              placeholder="What is it? e.g. Plugin, Website"/>
                       <small class="text-muted d-block">Tick more than one if the task builds several.</small>
@@ -8695,7 +8788,7 @@ export class KpiAction extends Component {
         if (worked_seconds <= 0) { this._toast('Enter the time worked.', 'warning'); return; }
         if (num('dtWorkedMinutes') > 59) { this._toast('Minutes worked must be between 0 and 59.', 'warning'); return; }
         if (!work_date) { this._toast('Please choose the work date.', 'warning'); return; }
-        if (!deliverable_type) { this._toast('Tick at least one type — Module, App, EXE or Other.', 'warning'); return; }
+        if (!deliverable_type) { this._toast('Tick at least one type — Module, App, EXE, Website, Database or Other.', 'warning'); return; }
         if (deliverable_type.split(',').includes('other') && !deliverable_other) {
             this._toast('Type what the Other type is (e.g. Plugin, Website).', 'warning'); return;
         }
@@ -8742,7 +8835,7 @@ export class KpiAction extends Component {
         // the one screen where the detail matters most was the one screen without it.
         // Escaped the same way as the title: this is innerHTML, not a QWeb t-esc.
         const safeDesc = (task.description || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const container = document.getElementById("modalContainer");
+        const container = modalHost();
         if (!container) return;
         container.innerHTML = `
             <div class="modal-backdrop fade show"></div>
@@ -9086,7 +9179,7 @@ export class KpiAction extends Component {
               </div>
             </div>`;
 
-        const container = document.getElementById("modalContainer");
+        const container = modalHost();
         if (!container) { this._toast("Could not open the task picker.", 'danger'); return; }
         container.innerHTML = html;
         const close = () => { container.innerHTML = ''; };
@@ -9214,7 +9307,7 @@ export class KpiAction extends Component {
                 </div>
               </div>
             </div>`;
-        const container = document.getElementById("modalContainer");
+        const container = modalHost();
         if (!container) { this._toast('Could not open the pause dialog.', 'danger'); return; }
         container.innerHTML = html;
         const close = () => { container.innerHTML = ''; };
@@ -9321,7 +9414,7 @@ export class KpiAction extends Component {
                 </div>
               </div>
             </div>`;
-        const container = document.getElementById("modalContainer");
+        const container = modalHost();
         if (!container) { this._toast('Could not open the revert dialog.', 'danger'); return; }
         container.innerHTML = html;
         const close = () => { container.innerHTML = ''; };
@@ -9361,7 +9454,8 @@ export class KpiAction extends Component {
      *  'module,app' and read "Module + App". */
     // Fallback for payloads without deliverable_label; 'other' shows its text.
     deliverableLabel(t, other) {
-        const labels = { module: 'Module', app: 'App', exe: 'EXE', other: (other || '').trim() || 'Other' };
+        const labels = { module: 'Module', app: 'App', exe: 'EXE', website: 'Website', database: 'Database',
+                         other: (other || '').trim() || 'Other' };
         return String(t || '').split(',').map(c => labels[c]).filter(Boolean).join(' + ');
     }
 
@@ -9648,7 +9742,7 @@ export class KpiAction extends Component {
 
     _showAwayReturnNudge(taskId, taskName) {
         const safe = (taskName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const container = document.getElementById("modalContainer");
+        const container = modalHost();
         if (!container) return;
         container.innerHTML = `
             <div class="modal fade show" tabindex="-1" style="display:block; background:rgba(0,0,0,0.5);">
@@ -10235,7 +10329,7 @@ export class KpiAction extends Component {
     }
 
     _renderModal(html, confirmCallback) {
-        const container = document.getElementById("modalContainer");
+        const container = modalHost();
         container.innerHTML = html;
         
         document.getElementById("closeModalBtn").addEventListener("click", () => this.closeModal());
@@ -10244,7 +10338,7 @@ export class KpiAction extends Component {
     }
 
     closeModal() {
-        document.getElementById("modalContainer").innerHTML = "";
+        modalHost().innerHTML = "";
         this.state.pauseReason = '';
         this.state.reassignReason = '';
         this.state.rejectionReason = '';

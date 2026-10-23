@@ -428,6 +428,10 @@ def _process_kpi_action_command(pool, uid, session_id, phone_clean, msg_text):
                             _send_reply(pool, uid, session_id, phone_clean,
                                         f"Task {ref_label} already finished (state: {kpi.task_state}).")
                             return True
+                        refused = kpi._completion_refusal()
+                        if refused:
+                            _send_reply(pool, uid, session_id, phone_clean, refused)
+                            return True
                         kpi_act.complete_task()
                         cr.commit()
                         _send_reply(pool, uid, session_id, phone_clean,
@@ -1089,8 +1093,12 @@ def _handle_conversation(pool, uid, session_id, phone_clean, msg_text):
                         kpi.sudo().with_user(actor_user).resume_task()
                         msg = f"▶️ Task {ref_label} RESUMED."
                     elif action == 'complete':
-                        kpi.sudo().with_user(actor_user).complete_task()
-                        msg = f"✅ Task {ref_label} marked COMPLETE.\nCoordinator will review."
+                        refused = kpi.sudo()._completion_refusal()
+                        if refused:
+                            msg = refused
+                        else:
+                            kpi.sudo().with_user(actor_user).complete_task()
+                            msg = f"✅ Task {ref_label} marked COMPLETE.\nCoordinator will review."
                     elif action == 'approve':
                         kpi.sudo().with_user(actor_user).approve_task()
                         msg = f"✅ Task {ref_label} APPROVED.\nClient will be asked to sign off."
