@@ -50,7 +50,7 @@ import { resolveGithubLink } from '../utils/githubLink';
 import { createLogger } from '../api/logger';
 import useBackHandler from '../components/useBackHandler';
 import { taskDeliverableLabel } from '../utils/deliverableType';
-import { completeMissing, completeExtras } from '../utils/completeMissing';
+import { completeMissing, completeExtras, completeWarnings, warningText } from '../utils/completeMissing';
 import CompleteRules from '../components/CompleteRules';
 import FinishModeRadio, { PARTIAL_NOTE } from '../components/FinishModeRadio';
 import { sendHeading, sendStatus, fileIcon, sendFileSource, hasClientSends } from '../utils/clientSends';
@@ -2990,7 +2990,11 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
           visible={cmpDlg?.kind === 'confirm'}
           tone="info"
           title={`Submit ${meta.external_ref || t?.name || 'this task'} for approval?`}
-          message="Your manager will review it and approve or send it back."
+          message={(() => {
+            const warns = completeWarnings(cmpRules, { filled: cmpFilled });
+            return (warns.length ? `${warningText(warns)}\n\n` : '')
+              + 'Your manager will review it and approve or send it back.';
+          })()}
           confirmLabel="Submit"
           onConfirm={() => onComplete(false)}
           onClose={() => setCmpDlg(null)}

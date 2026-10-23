@@ -54,7 +54,7 @@ import {
 import { estimateFromWorked } from '../utils/doneTaskEstimate';
 import DateGridModal from '../components/DateGridModal';
 import { fmtYMD } from '../utils/dateGrid';
-import { completeMissing, completeExtras } from '../utils/completeMissing';
+import { completeMissing, completeExtras, completeWarnings, warningText } from '../utils/completeMissing';
 import CompleteRules from '../components/CompleteRules';
 import FinishModeRadio, { PARTIAL_NOTE } from '../components/FinishModeRadio';
 import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
@@ -1158,6 +1158,9 @@ export default function KpiActionBoard({
   // When the error is a full Complete's missing-items list, the error box also
   // offers a one-tap switch to Partial Finish (summary only).
   const [finishOfferPartial, setFinishOfferPartial] = useState(false);
+  // A full Complete with the user manual / GitHub link not added asks once:
+  // the list shows, a second tap on Complete sends it.
+  const [finishWarnOk, setFinishWarnOk] = useState(false);
   // What this task's type needs to be completed (server rules, loaded when the
   // popup opens) and what the popup filled in for it.
   const [finishRules, setFinishRules] = useState([]);
@@ -2569,6 +2572,7 @@ export default function KpiActionBoard({
       setFinishPartial(kind === 'partial');
       setFinishSummary('');
       setFinishErr('');
+      setFinishWarnOk(false);
       setFinishRules([]);
       setFinishFilled({});
       // Loaded either way: the popup's radio can switch to Completed.
@@ -2810,6 +2814,12 @@ export default function KpiActionBoard({
         H.err();
         setFinishOfferPartial(true);
         return setFinishErr(`Before completing, you still need:\n${missing.map((m) => `• ${m}`).join('\n')}`);
+      }
+      const warns = completeWarnings(rules, { filled: finishFilled });
+      if (warns.length && !finishWarnOk) {
+        H.select();
+        setFinishWarnOk(true);
+        return setFinishErr(`${warningText(warns)}\n\nTap ✓ Complete again to confirm.`);
       }
     }
     setFinishErr('');
