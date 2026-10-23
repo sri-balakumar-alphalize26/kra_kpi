@@ -490,7 +490,7 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
   const sendOne = useCallback(async (att, index, kpiId) => {
     setAttachments((l) => l.map((a, i) => (i === index ? { ...a, status: 'uploading', pct: 0 } : a)));
     try {
-      await svc.uploadManual(
+      await svc.attachIntakeMedia(
         kpiId,
         { fileData: att.data, fileName: att.name, reason: att.reason },
         (sent, total) => {

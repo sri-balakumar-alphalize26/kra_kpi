@@ -328,6 +328,31 @@ export async function uploadManual(kpiId, { picked, fileData, fileName, files, r
   return res;
 }
 
+// A photo / video attached on this screen, with its reason. Not a user manual:
+// /kpi/manual/upload takes PDF / DOC / DOCX only, so the photos went nowhere.
+// /kpi_requirements/attach_media keeps them on the task, flagged so Full
+// Complete still asks for the real manual. Same shape and progress as above.
+export async function attachIntakeMedia(kpiId, { fileData, fileName, reason }, onProgress) {
+  const base = await server();
+  if (!base) {
+    log.warn('attachIntakeMedia skipped — no server configured (mock mode)');
+    return { status: false, message: 'No server is configured — nothing was uploaded.' };
+  }
+  log.info('attachIntakeMedia → /kpi_requirements/attach_media', { kpi_id: kpiId, name: fileName, bytesB64: (fileData || '').length });
+  const res = await jsonRpc(
+    base, '/kpi_requirements/attach_media',
+    { kpi_id: kpiId, file_data: fileData, file_name: fileName, description: reason || '' },
+    LONG_TIMEOUT,
+    null,
+    onProgress,
+  );
+  if (!res || res.status === false) {
+    log.error('attachIntakeMedia ✗', res?.message);
+    throw new Error(res?.message || `Could not upload ${fileName}`);
+  }
+  return res;
+}
+
 // Absolute URL for the "Download Blank Template" link (type='http' GET route).
 export async function templateUrl(docType) {
   const base = await server();

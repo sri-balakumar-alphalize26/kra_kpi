@@ -16,7 +16,11 @@ import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
-import { getClientDashboard, getClientSignature, removeClientSignature, fetchCertificatePdf } from '../services/clientPortal';
+import {
+  getClientDashboard, getClientSignature, removeClientSignature, fetchCertificatePdf,
+  getClientLinks, getDbFormLink, getChatLink,
+} from '../services/clientPortal';
+import * as WebBrowser from 'expo-web-browser';
 // /legacy: this screen uses StorageAccessFramework, EncodingType,
 // writeAsStringAsync and cacheDirectory, all of which SDK 54 moved off the bare
 // specifier. Getting it wrong did not throw where you would look for it — SAF came
@@ -27,6 +31,7 @@ import { getClientDashboard, getClientSignature, removeClientSignature, fetchCer
 // anyone debugging this would have gone looking.
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import * as ImagePicker from 'expo-image-picker';
 import { fetchPreApprovals, decidePreApproval, holdPreApproval, submitClientSignoff, submitClientRejection } from '../services/preApproval';
 import { REJECT_REASONS } from '../services/kpiActions';
 import { createLogger } from '../api/logger';
@@ -268,6 +273,11 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   const [rejectStage, setRejectStage] = useState('pre');
   const [rejectCode, setRejectCode] = useState('');    // chosen REJECT_REASONS code
   const [rejectNote, setRejectNote] = useState('');    // free text (required for 'other')
+  // ↩ Send back with proof (final stage only): photos / videos / voice notes,
+  // [{ uri, name, size, mimeType }]. Same limits as the server: 10 files, 50 MB each.
+  const [rejectFiles, setRejectFiles] = useState([]);
+  const [recOpen, setRecOpen] = useState(false);
+  const [Recorder, setRecorder] = useState(null);
   const [toast, setToast] = useState('');
   const [filter, setFilter] = useState('pending');     // active tab: pending | in_progress | completed
   const [detail, setDetail] = useState(null);          // task tapped → detail popup
@@ -347,6 +357,8 @@ export default function ClientTasks({ onBack, focusTaskId }) {
         // signature simply means the normal typed-name flow.
         getClientSignature(),
       ]);
+      // Fix / databases / chat buttons — never throws, null hides the row.
+      getClientLinks().then(setLinks);
       setData(res);
       setApprovals(appr.kpis || []);
       setSignature(sig);
@@ -409,6 +421,27 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     setToast(msg);
     setTimeout(() => setToast((m) => (m === msg ? '' : m)), 2600);
   }, []);
+
+  // What the client can also do from WhatsApp, opened here: the same pages.
+  // Fix and the database forms need the client's WhatsApp group, so they show
+  // only with one (controllers/kpi_client_links.py).
+  const [links, setLinks] = useState(null);
+  const [linkPanel, setLinkPanel] = useState('');   // '' | 'fix' | 'dbs'
+  const [linkBusy, setLinkBusy] = useState('');
+  const openPage = async (url) => {
+    try { await WebBrowser.openBrowserAsync(url); } catch (e) { flashToast('Could not open that link'); }
+  };
+  const openLink = async (key, get) => {
+    setLinkBusy(key);
+    try {
+      await openPage(await get());
+    } catch (e) {
+      log.warn('client link failed', e?.message);
+      flashToast(e?.message || 'Could not open it');
+    } finally {
+      setLinkBusy('');
+    }
+  };
 
   // Clear the saved signature. The server's own answer decides what we show —
   // assuming the write worked would leave someone believing it was removed when
@@ -480,7 +513,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   }, []);
   // Stage 2: the finished work is not acceptable — send it back to the team.
   const onRejectFinal = useCallback((t) => {
-    setRejectNote(''); setRejectCode(''); setRejectStage('final'); setRejectFor(t);
+    setRejectNote(''); setRejectCode(''); setRejectFiles([]); setRejectStage('final'); setRejectFor(t);
   }, []);
   // The reason sent to the server is the preset's label, or the typed text for
   // 'other'. It lands in pre_approval_feedback and is what the admin acts on.
@@ -501,8 +534,10 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     if (stage === 'pre') { decide(t, 'reject', reason); return; }
     setBusyId(t.id);
     try {
-      await submitClientRejection(t.id, reason);
-      flashToast('Sent back to the team with your reason.');
+      const proof = rejectFiles;
+      await submitClientRejection(t.id, reason, proof);
+      setRejectFiles([]);
+      flashToast(proof.length ? `Sent back to the team with ${proof.length} file(s).` : 'Sent back to the team with your reason.');
       load();
     } catch (e) {
       log.error('final reject failed', e?.message);
@@ -510,7 +545,53 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     } finally {
       setBusyId(null);
     }
-  }, [rejectFor, rejectStage, rejectReasonText, decide, flashToast, load]);
+  }, [rejectFor, rejectStage, rejectReasonText, rejectFiles, decide, flashToast, load]);
+
+  const addProof = useCallback((list) => {
+    setRejectFiles((cur) => {
+      const out = [...cur];
+      for (const f of list) {
+        if (out.length >= 10) { flashToast('At most 10 files.'); break; }
+        if (f.size && f.size > 50 * 1024 * 1024) { flashToast(`${f.name} is over 50 MB`); continue; }
+        out.push(f);
+      }
+      return out;
+    });
+  }, [flashToast]);
+  const onProofLibrary = useCallback(async () => {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'], allowsMultipleSelection: true,
+        selectionLimit: Math.max(1, 10 - rejectFiles.length), quality: 0.8,
+      });
+      if (res.canceled || !res.assets?.length) return;
+      addProof(res.assets.map((a) => {
+        const isVideo = a.type === 'video' || (a.mimeType || '').startsWith('video/');
+        return {
+          uri: a.uri, size: a.fileSize || 0,
+          mimeType: a.mimeType || (isVideo ? 'video/mp4' : 'image/jpeg'),
+          name: a.fileName || `${isVideo ? 'video' : 'photo'}_${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`,
+        };
+      }));
+    } catch (e) {
+      log.warn('proof pick failed', e?.message);
+      flashToast('Could not open your photos');
+    }
+  }, [rejectFiles.length, addProof, flashToast]);
+  // expo-audio is native: a build without it has no recorder, so it is loaded on
+  // the first tap, never at import (same as components/OldDbBox.js).
+  const onProofVoice = useCallback(() => {
+    let R = null;
+    try {
+      // eslint-disable-next-line global-require
+      R = require('../components/VoiceNoteRecorder').default || null;
+    } catch (e) {
+      log.warn('voice recording not available in this build', e?.message);
+    }
+    if (!R) { flashToast("Voice notes need the newest app. Type it instead."); return; }
+    setRecorder(() => R);
+    setRecOpen(true);
+  }, [flashToast]);
 
   // ── Stage-2 final sign-off ───────────────────────────────────────────────
   const openSignoff = useCallback((t) => {
@@ -608,6 +689,33 @@ export default function ClientTasks({ onBack, focusTaskId }) {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}
           showsVerticalScrollIndicator={false}
         >
+          {/* 🔧 Fix · 🗄️ New / 💥 Destroy database · 📋 Live databases · 💬 Chat */}
+          {links && (
+            <View style={s.linkRow}>
+              {links.declined.length > 0 && (
+                <TouchableOpacity style={[s.linkBtn, s.linkBtnRed]} onPress={() => setLinkPanel('fix')}>
+                  <Text style={[s.linkTxt, { color: COLORS.red }]}>🔧 Fix declined ({links.declined.length})</Text>
+                </TouchableOpacity>
+              )}
+              {links.has_group && (
+                <TouchableOpacity style={s.linkBtn} disabled={!!linkBusy} onPress={() => openLink('newdb', () => getDbFormLink('newdb'))}>
+                  {linkBusy === 'newdb' ? <ActivityIndicator size="small" color={COLORS.primary} /> : <Text style={s.linkTxt}>🗄️ New database</Text>}
+                </TouchableOpacity>
+              )}
+              {links.can_destroy && (
+                <TouchableOpacity style={s.linkBtn} disabled={!!linkBusy} onPress={() => openLink('destroy', () => getDbFormLink('dbdisconnect'))}>
+                  {linkBusy === 'destroy' ? <ActivityIndicator size="small" color={COLORS.primary} /> : <Text style={s.linkTxt}>💥 Destroy a database</Text>}
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={s.linkBtn} onPress={() => setLinkPanel('dbs')}>
+                <Text style={s.linkTxt}>📋 Live databases ({links.live_dbs.length})</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.linkBtn} disabled={!!linkBusy} onPress={() => openLink('chat', () => getChatLink())}>
+                {linkBusy === 'chat' ? <ActivityIndicator size="small" color={COLORS.primary} /> : <Text style={s.linkTxt}>💬 Chat with the team</Text>}
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Three tabs — Pending · In Progress · Completed. Tap to switch. */}
           <View style={s.tabRow}>
             {TABS.map((t) => {
@@ -739,6 +847,30 @@ export default function ClientTasks({ onBack, focusTaskId }) {
               />
             ) : null}
 
+            {rejectStage === 'final' && (
+              <View style={{ width: '100%', marginTop: 12 }}>
+                <Text style={s.mLabel}>Show the problem (optional)</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                  <TouchableOpacity style={[s.reason, { flex: 1 }]} onPress={onProofLibrary} activeOpacity={0.85}>
+                    <Text style={s.reasonTxt}>📷 Photo / video</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[s.reason, { flex: 1 }]} onPress={onProofVoice} activeOpacity={0.85}>
+                    <Text style={s.reasonTxt}>🎤 Voice note</Text>
+                  </TouchableOpacity>
+                </View>
+                {rejectFiles.map((f, i) => (
+                  <View key={`${f.uri}-${i}`} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                    <Text style={{ flex: 1, fontSize: 12, color: COLORS.navy }} numberOfLines={1}>
+                      {(f.mimeType || '').startsWith('video/') ? '🎥' : (f.mimeType || '').startsWith('audio/') ? '🎵' : '📷'} {f.name}
+                    </Text>
+                    <TouchableOpacity onPress={() => setRejectFiles((cur) => cur.filter((_, j) => j !== i))} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Ionicons name="close-circle" size={18} color={COLORS.red} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+
             <View style={s.mBtns}>
               <TouchableOpacity style={[s.mBtn, s.mCancel]} onPress={() => setRejectFor(null)} activeOpacity={0.85}>
                 <Text style={s.mCancelTxt}>Cancel</Text>
@@ -750,6 +882,54 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 <Text style={s.mDoTxt}>{rejectStage === 'final' ? 'Send back' : 'Reject'}</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {Recorder && (
+        <Recorder
+          visible={recOpen} count={rejectFiles.length + 1}
+          onDone={(f) => { setRecOpen(false); addProof([{ uri: f.uri, name: f.name, size: f.size || 0, mimeType: f.mimetype || 'audio/mp4' }]); }}
+          onCancel={(msg) => { setRecOpen(false); if (msg) flashToast(msg); }}
+          onMicFailed={() => { setRecOpen(false); flashToast("Can't use the mic. Type it instead."); }}
+        />
+      )}
+
+      {/* 🔧 Declined requests / 📋 Live databases. */}
+      <Modal visible={!!linkPanel} transparent animationType="fade" onRequestClose={() => setLinkPanel('')}>
+        <View style={s.mWrap}>
+          <View style={s.dCard}>
+            <View style={s.dHead}>
+              <Ionicons name={linkPanel === 'fix' ? 'construct-outline' : 'server-outline'} size={19} color="#fff" />
+              <Text style={s.dHeadTitle}>{linkPanel === 'fix' ? 'Declined requests' : 'Live databases'}</Text>
+              <TouchableOpacity onPress={() => setLinkPanel('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ maxHeight: 420 }}>
+              <View style={s.dPad}>
+                {linkPanel === 'fix' && (links?.declined || []).map((x) => (
+                  <View key={x.id} style={s.linkItem}>
+                    <Text style={s.linkItemName}><Text style={{ color: COLORS.primary }}>{x.ref} </Text>{x.name}</Text>
+                    {!!x.reason && <Text style={s.linkItemSub}>Reason: {x.reason}</Text>}
+                    <TouchableOpacity style={s.linkFix} onPress={() => { setLinkPanel(''); openPage(x.url); }}>
+                      <Text style={s.linkFixTxt}>Fix it</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {linkPanel === 'dbs' && !(links?.live_dbs || []).length && (
+                  <Text style={s.linkItemSub}>No live databases yet.</Text>
+                )}
+                {linkPanel === 'dbs' && (links?.live_dbs || []).map((x) => (
+                  <View key={x.id} style={s.linkItem}>
+                    <Text style={s.linkItemName}>{x.name}{x.label && x.label !== x.name ? ` · ${x.label}` : ''}</Text>
+                    <Text style={s.linkItemSub}>
+                      {['🖥️ ' + (x.server || '—'), x.created ? `📅 ${x.created}` : '', x.expires ? `⏳ expires ${x.expires}` : ''].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -980,6 +1160,15 @@ const s = StyleSheet.create({
   totalLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '600' },
   // 3-tab switcher (Pending / In Progress / Completed)
   tabRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  linkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  linkBtn: { backgroundColor: '#fff', borderRadius: 10, paddingHorizontal: 11, height: 36, justifyContent: 'center', borderWidth: 1, borderColor: '#DBE4F3', ...SHADOW },
+  linkBtnRed: { borderColor: '#FCA5A5' },
+  linkTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.navy },
+  linkItem: { borderTopWidth: 1, borderTopColor: '#EEF2F7', paddingVertical: 10 },
+  linkItemName: { fontSize: 13.5, fontWeight: '800', color: COLORS.navy },
+  linkItemSub: { fontSize: 12, color: COLORS.muted, marginTop: 3 },
+  linkFix: { alignSelf: 'flex-start', marginTop: 8, backgroundColor: COLORS.red, borderRadius: 8, paddingHorizontal: 14, height: 32, justifyContent: 'center' },
+  linkFixTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   tab: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     backgroundColor: '#fff', borderRadius: 12, paddingVertical: 10,
