@@ -83,7 +83,8 @@
         {
           "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone to record voice notes."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "extra": {
       "eas": {
