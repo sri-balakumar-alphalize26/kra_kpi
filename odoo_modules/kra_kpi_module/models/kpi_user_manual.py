@@ -57,6 +57,12 @@ class KpiUserManual(models.Model):
         string='Description',
         help='Brief description of this manual'
     )
+
+    # A photo / video attached on Upload Requirements, with its reason in
+    # description (/kpi_requirements/attach_media). Kept here so the queue
+    # screens list it, but it is NOT the task's user manual: Full Complete
+    # and the manual badges leave it out.
+    is_intake_media = fields.Boolean(string='Photo / video from upload', default=False, readonly=True)
     
     # Related fields for easy access
     kpi_name = fields.Char(

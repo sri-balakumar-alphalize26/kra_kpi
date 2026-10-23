@@ -296,8 +296,8 @@ class KraMaster(models.Model):
                     'task_state': k.task_state or '',
                     'user_id': k.user_id.id or False,
                     'user_name': k.user_id.name or '',
-                    'has_user_manual': bool(k.user_manual_ids),
-                    'manual_count': len(k.user_manual_ids)
+                    'has_user_manual': bool(k.user_manual_ids.filtered(lambda m: not m.is_intake_media)),
+                    'manual_count': len(k.user_manual_ids.filtered(lambda m: not m.is_intake_media))
                 })
 
         roots = []
