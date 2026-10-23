@@ -178,7 +178,10 @@ def main(argv=None):
     ap.add_argument('--token', required=True)
     ap.add_argument('--meeting', required=True)
     ap.add_argument('--alone-seconds', type=int, default=120)
-    ap.add_argument('--idle-seconds', type=int, default=300)
+    # Kept so an older Odoo calling with it does not crash; silence no
+    # longer makes the recorder leave (it pauses recording instead).
+    ap.add_argument('--idle-seconds', type=int, default=0)
+    ap.add_argument('--max-seconds', type=int, default=MAX_MEETING_SECONDS)
     ap.add_argument('--log')
     args = ap.parse_args(argv)
 
@@ -287,7 +290,7 @@ def main(argv=None):
                     break
 
                 now_ms = time.time() * 1000
-                if time.time() - started > MAX_MEETING_SECONDS:
+                if time.time() - started > args.max_seconds:
                     outcome = 'reached the maximum recording length'
                     break
 
@@ -300,13 +303,9 @@ def main(argv=None):
                 else:
                     alone_since = None
 
-                # Nobody is talking and nothing is happening. Reported as
-                # 'idle' so the server closes the meeting as of the last real
-                # activity rather than as of now.
-                quiet_ms = now_ms - (st.get('lastActivity') or now_ms)
-                if quiet_ms >= args.idle_seconds * 1000:
-                    outcome = 'idle'
-                    break
+                # Silence no longer ends anything here: the page pauses the
+                # recording itself and the server's "Continue?" popup decides
+                # who stays (kpi_meeting._silence_tick).
 
                 if not st.get('recording'):
                     outcome = 'recording stopped'
