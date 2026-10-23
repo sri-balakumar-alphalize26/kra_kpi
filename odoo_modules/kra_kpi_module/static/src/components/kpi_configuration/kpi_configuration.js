@@ -20,6 +20,30 @@ export class KpiConfiguration extends Component {
             this.state.tiers = rows.map((r) => ({ ...r, saved: false }));
         } catch (e) { this.state.tiers = []; }
     }
+    // ⚠ The same person (or the task's manager) on two steps asks the same
+    // person twice: the second step adds nothing. Shown in red, not blocked.
+    tierLabel(i) { const t = this.state.tiers[i]; return t ? `step ${i + 1} · ${t.name}` : ""; }
+    // Only an explicit "Task's manager" tick counts: an empty step is a slot
+    // not filled yet, not a mistake.
+    tierUsesManager(t) { return !!t.use_task_manager; }
+    tierPersonDup(i, uid) {
+        const j = this.state.tiers.findIndex((t, k) => k !== i && t.user_ids.includes(uid));
+        return j < 0 ? "" : this.tierLabel(j);
+    }
+    tierManagerDup(i) {
+        if (!this.tierUsesManager(this.state.tiers[i])) return "";
+        const j = this.state.tiers.findIndex((t, k) => k < i && this.tierUsesManager(t));
+        return j < 0 ? "" : this.tierLabel(j);
+    }
+    tierNameDup(i) {
+        const name = (this.state.tiers[i].name || "").trim().toLowerCase();
+        const j = this.state.tiers.findIndex((t, k) => k !== i && (t.name || "").trim().toLowerCase() === name);
+        return j < 0 ? "" : this.tierLabel(j);
+    }
+    tierHasDups() {
+        return this.state.tiers.some((t, i) => this.tierManagerDup(i) || this.tierNameDup(i)
+            || t.user_ids.some((u) => this.tierPersonDup(i, u)));
+    }
     userName(id) { return (this.state.staff.find((u) => u.id === id) || {}).name || "#" + id; }
     canDecide(id) { return !!(this.state.staff.find((u) => u.id === id) || {}).canDecide; }
     userNumber(id) { return (this.state.staff.find((u) => u.id === id) || {}).number || ""; }
@@ -168,11 +192,15 @@ export class KpiConfiguration extends Component {
                             and the last step is reminded every 30 minutes. <b>Nothing is accepted automatically.</b>
                             Each person gets a private WhatsApp link on the number shown under their name.</p>
                         <t t-if="!state.tiers.length"><div class="text-muted small">No steps — every manager is asked at once.</div></t>
+                        <div t-if="tierHasDups()" class="alert alert-danger py-2 small mb-2">
+                            <i class="fa fa-exclamation-triangle me-1"/> Some people are used on more than one step (marked in red).
+                            The same person asked twice adds nothing — put someone else on the later step.
+                        </div>
                         <t t-foreach="state.tiers" t-as="tier" t-key="tier.id">
-                            <div class="border rounded p-2 mb-2">
+                            <div t-att-class="'border rounded p-2 mb-2' + ((tierManagerDup(tier_index) or tierNameDup(tier_index)) ? ' border-danger' : '')">
                                 <div class="d-flex align-items-center gap-2 flex-wrap">
                                     <span class="badge bg-light text-dark border" t-esc="tier_index + 1"/>
-                                    <input class="form-control form-control-sm fw-bold" style="max-width:180px;"
+                                    <input t-att-class="'form-control form-control-sm fw-bold' + (tierNameDup(tier_index) ? ' is-invalid' : '')" style="max-width:180px;"
                                            t-model="tier.name" t-on-change="() => this.saveTier(tier, {name: tier.name})"/>
                                     <div class="input-group input-group-sm" style="max-width:130px;">
                                         <input type="number" min="1" class="form-control" t-model.number="tier.minutes"
@@ -185,6 +213,8 @@ export class KpiConfiguration extends Component {
                                         Task's manager
                                     </label>
                                     <span t-if="tier.saved" class="text-success small">✓ saved</span>
+                                    <span t-if="tierNameDup(tier_index)" class="text-danger small fw-semibold">
+                                        ⚠ Name already used for <t t-esc="tierNameDup(tier_index)"/></span>
                                     <span class="ms-auto d-flex gap-1">
                                         <button class="btn btn-sm btn-light border" title="Move up" t-att-disabled="tier_first"
                                                 t-on-click="() => this.moveTier(tier_index, -1)"><i class="fa fa-arrow-up"/></button>
@@ -196,26 +226,33 @@ export class KpiConfiguration extends Component {
                                 </div>
                                 <div class="d-flex flex-wrap gap-2 mt-2 align-items-stretch">
                                     <t t-foreach="tier.user_ids" t-as="uid" t-key="uid">
-                                        <div class="border rounded px-2 py-1 d-flex align-items-start gap-2"
-                                             style="background:#fffbeb;">
+                                        <div t-att-class="'border rounded px-2 py-1 d-flex align-items-start gap-2' + (tierPersonDup(tier_index, uid) ? ' border-danger' : '')"
+                                             t-att-style="tierPersonDup(tier_index, uid) ? 'background:#fee2e2;' : 'background:#fffbeb;'">
                                             <div class="lh-sm">
                                                 <div class="fw-semibold small" t-esc="userName(uid)"/>
                                                 <div class="text-muted" style="font-size:11.5px;" t-esc="userNumber(uid) or 'no WhatsApp number'"/>
+                                                <div t-if="tierPersonDup(tier_index, uid)" class="text-danger fw-semibold" style="font-size:11.5px;">
+                                                    ⚠ Already used for <t t-esc="tierPersonDup(tier_index, uid)"/></div>
                                             </div>
                                             <button class="btn btn-link btn-sm p-0 text-danger" title="Remove"
                                                     t-on-click="() => this.removePerson(tier, uid)"><i class="fa fa-times"/></button>
                                         </div>
                                     </t>
                                     <div t-if="tier.use_task_manager or !tier.user_ids.length"
-                                         class="border rounded px-2 py-1 lh-sm text-muted small" style="border-style:dashed !important;">
-                                        the task's manager<div style="font-size:11.5px;">from the task</div>
+                                         t-att-class="'border rounded px-2 py-1 lh-sm small' + (tierManagerDup(tier_index) ? ' border-danger text-danger' : ' text-muted')"
+                                         t-att-style="'border-style:dashed !important;' + (tierManagerDup(tier_index) ? ' background:#fee2e2;' : '')">
+                                        <t t-if="tier.use_task_manager">the task's manager<div style="font-size:11.5px;">from the task</div></t>
+                                        <t t-else="">Nobody yet — add a person<div style="font-size:11.5px;">until then it asks the task's manager</div></t>
+                                        <div t-if="tierManagerDup(tier_index)" class="fw-semibold" style="font-size:11.5px;">
+                                            ⚠ Already used for <t t-esc="tierManagerDup(tier_index)"/></div>
                                     </div>
                                     <select class="form-select form-select-sm" style="max-width:220px; align-self:center;"
                                             t-on-change="(e) => this.addPerson(tier, e)">
                                         <option value="">+ Add person…</option>
                                         <t t-foreach="state.staff" t-as="u" t-key="u.id">
                                             <option t-if="!tier.user_ids.includes(u.id)" t-att-value="u.id"
-                                                    t-esc="u.name + (u.number ? ' · ' + u.number : '')"/>
+                                                    t-att-style="tierPersonDup(tier_index, u.id) ? 'color:#dc2626;' : ''"
+                                                    t-esc="u.name + (u.number ? ' · ' + u.number : '') + (tierPersonDup(tier_index, u.id) ? ' — ⚠ already used for ' + tierPersonDup(tier_index, u.id) : '')"/>
                                         </t>
                                     </select>
                                 </div>
@@ -255,6 +292,81 @@ export class KpiConfiguration extends Component {
                         <span>AI keys (369 AI Assistant), meetings and transcription are in
                             <b>Settings → AI &amp; Transcription</b>.</span>
                         <button class="btn btn-sm btn-outline-primary ms-auto" t-on-click="() => this.openAiConfig()">Open</button>
+                    </div>
+                </div>
+
+                <!-- Billing has its own screen: Settings > Billing (kpi_billing_settings). -->
+                <div class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #f59e0b !important; border-left-style: solid;">
+                    <div class="card-header bg-white fw-bold d-flex align-items-center">
+                        <span class="me-2">🧾</span> Billing
+                    </div>
+                    <div class="card-body d-flex align-items-center gap-2 flex-wrap">
+                        <span>The price list a bill is made from (per client and work type), and each client's invoice
+                            WhatsApp group, are in <b>Settings → Billing</b>.</span>
+                        <button class="btn btn-sm btn-outline-primary ms-auto" t-on-click="() => this.openBilling()">Open billing</button>
+                    </div>
+                </div>
+
+                <!-- Meetings: every meeting timing in one place (controllers/kpi_meeting_page.py,
+                     /kpi_config/meeting_get and meeting_set). -->
+                <div t-if="state.meet" class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #0ea5e9 !important; border-left-style: solid;">
+                    <div class="card-header bg-white fw-bold d-flex align-items-center">
+                        <span class="me-2">📹</span> Meetings
+                        <span t-if="state.savedMeet" class="ms-2 text-success small">✓ Saved</span>
+                    </div>
+                    <div class="card-body">
+                        <label class="d-flex align-items-center gap-2 fw-semibold mb-3" style="cursor:pointer">
+                            <input type="checkbox" class="form-check-input m-0" t-att-checked="state.meet.meet_record_all"
+                                   t-on-change="(ev) => this.saveMeet('meet_record_all', ev.target.checked)"/>
+                            Record every meeting automatically
+                        </label>
+                        <div class="row g-3">
+                            <t t-foreach="meetFields" t-as="f" t-key="f.key">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold" t-esc="f.label"/>
+                                    <div class="input-group" style="max-width:200px;">
+                                        <input type="number" class="form-control" t-att-min="f.min" t-att-value="state.meet[f.key]"
+                                               t-on-change="(ev) => this.saveMeet(f.key, ev.target.value)"/>
+                                        <span class="input-group-text" t-esc="f.unit"/>
+                                    </div>
+                                    <small class="text-muted d-block mt-1" t-esc="f.help"/>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Finish and client review (models/kpi_finish.py): how long the client has to
+                     check finished work, and whether an admin checks it first. -->
+                <div t-if="state.finish" class="card shadow-sm mb-4 border-0" style="border-left: 4px solid #16a34a !important; border-left-style: solid;">
+                    <div class="card-header bg-white fw-bold d-flex align-items-center">
+                        <span class="me-2">🏁</span> Finish &amp; client review
+                        <span t-if="state.savedFinish" class="ms-2 small text-success fw-normal">✓ Saved</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-5">
+                                <label class="form-label fw-semibold mb-1">Days the client has to check finished work</label>
+                                <div class="input-group" style="max-width:220px;">
+                                    <input type="number" min="1" max="60" class="form-control" t-att-value="state.finish.review_days"
+                                           t-on-change="(ev) => this.saveFinish({ review_days: ev.target.value })"/>
+                                    <span class="input-group-text">days</span>
+                                </div>
+                            </div>
+                            <div class="col-md-7">
+                                <div class="form-check form-switch m-0">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="o_kpi_finish_admin"
+                                           t-att-checked="!state.finish.skip_admin"
+                                           t-on-change="(ev) => this.saveFinish({ skip_admin: !ev.target.checked })"/>
+                                    <label class="form-check-label fw-semibold" for="o_kpi_finish_admin">An admin checks finished work before the client</label>
+                                </div>
+                                <small class="text-muted">Off: the developer's Partial Complete goes straight to the client.</small>
+                            </div>
+                        </div>
+                        <div t-if="state.finishError" class="text-danger small fw-bold mt-2" t-esc="state.finishError"/>
+                        <small class="text-muted d-block mt-3">The client taps <b>Finished</b> or sends it back with what is wrong.
+                            No answer in <b t-esc="state.finish.review_days"/> day(s): it closes on its own, the developer is told,
+                            and <b>🏁 Full Complete</b> unlocks for them (manual and GitHub link), then the bill is made.</small>
                     </div>
                 </div>
 
@@ -668,9 +780,16 @@ export class KpiConfiguration extends Component {
             tiers: [],
             ceo_wa_numbers: "", savedCeo: false, ceoError: "",
             staff: [],   // internal users for "+ Add person": [{id, name, number}]
+            meet: null, savedMeet: false,   // Meetings card (/kpi_config/meeting_get)
+            finish: null, savedFinish: false, finishError: "",   // Finish & client review (/kpi_config/finish/get)
         });
         onWillStart(async () => {
             await this.loadTiers();
+            await this.loadFinish();
+            try {
+                const m = await rpc("/kpi_config/meeting_get", {});
+                if (m?.status) this.state.meet = m;
+            } catch (_e) { /* card stays hidden */ }
             try {
                 const cfg = await rpc("/kpi_config/get", {});
                 if (cfg?.status) {
@@ -772,6 +891,58 @@ export class KpiConfiguration extends Component {
 
     openAiConfig() {
         this.action.doAction("kra_kpi_module.action_kpi_ai_config");
+    }
+
+    async loadFinish() {
+        try {
+            const r = await rpc("/kpi_config/finish/get", {});
+            if (r?.status) this.state.finish = { review_days: r.review_days, skip_admin: !!r.skip_admin };
+        } catch (e) { /* older server: no card */ }
+    }
+
+    // One field at a time; the route answers with the saved values.
+    async saveFinish(vals) {
+        this.state.finishError = "";
+        try {
+            const r = await rpc("/kpi_config/finish/set", vals);
+            if (!r?.status) { this.state.finishError = r?.message || "Could not save."; await this.loadFinish(); return; }
+            this.state.finish = { review_days: r.review_days, skip_admin: !!r.skip_admin };
+            this._flash(this.state, "savedFinish");
+        } catch (e) { this.state.finishError = e?.data?.message || "Could not save."; }
+    }
+
+    openBilling() {
+        this.action.doAction("kra_kpi_module.action_kpi_billing_settings");
+    }
+
+    // Meetings card: the timings, with the server's minimums.
+    get meetFields() {
+        return [
+            { key: "meet_rec_pause_min", label: "Pause recording after silence", unit: "min", min: 1,
+              help: "Recording pauses when nobody talks this long, and continues as soon as someone talks." },
+            { key: "meet_ask_after_min", label: "Ask \"Continue?\" after no speech", unit: "min", min: 1,
+              help: "Everyone in the call gets a popup with a Continue button." },
+            { key: "meet_reply_sec", label: "Time to tap Continue", unit: "sec", min: 10,
+              help: "Whoever doesn't tap is taken out of the call. If nobody taps, the meeting ends." },
+            { key: "meet_gone_min", label: "End when every connection is lost for", unit: "min", min: 1,
+              help: "All browsers closed or offline this long: the meeting ends." },
+            { key: "meet_bot_alone_min", label: "Recorder leaves when alone for", unit: "min", min: 1,
+              help: "The recorder stops once nobody else is in the call." },
+            { key: "meet_rec_max_h", label: "Longest recording", unit: "hours", min: 1,
+              help: "The recorder always stops after this." },
+            { key: "meet_record_keep_days", label: "Keep recordings for", unit: "days", min: 0,
+              help: "Audio is deleted after this (once a summary exists). 0 keeps it forever." },
+        ];
+    }
+
+    async saveMeet(key, value) {
+        const val = typeof value === "boolean" ? value : parseInt(value, 10);
+        if (typeof val === "number" && Number.isNaN(val)) return;
+        try {
+            const r = await rpc("/kpi_config/meeting_set", { [key]: val });
+            if (r?.status) { this.state.meet = r; this._flash(this.state, "savedMeet"); }
+            else this.notification?.add?.(r?.message || "Could not save.", { type: "danger" });
+        } catch (_e) { /* keeps the old value on screen */ }
     }
 
     // Drives admin_accept_deadline_at (kpi_workflow.py _admin_accept_minutes) —
