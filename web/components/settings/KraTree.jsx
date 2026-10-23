@@ -3,9 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Avatar, Button, ErrorState, Field, Icon, IconButton, Input, Lozenge, Modal, PageHeader, Skeleton, stateTone, useDialogs, useFlags, Select } from "@/components/ui";
 import * as S from "@/lib/services/settings";
 import * as P from "@/lib/services/approvals";
-import { getIntakeUsers } from "@/lib/services/admin";
+import { getIntakeUsers, fileToBase64 } from "@/lib/services/admin";
 import { href } from "@/lib/api";
-import { PRIORITIES, DELIVERABLES, TASK_TYPES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue } from "@/lib/services/kpiActions";
+import { PRIORITIES, DELIVERABLES, TASK_TYPES, DELIVERABLE_OTHER_REQUIRED, deliverableOtherValue, findNameMatches } from "@/lib/services/kpiActions";
 import { useTaskActions } from "@/components/task/TaskActions";
 import OtherTypeInput from "@/components/task/OtherTypeInput";
 import SettingsNav from "./SettingsNav";
@@ -25,6 +25,7 @@ export default function KraTree() {
   const [open, setOpen] = useState(() => new Set());
   const [q, setQ] = useState("");
   const [dialog, setDialog] = useState(null); /* {kind:'kra'|'kpi'|'rename'|'clients', node, parent} */
+  const [detailsId, setDetailsId] = useState(null); /* KPI Details (Odoo kpi_view) */
   const [busy, setBusy] = useState(false);
   /* Who manages each client (kra.master.manager_user_id): the person who
      approves for that client. Read alongside the tree, which doesn't carry it. */
@@ -80,17 +81,51 @@ export default function KraTree() {
         {err && <ErrorState error={{ message: err }} onRetry={load} />}
         <div className="cardbox" style={{ padding: "10px 8px" }}>
           {!tree && !err && <div style={{ padding: 8 }}><Skeleton rows={6} /></div>}
-          {tree && <div className="tree">{tree.filter(matches).map((n) => <Node key={n.id} n={n} depth={0} open={open} toggle={toggle} onAdd={(node, kind) => setDialog({ kind, parent: node })} onRename={(node, isKpi) => setDialog({ kind: "rename", node, isKpi })} onDelete={del} onClients={(node) => setDialog({ kind: "clients", node })} onManager={(node) => setDialog({ kind: "manager", node })} mgr={mgr} onOpenTask={(id) => acts.openTask(id)} onManual={openManual} q={q} />)}{!tree.length && <div className="empty">No KRAs yet. Create the first client above.</div>}</div>}
+          {tree && <div className="tree">{tree.filter(matches).map((n) => <Node key={n.id} n={n} depth={0} open={open} toggle={toggle} onAdd={(node, kind) => setDialog({ kind, parent: node })} onRename={(node, isKpi) => setDialog({ kind: "rename", node, isKpi })} onDelete={del} onClients={(node) => setDialog({ kind: "clients", node })} onManager={(node) => setDialog({ kind: "manager", node })} mgr={mgr} onOpenTask={(id) => acts.openTask(id)} onManual={openManual} onDetails={setDetailsId} q={q} />)}{!tree.length && <div className="empty">No KRAs yet. Create the first client above.</div>}</div>}
         </div>
       </div>
       {dialog && (dialog.kind === "clients" ? <ClientsDialog node={dialog.node} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); load(); }} flags={flags} />
         : dialog.kind === "manager" ? <ManagerDialog node={dialog.node} current={mgr[dialog.node.id]} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); loadManagers(); }} flags={flags} />
         : <EditDialog d={dialog} busy={busy} onClose={() => setDialog(null)} onRun={run} />)}
+      {detailsId && <KpiDetails id={detailsId} onClose={() => setDetailsId(null)} onEdit={(id) => { setDetailsId(null); acts.openTask(id); }} />}
     </>
   );
 }
 
-function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, onManager, mgr = {}, onOpenTask, onManual, q }) {
+/* Odoo's KPI Details screen (kpi_view.js, /kra_kpi/get_kpi_detail): every
+   field of the KPI, read-only. Edit opens the task, where the web edits it. */
+function KpiDetails({ id, onClose, onEdit }) {
+  const [k, setK] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    S.fetchKpiDetail(id).then((r) => { if (!r?.status) throw new Error(r?.message || "Failed to load KPI."); setK(r.kpi); }).catch(setErr);
+  }, [id]);
+  const links = (() => { try { const p = JSON.parse(k?.related_links || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } })();
+  const rem = k && [k.reminder_days && `${k.reminder_days}d`, k.reminder_hours && `${k.reminder_hours}h`, k.reminder_minutes && `${k.reminder_minutes}m`].filter(Boolean).join(" ");
+  const yes = (v) => (v ? "Yes" : "No");
+  const rows = k ? [
+    ["Name", k.name], ["KRA", k.kra_name], ["Priority", k.priority], ["Estimate", k.estimate_display], ["Points", k.points],
+    ["Assignee", k.user_name], ["User Group", k.user_group_name], ["Deadline", k.deadline],
+    ["Reminder Interval", rem || <span className="mini">Not set</span>], ["Next KPI", k.next_kpi_name], ["Warehouse", k.warehouse], ["File Name", k.file_name],
+    ["Uploaded File", k.file_content ? <a className="btn btn-ghost" style={{ height: 28, fontSize: 12.5 }} href={`data:application/octet-stream;base64,${k.file_content}`} download={k.file_name || "download"}>Download File</a> : <span className="mini">No file uploaded</span>],
+    ["Related Links", links.length ? <div>{links.map((l) => <div key={l}><a href={l} target="_blank" rel="noreferrer">{l}</a></div>)}</div> : <span className="mini">No links added</span>],
+    ["Actions", k.actions || "-"], ["Description", k.description], ["Checklist", k.checklist], ["Guidelines", k.guidelines],
+    ["Is Mandatory", yes(k.is_mandatory)], ["Auto Estimated", yes(k.auto_estimated)], ["Service KPI", yes(k.service_kpi)], ["Coordinator Review", yes(k.is_manager_review_needed)],
+    ["Auto Assign", yes(k.auto_assign)], ["Is Permanent", yes(k.is_permanent)], ["Is Meeting", yes(k.is_meeting)], ["Customer Review", yes(k.is_customer_review_needed)],
+  ] : [];
+  return (
+    <Modal open onClose={onClose} title="KPI Details" width={680}
+      footer={<><Button kind="ghost" onClick={onClose}>Back</Button>{k && <Button kind="primary" onClick={() => onEdit(k.id)}>Edit</Button>}</>}>
+      {err && <ErrorState error={err} />}
+      {!k && !err && <Skeleton rows={8} />}
+      {k && rows.map(([label, v]) => (
+        <div key={label} className="kv"><span className="lbl">{label}</span><span className="val" style={{ whiteSpace: "pre-wrap" }}>{v === "" || v == null ? "—" : v}</span></div>
+      ))}
+    </Modal>
+  );
+}
+
+function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, onManager, mgr = {}, onOpenTask, onManual, onDetails, q }) {
   const m = depth === 0 ? mgr[n.id] : null;
   const manager = m && Array.isArray(m.manager_user_id) ? m.manager_user_id[1] : "";
   const isOpen = open.has(n.id) || !!q;
@@ -119,7 +154,7 @@ function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, on
           <IconButton icon="trash" label="Delete" size={15} onClick={() => onDelete(n, false)} />
         </span>
       </div>
-      {isOpen && kids.map((c) => <Node key={c.id} n={c} depth={depth + 1} open={open} toggle={toggle} onAdd={onAdd} onRename={onRename} onDelete={onDelete} onClients={onClients} onManager={onManager} mgr={mgr} onOpenTask={onOpenTask} onManual={onManual} q={q} />)}
+      {isOpen && kids.map((c) => <Node key={c.id} n={c} depth={depth + 1} open={open} toggle={toggle} onAdd={onAdd} onRename={onRename} onDelete={onDelete} onClients={onClients} onManager={onManager} mgr={mgr} onOpenTask={onOpenTask} onManual={onManual} onDetails={onDetails} q={q} />)}
       {isOpen && kpis.map((k) => (
         <div key={`k${k.id}`} className={`tr d${Math.min(depth + 1, 3)}`} style={{ fontWeight: 500 }}>
           <span className="ref" style={{ cursor: "pointer" }} onClick={() => onOpenTask(k.id)}>{k.external_ref || `#${k.id}`}</span>
@@ -127,7 +162,7 @@ function Node({ n, depth, open, toggle, onAdd, onRename, onDelete, onClients, on
           {k.task_state && (() => { const [tone, label] = stateTone(k.task_state); return <Lozenge tone={tone}>{label === k.task_state ? k.task_state.replace(/_/g, " ") : label}</Lozenge>; })()}
           {k.has_user_manual && <button type="button" onClick={() => onManual(k)} title={`Open the user manual${k.manual_count > 1 ? ` (${k.manual_count})` : ""}`} style={{ border: 0, background: "none", padding: 0, cursor: "pointer" }}><Lozenge tone="neutral" style={{ textTransform: "none" }}><Icon n="book" size={12} /> manual{k.manual_count > 1 ? ` · ${k.manual_count}` : ""}</Lozenge></button>}
           <span className="cnt">{k.user_name ? <><Avatar name={k.user_name} uid={k.user_id} size={18} /> {k.user_name}</> : k.task_state ? <span className="mini">unassigned</span> : ""}</span>
-          <span className="act"><IconButton icon="pen" label="Rename" size={15} onClick={() => onRename(k, true)} /><IconButton icon="trash" label="Delete" size={15} onClick={() => onDelete(k, true)} /></span>
+          <span className="act"><IconButton icon="info" label="KPI details" size={15} onClick={() => onDetails(k.id)} /><IconButton icon="pen" label="Rename" size={15} onClick={() => onRename(k, true)} /><IconButton icon="trash" label="Delete" size={15} onClick={() => onDelete(k, true)} /></span>
         </div>
       ))}
     </>
@@ -205,20 +240,67 @@ function NameDialog({ d, busy, onClose, onRun }) {
    through kra.kpi.create_kpi. */
 function KpiDialog({ parent, busy, onClose, onRun }) {
   const flags = useFlags();
+  const dlg = useDialogs();
   const [f, setF] = useState({
     name: "", estimateHours: "1", estimateMinutes: "0", priority: "regular", docType: "", deliverable: [], deliverableOther: "", userId: "", deadline: "",
     reminderDays: "0", reminderHours: "0", reminderMinutes: "0", description: "", checklist: "", guidelines: "", points: "0", flags: {},
+    userGroupId: "", actionConfigId: "", nextKpiId: "", warehouseId: "", fileName: "", uploadedFile: "", relatedLinks: [],
   });
   const [users, setUsers] = useState([]);
   const [lib, setLib] = useState({ checklist: [], guidelines: [] });
+  const [opts, setOpts] = useState({ groups: [], actions: [], kpis: [], warehouses: [] });
+  const [libOpen, setLibOpen] = useState(null); /* "checklist" | "guidelines" */
+  const [linkInput, setLinkInput] = useState("");
+  const [matches, setMatches] = useState([]);
+  const loadLib = () => Promise.all([S.fetchChecklistLibrary(), S.fetchGuidelineLibrary()]).then(([c, g]) => setLib({ checklist: c || [], guidelines: g || [] }));
+  const loadOpts = () => Promise.all([S.fetchUserGroups(), S.fetchActionConfigs(), S.fetchKpiPickList(), S.fetchWarehouses()])
+    .then(([groups, actions, kpis, warehouses]) => setOpts({ groups, actions, kpis, warehouses }));
   useEffect(() => {
     getIntakeUsers().then(setUsers).catch(() => {});
-    Promise.all([S.fetchChecklistLibrary(), S.fetchGuidelineLibrary()]).then(([c, g]) => setLib({ checklist: c || [], guidelines: g || [] }));
+    loadLib(); loadOpts();
   }, []);
+  /* Odoo onNameTyped: tasks under this KRA that already use the name. A heads-up only. */
+  useEffect(() => {
+    const name = f.name.trim();
+    if (!name) { setMatches([]); return; }
+    const t = setTimeout(() => findNameMatches(name, parent.id).then((r) => setMatches(r?.matches || [])), 350);
+    return () => clearTimeout(t);
+  }, [f.name, parent.id]);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const toggleDeliv = (code) => set("deliverable", f.deliverable.includes(code) ? f.deliverable.filter((c) => c !== code) : [...f.deliverable, code]);
-  /* Library pick: appended as the next numbered line, like Odoo's "apply" does. */
-  const addLine = (k, text) => { if (!text) return; const lines = f[k].split("\n").map((l) => l.replace(/^\d+\.\s*/, "").trim()).filter(Boolean); if (lines.includes(text)) return; set(k, [...lines, text].map((l, i) => `${i + 1}. ${l}`).join("\n")); };
+  /* The "+" next to each pick list (Odoo saveQuick*): create, reload the list, select the new one. */
+  const quick = async (title, fields, create, key, reload) => {
+    const v = await dlg.form({ title, fields, confirmLabel: "Create" });
+    if (!v) return;
+    try { const id = await create(v); await reload(); if (key) set(key, String(id)); flags.ok(`${title.replace(/^New /, "")} created.`); }
+    catch (e) { flags.err(e.message); }
+  };
+  const addGroup = () => quick("New user group", [{ key: "name", label: "Group name", value: "" }], (v) => S.quickCreateUserGroup(v.name), "userGroupId", loadOpts);
+  const addEmployee = () => quick("New employee", [{ key: "name", label: "Employee name", value: "" }, { key: "email", label: "Email", value: "", type: "email" }, { key: "login", label: "Login", value: "" }],
+    async (v) => {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim())) throw new Error("Please enter a valid email address.");
+      const id = await S.quickCreateEmployee(v);
+      flags.ok("Please set a password from Settings → Users.");
+      return id;
+    }, "userId", () => getIntakeUsers().then(setUsers));
+  const addAction = () => quick("New action", [{ key: "name", label: "Screen name", value: "" }, { key: "url", label: "URL", value: "" }], S.quickCreateAction, "actionConfigId", loadOpts);
+  const addWarehouse = () => quick("New warehouse", [{ key: "name", label: "Warehouse name", value: "" }, { key: "countryCode", label: "Country code", value: "+91", required: false },
+    { key: "phone", label: "Phone", value: "", required: false }, { key: "address", label: "Address", value: "", required: false },
+    { key: "company", label: "Company", value: "", required: false }, { key: "transaction", label: "Transaction number", value: "", required: false }], S.quickCreateWarehouse, "warehouseId", loadOpts);
+  const pickFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const b64 = await fileToBase64(file);
+    setF((x) => ({ ...x, fileName: file.name, uploadedFile: b64 }));
+  };
+  /* Odoo addRelatedLink: a real URL, no duplicates. */
+  const addLink = () => {
+    const link = linkInput.trim();
+    if (!link) return flags.warn("Please enter a link.");
+    try { new URL(link); } catch { return flags.warn("Please enter a valid URL (e.g., https://example.com)."); }
+    if (f.relatedLinks.includes(link)) return flags.warn("This link is already added.");
+    set("relatedLinks", [...f.relatedLinks, link]); setLinkInput("");
+  };
   const h = Math.max(0, Math.floor(+f.estimateHours || 0)), m = Math.floor(+f.estimateMinutes || 0);
   const go = () => {
     if (!f.name.trim()) return flags.warn("KPI name is required.");
@@ -236,11 +318,35 @@ function KpiDialog({ parent, busy, onClose, onRun }) {
   return (
     <Modal open onClose={onClose} title={`New KPI under ${parent.name}`} width={720} footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="primary" busy={busy} disabled={!f.name.trim()} onClick={go}>Create</Button></>}>
       <Field label="KPI name" required><Input value={f.name} autoFocus onChange={(e) => set("name", e.target.value)} /></Field>
+      {matches.length > 0 && (
+        <div className="callout" style={{ background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)" }}>
+          <span>{matches.length} task(s) under this KRA already use this name:
+            {matches.map((m) => <div key={m.id} style={{ marginLeft: 12 }}>{m.external_ref && <Lozenge tone="neutral" style={{ marginRight: 4 }}>{m.external_ref}</Lozenge>}{m.name}{m.assignee ? <span className="mini"> · {m.assignee}</span> : null}</div>)}
+            <div className="mini">You can still save — this is only a heads-up.</div></span>
+        </div>
+      )}
       <div className="grid3">
         <Field label="Estimate" required><span style={{ display: "flex", gap: 6 }}><Input type="number" min="0" value={f.estimateHours} onChange={(e) => set("estimateHours", e.target.value)} right={<span className="ph">h</span>} /><Input type="number" min="0" max="59" value={f.estimateMinutes} onChange={(e) => set("estimateMinutes", e.target.value)} right={<span className="ph">m</span>} /></span></Field>
         <Field label="Priority"><span className="input"><Select value={f.priority} onChange={(e) => set("priority", e.target.value)} style={SEL}>{PRIORITIES.map((p) => <option key={p.code} value={p.code}>{p.label}</option>)}</Select></span></Field>
-        <Field label="Assignee" required><span className="input"><Select value={f.userId} onChange={(e) => set("userId", e.target.value)} style={SEL} placeholder="Choose a person"><option value="">Choose a person</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
+        <Field label="Assignee" required><span style={{ display: "flex", gap: 6 }}><span className="input" style={{ flex: 1 }}><Select value={f.userId} onChange={(e) => set("userId", e.target.value)} style={SEL} placeholder="Choose a person"><option value="">Choose a person</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span><Button kind="ghost" onClick={addEmployee} title="New employee">+</Button></span></Field>
       </div>
+      <div className="grid2">
+        <PickPlus label="User group" value={f.userGroupId} onChange={(v) => set("userGroupId", v)} items={opts.groups} placeholder="Select user group" onAdd={addGroup} />
+        <PickPlus label="Actions" value={f.actionConfigId} onChange={(v) => set("actionConfigId", v)} items={opts.actions} placeholder="Select action" onAdd={addAction} />
+        <PickPlus label="Next KPI" value={f.nextKpiId} onChange={(v) => set("nextKpiId", v)} items={opts.kpis} placeholder="Select next KPI" />
+        <PickPlus label="Warehouse" value={f.warehouseId} onChange={(v) => set("warehouseId", v)} items={opts.warehouses} placeholder="Select warehouse" onAdd={addWarehouse} />
+        <Field label="File name"><Input value={f.fileName} onChange={(e) => set("fileName", e.target.value)} /></Field>
+        <Field label="Upload file"><input type="file" onChange={pickFile} /></Field>
+      </div>
+      <Field label="Related links" hint="Add reference links, documentation URLs, or related resources">
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ display: "flex", gap: 6 }}><Input type="url" value={linkInput} onChange={(e) => setLinkInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addLink(); } }} placeholder="Enter URL (e.g., https://example.com/docs)" /><Button onClick={addLink}>Add</Button></span>
+          {f.relatedLinks.length ? f.relatedLinks.map((l, i) => (
+            <span key={l} className="row" style={{ gap: 8 }}><a href={l} target="_blank" rel="noreferrer" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 520 }}>{l}</a>
+              <Button size="sm" kind="ghost" onClick={() => set("relatedLinks", f.relatedLinks.filter((_, j) => j !== i))}>Remove</Button></span>
+          )) : <span className="mini">No links added yet</span>}
+        </div>
+      </Field>
       <div className="grid3">
         <div className="field"><span>Type<span className="req" aria-hidden="true"> *</span></span><span className="pillset">{DELIVERABLES.map((d) => <button key={d.code} type="button" className={`pill ${f.deliverable.includes(d.code) ? "on" : ""}`} aria-pressed={f.deliverable.includes(d.code)} onClick={() => toggleDeliv(d.code)}>{d.label}</button>)}</span>{f.deliverable.includes("other") ? <OtherTypeInput bare value={f.deliverableOther} onChange={(v) => set("deliverableOther", v)} autoFocus /> : <small className="mini">Module, App, EXE and/or Other</small>}</div>
         <Field label="Request type" hint="Gives it a REQ / UPT / BUG ref"><span className="input"><Select value={f.docType} onChange={(e) => set("docType", e.target.value)} style={SEL}><option value="">None</option>{TASK_TYPES.map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}</Select></span></Field>
@@ -253,13 +359,66 @@ function KpiDialog({ parent, busy, onClose, onRun }) {
       <Field label="Description"><span className="input ta" style={{ height: "auto" }}><textarea rows={3} value={f.description} onChange={(e) => set("description", e.target.value)} style={TA} /></span></Field>
       {[["checklist", "Checklist"], ["guidelines", "Guidelines"]].map(([k, label]) => (
         <div key={k} className="field">{label}
-          {lib[k].length > 0 && <span className="input" style={{ height: 30 }}><Select value="" onChange={(e) => addLine(k, lib[k].find((x) => String(x.id) === e.target.value)?.name)} style={SEL} placeholder={`Add from the ${label.toLowerCase()} library…`}><option value="">{`Add from the ${label.toLowerCase()} library…`}</option>{lib[k].map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></span>}
+          <span><Button size="sm" kind="ghost" onClick={() => setLibOpen(k)}>+ Add {label}</Button></span>
           <span className="input ta" style={{ height: "auto" }}><textarea rows={3} value={f[k]} onChange={(e) => set(k, e.target.value)} placeholder={"1. …\n2. …"} style={TA} /></span>
         </div>
       ))}
       <div className="field">Flags<span style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0 14px" }}>
         {S.KPI_FLAGS.map(([k, label]) => <label key={k} className="chk"><input type="checkbox" checked={!!f.flags[k]} onChange={(e) => set("flags", { ...f.flags, [k]: e.target.checked })} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} />{label}</label>)}
       </span></div>
+      {libOpen && (
+        <LibraryDialog title={libOpen === "checklist" ? "Checklist Library" : "Guideline Library"} noun={libOpen === "checklist" ? "checklist" : "guideline"}
+          items={lib[libOpen]} text={f[libOpen]} onClose={() => setLibOpen(null)}
+          onAdd={async (name) => { const id = await (libOpen === "checklist" ? S.addChecklistLibraryItem(name) : S.addGuidelineLibraryItem(name)); await loadLib(); return id; }}
+          onApply={(text) => { set(libOpen, text); flags.ok(libOpen === "checklist" ? "Checklist items applied." : "Guideline items applied."); setLibOpen(null); }} />
+      )}
+    </Modal>
+  );
+}
+
+/* A pick list with Odoo's "+" quick-create button beside it. */
+function PickPlus({ label, value, onChange, items, placeholder, onAdd }) {
+  return (
+    <Field label={label}>
+      <span style={{ display: "flex", gap: 6 }}>
+        <span className="input" style={{ flex: 1 }}><Select value={value} onChange={(e) => onChange(e.target.value)} style={SEL} placeholder={placeholder}><option value="">{placeholder}</option>{items.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></span>
+        {onAdd && <Button kind="ghost" onClick={onAdd} title={`New ${label.toLowerCase()}`}>+</Button>}
+      </span>
+    </Field>
+  );
+}
+
+/* Odoo's Checklist / Guideline Library modal: add a new item to the library,
+   tick items (the ones already in the text start ticked), Apply Selected
+   writes them as "1. …" lines in library order. */
+function LibraryDialog({ title, noun, items, text, onAdd, onApply, onClose }) {
+  const flags = useFlags();
+  const [picked, setPicked] = useState(() => {
+    const lines = (text || "").split("\n").map((l) => l.replace(/^\d+\.\s*/, "").trim()).filter(Boolean);
+    return items.filter((x) => lines.includes(x.name)).map((x) => x.id);
+  });
+  const [neu, setNeu] = useState("");
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    if (!neu.trim()) return flags.warn(`Please enter a ${noun} item.`);
+    setBusy(true);
+    try { const id = await onAdd(neu); setPicked((p) => [...p, id]); setNeu(""); flags.ok(`${noun[0].toUpperCase()}${noun.slice(1)} item added successfully.`); }
+    catch (e) { flags.err(e.message); } finally { setBusy(false); }
+  };
+  const apply = () => onApply(items.filter((x) => picked.includes(x.id)).map((x, i) => `${i + 1}. ${x.name}`).join("\n"));
+  return (
+    <Modal open onClose={onClose} title={title} width={620}
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="primary" onClick={apply}>Apply Selected</Button></>}>
+      <Field label={`Add new ${noun} item`}>
+        <span style={{ display: "flex", gap: 6 }}><Input value={neu} onChange={(e) => setNeu(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} placeholder={`Enter ${noun} item`} /><Button kind="primary" busy={busy} onClick={add}>+ Add</Button></span>
+      </Field>
+      <Field label="Select from existing items">
+        <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6, padding: 10 }}>
+          {items.length ? items.map((x) => (
+            <label key={x.id} className="chk"><input type="checkbox" checked={picked.includes(x.id)} onChange={() => setPicked((p) => (p.includes(x.id) ? p.filter((y) => y !== x.id) : [...p, x.id]))} style={{ width: 15, height: 15, accentColor: "var(--brand)" }} />{x.name}</label>
+          )) : <span className="mini">No {noun} items available</span>}
+        </div>
+      </Field>
     </Modal>
   );
 }

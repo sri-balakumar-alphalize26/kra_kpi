@@ -7,6 +7,7 @@ import { invalidate } from "@/lib/api";
 import { useMe } from "@/lib/me";
 import * as P from "@/lib/services/portal";
 import { LegacyBlock, OldDbBadge } from "@/components/task/Legacy";
+import VoiceRecorder from "@/components/task/VoiceRecorder";
 import { BulkSignOff, CertificatePreview, SignatureCard, SignatureFields, useSignature } from "./SignOff";
 
 /* The client's tasks: tabs, table, and a right-side sheet to approve the
@@ -151,6 +152,16 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
 function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
   const [mode, setMode] = useState("view"); /* view | signoff | sendback | pre_reject */
   const [reason, setReason] = useState(""); const [code, setCode] = useState("");
+  /* ↩ Send back proof, checked before upload: photos, videos, audio; 10 files, 50 MB each. */
+  const [proof, setProof] = useState([]);
+  const addProof = (e) => {
+    const list = [...(e.target.files || [])]; e.target.value = "";
+    const bad = list.find((f) => !/^(image|video|audio)\//.test(f.type || ""));
+    if (bad) { flags.err(`“${bad.name}” is not a photo, video or audio file.`); return; }
+    const big = list.find((f) => f.size > 50 * 1024 * 1024);
+    if (big) { flags.err(`“${big.name}” is over 50 MB.`); return; }
+    setProof((fs) => (fs.length + list.length > 10 ? (flags.err("At most 10 files."), fs) : [...fs, ...list]));
+  };
   const [busy, setBusy] = useState(false);
   const s = useSignature(myName);
   const [tone, lbl] = canSign ? ["review", "Your sign-off needed"] : pre ? ["review", "Approve estimate"] : label(k.task_state);
@@ -215,7 +226,15 @@ function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
           <div className="cardbox" style={{ gap: 10 }}>
             <b style={{ color: "var(--navy)" }}>What isn&apos;t right?</b>
             <Field label="Reason" required><span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus placeholder="e.g. The merged table name doesn't show in the waiter app" style={{ border: 0, background: "none", outline: 0, resize: "none", width: "100%", height: "100%", font: "inherit", color: "inherit" }} /></span></Field>
-            <div className="row"><Button kind="danger" busy={busy} disabled={!reason.trim()} onClick={() => run(() => P.sendBack(k.id, reason), "Sent back for rework.")}>Request changes</Button><Button kind="ghost" onClick={() => setMode("view")}>Cancel</Button></div>
+            {/* Proof: photos, a screen video or a voice note that show what is still wrong. */}
+            <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+              <label className="btn" style={{ cursor: "pointer" }}>📷 Photo<input type="file" accept="image/*" multiple hidden onChange={(e) => addProof(e)} /></label>
+              <label className="btn" style={{ cursor: "pointer" }}>🎥 Video<input type="file" accept="video/*" hidden onChange={(e) => addProof(e)} /></label>
+              <VoiceRecorder onAttach={(f) => setProof((fs) => [...fs, f])} onMicFailed={() => flags.err("Can't use the mic. Type it instead, or attach a recording.")} />
+              <span className="mini">{proof.length ? `${proof.length} file(s)` : "Optional: up to 10 files, 50 MB each"}</span>
+            </div>
+            {proof.length > 0 && <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>{proof.map((f, i) => <span key={i} className="chip-sm" style={{ background: "var(--lz-todo-bg)", color: "var(--text)" }}>{f.name} <button type="button" style={{ border: 0, background: "none", color: "var(--over)", cursor: "pointer" }} aria-label={`Remove ${f.name}`} onClick={() => setProof((fs) => fs.filter((_, j) => j !== i))}>✕</button></span>)}</div>}
+            <div className="row"><Button kind="danger" busy={busy} disabled={!reason.trim()} onClick={() => run(() => P.sendBack(k.id, reason, proof), proof.length ? `Sent back with ${proof.length} file(s).` : "Sent back for rework.")}>Request changes</Button><Button kind="ghost" onClick={() => setMode("view")}>Cancel</Button></div>
           </div>
         )}
       </aside>

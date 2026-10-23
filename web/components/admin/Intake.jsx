@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { watchUploads } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { Button, Field, Icon, Input, PageHeader, Tabs, useFlags, Select } from "@/components/ui";
 import { useMe } from "@/lib/me";
@@ -40,6 +41,16 @@ export default function Intake({ docType = "requirement", portal = false }) {
   const [kras, setKras] = useState([]); const [kra, setKra] = useState("");
   const [users, setUsers] = useState([]);
   const [defUser, setDefUser] = useState(""); const [defPri, setDefPri] = useState("regular"); const [defDeliv, setDefDeliv] = useState("");
+  const [defHours, setDefHours] = useState(1); const [defMinutes, setDefMinutes] = useState(0);
+  /* Photos / video (Odoo step 3b): picked for one named row, each with a reason,
+     uploaded once the tasks exist. attachments: [{rowIndex, kind, data, name, size, preview, reason, status, pct, kpiId}] */
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [mediaRow, setMediaRow] = useState("");
+  const [mediaKind, setMediaKind] = useState("image");
+  const [mediaPicked, setMediaPicked] = useState(null);
+  const [mediaReason, setMediaReason] = useState("");
+  const [attachments, setAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
   const [defDelivOther, setDefDelivOther] = useState(""); /* the default's "Other" text */
   const [version, setVersion] = useState("");
   const [text, setText] = useState("");
@@ -54,7 +65,7 @@ export default function Intake({ docType = "requirement", portal = false }) {
   useEffect(() => { if (!client) { setKras([]); return; } A.getSubKras(+client).then((k) => { setKras(k); setKra(k[0] ? String(k[0].id) : ""); }).catch(() => setKras([])); }, [client]);
   useEffect(() => { A.peekNextRef(type).then(setNextRef).catch(() => {}); }, [type]);
 
-  const blank = () => ({ name: "", external_ref: "", related_req_ref: "", legacy_on: false, legacy_ref: "", legacy_name: "", legacy_note: "", estimate_hours: staff ? 1 : 0, estimate_minutes: 0, priority: defPri, deliverable_type: defDeliv, deliverable_other: "", primary_user_id: defUser, description: "" });
+  const blank = () => ({ name: "", external_ref: "", related_req_ref: "", legacy_on: false, legacy_ref: "", legacy_name: "", legacy_note: "", estimate_hours: staff ? (Number(defHours) || 0) : 0, estimate_minutes: staff ? (Number(defMinutes) || 0) : 0, priority: defPri, deliverable_type: defDeliv, deliverable_other: "", primary_user_id: defUser, description: "" });
   /* A row's own "Other" text, else the default's when the default is Other too. */
   const rowOther = (r) => deliverableOtherValue(r.deliverable_type || defDeliv, (r.deliverable_other || "").trim() || (defDeliv === "other" ? defDelivOther : ""));
   const defOther = deliverableOtherValue(defDeliv, defDelivOther);
@@ -115,9 +126,64 @@ export default function Intake({ docType = "requirement", portal = false }) {
       const r = await A.createBulkTasks({ subKraId: +kra, docType: type, tasks, deliverableType: defDeliv, deliverableOther: defOther, fileData: source?.b64 || "", fileName: source?.name || "", requirementVersion: version });
       A.assertOk(r, "Task creation failed.");
       flags.ok(`${r.created_count || valid.length} task${(r.created_count || valid.length) === 1 ? "" : "s"} created.`);
+      /* Attachments: the tasks exist now, so each file hangs off its task. One at
+         a time so the % means something; the tasks are never rolled back. */
+      const ids = r.kpi_ids || [];
+      const namedIdx = new Map(); let k = 0;
+      rows.forEach((row, i) => { if (row.name?.trim()) namedIdx.set(i, k++); });
+      const queued = attachments.map((a) => ({ ...a, kpiId: namedIdx.has(a.rowIndex) ? ids[namedIdx.get(a.rowIndex)] || null : null }));
+      const failed = queued.length ? await sendAttachments(queued) : [];
       setRows([]); setSource(null); setListName("");
+      if (failed.length) {
+        setAttachments(failed);
+        flags.err(`Your ${r.created_count || valid.length} task(s) were created. But these files did not upload: ${failed.map((a) => a.name).join(", ")}. Use "Retry failed uploads" to send them again.`);
+        return;
+      }
+      setAttachments([]); setMediaOpen(false);
       router.push(portal ? "/portal/requests" : staff ? "/queue" : "/board");
     } catch (ex) { flags.err(ex.message); } finally { setBusy(""); }
+  };
+  /* Upload each queued file to its task; the % comes from the upload tracker,
+     which names the file. Answers the ones that failed (they keep their kpiId). */
+  const sendAttachments = async (list) => {
+    setUploading(true);
+    const failed = [];
+    const set = (idx, patch) => setAttachments((l) => l.map((a, j) => (j === idx ? { ...a, ...patch } : a)));
+    setAttachments(list);
+    for (let idx = 0; idx < list.length; idx++) {
+      const att = list[idx];
+      if (att.status === "done") continue;
+      if (!att.kpiId) { set(idx, { status: "failed" }); failed.push({ ...att, status: "failed" }); continue; }
+      set(idx, { status: "uploading", pct: 0 });
+      const stop = watchUploads((live) => { const e = live.find((u) => u.label === att.name); if (e && e.total) set(idx, { pct: Math.min(100, Math.round((e.loaded / e.total) * 100)) }); });
+      try { const res = await A.attachIntakeMedia(att.kpiId, att); A.assertOk(res, "Upload failed"); set(idx, { status: "done", pct: 100 }); }
+      catch { set(idx, { status: "failed" }); failed.push({ ...att, status: "failed" }); }
+      finally { stop(); }
+    }
+    setUploading(false);
+    return failed;
+  };
+  const retryFailed = async () => {
+    const still = await sendAttachments(attachments);
+    if (still.length) { setAttachments(still); flags.err(`Still could not upload: ${still.map((a) => a.name).join(", ")}`); return; }
+    setAttachments([]); setMediaOpen(false); flags.ok("All files uploaded.");
+  };
+  /* Only NAMED rows can be attached to: the name is what identifies the task. */
+  const namedRows = rows.map((r, i) => ({ i, name: (r.name || "").trim() })).filter((r) => r.name);
+  const mediaReady = !!mediaPicked && mediaRow !== "" && mediaReason.trim().length > 0;
+  const pickMedia = async (e) => {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file) return;
+    const isVideo = mediaKind === "video";
+    /* Refuse at pick time, never mid-upload. */
+    if (isVideo && file.size > A.MAX_INTAKE_VIDEO_BYTES) { flags.err(`That video is ${A.humanSize(file.size)} — the limit is ${A.humanSize(A.MAX_INTAKE_VIDEO_BYTES)}. Record a shorter clip, or use a photo instead.`); return; }
+    const data = await A.fileToBase64(file);
+    setMediaPicked({ data, name: file.name, size: file.size, kind: mediaKind, preview: isVideo ? "" : URL.createObjectURL(file) });
+  };
+  const addAttachment = () => {
+    if (!mediaReady) return;
+    setAttachments((l) => [...l, { rowIndex: Number(mediaRow), ...mediaPicked, reason: mediaReason.trim(), status: "idle", pct: 0, kpiId: null }]);
+    setMediaPicked(null); setMediaReason("");
   };
   const total = rows.reduce((s, r) => s + (+r.estimate_hours || 0) * 60 + (+r.estimate_minutes || 0), 0);
   const upd = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -149,6 +215,8 @@ export default function Intake({ docType = "requirement", portal = false }) {
             {staff && <div className="grid2">
               <Field label="Default developer"><span className="input"><Select value={defUser} onChange={(e) => setDefUser(e.target.value)} style={SEL}><option value="">Unassigned</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></span></Field>
               <Field label="Default priority"><span className="input"><Select value={defPri} onChange={(e) => setDefPri(e.target.value)} style={SEL}>{PRIORITIES.map((p) => <option key={p.code} value={p.code}>{p.label}</option>)}</Select></span></Field>
+              <Field label="Default hours"><Input type="number" min="0" value={defHours} onChange={(e) => setDefHours(e.target.value)} /></Field>
+              <Field label="Default minutes"><Input type="number" min="0" max="59" value={defMinutes} onChange={(e) => setDefMinutes(e.target.value)} /></Field>
             </div>}
           </div>
           <div className="cardbox"><h2>Source</h2>
@@ -162,6 +230,10 @@ export default function Intake({ docType = "requirement", portal = false }) {
             <Field label="…or paste the text"><span className="input ta" style={{ height: 110 }}><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder={"1. Happy hour pricing 4-7pm weekdays\n2. WhatsApp table reservation link"} style={{ ...CELL, resize: "none", height: "100%" }} /></span></Field>
             <div className="row"><Button kind="primary" busy={busy === "ai"} disabled={!text.trim()} onClick={suggest}>Suggest tasks with AI</Button><Button kind="ghost" onClick={() => addRows([""])}>+ Add a row</Button></div>
           </div>
+          <MediaCard open={mediaOpen} setOpen={setMediaOpen} namedRows={namedRows} row={mediaRow} setRow={setMediaRow} kind={mediaKind}
+            setKind={(k) => { setMediaKind(k); setMediaPicked(null); }} picked={mediaPicked} onPick={pickMedia} reason={mediaReason} setReason={setMediaReason}
+            ready={mediaReady} onAdd={addAttachment} attachments={attachments} rows={rows} uploading={uploading}
+            onRemove={(i) => setAttachments((l) => l.filter((_, j) => j !== i))} onRetry={retryFailed} />
         </div>
         <div className="cardbox" style={{ padding: 0, overflow: "hidden" }}>
           <h2 style={{ padding: "14px 16px 0" }}>Review <small>{rows.length} task{rows.length === 1 ? "" : "s"}{staff ? ` · ${Math.floor(total / 60)}h ${total % 60}m` : ""}</small><span className="right"><Button size="sm" onClick={() => addRows([""])}>+ Add row</Button>{rows.length > 0 && <Button size="sm" kind="ghost" onClick={() => setRows([])}>Clear</Button>}</span></h2>
@@ -205,5 +277,59 @@ export default function Intake({ docType = "requirement", portal = false }) {
         </div>
       </div>
     </>
+  );
+}
+
+/* Step 3b: Photos / video, hidden behind ONE button (Odoo kpi_requirements_upload.js).
+   Pick a task by the name typed above, Photo (the default) or Video, the file,
+   and why it is attached; "Add attachment" queues it until the tasks exist. */
+function MediaCard({ open, setOpen, namedRows, row, setRow, kind, setKind, picked, onPick, reason, setReason, ready, onAdd, attachments, rows, uploading, onRemove, onRetry }) {
+  if (!open) {
+    return <button type="button" className="cardbox" onClick={() => setOpen(true)} style={{ borderStyle: "dashed", cursor: "pointer", textAlign: "center", font: "inherit", color: "var(--brand)", fontWeight: 600 }}>📎 Add photos / video</button>;
+  }
+  return (
+    <div className="cardbox">
+      <h2>📎 Photos / video<span className="right"><button type="button" className="icon-btn" aria-label="Close" style={{ width: 26, height: 26 }} onClick={() => setOpen(false)}><Icon n="up" size={14} /></button></span></h2>
+      {!namedRows.length ? <span className="mini">Type a task name above first — attachments are added to a task.</span> : (
+        <>
+          <div className="grid2">
+            <Field label="Which task?" required><span className="input"><Select value={row} onChange={(e) => setRow(e.target.value)} style={SEL}><option value="">— select a task —</option>{namedRows.map((r) => <option key={r.i} value={r.i}>{`#${r.i + 1}  ${r.name}`}</option>)}</Select></span></Field>
+            <Field label="Type"><span style={{ display: "inline-flex", gap: 6 }}>
+              <Button size="sm" kind={kind === "image" ? "primary" : "ghost"} onClick={() => setKind("image")}>🖼️ Photo</Button>
+              <Button size="sm" kind={kind === "video" ? "danger" : "ghost"} onClick={() => setKind("video")}>🎥 Video</Button>
+            </span></Field>
+          </div>
+          <Field label={kind === "video" ? "Choose a video" : "Choose photo"}><input type="file" accept={kind === "video" ? "video/*" : "image/*"} onChange={onPick} /></Field>
+          {kind === "video" && <div className="callout" style={{ background: "var(--over-bg)", borderColor: "var(--danger)", color: "var(--over)" }}><span>Only upload a video if it&apos;s <b>really needed</b> — a photo is usually enough, and videos are slow to upload. Limit: <b>{A.humanSize(A.MAX_INTAKE_VIDEO_BYTES)}</b>.</span></div>}
+          {picked && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              {picked.preview ? <img src={picked.preview} alt="" style={{ height: 64, width: 64, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }} />
+                : <span style={{ height: 64, width: 64, borderRadius: 8, background: "var(--hover)", display: "grid", placeItems: "center", fontSize: 26 }}>🎥</span>}
+              <span><b>{picked.name}</b><br /><span className="mini">{A.humanSize(picked.size)}</span></span>
+            </div>
+          )}
+          <Field label="Reason" required><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why are you attaching this?" /></Field>
+          <div className="row"><Button size="sm" kind="primary" disabled={!ready} onClick={onAdd}>+ Add attachment</Button>{!ready && <span className="mini">Pick a task, choose a file, and give a reason.</span>}</div>
+        </>
+      )}
+      {attachments.length > 0 && (
+        <div>
+          {attachments.map((a, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: "1px solid var(--border)" }}>
+              <span>{a.kind === "video" ? "🎥" : "🖼️"}</span>
+              <div style={{ flex: 1, fontSize: 12.5 }}>
+                <div><b>{a.name}</b><span className="mini"> · {A.humanSize(a.size)}</span>{rows[a.rowIndex] && <span className="mini"> → {rows[a.rowIndex].name}</span>}</div>
+                <div className="mini">{a.reason}</div>
+                {a.status === "uploading" && <><span className="bar" style={{ display: "block", marginTop: 4 }}><i style={{ width: `${a.pct}%`, background: "var(--brand)" }} /></span><span style={{ fontSize: 11, fontWeight: 700, color: "var(--brand)" }}>{A.humanSize(a.size)} · {a.pct}%</span></>}
+                {a.status === "failed" && <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)" }}>Upload failed</span>}
+              </div>
+              {a.status === "done" && <span style={{ color: "var(--lz-done)" }}>✓</span>}
+              {a.status === "idle" && <button type="button" className="icon-btn" aria-label="Remove" style={{ width: 24, height: 24 }} onClick={() => onRemove(i)}><Icon n="x" size={12} /></button>}
+            </div>
+          ))}
+          {attachments.some((x) => x.status === "failed") && <Button size="sm" kind="danger" disabled={uploading} onClick={onRetry}>↻ Retry failed uploads</Button>}
+        </div>
+      )}
+    </div>
   );
 }

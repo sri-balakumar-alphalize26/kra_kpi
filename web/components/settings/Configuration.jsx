@@ -20,6 +20,14 @@ export default function Configuration() {
   /* Days after the invoice date that an unpaid invoice is due (the Dashboard's billing tile). */
   const [term, setTerm] = useState(null);
   useEffect(() => { paymentTerm().then((r) => r?.status && setTerm(r.days)).catch(() => {}); }, []);
+  /* 🏁 Finish & client review card (S.finish). */
+  const [fin, setFin] = useState(null);
+  useEffect(() => { S.finish.get().then((r) => r?.status && setFin(r)).catch(() => {}); }, []);
+  const saveFin = (k, vals) => save(k, async () => { const r = S.assertOk(await S.finish.set(vals), "Could not save."); setFin(r); return r; });
+  /* 📹 Meetings card: every meeting timing (S.meetings). */
+  const [meet, setMeet] = useState(null);
+  useEffect(() => { S.meetings.get().then((r) => r?.status && setMeet(r)).catch(() => {}); }, []);
+  const saveMeet = (k, vals) => save(k, async () => { const r = S.assertOk(await S.meetings.set(vals), "Could not save."); setMeet(r); return r; });
   /* The sidebar's "Multi-task Settings" opens this page with ?section=multitask. */
   const hasDevs = !!devs.data;
   useEffect(() => {
@@ -88,6 +96,18 @@ export default function Configuration() {
                 {/* Only a server with the attendance bridge module sends attendance_available. */}
                 {c.attendance_available && <div className="kv" style={{ border: 0 }}><span className="lbl">Attendance in app</span><span className="val">Start Workday marks attendance</span><span className="right"><Toggle k="att" on={c.attendance_in_app} onChange={(v) => save("att", () => S.cfgSet.attendanceInApp(v))} /></span></div>}
               </div>
+              {meet && (
+                <div className="cardbox"><h2>Meetings</h2>
+                  <div className="kv"><span className="lbl">Record every meeting</span><span className="val">A recorder joins each meeting automatically (it can still be switched off for one meeting)</span><span className="right"><Toggle k="m0" on={meet.meet_record_all} onChange={(v) => saveMeet("m0", { meet_record_all: v })} /></span></div>
+                  <div className="kv"><span className="lbl">Pause recording</span><span className="val">After this much silence; it continues as soon as someone talks</span><span className="right"><Num k="m1" min={1} value={meet.meet_rec_pause_min} onSave={(v) => saveMeet("m1", { meet_rec_pause_min: v })} /></span></div>
+                  <div className="kv"><span className="lbl">Ask "Continue?"</span><span className="val">After this long with nobody speaking, everyone gets a popup</span><span className="right"><Num k="m2" min={1} value={meet.meet_ask_after_min} onSave={(v) => saveMeet("m2", { meet_ask_after_min: v })} /></span></div>
+                  <div className="kv"><span className="lbl">Time to tap Continue</span><span className="val">Whoever doesn't tap is taken out; if nobody taps, the meeting ends</span><span className="right"><Num k="m3" min={10} suffix="sec" value={meet.meet_reply_sec} onSave={(v) => saveMeet("m3", { meet_reply_sec: v })} /></span></div>
+                  <div className="kv"><span className="lbl">All connections lost</span><span className="val">Every browser closed or offline this long: the meeting ends</span><span className="right"><Num k="m4" min={1} value={meet.meet_gone_min} onSave={(v) => saveMeet("m4", { meet_gone_min: v })} /></span></div>
+                  <div className="kv"><span className="lbl">Recorder alone</span><span className="val">The recorder leaves when nobody else is in the call this long</span><span className="right"><Num k="m5" min={1} value={meet.meet_bot_alone_min} onSave={(v) => saveMeet("m5", { meet_bot_alone_min: v })} /></span></div>
+                  <div className="kv"><span className="lbl">Longest recording</span><span className="val">The recorder always stops after this</span><span className="right"><Num k="m6" min={1} suffix="h" value={meet.meet_rec_max_h} onSave={(v) => saveMeet("m6", { meet_rec_max_h: v })} /></span></div>
+                  <div className="kv" style={{ border: 0 }}><span className="lbl">Keep recordings</span><span className="val">Audio is deleted after this, once a summary exists (0 = keep)</span><span className="right"><Num k="m7" min={0} suffix="days" width={110} value={meet.meet_record_keep_days} onSave={(v) => saveMeet("m7", { meet_record_keep_days: v })} /></span></div>
+                </div>
+              )}
               <div className="cardbox"><h2>Daily report &amp; retention</h2>
                 <div className="kv"><span className="lbl">Daily report</span><span className="val">Send the employee task report (PDF) to admins every day</span><span className="right"><Toggle k="dr" on={c.daily_report_enabled} onChange={(v) => daily({ enabled: v })} /></span></div>
                 {c.daily_report_enabled && <div className="kv"><span className="lbl">Send at (IST)</span><span className="val">Previous day suits a morning send: everyone has ended their workday</span><span className="right" style={{ gap: 6 }}>
@@ -103,6 +123,17 @@ export default function Configuration() {
                 ))}
                 {devs.data && !(devs.data.developers || []).length && <span className="mini">No developers.</span>}
               </div>
+            </div>
+            {/* Finish & client review (models/kpi_finish.py). */}
+            {fin && (
+              <div className="cardbox"><h2>🏁 Finish &amp; client review</h2>
+                <div className="kv"><span className="lbl">Client review</span><span className="val">Days the client has to check finished work (1-60). No answer in time: it closes on its own, the developer is told and 🏁 Full Complete unlocks for them</span><span className="right"><Num k="rd" min={1} value={fin.review_days} suffix="days" width={110} onSave={(v) => saveFin("rd", { review_days: v })} /></span></div>
+                <div className="kv" style={{ border: 0 }}><span className="lbl">Admin check first</span><span className="val">An admin checks finished work before the client. Off: the developer's Partial Complete goes straight to the client</span><span className="right"><Toggle k="sa" on={!fin.skip_admin} onChange={(v) => saveFin("sa", { skip_admin: !v })} /></span></div>
+              </div>
+            )}
+            {/* Billing has its own page: Settings › Billing. */}
+            <div className="cardbox"><h2>🧾 Billing</h2>
+              <div className="kv" style={{ border: 0 }}><span className="val">The price list a bill is made from (per client and work type), and each client's invoice WhatsApp group, are in <b>Settings › Billing</b>.</span><span className="right"><a className="btn" href="/settings/billing">Open billing</a></span></div>
             </div>
             {/* Who decides a new client request, in order (kpi.escalation.tier). */}
             <ApprovalChainCard />
@@ -170,6 +201,11 @@ function WaGroupCard({ selectedJid, selectedName, flags, onChanged }) {
     if (!(await dlg.confirm({ title: "Send a test message?", text: `A test line is posted to "${name || "(unnamed)"}" (${jid}). Everyone in that group will see it.`, confirmLabel: "Send test" }))) return;
     act("test", () => S.testWaGroup(jid), "Test message dispatched.");
   };
+  /* Advanced (Odoo waJoin / waUseJid): join by invite link, or paste the id. */
+  const [waLink, setWaLink] = useState("");
+  const [waJid, setWaJid] = useState("");
+  const join = () => act("join", async () => { const r = await S.joinWaGroup(waLink); if (r?.status) setWaLink(""); return r; }, "Joined — reports will go to this group.");
+  const useJid = () => act("jid", async () => { const r = await S.selectWaGroup(waJid.trim(), ""); if (r?.status) setWaJid(""); return r; }, "Saved. Use Send test to confirm the group accepts it.");
 
   return (
     <div className="cardbox">
@@ -214,6 +250,17 @@ function WaGroupCard({ selectedJid, selectedName, flags, onChanged }) {
           </table>
         </div>
       )}
+      <details>
+        <summary className="mini" style={{ cursor: "pointer" }}>Advanced — invite link or a pasted id (both unavailable on this gateway)</summary>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8, maxWidth: 520 }}>
+          <b className="mini">Invite link</b>
+          <div className="row"><Input value={waLink} onChange={(e) => setWaLink(e.target.value)} placeholder="https://chat.whatsapp.com/…" /><Button size="sm" kind="ok" disabled={!waLink.trim() || !!busy} busy={busy === "join"} onClick={join}>Join and use</Button></div>
+          <span className="mini">Joins the group with this WhatsApp number and saves the group id in one step — members will see the number join. Copy the link <b>in full</b>; a truncated code is rejected as bad-request.</span>
+          <b className="mini" style={{ marginTop: 6 }}>…or paste the group id, if you have it</b>
+          <div className="row"><Input value={waJid} onChange={(e) => setWaJid(e.target.value)} placeholder="120363041234567890@g.us" /><Button size="sm" kind="primary" disabled={!waJid.trim()} busy={busy === "jid"} onClick={useJid}>Use</Button></div>
+          <span className="mini">Open the group in WhatsApp Web — the id is the <code>120363…@g.us</code> part of the address bar. Then use <b>Send test</b> to confirm it works.</span>
+        </div>
+      </details>
     </div>
   );
 }

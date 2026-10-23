@@ -161,6 +161,11 @@ export const parseFile = ({ fileData, fileName, docType }) => rpc("/kpi_requirem
    The answer carries kpi_ids in the order of `tasks`. */
 export const createBulkTasks = ({ subKraId, docType, tasks, fileData, fileName, requirementVersion, deliverableType, deliverableOther }) =>
   rpc("/kpi_requirements/create_bulk_tasks", { sub_kra_id: subKraId, doc_type: docType, tasks, deliverable_type: deliverableType || "", deliverable_other: deliverableOther || "", file_data: fileData || "", file_name: fileName || "", requirement_version: requirementVersion || "" }, { timeout: 90000 });
+/* "Add photos / video" (Odoo kpi_requirements_upload.js): one photo or video,
+   with the reason, onto a task the bulk create just made. Not a user manual. */
+export const attachIntakeMedia = (kpiId, { data, name, reason }) =>
+  rpc("/kpi_requirements/attach_media", { kpi_id: kpiId, file_data: data, file_name: name, description: reason }, { timeout: 300000 });
+export const MAX_INTAKE_VIDEO_BYTES = 10 * 1024 * 1024;
 export const buildTaskRow = (row) => ({
   name: (row.name || "").trim(), external_ref: row.external_ref || "", related_req_ref: row.related_req_ref || "", description: row.description || "",
   estimate_hours: Number(row.estimate_hours) || 0, estimate_minutes: Number(row.estimate_minutes) || 0, priority: row.priority || "regular",

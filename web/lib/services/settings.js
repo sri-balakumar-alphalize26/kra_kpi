@@ -35,8 +35,33 @@ export const createKpi = (t) => {
   };
   for (const [k] of KPI_FLAGS) v[k] = !!t.flags?.[k];
   if (t.docType) v.doc_type = t.docType;
+  /* The rest of Odoo's form: user group, action, next KPI, warehouse, a file and related links. */
+  v.user_group_id = t.userGroupId ? Number(t.userGroupId) : false;
+  v.action_config_id = t.actionConfigId ? Number(t.actionConfigId) : false;
+  v.next_kpi_id = t.nextKpiId ? Number(t.nextKpiId) : false;
+  v.warehouse_id = t.warehouseId ? Number(t.warehouseId) : false;
+  v.file_name = t.fileName || "";
+  v.uploaded_file = t.uploadedFile || false;
+  v.related_links = JSON.stringify(t.relatedLinks || []);
   return callKw("kra.kpi", "create_kpi", [v]);
 };
+/* Odoo's KPI Details screen. → { status, kpi: {name, kra_name, …, file_content, related_links} } */
+export const fetchKpiDetail = (kpiId) => rpc("/kra_kpi/get_kpi_detail", { kpi_id: Number(kpiId) });
+/* The pick lists behind those fields, read the way kpi_create.js reads them. */
+const pickList = (model, domain = []) => callKw(model, "search_read", [domain], { fields: ["id", "name"], order: "name" }).catch(() => []);
+export const fetchUserGroups = () => pickList("res.groups");
+export const fetchActionConfigs = () => pickList("kpi.config.screen");
+export const fetchKpiPickList = () => pickList("kra.kpi");
+export const fetchWarehouses = () => pickList("kra.warehouse");
+/* Odoo's "+" quick-create dialogs next to each pick list. Each answers the new id. */
+const newId = (r) => (Array.isArray(r) ? r[0] : r);
+export const quickCreateUserGroup = (name) => callKw("res.groups", "create", [[{ name: name.trim() }]]).then(newId);
+export const quickCreateEmployee = ({ name, email, login }) => callKw("res.users", "create", [[{ name: name.trim(), login: login.trim(), email: email.trim() }]]).then(newId);
+export const quickCreateAction = ({ name, url }) => callKw("kpi.config.screen", "create", [[{ name: name.trim(), url: url.trim(), active: true }]]).then(newId);
+export const quickCreateWarehouse = ({ name, countryCode, phone, address, company, transaction }) =>
+  callKw("kra.warehouse", "create", [[{ name: name.trim(), phone: phone?.trim() ? `${(countryCode || "").trim()} ${phone.trim()}`.trim() : "", address: address || "", company: company || "", transaction_number: transaction || "" }]]).then(newId);
+export const addChecklistLibraryItem = (name) => callKw("kpi.checklist.master", "create", [[{ name: name.trim() }]]).then(newId);
+export const addGuidelineLibraryItem = (name) => callKw("kpi.guideline.master", "create", [[{ name: name.trim() }]]).then(newId);
 /* Odoo's checklist / guideline libraries (kpi_create.js): picked items are written into the text as "1. …". */
 export const fetchChecklistLibrary = () => callKw("kpi.checklist.master", "search_read", [[]], { fields: ["id", "name"], order: "sequence, name" }).catch(() => []);
 export const fetchGuidelineLibrary = () => callKw("kpi.guideline.master", "search_read", [[]], { fields: ["id", "name"], order: "sequence, name" }).catch(() => []);
@@ -75,6 +100,39 @@ export const cfgSet = {
 };
 export const invalidateConfig = () => { invalidate("/kpi_config"); invalidate("/kpi_multitask"); };
 
+/* 📹 Meetings (controllers/kpi_meeting_page.py): every meeting timing.
+   get → { status, meet_record_all, meet_rec_pause_min, meet_ask_after_min,
+   meet_reply_sec, meet_gone_min, meet_bot_alone_min, meet_rec_max_h,
+   meet_record_keep_days }; set takes any of those keys and answers the same. */
+/* 🏁 Finish & client review (controllers/kpi_finish_api.py): days the client has to
+   check finished work (1-60), and whether an admin checks it first. Answers the
+   saved {review_days, skip_admin}. */
+export const finish = {
+  get: () => rpc("/kpi_config/finish/get", {}),
+  set: (vals) => rpc("/kpi_config/finish/set", vals || {}),
+};
+
+export const meetings = {
+  get: () => rpc("/kpi_config/meeting_get", {}),
+  set: (vals) => rpc("/kpi_config/meeting_set", vals || {}),
+};
+
+/* ---- 🧾 Billing (controllers/kpi_billing_api.py): the price list a bill is
+   made from at Full Complete, and who hears about each bill. Admins only;
+   the routes answer {status:false} for anyone else. */
+export const billing = {
+  config: () => rpc("/kpi_billing/config", {}),
+  saveRate: (r) => rpc("/kpi_billing/rate/save", {
+    id: r.id || null, client_id: r.client_id ? Number(r.client_id) : null, work_type: r.work_type, method: r.method,
+    amount: r.amount, currency_id: r.currency_id ? Number(r.currency_id) : null,
+    date_from: r.date_from, date_to: r.date_to || null, note: r.note || "",
+  }),
+  deleteRate: (id) => rpc("/kpi_billing/rate/delete", { id }),
+  setNumbers: (numbers) => rpc("/kpi_billing/set_numbers", { numbers: numbers || "" }),
+  /* Per client: the WhatsApp group its invoices go to, and the Send invoices switch. */
+  clientInvoice: (clientId, vals) => rpc("/kpi_billing/client_invoice_set", { client_id: clientId, ...vals }),
+};
+
 /* ---- WhatsApp group report events ---- */
 export const fetchGroupEvents = () => rpc("/kpi_wa_group/events", {});
 export const setGroupEvent = ({ event, enabled, template }) => { const p = { event }; if (enabled != null) p.enabled = enabled; if (template != null) p.template = template; return rpc("/kpi_wa_group/set_event", p); };
@@ -84,6 +142,8 @@ export const testGroupEvent = (event, confirmJid) => rpc("/kpi_wa_group/test_eve
 export const WA_GROUPS_PATH = "/kpi_wa_group/list";
 export const fetchWaGroups = () => rpc(WA_GROUPS_PATH, {}, { timeout: 45000 });
 export const selectWaGroup = (jid, name) => rpc("/kpi_wa_group/select", { jid: jid || "", name: name || "" });
+/* Join by invite link and use it in one step (Odoo Configuration › Advanced). → { status, jid, message } */
+export const joinWaGroup = (link) => rpc("/kpi_wa_group/join", { link: (link || "").trim(), select: true, name: "" }, { timeout: 45000 });
 export const renameWaGroup = (jid, name) => rpc("/kpi_wa_group/rename", { jid, name: (name || "").trim() });
 export const testWaGroup = (confirmJid) => rpc("/kpi_wa_group/test", { confirm_jid: confirmJid }, { timeout: 45000 });
 
