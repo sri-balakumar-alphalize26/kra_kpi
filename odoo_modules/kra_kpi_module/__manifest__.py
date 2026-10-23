@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.7.48",
+    "version": "19.0.7.87",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -15,6 +15,8 @@
         "data/kpi_partial_timeout_cron.xml",
         "data/kpi_admin_accept_cron.xml",
         "data/kpi_client_review_cron.xml",
+        "data/kpi_chat_escalate_cron.xml",
+        "data/kpi_doubt_escalate_cron.xml",
         "data/kpi_pre_approval_escalate_cron.xml",
         "data/kpi_workday_cron.xml",
         "data/kpi_notification_retry_cron.xml",
@@ -69,6 +71,7 @@
         "views/kpi_approval_views.xml",
         "views/kpi_wa_database_views.xml",
         "views/menu.xml",
+        "views/kpi_client_talks_views.xml",
         "views/kpi_escalation_views.xml",
         "views/kpi_workflow_views.xml",
         "views/kpi_reports_views.xml",
@@ -153,6 +156,8 @@
             "kra_kpi_module/static/src/components/kpi_period_report/kpi_period_report.js",
             "kra_kpi_module/static/src/components/kpi_company_settings/kpi_company_settings.js",
             "kra_kpi_module/static/src/components/kpi_configuration/kpi_configuration.js",
+            "kra_kpi_module/static/src/components/kpi_billing_settings/kpi_billing_settings.js",
+            "kra_kpi_module/static/src/components/kpi_client_talks/kpi_client_talks.js",
             "kra_kpi_module/static/src/components/kpi_user_access/kpi_user_access.js",
             "kra_kpi_module/static/src/components/kpi_task_approval/kpi_task_approval.js",
 
