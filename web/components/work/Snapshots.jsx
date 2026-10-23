@@ -66,6 +66,7 @@ export default function Snapshots({ mine = false }) {
     <>
       <PageHeader crumbs={[{ label: mine ? "Your work" : "Reports" }, { label: mine ? "My snapshots" : "Workday snapshots" }]} title={mine ? "My snapshots" : "Workday snapshots"} meta="End-of-workday summary images">
         <Tabs items={RANGES} value={days} onChange={setDays} />
+        <Button kind="ghost" icon="refresh" onClick={() => { setErr(""); setData(null); load(); }}>Refresh</Button>
       </PageHeader>
       <div className="page">
         {err && <ErrorState error={{ message: err }} onRetry={load} />}

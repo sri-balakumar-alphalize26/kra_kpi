@@ -70,7 +70,44 @@ export default function Invoices() {
   /* Only ticks still on screen and still billable narrow the invoice. */
   const tickedBillable = inType.filter((k) => k.billable && kpiSel.has(k.id)).map((k) => k.id);
   const toggle = (setter, id) => setter((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const open = () => { setForm(BLANK); setOnlyBillable(true); setCreate(true); };
+  const open = () => { setForm(BLANK); setPreset(""); setOnlyBillable(true); setCreate(true); };
+  /* Odoo setRangePreset: "All unbilled" (billability follows the client sign-off,
+     not the calendar), Today, Yesterday, This Week (from Monday), This Month,
+     Last Month, Custom. */
+  const [preset, setPreset] = useState("");
+  const applyPreset = (k) => {
+    setPreset(k);
+    if (k === "custom") return;
+    const f = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const t = new Date(); let from, to = t;
+    if (k === "all") { setForm((x) => ({ ...x, from: "2000-01-01", to: "2099-12-31" })); return; }
+    if (k === "today") from = t;
+    else if (k === "yesterday") from = to = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
+    else if (k === "this_week") from = new Date(t.getFullYear(), t.getMonth(), t.getDate() - ((t.getDay() || 7) - 1));
+    else if (k === "this_month") from = new Date(t.getFullYear(), t.getMonth(), 1);
+    else if (k === "last_month") { from = new Date(t.getFullYear(), t.getMonth() - 1, 1); to = new Date(t.getFullYear(), t.getMonth(), 0); }
+    setForm((x) => ({ ...x, from: f(from), to: f(to) }));
+  };
+  /* Row buttons, as Odoo list: PDF, and Mark Paid / Revert for a non-draft invoice. */
+  const [rowBusy, setRowBusy] = useState("");
+  const rowPdf = async (inv) => { setRowBusy(`pdf${inv.id}`); try { await R.downloadInvoicePdf(inv.id); flags.ok("PDF downloaded."); } catch (e) { flags.err(e.message); } finally { setRowBusy(""); } };
+  const rowPaid = async (inv) => {
+    const v = await dialogs.form({ title: `Mark ${inv.name} as paid`, text: "Record how the payment arrived. The note is internal — the client never sees it.", confirmLabel: "Mark Paid",
+      fields: [{ key: "method", label: "How was it paid?", value: "bank_transfer", options: R.PAYMENT_METHODS.map(([k, l]) => ({ value: k, label: l })) },
+        { key: "note", label: "Note (optional)", value: "", required: false, placeholder: "e.g. cheque #4417, transfer ref…" }] });
+    if (!v) return;
+    setRowBusy(`paid${inv.id}`);
+    try { R.assertOk(await R.markInvoicePaid(inv.id, true, v.note, v.method), "Could not mark it paid."); flags.ok(`${inv.name} marked paid.`); R.invalidateInvoices(); list.refresh(); }
+    catch (e) { flags.err(e.message); } finally { setRowBusy(""); }
+  };
+  const rowUnpaid = async (inv) => {
+    const v = await dialogs.form({ title: `Revert ${inv.name} to Due`, text: "Use this when a payment bounced or was recorded in error. Any tasks this invoice archived come back. The client is shown the reason on their invoice.", confirmLabel: "Revert to Due",
+      fields: [{ key: "reason", label: "Reason", value: "", placeholder: "e.g. cheque returned unpaid by the bank" }] });
+    if (!v) return;
+    setRowBusy(`unpaid${inv.id}`);
+    try { R.assertOk(await R.markInvoicePaid(inv.id, false, v.reason), "Could not revert it."); flags.ok(`${inv.name} is Due again.`); R.invalidateInvoices(); list.refresh(); }
+    catch (e) { flags.err(e.message); } finally { setRowBusy(""); }
+  };
 
   const doCreate = async () => {
     if (busy) return;
@@ -116,15 +153,21 @@ export default function Invoices() {
         <div className="cardbox table-scroll" style={{ padding: 0 }}>
           {!list.data && !listErr ? <div style={{ padding: 16 }}><Skeleton rows={6} /></div> : listFailed ? null : (
             <table className="table">
-              <thead><tr><th>Invoice</th><th>Title</th><th>Client</th><th>Period</th><th className="num">Lines</th><th className="num">Hours</th><th className="num">Amount</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Invoice</th><th>Title</th><th>Client</th><th>Period</th><th>Invoice Date</th><th className="num">Lines</th><th className="num">Quoted</th><th className="num">Adjust</th><th className="num">Total Hrs</th><th className="num">Amount</th><th>Status</th><th></th></tr></thead>
               <tbody>{invoices.map((inv) => (
                 <tr key={inv.id} style={{ cursor: "pointer" }} onClick={() => router.push(`/reports/invoices/${inv.id}`)}>
-                  <td><b>{inv.name}</b>{inv.revision_count > 0 && <span className="mini"> · rev {inv.revision_count}</span>}</td><td>{inv.invoice_title || "—"}</td><td>{inv.client_name}{inv.parent_name ? <span className="mini"> · {inv.parent_name}</span> : null}</td><td>{inv.from_date} – {inv.to_date}</td>
-                  <td className="num">{inv.line_count}</td><td className="num">{inv.grand_total_hours}h</td><td className="num"><b>{R.money(inv.total_amount, R.invSymbol(inv))}</b></td>
+                  <td><b>{inv.name}</b>{inv.revision_count > 0 && <span className="mini"> · rev {inv.revision_count}</span>}</td><td>{inv.invoice_title || "—"}</td><td>{inv.client_name}{inv.parent_name ? <span className="mini"> · {inv.parent_name}</span> : null}</td><td>{inv.from_date} – {inv.to_date}</td><td>{inv.invoice_date || "—"}</td>
+                  <td className="num">{inv.line_count}</td><td className="num">{inv.total_quoted_hours ?? 0}h</td><td className="num">{inv.total_adjusted_hours ?? 0}h</td><td className="num"><b>{inv.grand_total_hours}h</b></td><td className="num"><b>{R.money(inv.total_amount, R.invSymbol(inv))}</b></td>
                   <td><Lozenge tone={R.invTone(inv)}>{R.invLabel(inv)}</Lozenge>{inv.unpaid_reason && <div className="mini" style={{ color: "var(--danger)" }} title={inv.unpaid_reason}>↺ Payment reversed</div>}</td>
-                  <td><Button size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/reports/invoices/${inv.id}`); }}>Open</Button></td>
+                  <td onClick={(e) => e.stopPropagation()}><span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                    <Button size="sm" onClick={() => router.push(`/reports/invoices/${inv.id}`)}>Open</Button>
+                    <Button size="sm" kind="ghost" icon="download" busy={rowBusy === `pdf${inv.id}`} onClick={() => rowPdf(inv)}>PDF</Button>
+                    {inv.state !== "draft" && (inv.payment_status !== "paid"
+                      ? <Button size="sm" kind="ok" busy={rowBusy === `paid${inv.id}`} title="Record payment received" onClick={() => rowPaid(inv)}>Mark Paid</Button>
+                      : <Button size="sm" kind="ghost" busy={rowBusy === `unpaid${inv.id}`} title="Revert to Due (payment bounced / wrong entry)" onClick={() => rowUnpaid(inv)}>Revert</Button>)}
+                  </span></td>
                 </tr>
-              ))}{list.data && !invoices.length && <tr><td colSpan={9} className="empty">No invoices in this tab.</td></tr>}</tbody>
+              ))}{list.data && !invoices.length && <tr><td colSpan={12} className="empty">No invoices in this tab.</td></tr>}</tbody>
             </table>
           )}
         </div>
@@ -137,6 +180,11 @@ export default function Invoices() {
             <span className="input"><Select value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} style={selStyle}><option value="">Choose a client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}{c.billable_count ? ` · ${c.billable_count} billable` : ""}</option>)}</Select></span>
           </Field>
           <Field label="Title (optional)"><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. October 2026" /></Field>
+        </div>
+        <div className="pillset" role="group" aria-label="Date range preset">
+          {[["all", "All unbilled"], ["today", "Today"], ["yesterday", "Yesterday"], ["this_week", "This Week"], ["this_month", "This Month"], ["last_month", "Last Month"], ["custom", "Custom"]].map(([k, l]) => (
+            <button key={k} type="button" className={`pill ${preset === k ? "on" : ""}`} aria-pressed={preset === k} onClick={() => applyPreset(k)} title={k === "all" ? "Bill everything the client has signed off that isn't already invoiced" : undefined}>{l}</button>
+          ))}
         </div>
         <div className="grid3" style={{ gap: 10 }}>
           <Field label="From"><Input type="date" value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></Field>

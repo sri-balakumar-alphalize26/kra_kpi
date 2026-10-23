@@ -11,7 +11,8 @@ export const canManage = (me) => me?.role === "admin";
    Like the Odoo board (getButtonsForState), Start / Pause / Resume / Complete
    follow the task's STATE, not the lane it sits in: a self-created task that
    was sent back sits in Pending review but is paused, so it gets Resume.
-   `card: true` marks the main buttons that also show on the board card. */
+   `card: true` marks the buttons that also show on the board card: every one
+   the Odoo card shows (kpi_action.js card buttons), Priority stays in the panel. */
 const NOT_STARTABLE = ["in_progress", "paused", "partially_completed", "awaiting_client", "completed"];
 export function actionsFor(task, me, { workdayLocked = false } = {}) {
   if (!task) return [];
@@ -31,7 +32,7 @@ export function actionsFor(task, me, { workdayLocked = false } = {}) {
 
   if (lane === "pending_review" && admin) {
     add({ key: "accept_self", label: "Accept", kind: "primary", icon: "check", dialog: "accept", card: true });
-    add({ key: "sendback_self", label: "Send back", kind: "ghost", icon: "swap", dialog: "sendback" });
+    add({ key: "sendback_self", label: "Send back", kind: "ghost", icon: "swap", dialog: "sendback", card: true });
   }
   if (!NOT_STARTABLE.includes(st)) {
     if (actor) add({ key: "start", label: "Start", kind: "primary", icon: "play", dialog: "start", disabled: locked || task.can_start === false, reason: lockReason, card: true });
@@ -41,35 +42,36 @@ export function actionsFor(task, me, { workdayLocked = false } = {}) {
       add({ key: "pause", label: "Pause", kind: "default", icon: "pause", dialog: "pause", disabled: locked, card: true });
       add({ key: "complete", label: "Complete", kind: "ok", icon: "check", dialog: "complete", disabled: locked, card: true });
     }
-    if (mine) add({ key: "switch", label: "Switch to…", kind: "ghost", icon: "swap", dialog: "switch", disabled: locked });
+    /* Odoo shows Switch to whoever may pause the task (admins included). */
+    if (actor) add({ key: "switch", label: "Switch to…", kind: "ghost", icon: "swap", dialog: "switch", disabled: locked, card: true });
   }
   if (st === "paused") {
     if (actor) add({ key: "resume", label: "Resume", kind: "primary", icon: "play", dialog: task.self_needs_resume_reason ? "resume_reason" : "resume", disabled: locked || task.can_start === false, reason: lockReason, card: true });
     if (actor) add({ key: "complete", label: "Complete", kind: "ok", icon: "check", dialog: "complete", disabled: locked, card: true });
   }
   if (task.can_undo_start && (mine || admin)) {
-    add({ key: "undo_start", label: "Undo start", kind: "ghost", icon: "swap", dialog: "undo_start" });
+    add({ key: "undo_start", label: "Undo start", kind: "ghost", icon: "swap", dialog: "undo_start", card: true });
   }
   if (lane === "approvals" && admin) {
     add({ key: "approve", label: "Approve", kind: "ok", icon: "check", dialog: "approve", card: true });
-    add({ key: "reject", label: "Send back", kind: "danger", icon: "x", dialog: "reject" });
+    add({ key: "reject", label: "Send back", kind: "danger", icon: "x", dialog: "reject", card: true });
   }
   if (lane === "awaiting_client" && admin) {
-    add({ key: "revert_signoff", label: "Revert sign-off", kind: "ghost", icon: "swap", dialog: "revert" });
+    add({ key: "revert_signoff", label: "Revert sign-off", kind: "ghost", icon: "swap", dialog: "revert", card: true });
   }
   if (canAddTime(task, mine, admin)) {
-    add({ key: "add_time", label: "Add time", kind: "ghost", icon: "clock", dialog: "add_time" });
+    add({ key: "add_time", label: "Add time", kind: "ghost", icon: "clock", dialog: "add_time", card: true });
   }
   /* Admin only, and only when the task has time recorded YESTERDAY (the
      server sends prev_day_seconds to admins alone). Decrease only. */
   if (admin && (task.prev_day_seconds || 0) > 0) {
-    add({ key: "reduce_prev", label: "Reduce yesterday", kind: "ghost", icon: "clock", dialog: "reduce_prev" });
+    add({ key: "reduce_prev", label: "Reduce yesterday", kind: "ghost", icon: "clock", dialog: "reduce_prev", card: true });
   }
   if (admin && st !== "completed") {
-    add({ key: "reassign", label: "Reassign", kind: "ghost", icon: "people", dialog: "reassign" });
+    add({ key: "reassign", label: "Reassign", kind: "ghost", icon: "people", dialog: "reassign", card: true });
     if (PRIORITY_LANES.includes(lane)) add({ key: "priority", label: "Priority", kind: "ghost", icon: "flag", dialog: "priority" });
   }
-  if (admin && task.can_admin_delete) add({ key: "delete", label: "Delete", kind: "danger", icon: "trash", dialog: "delete" });
+  if (admin && task.can_admin_delete) add({ key: "delete", label: "Delete", kind: "danger", icon: "trash", dialog: "delete", card: true });
   return out;
 }
 
@@ -98,7 +100,7 @@ export function dropTargets(task, me, { workdayLocked = false } = {}) {
   const t = {};
   if (workdayLocked && !admin) return t;
   const own = task.priority === "urgent" ? "urgent" : task.priority === "important" ? "important" : "regular";
-  const complete = { action: "complete", dialog: "complete", hint: "Complete: checklist and progress note needed" };
+  const complete = { action: "complete", dialog: "complete", hint: "Complete: what this task's type needs" };
   const undo = { action: "undo_start", dialog: "undo_start", hint: "Undo start" };
 
   /* No dragging between Regular / Important / Urgent: priority changes only

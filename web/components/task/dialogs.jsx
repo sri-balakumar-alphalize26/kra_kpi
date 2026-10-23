@@ -23,8 +23,11 @@ export default function TaskDialog({ dialog, task, extra, busy, onClose, onConfi
     case "complete": return <CompleteDialog {...props} />;
     case "approve": return <ApproveDialog {...props} />;
     case "reject": return <RejectDialog {...props} />;
-    case "revert": return <ReasonDialog {...props} title="Revert client sign-off" label="Why is it coming back?" confirm="Revert" danger />;
-    case "delete": return <ReasonDialog {...props} title={`Delete ${task.external_ref || "task"}?`} label="Reason (kept in the log)" confirm="Delete task" danger text="Only a task nobody has worked on can be deleted. This cannot be undone." />;
+    /* Odoo's own wording for these three (kpi_action.js openRevertSignoff / adminDeleteTask). */
+    case "revert": return <ReasonDialog {...props} title="Revert from client sign-off?" label="Why is it going back?" placeholder="e.g. Client reported the export is still wrong" confirm="Revert" danger
+      text={<><b>&quot;{(task.external_ref ? `${task.external_ref} ` : "") + (task.name || "")}&quot;</b> goes back to the developer:<ul style={{ margin: "6px 0 0", paddingLeft: 18 }}><li>The <b>client stops seeing it</b> straight away.</li><li>It returns to <b>Paused</b> with your reason on the card.</li><li>The developer is notified. Time already logged is kept.</li><li>Completing it again sends it through admin review, then the client.</li></ul></>} />;
+    case "delete": return <ReasonDialog {...props} title="Delete this task?" label="Reason" optional hint="Optional — shown to whoever was waiting on this task." placeholder="e.g. Raised by mistake / duplicate of REQ-042…" confirm="Delete" danger
+      text={<><b>&quot;{(task.external_ref ? `${task.external_ref} ` : "") + (task.name || "")}&quot;</b> will be permanently deleted.<ul style={{ margin: "6px 0 0", paddingLeft: 18 }}><li>This cannot be undone.</li><li>Only possible because <b>no time has been logged</b> against it.</li><li>The assigned developer and the client who raised it are notified.</li></ul></>} />;
     case "resume_reason": return <ResumeReasonDialog {...props} />;
     case "sendback": return <SendBackDialog {...props} />;
     case "undo_start": return <UndoStartDialog {...props} task={task} />;
@@ -166,19 +169,15 @@ function PauseDialog({ task, extra, busy, onClose, onConfirm, all }) {
 }
 
 /* ---- complete ---- */
-/* Pre-ticks what the task already shows (Odoo openCompleteFromCard): a GitHub
-   link → "Verified GitHub URL"; files on its updates → manual + documentation. */
+/* What this task's type needs (kpi_workflow._completion_rules), ticked from
+   what is already on the task or typed here. */
 function CompleteDialog({ task, busy, onClose, onConfirm }) {
-  const [checks, setChecks] = useState({});
   const [summary, setSummary] = useState("");
   const [partial, setPartial] = useState(true);
-  const [inferred, setInferred] = useState([]);
   /* null = not loaded yet. A full Complete needs a user manual on the task
      (the server refuses without one); Partial needs none. */
   const [hasManual, setHasManual] = useState(null);
-  /* A Module / App task needs a GitHub link for a full Complete (server rule). */
   const [hasGithub, setHasGithub] = useState(null);
-  const [githubRequired, setGithubRequired] = useState(S.needsGithub(task.deliverable_type));
   /* null | { missing: [...] } "What did we miss?" | { confirm: true } submit confirm */
   const [ask, setAsk] = useState(null);
   /* Team-written updates only: what the client attached when raising the task
@@ -196,13 +195,6 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
       setDevCount(typeof dpc === "number" ? dpc : Array.isArray(r.progress) ? r.progress.filter((p) => !p.from_client).length : (r.task?.progress_count ?? task.progress_count ?? 0));
       setHasManual((r.manuals || []).length > 0);
       setHasGithub((r.github || []).length > 0);
-      const gr = r.task?.github_required;
-      setGithubRequired(typeof gr === "boolean" ? gr : S.needsGithub(r.task?.deliverable_type ?? task.deliverable_type));
-      const pre = {};
-      if ((r.github || []).length) pre.verify_github = true;
-      if ((r.files || []).some((f) => !f.from_client)) { pre.user_manual = true; pre.documentation = true; }
-      setInferred(Object.keys(pre));
-      setChecks((c) => ({ ...pre, ...c }));
       const m = r.meta || {};
       if (Array.isArray(m.completion_rules)) setRules(m.completion_rules);
       const dbd = m.db_details || {};
@@ -212,8 +204,6 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
     }).catch(() => {});
     return () => { live = false; };
   }, [task.id]);
-  /* Odoo's full Complete needs at least one item ticked (task_complete), not all five. */
-  const anyDone = S.CHECKLIST_ITEMS.some((c) => checks[c.key]);
   const hasSummary = !!summary.trim() || devCount > 0;
   const ref = task.external_ref || `#${task.id}`;
   /* The rows this type needs, ticked from what is on the task or typed here. */
@@ -234,20 +224,20 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
     if (r.key === "manual") extra.user_manual_url = form.user_manual_url || "";
     else if (LINK[r.key]) extra[LINK[r.key]] = form[LINK[r.key]] || "";
   }
-  const send = (p) => { if (busy) return; setAsk(null); onConfirm({ employeeChecklist: checks, partial: p, summary: summary.trim(), extra: p ? {} : extra }); };
+  const send = (p) => { if (busy) return; setAsk(null); onConfirm({ employeeChecklist: {}, partial: p, summary: summary.trim(), extra: p ? {} : extra }); };
   /* Full Complete never silently disables: what's missing is reported in one popup. */
   const submit = () => {
     if (busy) return;
     if (partial) { send(true); return; }
-    const missing = rules ? req.filter((r) => !r.done).map((r) => r.label)
-      : S.completeMissing({ hasSummary, hasManual: hasManual === true, githubRequired, hasGithub: hasGithub === true, anyTicked: true });
+    if (!rules) return; /* the type's rules are still loading */
+    const missing = req.filter((r) => !r.done).map((r) => r.label);
     setAsk(missing.length ? { missing } : { confirm: true });
   };
   const setF = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   return (
     <>
     <Modal open onClose={onClose} title={<Title task={task}>Complete</Title>} width={540}
-      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="ok" busy={busy} disabled={busy || (partial && !hasSummary)} title={partial && !hasSummary ? "Write a progress note first" : undefined} onClick={submit}>{partial ? "Send for review" : "Complete"}</Button></>}>
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="ok" busy={busy} disabled={busy || (partial && !hasSummary) || (!partial && !rules)} title={partial && !hasSummary ? "Write a progress note first" : !partial && !rules ? "Loading what this task needs…" : undefined} onClick={submit}>{partial ? "Send for review" : "Complete"}</Button></>}>
       <p className="note" style={{ margin: 0 }}>It goes to an admin for approval{partial ? "" : " (or straight to done when admin acceptance is off)"}.</p>
       {rules && (
         <div className="cr">
@@ -296,12 +286,13 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
 }
 
 /* ---- approve (admin) ---- */
-/* Odoo shows what the task was and who finished it, the developer's checklist,
-   and refuses to approve until all six review items are ticked. */
+/* Odoo shows what the task was and who finished it, what its type needed
+   (completion_rules: ✓ done, ✗ missing, "— optional"), and refuses to approve
+   until all six coordinator review items are ticked. */
 function ApproveDialog({ task, busy, onClose, onConfirm }) {
   const [checks, setChecks] = useState({});
-  const [dev, setDev] = useState(undefined);
-  useEffect(() => { S.getTaskChecklists(task.id).then((r) => setDev(r?.employee_checklist || r?.employee || null)).catch(() => setDev(null)); }, [task.id]);
+  const [rules, setRules] = useState(undefined);
+  useEffect(() => { S.fetchTaskDetails(task.id, { fresh: true }).then((r) => setRules(Array.isArray(r?.meta?.completion_rules) ? r.meta.completion_rules : null)).catch(() => setRules(null)); }, [task.id]);
   const n = S.MGR_CHECKLIST_ITEMS.filter((c) => checks[c.key]).length;
   const total = S.MGR_CHECKLIST_ITEMS.length;
   return (
@@ -310,9 +301,11 @@ function ApproveDialog({ task, busy, onClose, onConfirm }) {
       <Facts rows={[["Task", task.name], ["Completed by", task.completed_by_name || "Unknown"], ["Completion date", task.completion_date || "—"], ["Time spent", fmtHM(task.timer_total_seconds)]]} />
       {task.description && <Box><b><Icon n="doc" size={13} /> Description</b><div style={{ whiteSpace: "pre-wrap", maxHeight: 140, overflow: "auto", marginTop: 4 }}>{task.description}</div></Box>}
       <Box>
-        <b>Developer's checklist (submitted)</b>
+        <b>📝 What this task needed</b>
         <div style={{ marginTop: 4 }}>
-          {dev === undefined ? "Loading…" : !dev ? "Could not load the developer's checklist." : S.CHECKLIST_ITEMS.map((c) => <div key={c.key}>{dev[c.key] ? "✓" : "✗"} {c.label}</div>)}
+          {rules === undefined ? "Loading…" : !rules ? "Could not load what this task needed." : !rules.length ? "Nothing for this type." : rules.map((r) => (
+            <div key={r.key}>{r.done ? "✓" : r.required ? "✗" : "—"} {r.label}{r.required ? " ✱" : ""}{!r.done && !r.required ? " — optional" : ""}</div>
+          ))}
         </div>
       </Box>
       <b style={{ fontSize: 13 }}>Coordinator approval checklist</b>
@@ -352,13 +345,13 @@ function RejectDialog({ task, busy, onClose, onConfirm }) {
 }
 
 /* ---- generic reason ---- */
-function ReasonDialog({ task, busy, onClose, onConfirm, title, label, text, confirm, danger, noReason }) {
+function ReasonDialog({ task, busy, onClose, onConfirm, title, label, text, confirm, danger, noReason, optional, hint, placeholder }) {
   const [reason, setReason] = useState("");
   return (
     <Modal open onClose={onClose} title={<Title task={task}>{title}</Title>} width={480}
-      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind={danger ? "danger" : "primary"} busy={busy} disabled={!noReason && !reason.trim()} onClick={() => onConfirm({ reason: reason.trim() })}>{confirm}</Button></>}>
-      {text && <p className="note" style={{ margin: 0, whiteSpace: "pre-line" }}>{text}</p>}
-      {!noReason && <Field label={label} required><span className="input ta"><textarea value={reason} onChange={(e) => setReason(e.target.value)} autoFocus style={TA} /></span></Field>}
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind={danger ? "danger" : "primary"} busy={busy} disabled={!noReason && !optional && !reason.trim()} onClick={() => onConfirm({ reason: reason.trim() })}>{confirm}</Button></>}>
+      {text && <div className="note" style={{ margin: 0, whiteSpace: "pre-line" }}>{text}</div>}
+      {!noReason && <Field label={label} required={!optional} hint={hint}><span className="input ta"><textarea value={reason} placeholder={placeholder} onChange={(e) => setReason(e.target.value)} autoFocus style={TA} /></span></Field>}
     </Modal>
   );
 }
@@ -367,10 +360,11 @@ function SendBackDialog({ task, busy, onClose, onConfirm }) {
   const [note, setNote] = useState("");
   return (
     <Modal open onClose={onClose} title={<Title task={task}>Send back to {task.user_name || "developer"}</Title>} width={480}
-      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="danger" busy={busy} onClick={() => onConfirm({ note: note.trim(), discard: true })}>Discard task</Button><Button kind="primary" busy={busy} disabled={!note.trim()} onClick={() => onConfirm({ note: note.trim(), discard: false })}>Send back</Button></>}>
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="danger" busy={busy} onClick={() => onConfirm({ note: note.trim(), discard: true })}>Discard task</Button><Button kind="primary" busy={busy} onClick={() => onConfirm({ note: note.trim(), discard: false })}>Send Back</Button></>}>
       {task.self_resume_note && <Box><b>{task.self_resume_by || "Developer"}</b> replied: <span style={{ whiteSpace: "pre-wrap" }}>{task.self_resume_note}</span></Box>}
-      <Field label="Note to the developer" required><span className="input ta"><textarea value={note} onChange={(e) => setNote(e.target.value)} autoFocus style={TA} /></span></Field>
-      <p className="mini" style={{ margin: 0 }}>Send back keeps it in Pending review with your note on the card; Discard removes it.</p>
+      <div className="note" style={{ margin: 0 }}>You&apos;re about to send <b>&quot;{task.name}&quot;</b> back for revision:<ul style={{ margin: "6px 0 0", paddingLeft: 18 }}><li>The task is <b>paused</b> — the timer stops, but time logged so far is kept.</li><li>It stays in the developer&apos;s <b>Pending Review</b> lane — nothing is deleted.</li><li>The developer is notified and sees your reason on the card.</li></ul></div>
+      <Field label="Reason for sending back" hint={"Optional — leave blank and the card shows \"Please revise\"."}><span className="input ta"><textarea value={note} placeholder="e.g. Please add more detail / wrong project…" onChange={(e) => setNote(e.target.value)} autoFocus style={TA} /></span></Field>
+      <p className="mini" style={{ margin: 0 }}>Discard removes the task instead.</p>
     </Modal>
   );
 }
@@ -488,12 +482,12 @@ function ReassignDialog({ task, busy, onClose, onConfirm }) {
    then not-started; last worked first, ref as the tie-break. */
 const SWITCHABLE = ["assigned", "paused", "rework", "regular", "important", "urgent", "hold"];
 function SwitchDialog({ task, busy, onClose, onConfirm }) {
-  const { me } = useMe();
   const board = useResource(S.TASKS_PATH, { my_tasks_only: false });
   const [pick, setPick] = useState(null); const [note, setNote] = useState(""); const [q, setQ] = useState("");
   const candidates = useMemo(() => (board.data?.tasks || [])
-    .filter((t) => t.id !== task.id && t.user_id === me.uid && SWITCHABLE.includes(t.task_state) && t.can_start !== false)
-    .sort((a, b) => S.byRecency(a, b) || String(a.external_ref || "").localeCompare(String(b.external_ref || ""))), [board.data, task.id, me.uid]);
+    /* Odoo openSwitchTask: every task on the board that is not running and may be started, whoever it belongs to. */
+    .filter((t) => t.id !== task.id && t.task_state !== "in_progress" && SWITCHABLE.includes(t.task_state) && t.can_start !== false)
+    .sort((a, b) => S.byRecency(a, b) || String(a.external_ref || "").localeCompare(String(b.external_ref || ""))), [board.data, task.id]);
   const ql = q.trim().toLowerCase();
   const shown = ql ? candidates.filter((t) => `${t.external_ref || ""} ${t.name || ""} ${t.user_name || ""}`.toLowerCase().includes(ql)) : candidates;
   const groups = [["Paused — pick back up", shown.filter((t) => S.PAUSED_STATES.includes(t.task_state))], ["Not started yet", shown.filter((t) => !S.PAUSED_STATES.includes(t.task_state))]];
@@ -673,8 +667,14 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
 function UndoStartDialog({ task, ...props }) {
   const [keeps, setKeeps] = useState("");
   useEffect(() => { S.undoStartInfo(task.id).then((r) => setKeeps(r?.keeps || "")).catch(() => {}); }, [task.id]);
-  const base = `${task.external_ref || "The task"} goes back to how it was before today's first start and today's time on it is removed.`;
-  return <ReasonDialog {...props} title="Undo today's start?" text={keeps ? `${base}
+  /* Odoo undoStartTask: who started it, where it goes back to, how much time
+     today is removed, and that the gap may show as idle. */
+  const secs = Math.round(task.today_seconds || 0);
+  const time = secs > 0 ? `the ${fmtHM(secs)} logged on it today` : "the time logged on it today";
+  const by = task.undo_start_by ? ` (started by ${task.undo_start_by})` : "";
+  const back = task.undo_start_prev_state_label || "where it was";
+  const base = `"${(task.external_ref ? `${task.external_ref} ` : "") + (task.name || "")}"${by} goes back to ${back}, and ${time} is removed. It leaves your Today list, and that time may show as idle on your Workday Map. This cannot be undone.`;
+  return <ReasonDialog {...props} title="Undo starting this task?" text={keeps ? `${base}
 
 ✅ ${keeps}` : base} confirm="Undo start" noReason />;
 }

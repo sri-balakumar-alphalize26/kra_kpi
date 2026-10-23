@@ -14,6 +14,17 @@ import WorkdayTimeline from "./WorkdayTimeline";
 const AWAY = [["break", "Break"], ["lunch", "Lunch"], ["meeting", "Meeting"], ["no_tasks", "No tasks"], ["other", "Other"], ["away", "Away (system)"], ["other_idle", "Other / Idle"]];
 const hhmm = (ts) => (ts ? String(ts).slice(11, 16) || ts : "—");
 
+/* Odoo presenceFootnote: "09:30–18:15 · 1h 20m paused" under Presence, which
+   stops while the workday is paused, so it can be squared with the day's own
+   stamps. Before End is pressed there is no logout yet: just the start. */
+function presenceFoot(d) {
+  if (!(d.paused_seconds > 0)) return "";
+  const hm = (v) => (String(v || "").split(" ")[1] || String(v || "")).slice(0, 5);
+  const from = hm(d.login_at), to = hm(d.logout_at);
+  const span = from ? (to ? `${from}–${to}` : from) : "";
+  return `${span ? `${span} · ` : ""}${d.paused_display || "0m"} paused`;
+}
+
 export default function EndWorkdayDialog({ onClose, onEnded, onPaused, reopened, paused }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
@@ -97,7 +108,7 @@ export function Summary({ d, readOnly = false, onLeft }) {
       <div className="ewd-stats">
         <div className="stat"><small>Login</small><b>{hhmm(d.login_at)}</b><span>{d.session_date || ""}</span></div>
         <div className="stat"><small>Productive</small><b>{d.productive_display || "0h 0m"}</b><span>task time</span></div>
-        <div className="stat"><small>Presence</small><b style={{ color: d.met_standard ? "var(--pri-regular)" : "var(--danger)" }}>{d.presence_display || "0h 0m"}</b><span>{d.met_standard ? "✓" : "▾"} {d.standard_display} standard</span></div>
+        <div className="stat"><small>Presence</small><b style={{ color: d.met_standard ? "var(--pri-regular)" : "var(--danger)" }}>{d.presence_display || "0h 0m"}</b><span>{d.met_standard ? "✓" : "▾"} {d.standard_display} standard</span>{presenceFoot(d) && <span className="mini">{presenceFoot(d)}</span>}</div>
         <div className="stat"><small>Accounted</small><b>{d.accounted_display || "0h 0m"}</b><span>task + meeting + lunch + break + no-tasks + paused</span></div>
         {(d.paused_seconds || 0) > 0 && <div className="stat"><small>Workday paused</small><b>{d.paused_display}</b><span>paused time</span></div>}
       </div>

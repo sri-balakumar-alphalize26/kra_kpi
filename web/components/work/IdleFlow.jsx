@@ -95,11 +95,15 @@ function IdleDialog({ onClose, onDone }) {
 
 function MeetingPicker({ team, setTeam, picked, setPicked, busy, onStart }) {
   const people = useResource("/kra_kpi/get_people", {}, { ttl: 300000 });
-  const list = Array.isArray(people.data) ? people.data : (people.data?.people || []);
+  const all = Array.isArray(people.data) ? people.data : (people.data?.people || []);
+  /* Odoo "Search people…" box over the list. */
+  const [q, setQ] = useState("");
+  const list = q.trim() ? all.filter((p) => String(p.name || "").toLowerCase().includes(q.trim().toLowerCase())) : all;
   return (
     <div className="idle-meet reveal">
       <b style={{ color: "var(--navy)" }}>Who is it with?</b>
       <label className="chk"><input type="checkbox" checked={team} onChange={(e) => setTeam(e.target.checked)} style={{ width: 16, height: 16, accentColor: "var(--brand)" }} />Team meeting (everyone)</label>
+      {!team && <span className="input" style={{ height: 32 }}><input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people…" autoComplete="off" aria-label="Search people" style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }} /></span>}
       {!team && (
         <div className="people" style={{ maxHeight: 180, overflowY: "auto" }}>
           {list.map((p) => (

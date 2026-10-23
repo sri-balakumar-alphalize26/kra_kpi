@@ -56,7 +56,7 @@ export default function EmployeeTracker() {
         <div className="cardbox table-scroll" style={{ padding: 0 }}>
           {!rep.data && !rep.error ? <div style={{ padding: 16 }}><Skeleton rows={6} /></div> : rep.data?.status === false || !rep.data ? null : (
             <table className="table">
-              <thead><tr><th style={{ width: 28 }}></th><th>{frame === "daily" ? "Day" : frame === "weekly" ? "Week" : "Month"}</th>{!userId && <th>Developer</th>}<th>In</th><th>Out</th><th className="num">Presence</th><th className="num">Productive</th><th className="num">Paused</th><th className="num">Tasks</th><th></th></tr></thead>
+              <thead><tr><th style={{ width: 28 }}></th><th>{frame === "daily" ? "Day" : frame === "weekly" ? "Week" : "Month"}</th>{!userId && <th>Developer</th>}<th>In</th><th>Out</th><th className="num">Presence</th><th className="num">Productive</th><th className="num">Paused</th><th className="num">Tasks</th><th className="num">Sessions</th><th></th></tr></thead>
               <tbody>
                 {periods.map((p, i) => {
                   const key = `${p.user_id || ""}|${p.period_key || p.label || i}`;
@@ -65,7 +65,7 @@ export default function EmployeeTracker() {
                     <PeriodRows key={key} p={p} all={!userId} multiDay={frame !== "daily"} isOpen={isOpen} onToggle={() => setOpen(isOpen ? null : key)} />
                   );
                 })}
-                {!periods.length && <tr><td colSpan={userId ? 9 : 10} className="empty">No sessions for this range.</td></tr>}
+                {!periods.length && <tr><td colSpan={userId ? 10 : 11} className="empty">No sessions for this range.</td></tr>}
               </tbody>
             </table>
           )}
@@ -84,16 +84,24 @@ function PeriodRows({ p, all, multiDay, isOpen, onToggle }) {
         <td><b>{p.label || p.period_key}</b>{sp.autoClosed > 0 && <> <Lozenge tone="paused">{multiDay && sp.autoClosed > 1 ? `${sp.autoClosed} auto-closed` : "Auto-closed"}</Lozenge></>}</td>
         {all && <td>{p.user_name ? <><Avatar name={p.user_name} uid={p.user_id} size={20} /> {p.user_name}</> : "—"}</td>}
         <td>{clock(sp.in, multiDay) || "—"}</td><td>{sp.open ? <span className="mini">still in</span> : clock(sp.out, multiDay) || "—"}</td>
-        <td className="num">{fmtHM(p.presence_seconds)}</td><td className="num"><b>{fmtHM(p.productive_seconds)}</b></td><td className="num">{fmtHM(p.paused_seconds)}</td><td className="num">{p.task_count ?? (p.tasks || []).length}</td>
+        <td className="num">{fmtHM(p.presence_seconds)}</td><td className="num"><b>{fmtHM(p.productive_seconds)}</b></td><td className="num">{fmtHM(p.paused_seconds)}</td><td className="num">{p.task_count ?? (p.tasks || []).length}</td><td className="num">{(p.sessions || []).length}</td>
         <td><span className="prog" style={{ width: 90 }}><i style={{ width: `${p.presence_seconds ? Math.min(100, ((p.productive_seconds || 0) / p.presence_seconds) * 100) : 0}%` }} /></span></td>
       </tr>
       {isOpen && (
-        <tr><td colSpan={all ? 10 : 9} style={{ background: "var(--hover)", padding: "10px 14px" }}>
+        <tr><td colSpan={all ? 11 : 10} style={{ background: "var(--hover)", padding: "10px 14px" }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {(p.tasks || []).map((t, i) => <span key={i} className="chip-sm" style={{ background: "var(--surface)", color: "var(--navy)" }}><span className="ref">{t.ref || ""}</span>{t.name} · {fmtHM(t.duration_seconds || t.seconds)}</span>)}
-            {(p.sessions || []).length > 1 && <span className="mini">{p.sessions.length} sessions: {[...p.sessions].sort((a, b) => (a.login_at < b.login_at ? -1 : 1)).map((x) => `${clock(x.login_at, multiDay)}–${x.logout_at ? clock(x.logout_at, multiDay) : "now"}${x.auto_closed ? " (auto-closed)" : ""}`).join(" · ")}</span>}
             {!(p.tasks || []).length && <span className="mini">No tasks in this period.</span>}
           </div>
+          {/* Odoo: the period's sessions as a table (Date / Login / Logout, "auto" when the cron closed it). */}
+          {(p.sessions || []).length > 0 && (
+            <table className="table" style={{ marginTop: 8, maxWidth: 520, background: "var(--surface)" }}>
+              <thead><tr><th>Date</th><th>Login</th><th>Logout</th></tr></thead>
+              <tbody>{[...p.sessions].sort((a, b) => (a.login_at < b.login_at ? -1 : 1)).map((x, i) => (
+                <tr key={x.session_id || i}><td>{x.session_date || "—"}</td><td>{x.login_at || "—"}</td><td>{x.logout_at || "(open)"}{x.auto_closed && <> <Lozenge tone="paused" title="Auto-closed by cron">auto</Lozenge></>}</td></tr>
+              ))}</tbody>
+            </table>
+          )}
         </td></tr>
       )}
     </>

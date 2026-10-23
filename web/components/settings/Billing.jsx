@@ -119,7 +119,7 @@ function BillingCard({ flags }) {
               <b>{sec.name}</b>
               {sec.isDefault && <span className="mini">used for any client without its own price</span>}
               {sec.missing > 0 ? <Lozenge tone="danger">{sec.missing} missing</Lozenge> : !sec.isDefault ? <Lozenge tone="done">✓ complete</Lozenge> : null}
-              {/* Each new bill goes to this client's invoice group while Send invoices is on. */}
+              {/* Invoices on: each fully complete task makes a bill, posted in this client's invoice group. Off: no bill (Bill now by hand). */}
               {!sec.isDefault && (
                 <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span className="mini">Invoice group</span>
@@ -132,17 +132,18 @@ function BillingCard({ flags }) {
                     </Select>
                   </span>
                   <Button kind="ghost" icon="refresh" aria-label="Refresh the group list" onClick={loadGroups} />
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, color: sec.client.send_invoice ? "var(--lz-done)" : "var(--subtle, inherit)" }}>
+                  <label title={sec.client.send_invoice ? "On: each fully complete task makes a bill and posts it in the invoice group" : "Off: no bill is made (Bill now on the task makes one by hand)"}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontWeight: 600, fontSize: 13, color: sec.client.send_invoice ? "var(--lz-done)" : "var(--subtle, inherit)" }}>
                     <span className={`toggle ${sec.client.send_invoice ? "on" : ""}`} role="switch" aria-checked={!!sec.client.send_invoice} tabIndex={0}
                       onClick={() => clientSet(sec.client, { send: !sec.client.send_invoice })}
                       onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); clientSet(sec.client, { send: !sec.client.send_invoice }); } }} />
-                    Send invoices: {sec.client.send_invoice ? "on" : "off"}
+                    Invoices: {sec.client.send_invoice ? "on" : "off"}
                   </label>
                 </span>
               )}
             </div>
             {!sec.isDefault && sec.client.send_invoice && !sec.client.invoice_group_jid && (
-              <div role="alert" style={{ padding: "6px 12px", background: "var(--over-bg)", color: "var(--danger)", fontWeight: 600, fontSize: 13 }}>⚠ Send invoices is on, but no invoice group is picked: nothing will be sent.</div>
+              <div role="alert" style={{ padding: "6px 12px", background: "var(--over-bg)", color: "var(--danger)", fontWeight: 600, fontSize: 13 }}>⚠ Invoices are on, but no invoice group is picked: bills are made but not sent.</div>
             )}
             <div style={{ overflowX: "auto" }}>
               <table className="table" style={{ width: "100%", minWidth: 620, margin: 0 }}>

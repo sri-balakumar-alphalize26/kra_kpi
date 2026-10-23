@@ -567,6 +567,18 @@ export function ProgressComposer({ kpiId, d, onChanged }) {
   );
 }
 
+/* Odoo: a progress note over 180 characters shows its start and "Show more". */
+function NoteText({ text }) {
+  const [more, setMore] = useState(false);
+  const long = String(text || "").length > 180;
+  return (
+    <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+      {long && !more ? `${String(text).slice(0, 180).trimEnd()}…` : text}
+      {long && <button type="button" className="btn btn-ghost" style={{ height: 22, fontSize: 12, padding: "0 6px", marginLeft: 4 }} onClick={() => setMore((v) => !v)}>{more ? "Show less" : "Show more"}</button>}
+    </p>
+  );
+}
+
 export function ProgressItem({ p, onChanged, selected, onSelect }) {
   const flags = useFlags();
   const dlg = useDialogs();
@@ -587,7 +599,7 @@ export function ProgressItem({ p, onChanged, selected, onSelect }) {
     catch (e) { flags.err(e.message); }
   };
   return (
-    <div className="comment">
+    <div className="comment" id={`pg-${p.id}`}>
       {onSelect && p.can_edit && <input type="checkbox" checked={!!selected} onChange={() => onSelect(p.id)} aria-label="Select this update" style={{ width: 15, height: 15, accentColor: "var(--brand)", marginTop: 6, flex: "none" }} />}
       <Avatar name={p.employee_name} size={26} />
       <div style={{ minWidth: 0, flex: 1 }}>
@@ -613,13 +625,31 @@ export function ProgressItem({ p, onChanged, selected, onSelect }) {
           </div>
         ) : (
           <>
-            <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{p.summary}</p>
+            <NoteText text={p.summary} />
             <FileChips files={p.files?.length ? p.files : p.has_file ? [{ id: 0, file_name: p.file_name, url: `/kpi/progress/download?progress_id=${p.id}` }] : []} viewFirst={`/kpi/progress/view?progress_id=${p.id}`} fallbackAt={p.create_date} />
             <LinkList links={links} />
           </>
         )}
       </div>
     </div>
+  );
+}
+
+/* Odoo's sort menu on GitHub, Documents and Drive & Links: Newest / Oldest / Name. */
+const SORTS = [["newest", "Newest"], ["oldest", "Oldest"], ["name", "Name"]];
+function sortBy(list, how, dateOf, nameOf) {
+  const out = [...list];
+  if (how === "name") return out.sort((a, b) => String(nameOf(a) || "").localeCompare(String(nameOf(b) || "")));
+  out.sort((a, b) => String(dateOf(b) || "").localeCompare(String(dateOf(a) || "")));
+  return how === "oldest" ? out.reverse() : out;
+}
+function SortMenu({ value, onChange }) {
+  return (
+    <span className="input" style={{ height: 26, width: 96, marginLeft: 8 }}>
+      <Select value={value} onChange={(e) => onChange(e.target.value)} aria-label="Sort" style={{ border: 0, background: "none", outline: 0, font: "inherit", fontSize: 12, color: "inherit", width: "100%" }}>
+        {SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </Select>
+    </span>
   );
 }
 
@@ -632,14 +662,22 @@ export function FilesTab({ kpiId, d, canAdd = true, canManageGithub, onChanged }
   /* Files the client attached when raising the task get their own list on top,
      apart from what the team attached to its updates. */
   const clientFiles = (d.files || []).filter((f) => f.from_client);
-  const teamFiles = (d.files || []).filter((f) => !f.from_client);
+  const [fileSort, setFileSort] = useState("newest");
+  const [linkSort, setLinkSort] = useState("newest");
+  const [ghSort, setGhSort] = useState("newest");
+  const teamFiles = sortBy((d.files || []).filter((f) => !f.from_client), fileSort, (f) => f.upload_date, (f) => f.file_name);
+  const links = sortBy(d.links || [], linkSort, (l) => l.added_date, (l) => shortUrl(l.url));
+  const github = sortBy(d.github || [], ghSort, (g) => g.create_date, (g) => g.github_url);
   /* The old-DB KPI Details card lives in the Client tab (ClientTab.jsx), with
      every time the client sent the task. */
   const fileRow = (f) => (
     <div key={`f${f.id}`} className="kv" style={{ padding: "6px 0" }}>
       <FileBadge kind={fileKind(f.file_name)} />
       <a className="val" href={href(`/kpi/progress/view?progress_id=${f.id}`)} target="_blank" rel="noreferrer" style={{ ...ELLIPSIS, textDecoration: "none", minWidth: 0 }}>{f.file_name || "file"}</a>
-      <span className="right mini">{f.uploaded_by} · {fmtFriendly(f.upload_date)}<a className="icon-btn" href={href(`/kpi/progress/download?progress_id=${f.id}`)} title="Download" aria-label="Download"><Icon n="download" size={15} /></a></span>
+      <span className="right mini">{f.uploaded_by} · {fmtFriendly(f.upload_date)}
+        {/* Odoo "📝 View note": jump to the progress update this file came with. */}
+        {!f.from_client && <button type="button" className="btn btn-ghost" style={{ height: 24, fontSize: 12, padding: "0 6px" }} onClick={() => window.dispatchEvent(new CustomEvent("kpi:view-note", { detail: f.id }))}>📝 View note</button>}
+        <a className="icon-btn" href={href(`/kpi/progress/download?progress_id=${f.id}`)} title="Download" aria-label="Download"><Icon n="download" size={15} /></a></span>
     </div>
   );
   return (
@@ -652,16 +690,16 @@ export function FilesTab({ kpiId, d, canAdd = true, canManageGithub, onChanged }
       )}
       {!canAdd && <NotStartedNote />}
       {(canAdd || manuals.length > 0) && <Manuals kpiId={kpiId} manuals={manuals} progress={d.progress || []} linkIdx={linkIdx} canAdd={canAdd} onChanged={onChanged} />}
-      <Github kpiId={kpiId} github={d.github || []} linkIdx={linkIdx} canAdd={canAdd} canDelete={canManageGithub} onChanged={onChanged} />
+      <Github kpiId={kpiId} github={github} sort={<SortMenu value={ghSort} onChange={setGhSort} />} linkIdx={linkIdx} canAdd={canAdd} canDelete={canManageGithub} onChanged={onChanged} />
       <div>
-        <h3>Attached to updates{teamFiles.length ? ` · ${teamFiles.length}` : ""}</h3>
+        <h3 style={{ display: "flex", alignItems: "center" }}>Attached to updates{teamFiles.length ? ` · ${teamFiles.length}` : ""}{teamFiles.length > 1 && <SortMenu value={fileSort} onChange={setFileSort} />}</h3>
         {teamFiles.map(fileRow)}
         {!teamFiles.length && <span className="mini">No files on progress updates yet.</span>}
       </div>
-      {(d.links || []).length > 0 && (
+      {links.length > 0 && (
         <div>
-          <h3>Links · {d.links.length}</h3>
-          {d.links.map((l, i) => (
+          <h3 style={{ display: "flex", alignItems: "center" }}>Links · {links.length}{links.length > 1 && <SortMenu value={linkSort} onChange={setLinkSort} />}</h3>
+          {links.map((l, i) => (
             <div key={`l${i}`} className="kv" style={{ padding: "6px 0" }}>
               <FileBadge kind={fileKind("", l.url)} />
               <a className="val" href={l.url} target="_blank" rel="noreferrer" style={{ ...ELLIPSIS, textDecoration: "none", minWidth: 0 }} title={l.url}>{shortUrl(l.url)}</a>
@@ -775,7 +813,7 @@ function githubDup(links, url, branch) {
     : { exact: false, text: `This repo is already linked on branch ${same.map((x) => x.branch_name).join(", ")} (${g.employee_name || "someone"}, ${when}). A different branch is fine.` };
 }
 
-function Github({ kpiId, github, linkIdx, canAdd = true, canDelete, onChanged }) {
+function Github({ kpiId, github, sort, linkIdx, canAdd = true, canDelete, onChanged }) {
   const flags = useFlags();
   const dlg = useDialogs();
   const [open, setOpen] = useState(false);
@@ -826,7 +864,7 @@ function Github({ kpiId, github, linkIdx, canAdd = true, canDelete, onChanged })
   };
   return (
     <div>
-      <h3 style={{ display: "flex", alignItems: "center" }}>GitHub{github.length ? ` · ${github.length}` : ""}{!open && canAdd && <span style={{ marginLeft: "auto" }}><Button size="sm" kind="ghost" icon="plus" onClick={() => setOpen(true)}>Add link</Button></span>}</h3>
+      <h3 style={{ display: "flex", alignItems: "center" }}>GitHub{github.length ? ` · ${github.length}` : ""}{github.length > 1 && sort}{!open && canAdd && <span style={{ marginLeft: "auto" }}><Button size="sm" kind="ghost" icon="plus" onClick={() => setOpen(true)}>Add link</Button></span>}</h3>
       {open && canAdd && (
         <div className="reveal" style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
           <Field label="Repository URL" required hint="Only GitHub repository URLs are accepted">
@@ -1158,39 +1196,7 @@ const TL_FILTERS = [
   ["documents", "Documents", ["document"]],
   ["activity", "Activity", ["activity"]],
 ];
-const TL_ICON = { talk: "chat", question: "info", progress: "pen", meeting: "cal", code: "link", document: "paperclip", activity: "clock" };
-/* One talk with the client (a back-and-forth), as on Client Talks ›
-   Discussions: one row, closed until tapped; open, the bubbles. */
-function TalkRow({ it }) {
-  const [open, setOpen] = useState(false);
-  const waiting = (it.badge || "").startsWith("●");
-  return (
-    <div className="tl-talk">
-      <button type="button" className="tl-talk-head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
-        <span className="tl-ic" aria-hidden="true"><Icon n="chat" size={15} /></span>
-        <b>{it.title}</b>
-        <span className="mini">{it.count} message{it.count === 1 ? "" : "s"}</span>
-        {it.badge && <span className={`tl-talk-st${waiting ? " wait" : ""}`}>{it.badge}</span>}
-      </button>
-      {open && (
-        <div className="tl-msgs">
-          {(it.messages || []).map((m) => (
-            <div key={m.id} className={`tl-msg ${m.side === "team" ? "team" : "client"}`}>
-              <div className="tl-msg-top"><b>{m.who}{m.side === "client" ? " · client" : ""}</b><span>{m.time}</span></div>
-              {m.body && <p>{m.body}</p>}
-              {(m.files || []).map((f) => f.kind === "image"
-                ? <a key={f.id} href={href(f.url)} target="_blank" rel="noreferrer" title={f.name}><img src={href(f.url)} alt={f.name} loading="lazy" /></a>
-                : f.kind === "video" ? <video key={f.id} controls preload="metadata" src={href(f.url)} />
-                  : f.kind === "audio" ? <audio key={f.id} controls preload="metadata" src={href(f.url)} />
-                    : <a key={f.id} className="chat-doc" href={href(f.url)} target="_blank" rel="noreferrer">📄 <b>{f.name}</b></a>)}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+const TL_ICON = { question: "info", progress: "pen", meeting: "cal", code: "link", document: "paperclip", activity: "clock" };
 
 export function TaskTimeline({ kpiId }) {
   const [items, setItems] = useState(null);
@@ -1236,7 +1242,7 @@ export function TaskTimeline({ kpiId }) {
       {items === null ? <p className="mini">Loading…</p> : !days.length ? <p className="mini">Nothing here yet.</p> : days.map((day) => (
         <div key={day.label}>
           <DayRow label={day.label} count={day.items.length} open={dayIsOpen(day.label)} onToggle={() => setOpenDays((o) => ({ ...o, [day.label]: !dayIsOpen(day.label) }))} />
-          {dayIsOpen(day.label) && day.items.map((it) => it.kind === "talk" ? <TalkRow key={it.key} it={it} /> : (
+          {dayIsOpen(day.label) && day.items.map((it) => (
             <div key={it.key} className={`tl-row k-${it.kind}`}>
               <span className="tl-ic" aria-hidden="true"><Icon n={TL_ICON[it.kind] || "clock"} size={15} /></span>
               <div style={{ minWidth: 0 }}>
@@ -1245,7 +1251,7 @@ export function TaskTimeline({ kpiId }) {
                   <span className="mini">{it.who ? `${it.who} · ` : ""}{chatDate(it.at)?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   {it.badge && <span className={`chip-sm${it.badge === "waiting for reply" ? " tl-wait" : ""}`}>{it.badge}</span>}
                 </div>
-                {it.body && <p className={it.kind === "talk" ? "tl-bubble" : "tl-body"}>{it.body}</p>}
+                {it.body && <p className="tl-body">{it.body}</p>}
               </div>
             </div>
           ))}
@@ -2095,7 +2101,9 @@ export function FinishBox({ task, canFinish, isAdmin, onChanged }) {
   return (
     <div className="callout" style={{ borderColor: "var(--warn, #f59e0b)" }}>
       <b>🏁 Fully complete: no bill yet</b>
-      <div className="mini">Usually no price matches this client and work type. Add it in Settings → Configuration → Billing, then:</div>
+      <div className="mini">{t.bill_off
+        ? "Invoices are off for this client (Settings → Billing). Make one by hand:"
+        : "Usually no price matches this client and work type. Add it in Settings → Configuration → Billing, then:"}</div>
       <div style={{ marginTop: 8 }}><Button kind="primary" busy={busy === "bn"} onClick={() => run("bn", S.billNow, (r) => (r.bill?.name ? `Bill ${r.bill.name} made: ${r.bill.money}` : "Bill made."))}>🧾 Bill now</Button></div>
     </div>
   );
@@ -2104,13 +2112,10 @@ export function FinishBox({ task, canFinish, isAdmin, onChanged }) {
 /* ↩ Every time the client sent the work back, newest first: what is still
    wrong and the photos / videos / voice notes that show it
    (models/kpi_client_sendback.py, task.sendbacks). */
-export function SendBackHistory({ task }) {
+export function SendBackHistory({ task, compact = false }) {
   const rounds = task?.sendbacks || [];
   if (!rounds.length) return null;
-  return (
-    <div className="sec">
-      <h3 style={{ color: "var(--over)" }}>↩ Client sent it back {rounds.length}×</h3>
-      {rounds.map((sb) => {
+  const list = rounds.map((sb) => {
         const d = chatDate(sb.at);
         return (
           <div key={sb.id} className="callout" style={{ marginBottom: 8, borderColor: "var(--over)" }}>
@@ -2119,7 +2124,20 @@ export function SendBackHistory({ task }) {
             {sb.files?.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>{sb.files.map((f) => <ChatMedia key={f.id} f={f} />)}</div>}
           </div>
         );
-      })}
+      });
+  /* On the board card (Odoo): one closed line, "↩ Client sent it back N× · 📷 2 photos", tap for the rounds. */
+  if (compact) {
+    return (
+      <details className="cd-sendback" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+        <summary style={{ cursor: "pointer", fontWeight: 700, color: "var(--over)", fontSize: 12.5 }}>↩ Client sent it back {rounds.length}×{rounds[0].files_label ? ` · ${rounds[0].files_label}` : ""}</summary>
+        <div style={{ marginTop: 6 }}>{list}</div>
+      </details>
+    );
+  }
+  return (
+    <div className="sec">
+      <h3 style={{ color: "var(--over)" }}>↩ Client sent it back {rounds.length}×</h3>
+      {list}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
-import { ErrorState, Icon, Lozenge, PageHeader, Skeleton, Tabs } from "@/components/ui";
+import { Button, ErrorState, Icon, Lozenge, PageHeader, Skeleton, Tabs } from "@/components/ui";
 import { useResource } from "@/lib/useFetch";
 import * as M from "@/lib/services/more";
 import { localDay } from "@/lib/services/kpiActions";
@@ -46,6 +46,7 @@ export default function MyWorkday() {
       <PageHeader crumbs={[{ label: "Your work" }, { label: "My workday" }]} title="My workday">
         <Tabs items={[{ key: "week", label: "This week" }, { key: "lastweek", label: "Last week" }, { key: "month", label: "This month" }, { key: "lastmonth", label: "Last month" }]} value={custom ? "" : period} onChange={(k) => { setCustom(null); setPeriod(k); }} />
         <span className="input" style={{ height: 32 }}><Icon n="cal" size={16} /><input type="date" value={from} max={to} onChange={(e) => setCustom([e.target.value, to])} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit", width: 130 }} /><span className="mini">to</span><input type="date" value={to} min={from} onChange={(e) => setCustom([from, e.target.value])} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit", width: 130 }} /></span>
+        <Button kind="ghost" icon="refresh" busy={rep.loading && !!rep.data} onClick={rep.refresh}>Refresh</Button>
       </PageHeader>
       <div className="page">
         <div className="stats">

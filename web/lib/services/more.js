@@ -98,15 +98,16 @@ export async function deleteManual(id) { await callKw(MANUAL, "unlink", [[Number
 const REM = "kpi.reminder";
 const REM_FIELDS = ["name", "remind_date", "remind_time", "enabled", "repeat", "next_trigger", "kra_id", "client_kra_id", "completion_count"];
 export const REPEATS = [["none", "Once"], ["daily", "Daily"], ["weekly", "Weekly"]];
-export async function fetchReminders() {
+/* user_id (the owner) is groups="base.group_system" in Odoo: only System users may read or set it. */
+export async function fetchReminders(system = false) {
   try {
-    const rows = await callKw(REM, "search_read", [[], REM_FIELDS], { order: "next_trigger asc, id desc" });
+    const rows = await callKw(REM, "search_read", [[], system ? [...REM_FIELDS, "user_id"] : REM_FIELDS], { order: "next_trigger asc, id desc" });
     return { status: true, reminders: Array.isArray(rows) ? rows : [] };
   } catch (e) {
     return { status: false, notInstalled: true, message: e?.message || "Unavailable" };
   }
 }
-export async function saveReminder({ id, name, remind_date, remind_time, enabled, repeat, kra_id }) {
+export async function saveReminder({ id, name, remind_date, remind_time, enabled, repeat, kra_id, user_id }) {
   const vals = {};
   if (name != null) vals.name = name;
   if (remind_date != null) vals.remind_date = remind_date;
@@ -114,6 +115,7 @@ export async function saveReminder({ id, name, remind_date, remind_time, enabled
   if (enabled != null) vals.enabled = !!enabled;
   if (repeat != null) vals.repeat = repeat;
   if (kra_id !== undefined) vals.kra_id = kra_id ? Number(kra_id) : false;
+  if (user_id) vals.user_id = Number(user_id);
   if (id) { await callKw(REM, "write", [[Number(id)], vals]); return { status: true, id: Number(id) }; }
   const newId = await callKw(REM, "create", [vals]);
   return { status: true, id: newId };
