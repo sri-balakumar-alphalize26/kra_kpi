@@ -141,6 +141,10 @@ class KpiWaClientForm(http.Controller):
 
     def _fix_values(self, kpi):
         """A declined task's earlier answers, in the form's own field names."""
+        if kpi.request_category == 'new_database':
+            return {'server_id': kpi.provision_server_id.id or '',
+                    'db_name': kpi.provision_db_name or '',
+                    'username': kpi.provision_username or ''}
         db = kpi.client_db_id
         parent = kpi.related_req_kpi_id if 'related_req_kpi_id' in kpi._fields else False
         desc = kpi.original_client_text or kpi.description or ''
@@ -185,7 +189,7 @@ class KpiWaClientForm(http.Controller):
             'today': fields.Date.to_string(fields.Date.today()),
             'fix_ref': (fix.external_ref or '#%s' % fix.id) if fix else '',
             'fix_reason': (fix.decline_note or '') if fix else '',
-            'fix_kinds': FIX_KINDS if fix else [],
+            'fix_kinds': FIX_KINDS if fix and kind != 'newdb' else [],
             'boot': _json_for_script(boot)})
 
     def _existing_files(self, token, kpi):
@@ -254,7 +258,8 @@ class KpiWaClientForm(http.Controller):
         key = (member.lid or member.phone) if member else 'fix-%s' % kpi.id
         st = Intake._get_or_create(group, key, member.wa_name if member else '')
         form_token = secrets.token_urlsafe(24)
-        st.write({'client_form_token': form_token, 'client_form_kind': kpi._kind_now(),
+        kind = 'newdb' if kpi.request_category == 'new_database' else kpi._kind_now()
+        st.write({'client_form_token': form_token, 'client_form_kind': kind,
                   'client_form_fix_kpi_id': kpi.id,
                   'client_form_expires': fields.Datetime.now() + timedelta(minutes=30)})
         return request.redirect('/kpi/wa/client/%s' % form_token, local=True)
@@ -324,10 +329,10 @@ class KpiWaClientForm(http.Controller):
         st = _state_for(token)
         if not st:
             return {'ok': False, 'expired': True}
-        clean, errors = self._check_new_db(name, server_id)
+        clean, errors = self._check_new_db(name, server_id, fixing=st.client_form_fix_kpi_id)
         return {'ok': not errors, 'clean': clean, 'errors': errors}
 
-    def _check_new_db(self, name, server_id):
+    def _check_new_db(self, name, server_id, fixing=None):
         Server = request.env['kpi.server'].sudo()
         clean, errors = Server.validate_new_db_name(name)
         if errors:
@@ -338,6 +343,8 @@ class KpiWaClientForm(http.Controller):
             if exists:
                 return clean, ['%s already exists on this server' % clean]
         dup = Server.existing_request(clean)
+        if dup and fixing and dup == fixing:
+            dup = None
         if dup:
             return clean, ['%s is already requested (%s)' % (clean, dup.external_ref or dup.id)]
         return clean, []
@@ -618,6 +625,50 @@ class KpiWaClientForm(http.Controller):
                 ' '.join((post.get('legacy_name') or '').split())[:200],
                 (post.get('legacy_note') or '').strip()[:TEXT_MAX])
 
+    def _resubmit_newdb(self, st, kpi, post):
+        """A declined New Database request, fixed on the New Database form.
+        Same record and ref; a blank password keeps the one sent before."""
+        if kpi.correction_round >= kpi.MAX_CORRECTION_ROUNDS:
+            return None, ('This has been sent back %d times already, so a person from the '
+                          'team will contact you about it.') % kpi.correction_round, ''
+        server = request.env['kpi.server'].sudo().browse(int(post.get('server_id') or 0)).exists()
+        if not server:
+            return None, 'Choose a server.', ''
+        clean, errors = self._check_new_db(post.get('db_name'), server.id, fixing=kpi)
+        if errors:
+            return None, 'Database name: ' + '; '.join(errors), ''
+        username = (post.get('username') or '').strip()[:64]
+        password = (post.get('password') or '')[:128] or kpi.provision_password or ''
+        if not username:
+            return None, 'Type the username.', ''
+        if not password:
+            return None, 'Type or generate the password.', ''
+        who = st.participant_name or st.participant_key
+        footer = '\n\n— Sent again from the WhatsApp form by %s after a decline.' % who
+        old_ref = kpi.external_ref or ''
+        vals = {
+            'name': '[New DB] New DB %s on %s' % (clean, server.poll_label() or server.name),
+            'description': ('— New database —\nServer: %s\nDatabase name: %s\n'
+                            'Login: %s\nPassword: set on the request (Login / '
+                            'Password fields)%s') % (server.poll_label() or server.name, clean, username, footer),
+            'provision_server_id': server.id, 'provision_db_name': clean,
+            'provision_username': username, 'provision_password': password,
+            'active': True, 'published': False, 'user_id': False,
+            'task_state': 'queue_waiting', 'admin_accept_deadline_at': False,
+            'client_reconfirm_state': 'corrected', 'client_dispute': False,
+            'correction_round': kpi.correction_round + 1,
+            'last_correction_text': clean, 'client_fix_token': False,
+            'self_review_note': ('[CLIENT FIXED] New DB %s' % clean)[:255],
+        }
+        if not kpi.original_client_text:
+            vals['original_client_text'] = kpi.description or ''
+        kpi.write(vals)
+        kpi._log_action('client_resubmitted', source='whatsapp', actor_label=who, payload={
+            'round': kpi.correction_round, 'old_ref': old_ref, 'new_ref': kpi.external_ref,
+            'old_kind': 'newdb', 'new_kind': 'newdb'})
+        kpi._after_commit_in_background('_announce_new_client_ticket')
+        return kpi, '', ''
+
     def _resubmit(self, st, kind, post):
         """A declined task, fixed by the client on the same form.
 
@@ -626,6 +677,8 @@ class KpiWaClientForm(http.Controller):
         the approval chain, exactly like a fresh request."""
         Kpi = request.env['kra.kpi'].sudo()
         kpi = st.client_form_fix_kpi_id.sudo().with_context(active_test=False)
+        if kind == 'newdb':
+            return self._resubmit_newdb(st, kpi, post)
         if kind not in dict(FIX_KINDS):
             return None, 'Choose Requirement, Bug or Update.', ''
         if kpi.correction_round >= kpi.MAX_CORRECTION_ROUNDS:

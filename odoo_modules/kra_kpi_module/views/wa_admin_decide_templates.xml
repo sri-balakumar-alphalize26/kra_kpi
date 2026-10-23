@@ -10,9 +10,12 @@
             <t t-call="kra_kpi_module.wa_task_layout">
                 <t t-set="page_title" t-value="title"/>
                 <style>
-                    .det { margin:0; display:grid; grid-template-columns:auto 1fr; gap:6px 14px; }
+                    .det { margin:0; display:grid; grid-template-columns:auto 1fr; column-gap:14px;
+                           border-bottom:1px solid var(--border); }
+                    .det dt, .det dd { padding:8px 0; border-top:1px solid var(--border); }
                     .det dt { font-size:12.5px; font-weight:700; color:var(--subtlest); }
-                    .det dd { margin:0; white-space:pre-wrap; word-break:break-word; }
+                    .det dd { margin:0; white-space:pre-wrap; word-break:break-word; font-weight:700; color:var(--text); }
+                    .det dd.long { font-weight:400; }
                     .choice { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
                     .choice input { display:none; }
                     .choice label { text-align:center; padding:12px; border-radius:var(--r); font-weight:800;
@@ -42,7 +45,7 @@
                         <div t-if="error" class="err" t-esc="error"/>
                         <dl class="det">
                             <t t-foreach="rows" t-as="r">
-                                <dt t-esc="r[0]"/><dd t-esc="r[1]"/>
+                                <dt t-esc="r[0]"/><dd t-esc="r[1]" t-att-class="'long' if r[0] == 'Description' else None"/>
                             </t>
                         </dl>
 

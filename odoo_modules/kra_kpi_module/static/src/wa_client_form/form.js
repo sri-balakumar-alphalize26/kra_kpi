@@ -820,6 +820,11 @@
     if (otherBox && $('kfDeliv_other').checked) { otherBox.style.display = ''; otherBox.disabled = false; }
     var only = (B.servers || []).length === 1 ? String(B.servers[0].id) : '';
     server.value = V.server_id || only;
-    if (KIND === 'newdb') { checkDbName(); preview(); }
+    if (KIND === 'newdb') {
+        // Fixing a declined request, or a refused send: the name and login typed before.
+        if (dbName && V.db_name) { dbName.value = V.db_name; }
+        if (user && V.username) { user.value = V.username; user.disabled = false; }
+        checkDbName(); preview();
+    }
     else if (server.value) { loadDbs(V.db_id); } else { preview(); }
 })();
