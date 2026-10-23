@@ -203,6 +203,16 @@ export default function TaskPanel({ id, onClose }) {
                     <TaskTimeline key={`tl${id}`} kpiId={id} />
 
                     {/* The rest of the facts, only those that have a value. */}
+                    {meta.client_decision?.name && (
+                      <dl className="details">
+                        <dt>Client</dt>
+                        <dd style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+                          <span>{meta.client_decision.action === "finished" ? "✅ Finished by " : meta.client_decision.action === "sent_back" ? "↩ Sent back by " : "💬 Asked by "}<b>{meta.client_decision.name}</b>{meta.client_decision.at ? <span className="mini"> · {meta.client_decision.at}</span> : null}</span>
+                          {meta.client_decision.note ? <span className="mini" style={{ whiteSpace: "pre-wrap" }}>{meta.client_decision.note}</span> : null}
+                          {meta.client_decision.has_signature ? <span className="mini">Signed on the sign-off page</span> : null}
+                        </dd>
+                      </dl>
+                    )}
                     {(t.estimate_extension_count > 0 || (t.time_by_user || []).length > 0 || t.today_seconds > 0 || t.deadline || S.reminderIntervalMs(t) > 0 || t.completion_date || t.approval_date || meta.points != null || (t.coordinator_review_started_at && t.task_state === "partially_completed")) && (
                       <dl className="details">
                         {t.estimate_extension_count > 0 && <><dt>Estimate</dt><dd>{fmtHM(est)}<span className="mini"> · extended {t.estimate_extension_count}×{t.estimate_extended_by_name ? ` by ${t.estimate_extended_by_name}` : ""} {t.estimate_extend_reason ? `— ${t.estimate_extend_reason}` : ""}</span></dd></>}
