@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- KRA / KPI > Client Talks: every discussion, meeting and question in one
+         place (static/src/components/kpi_client_talks, controllers/kpi_talks_api.py).
+         Each list shows only what the person may see: admins everything,
+         developers their own tasks and what they were asked. -->
+    <record id="action_kpi_talks_discussions" model="ir.actions.client">
+        <field name="name">Discussions</field>
+        <field name="tag">kpi_talks_discussions</field>
+    </record>
+    <record id="action_kpi_talks_meetings" model="ir.actions.client">
+        <field name="name">Meetings</field>
+        <field name="tag">kpi_talks_meetings</field>
+    </record>
+    <record id="action_kpi_talks_questions" model="ir.actions.client">
+        <field name="name">Questions</field>
+        <field name="tag">kpi_talks_questions</field>
+    </record>
+
+    <menuitem id="menu_grp_client_talks" name="Client Talks" parent="menu_kra_root" sequence="12"
+              groups="kra_kpi_module.group_kra_developer"/>
+    <menuitem id="menu_kpi_talks_discussions" name="💬 Discussions" parent="menu_grp_client_talks"
+              action="action_kpi_talks_discussions" sequence="10"/>
+    <menuitem id="menu_kpi_talks_meetings" name="📅 Meetings" parent="menu_grp_client_talks"
+              action="action_kpi_talks_meetings" sequence="20"/>
+    <menuitem id="menu_kpi_talks_questions" name="❓ Questions" parent="menu_grp_client_talks"
+              action="action_kpi_talks_questions" sequence="30"/>
+</odoo>
