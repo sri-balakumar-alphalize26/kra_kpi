@@ -376,7 +376,7 @@
                     </div>
                 </div>
                 <script>window.KF_BOOT = <t t-out="boot"/>;</script>
-                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=13"></script>
+                <script src="/kra_kpi_module/static/src/wa_client_form/form.js?v=14"></script>
             </t>
         </template>
 
