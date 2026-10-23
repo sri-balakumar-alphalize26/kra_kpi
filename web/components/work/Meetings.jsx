@@ -9,9 +9,11 @@
    details; the buttons and edits are for admins, as on the web's other
    admin screens. */
 import { useCallback, useEffect, useState } from "react";
-import { Avatar, Button, Empty, ErrorState, Field, Input, Lozenge, Modal, PageHeader, Select, Skeleton, useDialogs, useFlags } from "@/components/ui";
+import { useSearchParams } from "next/navigation";
+import { Avatar, Button, Empty, ErrorState, Field, Input, Lozenge, Modal, PageHeader, Select, Skeleton, Tabs, useDialogs, useFlags } from "@/components/ui";
 import { useMe, isAdmin } from "@/lib/me";
 import { fetchUsers } from "@/lib/services/kpiActions";
+import { fileToBase64 } from "@/lib/services/admin";
 import { local, m2o } from "@/lib/services/sysadmin";
 import * as M from "@/lib/services/meetings";
 
@@ -25,7 +27,9 @@ export default function Meetings() {
   const [rows, setRows] = useState(null);
   const [counts, setCounts] = useState({});
   const [err, setErr] = useState(null);
-  const [openId, setOpenId] = useState(null);
+  /* ?id=<meeting> opens that meeting (Client Talks › Questions "📅 Open meeting"). */
+  const sp = useSearchParams();
+  const [openId, setOpenId] = useState(() => Number(sp.get("id")) || null);
 
   const domainFor = useCallback((key) => {
     const d = [...(M.FILTERS.find((f) => f.key === key)?.domain || [])];
@@ -98,24 +102,32 @@ function MeetingDialog({ id, canEdit, onClose, onChanged }) {
   const [m, setM] = useState(null);
   const [draft, setDraft] = useState({});
   const [people, setPeople] = useState([]);
+  const [sheet, setSheet] = useState([]);
   const [users, setUsers] = useState([]);
   const [link, setLink] = useState("");
+  const [recs, setRecs] = useState([]);
+  const [log, setLog] = useState([]);
+  const [tab, setTab] = useState("after");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await M.readMeeting(id);
+      const r = await M.readMeeting(id, canEdit);
       if (!r) throw new Error("This meeting no longer exists.");
       setM(r);
       setDraft({ name: r.name || "", start: M.toLocalInput(r.scheduled_start), minutes: r.duration_minutes || 30,
         organizer: r.organizer_id ? String(r.organizer_id[0]) : "", attendees: r.attendee_user_ids || [],
-        provider: r.provider || "jitsi", join_url: r.join_url || "", summary: r.summary || "", action_items: r.action_items || "", notes: r.notes || "" });
+        provider: r.provider || "jitsi", join_url: r.join_url || "", summary: r.summary || "", action_items: r.action_items || "", notes: r.notes || "",
+        record: !!r.record_meeting });
       setPeople(await M.listParticipants(id).catch(() => []));
+      setSheet(await M.attendance(id).catch(() => []));
+      setRecs(await M.listRecordings(r.recording_ids).catch(() => []));
+      if (canEdit) setLog(await M.readLog(r.log_ids).catch(() => []));
       if (["confirmed", "live", "done"].includes(r.state)) setLink(await M.clientLink(id).catch(() => r.join_url || ""));
       setErr(null);
     } catch (e) { setErr(e); }
-  }, [id]);
+  }, [id, canEdit]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (canEdit) fetchUsers().then((u) => setUsers(u || [])).catch(() => {}); }, [canEdit]);
 
@@ -134,6 +146,7 @@ function MeetingDialog({ id, canEdit, onClose, onChanged }) {
     if (draft.provider !== m.provider) v.provider = draft.provider;
     if (draft.provider === "manual" && draft.join_url !== (m.join_url || "")) v.join_url = draft.join_url.trim();
     for (const k of ["summary", "action_items", "notes"]) if (draft[k] !== (m[k] || "")) v[k] = draft[k];
+    if (canEdit && draft.record !== !!m.record_meeting) v.record_meeting = draft.record;
     return v;
   };
   const dirty = Object.keys(changes()).length > 0;
@@ -158,19 +171,60 @@ function MeetingDialog({ id, canEdit, onClose, onChanged }) {
     try { await M.cancelMeeting(id, v.reason.trim()); flags.ok("Meeting cancelled. The client has been told."); await load(); onChanged?.(); }
     catch (e) { flags.err(e.message); } finally { setBusy(""); }
   };
+  /* Draft with AI (Odoo: the link under "Summary sent" on the Afterwards page). */
+  const draftAi = async () => {
+    setBusy("draft");
+    try {
+      const v = changes();
+      if (Object.keys(v).length) await M.writeMeeting(id, v);
+      const r = await M.draftSummary(id);
+      if (r.ok) flags.ok(r.message || "Summary written."); else flags.err(r.message || "Could not draft the summary.");
+      await load(); onChanged?.();
+    } catch (e) { flags.err(e.message); } finally { setBusy(""); }
+  };
+  /* Recordings: upload a file somebody recorded locally, or take one off. */
+  const addRecording = async (e) => {
+    const files = [...(e.target.files || [])];
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy("rec");
+    try {
+      for (const f of files) await M.uploadRecording(id, f.name, await fileToBase64(f), f.type);
+      flags.ok(files.length === 1 ? "Recording added." : `${files.length} recordings added.`);
+      await load();
+    } catch (er) { flags.err(er.message); } finally { setBusy(""); }
+  };
+  const dropRecording = async (a) => {
+    if (!(await dlg.confirm({ title: "Remove this recording?", text: a.name, confirmLabel: "Remove", danger: true }))) return;
+    setBusy("rec");
+    try { await M.removeRecording(id, a.id); await load(); }
+    catch (er) { flags.err(er.message); } finally { setBusy(""); }
+  };
   const copy = async () => { try { await navigator.clipboard.writeText(link); flags.ok("Link copied."); } catch { flags.err("Could not copy."); } };
+  /* Join as ME: the room opens with my name from Odoo, no name screen. The tab
+     is opened inside the click so a pop-up blocker doesn't stop it. */
+  const join = async () => {
+    const w = window.open("", "_blank");
+    setBusy("join");
+    try { const url = await M.myLink(id); if (w) w.location = url; else window.location = url; }
+    catch (e) { if (w) w.close(); flags.err(e.message); } finally { setBusy(""); }
+  };
 
   const st = m?.state;
   const edit = canEdit && st && !["done", "cancelled"].includes(st);
   const [tone, label] = (st && M.STATES[st]) || ["todo", ""];
-  const footer = m && canEdit && (
+  const canJoin = ["confirmed", "live"].includes(st);
+  const footer = m && (canEdit || canJoin) && (
     <>
+      {canJoin && <Button kind="ok" icon="play" busy={busy === "join"} onClick={join} style={canEdit ? undefined : { marginLeft: "auto" }}>Join</Button>}
+      {canEdit && <>
       {!["done", "cancelled"].includes(st) && <Button kind="ghost" busy={busy === "cancel"} onClick={cancel} style={{ marginRight: "auto" }}>Cancel meeting</Button>}
       {dirty && <Button busy={busy === "save"} onClick={() => run("save", null, "Saved.")}>Save</Button>}
       {(st === "requested" || st === "confirmed") && <Button kind="primary" busy={busy === "confirm"} onClick={() => run("confirm", M.confirmMeeting, "Confirmed. The link is posted in the client's group.")}>{st === "confirmed" ? "Re-send link" : "Confirm & send link"}</Button>}
       {st === "confirmed" && <Button busy={busy === "open"} onClick={() => run("open", M.openNow, "The link is posted now.")}>Open now</Button>}
       {st === "live" && <Button kind="primary" busy={busy === "done"} onClick={() => run("done", M.markDone, "Finished. The clock has stopped.")}>Finished</Button>}
       {st === "done" && !m.summary_posted && <Button kind="primary" busy={busy === "summary"} disabled={!draft.summary.trim()} onClick={() => run("summary", M.postSummary, "Summary sent to the client.")}>Send summary</Button>}
+      </>}
     </>
   );
 
@@ -232,7 +286,77 @@ function MeetingDialog({ id, canEdit, onClose, onChanged }) {
               <div className="row"><Input value={link} readOnly /><Button size="sm" onClick={copy}>Copy</Button><a className="btn btn-ghost" style={{ height: 28, fontSize: 12.5 }} href={link} target="_blank" rel="noreferrer">Open</a></div>
             </Field>
           )}
+          {(m.provider === "jitsi" && m.room_name || m.participant_summary) && (
+            <div className="mini">{m.provider === "jitsi" && m.room_name ? <>Room <b>{m.room_name}</b></> : null}{m.provider === "jitsi" && m.room_name && m.participant_summary ? " · " : ""}{m.participant_summary ? <>Joined: <b>{m.participant_summary}</b></> : null}</div>
+          )}
 
+          {canEdit && (
+            <div className="cardbox" style={{ boxShadow: "none" }}>
+              <h2>Recording</h2>
+              <label className="row" style={{ cursor: st === "done" || st === "cancelled" ? "default" : "pointer", gap: 8 }}>
+                <input type="checkbox" checked={draft.record} disabled={st === "done" || st === "cancelled" || (st === "live" && !m.record_meeting)}
+                  onChange={(e) => setDraft((d) => ({ ...d, record: e.target.checked }))} />
+                <b>Record this meeting</b>
+              </label>
+              {(m.recording_state && m.recording_state !== "off" || m.recording_detail || m.active_minutes > 0) && (
+                <div className="grid2">
+                  {m.recording_state && m.recording_state !== "off" && <Field label="Recorder"><div>{M.RECORDING_STATES[m.recording_state] || m.recording_state}</div></Field>}
+                  {m.active_minutes > 0 && <Field label="Active (min)"><div>{m.active_minutes}</div></Field>}
+                  {m.recording_detail && <Field label="Detail"><div className="mini">{m.recording_detail}</div></Field>}
+                </div>
+              )}
+              {draft.record && (
+                <div className="callout" style={{ background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)" }}>
+                  <span><b>Everyone in this call will be told it is being recorded.</b> A recorder joins the room from this server and appears in the participant list, and the meeting page says so above the video. Audio only — no video is kept.
+                  <br />It cannot be switched on once the call has started: the people in it were already shown a page saying it is not being recorded.</span>
+                </div>
+              )}
+              {["failed", "no_audio"].includes(m.recording_state) && (
+                <div className="callout" style={{ background: "var(--over-bg)", borderColor: "var(--danger)", color: "var(--over)" }}>
+                  <span><b>This meeting was not recorded.</b> The reason is in <b>Recorder</b> above. There will be no transcript, so any summary is built only from who joined and for how long.</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <Tabs value={tab} onChange={setTab} items={[
+            { key: "after", label: "Afterwards" },
+            ...(canEdit ? [{ key: "log", label: "Log", count: log.length || null }] : []),
+            ...(canEdit ? [{ key: "notes", label: "Internal notes" }] : []),
+          ]} />
+
+          {tab === "log" && canEdit && (
+            <>
+              {log.length ? (
+                <div className="cardbox table-scroll" style={{ boxShadow: "none", padding: 0 }}>
+                  <table className="table">
+                    <thead><tr><th>When</th><th>Event</th><th>By</th><th>Source</th><th>Detail</th></tr></thead>
+                    <tbody>{log.map((l) => (
+                      <tr key={l.id}>
+                        <td>{when(l.create_date)}</td>
+                        <td>{l.event}</td>
+                        <td>{m2o(l.actor_user_id) || "—"}</td>
+                        <td><Lozenge tone="neutral" style={{ textTransform: "none" }}>{M.LOG_SOURCES[l.source] || l.source || "—"}</Lozenge></td>
+                        <td className="mini" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", maxWidth: 280 }}>{l.payload_json || ""}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              ) : <p className="mini" style={{ margin: 0 }}>Nothing logged for this meeting yet.</p>}
+              <div className="mini">Every step is written to the task's own log as well, so it survives even if this meeting is deleted.</div>
+            </>
+          )}
+
+          {tab === "notes" && canEdit && (
+            <>
+              <Field label="Internal notes" hint="Never sent to the client.">
+                <span className="input ta" style={{ height: "auto" }}><textarea rows={3} value={draft.notes} onChange={set("notes")} placeholder="Never sent to the client." style={TA} /></span>
+              </Field>
+              {st === "cancelled" && m.cancel_reason && <Field label="Cancel reason"><div>{m.cancel_reason}</div></Field>}
+            </>
+          )}
+
+          {tab === "after" && <>
           {["live", "done"].includes(st) && (
             <div className="cardbox" style={{ boxShadow: "none" }}>
               <h2>How long it ran<span className="right"><small>Kept apart from task time</small></span></h2>
@@ -240,7 +364,7 @@ function MeetingDialog({ id, canEdit, onClose, onChanged }) {
                 <Field label="Opened"><div>{when(m.opened_at)}</div></Field>
                 <Field label="Finished"><div>{m.ended_at ? when(m.ended_at) : "Still open"}</div></Field>
               </div>
-              {st === "done" && <div><b>{m.actual_minutes || 0} minutes</b> of meeting</div>}
+              {st === "done" && <div><b>{m.actual_minutes || 0} minutes</b> of meeting{m.active_minutes > 0 ? <> · <b>{m.active_minutes} min</b> active</> : null}</div>}
             </div>
           )}
 
@@ -249,10 +373,52 @@ function MeetingDialog({ id, canEdit, onClose, onChanged }) {
               <h2 style={{ padding: "12px 16px 0" }}>Who was in the room</h2>
               {people.length ? (
                 <table className="table">
-                  <thead><tr><th>Name (as they typed it)</th><th>Joined</th><th>Left</th><th className="num">Minutes</th></tr></thead>
-                  <tbody>{people.map((p) => <tr key={p.id}><td><b>{p.person_name || "—"}</b></td><td>{when(p.joined_at)}</td><td>{p.left_at ? when(p.left_at) : "still in"}</td><td className="num">{p.minutes || 0}</td></tr>)}</tbody>
+                  <thead><tr><th>Name</th><th>Employee</th><th>Joined</th><th>Left</th><th className="num">Minutes</th><th>Removed: no reply</th></tr></thead>
+                  <tbody>{people.map((p) => <tr key={p.id}><td><b>{p.person_name || "—"}</b></td><td>{m2o(p.user_id) || "—"}</td><td>{when(p.joined_at)}</td><td>{p.left_at ? when(p.left_at) : "still in"}</td><td className="num">{p.minutes || 0}</td><td>{p.removed_no_reply ? <span style={{ color: "var(--pri-important)" }}>Yes</span> : ""}</td></tr>)}</tbody>
                 </table>
               ) : <p className="mini" style={{ padding: "0 16px 12px", margin: 0 }}>Nobody recorded yet. Names and times are captured only when people join through the client link above.</p>}
+              {sheet.length > 0 && (
+                <>
+                  <h2 style={{ padding: "12px 16px 0" }}>Attendance</h2>
+                  <table className="table">
+                    <thead><tr><th>Person</th><th>Status</th><th className="num">Minutes</th></tr></thead>
+                    <tbody>{sheet.map((r, i) => (
+                      <tr key={`${r.user || r.name}${i}`}>
+                        <td><b>{r.name}</b></td>
+                        <td>{r.absent ? <span style={{ color: "var(--danger)" }}>Absent</span> : r.removed ? <span style={{ color: "var(--pri-important)" }}>Removed: no reply</span> : <span style={{ color: "var(--lz-done)" }}>Attended</span>}</td>
+                        <td className="num">{r.absent ? "—" : r.minutes || 0}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          )}
+
+          {(recs.length > 0 || (canEdit && ["confirmed", "live", "done"].includes(st))) && (
+            <Field label="Recordings">
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {recs.map((a) => (
+                  <div key={a.id} className="row" style={{ gap: 8 }}>
+                    <a href={M.recordingUrl(a)} target="_blank" rel="noreferrer">{a.name}</a>
+                    {a.file_size ? <span className="mini">{Math.max(1, Math.round(a.file_size / 1024))} KB</span> : null}
+                    {canEdit && <Button size="sm" kind="ghost" busy={busy === "rec"} onClick={() => dropRecording(a)}>Remove</Button>}
+                  </div>
+                ))}
+                {canEdit && (
+                  <label className="btn btn-ghost" style={{ height: 28, fontSize: 12.5, alignSelf: "flex-start", cursor: "pointer" }}>
+                    {busy === "rec" ? "Uploading…" : "Upload your files"}
+                    <input type="file" multiple hidden disabled={busy === "rec"} onChange={addRecording} />
+                  </label>
+                )}
+              </div>
+            </Field>
+          )}
+
+          {st === "done" && canEdit && (
+            <div className="row" style={{ gap: 8 }}>
+              <span className="mini">Summary sent: <b>{m.summary_posted ? "Yes" : "No"}</b></span>
+              <Button size="sm" kind="ghost" busy={busy === "draft"} onClick={draftAi}>Draft with AI</Button>
             </div>
           )}
 
@@ -266,13 +432,12 @@ function MeetingDialog({ id, canEdit, onClose, onChanged }) {
               </Field>
             </>
           )}
-
-          {canEdit && (
-            <Field label="Internal notes" hint="Never sent to the client.">
-              <span className="input ta" style={{ height: "auto" }}><textarea rows={2} value={draft.notes} onChange={set("notes")} style={TA} /></span>
-            </Field>
+          {["live", "done"].includes(st) && (
+            <div className="mini"><b>Ran for</b> is how long the room was open. <b>Active</b> is how much of that somebody was actually talking, and is only known for a recorded meeting. Neither is ever added to the task's work time, so neither reaches hourly invoicing.</div>
           )}
-          {st === "cancelled" && m.cancel_reason && <div className="mini">Cancelled: {m.cancel_reason}</div>}
+          </>}
+
+          {!canEdit && st === "cancelled" && m.cancel_reason && <div className="mini">Cancelled: {m.cancel_reason}</div>}
           {m.confirmed_by_id && <div className="mini">Confirmed by {m2o(m.confirmed_by_id)} · {when(m.confirmed_at)}{m.link_posted_at ? ` · link posted ${when(m.link_posted_at)}` : ""}{m.reminder_sent_at ? ` · reminder ${when(m.reminder_sent_at)}` : ""}</div>}
         </div>
       )}

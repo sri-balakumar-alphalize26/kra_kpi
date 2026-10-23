@@ -44,6 +44,13 @@ export const WORK_MENU = [
     { key: "owner", label: "Client Billing", href: "/dashboards" },
     { key: "attendance", label: "Attendance", href: "/people/attendance" }, /* web only */
   ] },
+  /* Every discussion, meeting and question in one place (Odoo views/kpi_client_talks_views.xml).
+     Each list holds only what the person may see: admins everything, developers their own. */
+  { key: "talks", group: "Client Talks", icon: "chat", roles: ["developer", "admin"], items: [
+    { key: "talks-discussions", label: "💬 Discussions", href: "/talks/discussions" },
+    { key: "talks-meetings", label: "📅 Meetings", href: "/talks/meetings" },
+    { key: "talks-questions", label: "❓ Questions", href: "/talks/questions" },
+  ] },
   { key: "clients", group: "Clients", icon: "inbox", roles: ADMIN, items: [
     /* badge: the Sidebar shows the number waiting on a manager (Shell.jsx). */
     { key: "approvals", label: "Approvals", href: "/approvals", badge: "approvals" },
@@ -90,6 +97,7 @@ export const WORK_MENU = [
   ] },
   { key: "settings", group: "Settings", icon: "gear", roles: ADMIN, items: [
     { key: "configuration", label: "Configuration", href: "/settings/configuration" },
+    { key: "billing", label: "Billing", href: "/settings/billing" },
     { key: "ai-config", label: "AI & Transcription", href: "/settings/ai" },
     { key: "branding", label: "Company Branding", href: "/settings/branding" },
     /* Multi-task settings live inside the Configuration page on the web. */
@@ -135,6 +143,7 @@ export const PORTAL_TABS = [
 export const SETTINGS_NAV = [
   { key: "kra-tree", label: "KRA / KPI master", href: "/settings/kra-tree" },
   { key: "configuration", label: "Configuration", href: "/settings/configuration" },
+  { key: "billing", label: "Billing", href: "/settings/billing" },
   { key: "ai-config", label: "AI & transcription", href: "/settings/ai" },
   { key: "pre-approvals", label: "Pre-approvals", href: "/settings/pre-approvals" },
   { key: "users", label: "Users", href: "/settings/users" },

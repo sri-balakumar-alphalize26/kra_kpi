@@ -1,17 +1,18 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Avatar, Button, Icon, IconButton, Lozenge, Skeleton, stateTone } from "@/components/ui";
-import { useMe } from "@/lib/me";
+import { isAdmin, useMe } from "@/lib/me";
 import * as S from "@/lib/services/kpiActions";
 import { fmtHM, estimateSeconds, laneForTask, refPrefix, TYPE_TILE } from "@/lib/services/kpiActions";
 import { liveFromAnchor, fmtClock, secsSince, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
 import { actionsFor } from "./actions";
 import DbHandover from "./DbHandover";
+import TaskMeetings from "@/components/talks/TaskMeetings";
 import { OldDbBadge } from "./Legacy";
 import { useTaskActions } from "./TaskActions";
 import ClientTab, { hasClientTab, useClientSends } from "./ClientTab";
-import { ChatTab, ClientProgress, ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList } from "./TaskExtras";
+import { ChatTab, ClientProgress, FinishBox, SendBackHistory, ClientWording, EditHeadingDialog, FilesTab, HistoryTab, ManagerQuestions, NotStartedNote, ProgressComposer, ProgressList, TaskTimeline } from "./TaskExtras";
 
 /* Odoo's has_started states (kra_api.py /kpi_action/details). */
 const STARTED_STATES = ["in_progress", "paused", "partially_completed", "awaiting_client", "completed"];
@@ -23,12 +24,13 @@ export default function TaskPanel({ id, onClose }) {
   const acts = useTaskActions();
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState("updates");
+  /* The section picked on the icon rail: overview | chat | client | updates | files | history. */
+  const [tab, setTab] = useState("overview");
   const [editing, setEditing] = useState(false);
-  /* What the client sent (Client tab): the tab shows only when there is something. */
+  /* What the client sent (Client section): shown only when there is something. */
   const [sends] = useClientSends(id);
   const showClient = hasClientTab(sends);
-  useEffect(() => { if (tab === "client" && sends && !showClient) setTab("updates"); }, [sends]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (tab === "client" && sends && !showClient) setTab("overview"); }, [sends]); // eslint-disable-line react-hooks/exhaustive-deps
   /* Timers tick inside LiveTick; the deadline flag needs only a one-minute clock. */
   const now = useNow(!!d?.task && d.task.task_state !== "completed", 60000);
 
@@ -44,7 +46,13 @@ export default function TaskPanel({ id, onClose }) {
     loadChatCount();
     return S.fetchTaskDetails(id).then((r) => { if (r.ok) { setD(r); setErr(""); } else setErr(r.message); }).catch((e) => setErr(e.message));
   };
-  useEffect(() => { setD(null); setInfo(null); load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setD(null); setInfo(null); setTab("overview"); load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* A client waiting for a reply: open straight on the Chat, once per task
+     (only if nobody picked a section yet). */
+  const [chatOpened, setChatOpened] = useState(null);
+  useEffect(() => {
+    if (chatWaiting > 0 && chatOpened !== id) { setChatOpened(id); setTab((s) => (s === "overview" ? "chat" : s)); }
+  }, [chatWaiting, id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const on = () => load();
     window.addEventListener("kpi:refresh", on);
@@ -84,7 +92,6 @@ export default function TaskPanel({ id, onClose }) {
      own "From the client" block, never among the team's updates. */
   const teamProgress = (d?.progress || []).filter((p) => !p.from_client);
   const clientProgress = (d?.progress || []).filter((p) => p.from_client);
-  const updatesCount = t ? (typeof t.dev_progress_count === "number" ? t.dev_progress_count : t.progress_count) : 0;
   const fileCount = (d?.files?.length || 0) +(d?.github?.length || 0) + (d?.manuals?.length || 0) + (d?.links?.length || 0);
   /* Updates, files, manuals and GitHub links are added only once the task has
      been started, as on the Odoo board. /kpi_action/details says so (has_started:
@@ -109,11 +116,16 @@ export default function TaskPanel({ id, onClose }) {
           <a className="icon-btn" href={`/browse/${id}`} title="Open as a page" aria-label="Open as a page"><Icon n="link" size={18} /></a>
           <IconButton icon="x" label="Close" onClick={onClose} />
         </div>
-        <div className="panel-b">
-          {err && <div className="callout" style={{ background: "var(--over-bg)", borderColor: "var(--danger)", color: "var(--over)" }}><Icon n="warn" size={18} /><span style={{ flex: 1 }}>{err}</span><Button size="sm" onClick={load}>Retry</Button></div>}
-          {!t && !err && <Skeleton rows={6} />}
-          {t && (
-            <>
+        {(err || !t) && (
+          <div className="panel-b">
+            {err && <div className="callout" style={{ background: "var(--over-bg)", borderColor: "var(--danger)", color: "var(--over)" }}><Icon n="warn" size={18} /><span style={{ flex: 1 }}>{err}</span><Button size="sm" onClick={load}>Retry</Button></div>}
+            {!t && !err && <Skeleton rows={6} />}
+          </div>
+        )}
+        {t && !err && (
+          <>
+            {/* Name and status stay on top whatever section is open. */}
+            <div className="tp-top">
               <h2>{t.name}</h2>
               <div className="row" style={{ flexWrap: "wrap" }}>
                 <Lozenge tone={tone} style={{ height: 24, padding: "0 8px" }}>{label}</Lozenge>
@@ -136,67 +148,98 @@ export default function TaskPanel({ id, onClose }) {
                   {t.self_resume_note && <span style={{ whiteSpace: "pre-wrap", fontSize: 13, color: me.role === "admin" ? "var(--danger)" : "var(--pri-regular)" }}><Icon n="user" size={12} /> <b>{t.self_resume_by || "Developer"}:</b> {t.self_resume_note}</span>}
                 </div>
               )}
-              <div className="actions">
-                {actions.map((a) => <Button key={a.key} kind={a.kind} size="sm" icon={a.icon} disabled={a.disabled} title={a.reason || a.label} onClick={() => acts.run(a, t)}>{a.label}</Button>)}
-              </div>
-              {/* A greyed-out Start reads as broken unless it says why; the reason
-                  used to live only in the hover title. */}
-              {(() => { const off = actions.find((a) => a.disabled && a.reason); return off ? <span className="mini" style={{ display: "flex", alignItems: "center", gap: 5, marginTop: -4 }}><Icon n="info" size={13} />{off.reason}</span> : null; })()}
+            </div>
 
-              {t.description && <div className="sec"><h3>Description</h3><p style={{ whiteSpace: "pre-wrap" }}>{t.description}</p></div>}
-              <ClientWording key={`cw${id}`} kpiId={id} />
-              {(t.request_category === "new_database" || t.request_category === "db_disconnect") && <DbHandover key={`dbh${id}`} kpiId={id} canEdit={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
-              {String(meta.guidelines || "").trim() && <div className="sec"><h3>Guidelines</h3><p style={{ whiteSpace: "pre-wrap" }}>{meta.guidelines}</p></div>}
-
-              <dl className="details">
-                <dt>Assignee</dt><dd>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={20} />{t.user_name}</> : <span className="mini">Unassigned</span>}</dd>
-                <dt>Client</dt><dd>{t.client_name || "—"}</dd>
-                <dt>Project</dt><dd>{meta.kra || t.project_name || "—"}</dd>
-                {(t.parent_ref || t.legacy_req_link) && <><dt>Under task</dt><dd>{t.parent_ref}<OldDbBadge t={t} style={t.parent_ref ? { marginLeft: 6 } : undefined} /></dd></>}
-                <dt>Type</dt><dd>{meta.kind || refPrefix(t.external_ref) || "Task"}{t.deliverable_type ? ` · ${S.taskDeliverableLabel(t)}` : ""}{t.is_self_created && !t.admin_accepted && t.requested_doc_type ? <span className="mini"> (asked: {t.requested_doc_type})</span> : null}</dd>
-                <dt>Priority</dt><dd style={{ color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)", fontWeight: 800 }}>{t.priority === "urgent" ? "▲▲ Urgent" : t.priority === "important" ? "▲ Important" : "– Regular"}{t.requested_priority && t.requested_priority !== t.priority ? <span className="mini"> (developer asked for {S.priorityLabel(t.requested_priority)})</span> : null}</dd>
-                <dt>Estimate</dt><dd style={{ height: "auto", minHeight: 24, flexWrap: "wrap" }}>{fmtHM(est)}{t.estimate_extension_count > 0 && <span className="mini"> · extended {t.estimate_extension_count}×{t.estimate_extended_by_name ? ` by ${t.estimate_extended_by_name}` : ""} {t.estimate_extend_reason ? `— ${t.estimate_extend_reason}` : ""}</span>}</dd>
-                <dt>Time spent</dt><dd><LiveTick active={!!running} fn={(n) => { const spent = spentAt(n); return <>{fmtHM(spent)}<span className="bar"><i style={{ width: `${est ? Math.min(100, (spent / est) * 100) : 0}%`, background: est && spent > est ? "var(--danger)" : "var(--brand)" }} /></span></>; }} /></dd>
-                {(t.time_by_user || []).length > 0 && <><dt>Time by person</dt><dd style={{ height: "auto", minHeight: 24, flexDirection: "column", alignItems: "flex-start", gap: 2 }}>{t.time_by_user.map((u) => <span key={u.user_id}>{u.user_name}{u.is_current ? <span className="mini" style={{ color: "var(--pri-regular)" }}> (current)</span> : null} — <b>{u.display}</b></span>)}</dd></>}
-                {t.today_seconds > 0 && <><dt>Today</dt><dd>{fmtHM(t.today_seconds)}</dd></>}
-                {updatesCount > 0 && <><dt>Updates</dt><dd>{updatesCount}</dd></>}
-                {t.deadline && <><dt>Deadline</dt><dd style={late ? { color: "var(--danger)", fontWeight: 800 } : undefined}>{t.deadline}{late ? " · passed" : ""}</dd></>}
-                {S.reminderIntervalMs(t) > 0 && <><dt>Reminder</dt><dd>Every {S.fmtReminder(t)}{t.last_reminder_shown ? <span className="mini"> · last {t.last_reminder_shown}</span> : null}</dd></>}
-                {t.completion_date && <><dt>Completed</dt><dd>{t.completion_date}{t.completed_by_name ? ` · ${t.completed_by_name}` : ""}</dd></>}
-                {t.coordinator_review_started_at && t.task_state === "partially_completed" && <><dt>Review started</dt><dd>{t.coordinator_review_started_at}{t.coordinator_review_started_by_name ? ` · ${t.coordinator_review_started_by_name}` : ""}</dd></>}
-                {t.approval_date && <><dt>Approved</dt><dd>{t.approval_date}{t.approved_by_name ? ` · ${t.approved_by_name}` : ""}</dd></>}
-                {meta.points != null && <><dt>Points</dt><dd>{meta.points}</dd></>}
-              </dl>
-
-              {/* meta.checklist is the task's plain-text checklist field, not a list. */}
-              {String(meta.checklist || "").trim() && <div className="sec"><h3>Checklist</h3><p style={{ whiteSpace: "pre-wrap" }}>{meta.checklist}</p></div>}
-              {info && <ExtraDetails info={info} />}
-
-              <div className="tabs" role="tablist">
-                {[["updates", `Updates${teamProgress.length ? ` · ${teamProgress.length}` : ""}`], ["files", `Files${fileCount ? ` · ${fileCount}` : ""}`], ...(showClient ? [["client", "Client"]] : []), ["chat", chatWaiting ? `💬 Chat · ${chatWaiting} waiting` : "💬 Chat"], ["history", "History"]].map(([k, l]) => (
-                  <span key={k} role="tab" className={tab === k ? "on" : ""} onClick={() => setTab(k)} style={{ cursor: "pointer" }}>{l}</span>
+            <div className="tp-body">
+              {/* Every section one click away; the red number on Chat is how many
+                  client messages are waiting for the team. */}
+              <nav className="tp-rail" role="tablist" aria-label="Task sections">
+                {[
+                  ["overview", "Overview", "info", 0],
+                  ["chat", "Chat", "chat", chatWaiting, true],
+                  ...(showClient ? [["client", "Client", "user", 0]] : []),
+                  ["updates", "Updates", "pen", teamProgress.length],
+                  ["files", "Files", "paperclip", fileCount],
+                  ["history", "History", "clock", 0],
+                ].map(([k, l, ic, n, urgent]) => (
+                  <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
+                    <Icon n={ic} size={20} />{l}
+                    {n > 0 && <span className={`n${urgent ? "" : " soft"}`} aria-label={urgent ? `${n} waiting` : `${n}`}>{n}</span>}
+                  </button>
                 ))}
-              </div>
+              </nav>
 
-              {tab === "updates" && (
-                <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {clientProgress.length > 0 && <ClientProgress progress={clientProgress} />}
-                  {locked ? <div className="callout" style={{ background: "var(--hover)", borderColor: "var(--border)" }}>🔒 {locked}</div>
-                    : lane !== "completed" && (started ? <ProgressComposer kpiId={id} d={d} onChanged={changed} /> : <NotStartedNote />)}
-                  {/* Questions go to the manager, never the client: the assignee (and
-                      admins) can ask; everyone on the task sees the answers. */}
-                  <ManagerQuestions key={`mq${id}`} kpiId={id} canAsk={!!(meta.is_assignee || meta.is_manager) && lane !== "completed"} />
-                  <ProgressList progress={teamProgress} onChanged={changed} />
-                  {!teamProgress.length && <span className="mini">No updates yet.</span>}
+              <div className="tp-main">
+                {tab === "overview" && (
+                  <>
+                    <div className="tp-facts">
+                      <div className="tp-fact"><small>Assignee</small><b>{t.user_name ? <><Avatar name={t.user_name} uid={t.user_id} size={20} />{t.user_name}</> : <span className="mini">Unassigned</span>}</b></div>
+                      <div className="tp-fact"><small>Client · project</small><b>{t.client_name || "—"}{(meta.kra || t.project_name) && (meta.kra || t.project_name) !== t.client_name ? ` · ${meta.kra || t.project_name}` : ""}</b></div>
+                      <div className="tp-fact"><small>Time</small><LiveTick active={!!running} fn={(n) => { const spent = spentAt(n); return <><b>{fmtHM(spent)} of {fmtHM(est)}</b><span className="bar" style={{ flex: "none" }}><i style={{ width: `${est ? Math.min(100, (spent / est) * 100) : 0}%`, background: est && spent > est ? "var(--danger)" : "var(--brand)" }} /></span></>; }} /></div>
+                      <div className="tp-fact"><small>Under task</small><b>{t.parent_ref || t.legacy_req_link ? <>{t.parent_ref}<OldDbBadge t={t} /></> : "—"}</b></div>
+                      <div className="tp-fact"><small>Type</small><b>{meta.kind || refPrefix(t.external_ref) || "Task"}{t.deliverable_type ? ` · ${S.taskDeliverableLabel(t)}` : ""}</b>{t.is_self_created && !t.admin_accepted && t.requested_doc_type ? <span className="mini">asked: {t.requested_doc_type}</span> : null}</div>
+                      <div className="tp-fact"><small>Priority</small><b style={{ color: t.priority === "urgent" ? "var(--pri-urgent)" : t.priority === "important" ? "var(--pri-important)" : "var(--pri-regular)" }}>{t.priority === "urgent" ? "▲▲ Urgent" : t.priority === "important" ? "▲ Important" : "– Regular"}</b>{t.requested_priority && t.requested_priority !== t.priority ? <span className="mini">developer asked for {S.priorityLabel(t.requested_priority)}</span> : null}</div>
+                    </div>
+
+                    {t.description && <div className="sec"><h3>About</h3><p style={{ whiteSpace: "pre-wrap" }}>{t.description}</p></div>}
+                    {clientProgress.length > 0 && <ClientProgress progress={clientProgress} />}
+                    <SendBackHistory task={t} />
+                    <FinishBox task={t} isAdmin={isAdmin(me)} canFinish={isAdmin(me) || (t && me && t.user_id === me.uid)} onChanged={changed} />
+                    <ClientWording key={`cw${id}`} kpiId={id} />
+                    {(t.request_category === "new_database" || t.request_category === "db_disconnect") && <DbHandover key={`dbh${id}`} kpiId={id} canEdit={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
+                    {String(meta.guidelines || "").trim() && <div className="sec"><h3>Guidelines</h3><p style={{ whiteSpace: "pre-wrap" }}>{meta.guidelines}</p></div>}
+                    {/* meta.checklist is the task's plain-text checklist field, not a list. */}
+                    {String(meta.checklist || "").trim() && <div className="sec"><h3>Checklist</h3><p style={{ whiteSpace: "pre-wrap" }}>{meta.checklist}</p></div>}
+                    <TaskMeetings key={`tm${id}`} kpiId={id} />
+                    <TaskTimeline key={`tl${id}`} kpiId={id} />
+
+                    {/* The rest of the facts, only those that have a value. */}
+                    {(t.estimate_extension_count > 0 || (t.time_by_user || []).length > 0 || t.today_seconds > 0 || t.deadline || S.reminderIntervalMs(t) > 0 || t.completion_date || t.approval_date || meta.points != null || (t.coordinator_review_started_at && t.task_state === "partially_completed")) && (
+                      <dl className="details">
+                        {t.estimate_extension_count > 0 && <><dt>Estimate</dt><dd>{fmtHM(est)}<span className="mini"> · extended {t.estimate_extension_count}×{t.estimate_extended_by_name ? ` by ${t.estimate_extended_by_name}` : ""} {t.estimate_extend_reason ? `— ${t.estimate_extend_reason}` : ""}</span></dd></>}
+                        {(t.time_by_user || []).length > 0 && <><dt>Time by person</dt><dd style={{ flexDirection: "column", alignItems: "flex-start", gap: 2 }}>{t.time_by_user.map((u) => <span key={u.user_id}>{u.user_name}{u.is_current ? <span className="mini" style={{ color: "var(--pri-regular)" }}> (current)</span> : null} — <b>{u.display}</b></span>)}</dd></>}
+                        {t.today_seconds > 0 && <><dt>Today</dt><dd>{fmtHM(t.today_seconds)}</dd></>}
+                        {t.deadline && <><dt>Deadline</dt><dd style={late ? { color: "var(--danger)", fontWeight: 800 } : undefined}>{t.deadline}{late ? " · passed" : ""}</dd></>}
+                        {S.reminderIntervalMs(t) > 0 && <><dt>Reminder</dt><dd>Every {S.fmtReminder(t)}{t.last_reminder_shown ? <span className="mini"> · last {t.last_reminder_shown}</span> : null}</dd></>}
+                        {t.completion_date && <><dt>Completed</dt><dd>{t.completion_date}{t.completed_by_name ? ` · ${t.completed_by_name}` : ""}</dd></>}
+                        {t.coordinator_review_started_at && t.task_state === "partially_completed" && <><dt>Review started</dt><dd>{t.coordinator_review_started_at}{t.coordinator_review_started_by_name ? ` · ${t.coordinator_review_started_by_name}` : ""}</dd></>}
+                        {t.approval_date && <><dt>Approved</dt><dd>{t.approval_date}{t.approved_by_name ? ` · ${t.approved_by_name}` : ""}</dd></>}
+                        {meta.points != null && <><dt>Points</dt><dd>{meta.points}</dd></>}
+                      </dl>
+                    )}
+                    {info && <ExtraDetails info={info} />}
+                  </>
+                )}
+                {tab === "updates" && (
+                  <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {locked ? <div className="callout" style={{ background: "var(--hover)", borderColor: "var(--border)" }}>🔒 {locked}</div>
+                      : lane !== "completed" && (started ? <ProgressComposer kpiId={id} d={d} onChanged={changed} /> : <NotStartedNote />)}
+                    {/* Questions go to the manager, never the client: the assignee (and
+                        admins) can ask; everyone on the task sees the answers. */}
+                    <ManagerQuestions key={`mq${id}`} kpiId={id} canAsk={!!(meta.is_assignee || meta.is_manager) && lane !== "completed"} />
+                    <ProgressList progress={teamProgress} onChanged={changed} />
+                    {!teamProgress.length && <span className="mini">No updates yet.</span>}
+                  </div>
+                )}
+                {tab === "files" && <FilesTab kpiId={id} d={d} canAdd={started && !locked} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
+                {tab === "client" && showClient && <ClientTab kpiId={id} res={sends} onSaved={changed} />}
+                {tab === "chat" && <ChatTab key={`chat${id}`} kpiId={id} onSeen={loadChatCount} taskRef={t?.external_ref || meta.external_ref} />}
+                {tab === "history" && <HistoryTab key={id} kpiId={id} d={d} />}
+              </div>
+            </div>
+
+            {/* Start / Pause / Complete / Add time: always in the same place. */}
+            {actions.length > 0 && (
+              <div className="tp-foot">
+                <div className="actions">
+                  {actions.map((a) => <Button key={a.key} kind={a.kind} icon={a.icon} disabled={a.disabled} title={a.reason || a.label} onClick={() => acts.run(a, t)}>{a.label}</Button>)}
                 </div>
-              )}
-              {tab === "files" && <FilesTab kpiId={id} d={d} canAdd={started && !locked} canManageGithub={!!(meta.is_manager || meta.is_assignee)} onChanged={changed} />}
-              {tab === "client" && showClient && <ClientTab kpiId={id} res={sends} onSaved={changed} />}
-              {tab === "chat" && <ChatTab key={`chat${id}`} kpiId={id} onSeen={loadChatCount} />}
-              {tab === "history" && <HistoryTab key={id} kpiId={id} d={d} />}
-            </>
-          )}
-        </div>
+                {/* A greyed-out Start reads as broken unless it says why. */}
+                {(() => { const off = actions.find((a) => a.disabled && a.reason); return off ? <span className="mini" style={{ display: "flex", alignItems: "center", gap: 5 }}><Icon n="info" size={13} />{off.reason}</span> : null; })()}
+              </div>
+            )}
+          </>
+        )}
       </aside>
       {editing && t && <EditHeadingDialog task={t} onClose={() => setEditing(false)} onSaved={changed} />}
     </>
