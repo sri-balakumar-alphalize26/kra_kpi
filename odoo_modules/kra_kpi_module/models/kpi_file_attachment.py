@@ -39,6 +39,24 @@ class KpiFileAttachment(models.Model):
         index=True,
     )
 
+    # 💬 Chat: a photo / video / audio sent with a chat message (models/kpi_chat.py).
+    # Unlike the two parents above, a chat message keeps ALL its files here.
+    chat_message_id = fields.Many2one(
+        'kpi.chat.message',
+        string='Chat Message',
+        ondelete='cascade',
+        index=True,
+    )
+
+    # ↩ Send back: the photos / videos / voice notes a client attached to show
+    # what is still wrong (models/kpi_client_sendback.py). All files live here.
+    sendback_id = fields.Many2one(
+        'kpi.client.sendback',
+        string='Client send-back',
+        ondelete='cascade',
+        index=True,
+    )
+
     # Stated rather than relied on: attachment=True is already the Binary default,
     # but this table exists to hold SEVERAL files per entry, so "the bytes live in
     # the filestore, not in this table" is the one property here worth being
@@ -52,6 +70,9 @@ class KpiFileAttachment(models.Model):
     file_name = fields.Char(string='File Name', required=True)
 
     mimetype = fields.Char(string='MIME Type')
+
+    # Bytes, so a chat bubble can say "4.1 MB" without reading the file.
+    file_size = fields.Integer(string='Size')
 
     # Upload order, so a set of screenshots reads back in the order it was picked
     # rather than by insert id.

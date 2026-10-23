@@ -113,11 +113,26 @@
                     <t t-if="len(task.description or '') &gt; 280">…</t>
                 </div>
 
-                <form id="wa-decide-form" method="POST" t-attf-action="/kpi/wa/{{token}}/decide">
+                <form id="wa-decide-form" method="POST" enctype="multipart/form-data" t-attf-action="/kpi/wa/{{token}}/decide">
                     <input class="wa-field" type="text" name="partner_name"
                            placeholder="Your name" required="required" maxlength="120"/>
                     <textarea class="wa-field" name="feedback" rows="2"
-                              placeholder="Comment (optional — required for Reject / Clarify)"></textarea>
+                              t-att-placeholder="'What is still wrong? (needed to send it back)' if is_final else 'Comment (optional — required for Reject / Clarify)'"></textarea>
+                    <!-- Send back with proof: photos, videos and a voice note that show
+                         what is still wrong (models/kpi_client_sendback.py). Only sent with Send back. -->
+                    <div t-if="is_final" id="wa-proof" style="margin:4px 0 12px;">
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <label class="wa-btn" style="background:#6c757d; flex:1; min-width:140px; text-align:center; cursor:pointer;">
+                                📷 Photo / video
+                                <input type="file" id="wa-pick" accept="image/*,video/*,audio/*" multiple="multiple" style="display:none;"/>
+                            </label>
+                            <button type="button" id="wa-mic" class="wa-btn" style="background:#6c757d; flex:1; min-width:140px;">🎤 Voice note</button>
+                        </div>
+                        <input type="file" id="wa-files" name="files" multiple="multiple" style="display:none;"/>
+                        <div id="wa-chips" class="wa-meta" style="margin-top:6px;"></div>
+                        <div id="wa-proof-err" class="wa-meta" style="display:none; color:#dc3545;"></div>
+                        <div class="wa-meta" style="margin-top:4px;">Optional: show the problem with photos, a screen video or a voice note (up to 10 files, 50 MB each). They go with <b>Send back</b> only.</div>
+                    </div>
 
                     <div class="wa-grid">
                         <button class="wa-btn" type="submit" name="action" value="approve"
@@ -151,13 +166,94 @@
                         f.querySelectorAll('button[name=action]').forEach(function (b) {
                             b.addEventListener('click', function () { by = b.value; });
                         });
+                        // 📎 Proof: picked files and recorded voice notes are kept in one list and
+                        // copied into the hidden `files` input just before a Send back is posted.
+                        var proof = [], MAX_FILES = 10, MAX_BYTES = 50 * 1024 * 1024;
+                        var pick = document.getElementById('wa-pick'), mic = document.getElementById('wa-mic'),
+                            hidden = document.getElementById('wa-files'), chips = document.getElementById('wa-chips'),
+                            perr = document.getElementById('wa-proof-err');
+                        function size(n) { return n &lt; 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
+                        function say(msg) { if (perr) { perr.textContent = msg || ''; perr.style.display = msg ? 'block' : 'none'; } }
+                        function kind(file) {
+                            var t = (file.type || '').toLowerCase();
+                            if (t.indexOf('image/') === 0) { return '📷'; }
+                            if (t.indexOf('video/') === 0) { return '🎥'; }
+                            if (t.indexOf('audio/') === 0) { return '🎵'; }
+                            return '';
+                        }
+                        function add(file) {
+                            if (!kind(file)) { say('"' + file.name + '" is not a photo, video or audio.'); return; }
+                            if (file.size &gt; MAX_BYTES) { say('"' + file.name + '" is ' + size(file.size) + '. The limit is 50 MB.'); return; }
+                            if (proof.length &gt;= MAX_FILES) { say('At most ' + MAX_FILES + ' files.'); return; }
+                            proof.push(file);
+                        }
+                        function draw() {
+                            if (!chips) { return; }
+                            chips.textContent = '';
+                            proof.forEach(function (file, i) {
+                                var c = document.createElement('span');
+                                c.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:#f1f3f5;border-radius:12px;padding:2px 10px;margin:2px 4px 2px 0;';
+                                c.textContent = kind(file) + ' ' + file.name + ' · ' + size(file.size) + ' ';
+                                var x = document.createElement('a'); x.href = '#'; x.textContent = '✕'; x.style.color = '#dc3545';
+                                x.addEventListener('click', function (e) { e.preventDefault(); proof.splice(i, 1); draw(); });
+                                c.appendChild(x); chips.appendChild(c);
+                            });
+                        }
+                        if (pick) {
+                            pick.addEventListener('change', function () {
+                                say('');
+                                Array.prototype.forEach.call(pick.files || [], add);
+                                pick.value = ''; draw();
+                            });
+                        }
+                        // 🎤 Tap to record, tap again to stop. Phones without MediaRecorder can
+                        // still attach a recording from their voice recorder app with 📷.
+                        var rec = null, chunks = [], started = 0;
+                        if (mic) {
+                            if (!(window.MediaRecorder &amp;&amp; navigator.mediaDevices &amp;&amp; navigator.mediaDevices.getUserMedia)) {
+                                mic.style.display = 'none';
+                            }
+                            mic.addEventListener('click', function () {
+                                if (rec &amp;&amp; rec.state === 'recording') { rec.stop(); return; }
+                                say('');
+                                navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+                                    chunks = []; started = Date.now();
+                                    rec = new MediaRecorder(stream);
+                                    rec.ondataavailable = function (e) { if (e.data &amp;&amp; e.data.size) { chunks.push(e.data); } };
+                                    rec.onstop = function () {
+                                        stream.getTracks().forEach(function (t) { t.stop(); });
+                                        mic.textContent = '🎤 Voice note'; mic.style.background = '#6c757d';
+                                        var type = rec.mimeType || 'audio/webm', secs = Math.round((Date.now() - started) / 1000);
+                                        var ext = type.indexOf('mp4') &gt; -1 ? 'm4a' : (type.indexOf('ogg') &gt; -1 ? 'ogg' : 'webm');
+                                        var name = 'Voice note ' + (proof.length + 1) + ' (' + Math.floor(secs / 60) + 'm' + ('0' + secs % 60).slice(-2) + 's).' + ext;
+                                        add(new File(chunks, name, { type: type.split(';')[0] }));
+                                        draw();
+                                    };
+                                    rec.start();
+                                    mic.textContent = '⏹ Stop recording'; mic.style.background = '#dc3545';
+                                }).catch(function () { say('The microphone could not be opened. Allow it in your browser, or attach a recording with 📷.'); });
+                            });
+                        }
                         f.addEventListener('submit', function (e) {
                             var fb = f.querySelector('[name=feedback]');
                             if ((by === 'reject' || by === 'clarify') &amp;&amp; fb.value.trim().length &lt; 3) {
                                 e.preventDefault();
                                 document.getElementById('wa-need-reason').style.display = 'block';
                                 fb.focus();
+                                return;
                             }
+                            if (rec &amp;&amp; rec.state === 'recording') {
+                                e.preventDefault(); say('Stop the recording first (⏹), then tap Send back.'); return;
+                            }
+                            if (hidden) {
+                                var dt = new DataTransfer();
+                                if (by === 'reject') { proof.forEach(function (file) { dt.items.add(file); }); }
+                                hidden.files = dt.files;
+                            }
+                            f.querySelectorAll('button[name=action]').forEach(function (b) { b.disabled = true; });
+                            // A disabled submit button is not posted: carry the action ourselves.
+                            var a = document.createElement('input'); a.type = 'hidden'; a.name = 'action'; a.value = by || '';
+                            f.appendChild(a);
                         });
                     })();
                 </script>

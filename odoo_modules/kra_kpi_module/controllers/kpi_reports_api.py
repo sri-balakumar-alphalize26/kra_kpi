@@ -6047,7 +6047,8 @@ class KpiReportsAPI(http.Controller):
                                      order='scheduled_start asc'):
                     meetings.append({'id': m.id, 'time': local(m.scheduled_start), 'name': m.name or '',
                                      'state': dict(Meet._fields['state'].selection).get(m.state, m.state),
-                                     'join_url': m.join_url or ''})
+                                     # Our page (Odoo name, number check), never the raw room.
+                                     'join_url': m.page_url() if m.join_url else ''})
 
             # ---- attendance, last 30 days ----
             try:
@@ -7253,12 +7254,24 @@ class KpiReportsAPI(http.Controller):
             # swallowed by the except below, so the client got a silent no-op and the task
             # sat in the queue forever. record_client_final_decision is the stage-2 path
             # (the same one WhatsApp uses); it walks the state back to 'rework' itself.
+            # 📎 Proof (photos / videos / voice notes) as base64 JSON:
+            # [{name, data_b64, mimetype}] -- the Odoo client dashboard's shape.
+            import base64 as _b64
+            files = []
+            for a in (params.get('attachments') or []):
+                raw = a.get('data_b64') or a.get('data') or ''
+                if ',' in raw[:80] and raw.startswith('data:'):
+                    raw = raw.split(',', 1)[1]
+                if raw:
+                    files.append((a.get('name') or 'file', _b64.b64decode(raw), a.get('mimetype') or ''))
             res = kpi.record_client_final_decision(
                 'reject',
                 partner_name=request.env.user.name or '',
                 feedback=reason,
                 source='web',
                 partner_id=request.env.user.partner_id.id or None,
+                files=files,
+                sendback_source=params.get('source') if params.get('source') in ('odoo', 'web', 'app') else 'odoo',
             ) or {}
             # That method returns a STRING status ('ok' | 'invalid' | 'expired' |
             # 'already_decided'). Both OWL callers test `if (!r.status)`, and every one of
@@ -7272,6 +7285,41 @@ class KpiReportsAPI(http.Controller):
             import logging
             logging.getLogger(__name__).error(f"submit_client_rejection: {str(e)}")
             return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_client_approval/reject_files', type='http', auth='user', methods=['POST'], csrf=False)
+    def submit_client_rejection_files(self, **params):
+        """↩ Send back with proof, multipart (web portal, app): `kpi_id`,
+        `reason`, `source` and the files as repeated `files`. Same answer as
+        /kpi_client_approval/reject, as plain JSON."""
+        from odoo.exceptions import UserError
+        from .kpi_client_chat import chat_upload_files
+
+        def out(d):
+            return request.make_json_response(d)
+        try:
+            kpi = request.env['kra.kpi'].sudo().browse(int(params.get('kpi_id') or 0))
+            if not kpi.exists():
+                return out({'status': False, 'message': 'Task not found.'})
+            if not self._is_client_authorized_for_kpi(kpi):
+                return out({'status': False, 'message': 'You are not authorized.'})
+            reason = (params.get('reason') or '').strip()
+            if len(reason) < 3:
+                return out({'status': False, 'message': 'Please write what is still wrong, so the developer knows what to fix.'})
+            src = params.get('source') if params.get('source') in ('odoo', 'web', 'app') else 'web'
+            res = kpi.record_client_final_decision(
+                'reject', partner_name=request.env.user.name or '', feedback=reason, source='web',
+                partner_id=request.env.user.partner_id.id or None,
+                files=chat_upload_files(), sendback_source=src) or {}
+            ok = res.get('status') == 'ok'
+            return out({'status': ok,
+                        'message': res.get('message') or ('' if ok else 'Could not record your rejection.'),
+                        'state': res.get('state') or kpi.task_state})
+        except UserError as e:
+            return out({'status': False, 'message': str(e)})
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"submit_client_rejection_files: {str(e)}")
+            return out({'status': False, 'message': str(e)})
 
     @http.route('/kpi_completion_cert/set_version', type='json', auth='user', methods=['POST'], csrf=False)
     def set_kpi_delivery_version(self, **params):
