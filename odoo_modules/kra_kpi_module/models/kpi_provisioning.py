@@ -202,19 +202,15 @@ class KraKpiProvisioning(models.Model):
         """
         for rec in self:
             try:
-                if (rec.request_category == 'new_database'
-                        and rec.provision_progress < len(PROVISION_FIELDS)):
-                    raise ValidationError(_(
-                        'Tick all %(total)s provisioning steps first — '
-                        '%(done)s done.') % {
-                            'total': len(PROVISION_FIELDS),
-                            'done': rec.provision_progress})
-                if rec.request_category == 'new_database' and not (
+                # A database task (new database, destroy, or type Database)
+                # needs the four details -- the setup steps are an optional
+                # checklist, and no manual or summary is asked.
+                if rec._is_db_task() and not (
                         rec.provision_url and rec.provision_db_name
                         and rec.sudo().provision_username and rec.sudo().provision_password):
                     raise ValidationError(_(
-                        'Fill in the handover first: database URL, database '
-                        'name, user ID and password.'))
+                        'Fill in the database details first: URL, database '
+                        'name, username and password.'))
             except ValidationError:
                 raise
             except Exception:

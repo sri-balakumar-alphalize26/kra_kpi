@@ -1053,6 +1053,8 @@ class KpiWaStaffTask(models.AbstractModel):
             [('kpi_id', '=', task.id), ('from_client', '=', True)]))
         summary_item = ("a summary of what you did (the client's files don't count)" if client_only
                         else 'a summary of what you did')
+        if no_summary and task._is_db_task():
+            no_summary = False                      # a database task: summary optional
         if partial and no_summary:
             return False, ("The client's files don't count as your summary — write what you did."
                            if client_only else 'Write a summary of what you did — this is what your manager reads.')
@@ -1064,11 +1066,11 @@ class KpiWaStaffTask(models.AbstractModel):
             if no_summary:
                 missing.append(summary_item)
             if not files and task._manual_required_refusal():
-                missing.append('the user manual (PDF, DOC or DOCX)')
+                missing.append('the user manual (PDF, DOC or DOCX, or a manual link in KPI details)')
             if not (gh_url or '').strip() and task._github_required_refusal():
                 missing.append('the GitHub link + branch (this is a Module / App task)')
-            if not any(checklist.values()):
-                missing.append('at least one ticked checkbox')
+            # The rest this task's type asks for (app link, database details).
+            missing += task._completion_missing(skip=('summary', 'manual', 'github'))
             if missing:
                 return False, ('Before completing, you still need: %s. Or use Partial finish to send a '
                                'summary only.' % '; '.join(missing))
@@ -1087,7 +1089,7 @@ class KpiWaStaffTask(models.AbstractModel):
                     if not ok:
                         raise _Refused(msg)
                 if not partial:
-                    refused = task._manual_required_refusal() or task._github_required_refusal()
+                    refused = task._completion_refusal()
                     if refused:
                         raise _Refused(refused)
                 task.with_user(user).sudo().complete_task(employee_checklist=checklist)
@@ -1146,8 +1148,8 @@ class KpiWaStaffTask(models.AbstractModel):
                 'Resume %s first — a task has to be started before it can be finished.')
                 % self._ref(task))
         state._reset()
-        needed = _('summary, user manual and GitHub link') if task._github_required() \
-            else _('summary and user manual')
+        needed = ', '.join(r['label'] for r in task._completion_rules() if r['required']) \
+            or _('nothing more')
         self._send_page_link(message, state, user, task, group_note=_(
             '⏳ %(ref)s is not completed yet, %(who)s. Open the link in your private chat, fill in '
             'the mandatory items (%(needed)s), tick the checkboxes, then tap '
@@ -1203,7 +1205,8 @@ class KpiWaStaffTask(models.AbstractModel):
     def _done_finish(self, message, state, user, task, ticked, partial=False):
         """/kra_kpi/task/complete, rule for rule."""
         Progress = self.env['kpi.progress'].sudo()
-        if not Progress.search_count([('kpi_id', '=', task.id), ('from_client', '=', False)]):
+        if not task._is_db_task() and not Progress.search_count(
+                [('kpi_id', '=', task.id), ('from_client', '=', False)]):
             if Progress.search_count([('kpi_id', '=', task.id), ('from_client', '=', True)]):
                 return self._back_to_task(message, state, task, _(
                     "The client's files don't count as your summary — add your own progress update "
@@ -1211,9 +1214,7 @@ class KpiWaStaffTask(models.AbstractModel):
             return self._back_to_task(message, state, task, _(
                 'Please submit a Progress Summary before completing this task.'))
         checklist = {} if partial else {k: (k in ticked) for k, _l in CHECKLIST}
-        if not partial and not any(checklist.values()):
-            return self._done_checklist(message, state, user, task, True)
-        if not partial and (task._manual_required_refusal() or task._github_required_refusal()):
+        if not partial and task._completion_missing():
             # A manual / GitHub link is added on the page: send them there.
             return self._done_begin(message, state, user, task)
         return self._staff_run(message, state, user, task, 'complete',

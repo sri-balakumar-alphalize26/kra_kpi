@@ -1692,16 +1692,81 @@ class KpiWorkflow(models.Model):
                            '— or use Partial Finish to send a summary only.')
 
     def _manual_required_refusal(self):
-        """A full Complete needs a user manual on the task; Partial Finish does not.
-
-        One manual already uploaded is enough. Every Complete caller asks this
-        (the /kra_kpi/task/complete route the board, web and app use, and the
-        WhatsApp page and chat), so the rule reads the same everywhere. Returns
-        the message to show, or False."""
+        """A full Complete of a Module / App task needs a user manual: a file
+        (never a photo from Upload Requirements) or a manual link. Other types
+        never ask. Partial Finish never asks. Returns the message, or False."""
         self.ensure_one()
-        if self.env['kpi.user.manual'].sudo().search_count([('kpi_id', '=', self.id)]):
+        rule = self._completion_rule('manual')
+        return self.MANUAL_REQUIRED_MSG if (rule and rule['required'] and not rule['done']) else False
+
+    # ------------------------------------------------------------------
+    # What Complete needs, by task type. ONE list for the Odoo page, the web
+    # app, the WhatsApp page and chat, and the old text commands:
+    #   database task (new database / destroy / type Database): URL, database
+    #     name, username, password -- summary optional, nothing else;
+    #   bug fix: summary;  app: summary, app link, user manual, GitHub;
+    #   module: summary, user manual, GitHub;  website: summary (+ website URL,
+    #   optional);  other / EXE / update: summary.
+    # Several types on one task: everything each asks for.
+    def _is_db_task(self):
+        self.ensure_one()
+        return (self.request_category in ('new_database', 'db_disconnect')
+                or 'database' in (self.deliverable_type or '').split(','))
+
+    def _is_bug_task(self):
+        self.ensure_one()
+        return (self.name or '').startswith('[Bug]') or (self.external_ref or '').upper().startswith('BUG')
+
+    def _completion_rules(self):
+        """[{key, label, required, done}] for this task's Complete step."""
+        self.ensure_one()
+        me = self.sudo()
+        rules = []
+
+        def add(key, label, required, done):
+            rules.append({'key': key, 'label': label, 'required': bool(required), 'done': bool(done)})
+
+        has_summary = bool(self.env['kpi.progress'].sudo().search_count(
+            [('kpi_id', '=', self.id), ('from_client', '=', False)]))
+        if self._is_db_task():
+            add('summary', _('Progress summary'), False, has_summary)
+            add('db_url', _('URL'), True, me.provision_url)
+            add('db_name', _('Database name'), True, me.provision_db_name)
+            add('db_user', _('Username'), True, me.provision_username)
+            add('db_password', _('Password'), True, me.provision_password)
+            return rules
+        add('summary', _('Progress summary'), True, has_summary)
+        if self._is_bug_task():
+            return rules
+        types = set((self.deliverable_type or '').split(','))
+        if 'app' in types:
+            add('app_link', _('App link'), True, me.app_link)
+        if types & {'module', 'app'}:
+            add('manual', _('User manual'), True,
+                me.user_manual_url or self.env['kpi.user.manual'].sudo().search_count(
+                    [('kpi_id', '=', self.id), ('is_intake_media', '=', False)]))
+            add('github', _('GitHub link'), True,
+                self.env['kpi.github.link'].sudo().search_count([('kpi_id', '=', self.id)]))
+        if 'website' in types:
+            add('website_url', _('Website URL'), False, me.website_url)
+        return rules
+
+    def _completion_rule(self, key):
+        return next((r for r in self._completion_rules() if r['key'] == key), None)
+
+    def _completion_missing(self, skip=()):
+        """Labels of what a full Complete still needs (required and not done)."""
+        self.ensure_one()
+        return [r['label'] for r in self._completion_rules()
+                if r['required'] and not r['done'] and r['key'] not in skip]
+
+    def _completion_refusal(self, skip=()):
+        """The message for a full Complete that is missing something, else False."""
+        missing = self._completion_missing(skip=skip)
+        if not missing:
             return False
-        return self.MANUAL_REQUIRED_MSG
+        return _('Before completing %(ref)s, add: %(what)s. Or use Partial Finish to send a summary only.') % {
+            'ref': self.external_ref or self.name, 'what': ', '.join(missing)}
 
     GITHUB_REQUIRED_MSG = ('This is a Module / App task — add the GitHub link (repository + branch) '
                            'before completing, or use Partial Finish to send a summary only.')
@@ -1713,14 +1778,11 @@ class KpiWorkflow(models.Model):
 
     def _github_required_refusal(self):
         """A full Complete of a Module / App task needs a GitHub link on it (one
-        already added counts). Any other type: optional. Partial Finish never
-        asks. Returns the message to show, or False."""
+        already added counts). A bug fix or any other type: optional. Partial
+        Finish never asks. Returns the message to show, or False."""
         self.ensure_one()
-        if not self._github_required():
-            return False
-        if self.env['kpi.github.link'].sudo().search_count([('kpi_id', '=', self.id)]):
-            return False
-        return self.GITHUB_REQUIRED_MSG
+        rule = self._completion_rule('github')
+        return self.GITHUB_REQUIRED_MSG if (rule and rule['required'] and not rule['done']) else False
 
     def complete_task(self, employee_checklist=None):
         result = super().complete_task(employee_checklist=employee_checklist)

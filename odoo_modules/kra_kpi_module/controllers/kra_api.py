@@ -918,6 +918,25 @@ class KraKpiAPI(http.Controller):
         if refused:
             return refused
 
+        # What the Complete form brings with it, saved first (and checked: links
+        # must be http/https) so the form fills and completes in one tap.
+        vals = {}
+        for key in ('app_link', 'user_manual_url', 'website_url'):
+            if key in params:
+                vals[key] = (params.get(key) or '').strip() or False
+        db_vals = {f: (params.get(f) or '').strip() for f in
+                   ('provision_url', 'provision_db_name', 'provision_username', 'provision_password')
+                   if f in params}
+        if db_vals.get('provision_url') and not db_vals['provision_url'].lower().startswith(('http://', 'https://')):
+            return {'status': False, 'message': 'The database URL must start with http:// or https://'}
+        try:
+            if vals:
+                rec.write(vals)
+            if db_vals:
+                rec.write({k: (v or False) for k, v in db_vals.items()})
+        except Exception as e:
+            return {'status': False, 'message': str(e).strip()[:300]}
+
         # 🆕 Part B guard — a task can only be completed after a Progress Summary
         # has been recorded. Keeps both "Complete" and "Partial Finish" honest and
         # always leaves the reviewer something to read.
@@ -925,7 +944,8 @@ class KraKpiAPI(http.Controller):
         Progress = request.env['kpi.progress'].sudo()
         has_summary = Progress.search_count(
             [('kpi_id', '=', rec.id), ('from_client', '=', False)]) > 0
-        if not has_summary:
+        # A database task completes on its four details; the summary is optional.
+        if not has_summary and not rec._is_db_task():
             # Say plainly why, when the only "update" is the client's attachment.
             if Progress.search_count([('kpi_id', '=', rec.id), ('from_client', '=', True)]):
                 return {'status': False,
@@ -946,20 +966,19 @@ class KraKpiAPI(http.Controller):
         # Kept as a server check and not left to the button: the board is not the
         # only caller, and 'no boxes at all' is what Partial Finish is for.
         if not is_partial:
-            required = ('verify_github', 'deployed_task', 'user_manual', 'documentation', 'tested_code')
-            if not any(employee_checklist.get(k) for k in required):
-                return {'status': False,
-                        'message': 'Confirm at least one checklist item before completing '
-                                   '(or use "Partial Finish" to send a summary only).'}
-            # The manual box above stays a statement, but a full Complete now also
-            # needs a real manual on the task (one already uploaded counts).
-            # Partial Finish is the way through for work without one.
-            refused = rec._manual_required_refusal()
+            # What this task's type needs (kpi_workflow._completion_rules): the
+            # checklist ticks itself from what is on the task, so a box nobody
+            # could honestly tick no longer blocks anyone.
+            refused = rec._completion_refusal()
             if refused:
-                return {'status': False, 'message': refused, 'manual_required': True}
-            refused = rec._github_required_refusal()
-            if refused:
-                return {'status': False, 'message': refused, 'github_required': True}
+                return {'status': False, 'message': refused,
+                        'missing': rec._completion_missing(), 'rules': rec._completion_rules(),
+                        'manual_required': bool(rec._manual_required_refusal()),
+                        'github_required': bool(rec._github_required_refusal())}
+            done = {r['key'] for r in rec._completion_rules() if r['done']}
+            employee_checklist = dict(employee_checklist,
+                                      user_manual=employee_checklist.get('user_manual') or 'manual' in done,
+                                      verify_github=employee_checklist.get('verify_github') or 'github' in done)
 
         rec.complete_task(employee_checklist)
 
@@ -1811,6 +1830,8 @@ class KraKpiAPI(http.Controller):
                 # must be workable AND you must be the assignee or a manager.
                 'can_complete': (kpi.task_state in ('in_progress', 'paused', 'hold', 'rework')
                                  and (is_assignee or is_admin)),
+                # What Complete needs for this task's type, and what it already has.
+                **self._complete_extras(kpi),
             },
             'manuals': [{
                 'id': m.id,
@@ -3955,9 +3976,9 @@ class KraKpiAPI(http.Controller):
 
     @http.route('/kpi_action/history', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_action_history(self, **params):
-        """KPI Details › History: everything on one task in one list -- client
-        chat, questions to the manager, progress, meetings, GitHub, manuals and
-        the activity trail. Times are UTC ('YYYY-MM-DD HH:MM:SS'); the page
+        """KPI Details › History: the work on one task in one list -- questions
+        to the manager, progress, meetings, GitHub, manuals and the activity
+        trail. Client chat stays in the Chat tab. Times are UTC ('YYYY-MM-DD HH:MM:SS'); the page
         groups them by day in the viewer's time zone."""
         try:
             kpi = request.env['kra.kpi'].sudo().with_context(active_test=False).browse(
@@ -3976,27 +3997,7 @@ class KraKpiAPI(http.Controller):
                     out.append({'kind': kind, 'at': stamp(at), 'title': title or '', 'body': (body or '')[:600],
                                 'who': who or '', 'badge': badge or '', 'key': key})
 
-            # Client chat: one item per talk (a back-and-forth), grouped exactly as
-            # Client Talks › Discussions groups it (kpi_talks_api.talks_thread).
-            from .kpi_talks_api import KpiTalksApi
-            thread = KpiTalksApi().talks_thread(kpi_id=kpi.id)
-            if thread.get('status'):
-                sent = {r['id']: r['create_date'] for r in env['kpi.chat.message'].sudo().search_read(
-                    [('kpi_id', '=', kpi.id)], ['create_date'])}
-                for day in thread.get('days') or []:
-                    for s in day.get('sessions') or []:
-                        msgs = s.get('messages') or []
-                        last = max((sent[x['id']] for x in msgs if sent.get(x['id'])), default=None)
-                        if not last:
-                            continue
-                        status = s.get('status')
-                        badge = ('● waiting' if status == 'waiting' else
-                                 ('✓ answered' + (' by %s' % s['by'] if s.get('by') else '')) if status == 'answered'
-                                 else '')
-                        span = s['start'] if s.get('end') == s.get('start') else '%s – %s' % (s['start'], s['end'])
-                        out.append({'kind': 'talk', 'at': stamp(last), 'title': 'Talk %d · %s' % (s['n'], span),
-                                    'body': '', 'who': '', 'badge': badge, 'count': len(msgs), 'messages': msgs,
-                                    'key': 't%s-%d' % (day.get('date'), s['n'])})
+            # Client chat is not listed here: it lives in the Chat tab (by date, scroll up for older).
             for d in env['kpi.doubt'].sudo().search([('kpi_id', '=', kpi.id), ('kind', '!=', 'client_msg')],
                                                     order='id desc', limit=100):
                 label = dict(d._fields['kind'].selection).get(d.kind, d.kind)
@@ -4150,6 +4151,19 @@ class KraKpiAPI(http.Controller):
             return request.not_found()
         return chat_file_response(kpi, att_id)
 
+    def _complete_extras(self, kpi):
+        """The Complete checklist for this task's type (kpi_workflow._completion_rules),
+        the links it can carry, and -- for a database task -- the four database
+        details (these screens are team-only; the password stays masked on screen)."""
+        k = kpi.sudo()
+        out = {'completion_rules': k._completion_rules(), 'is_db_task': k._is_db_task(),
+               'app_link': k.app_link or '', 'user_manual_url': k.user_manual_url or '',
+               'website_url': k.website_url or ''}
+        if out['is_db_task']:
+            out['db_details'] = {'url': k.provision_url or '', 'db_name': k.provision_db_name or '',
+                                 'username': k.provision_username or '', 'password': k.provision_password or ''}
+        return out
+
     @http.route('/kpi_action/details', type='json', auth='user')
     def get_kpi_action_details(self, id):
         kpi = request.env['kra.kpi'].sudo().browse(int(id))
@@ -4222,6 +4236,7 @@ class KraKpiAPI(http.Controller):
             "deliverable_other": kpi.deliverable_other or "",
             "deliverable_label": deliverable_type_label(kpi.deliverable_type, kpi.deliverable_other),
             "github_required": kpi._github_required(),
+            **self._complete_extras(kpi),
             "external_ref": kpi.external_ref or "",
             "is_manager": is_manager,
             # 🆕 Part B: gate the in-detail "Complete This Task" panel
