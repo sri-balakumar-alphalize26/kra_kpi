@@ -451,5 +451,242 @@
             </t>
         </template>
 
+
+        <!-- ============================================================
+             Final sign-off (task awaiting_client): the same look as the
+             client's Requirement / Update / Bug form (wa_task_layout), whose
+             viewer.js opens the team's photos, videos and PDFs on the page.
+             The link has no timer; it ends when the client acts.
+             ============================================================ -->
+        <template id="wa_signoff_page" name="WA Client Sign-off">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'Check and sign off · %s' % (task.external_ref or task.name or '')"/>
+                <style>
+                    .chips { display:flex; flex-wrap:wrap; gap:6px; }
+                    .chip { padding:3px 10px; border-radius:999px; background:var(--input); border:1px solid var(--border);
+                            font-size:12px; font-weight:700; color:var(--subtle); }
+                    .chip.ok { background:var(--ok-bg); color:var(--ok); border-color:transparent; }
+                    .chip.part { background:#FEF3C7; color:#92400E; border-color:transparent; }
+                    .part { background:#FFFBEB; border:1px solid #FDE68A; border-radius:var(--r); padding:10px 12px; }
+                    .part b { color:#92400E; display:block; margin-bottom:4px; }
+                    .desc { background:var(--input); border-radius:var(--r); padding:10px 12px; white-space:pre-wrap; }
+                    .thumbs { display:grid; grid-template-columns:repeat(auto-fill, minmax(92px, 1fr)); gap:8px; }
+                    .thumb { position:relative; aspect-ratio:1; border-radius:var(--r); overflow:hidden; background:var(--input);
+                             border:1px solid var(--border); display:block; cursor:pointer; }
+                    .thumb img, .thumb video { width:100%; height:100%; object-fit:cover; display:block; }
+                    .thumb .play { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+                                   font-size:28px; color:#fff; text-shadow:0 1px 6px rgba(0,0,0,.6); pointer-events:none; }
+                    .thumb .nm { position:absolute; left:0; right:0; bottom:0; padding:2px 6px; font-size:11px; color:#fff;
+                                 background:linear-gradient(transparent, rgba(0,0,0,.65)); white-space:nowrap;
+                                 overflow:hidden; text-overflow:ellipsis; }
+                    .thumb .x { position:absolute; top:4px; right:4px; width:24px; height:24px; border-radius:50%; border:0;
+                                background:rgba(0,0,0,.6); color:#fff; cursor:pointer; }
+                    .doc { display:flex; align-items:center; gap:8px; padding:9px 12px; border:1px solid var(--border);
+                           border-radius:var(--r); color:var(--text); text-decoration:none; font-weight:600; }
+                    .doc:hover { background:var(--hover); }
+                    .proof-btns { display:flex; gap:8px; flex-wrap:wrap; }
+                    .btn.sm { min-height:36px; padding:0 14px; font-size:13px; display:inline-flex; align-items:center; gap:6px; }
+                    .btn.ok { background:var(--ok); color:#fff; }
+                    .btn.back { background:#fff; color:var(--danger); border-color:var(--danger); }
+                    .ft { flex-wrap:wrap; }
+                    .ft .btn { flex:1 1 140px; }
+                    .aud { display:flex; align-items:center; gap:8px; background:var(--input); border-radius:var(--r); padding:6px 8px; }
+                    .aud audio { flex:1; min-width:0; height:36px; }
+                    .aud button { border:0; background:none; color:var(--danger); cursor:pointer; }
+                    .wa-view { position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.92); display:none;
+                               align-items:center; justify-content:center; padding:16px; }
+                    .wa-view.on { display:flex; }
+                    .wa-view img, .wa-view video { max-width:100%; max-height:100%; border-radius:8px; }
+                    .wa-view .close { position:absolute; top:12px; right:14px; width:40px; height:40px; border-radius:50%;
+                                      border:0; background:rgba(255,255,255,.15); color:#fff; font-size:20px; cursor:pointer; }
+                </style>
+                <div class="hd"><t t-esc="task.name or 'Task'"/>
+                    <small><t t-esc="task.external_ref or ''"/><t t-if="task.kra_id"> · <t t-esc="task.kra_id.name"/></t></small>
+                </div>
+                <form id="so-form" method="POST" enctype="multipart/form-data" t-attf-action="/kpi/wa/{{token}}/decide">
+                    <div class="bd">
+                        <div class="chips">
+                            <span t-if="partial" class="chip part">🏁 Partially completed</span>
+                            <span t-else="" class="chip ok">✅ Ready for your sign-off</span>
+                            <span class="chip">Deadline: <t t-esc="task.deadline or 'not set'"/></span>
+                            <span t-if="task.estimate_hours or task.estimate_minutes" class="chip">Estimate:
+                                <t t-esc="task.estimate_hours or 0"/>h <t t-esc="task.estimate_minutes or 0"/>m</span>
+                        </div>
+                        <p class="mini">
+                            <t t-if="partial">Our team has finished part of this — what was done is below.</t>
+                            <t t-else="">Our team has finished this.</t>
+                            Please check it, then tap <b>Finished</b>, or <b>Send back</b> with what is still wrong.
+                        </p>
+                        <div t-if="partial" class="part">
+                            <b>🏁 What we did so far<t t-if="partial_n &gt; 1"> · round <t t-esc="partial_n"/></t></b>
+                            <t t-esc="partial_summary or 'The team sent this as a partial finish.'"/>
+                        </div>
+                        <div t-if="task.description" class="field"><span class="lbl">The request</span>
+                            <div class="desc"><t t-esc="task.description"/></div></div>
+                        <div t-if="team_files" class="field">
+                            <span class="lbl">📎 From our team (<t t-esc="len(team_files)"/>) — tap to open</span>
+                            <t t-set="media" t-value="[f for f in team_files if f['kind'] in ('image', 'video')]"/>
+                            <div t-if="media" class="thumbs">
+                                <t t-foreach="media" t-as="f">
+                                    <a class="thumb" t-att-href="f['url']" t-att-data-name="f['name']" t-att-title="f['name']">
+                                        <img t-if="f['kind'] == 'image'" t-att-src="f['url']" t-att-alt="f['name']" loading="lazy"/>
+                                        <t t-else="">
+                                            <video t-att-src="f['url'] + '#t=0.1'" preload="metadata" muted="muted" playsinline="playsinline"/>
+                                            <span class="play">▶</span>
+                                        </t>
+                                        <span class="nm" t-esc="f['name']"/>
+                                    </a>
+                                </t>
+                            </div>
+                            <t t-foreach="[f for f in team_files if f['kind'] not in ('image', 'video')]" t-as="f">
+                                <a class="doc" t-att-href="f['url']" t-att-data-name="f['name']">
+                                    <t t-esc="'🎵' if f['kind'] == 'audio' else '📄'"/> <t t-esc="f['name']"/></a>
+                            </t>
+                        </div>
+                        <div class="field"><span class="lbl">Your name <span class="req">*</span></span>
+                            <input class="input" type="text" name="partner_name" required="required" maxlength="120"/></div>
+                        <div class="field"><span class="lbl">What is still wrong, or your question</span>
+                            <textarea name="feedback" placeholder="Needed to send it back or to ask a question"/>
+                            <span id="so-need" class="err" style="display:none;">Write what is still wrong (or your question) here first.</span></div>
+                        <div class="field"><span class="lbl">Show the problem (optional)</span>
+                            <div class="proof-btns">
+                                <label class="btn ghost sm">📷 Photo / video
+                                    <input type="file" id="so-pick" accept="image/*,video/*,audio/*" multiple="multiple" style="display:none;"/></label>
+                                <button type="button" id="so-mic" class="btn ghost sm">🎤 Voice note</button>
+                            </div>
+                            <input type="file" id="so-files" name="files" multiple="multiple" style="display:none;"/>
+                            <div id="so-chips"/>
+                            <span id="so-err" class="err" style="display:none;"/>
+                            <span class="hint">Up to 10 files, 50 MB each. They go with Send back only.</span></div>
+                    </div>
+                    <div class="ft">
+                        <button class="btn ok" type="submit" name="action" value="approve">✓ Finished</button>
+                        <button class="btn back" type="submit" name="action" value="reject">↩ Send back</button>
+                        <button class="btn ghost" type="submit" name="action" value="clarify">💬 Ask a question</button>
+                    </div>
+                </form>
+                <div id="so-view" class="wa-view" role="dialog" aria-modal="true">
+                    <button type="button" class="close" aria-label="Close">✕</button>
+                    <div class="body"/>
+                </div>
+                <script>
+                    (function () {
+                        var f = document.getElementById('so-form');
+                        if (!f) { return; }
+                        var by = null;
+                        f.querySelectorAll('button[name=action]').forEach(function (b) {
+                            b.addEventListener('click', function () { by = b.value; });
+                        });
+                        var proof = [], urls = [], MAX_FILES = 10, MAX_BYTES = 50 * 1024 * 1024;
+                        var pick = document.getElementById('so-pick'), mic = document.getElementById('so-mic'),
+                            hidden = document.getElementById('so-files'), chips = document.getElementById('so-chips'),
+                            perr = document.getElementById('so-err'), view = document.getElementById('so-view');
+                        function size(n) { return n &lt; 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
+                        function say(m) { perr.textContent = m || ''; perr.style.display = m ? 'block' : 'none'; }
+                        function kind(file) {
+                            var t = (file.type || '').toLowerCase();
+                            return t.indexOf('image/') === 0 ? 'img' : t.indexOf('video/') === 0 ? 'vid' : t.indexOf('audio/') === 0 ? 'aud' : '';
+                        }
+                        function add(file) {
+                            if (!kind(file)) { say('"' + file.name + '" is not a photo, video or audio.'); return; }
+                            if (file.size &gt; MAX_BYTES) { say('"' + file.name + '" is ' + size(file.size) + '. The limit is 50 MB.'); return; }
+                            if (proof.length &gt;= MAX_FILES) { say('At most ' + MAX_FILES + ' files.'); return; }
+                            proof.push(file);
+                        }
+                        function open(file, url) {
+                            var body = view.querySelector('.body'); body.textContent = '';
+                            var el = document.createElement(kind(file) === 'vid' ? 'video' : 'img');
+                            el.src = url;
+                            if (el.tagName === 'VIDEO') { el.controls = true; el.autoplay = true; el.playsInline = true; }
+                            body.appendChild(el); view.classList.add('on');
+                        }
+                        function shut() {
+                            var v = view.querySelector('video'); if (v) { v.pause(); }
+                            view.classList.remove('on'); view.querySelector('.body').textContent = '';
+                        }
+                        view.querySelector('.close').addEventListener('click', shut);
+                        view.addEventListener('click', function (e) { if (e.target === view) { shut(); } });
+                        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { shut(); } });
+                        function draw() {
+                            urls.forEach(function (u) { URL.revokeObjectURL(u); }); urls = [];
+                            chips.textContent = '';
+                            var grid = document.createElement('div'); grid.className = 'thumbs'; grid.style.marginTop = '8px';
+                            proof.forEach(function (file, i) {
+                                var url = URL.createObjectURL(file); urls.push(url);
+                                var drop = function (e) { e.preventDefault(); e.stopPropagation(); proof.splice(i, 1); draw(); };
+                                if (kind(file) === 'aud') {
+                                    var a = document.createElement('div'); a.className = 'aud'; a.style.marginTop = '8px';
+                                    var au = document.createElement('audio'); au.controls = true; au.src = url;
+                                    var bx = document.createElement('button'); bx.type = 'button'; bx.textContent = '✕';
+                                    bx.setAttribute('aria-label', 'Remove ' + file.name); bx.addEventListener('click', drop);
+                                    a.appendChild(au); a.appendChild(bx); chips.appendChild(a); return;
+                                }
+                                var t = document.createElement('div'); t.className = 'thumb'; t.title = file.name + ' · ' + size(file.size);
+                                var m = document.createElement(kind(file) === 'vid' ? 'video' : 'img');
+                                if (m.tagName === 'VIDEO') { m.src = url + '#t=0.1'; m.muted = true; m.preload = 'metadata'; m.playsInline = true; }
+                                else { m.src = url; m.alt = file.name; }
+                                t.appendChild(m);
+                                if (m.tagName === 'VIDEO') { var pl = document.createElement('span'); pl.className = 'play'; pl.textContent = '▶'; t.appendChild(pl); }
+                                var x = document.createElement('button'); x.type = 'button'; x.className = 'x'; x.textContent = '✕';
+                                x.setAttribute('aria-label', 'Remove ' + file.name); x.addEventListener('click', drop);
+                                t.appendChild(x);
+                                t.addEventListener('click', function () { open(file, url); });
+                                grid.appendChild(t);
+                            });
+                            if (grid.childNodes.length) { chips.insertBefore(grid, chips.firstChild); }
+                        }
+                        pick.addEventListener('change', function () {
+                            say(''); Array.prototype.forEach.call(pick.files || [], add); pick.value = ''; draw();
+                        });
+                        var rec = null, chunks = [], started = 0;
+                        if (!(window.MediaRecorder &amp;&amp; navigator.mediaDevices &amp;&amp; navigator.mediaDevices.getUserMedia)) { mic.style.display = 'none'; }
+                        mic.addEventListener('click', function () {
+                            if (rec &amp;&amp; rec.state === 'recording') { rec.stop(); return; }
+                            say('');
+                            navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+                                chunks = []; started = Date.now(); rec = new MediaRecorder(stream);
+                                rec.ondataavailable = function (e) { if (e.data &amp;&amp; e.data.size) { chunks.push(e.data); } };
+                                rec.onstop = function () {
+                                    stream.getTracks().forEach(function (t) { t.stop(); });
+                                    mic.textContent = '🎤 Voice note';
+                                    var type = rec.mimeType || 'audio/webm', secs = Math.round((Date.now() - started) / 1000);
+                                    var ext = type.indexOf('mp4') &gt; -1 ? 'm4a' : (type.indexOf('ogg') &gt; -1 ? 'ogg' : 'webm');
+                                    add(new File(chunks, 'Voice note ' + (proof.length + 1) + ' (' + secs + 's).' + ext, { type: type.split(';')[0] }));
+                                    draw();
+                                };
+                                rec.start(); mic.textContent = '⏹ Stop recording';
+                            }).catch(function () { say('The microphone could not be opened. Allow it, or attach a recording with 📷.'); });
+                        });
+                        f.addEventListener('submit', function (e) {
+                            var fb = f.querySelector('[name=feedback]');
+                            if ((by === 'reject' || by === 'clarify') &amp;&amp; fb.value.trim().length &lt; 3) {
+                                e.preventDefault(); document.getElementById('so-need').style.display = 'block'; fb.focus(); return;
+                            }
+                            if (rec &amp;&amp; rec.state === 'recording') { e.preventDefault(); say('Stop the recording first (⏹).'); return; }
+                            var dt = new DataTransfer();
+                            if (by === 'reject') { proof.forEach(function (x) { dt.items.add(x); }); }
+                            hidden.files = dt.files;
+                            f.querySelectorAll('button[name=action]').forEach(function (b) { b.disabled = true; });
+                            var a = document.createElement('input'); a.type = 'hidden'; a.name = 'action'; a.value = by || '';
+                            f.appendChild(a);
+                        });
+                    })();
+                </script>
+            </t>
+        </template>
+
+        <!-- After a tap on the sign-off page: the same card look, one message. -->
+        <template id="wa_signoff_done" name="WA Client Sign-off Done">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="title"/>
+                <div class="done">
+                    <div class="big" t-esc="icon"/>
+                    <div style="font-size:18px; font-weight:800;" t-esc="title"/>
+                    <span class="ref"><t t-esc="task.external_ref or ''"/> — <t t-esc="task.name or ''"/></span>
+                    <p style="margin-top:16px; font-weight:700;" t-esc="message"/>
+                    <p class="mini">You can close this page.</p>
+                </div>
+            </t>
+        </template>
     </data>
 </odoo>

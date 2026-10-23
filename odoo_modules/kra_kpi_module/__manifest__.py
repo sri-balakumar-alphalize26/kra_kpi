@@ -1,6 +1,6 @@
 {
     "name": "KRA/KPI Management",
-    "version": "19.0.7.99",
+    "version": "19.0.8.3",
     "author": "Your Company",   
     "category": "Human Resources",
     "summary": "KRA/KPI Master with Custom OWL UI",
@@ -31,6 +31,7 @@
         "data/kpi_auto_away_cron.xml",
         "data/kpi_decline_reasons.xml",
         "data/kpi_server_data.xml",
+        "data/kpi_server_fetch_cron.xml",
         "data/kpi_install_preset_data.xml",
         "data/kpi_db_term_data.xml",
         "data/kpi_db_disconnect_reasons.xml",
@@ -157,6 +158,7 @@
             "kra_kpi_module/static/src/components/kpi_company_settings/kpi_company_settings.js",
             "kra_kpi_module/static/src/components/kpi_configuration/kpi_configuration.js",
             "kra_kpi_module/static/src/components/kpi_billing_settings/kpi_billing_settings.js",
+            "kra_kpi_module/static/src/components/kpi_db_pick/kpi_db_pick.js",
             "kra_kpi_module/static/src/components/kpi_client_talks/kpi_client_talks.js",
             "kra_kpi_module/static/src/components/kpi_user_access/kpi_user_access.js",
             "kra_kpi_module/static/src/components/kpi_task_approval/kpi_task_approval.js",

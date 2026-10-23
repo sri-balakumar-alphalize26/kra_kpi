@@ -96,7 +96,7 @@ def _team_files(task, token):
     def add(kind, entry, att, name):
         if name:
             out.append({'name': name, 'kind': _media_kind(name),
-                        'url': '/kpi/wa/%s/media?kind=%s&entry=%s&att=%s' % (token, kind, entry.id, att)})
+                        'url': '/kpi/wa/%s/file?kind=%s&entry=%s&att=%s' % (token, kind, entry.id, att)})
 
     Att = request.env['kpi.file.attachment'].sudo()
     for p in request.env['kpi.progress'].sudo().search(
@@ -125,7 +125,9 @@ class KpiWaApproval(http.Controller):
                                   {'reason': 'Token not recognized.'})
 
         now = fields.Datetime.now()
-        if task.approval_token_expires and task.approval_token_expires < now:
+        # The sign-off link (awaiting_client) has no timer: it ends when used.
+        if (task.task_state != 'awaiting_client' and task.approval_token_expires
+                and task.approval_token_expires < now):
             return _render('kra_kpi_module.wa_approval_expired',
                                   {'reason': 'This approval link has expired.'})
 
@@ -145,7 +147,7 @@ class KpiWaApproval(http.Controller):
         stage = 'final' if task.task_state == 'awaiting_client' else 'pre'
         # A Partial Finish: the page says so and shows the team's summary.
         partial = stage == 'final' and bool(task.sudo().finish_partial)
-        return _render('kra_kpi_module.wa_approval_page', {
+        return _render('kra_kpi_module.wa_signoff_page' if stage == 'final' else 'kra_kpi_module.wa_approval_page', {
             'task':   task,
             'token':  task.approval_token,
             'colors': _ACTION_COLORS,
@@ -161,13 +163,13 @@ class KpiWaApproval(http.Controller):
     # GET /kpi/wa/<token>/media -- one of the team's files, for the       #
     # finishing page (only while the sign-off link is valid).             #
     # ------------------------------------------------------------------ #
-    @http.route('/kpi/wa/<string:token>/media', type='http', auth='public',
-                methods=['GET'], csrf=False, website=False)
+    # /file is what the shared viewer.js opens in its popup (photos, videos,
+    # audio, PDFs); /media is the 7.97 name, kept for links already out.
+    @http.route(['/kpi/wa/<string:token>/file', '/kpi/wa/<string:token>/media'], type='http',
+                auth='public', methods=['GET'], csrf=False, website=False)
     def media(self, token, kind='', entry='0', att='0', **kw):
         task = _lookup_task(token)
         if not task or task.task_state != 'awaiting_client':
-            return request.not_found()
-        if task.approval_token_expires and task.approval_token_expires < fields.Datetime.now():
             return request.not_found()
         if kind == 'progress':
             p = request.env['kpi.progress'].sudo().browse(int(entry or 0)).exists()
@@ -203,6 +205,9 @@ class KpiWaApproval(http.Controller):
         except Exception:
             ip, ua = None, None
 
+        final = task.task_state == 'awaiting_client'
+        done = lambda icon, title, msg: _render('kra_kpi_module.wa_signoff_done', {  # noqa: E731
+            'task': task, 'icon': icon, 'title': title, 'message': msg})
         try:
             if task.task_state == 'awaiting_client':
                 # Final sign-off — only approve / reject / clarify make sense
@@ -232,6 +237,9 @@ class KpiWaApproval(http.Controller):
                     user_agent=ua,
                 )
         except UserError as ue:
+            if final:
+                # Never "Link Expired" for something only our team can fix.
+                return done('⚠️', "Couldn't save", '%s' % ue)
             return _render('kra_kpi_module.wa_approval_expired',
                                   {'reason': str(ue)})
         except Exception as exc:
@@ -250,6 +258,14 @@ class KpiWaApproval(http.Controller):
                 'decision_label': _ACTION_LABELS.get(result.get('decision'), ''),
                 'decision_color': _ACTION_COLORS.get(result.get('decision'), '#6c757d'),
             })
+
+        if final:
+            return done(*{
+                'approve': ('✅', 'Thank you — finished', result.get('message') if result.get('pending_team')
+                            else 'We have your sign-off. The task is closed.'),
+                'reject': ('↩️', 'Sent back', 'The developer has your notes and will fix it.'),
+                'clarify': ('💬', 'Question sent', result.get('message') or 'Your question was sent.'),
+            }.get(action, ('✅', 'Saved', result.get('message') or '')))
 
         # status == 'ok' — render the confirmation card colored by action.
         return _render('kra_kpi_module.wa_approval_confirmed', {

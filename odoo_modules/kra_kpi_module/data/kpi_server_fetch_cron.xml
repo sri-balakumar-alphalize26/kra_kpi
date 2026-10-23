@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Daily: read each server's database list from its Odoo address, so
+             Setup > Databases is never typed by hand. New databases are added
+             with no client, gone ones archived. See models/kpi_server.py
+             _cron_fetch_databases. -->
+        <record id="ir_cron_kpi_server_fetch_databases" model="ir.cron">
+            <field name="name">KRA/KPI: Refresh database lists from the servers</field>
+            <field name="model_id" ref="model_kpi_server"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_fetch_databases()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

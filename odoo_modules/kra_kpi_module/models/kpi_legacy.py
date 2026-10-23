@@ -543,9 +543,10 @@ class KraKpiLegacy(models.Model):
                 if vals['correction_round'] > (rec.correction_round or 0):
                     rec._client_send_snapshot()
             vals = dict(vals, client_last_sent_at=fields.Datetime.now())
-        if vals.get('task_state') == 'completed':
-            blocked = self.filtered(lambda r: r.legacy_req_link and not r.is_legacy
-                                    and (r.legacy_status or 'pending') == 'pending')
+        # The developer's finish (-> partially_completed) is refused too, so a
+        # task with an unconfirmed old DB link never reaches the client.
+        if vals.get('task_state') in ('completed', 'partially_completed'):
+            blocked = self.filtered(lambda r: r._legacy_blocks_done())
             if blocked:
                 raise UserError(
                     '%s is about an old DB requirement that is still Pending. Add its Request '
@@ -554,4 +555,45 @@ class KraKpiLegacy(models.Model):
         res = super().write(vals)
         if 'external_ref' in vals:
             self._legacy_relink_children()
+        # Confirmed now, and the client had already said Finished: close it the
+        # normal way (the close messages and Full Complete follow, kpi_finish).
+        if vals.get('legacy_status') == 'confirmed':
+            for rec in self.filtered(lambda r: r.task_state == 'awaiting_client'
+                                     and r.client_final_approved and r.approval_token_used):
+                rec.sudo().write({'task_state': 'completed', 'review_close_reason': 'client'})
         return res
+
+    def _legacy_blocks_done(self):
+        self.ensure_one()
+        return bool(self.legacy_req_link and not self.is_legacy
+                    and (self.legacy_status or 'pending') == 'pending')
+
+    def record_client_final_decision(self, action, partner_name='', feedback='', source='web',
+                                     ip=None, user_agent=None, partner_id=None, **kw):
+        """The client taps ✓ Finished on a task whose old DB Request ID is not
+        confirmed yet: keep their OK (the task closes when an admin confirms,
+        see write) and tell the developer / Approval Chain -- never refuse the
+        client for something only our team can fix."""
+        if (action == 'approve' and len(self) == 1 and self.task_state == 'awaiting_client'
+                and not self.approval_token_used and self._legacy_blocks_done()):
+            now = fields.Datetime.now()
+            signer = (partner_name or '').strip()[:120] or (ip or 'WhatsApp client')
+            self.sudo().write({
+                'client_final_approved': True, 'client_signature_text': signer,
+                'client_signed_datetime': now, 'client_approval_notes': (feedback or '').strip(),
+                'approval_token_used': True, 'pre_approval_decision': 'approve',
+                'pre_approval_decided_at': now, 'pre_approval_decided_by_name': signer,
+            })
+            self._log_action('client_final_ok_waiting_legacy', source=source if source in ('web', 'whatsapp') else 'web',
+                             actor_label=signer, payload={'legacy': 'pending'})
+            users, _dev = self._finish_team_people()
+            text = ('✅ %s said *%s* — %s is finished, but its old DB Request ID is still Pending. '
+                    'Confirm it in KPI Details and the task closes.') % (signer, self._finish_ref(), self.name or '')
+            for u in users:
+                self._finish_dm(u, text)
+            return {'status': 'ok', 'state': 'awaiting_client', 'decision': 'approve',
+                    'pending_team': True,
+                    'message': 'Thanks — we have your answer. Our team has one detail to finish, then it closes.'}
+        return super().record_client_final_decision(
+            action, partner_name=partner_name, feedback=feedback, source=source,
+            ip=ip, user_agent=user_agent, partner_id=partner_id, **kw)

@@ -210,6 +210,25 @@ class KpiClientDb(models.Model):
         for rec in self:
             rec.task_count = len(rec.task_ids)
 
+    @api.model
+    def action_fetch_all_servers(self):
+        """🔄 Fetch from servers (Databases list): read every server's list now.
+        New ones are added with no client; a server that can't be read keeps
+        its reason on the server (last_fetch_error)."""
+        servers = self.env['kpi.server'].search([])
+        servers._fetch_quietly()
+        failed = servers.filtered('last_fetch_error')
+        return {
+            'type': 'ir.actions.client', 'tag': 'display_notification',
+            'params': {
+                'type': 'warning' if failed else 'success',
+                'title': _('Database lists read'),
+                'message': (_('Could not read: %s') % ', '.join(failed.mapped('name'))) if failed
+                else _('Every server read. New databases have no client yet: pick one.'),
+                'next': {'type': 'ir.actions.client', 'tag': 'soft_reload'},
+            },
+        }
+
     def action_view_tasks(self):
         """Every ticket ever raised against this database, stopped or not."""
         self.ensure_one()
@@ -255,6 +274,10 @@ class KpiClientDb(models.Model):
         screen can never disagree about what a legal name is."""
         clean, err = self.env['kpi.server'].sudo().validate_db_name(raw)
         if err:
+            # Read from the server's own list (kpi.server.action_fetch_databases):
+            # it exists under that name, e.g. TOASTIA-coffee-shop, so keep it.
+            if self.env.context.get('kpi_db_fetched'):
+                return (raw or '').strip()
             raise ValidationError(_('%s') % err)
         return clean
 

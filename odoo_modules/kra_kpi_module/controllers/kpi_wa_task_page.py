@@ -416,6 +416,8 @@ class KpiWaTaskPage(http.Controller):
             'rule_keys': keys,
             # Required and not on the task yet: the page asks for these before sending.
             'need_keys': ','.join(r['key'] for r in rules if r['required'] and not r['done']),
+            # Recommended, not added: the send popup warns (never blocks).
+            'warn_labels': ' · '.join(r['label'] for r in rules if r.get('warn') and not r['done']),
             'is_db_task': k._is_db_task(),
             'cf': {'app_link': k.app_link or '', 'user_manual_url': k.user_manual_url or '',
                    'website_url': k.website_url or '', 'provision_url': k.provision_url or '',
@@ -443,9 +445,8 @@ class KpiWaTaskPage(http.Controller):
             extra={} if partial else {f: post.get(f) for f in self.COMPLETE_EXTRA if f in post})
         if not ok:
             return self._back(token, err=msg)
-        self._notify(st, user, ('🏁 %s finished %s as a partial finish — the client is sent the summary.'
-                                if partial else '✅ %s finished %s. It is with a manager to check.')
-                     % (user.name, task.external_ref or task.id))
+        # No group note here: the finish itself tells the team group once, with
+        # who and where it is now (kpi_finish._finish_tell_review).
         # Finished: the link is spent (reloading it says it has expired) and the
         # page shows a final Done, like the client's request form.
         st.sudo().write({'staff_page_token': False, 'staff_page_expires': False})
