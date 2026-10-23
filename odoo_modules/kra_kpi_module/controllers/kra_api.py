@@ -400,7 +400,7 @@ class KraKpiAPI(http.Controller):
                         "estimate": f"{kpi.estimate_hours:02d}:{kpi.estimate_minutes:02d}",
                         "estimate_hours": kpi.estimate_hours,
                         "estimate_minutes": kpi.estimate_minutes,
-                        "manual_count": len(kpi.user_manual_ids),  # ✅ ADD THIS
+                        "manual_count": len(kpi.user_manual_ids.filtered(lambda m: not m.is_intake_media)),
                     } for kpi in kra.kpi_ids] if with_tasks else [],
                 })
             return output
@@ -3826,6 +3826,8 @@ class KraKpiAPI(http.Controller):
         'client_chat_message': 'Client message (Discuss)',
         'client_chat_reply': 'Reply to the client',
         'client_chat_forwarded': 'Client question sent to the developer',
+        'client_chat_edited': 'Chat message edited',
+        'client_chat_deleted': 'Chat message deleted',
     }
 
     def _activity_log(self, kpi, kind='all'):
@@ -3896,21 +3898,179 @@ class KraKpiAPI(http.Controller):
     # ------------------------------------------------------------------
     def _chat_kpi(self, params):
         kpi_id = int(params.get('kpi_id') or 0)
-        kpi = request.env['kra.kpi'].sudo().browse(kpi_id).exists() if kpi_id else None
+        kpi = request.env['kra.kpi'].sudo().with_context(active_test=False).browse(kpi_id).exists() if kpi_id else None
         if not kpi:
             return None, 'Task not found.'
         denied = self._may_view_kpi_details(kpi)
+        if denied and kpi.is_chat_general and self._general_chat_ok(kpi):
+            denied = None
         if denied:
             return None, denied
         return kpi, None
 
+    def _general_chat_ok(self, kpi):
+        """A client's general questions (the hidden GEN task, no developer on
+        it): admins, plus whoever its open question was put to — the
+        developer picked to reply, or someone the Approval Chain asked."""
+        user = request.env.user
+        if self._is_kra_admin(user):
+            return True
+        doubts = request.env['kpi.doubt'].sudo().search([('kpi_id', '=', kpi.id), ('kind', '=', 'client_msg')])
+        return user in (doubts.mapped('assigned_dev_id') | doubts.mapped('esc_asked_ids')
+                        | doubts.mapped('manager_user_id'))
+
+    @http.route('/kpi_action/chat/general_list', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_chat_general_list(self, **params):
+        """💬 General questions: one row per client chat (the hidden GEN tasks)
+        this person may open, the waiting ones first."""
+        try:
+            Kpi = request.env['kra.kpi'].sudo().with_context(active_test=False)
+            Msg = request.env['kpi.chat.message'].sudo()
+            rows = []
+            for kpi in Kpi.search([('is_chat_general', '=', True)]):
+                if not self._general_chat_ok(kpi):
+                    continue
+                last = Msg.search([('kpi_id', '=', kpi.id), ('deleted_at', '=', False)], order='id desc', limit=1)
+                if not last:
+                    continue
+                said = last.body or ('📎 ' + ', '.join(last.file_ids.mapped('file_name')))
+                rows.append({'kpi_id': kpi.id, 'ref': kpi._chat_ref(), 'code': kpi.external_ref or '',
+                             'client': kpi.client_kra_id.name or kpi.kra_id.name or '',
+                             'last': ' '.join((said or '').split())[:120], 'last_side': last.side,
+                             'last_who': (last.author_user_id.name if last.side == 'team' else last.author_name) or '',
+                             'at': fields.Datetime.to_string(last.create_date),
+                             'waiting': kpi.chat_waiting()})
+            # Waiting chats first, then the latest.
+            rows.sort(key=lambda r: r['at'], reverse=True)
+            rows.sort(key=lambda r: r['waiting'] == 0)
+            return {'status': True, 'rows': rows, 'waiting': sum(1 for r in rows if r['waiting'])}
+        except Exception as e:
+            _logger.warning("kpi_chat_general_list failed: %s", e)
+            return {'status': False, 'message': str(e)}
+
+    # Events that already show as their own History items (chat, progress …),
+    # so the Activity filter lists only what is not anywhere else.
+    _HISTORY_SKIP_EVENTS = ('client_chat_message', 'client_chat_reply', 'client_chat_forwarded',
+                            'client_chat_edited', 'client_chat_deleted')
+
+    @http.route('/kpi_action/history', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_action_history(self, **params):
+        """KPI Details › History: everything on one task in one list -- client
+        chat, questions to the manager, progress, meetings, GitHub, manuals and
+        the activity trail. Times are UTC ('YYYY-MM-DD HH:MM:SS'); the page
+        groups them by day in the viewer's time zone."""
+        try:
+            kpi = request.env['kra.kpi'].sudo().with_context(active_test=False).browse(
+                int(params.get('kpi_id') or 0)).exists()
+            if not kpi:
+                return {'status': False, 'message': 'Task not found.'}
+            denied = self._may_view_kpi_details(kpi)
+            if denied and not (kpi.is_chat_general and self._general_chat_ok(kpi)):
+                return {'status': False, 'message': denied}
+            env = request.env
+            stamp = fields.Datetime.to_string
+            out = []
+
+            def add(kind, at, title, body='', who='', badge='', key=''):
+                if at:
+                    out.append({'kind': kind, 'at': stamp(at), 'title': title or '', 'body': (body or '')[:600],
+                                'who': who or '', 'badge': badge or '', 'key': key})
+
+            # Client chat: one item per talk (a back-and-forth), grouped exactly as
+            # Client Talks › Discussions groups it (kpi_talks_api.talks_thread).
+            from .kpi_talks_api import KpiTalksApi
+            thread = KpiTalksApi().talks_thread(kpi_id=kpi.id)
+            if thread.get('status'):
+                sent = {r['id']: r['create_date'] for r in env['kpi.chat.message'].sudo().search_read(
+                    [('kpi_id', '=', kpi.id)], ['create_date'])}
+                for day in thread.get('days') or []:
+                    for s in day.get('sessions') or []:
+                        msgs = s.get('messages') or []
+                        last = max((sent[x['id']] for x in msgs if sent.get(x['id'])), default=None)
+                        if not last:
+                            continue
+                        status = s.get('status')
+                        badge = ('● waiting' if status == 'waiting' else
+                                 ('✓ answered' + (' by %s' % s['by'] if s.get('by') else '')) if status == 'answered'
+                                 else '')
+                        span = s['start'] if s.get('end') == s.get('start') else '%s – %s' % (s['start'], s['end'])
+                        out.append({'kind': 'talk', 'at': stamp(last), 'title': 'Talk %d · %s' % (s['n'], span),
+                                    'body': '', 'who': '', 'badge': badge, 'count': len(msgs), 'messages': msgs,
+                                    'key': 't%s-%d' % (day.get('date'), s['n'])})
+            for d in env['kpi.doubt'].sudo().search([('kpi_id', '=', kpi.id), ('kind', '!=', 'client_msg')],
+                                                    order='id desc', limit=100):
+                label = dict(d._fields['kind'].selection).get(d.kind, d.kind)
+                body = d.question or ''
+                if d.answer:
+                    body += '\n→ %s: %s' % (d.answered_by_id.name or 'Answer', d.answer)
+                add('question', d.create_date, label, body,
+                    who=d.raised_by_id.name or d.raised_by_name or '',
+                    badge=dict(d._fields['state'].selection).get(d.state, d.state), key='d%d' % d.id)
+            for p in env['kpi.progress'].sudo().search([('kpi_id', '=', kpi.id)], order='id desc', limit=200):
+                add('progress', p.create_date, 'Progress update' + (' · from the client' if p.from_client else ''),
+                    p.summary, who=p.employee_name or '', badge='file' if p.uploaded_file else '', key='p%d' % p.id)
+            for mt in env['kpi.meeting'].sudo().search([('kpi_id', '=', kpi.id)], order='id desc', limit=50):
+                state = dict(mt._fields['state'].selection).get(mt.state, mt.state)
+                bits = [x for x in (
+                    ('%d min' % mt.actual_minutes) if mt.actual_minutes else '',
+                    mt.participant_summary or '', (mt.summary or '')[:300]) if x]
+                if not (mt.ended_at or mt.opened_at):
+                    # Not held yet: listed on the day it was booked, saying when it is planned.
+                    bits = [x for x in ('Planned: %s' % (mt.local_when or mt.requested_text or 'time not set'),) if x]
+                add('meeting', mt.ended_at or mt.opened_at or mt.create_date,
+                    'Meeting · %s' % (mt.name or ''), ' · '.join(bits[:2]) + (('\n' + bits[2]) if len(bits) > 2 else ''),
+                    who=mt.organizer_id.name or '', badge=state, key='m%d' % mt.id)
+            for g in env['kpi.github.link'].sudo().search([('kpi_id', '=', kpi.id)], order='id desc', limit=50):
+                add('code', g.create_date, 'GitHub branch linked',
+                    '%s · %s' % (g.github_url or '', (g.branch_name or '').strip()), who=g.employee_name or '',
+                    key='g%d' % g.id)
+            for u in env['kpi.user.manual'].sudo().search([('kpi_id', '=', kpi.id)], order='id desc', limit=50):
+                add('document', u.upload_date or u.create_date, 'Manual uploaded',
+                    ' · '.join(x for x in (u.file_name or '', u.description or '') if x),
+                    who=u.uploader_name or '', key='u%d' % u.id)
+            Log = env['kpi.action.log'].sudo()
+            for e in Log.search([('kpi_id', '=', kpi.id), ('event', 'not in', self._HISTORY_SKIP_EVENTS)],
+                                order='id desc', limit=150):
+                add('activity', e.create_date,
+                    self.ACTIVITY_LABELS.get(e.event) or (e.event or '').replace('_', ' ').strip().capitalize(),
+                    who=e.actor_label or (e.actor_user_id.name if e.actor_user_id else ''), key='a%d' % e.id)
+            out.sort(key=lambda r: r['at'], reverse=True)
+            return {'status': True, 'items': out}
+        except Exception as e:
+            _logger.warning("kpi_action_history failed: %s", e)
+            return {'status': False, 'message': str(e)}
+
     def _chat_payload(self, kpi):
         Report = request.env['kpi.wa.group.report'].sudo()
-        return {'status': True, 'messages': kpi.chat_rows(viewer=request.env.user),
+        user = request.env.user
+        locked = kpi._details_locked_for(user)
+        return {'status': True,
+                'messages': kpi.chat_rows(viewer=user, admin=self._is_kra_admin(user)),
                 'waiting': kpi.chat_waiting(),
                 'can_send': bool(Report._group_for_kpi(kpi)),
-                'locked': kpi._details_locked_for(request.env.user),
+                'locked': locked,
+                'can_act': not locked,
+                'ref': kpi.external_ref or kpi._chat_ref(),
                 'client': kpi.client_kra_id.name or kpi.kra_id.name or ''}
+
+    @http.route('/kpi_action/chat/act', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_chat_act(self, **params):
+        """Long-press on a bubble: react / edit / delete (models/kpi_chat.py chat_act)."""
+        try:
+            kpi, err = self._chat_kpi(params)
+            if err:
+                return {'status': False, 'message': err}
+            user = request.env.user
+            locked = kpi._details_locked_for(user)
+            if locked:
+                return {'status': False, 'message': locked}
+            kpi.chat_act(params.get('msg_id'), params.get('action') or '', 'u:%d' % user.id,
+                         emoji=params.get('emoji'), text=params.get('text'),
+                         admin=self._is_kra_admin(user))
+            return self._chat_payload(kpi)
+        except Exception as e:
+            _logger.warning("kpi_chat_act failed: %s", e)
+            return {'status': False, 'message': str(e)}
 
     @http.route('/kpi_action/chat', type='json', auth='user', methods=['POST'], csrf=False)
     def kpi_chat_list(self, **params):
@@ -3918,6 +4078,12 @@ class KraKpiAPI(http.Controller):
             kpi, err = self._chat_kpi(params)
             if err:
                 return {'status': False, 'message': err}
+            # mark_seen: the chat window is open and on screen (not the
+            # count-only poll behind the 💬 button): the client's messages
+            # become seen -- blue ✓✓ on their page.
+            # active: also touched in the last minute = the team is online.
+            if params.get('mark_seen'):
+                kpi.chat_mark_seen('team', active=bool(params.get('active')))
             return self._chat_payload(kpi)
         except Exception as e:
             _logger.error("kpi_chat_list failed: %s", e)
@@ -3933,11 +4099,56 @@ class KraKpiAPI(http.Controller):
             if locked:
                 return {'status': False, 'message': locked}
             source = params.get('source') if params.get('source') in ('odoo', 'web') else 'odoo'
-            kpi.chat_post_team(params.get('text') or '', request.env.user, source=source)
+            kpi.chat_post_team(params.get('text') or '', request.env.user, source=source,
+                               reply_to=params.get('reply_to'))
             return self._chat_payload(kpi)
         except Exception as e:
             _logger.warning("kpi_chat_send failed: %s", e)
             return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi_action/chat/send_files', type='http', auth='user', methods=['POST'], csrf=False)
+    def kpi_chat_send_files(self, **params):
+        """💬 📎 photos / videos / audio: multipart, field `files`, optional `text`."""
+        from .kpi_client_chat import chat_upload_files
+        try:
+            kpi, err = self._chat_kpi(params)
+            if err:
+                return request.make_json_response({'status': False, 'message': err})
+            locked = kpi._details_locked_for(request.env.user)
+            if locked:
+                return request.make_json_response({'status': False, 'message': locked})
+            source = params.get('source') if params.get('source') in ('odoo', 'web') else 'odoo'
+            kpi.chat_post_team(params.get('text') or '', request.env.user, source=source,
+                               files=chat_upload_files(), reply_to=params.get('reply_to'))
+            return request.make_json_response(self._chat_payload(kpi))
+        except Exception as e:
+            _logger.warning("kpi_chat_send_files failed: %s", e)
+            return request.make_json_response({'status': False, 'message': str(e)})
+
+    @http.route('/kpi_action/chat/retry', type='json', auth='user', methods=['POST'], csrf=False)
+    def kpi_chat_retry(self, **params):
+        """⚠ on a bubble: the WhatsApp note failed; send it again."""
+        try:
+            kpi, err = self._chat_kpi(params)
+            if err:
+                return {'status': False, 'message': err}
+            kpi.chat_retry(params.get('message_id'))
+            return self._chat_payload(kpi)
+        except Exception as e:
+            _logger.warning("kpi_chat_retry failed: %s", e)
+            return {'status': False, 'message': str(e)}
+
+    @http.route('/kpi/chat/file/<int:att_id>', type='http', auth='user', methods=['GET'], csrf=False)
+    def kpi_chat_file(self, att_id, **kw):
+        """One 📎 chat file, for anyone who may open that task's chat."""
+        from .kpi_client_chat import _team_user_ok, chat_file_response
+        att = request.env['kpi.file.attachment'].sudo().browse(att_id).exists()
+        kpi = att.chat_message_id.kpi_id if att else None
+        if not kpi:
+            return request.not_found()
+        if self._may_view_kpi_details(kpi) and not _team_user_ok(request.env.user):
+            return request.not_found()
+        return chat_file_response(kpi, att_id)
 
     @http.route('/kpi_action/details', type='json', auth='user')
     def get_kpi_action_details(self, id):
@@ -4995,6 +5206,57 @@ class KraKpiAPI(http.Controller):
             }
         except Exception as e:
             _logger.error(f"Error uploading user manual: {str(e)}")
+            return {'status': False, 'message': str(e)}
+
+    # Upload Requirements / Updates / Bug Reports: "Add photos / video". Each
+    # file hangs off the task just created, with the reason it was attached.
+    # It used to go through /kpi/manual/upload, which takes PDF / DOC / DOCX
+    # only, so every photo was refused. Stored as a kpi.user.manual flagged
+    # is_intake_media (the queue screens read them from there) and never
+    # counted as the task's user manual.
+    _INTAKE_MEDIA_MAX_VIDEO = 10 * 1024 * 1024
+
+    @http.route('/kpi_requirements/attach_media', type='json', auth='user', methods=['POST'], csrf=False)
+    def attach_intake_media(self, **params):
+        try:
+            from ..models.kpi_chat import chat_file_kind, CHAT_FILE_MAX_BYTES
+            kpi_id = params.get('kpi_id')
+            description = (params.get('description') or '').strip()
+            if not description:
+                return {'status': False, 'message': 'Say why you are attaching this.'}
+            try:
+                kpi = request.env['kra.kpi'].sudo().with_context(active_test=False).browse(int(kpi_id or 0)).exists()
+            except (TypeError, ValueError):
+                kpi = None
+            if not kpi:
+                return {'status': False, 'message': 'KPI not found'}
+            user = request.env.user
+            # The person who just created it (admin, coordinator or the client
+            # filing it), or an admin later.
+            if not (self._is_kra_admin(user) or kpi.submitted_by_uid == user or kpi.create_uid == user):
+                return {'status': False, 'message': 'Not authorized'}
+            files = self._collect_upload_files(params, 'files', 'file_data', 'file_name')
+            if not files or not files[0][1]:
+                return {'status': False, 'message': 'The file could not be read. Please pick it again.'}
+            for name, raw in files:
+                kind = chat_file_kind(name)
+                if kind not in ('image', 'video'):
+                    return {'status': False, 'message': '"%s": only a photo or a video can be attached here.' % (name or 'File')}
+                limit = self._INTAKE_MEDIA_MAX_VIDEO if kind == 'video' else CHAT_FILE_MAX_BYTES
+                if len(raw) > limit:
+                    return {'status': False, 'message': '"%s" is too big (max %d MB).' % (name or 'File', limit // (1024 * 1024))}
+            media = request.env['kpi.user.manual'].sudo().create({
+                'kpi_id': kpi.id,
+                'description': description,
+                'related_links': '[]',
+                'uploaded_by': user.id,
+                'upload_date': fields.Datetime.now(),
+                'is_intake_media': True,
+            })
+            self._store_entry_files(media, 'manual_file', files)
+            return {'status': True, 'message': 'Attached', 'manual_id': media.id}
+        except Exception as e:
+            _logger.error("attach_intake_media: %s", e)
             return {'status': False, 'message': str(e)}
 
     @http.route('/kpi/manual/upload_file', type='http', auth='user', methods=['POST'], csrf=False)

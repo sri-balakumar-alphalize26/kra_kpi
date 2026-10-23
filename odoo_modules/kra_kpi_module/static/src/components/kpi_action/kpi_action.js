@@ -1,12 +1,13 @@
 /** @odoo-module **/
 
-import { Component, xml, useState, onWillStart, onMounted, onWillUnmount, useRef } from "@odoo/owl";
+import { Component, xml, useState, onWillStart, onMounted, onWillUnmount, useRef, useEffect } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { rpc } from "@web/core/network/rpc";
 import { useService } from "@web/core/utils/hooks";
 import { session } from "@web/session";
 import { uploadWithProgress } from "@kra_kpi_module/utils/upload_with_progress";
 import { renderTimelineHtml } from "@kra_kpi_module/components/kpi_workday_timeline/workday_timeline";
+import { KpiMeetingDays } from "@kra_kpi_module/components/kpi_client_talks/kpi_client_talks";
 
 // How long a never-started card stays red before dropping back to its lane
 // colour. Mirrors FRESH_MAX_AGE_MS in the app's services/kpiActions.js — the two
@@ -127,7 +128,7 @@ class LiveTick extends Component {
 }
 
 export class KpiAction extends Component {
-    static components = { LiveTick };
+    static components = { LiveTick, KpiMeetingDays };
 
     static template = xml/* xml */`
         <div class="o_kpi_action_wrapper">
@@ -190,18 +191,48 @@ export class KpiAction extends Component {
 
         <!-- 💬 Chat with the client (models/kpi_chat.py), WhatsApp style: the
              client on the left in white, the team on the right in green. The
-             client group only ever sees "Reply from our team". -->
+             client group only ever sees "Reply from our team". The 📎 pin adds
+             photos, videos and audio. Hold a message (or right-click it) for its
+             actions: reactions, reply, edit, info, copy, delete, as in 369Chats. -->
         <div t-if="state.chatOpen" class="modal d-block" tabindex="-1"
              style="background: rgba(0,0,0,0.5); z-index:2100;">
             <div class="modal-dialog modal-lg modal-dialog-centered">
-                <div class="modal-content" style="overflow:hidden;">
+                <div class="modal-content position-relative" style="overflow:hidden;">
                     <div class="modal-header text-white" style="background:#008069;">
                         <h5 class="modal-title">
                             💬 Chat with <t t-esc="state.chatInfo.client or 'the client'"/>
-                            <small class="ms-2 opacity-75" t-esc="state.detailData.external_ref or ''"/>
+                            <small class="ms-2 opacity-75" t-esc="state.chatInfo.ref or state.detailData.external_ref or ''"/>
                         </h5>
                         <button type="button" class="btn-close btn-close-white" t-on-click="closeChat"/>
                     </div>
+                    <style>
+                        .o_kpi_chat_caret { position:absolute; top:2px; right:2px; border:0; width:26px; height:22px; padding:0;
+                            border-radius:0 8px 0 10px; font-size:16px; line-height:14px; color:#667781; cursor:pointer; opacity:0;
+                            transition:opacity .15s; background:radial-gradient(circle at 70% 30%, var(--o-bg) 55%, transparent 80%); }
+                        .o_kpi_chat_caret svg { margin-top:-2px; }
+                        @media (hover: hover) { .o_kpi_chat_bub:hover .o_kpi_chat_caret { opacity:1; } }
+                        @media (hover: none) { .o_kpi_chat_caret { display:none; } }
+                        /* WhatsApp Web: quick reply / react beside the bubble on hover. */
+                        .o_kpi_chat_quick { display:flex; gap:2px; opacity:0; transition:opacity .15s; }
+                        .o_kpi_chat_quick button { width:28px; height:28px; border:0; border-radius:50%; padding:0; color:#54656f;
+                            background:rgba(255,255,255,.85); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+                        .o_kpi_chat_quick button:hover { background:#fff; color:#111b21; }
+                        @media (hover: hover) { .o_kpi_chat_line:hover .o_kpi_chat_quick { opacity:1; } }
+                        @media (hover: none) { .o_kpi_chat_quick { display:none; } }
+                        /* The little tail on the first bubble of a run. */
+                        .o_kpi_tail_out { border-top-right-radius:0 !important; }
+                        .o_kpi_tail_in { border-top-left-radius:0 !important; }
+                        .o_kpi_tail_out::after, .o_kpi_tail_in::after { content:''; position:absolute; top:0; width:0; height:0;
+                            border-top:8px solid var(--o-bg); }
+                        .o_kpi_tail_out::after { right:-7px; border-right:8px solid transparent; }
+                        .o_kpi_tail_in::after { left:-7px; border-left:8px solid transparent; }
+                        .o_kpi_chat_icon { width:40px; height:40px; border:0; border-radius:50%; background:transparent; color:#54656f;
+                            display:flex; align-items:center; justify-content:center; padding:0; cursor:pointer; }
+                        .o_kpi_chat_icon:hover { background:rgba(11,20,26,.06); }
+                        .o_kpi_chat_icon:disabled { opacity:.5; }
+                        .o_kpi_rec_dot { animation:o_kpi_blink 1s infinite; }
+                        @keyframes o_kpi_blink { 50% { opacity:.25; } }
+                    </style>
                     <div class="modal-body o_kpi_chat_body"
                          style="height:60vh; overflow-y:auto; background:#efeae2; padding:16px 18px;">
                         <div t-if="state.chatLoading and !state.chatMsgs.length" class="text-muted small py-3 text-center">
@@ -217,33 +248,245 @@ export class KpiAction extends Component {
                                 <span class="small px-3 py-1" style="background:#fff; border-radius:8px; color:#54656f; box-shadow:0 1px 0.5px rgba(11,20,26,.13);" t-esc="g.day"/>
                             </div>
                             <t t-foreach="g.msgs" t-as="m" t-key="m.id">
-                                <div t-att-class="'d-flex mb-2 ' + (m.side === 'team' ? 'justify-content-end' : 'justify-content-start')">
-                                    <div t-att-style="'max-width:72%; padding:6px 9px 4px; border-radius:8px; box-shadow:0 1px 0.5px rgba(11,20,26,.13); background:' + (m.side === 'team' ? '#d9fdd3' : '#ffffff')">
+                                <t t-set="runStart" t-value="m_index === 0 or g.msgs[m_index - 1].side !== m.side"/>
+                                <div t-att-id="'o_kpi_chat_m' + m.id"
+                                     t-att-class="'d-flex flex-column rounded ' + (runStart ? 'mt-2 ' : 'mt-1 ') + (m.side === 'team' ? 'align-items-end' : 'align-items-start')"
+                                     style="transition:background .4s;">
+                                    <div t-att-class="'o_kpi_chat_line d-flex align-items-center gap-1 ' + (m.side === 'team' ? 'flex-row-reverse' : '')" style="max-width:78%;">
+                                    <div t-att-class="'o_kpi_chat_bub ' + (runStart ? (m.side === 'team' ? 'o_kpi_tail_out' : 'o_kpi_tail_in') : '')" t-att-style="'position:relative; max-width:100%; min-width:0; padding:6px 9px 4px; border-radius:8px; box-shadow:0 1px 0.5px rgba(11,20,26,.13); user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; --o-bg:' + (m.side === 'team' ? '#d9fdd3' : '#ffffff') + '; background:' + (m.side === 'team' ? '#d9fdd3' : '#ffffff') + (m.deleted ? '; opacity:.8' : '')"
+                                         t-on-touchstart="(ev) => this.chatHoldStart(ev, m)" t-on-touchmove="(ev) => this.chatHoldMove(ev)"
+                                         t-on-touchend="(ev) => this.chatHoldEnd(ev)" t-on-touchcancel="chatHoldEnd"
+                                         t-on-mousedown="(ev) => this.chatHoldStart(ev, m)" t-on-mousemove="(ev) => this.chatHoldMove(ev)"
+                                         t-on-mouseup="chatHoldEnd" t-on-mouseleave="chatHoldEnd"
+                                         t-on-contextmenu.prevent="() => this.chatHoldContext(m)">
+                                        <!-- The arrow on mouse hover (as WhatsApp Web): opens the actions. -->
+                                        <button t-if="!m.deleted" type="button" class="o_kpi_chat_caret" title="Message options"
+                                                t-on-mousedown.stop="() => {}" t-on-touchstart.stop="() => {}"
+                                                t-on-click.stop="() => this.chatOpenCard(m)"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg></button>
                                         <div class="fw-bold small" t-att-style="'color:' + (m.side === 'team' ? '#027eb5' : '#d4572e')">
                                             <t t-esc="m.side === 'team' ? m.who : (m.who + ' · client')"/>
                                         </div>
-                                        <div style="white-space:pre-wrap; word-break:break-word; color:#111b21;" t-esc="m.body"/>
-                                        <div class="text-end" style="font-size:11px; color:#667781;" t-esc="chatTime(m.at)"/>
+                                        <div t-if="m.reply" class="small mb-1 px-2 py-1" role="button"
+                                             t-att-style="'background:rgba(11,20,26,.06); border-radius:6px; border-left:3px solid ' + (m.reply.side === 'team' ? '#027eb5' : '#d4572e')"
+                                             t-on-click="() => this.chatJump(m.reply.id)">
+                                            <div class="fw-bold" t-att-style="'color:' + (m.reply.side === 'team' ? '#027eb5' : '#d4572e')" t-esc="m.reply.who"/>
+                                            <div class="text-truncate" style="max-width:340px; color:#54656f;" t-esc="m.reply.text"/>
+                                        </div>
+                                        <t t-foreach="m.files or []" t-as="f" t-key="f.id">
+                                            <div class="mb-1">
+                                                <img t-if="f.kind === 'image'" t-att-src="f.url" t-att-alt="f.name" loading="lazy"
+                                                     style="display:block; max-width:260px; max-height:260px; border-radius:6px; cursor:zoom-in;"
+                                                     t-on-click="() => { this.state.chatPhoto = Object.assign({}, f, { who: m.side === 'team' ? m.who : (m.who + ' · client'), at: m.at, body: m.body }); }"/>
+                                                <video t-elif="f.kind === 'video'" t-att-src="f.url" controls="" preload="metadata"
+                                                       style="display:block; max-width:300px; max-height:260px; border-radius:6px;"/>
+                                                <a t-elif="f.kind === 'document'" t-att-href="f.url" target="_blank" rel="noopener"
+                                                   style="display:flex;gap:8px;align-items:center;padding:10px 12px;background:rgba(0,0,0,.05);border-radius:6px;color:inherit;text-decoration:none;word-break:break-all;min-width:200px">
+                                                    <span>📄</span><b t-esc="f.name"/></a>
+                                                <audio t-else="" t-att-src="f.url" controls="" preload="metadata" style="display:block; width:260px;"/>
+                                                <div style="font-size:11px; color:#667781;">
+                                                    <a t-att-href="f.url" target="_blank" class="text-reset" t-esc="f.name"/> · <t t-esc="_fmtBytes(f.size)"/>
+                                                </div>
+                                            </div>
+                                        </t>
+                                        <div t-if="m.deleted" class="fst-italic" style="color:#667781;">⊘ This message was deleted</div>
+                                        <div t-elif="m.body" style="white-space:pre-wrap; word-break:break-word; color:#111b21;" t-esc="m.body"/>
+                                        <div class="d-flex justify-content-end align-items-center gap-1" style="font-size:11px; color:#667781;">
+                                            <span t-if="m.edited">edited ·</span>
+                                            <span t-esc="chatTime(m.at)"/>
+                                            <!-- The tick on our own bubbles, as in WhatsApp: pending, sent, seen (blue), failed (tap to retry). -->
+                                            <span t-if="m.side === 'team' and m.status and !m.deleted" t-att-title="chatTickTitle(m)"
+                                                  t-att-style="'font-size:12px; letter-spacing:-2px; cursor:' + (m.status === 'failed' ? 'pointer' : 'default') + '; color:' + (m.status === 'seen' ? '#53bdeb' : (m.status === 'failed' ? '#d4572e' : '#667781'))"
+                                                  t-on-click="() => this.chatRetry(m)" t-esc="chatTick(m)"/>
+                                        </div>
+                                    </div>
+                                    <!-- WhatsApp Web: on hover, reply at once or react, beside the bubble. -->
+                                    <div t-if="!m.deleted and chatCanAct()" class="o_kpi_chat_quick">
+                                        <button t-if="state.chatInfo.can_send" type="button" title="Reply"
+                                                t-on-click="() => this.chatQuickReply(m)"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg></button>
+                                        <button type="button" title="React"
+                                                t-on-click="() => this.chatOpenCard(m)"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg></button>
+                                    </div>
+                                    </div>
+                                    <!-- Reaction chips hang under the bubble; tap one to add / remove yours. -->
+                                    <div t-if="(m.reactions or []).length" class="d-flex flex-wrap gap-1 px-2" style="margin-top:-6px;">
+                                        <button t-foreach="m.reactions" t-as="rx" t-key="rx.emoji" type="button"
+                                                class="btn btn-sm py-0 px-2 bg-white border rounded-pill"
+                                                t-att-style="'font-size:13px; line-height:20px;' + (rx.mine ? ' border-color:#00a884 !important; background:#e7fbf4 !important;' : '')"
+                                                t-att-title="rx.mine ? 'You reacted — click to remove' : 'Click to react'"
+                                                t-on-click="() => this.chatAct(m.id, 'react', { emoji: rx.emoji })">
+                                            <t t-esc="rx.emoji"/><t t-if="rx.count > 1"> <t t-esc="rx.count"/></t>
+                                        </button>
                                     </div>
                                 </div>
                             </t>
                         </t>
+                    </div>
+                    <!-- The action card (long-press / right-click on a bubble). Outside the
+                         list so a refresh never closes it; it only remembers the message id. -->
+                    <div t-if="state.chatCard" class="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
+                         style="background:rgba(0,0,0,.45); z-index:10;" t-on-click.self="chatCloseCard">
+                        <div class="bg-white rounded-4 shadow py-2" style="min-width:270px; max-width:92%;">
+                            <t t-set="cm" t-value="chatCardMsg()"/>
+                            <t t-if="!cm"><div class="px-3 py-2 text-muted small">This message is gone.</div></t>
+                            <t t-elif="state.chatCard.info">
+                                <!-- When it was sent, reached the client's group and was seen. -->
+                                <div class="px-3 pt-2 pb-1 d-flex flex-column" style="font-size:14px; min-width:300px;">
+                                    <b class="mb-2">Message info</b>
+                                    <div t-foreach="chatInfoRows(cm)" t-as="row" t-key="row_index" class="d-flex gap-2 py-2 border-bottom"
+                                         t-att-style="row.seen ? 'color:#2E90FA;' : ''">
+                                        <span style="width:22px; letter-spacing:-2px;" t-esc="row.mark"/>
+                                        <span class="flex-grow-1" t-esc="row.what"/>
+                                        <span class="text-nowrap" t-att-style="row.seen ? '' : 'color:#667781;'" t-esc="row.time"/>
+                                    </div>
+                                    <button type="button" class="btn btn-link align-self-end p-1" style="color:#008069;" t-on-click="chatCloseCard">Close</button>
+                                </div>
+                            </t>
+                            <t t-elif="state.chatCard.grid">
+                                <div class="d-flex align-items-center gap-2 px-2 small text-muted">
+                                    <button type="button" class="btn btn-sm btn-link text-reset" t-on-click="() => { this.state.chatCard.grid = false; }">← Back</button>
+                                    Pick a reaction
+                                </div>
+                                <div class="d-grid px-2 pb-2" style="grid-template-columns:repeat(8, 40px); gap:4px;">
+                                    <button t-foreach="CHAT_ALL_REACTIONS" t-as="e" t-key="e" type="button" class="btn p-0 rounded-circle"
+                                            style="width:40px; height:40px; font-size:22px; line-height:1; background:#f0f2f5;"
+                                            t-on-click="() => this.chatCardReact(e)"><t t-esc="e"/></button>
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <div t-if="chatCanAct()" class="d-flex gap-1 px-2 pb-2 border-bottom">
+                                    <button t-foreach="CHAT_QUICK_REACTIONS" t-as="e" t-key="e" type="button" class="btn p-0 rounded-circle"
+                                            style="width:40px; height:40px; font-size:22px; line-height:1; background:#f0f2f5;"
+                                            t-on-click="() => this.chatCardReact(e)"><t t-esc="e"/></button>
+                                    <button type="button" class="btn p-0 rounded-circle" title="More reactions"
+                                            style="width:40px; height:40px; font-size:22px; line-height:1; background:#f0f2f5;"
+                                            t-on-click="() => { this.state.chatCard.grid = true; }">+</button>
+                                </div>
+                                <div class="d-flex flex-column pt-1">
+                                    <button t-if="chatCanAct() and state.chatInfo.can_send" type="button" class="btn text-start px-3 py-2 rounded-0"
+                                            t-on-click="() => this.chatCardDo('reply')"><span class="d-inline-block text-muted" style="width:26px;">↩</span>Reply</button>
+                                    <button t-if="chatCanAct() and cm.can_edit" type="button" class="btn text-start px-3 py-2 rounded-0"
+                                            t-on-click="() => this.chatCardDo('edit')"><span class="d-inline-block text-muted" style="width:26px;">✎</span>Edit</button>
+                                    <button t-if="cm.info" type="button" class="btn text-start px-3 py-2 rounded-0"
+                                            t-on-click="() => { this.state.chatCard.info = true; }"><span class="d-inline-block text-muted" style="width:26px;">ⓘ</span>Info</button>
+                                    <button t-if="cm.body" type="button" class="btn text-start px-3 py-2 rounded-0"
+                                            t-on-click="() => this.chatCardDo('copy')"><span class="d-inline-block text-muted" style="width:26px;">⎘</span>Copy</button>
+                                    <button t-if="chatCanAct() and cm.can_delete" type="button" class="btn text-start px-3 py-2 rounded-0 text-danger"
+                                            t-on-click="() => this.chatCardDo('delete')"><span class="d-inline-block" style="width:26px;">🗑</span>Delete</button>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+                    <!-- Tap a photo: full screen over the chat, as in WhatsApp. -->
+                    <div t-if="state.chatPhoto" class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
+                         style="background:rgba(11,20,26,.94); z-index:2200;" t-on-click.self="() => { this.state.chatPhoto = null; }">
+                        <div class="position-absolute top-0 start-0 end-0 d-flex align-items-center gap-3 px-3 py-2 text-white">
+                            <div class="flex-grow-1 small" style="min-width:0;">
+                                <div class="fw-bold text-truncate" t-esc="state.chatPhoto.who or state.chatPhoto.name"/>
+                                <div t-if="state.chatPhoto.at" class="opacity-75" t-esc="chatPhotoWhen(state.chatPhoto.at)"/>
+                            </div>
+                            <a t-att-href="state.chatPhoto.url" target="_blank" class="text-white fs-4 text-decoration-none" title="Open / download">⤓</a>
+                            <button type="button" class="btn btn-link text-white fs-4 p-0 text-decoration-none" title="Close"
+                                    t-on-click="() => { this.state.chatPhoto = null; }">✕</button>
+                        </div>
+                        <img t-att-src="state.chatPhoto.url" t-att-alt="state.chatPhoto.name"
+                             style="max-width:96vw; max-height:86vh; object-fit:contain; border-radius:4px;"/>
+                        <!-- The words sent with the photo, under it as in WhatsApp. -->
+                        <div t-if="state.chatPhoto.body" class="position-absolute bottom-0 start-0 end-0 text-white text-center px-4 pb-4 pt-3"
+                             style="background:linear-gradient(transparent, rgba(0,0,0,.75)); white-space:pre-wrap; word-break:break-word; max-height:30vh; overflow:auto; font-size:15px;"
+                             t-esc="state.chatPhoto.body"/>
                     </div>
                     <div class="modal-footer d-block" style="background:#f0f2f5;">
                         <div t-if="state.chatInfo.locked" class="small text-muted">🔒 <t t-esc="state.chatInfo.locked"/></div>
                         <div t-elif="!state.chatInfo.can_send" class="small text-muted">
                             This client has no WhatsApp group linked, so messages can't be sent.
                         </div>
-                        <div t-else="" class="d-flex gap-2 align-items-end">
-                            <textarea class="form-control" rows="2" placeholder="Type a message — the client sees it as &quot;Reply from our team&quot;"
-                                      style="border-radius:8px; resize:none;"
-                                      t-model="state.chatText" t-on-keydown="onChatKey"/>
-                            <button class="btn text-white rounded-circle" style="background:#00a884; width:44px; height:44px;"
-                                    title="Send" t-att-disabled="state.chatSending or !state.chatText.trim()"
-                                    t-on-click="sendChat">
-                                <i t-att-class="'fa ' + (state.chatSending ? 'fa-spinner fa-spin' : 'fa-paper-plane')"/>
-                            </button>
-                        </div>
+                        <t t-else="">
+                            <div t-if="state.chatReply or state.chatEdit" class="d-flex align-items-center gap-2 mb-2 px-2 py-1"
+                                 style="background:#fff; border-left:4px solid #00a884; border-radius:6px;">
+                                <div class="flex-grow-1 small" style="min-width:0;">
+                                    <div t-if="state.chatEdit" class="fw-bold" style="color:#008069;">✎ Editing message</div>
+                                    <div t-else="" class="fw-bold" style="color:#008069;">↩ Replying to <t t-esc="state.chatReply.who"/></div>
+                                    <div class="text-truncate text-muted" t-esc="state.chatEdit ? state.chatEdit.text : state.chatReply.text"/>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-link text-muted" t-att-title="state.chatEdit ? 'Cancel edit' : 'Cancel reply'"
+                                        t-on-click="chatCancelBar">✕</button>
+                            </div>
+                            <div t-if="state.chatFiles.length" class="d-flex flex-wrap gap-2 mb-2">
+                                <t t-foreach="state.chatFiles" t-as="cf" t-key="cf_index">
+                                    <span class="badge text-bg-light border d-inline-flex align-items-center gap-1 fw-normal">
+                                        <t t-esc="{ image: '📷', video: '🎥', audio: '🎵', document: '📄' }[cf.kind]"/>
+                                        <t t-esc="cf.file.name"/> · <t t-esc="_fmtBytes(cf.file.size)"/>
+                                        <a t-if="!state.chatSending" href="#" class="text-danger ms-1" title="Remove"
+                                           t-on-click.prevent="() => this.chatRemoveFile(cf_index)">✕</a>
+                                    </span>
+                                </t>
+                            </div>
+                            <div t-if="state.chatSending and state.chatProgress" class="small text-muted mb-2">
+                                <div class="progress mb-1" style="height:6px;">
+                                    <div class="progress-bar bg-success" t-att-style="'width:' + state.chatProgress.percent + '%'"/>
+                                </div>
+                                <t t-esc="state.chatProgress.percent"/>% · <t t-esc="_fmtBytes(state.chatProgress.loaded)"/> of <t t-esc="_fmtBytes(state.chatProgress.total)"/>
+                            </div>
+                            <!-- 🎤 Recording a voice note: delete, timer, pause / listen / continue, send. -->
+                            <div t-if="state.chatRec" class="d-flex align-items-center gap-2" style="min-height:46px;">
+                                <button type="button" class="o_kpi_chat_icon" title="Delete" t-on-click="() => this.chatRecFinish(false)">🗑</button>
+                                <span t-att-style="'width:10px; height:10px; border-radius:50%; flex:0 0 auto; background:' + (state.chatRec.paused ? '#9aa5ab' : '#e53935')"
+                                      t-att-class="state.chatRec.paused ? '' : 'o_kpi_rec_dot'"/>
+                                <span t-if="!state.chatRec.url" style="min-width:42px; font-variant-numeric:tabular-nums;" t-esc="state.chatRec.time"/>
+                                <audio t-if="state.chatRec.url" t-att-src="state.chatRec.url" controls="" style="height:36px; flex:1; max-width:360px;"/>
+                                <button type="button" class="o_kpi_chat_icon ms-auto" t-att-title="state.chatRec.paused ? 'Continue recording' : 'Pause'"
+                                        t-on-click="() => (state.chatRec.paused ? this.chatRecResume() : this.chatRecPause())"
+                                        t-esc="state.chatRec.paused ? '🎙' : '⏸'"/>
+                                <button type="button" class="btn text-white rounded-circle d-flex align-items-center justify-content-center p-0"
+                                        style="background:#00a884; width:42px; height:42px; flex:0 0 auto;" title="Send"
+                                        t-on-click="() => this.chatRecFinish(true)"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
+                            </div>
+                            <div t-else="" class="d-flex gap-1 align-items-end">
+                                <div class="position-relative">
+                                    <button type="button" class="o_kpi_chat_icon" title="Emoji"
+                                            t-on-click="() => { this.state.chatEmojiOpen = !this.state.chatEmojiOpen; this.state.chatPinOpen = false; }"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg></button>
+                                    <div t-if="state.chatEmojiOpen" class="position-absolute bg-white shadow rounded-3 p-2"
+                                         style="bottom:48px; left:0; width:300px; z-index:6; display:grid; grid-template-columns:repeat(8, 1fr); gap:2px;">
+                                        <button t-foreach="CHAT_EMOJI" t-as="e" t-key="e" type="button" class="btn p-0"
+                                                style="font-size:22px; line-height:34px; height:34px;"
+                                                t-on-mousedown.prevent="() => {}" t-on-click="() => this.chatInsertEmoji(e)"><t t-esc="e"/></button>
+                                    </div>
+                                </div>
+                                <div class="position-relative">
+                                    <button type="button" class="o_kpi_chat_icon"
+                                            title="Attach a photo, video, audio or document" t-att-disabled="state.chatSending"
+                                            t-on-click="() => { this.state.chatPinOpen = !this.state.chatPinOpen; this.state.chatEmojiOpen = false; }"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" style="transform:rotate(45deg)"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg></button>
+                                    <div t-if="state.chatPinOpen" class="position-absolute bg-white shadow rounded py-1"
+                                         style="bottom:52px; left:0; min-width:200px; z-index:5;">
+                                        <a href="#" class="dropdown-item py-2" t-on-click.prevent="() => this.chatPick('camera')">📷 Camera</a>
+                                        <a href="#" class="dropdown-item py-2" t-on-click.prevent="() => this.chatPick('media')">🖼 Photos &amp; videos</a>
+                                        <a href="#" class="dropdown-item py-2" t-on-click.prevent="() => this.chatPick('audio')">🎵 Audio</a>
+                                        <a href="#" class="dropdown-item py-2" t-on-click.prevent="() => this.chatPick('doc')">📄 Document</a>
+                                    </div>
+                                    <input id="o_kpi_chat_in_camera" type="file" class="d-none" accept="image/*,video/*"
+                                           capture="environment" t-on-change="onChatFiles"/>
+                                    <input id="o_kpi_chat_in_media" type="file" class="d-none" accept="image/*,video/*"
+                                           multiple="" t-on-change="onChatFiles"/>
+                                    <input id="o_kpi_chat_in_audio" type="file" class="d-none" accept="audio/*"
+                                           multiple="" t-on-change="onChatFiles"/>
+                                    <input id="o_kpi_chat_in_doc" type="file" class="d-none" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.csv,.zip,.rar,.7z"
+                                           multiple="" t-on-change="onChatFiles"/>
+                                </div>
+                                <textarea id="o_kpi_chat_text" class="form-control border-0" rows="1"
+                                          placeholder="Type a message — the client sees it as &quot;Reply from our team&quot;"
+                                          style="border-radius:20px; resize:none; padding:10px 16px; min-height:42px; max-height:140px;"
+                                          t-model="state.chatText" t-on-keydown="onChatKey" t-on-input="chatFitBox"/>
+                                <button class="btn text-white rounded-circle d-flex align-items-center justify-content-center p-0"
+                                        style="background:#00a884; width:42px; height:42px; flex:0 0 auto;"
+                                        t-att-title="chatMicMode() ? 'Record a voice note' : 'Send'"
+                                        t-att-disabled="state.chatSending or (!chatMicMode() and !state.chatText.trim() and !state.chatFiles.length)"
+                                        t-on-click="() => (this.chatMicMode() ? this.chatRecStart() : this.sendChat())">
+                                    <i t-if="state.chatSending" class="fa fa-spinner fa-spin"/>
+                                    <t t-elif="chatMicMode()"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg></t>
+                                    <t t-else=""><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg></t>
+                                </button>
+                            </div>
+                        </t>
                     </div>
                 </div>
             </div>
@@ -483,10 +726,17 @@ export class KpiAction extends Component {
                             </button>
                         </div>
 
+                        <!-- Two columns: the task's facts and quick actions on the left,
+                             one History list and every section on the right. Nothing
+                             below moved out of the page, only into the right column. -->
+                        <div class="row g-3 align-items-start">
+                        <!-- Wide screens: the left column stays in view while the right one scrolls. -->
+                        <style>@media (min-width: 992px) { .o_kpi_left_pin { position: sticky; top: 12px; } }</style>
+                        <div class="col-lg-4 o_kpi_left_pin" t-ref="leftPin">
                         <div class="card p-4 mb-3">
                             <div class="row">
                                 <!-- Left Column -->
-                                <div class="col-md-6">
+                                <div class="col-12">
                                     <table class="table table-borderless">
                                         <tbody>
 
@@ -614,7 +864,7 @@ export class KpiAction extends Component {
                                 </div>
                                 
                                 <!-- Right Column -->
-                                <div class="col-md-6">
+                                <div class="col-12">
                                     <table class="table table-borderless mb-0">
                                         <tbody>
                                             <tr><td style="width:40%;"><b>Description</b></td><td style="white-space:pre-wrap;" t-esc="state.detailData.description || '—'"/></tr>
@@ -654,6 +904,117 @@ export class KpiAction extends Component {
                                     </t>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- The latest team update, so "where is this" is answered without scrolling. -->
+                        <div t-if="teamProgress().length" class="alert alert-warning mb-3" style="white-space: pre-wrap;">
+                            <b>Latest update</b> · <span class="small" t-esc="teamProgress()[0].employee_name"/>
+                            <div class="mt-1" style="display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden;"
+                                 t-esc="teamProgress()[0].summary"/>
+                        </div>
+                        <div class="d-grid gap-2 mb-3">
+                            <button t-if="detailStarted() and !detailLocked()" type="button" class="btn btn-primary"
+                                    t-on-click="() => this.historyJump('progressSummary')">Add progress update</button>
+                            <button t-if="detailStarted() and !detailLocked()" type="button" class="btn btn-secondary"
+                                    t-on-click="() => this.historyJump('kpiGithubCard')">Link GitHub branch</button>
+                            <button t-if="detailStarted() or state.manualsList.length" type="button" class="btn btn-secondary"
+                                    t-on-click="() => this.historyJump('kpiManualCard')">Upload manual / files</button>
+                            <button type="button" class="btn btn-secondary"
+                                    t-on-click="() => this.historyJump('kpiCompletePanel')">Complete this task</button>
+                        </div>
+                        </div>
+
+                        <div class="col-lg-8">
+                        <!-- History: chat, questions, progress, meetings, GitHub, manuals and
+                             activity in one list, newest first, by day (/kpi_action/history). -->
+                        <div class="card p-4 mb-3">
+                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                <h4 class="fw-bold mb-0">History</h4>
+                                <button type="button" class="btn btn-link btn-sm p-0 ms-1" title="Refresh"
+                                        t-on-click="() => this.loadHistory()"><i class="fa fa-refresh"/></button>
+                                <div class="ms-auto d-flex flex-wrap gap-1">
+                                    <t t-foreach="historyFilters()" t-as="hf" t-key="hf.key">
+                                        <button type="button" class="btn btn-sm"
+                                                t-att-class="state.history.filter === hf.key ? 'btn-primary' : 'btn-light border'"
+                                                t-on-click="() => { this.state.history.filter = hf.key; this.state.history.shown = 30; this.state.history.openDays = {}; }">
+                                            <t t-esc="hf.label"/> <span class="opacity-75" t-esc="hf.count"/>
+                                        </button>
+                                    </t>
+                                </div>
+                            </div>
+                            <div t-if="state.history.loading and !state.history.items.length" class="text-muted small py-3">Loading…</div>
+                            <div t-elif="!historyDays().length" class="text-muted small py-3">Nothing here yet.</div>
+                            <!-- One row per day, as in the Activity popup: Today open, older days closed until tapped. -->
+                            <t t-foreach="historyDays()" t-as="hd" t-key="hd.label">
+                                <div class="d-flex align-items-center border-bottom py-2" style="cursor:pointer;"
+                                     role="button" t-att-aria-expanded="isHistoryDayOpen(hd.label) ? 'true' : 'false'"
+                                     t-on-click="() => this.toggleHistoryDay(hd.label)">
+                                    <i t-att-class="'fa me-2 ' + (isHistoryDayOpen(hd.label) ? 'fa-caret-down' : 'fa-caret-right')"/>
+                                    <span class="fw-bold" t-esc="hd.label"/>
+                                    <span class="badge bg-light text-dark ms-auto"><t t-esc="hd.items.length"/> <t t-esc="hd.items.length === 1 ? 'entry' : 'entries'"/></span>
+                                </div>
+                                <t t-if="isHistoryDayOpen(hd.label)" t-foreach="hd.items" t-as="hi" t-key="hi.key">
+                                    <!-- A talk with the client: one row, closed until tapped; open, it shows
+                                         the bubbles as in Client Talks › Discussions. -->
+                                    <div t-if="hi.kind === 'talk'" class="py-1">
+                                        <div class="d-flex align-items-center flex-wrap gap-2 rounded-2 px-2 py-2 bg-light" style="cursor:pointer;"
+                                             role="button" t-att-aria-expanded="isHistoryTalkOpen(hi.key) ? 'true' : 'false'"
+                                             t-on-click="() => this.toggleHistoryTalk(hi.key)">
+                                            <i t-att-class="'fa ' + (isHistoryTalkOpen(hi.key) ? 'fa-chevron-down' : 'fa-chevron-right') + ' text-muted'"/>
+                                            <span class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 text-white"
+                                                  style="width:28px;height:28px;background:#00a884"><i class="fa fa-comments"/></span>
+                                            <b t-esc="hi.title"/>
+                                            <span class="small text-muted"><t t-esc="hi.count"/> message<t t-if="hi.count !== 1">s</t></span>
+                                            <span t-if="hi.badge" class="ms-auto small fw-semibold"
+                                                  t-att-style="'color:' + (hi.badge.startsWith('●') ? '#B42318' : '#0F5E2D')" t-esc="hi.badge"/>
+                                        </div>
+                                        <div t-if="isHistoryTalkOpen(hi.key)" class="rounded-2 p-2 mt-1 d-flex flex-column gap-2"
+                                             style="background:#EAF6F1; box-shadow: inset 4px 0 0 #00a884;">
+                                            <div t-foreach="hi.messages" t-as="msg" t-key="msg.id"
+                                                 t-att-class="'rounded-2 px-2 py-1 ' + (msg.side === 'team' ? 'align-self-end' : 'align-self-start')"
+                                                 t-att-style="'max-width:75%; background:' + (msg.side === 'team' ? '#D9FDD3' : '#FFFFFF') + ';'">
+                                                <div class="d-flex gap-2" style="font-size:12px;">
+                                                    <b t-att-style="'color:' + (msg.side === 'team' ? '#1D4FA8' : '#B45309')"><t t-esc="msg.who"/><t t-if="msg.side === 'client'"> · client</t></b>
+                                                    <span class="ms-auto text-muted" t-esc="msg.time"/>
+                                                </div>
+                                                <div t-if="msg.body" style="white-space: pre-wrap;" t-esc="msg.body"/>
+                                                <div t-foreach="msg.files or []" t-as="f" t-key="f.id" class="my-1">
+                                                    <a t-if="f.kind === 'image'" t-att-href="f.url" target="_blank" t-att-title="f.name">
+                                                        <img t-att-src="f.url" t-att-alt="f.name" loading="lazy"
+                                                             style="display:block; max-width:240px; max-height:240px; border-radius:6px;"/></a>
+                                                    <video t-elif="f.kind === 'video'" t-att-src="f.url" controls="" preload="metadata"
+                                                           style="display:block; max-width:280px; max-height:240px; border-radius:6px;"/>
+                                                    <a t-elif="f.kind === 'document'" t-att-href="f.url" target="_blank" rel="noopener"
+                                                       class="d-flex gap-2 align-items-center px-2 py-2 rounded text-reset text-decoration-none"
+                                                       style="background:rgba(0,0,0,.05); min-width:200px; word-break:break-all;">
+                                                        <i class="fa fa-file-text-o"/><b t-esc="f.name"/></a>
+                                                    <audio t-else="" t-att-src="f.url" controls="" preload="metadata" style="display:block; width:240px;"/>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div t-else="" class="d-flex gap-3 py-2">
+                                        <span class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 text-white"
+                                              t-att-style="'width:32px;height:32px;background:' + historyColor(hi.kind)">
+                                            <i t-att-class="'fa ' + historyIcon(hi.kind)"/>
+                                        </span>
+                                        <div class="flex-grow-1" style="min-width:0;">
+                                            <div class="d-flex flex-wrap align-items-baseline gap-2">
+                                                <b t-esc="hi.title"/>
+                                                <span class="text-muted small"><t t-if="hi.who"><t t-esc="hi.who"/> · </t><t t-esc="historyTime(hi.at)"/></span>
+                                                <span t-if="hi.badge" class="badge"
+                                                      t-att-class="hi.badge === 'waiting for reply' ? 'bg-danger' : 'text-bg-light border'"
+                                                      t-esc="hi.badge"/>
+                                            </div>
+                                            <div t-if="hi.body" class="mt-1"
+                                                 t-att-class="hi.kind === 'talk' ? 'bg-light rounded px-3 py-2 d-inline-block' : ''"
+                                                 style="white-space: pre-wrap; max-width: 75ch;" t-esc="hi.body"/>
+                                        </div>
+                                    </div>
+                                </t>
+                            </t>
+                            <button t-if="historyMore()" type="button" class="btn btn-light border btn-sm align-self-center mt-2"
+                                    t-on-click="() => { this.state.history.shown += 30; }">Load older</button>
                         </div>
 
                         <!-- 🆕 NEW: Reassignment History Section -->
@@ -1609,6 +1970,16 @@ export class KpiAction extends Component {
                             </ul>
                         </div>
 
+                        <!-- 📅 Meetings on this task: all their details, by date. -->
+                        <div t-if="state.detailMeetings.count" class="card p-4 mb-4">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <h4 class="fw-bold mb-0">📅 Meetings</h4>
+                                <span class="badge text-bg-light border" t-esc="state.detailMeetings.count"/>
+                                <span class="ms-auto small text-muted">Attendance, summary, action items, recording and transcript are kept on each meeting.</span>
+                            </div>
+                            <KpiMeetingDays days="state.detailMeetings.days"/>
+                        </div>
+
                         <!-- Progress History -->
                         <div class="card p-4">
                             <div class="d-flex align-items-center flex-wrap gap-2 mb-3">
@@ -1738,6 +2109,8 @@ export class KpiAction extends Component {
                                     No progress updates yet. Submit your first update above!
                                 </div>
                             </t>
+                        </div>
+                        </div>
                         </div>
                     </t>
                     
@@ -2635,6 +3008,59 @@ export class KpiAction extends Component {
                                                             </div>
                                                         </div>
                                                     </t>
+                                                    <!-- Every time the client sent it back, newest first, with the photos,
+                                                         videos and voice notes that show what is wrong (kpi_client_sendback.py). -->
+                                                    <t t-if="task.sendbacks and task.sendbacks.length">
+                                                        <details class="mt-1 small" t-on-click.stop="">
+                                                            <summary class="fw-bold text-danger" style="cursor:pointer;">
+                                                                ↩ Client sent it back <t t-esc="task.sendbacks.length"/>×
+                                                                <t t-if="task.sendbacks[0].files_label"> · <t t-esc="task.sendbacks[0].files_label"/></t>
+                                                            </summary>
+                                                            <t t-foreach="task.sendbacks" t-as="sb" t-key="sb.id">
+                                                                <div class="mt-1 p-2 rounded" style="background:#fff5f5; border:1px solid #fecaca;">
+                                                                    <div class="text-muted">Round <t t-esc="sb.round"/><t t-if="sb.by"> · <t t-esc="sb.by"/></t> · <t t-esc="chatTime(sb.at)"/></div>
+                                                                    <div style="white-space:pre-wrap;" t-esc="sb.reason"/>
+                                                                    <div t-if="sb.files.length" class="d-flex flex-wrap gap-2 mt-1">
+                                                                        <t t-foreach="sb.files" t-as="f" t-key="f.id">
+                                                                            <a t-if="f.kind === 'image'" t-att-href="f.url" target="_blank" t-att-title="f.name">
+                                                                                <img t-att-src="f.url" t-att-alt="f.name" loading="lazy" style="width:72px; height:72px; object-fit:cover; border-radius:6px;"/>
+                                                                            </a>
+                                                                            <video t-elif="f.kind === 'video'" t-att-src="f.url" controls="" preload="metadata" style="max-width:220px; max-height:140px; border-radius:6px;"/>
+                                                                            <audio t-else="" t-att-src="f.url" controls="" preload="metadata" style="width:220px;"/>
+                                                                        </t>
+                                                                    </div>
+                                                                </div>
+                                                            </t>
+                                                        </details>
+                                                    </t>
+                                                    <!-- After the client's check: Full Complete (manual and GitHub link
+                                                         on the task), then the bill. models/kpi_finish.py, kpi_billing.py -->
+                                                    <t t-if="task.full_complete_pending">
+                                                        <div class="mt-1 p-2 rounded small" style="background:#ecfdf5; border:1px solid #a7f3d0;">
+                                                            <div class="fw-bold text-success">👍 Client said finished: needs 🏁 Full Complete</div>
+                                                            <ul t-if="task.full_complete_missing and task.full_complete_missing.length" class="mb-1 ps-3">
+                                                                <li t-foreach="task.full_complete_missing" t-as="need" t-key="need_index" t-esc="need"/>
+                                                            </ul>
+                                                            <button t-if="state.isAdmin or task.user_id === state.currentUserId"
+                                                                    class="btn btn-sm btn-success mt-1" t-att-disabled="state.finishBusy === task.id"
+                                                                    t-on-click.stop="() => this.fullComplete(task)">🏁 Full Complete</button>
+                                                        </div>
+                                                    </t>
+                                                    <t t-if="task.full_complete_at and task.bill and task.bill.id">
+                                                        <div class="mt-1">
+                                                            <span t-att-class="'badge border ' + (task.bill.paid ? 'bg-success' : 'bg-white text-dark border-warning')">
+                                                                🧾 <t t-esc="task.bill.name"/> · <t t-esc="task.bill.money"/> · <t t-esc="task.bill.paid ? 'Paid' : (task.bill.client_says_paid ? 'Client says paid' : 'Unpaid')"/>
+                                                            </span>
+                                                        </div>
+                                                    </t>
+                                                    <t t-elif="task.full_complete_at and state.isAdmin">
+                                                        <div class="mt-1 p-2 rounded small" style="background:#fffbeb; border:1px solid #fde68a;">
+                                                            <div class="fw-bold" style="color:#92400e;">🏁 Fully complete: no bill yet</div>
+                                                            <div class="text-muted">Usually no price matches. Add it in Configuration → Billing, then:</div>
+                                                            <button class="btn btn-sm btn-warning mt-1" t-att-disabled="state.finishBusy === task.id"
+                                                                    t-on-click.stop="() => this.billNow(task)">🧾 Bill now</button>
+                                                        </div>
+                                                    </t>
                                                     <t t-if="task.requested_priority and task.requested_priority !== task.priority">
                                                         <div class="text-muted small mt-1">
                                                             <i class="fa fa-flag me-1"/>Developer asked for
@@ -3467,6 +3893,16 @@ export class KpiAction extends Component {
             // 💬 Chat with the client popup (models/kpi_chat.py)
             chatOpen: false, chatLoading: false, chatSending: false, chatText: '',
             chatMsgs: [], chatInfo: {}, chatWaiting: 0,
+            chatFiles: [], chatReply: null, chatPinOpen: false, chatProgress: null,
+            chatCard: null, chatEdit: null,   // the long-press card / the message being edited
+            chatPhoto: null,                  // the photo open full screen
+            chatEmojiOpen: false,             // the 😊 panel above the type box
+            chatRec: null,                    // 🎤 { paused, time, url } while recording a voice note
+            chatKpiId: null,                  // a chat opened from 💬 General questions (not the open task)
+            generalChats: { open: false, rows: [], waiting: 0 },
+            history: { items: [], filter: 'all', shown: 30, loading: false, openDays: {}, openTalks: {} },   // KPI Details › History; openDays: day label → open
+            // 📅 Meetings in KPI details (controllers/kpi_talks_api.py), by date.
+            detailMeetings: { days: [], count: 0 },
             activityExpanded: {},     // which day sections are open, keyed by date
             activityKind: 'all',      // which log the dropdown picked
             activityRows: [],         // rows for a narrowed kind ('all' reads detailData)
@@ -3479,6 +3915,7 @@ export class KpiAction extends Component {
             isAdmin: false,
             selfPendingCount: 0,  // 🆕 Self-created tasks awaiting admin Accept
             currentUserId: null,  // 🆕 NEW: Store current user ID from API
+            finishBusy: null,     // task id while 🏁 Full Complete / 🧾 Bill now runs
             showMyTasksOnly: false,  // 🆕 NEW: Toggle for My Tasks filter
             workdayOpen:    false,   // green Start Workday button visible while false
             workdayPaused:  false,   // open but frozen — Presence stopped, tasks blocked
@@ -3718,10 +4155,31 @@ export class KpiAction extends Component {
 
         onWillStart(async () => {
             await this.refresh();
+            // Opened from Client Talks: straight to that task, or to a General chat.
+            const ctx = (this.props.action && this.props.action.context) || {};
+            if (ctx.open_kpi_id) {
+                await this.openKpiDetail(ctx.open_kpi_id);
+            } else if (ctx.open_chat_kpi_id) {
+                this.openGeneralChat({ kpi_id: ctx.open_chat_kpi_id, code: ctx.open_chat_ref || "", client: ctx.open_chat_client || "" });
+            }
         });
 
         // Refs for the top-scrollbar sync (kanban-scrolls-horizontally pattern)
         this.kpiScrollTop = useRef('kpiScrollTop');
+        // KPI Details: the pinned left column. Taller than the screen, its
+        // BOTTOM sticks (a negative top), so it scrolls with the page until
+        // its end shows, then stays while the right column goes on.
+        this.leftPin = useRef('leftPin');
+        useEffect((el) => {
+            if (!el || typeof ResizeObserver === 'undefined') return;
+            const box = el.closest('.o_content') || document.documentElement;
+            const fit = () => { el.style.top = Math.min(12, box.clientHeight - el.offsetHeight - 12) + 'px'; };
+            const ro = new ResizeObserver(fit);
+            ro.observe(el);
+            ro.observe(box);
+            fit();
+            return () => ro.disconnect();
+        }, () => [this.leftPin.el]);
         this.kpiScrollTopInner = useRef('kpiScrollTopInner');
         this.kpiKanbanRow = useRef('kpiKanbanRow');
         // The two file inputs. A file control renders its label from its OWN
@@ -4003,6 +4461,39 @@ export class KpiAction extends Component {
     }
 
     // 🆕 NEW: Confirm Approve
+    // 🏁 Full Complete: the client has checked it; with the manual (and the
+    // GitHub link for a module / app) on it, it closes and goes to billing.
+    async fullComplete(task) {
+        if (this.state.finishBusy) return;
+        this.state.finishBusy = task.id;
+        try {
+            const r = await rpc('/kra_kpi/task/full_complete', { kpi_id: task.id });
+            if (!r?.status) {
+                const missing = (r?.missing || []).join('\n• ');
+                this._toast(missing ? 'Before Full Complete:\n• ' + missing : (r?.message || "Couldn't complete it."), 'warning');
+                return;
+            }
+            this._toast(r.message || 'Fully complete.', 'success');
+            await this.refresh();
+        } catch (e) {
+            this._toast("Couldn't complete it: " + ((e && e.message) || e), 'danger');
+        } finally { this.state.finishBusy = null; }
+    }
+
+    // 🧾 Bill now: a fully complete task had no matching price; try again.
+    async billNow(task) {
+        if (this.state.finishBusy) return;
+        this.state.finishBusy = task.id;
+        try {
+            const r = await rpc('/kpi_billing/bill_now', { kpi_id: task.id });
+            if (!r?.status) { this._toast(r?.message || "Couldn't make the bill.", 'warning'); return; }
+            this._toast(r.bill && r.bill.name ? ('Bill ' + r.bill.name + ' made: ' + r.bill.money) : 'Bill made.', 'success');
+            await this.refresh();
+        } catch (e) {
+            this._toast("Couldn't make the bill: " + ((e && e.message) || e), 'danger');
+        } finally { this.state.finishBusy = null; }
+    }
+
     async confirmApprove() {
         // Collect manager checklist values
         const managerChecklist = {
@@ -6836,27 +7327,58 @@ export class KpiAction extends Component {
         await this.loadResourceSections(id);  // Part E: sortable resource sections
         await this.loadLegacy(id);
         await this.loadClientSends(id);
+        this.loadDetailMeetings(id);
+        this.state.history.items = [];
+        this.state.history.filter = 'all';
+        this.state.history.shown = 30;
+        this.loadHistory(id);
         this.state.chatWaiting = 0;
         this.loadChat(true);
     }
 
+    // ---- 📅 Meetings on this task (controllers/kpi_talks_api.py) -----------
+    async loadDetailMeetings(id) {
+        this.state.detailMeetings = { days: [], count: 0 };
+        try {
+            const r = await rpc("/kpi_action/meetings", { kpi_id: id });
+            if (r && r.status && this.state.detailKpiId === id) {
+                this.state.detailMeetings = { days: r.days || [], count: r.count || 0 };
+            }
+        } catch (e) { /* the section just stays empty */ }
+    }
+
     // ---- 💬 Chat with the client (models/kpi_chat.py) ----------------------
+    // The same reaction set as the 369Chats app and models/kpi_chat.py.
+    get CHAT_QUICK_REACTIONS() { return ['👍', '❤️', '😂', '😮', '😢', '🙏']; }
+    get CHAT_ALL_REACTIONS() {
+        return ['👍', '👎', '❤️', '🔥', '🎉', '👏', '🙏', '💯', '😂', '🤣', '😅', '😊', '😍', '😎', '🤔', '😐',
+                '😮', '😢', '😭', '😡', '🥳', '🤝', '💪', '✅', '❌', '⚠️', '👀', '🚀', '⭐', '💡', '⏰', '📌'];
+    }
     async loadChat(countOnly = false) {
-        const kpiId = this.state.detailKpiId;
+        const kpiId = this._chatTaskId();
         if (!kpiId) return;
         if (!countOnly) this.state.chatLoading = true;
         try {
-            const res = await rpc('/kpi_action/chat', { kpi_id: kpiId });
-            if (kpiId !== this.state.detailKpiId) return;   // moved to another task meanwhile
+            // The window is open and on screen: the client's messages count as
+            // seen (blue ✓✓ on their page). The count-only poll never marks.
+            const markSeen = !countOnly && this.state.chatOpen && document.visibilityState === 'visible';
+            // active: also touched in the last minute = we are online, so the
+            // client's messages make no WhatsApp alert.
+            const active = markSeen && Date.now() - (this._chatTouch || 0) < 60000;
+            const res = await rpc('/kpi_action/chat', { kpi_id: kpiId, mark_seen: markSeen, active });
+            if (kpiId !== this._chatTaskId()) return;   // moved to another task meanwhile
             if (res && res.status === false) {
                 if (!countOnly) this._toast(res.message || "Couldn't load the chat.", 'danger');
                 return;
             }
             this.state.chatWaiting = res.waiting || 0;
             if (countOnly) return;
+            if (this.state.chatSending) return;   // a send is in flight: its answer wins
             const grew = (res.messages || []).length !== this.state.chatMsgs.length;
+            this._chatHeard(res.messages || []);
             this.state.chatMsgs = res.messages || [];
-            this.state.chatInfo = { can_send: res.can_send, locked: res.locked, client: res.client };
+            this.state.chatInfo = { can_send: res.can_send, locked: res.locked, client: res.client,
+                                    can_act: res.can_act, ref: res.ref };
             if (grew) this._chatScroll();
         } catch (e) {
             if (!countOnly) this._toast("Couldn't load the chat: " + ((e && e.message) || e), 'danger');
@@ -6864,19 +7386,211 @@ export class KpiAction extends Component {
             this.state.chatLoading = false;
         }
     }
-    async openChat() {
+    // ---- KPI Details › History (/kpi_action/history) -------------------------
+    // History days (keyed by the day label): Today starts open, every other
+    // day closed, until tapped.
+    toggleHistoryDay(label) {
+        this.state.history.openDays[label] = !this.isHistoryDayOpen(label);
+    }
+    isHistoryDayOpen(label) {
+        const o = this.state.history.openDays;
+        return label in o ? !!o[label] : label === 'Today';
+    }
+    // A talk row in History: closed until tapped.
+    toggleHistoryTalk(key) {
+        this.state.history.openTalks[key] = !this.state.history.openTalks[key];
+    }
+    isHistoryTalkOpen(key) {
+        return !!this.state.history.openTalks[key];
+    }
+    async loadHistory(kpiId) {
+        const id = kpiId || this.state.detailKpiId;
+        if (!id) return;
+        if (kpiId) {   // another task: start closed
+            this.state.history.openDays = {};
+            this.state.history.openTalks = {};
+        }
+        this.state.history.loading = true;
+        try {
+            const res = await rpc('/kpi_action/history', { kpi_id: id });
+            if (id !== this.state.detailKpiId) return;   // moved to another task meanwhile
+            this.state.history.items = (res && res.status) ? (res.items || []) : [];
+        } catch (e) {
+            this.state.history.items = [];
+        } finally {
+            this.state.history.loading = false;
+        }
+    }
+    historyFilters() {
+        const items = this.state.history.items || [];
+        const n = (kinds) => items.filter((i) => kinds.includes(i.kind)).length;
+        return [
+            { key: 'all', label: 'All', count: items.filter((i) => i.kind !== 'activity').length },
+            { key: 'talks', label: 'Client talks', count: n(['talk', 'question']) },
+            { key: 'progress', label: 'Progress', count: n(['progress']) },
+            { key: 'meetings', label: 'Meetings', count: n(['meeting']) },
+            { key: 'code', label: 'Code', count: n(['code']) },
+            { key: 'documents', label: 'Documents', count: n(['document']) },
+            { key: 'activity', label: 'Activity', count: n(['activity']) },
+        ];
+    }
+    _historyShown() {
+        const f = this.state.history.filter;
+        const want = { talks: ['talk', 'question'], progress: ['progress'], meetings: ['meeting'],
+                       code: ['code'], documents: ['document'], activity: ['activity'] }[f];
+        return (this.state.history.items || []).filter((i) => (want ? want.includes(i.kind) : i.kind !== 'activity'));
+    }
+    historyMore() {
+        return this._historyShown().length > this.state.history.shown;
+    }
+    historyDays() {
+        const days = [];
+        let cur = null;
+        for (const it of this._historyShown().slice(0, this.state.history.shown)) {
+            const d = this._chatDate(it.at);
+            const label = this._historyDay(d);
+            if (!cur || cur.label !== label) {
+                cur = { label, items: [] };
+                days.push(cur);
+            }
+            cur.items.push(it);
+        }
+        return days;
+    }
+    _historyDay(d) {
+        if (!d) return '';
+        const today = new Date();
+        const y = new Date(Date.now() - 864e5);
+        if (d.toDateString() === today.toDateString()) return 'Today';
+        if (d.toDateString() === y.toDateString()) return 'Yesterday';
+        return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    historyTime(at) {
+        return this.chatTime(at);
+    }
+    historyIcon(kind) {
+        return { talk: 'fa-comments', question: 'fa-question', progress: 'fa-pencil', meeting: 'fa-calendar',
+                 code: 'fa-github', document: 'fa-file-text-o', activity: 'fa-history' }[kind] || 'fa-circle';
+    }
+    historyColor(kind) {
+        return { talk: '#00a884', question: '#714b67', progress: '#017e84', meeting: '#6f42c1',
+                 code: '#374151', document: '#b7791f', activity: '#6c757d' }[kind] || '#6c757d';
+    }
+    // The left column's buttons: bring that form into view, and focus it when it is a field.
+    historyJump(id) {
+        const el = document.getElementById(id);
+        if (!el) {
+            this._toast('That section is not available on this task right now.', 'warning');
+            return;
+        }
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (typeof el.focus === 'function' && /^(TEXTAREA|INPUT)$/.test(el.tagName)) el.focus();
+    }
+    // The task whose chat is open: one picked from 💬 General questions, else
+    // the task open in KPI Details.
+    _chatTaskId() {
+        return this.state.chatKpiId || this.state.detailKpiId;
+    }
+    async loadGeneralChats() {
+        try {
+            const res = await rpc('/kpi_action/chat/general_list', {});
+            if (res && res.status) {
+                this.state.generalChats.rows = res.rows || [];
+                this.state.generalChats.waiting = res.waiting || 0;
+            }
+        } catch (e) { /* the button just shows no count */ }
+    }
+    async openGeneralChats() {
+        this.state.generalChats.open = true;
+        await this.loadGeneralChats();
+    }
+    async openGeneralChat(g) {
+        this.state.generalChats.open = false;
+        this.state.chatKpiId = g.kpi_id;
+        this.state.chatInfo = { ref: g.code || g.ref, client: g.client };
+        await this.openChat(true);
+    }
+    async openChat(keepTask = false) {
+        if (!keepTask) this.state.chatKpiId = null;
         this.state.chatOpen = true;
+        this._chatLastClient = null;
+        this._chatTouch = Date.now();
+        if (!this._chatTouchOn) {
+            this._chatTouchOn = () => { this._chatTouch = Date.now(); };
+            ['pointerdown', 'keydown', 'touchstart', 'wheel', 'mousemove'].forEach(
+                (n) => document.addEventListener(n, this._chatTouchOn, { passive: true, capture: true }));
+        }
         this.state.chatMsgs = [];
         this.state.chatText = '';
+        this.state.chatFiles = [];
+        this.state.chatReply = null;
+        this.state.chatEdit = null;
+        this.state.chatCard = null;
+        this.state.chatPinOpen = false;
         await this.loadChat();
         // New messages show up while the window is open, like WhatsApp.
         clearInterval(this._chatTimer);
         this._chatTimer = setInterval(() => {
             if (this.state.chatOpen) this.loadChat(); else clearInterval(this._chatTimer);
-        }, 10000);
+        }, 3000);
+    }
+    // 🔔 A client message while this tab is in the background (or the window
+    // is not focused): a soft pop and "(N) New message" in the tab title,
+    // cleared when the person comes back. Looking at the chat: silent.
+    _chatHeard(rows) {
+        let newest = 0, fresh = 0;
+        for (const m of rows) {
+            if (m.side !== 'client' || typeof m.id !== 'number') continue;
+            if (m.id > newest) newest = m.id;
+            if (this._chatLastClient != null && m.id > this._chatLastClient) fresh++;
+        }
+        if (this._chatLastClient != null && fresh) this._chatNotify(fresh);
+        this._chatLastClient = Math.max(this._chatLastClient || 0, newest);
+    }
+    _chatNotify(n) {
+        const away = () => document.hidden || !document.hasFocus();
+        if (!this._chatSound) {
+            const s = this._chatSound = { ctx: null, unread: 0, base: '' };
+            const unlock = () => {
+                if (!s.ctx) { try { s.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { s.ctx = null; } }
+                if (s.ctx && s.ctx.state === 'suspended') s.ctx.resume();
+            };
+            ['pointerdown', 'keydown', 'touchstart'].forEach((ev) => document.addEventListener(ev, unlock, { passive: true }));
+            const back = () => {
+                if (!away() && s.unread) { s.unread = 0; document.title = s.base; }
+            };
+            document.addEventListener('visibilitychange', back);
+            window.addEventListener('focus', back);
+            unlock();
+        }
+        const s = this._chatSound;
+        if (!n || !away()) return;
+        if (!s.unread) s.base = document.title;
+        s.unread += n;
+        document.title = `(${s.unread}) New message · ${this.state.chatInfo.ref || this.state.detailData.external_ref || 'Chat'}`;
+        if (s.ctx) {
+            const t = s.ctx.currentTime;
+            for (const [freq, at] of [[880, 0], [1320, 0.08]]) {
+                const o = s.ctx.createOscillator(), g = s.ctx.createGain();
+                o.type = 'sine'; o.frequency.value = freq;
+                g.gain.setValueAtTime(0.0001, t + at);
+                g.gain.exponentialRampToValueAtTime(0.12, t + at + 0.012);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.1);
+                o.connect(g); g.connect(s.ctx.destination);
+                o.start(t + at); o.stop(t + at + 0.12);
+            }
+        }
     }
     closeChat() {
+        if (this._chatRec) this.chatRecFinish(false);
+        if (this.state.chatKpiId) {
+            this.state.chatKpiId = null;
+        }
         this.state.chatOpen = false;
+        this.state.chatPhoto = null;
+        this.state.chatEmojiOpen = false;
+        this.chatCloseCard();
+        this.chatHoldEnd();
         clearInterval(this._chatTimer);
         this.loadChat(true);
     }
@@ -6895,22 +7609,382 @@ export class KpiAction extends Component {
     }
     async sendChat() {
         const text = (this.state.chatText || '').trim();
-        if (!text || this.state.chatSending) return;
+        const files = this.state.chatFiles;
+        if (this.state.chatEdit) {
+            // ✎ The box holds the new text of an existing message.
+            if (!text || this.state.chatSending) return;
+            this.state.chatSending = true;
+            try {
+                if (await this.chatAct(this.state.chatEdit.id, 'edit', { text })) {
+                    this.state.chatText = '';
+                    this.state.chatEdit = null;
+                }
+            } finally {
+                this.state.chatSending = false;
+            }
+            return;
+        }
+        if ((!text && !files.length) || this.state.chatSending) return;
         this.state.chatSending = true;
+        this.state.chatPinOpen = false;
+        this.state.chatEmojiOpen = false;
+        const reply = this.state.chatReply;
+        const replyTo = reply ? reply.id : '';
+        // A text message shows at once with a single ✓ and the box clears;
+        // the server's answer replaces it. Files keep the progress bar.
+        let temp = null;
+        if (!files.length) {
+            temp = {
+                id: 'tmp' + Date.now(), side: 'team', who: session.name || 'You', body: text,
+                at: new Date().toISOString().slice(0, 19).replace('T', ' '), files: [],
+                reply: reply ? { id: reply.id, side: reply.side, who: reply.who, text: reply.text } : false,
+                status: 'pending', error: '', mine: true,
+            };
+            this.state.chatMsgs = [...this.state.chatMsgs, temp];
+            this.state.chatText = '';
+            this.state.chatReply = null;
+            this._chatScroll();
+        }
         try {
-            const res = await rpc('/kpi_action/chat/send', { kpi_id: this.state.detailKpiId, text, source: 'odoo' });
+            let res;
+            if (files.length) {
+                // 📎 multipart, so the bar can show real upload progress.
+                const fd = new FormData();
+                fd.append('kpi_id', this._chatTaskId());
+                fd.append('text', text);
+                fd.append('source', 'odoo');
+                fd.append('reply_to', replyTo);
+                for (const cf of files) fd.append('files', cf.file, cf.file.name);
+                this.state.chatProgress = { percent: 0, loaded: 0, total: 0 };
+                const { promise } = uploadWithProgress('/kpi_action/chat/send_files', fd, (p) => {
+                    this.state.chatProgress = p;
+                });
+                res = await promise;
+            } else {
+                res = await rpc('/kpi_action/chat/send', {
+                    kpi_id: this._chatTaskId(), text, source: 'odoo', reply_to: replyTo,
+                });
+            }
             if (res && res.status === false) {
+                this._chatUnsend(temp, text, reply);
                 this._toast(res.message || "Couldn't send.", 'danger');
                 return;
             }
             this.state.chatText = '';
+            this.state.chatFiles = [];
+            this.state.chatReply = null;
             this.state.chatMsgs = res.messages || [];
             this.state.chatWaiting = res.waiting || 0;
             this._chatScroll();
         } catch (e) {
+            this._chatUnsend(temp, text, reply);
             this._toast("Couldn't send: " + ((e && e.message) || e), 'danger');
         } finally {
             this.state.chatSending = false;
+            this.state.chatProgress = null;
+        }
+    }
+    // 📎 Same rules as the server (models/kpi_chat.py): photos, videos, audio
+    // and documents, at most 10 on one message, 50 MB each.
+    chatPick(kind) {
+        this.state.chatPinOpen = false;
+        const el = document.getElementById('o_kpi_chat_in_' + kind);
+        if (el) {
+            el.value = '';
+            el.click();
+        }
+    }
+    _chatFileKind(file) {
+        const t = (file.type || '').toLowerCase();
+        const n = (file.name || '').toLowerCase();
+        if (t.startsWith('audio/')) return 'audio';
+        if (t.startsWith('image/')) return 'image';
+        if (t.startsWith('video/')) return 'video';
+        if (/\.(jpe?g|png|gif|webp|bmp|heic|heif)$/.test(n)) return 'image';
+        if (/\.(mp4|mov|mkv|avi|m4v)$/.test(n)) return 'video';
+        if (/\.(webm|ogg|opus|mp3|wav|m4a|aac|amr|3gp)$/.test(n)) return 'audio';
+        if (/\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z)$/.test(n)) return 'document';
+        return '';
+    }
+    onChatFiles(ev) {
+        const picked = Array.from(ev.target.files || []);
+        ev.target.value = '';
+        const MAX_FILES = 10, MAX_BYTES = 50 * 1024 * 1024;
+        for (const file of picked) {
+            const kind = this._chatFileKind(file);
+            if (!kind) {
+                this._toast(`"${file.name}" can not be sent: photos, videos, audio and documents only.`, 'warning');
+            } else if (file.size > MAX_BYTES) {
+                this._toast(`"${file.name}" is ${this._fmtBytes(file.size)}. The limit is 50 MB.`, 'warning');
+            } else if (this.state.chatFiles.length >= MAX_FILES) {
+                this._toast(`At most ${MAX_FILES} files in one message.`, 'warning');
+                break;
+            } else {
+                this.state.chatFiles.push({ file, kind });
+            }
+        }
+    }
+    chatRemoveFile(i) {
+        this.state.chatFiles.splice(i, 1);
+    }
+    _chatFilesLabel(files) {
+        const out = [];
+        for (const [kind, icon, one, many] of [['image', '📷', 'photo', 'photos'],
+            ['video', '🎥', 'video', 'videos'], ['audio', '🎵', 'audio', 'audios'],
+            ['document', '📄', 'document', 'documents']]) {
+            const n = (files || []).filter((f) => f.kind === kind).length;
+            if (n) out.push(`${icon} ${n} ${n === 1 ? one : many}`);
+        }
+        return out.join(' · ');
+    }
+    // ↩ Reply: the next message quotes this one.
+    chatReplyTo(m) {
+        this.state.chatReply = {
+            id: m.id,
+            who: m.side === 'team' ? m.who : m.who + ' · client',
+            text: (m.body || '').replace(/\s+/g, ' ').slice(0, 120) || this._chatFilesLabel(m.files),
+        };
+        const el = document.getElementById('o_kpi_chat_text');
+        if (el) el.focus();
+    }
+    chatJump(id) {
+        const el = document.getElementById('o_kpi_chat_m' + id);
+        if (!el) return;
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.style.background = 'rgba(0,168,132,.18)';
+        setTimeout(() => { el.style.background = ''; }, 1400);
+    }
+    // ---- the long-press action card (as 369Chats / WhatsApp) ----------------
+    // Hold a bubble 450 ms without moving, or right-click it. Touch events
+    // on phones (a browser may cancel pointer events mid-press), mouse on
+    // computers; a touch device ignores the mouse events it also emits.
+    _chatPoint(ev) {
+        const t = ev.touches && ev.touches[0];
+        return t ? { x: t.clientX, y: t.clientY } : { x: ev.clientX, y: ev.clientY };
+    }
+    chatHoldStart(ev, m) {
+        if (ev.type === 'mousedown' && (ev.button !== 0 || 'ontouchstart' in window)) return;
+        this.chatHoldEnd();
+        const p = this._chatPoint(ev);
+        this._chatHold = { x: p.x, y: p.y, fired: false,
+                           timer: setTimeout(() => { this._chatFiredAt = Date.now(); this._chatHold = null; this.chatOpenCard(m); }, 450) };
+    }
+    chatHoldMove(ev) {
+        const h = this._chatHold;
+        if (!h) return;
+        const p = this._chatPoint(ev);
+        if (Math.abs(p.x - h.x) > 8 || Math.abs(p.y - h.y) > 8) this.chatHoldEnd();
+    }
+    chatHoldEnd(ev) {
+        if (this._chatHold) clearTimeout(this._chatHold.timer);
+        this._chatHold = null;
+        // The card just opened under this finger: no ghost click on it.
+        if (ev && ev.type === 'touchend' && Date.now() - (this._chatFiredAt || 0) < 800 && ev.cancelable) ev.preventDefault();
+    }
+    chatHoldContext(m) {
+        this.chatHoldEnd();
+        // A phone's own long-press menu comes right after our hold: ignore that one.
+        if (Date.now() - (this._chatFiredAt || 0) > 800) this.chatOpenCard(m);
+    }
+    chatOpenCard(m) {
+        if (!m || m.deleted || String(m.id).startsWith('tmp')) return;
+        this.state.chatCard = { id: m.id, grid: false, info: false };
+        // Esc closes the card wherever the focus is.
+        if (!this._chatEsc) {
+            this._chatEsc = (ev) => { if (ev.key === 'Escape') this.chatCloseCard(); };
+            document.addEventListener('keydown', this._chatEsc);
+        }
+    }
+    chatCloseCard() {
+        this.state.chatCard = null;
+        if (this._chatEsc) {
+            document.removeEventListener('keydown', this._chatEsc);
+            this._chatEsc = null;
+        }
+    }
+    // The card keeps only the id: the row is read fresh, so a 3 s refresh
+    // cannot leave it pointing at stale data.
+    chatCardMsg() {
+        const c = this.state.chatCard;
+        return c ? (this.state.chatMsgs.find((m) => m.id === c.id) || null) : null;
+    }
+    chatCanAct() {
+        return !!this.state.chatInfo.can_act;
+    }
+    get CHAT_EMOJI() {
+        return ['😀', '😂', '😊', '😍', '😘', '🤔', '😅', '😉', '🙂', '😎', '😢', '😭', '😡', '👍', '👎', '🙏',
+                '👏', '💪', '🤝', '👌', '✌️', '🙌', '❤️', '🔥', '🎉', '✅', '❌', '⚠️', '⭐', '💯', '👀', '🚀',
+                '💡', '📌', '⏰', '📷', '📎', '📝', '💬', '📞'];
+    }
+    // 🎤 Voice note, as in WhatsApp: with an empty box the send button is a
+    // mic. Recording can be paused, listened to, continued; it goes out only
+    // when ➤ is pressed, through the same upload as a picked audio file.
+    chatMicMode() {
+        return !this.state.chatEdit && !(this.state.chatText || '').trim() && !this.state.chatFiles.length
+            && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+    }
+    async chatRecStart() {
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (e) {
+            this._toast('Microphone not available — allow it in the browser to record.', 'warning');
+            return;
+        }
+        const types = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'];
+        const mime = types.find((t) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+        let rec;
+        try { rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); } catch (e) { rec = new MediaRecorder(stream); }
+        const r = this._chatRec = { rec, stream, mime, chunks: [], acc: 0, started: Date.now() };
+        rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) r.chunks.push(ev.data); };
+        rec.start(250);
+        this.state.chatRec = { paused: false, time: '0:00', url: '' };
+        r.timer = setInterval(() => {
+            const ms = r.acc + (rec.state === 'recording' ? Date.now() - r.started : 0);
+            const sec = Math.floor(ms / 1000);
+            if (this.state.chatRec) this.state.chatRec.time = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+            if (ms >= 900000 && rec.state === 'recording') this.chatRecPause();
+        }, 250);
+    }
+    chatRecPause() {
+        const r = this._chatRec;
+        if (!r || r.rec.state !== 'recording') return;
+        r.rec.pause();
+        r.acc += Date.now() - r.started;
+        try { r.rec.requestData(); } catch (e) { /* the chunks so far are enough */ }
+        this.state.chatRec.paused = true;
+        setTimeout(() => {
+            if (!this.state.chatRec || !this._chatRec) return;
+            if (r.url) URL.revokeObjectURL(r.url);
+            r.url = URL.createObjectURL(new Blob(r.chunks, { type: (r.rec.mimeType || r.mime || 'audio/webm').split(';')[0] }));
+            this.state.chatRec.url = r.url;
+        }, 200);
+    }
+    chatRecResume() {
+        const r = this._chatRec;
+        if (!r || r.rec.state !== 'paused') return;
+        this.state.chatRec.url = '';
+        r.rec.resume();
+        r.started = Date.now();
+        this.state.chatRec.paused = false;
+    }
+    chatRecFinish(send) {
+        const r = this._chatRec;
+        if (!r) return;
+        r.rec.onstop = () => {
+            r.stream.getTracks().forEach((t) => t.stop());
+            clearInterval(r.timer);
+            if (r.url) URL.revokeObjectURL(r.url);
+            this._chatRec = null;
+            this.state.chatRec = null;
+            const type = (r.rec.mimeType || r.mime || 'audio/webm').split(';')[0];
+            const blob = new Blob(r.chunks, { type });
+            if (!send || !blob.size) return;
+            const ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'm4a' : 'webm';
+            const n = new Date(), p = (x) => String(x).padStart(2, '0');
+            const name = `voice-${n.getFullYear()}${p(n.getMonth() + 1)}${p(n.getDate())}-${p(n.getHours())}${p(n.getMinutes())}${p(n.getSeconds())}.${ext}`;
+            this.state.chatFiles = [{ file: new File([blob], name, { type }), kind: 'audio' }];
+            this.sendChat();
+        };
+        if (r.rec.state === 'inactive') r.rec.onstop(); else r.rec.stop();
+    }
+    // The hover ↩ beside a bubble: reply to it straight away.
+    chatQuickReply(m) {
+        this.state.chatEdit = null;
+        this.chatReplyTo(m);
+    }
+    chatInsertEmoji(e) {
+        const el = document.getElementById('o_kpi_chat_text');
+        const text = this.state.chatText || '';
+        const at = el && el.selectionStart != null ? el.selectionStart : text.length;
+        const end = el && el.selectionEnd != null ? el.selectionEnd : at;
+        this.state.chatText = text.slice(0, at) + e + text.slice(end);
+        if (el) {
+            setTimeout(() => { el.focus(); el.selectionStart = el.selectionEnd = at + e.length; this.chatFitBox({ target: el }); }, 0);
+        }
+    }
+    // The type box grows with the text, like WhatsApp.
+    chatFitBox(ev) {
+        const el = ev && ev.target;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+    }
+    // Info: plain times (with the date when it is not today).
+    chatInfoRows(m) {
+        return [['✓', 'Sent', m.at, false],
+                ['✓✓', "Delivered to the client's group", m.info && m.info.delivered_at, false],
+                ['✓✓', 'Seen by the client', m.info && m.info.seen_at, true]].map(
+            ([mark, what, at, seen]) => ({ mark, what, seen, time: at ? this.chatStamp(at) : 'not yet' }));
+    }
+    // The photo viewer's "Today at 2:23 pm" / "21 Oct at 2:23 pm".
+    chatPhotoWhen(at) {
+        const d = this._chatDate(at);
+        if (!d) return '';
+        const today = d.toDateString() === new Date().toDateString();
+        return (today ? 'Today' : d.toLocaleDateString([], { day: 'numeric', month: 'short' })) + ' at ' + this.chatTime(at);
+    }
+    chatStamp(at) {
+        const d = this._chatDate(at);
+        if (!d) return 'not yet';
+        const today = d.toDateString() === new Date().toDateString();
+        return (today ? '' : d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ') + this.chatTime(at);
+    }
+    chatCardReact(emoji) {
+        const c = this.state.chatCard;
+        this.chatCloseCard();
+        if (c) this.chatAct(c.id, 'react', { emoji });
+    }
+    chatCardDo(what) {
+        const m = this.chatCardMsg();
+        this.chatCloseCard();
+        if (!m) return;
+        if (what === 'reply') {
+            this.state.chatEdit = null;
+            this.chatReplyTo(m);
+        } else if (what === 'edit') {
+            this.state.chatReply = null;
+            this.state.chatEdit = { id: m.id, text: (m.body || '').replace(/\s+/g, ' ').slice(0, 120) };
+            this.state.chatText = m.body || '';
+            const el = document.getElementById('o_kpi_chat_text');
+            if (el) el.focus();
+        } else if (what === 'copy') {
+            const text = m.body || '';
+            const fallback = () => {
+                const ta = document.createElement('textarea');
+                ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                document.body.appendChild(ta); ta.select();
+                try { document.execCommand('copy'); } catch (e) { /* nothing to do */ }
+                document.body.removeChild(ta);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(fallback);
+            else fallback();
+            this._toast('Copied.', 'success');
+        } else if (what === 'delete') {
+            if (window.confirm('Delete this message for everyone?')) this.chatAct(m.id, 'delete');
+        }
+    }
+    chatCancelBar() {
+        if (this.state.chatEdit) this.state.chatText = '';
+        this.state.chatEdit = null;
+        this.state.chatReply = null;
+    }
+    async chatAct(msgId, action, extra = {}) {
+        try {
+            const res = await rpc('/kpi_action/chat/act', {
+                kpi_id: this._chatTaskId(), msg_id: msgId, action, emoji: extra.emoji, text: extra.text,
+            });
+            if (res && res.status === false) {
+                this._toast(res.message || "That didn't work.", 'danger');
+                return false;
+            }
+            this.state.chatMsgs = res.messages || [];
+            this.state.chatInfo = { ...this.state.chatInfo, can_act: res.can_act, locked: res.locked };
+            this.state.chatWaiting = res.waiting || 0;
+            return true;
+        } catch (e) {
+            this._toast("That didn't work: " + ((e && e.message) || e), 'danger');
+            return false;
         }
     }
     _chatDate(at) {
@@ -6920,6 +7994,34 @@ export class KpiAction extends Component {
     chatTime(at) {
         const d = this._chatDate(at);
         return d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    }
+    // The send failed: the provisional bubble goes, the text and reply come back.
+    _chatUnsend(temp, text, reply) {
+        if (!temp) return;
+        this.state.chatMsgs = this.state.chatMsgs.filter((m) => m.id !== temp.id);
+        this.state.chatText = text;
+        this.state.chatReply = reply;
+    }
+    // ✓ saved · ✓✓ reached the client's group · blue ✓✓ the client opened the
+    // chat · ⚠ WhatsApp refused it (tap to retry).
+    chatTick(m) {
+        return m.status === 'failed' ? '⚠' : (m.status === 'pending' ? '✓' : '✓✓');
+    }
+    chatTickTitle(m) {
+        if (m.status === 'failed') return (m.error || 'Not delivered.') + ' Tap to retry.';
+        if (m.status === 'seen') return 'Seen by the client';
+        if (m.status === 'sent') return 'Delivered to the client\'s WhatsApp group';
+        return 'Sending…';
+    }
+    async chatRetry(m) {
+        if (m.status !== 'failed' || !this._chatTaskId()) return;
+        try {
+            const res = await rpc('/kpi_action/chat/retry', { kpi_id: this._chatTaskId(), message_id: m.id });
+            if (res && res.status === false) { this._toast(res.message || "Couldn't retry.", 'danger'); return; }
+            this.state.chatMsgs = res.messages || [];
+        } catch (e) {
+            this._toast("Couldn't retry: " + ((e && e.message) || e), 'danger');
+        }
     }
     chatGroups() {
         const groups = [];
@@ -9165,7 +10267,8 @@ export class KpiAction extends Component {
         // Find paused tasks with rejection messages for current user
         const allRejectedTasks = this.state.tasksByState['paused'].filter(task => {
             const isCurrentUser = task.user_id === currentUserId;
-            const hasRejection = task.paused_reason && task.paused_reason.includes('🔴 REJECTED');
+            // Both the manager's "🔴 REJECTED" and the client's "🔴 CLIENT REJECTED" (a send back).
+            const hasRejection = task.paused_reason && /🔴 (CLIENT )?REJECTED/.test(task.paused_reason);
             
             return isCurrentUser && hasRejection;
         });
@@ -9208,6 +10311,7 @@ export class KpiAction extends Component {
         
         // Remove the "🔴 REJECTED - Manager Feedback: " prefix
         return pausedReason
+            .replace(/^🔴 CLIENT REJECTED\s*[—-]\s*/, '')
             .replace('🔴 REJECTED - Manager Feedback: ', '')
             .replace('🔴 REJECTED -', '')
             .replace('Manager Feedback:', '')
