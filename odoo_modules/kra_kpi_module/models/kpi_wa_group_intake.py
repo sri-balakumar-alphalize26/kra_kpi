@@ -90,12 +90,26 @@ _CLIENT_STATUS = {
     'completed': '✅ Done',
 }
 _MYREQ_PAGE_ROWS = 8
+# Meeting / Discuss request pickers: rows per page, leaving room in the
+# 10-option poll for More, Back, Search and Other.
+_PICK_PAGE_ROWS = 6
+_PICK_SEARCH_ID = '__search__'
+_PICK_CLEAR_ID = '__clear__'
+_PICK_OTHER_ID = '__othertopic__'
+# ↩️ Back: the previous question. Added to every client menu that has room
+# (_poll, context kpi_back_ok); answered before the step pickers (_go_back).
+_BACK_LABEL = '↩️ Back'
+# Steps where the person TYPES: a typed "back" there is their text, so only a
+# tap on an earlier menu's Back row counts.
+_TEXT_STEPS = ('type_server', 'ask_db_name', 'ask_db_desc', 'type_install', 'type_slot',
+               'type_db', 'type_disc_reason', 'ask_text', 'discuss_text',
+               'meet_search', 'discuss_search', 'myreq_search', 'db_search', 'livedb_search')
 
 # Types answered with a private one-use form link (/kpi/wa/client/<token>,
 # controllers/kpi_wa_client_form.py) instead of the poll conversation.
 _FORM_TYPES = ('requirement', 'bug', 'update', 'newdb', 'dbdisconnect')
 CLIENT_FORM_TTL_MINUTES = 30
-_LIVEDB_PAGE_ROWS = 8
+_LIVEDB_PAGE_ROWS = 6
 _LIVEDB_MORE_ID = '__more__'
 _LIVEDB_BACK_ID = '__back__'
 
@@ -164,6 +178,13 @@ _STEPS = [
     ('discuss_pick', 'Discuss: picking a request'),
     ('discuss_text', 'Discuss: typing the message'),
     ('discuss_confirm', 'Discuss: confirming the message'),
+    ('discuss_search', 'Discuss: typing a search'),
+    # 📅 Request a Meeting: which open request it is about.
+    ('meet_pick', 'Meeting: picking the request'),
+    ('meet_search', 'Meeting: typing a search'),
+    ('myreq_search', 'My requests: typing a search'),
+    ('db_search', 'Database picker: typing a search'),
+    ('livedb_search', 'Live databases: typing a search'),
     # Smart typing: a request type typed ("bug") is asked about first.
     ('type_confirm', 'Confirming a typed choice'),
 ]
@@ -414,6 +435,11 @@ class KpiWaGroupIntake(models.Model):
     action_type = fields.Selection(
         selection=lambda self: [(r[0], r[1]) for r in _TYPE_ROWS])
     work_area = fields.Char()
+    # 📅 Meeting about an EXISTING request (no new ticket), or Other (area list).
+    meet_kpi_id = fields.Many2one('kra.kpi', ondelete='set null', copy=False)
+    meet_other = fields.Boolean(copy=False)
+    # Meeting / Discuss request pickers: the words typed after 🔍 Search.
+    pick_search = fields.Char(copy=False)
     raw_text = fields.Text(help='Exactly what the member typed, before tidying.')
     draft_title = fields.Char(help='After AI correction; what will be created.')
     ai_source = fields.Char()
@@ -472,6 +498,8 @@ class KpiWaGroupIntake(models.Model):
                            'db_other': False, 'disc_reason_id': False,
                            'disc_reason_text': False, 'menu_csv': False,
                            'meet_start': False, 'meet_text': False,
+                           'meet_kpi_id': False, 'meet_other': False,
+                           'pick_search': False,
                            'meet_day': -1, 'meet_tz': False,
                            'meet_band': False, 'meet_hour': False,
                            # Which refusal we were waiting on an answer about.
@@ -504,6 +532,11 @@ class KpiWaGroupIntake(models.Model):
             if rec._is_stale():
                 rec._reset()
         return True
+
+
+# 💬 Discuss: WhatsApp media the client may send instead of / with text.
+_DISCUSS_MEDIA = ('image', 'video', 'audio')
+_DISCUSS_PLACEHOLDERS = ('[Image]', '[Video]', '[Voice]')
 
 
 class KpiWaGroupIntakeRouter(models.AbstractModel):
@@ -567,6 +600,9 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         if low in _GREETINGS:
             return self._show_types(message, state, group)
 
+        # Every menu sent from here on offers ↩️ Back (see _poll).
+        self = self.with_context(kpi_back_ok=True)
+
         # Defensive: a step this code does not know (an old row from a previous
         # version of the flow) is treated as idle rather than falling through
         # into silence.
@@ -590,6 +626,9 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
 
         if step == 'idle':
             return False                      # ordinary chatter: stay quiet
+
+        if self._is_back(tapped, low, step):
+            return self._go_back(message, state, group)
 
         if step == 'pick_type':
             # Numbers resolve against what was OFFERED, not against the full
@@ -626,6 +665,15 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             return self._show_dbs(message, state, group)
 
         if step == 'type_server':
+            # Typed the name of a server we have ("nexgennpos2"): that is the
+            # tap they meant, so the database question still follows.
+            known = self._match_server(body, group if state.action_type != 'newdb' else None)
+            if known:
+                state._touch(srv_id=known.id, srv_other=False)
+                if state.action_type == 'newdb':
+                    state._touch(step='ask_db_name')
+                    return self._ask_db_name(message)
+                return self._show_dbs(message, state, group)
             state._touch(srv_other=body[:80], srv_id=False)
             if state.action_type == 'newdb':
                 state._touch(step='ask_db_name')
@@ -759,11 +807,26 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             return self._confirm_meeting(message, state, group)
 
         # ---- which EXISTING database is this about ------------------------ #
+        if step == 'db_search':
+            if tapped or not body:
+                return False
+            state._touch(pick_search=body[:60], livedb_page=0)
+            return self._show_dbs(message, state, group)
+
         if step == 'pick_db':
             opts = self._db_options(state, group)
             pick = self._resolve_rows(tapped, low, opts)
             if not pick:
                 return False
+            if pick in (_LIVEDB_MORE_ID, _LIVEDB_BACK_ID, _PICK_CLEAR_ID):
+                state._touch(livedb_page=0 if pick == _PICK_CLEAR_ID else max(
+                    0, state.livedb_page + (1 if pick == _LIVEDB_MORE_ID else -1)),
+                    pick_search=False if pick == _PICK_CLEAR_ID else state.pick_search)
+                return self._show_dbs(message, state, group)
+            if pick == _PICK_SEARCH_ID:
+                state._touch(step='db_search')
+                self._text(message, _('🔍 Type part of the database name.'))
+                return True
             if pick == _DB_OTHER_ID:
                 state._touch(step='type_db')
                 self._text(message, _(
@@ -780,21 +843,36 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             return self._show_areas(message, state, group)
 
         if step == 'type_db':
+            # Typed a database we have on that server: same as tapping it.
+            known = self._match_db(body, state, group)
+            if known:
+                state._touch(step='pick_area', client_db_id=known.id,
+                             db_is_common=False, db_other=False)
+                return self._show_areas(message, state, group)
             state._touch(step='pick_area', db_other=body[:80],
                          client_db_id=False, db_is_common=False)
             return self._show_areas(message, state, group)
 
         # ---- 📋 my requests (read-only) ---------------------------------- #
+        if step == 'myreq_search':
+            if tapped or not body:
+                return False
+            state._touch(step='myreq_pick', pick_search=body[:60], livedb_page=0)
+            return self._myreq_show(message, state, group)
+
         if step == 'myreq_pick':
             pick = self._resolve_rows(tapped, low, self._myreq_options(state, group))
             if not pick:
                 return False
-            if pick == _LIVEDB_MORE_ID:
-                state._touch(livedb_page=state.livedb_page + 1)
+            if pick in (_LIVEDB_MORE_ID, _LIVEDB_BACK_ID, _PICK_CLEAR_ID):
+                state._touch(livedb_page=0 if pick == _PICK_CLEAR_ID else max(
+                    0, state.livedb_page + (1 if pick == _LIVEDB_MORE_ID else -1)),
+                    pick_search=False if pick == _PICK_CLEAR_ID else state.pick_search)
                 return self._myreq_show(message, state, group)
-            if pick == _LIVEDB_BACK_ID:
-                state._touch(livedb_page=max(0, state.livedb_page - 1))
-                return self._myreq_show(message, state, group)
+            if pick == _PICK_SEARCH_ID:
+                state._touch(step='myreq_search')
+                self._text(message, _('🔍 Type a word from the request, or its number (e.g. REQ-012).'))
+                return True
             task = self.env['kra.kpi'].sudo().browse(int(pick)).exists()
             if not task or task.kra_id.id not in self._client_kra_ids(group):
                 return False
@@ -822,6 +900,44 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                 return True
             return False
 
+        # ---- 📅 meeting: which open request ------------------------------- #
+        if step == 'meet_pick':
+            pick = self._resolve_rows(tapped, low, self._meet_options(state, group))
+            if not pick:
+                return False
+            if pick in (_LIVEDB_MORE_ID, _LIVEDB_BACK_ID, _PICK_CLEAR_ID):
+                state._touch(livedb_page=0 if pick == _PICK_CLEAR_ID else max(
+                    0, state.livedb_page + (1 if pick == _LIVEDB_MORE_ID else -1)),
+                    pick_search=False if pick == _PICK_CLEAR_ID else state.pick_search)
+                return self._meet_requests(message, state, group)
+            if pick == _PICK_SEARCH_ID:
+                state._touch(step='meet_search')
+                self._text(message, _('🔍 Type a word from the request, or its number (e.g. REQ-012).'))
+                return True
+            if pick == _PICK_OTHER_ID:
+                state._touch(step='pick_area', meet_other=True, meet_kpi_id=False)
+                return self._show_areas(message, state, group)
+            task = self.env['kra.kpi'].sudo().browse(int(pick)).exists()
+            if not task or task.kra_id.id not in self._client_kra_ids(group):
+                return False
+            state._touch(meet_kpi_id=task.id, work_area=False,
+                         raw_text='%s %s' % (task.external_ref or '', task.name or ''),
+                         draft_title=_('Meeting about %s — %s') % (task.external_ref or '#%s' % task.id,
+                                                                 task.name or ''))
+            return self._show_hours(message, state)
+
+        if step == 'meet_search':
+            if tapped or not body:
+                return False
+            state._touch(step='meet_pick', pick_search=body[:60], livedb_page=0)
+            return self._meet_requests(message, state, group)
+
+        if step == 'discuss_search':
+            if tapped or not body:
+                return False
+            state._touch(step='discuss_pick', pick_search=body[:60], livedb_page=0)
+            return self._discuss_requests(message, state, group)
+
         # ---- 💬 discuss a request (kpi_chat.py) --------------------------- #
         if step == 'discuss_kind':
             pick = self._resolve_rows(tapped, low, self._DISCUSS_KINDS)
@@ -832,15 +948,20 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             return self._discuss_requests(message, state, group)
 
         if step == 'discuss_pick':
-            pick = self._resolve_rows(tapped, low, self._myreq_options(state, group))
+            pick = self._resolve_rows(tapped, low, self._discuss_options(state, group))
             if not pick:
                 return False
-            if pick == _LIVEDB_MORE_ID:
-                state._touch(livedb_page=state.livedb_page + 1)
+            if pick in (_LIVEDB_MORE_ID, _LIVEDB_BACK_ID, _PICK_CLEAR_ID):
+                state._touch(livedb_page=0 if pick == _PICK_CLEAR_ID else max(
+                    0, state.livedb_page + (1 if pick == _LIVEDB_MORE_ID else -1)),
+                    pick_search=False if pick == _PICK_CLEAR_ID else state.pick_search)
                 return self._discuss_requests(message, state, group)
-            if pick == _LIVEDB_BACK_ID:
-                state._touch(livedb_page=max(0, state.livedb_page - 1))
-                return self._discuss_requests(message, state, group)
+            if pick == _PICK_SEARCH_ID:
+                state._touch(step='discuss_search')
+                self._text(message, _('🔍 Type a word from the request, or its number (e.g. REQ-012).'))
+                return True
+            if pick == _PICK_OTHER_ID:
+                return self._discuss_general(message, state, group)
             task = self.env['kra.kpi'].sudo().browse(int(pick)).exists()
             if not task or task.kra_id.id not in self._client_kra_ids(group):
                 return False
@@ -849,6 +970,8 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         if step == 'discuss_text':
             if tapped or not body:
                 return False          # a late vote on the previous poll is not the message
+            if message.message_type in _DISCUSS_MEDIA:
+                return self._discuss_media(message, state)
             return self._discuss_confirm(message, state, body)
 
         if step == 'discuss_confirm':
@@ -862,7 +985,8 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             if ans in ('send', 'yes', 'ok', 'send it') or low == '1':
                 try:
                     task.chat_post_client(state.discuss_text or '', name=state.participant_name or '',
-                                          number=self._participant_number(state) or '')
+                                          number=self._participant_number(state) or '',
+                                          files=self._discuss_files(state))
                 except Exception as exc:
                     _logger.exception('discuss: could not send for %s: %s', task.id, exc)
                     state._reset()
@@ -880,6 +1004,9 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                 return True
             if tapped:
                 return False
+            # Another photo / video / voice note joins the message.
+            if message.message_type in _DISCUSS_MEDIA:
+                return self._discuss_media(message, state)
             # Typed again instead of tapping: that is the new version of the message.
             return self._discuss_confirm(message, state, body)
 
@@ -891,18 +1018,25 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             state._touch(livedb_server_id=int(pick), livedb_page=0)
             return self._livedb_show_dbs(message, state, group)
 
+        if step == 'livedb_search':
+            if tapped or not body:
+                return False
+            state._touch(step='livedb_db', pick_search=body[:60], livedb_page=0)
+            return self._livedb_show_dbs(message, state, group)
+
         if step == 'livedb_db':
             pick = self._resolve_rows(tapped, low, self._livedb_db_options(state, group))
             if not pick:
                 return False
-            if pick == _LIVEDB_MORE_ID:
-                state._touch(livedb_page=state.livedb_page + 1)
+            if pick in (_LIVEDB_MORE_ID, _LIVEDB_BACK_ID, _PICK_CLEAR_ID):
+                state._touch(livedb_page=0 if pick == _PICK_CLEAR_ID else max(
+                    0, state.livedb_page + (1 if pick == _LIVEDB_MORE_ID else -1)),
+                    pick_search=False if pick == _PICK_CLEAR_ID else state.pick_search)
                 return self._livedb_show_dbs(message, state, group)
-            if pick == _LIVEDB_BACK_ID:
-                if state.livedb_page > 0:
-                    state._touch(livedb_page=state.livedb_page - 1)
-                    return self._livedb_show_dbs(message, state, group)
-                return self._livedb_begin(message, state, group)
+            if pick == _PICK_SEARCH_ID:
+                state._touch(step='livedb_search')
+                self._text(message, _('🔍 Type part of the database name.'))
+                return True
             db = self.env['kpi.client.db'].sudo().browse(int(pick)).exists()
             if not db or db.client_kra_id != group.kra_id:
                 return False
@@ -978,23 +1112,60 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                               _CONFIRM_BY_LABEL,
                               {'1': 'create', '2': 'edit', '3': 'cancel'}) or low
             if action in ('create', 'yes', 'y', '1', 'ok'):
-                kpi = self._create_ticket(group, state, message)
-                state._touch(step='idle', created_kpi_id=kpi.id if kpi else False)
+                picked = state.action_type == 'meeting' and state.meet_kpi_id
+                # No task picked (Common / Other): a General meeting, kept on
+                # the client's hidden GEN task like Discuss's general
+                # questions, never a new ticket.
+                general = state.action_type == 'meeting' and not picked
+                if general:
+                    kpi = self.env['kra.kpi'].sudo()._chat_general_task(group.kra_id)
+                else:
+                    kpi = picked or self._create_ticket(group, state, message)
+                state._touch(step='idle', created_kpi_id=kpi.id if kpi and not general else False)
                 if kpi and state.action_type == 'meeting':
                     meeting = False
                     try:
                         meeting = self.env['kpi.meeting'].sudo() \
                             .create_from_intake(kpi, state)
+                        if meeting and general:
+                            meeting.write({
+                                'name': (state.draft_title or state.raw_text or _('Meeting'))[:200],
+                                'notes': _('General meeting. About: %(scope)s · %(area)s') % {
+                                    'scope': self._db_scope_label(state),
+                                    'area': _area_label(state.work_area) if state.work_area else '—'}})
                     except Exception as exc:
                         # The ticket exists either way. A meeting record that
                         # failed to create is a thing an admin can add; a
                         # swallowed error that loses the whole request is not.
                         _logger.exception(
                             'could not create meeting for %s: %s', kpi.id, exc)
+                    # Who takes it: the request's developer first (Yes/No),
+                    # else the Approval Chain (kpi_doubt._route_meeting).
+                    Doubt = self.env['kpi.doubt'].sudo()
+                    if meeting and hasattr(Doubt, '_route_meeting'):
+                        try:
+                            Doubt._route_meeting(meeting, picked=bool(picked))
+                        except Exception as exc:
+                            _logger.exception('could not route meeting %s: %s', meeting.id, exc)
                     when = self._meet_when_label(state)
                     link = ''
                     if meeting and meeting.page_url():
                         link = _('\n🔗 %s') % meeting.page_url()
+                    if general:
+                        self._text(message, _(
+                            "📅 Meeting logged for *%(client)s*.\n"
+                            "%(title)s\n"
+                            "🕒 %(when)s%(link)s\n\n"
+                            "_Somebody will confirm and tell you who is "
+                            "joining.%(warn)s_") % {
+                                'client': group.kra_id.name,
+                                'title': meeting.name if meeting else (state.draft_title or state.raw_text or ''),
+                                'when': when or _('a time to be agreed'),
+                                'link': link,
+                                'warn': '' if meeting else _(
+                                    ' (Please mention it again if you do not '
+                                    'hear back.)')})
+                        return True
                     self._text(message, _(
                         "📅 Logged *%(ref)s* for *%(client)s*.\n"
                         "%(title)s\n"
@@ -1251,8 +1422,11 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         return rows
 
     def _show_types(self, message, state, group):
+        self = self.with_context(kpi_back_ok=False)     # the first menu: nothing to go back to
         rows = self._type_rows_for(group)
         state._touch(step='pick_type', action_type=False, work_area=False,
+                     # a fresh start: no search, page or meeting choice carried over
+                     pick_search=False, livedb_page=0, meet_kpi_id=False, meet_other=False,
                      client_db_id=False, db_is_common=False, db_other=False,
                      disc_reason_id=False, disc_reason_text=False,
                      menu_csv=','.join(r[0] for r in rows))
@@ -1288,10 +1462,12 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
     def _db_scope_label(self, state):
         """What the client said this is about, for the description and the log."""
         if state.client_db_id:
+            srv = state.client_db_id.server_id
             return '%s (%s)' % (state.client_db_id.db_name or '?',
-                                state.client_db_id.server_id.name or '?')
+                                (srv.poll_label() if srv else '') or '?')
         if state.db_is_common:
-            srv = state.srv_id.name or state.srv_other or ''
+            # The short name ("nexgennpos2"), not the server's full address.
+            srv = (state.srv_id.poll_label() if state.srv_id else '') or state.srv_other or ''
             return _('Common — whole server %s') % srv if srv \
                 else _('Common — whole server')
         if state.db_other:
@@ -1325,16 +1501,76 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         return self._show_servers(message, state, group=group,
                                   only_client=True)
 
-    def _db_options(self, state, group):
-        """[(id, label)] for the database picker: the client's own live rows
-        on the chosen server, then Common, then Other."""
+    @api.model
+    def _name_key(self, text):
+        """'https://NexGenPos2.alphalizedns.com/' -> 'nexgenpos2.alphalizedns.com'."""
+        t = ' '.join((text or '').lower().split())
+        for pre in ('https://', 'http://', 'www.'):
+            if t.startswith(pre):
+                t = t[len(pre):]
+        return t.strip().rstrip('/')
+
+    def _match_server(self, text, group=None):
+        """The one server whose name or label the typed text is (or starts
+        with: "nexgennpos2" for nexgennpos2.alphalizedns.com). With `group`,
+        only the servers this client has live databases on."""
+        key = self._name_key(text)
+        if len(key) < 3:
+            return self.env['kpi.server']
+        servers = self._live_dbs(group).mapped('server_id') if group \
+            else self.env['kpi.server'].sudo().search([])
+        exact = servers.filtered(lambda r: key in (self._name_key(r.name), self._name_key(r.label)))
+        if len(exact) == 1:
+            return exact
+        hits = servers.filtered(lambda r: any(
+            n == key or n.split('.')[0] == key for n in (self._name_key(r.name), self._name_key(r.label)) if n))
+        return hits if len(hits) == 1 else self.env['kpi.server']
+
+    def _match_db(self, text, state, group):
+        """The one live database of this client (on the chosen server) the
+        typed text names."""
+        key = self._name_key(text)
+        rows = self._live_dbs(group)
+        if state.srv_id:
+            rows = rows.filtered(lambda r: r.server_id == state.srv_id)
+        hits = rows.filtered(lambda r: key in (self._name_key(r.db_name), self._name_key(r.label)))
+        return hits if len(hits) == 1 else self.env['kpi.client.db']
+
+    def _db_rows(self, state, group):
         Db = self.env['kpi.client.db'].sudo()
-        domain = [('client_kra_id', '=', group.kra_id.id),
-                  ('state', '=', 'live')]
+        domain = [('client_kra_id', '=', group.kra_id.id), ('state', '=', 'live')]
         if state.srv_id:
             domain.append(('server_id', '=', state.srv_id.id))
-        rows = Db.search(domain, limit=POLL_MAX_DB_ROWS)
-        opts = [(str(r.id), r.poll_label()) for r in rows]
+        return Db.search(domain, order='db_name')
+
+    @api.model
+    def _db_filter(self, rows, words):
+        terms = [w for w in (words or '').lower().split() if w]
+        if not terms:
+            return rows
+        return rows.filtered(lambda r: all(
+            w in ('%s %s' % (r.db_name or '', r.label or '')).lower() for w in terms))
+
+    def _db_options(self, state, group):
+        """[(id, label)] for the database picker: one page of the client's
+        live databases on the chosen server (all of them when they fit), then
+        More / Previous page / 🔍 Search, then Common and Other. Kept to nine
+        rows so ↩️ Back always fits."""
+        all_rows = self._db_rows(state, group)
+        rows = self._db_filter(all_rows, state.pick_search)
+        paged = len(all_rows) > 6
+        size = 4 if paged else 6
+        pages = max(1, -(-len(rows) // size))
+        page = min(max(state.livedb_page, 0), pages - 1)
+        opts = [(str(r.id), r.poll_label()) for r in rows[page * size:(page + 1) * size]]
+        if page + 1 < pages:
+            opts.append((_LIVEDB_MORE_ID, _('➡️ More (page %d of %d)') % (page + 2, pages)))
+        if page > 0:
+            opts.append((_LIVEDB_BACK_ID, _('⬅️ Previous page')))
+        if state.pick_search:
+            opts.append((_PICK_CLEAR_ID, _('✖️ Clear search')))
+        elif paged:
+            opts.append((_PICK_SEARCH_ID, _('🔍 Search a database')))
         opts.append((_DB_COMMON_ID, _DB_COMMON_LABEL))
         opts.append((_DB_OTHER_ID, _DB_OTHER_LABEL))
         return opts
@@ -1344,10 +1580,11 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         state._touch(step='pick_db',
                      menu_csv=','.join(o for o, _l in opts))
         srv = state.srv_id.poll_label() if state.srv_id else ''
-        self._poll(message,
-                   (_('%s — which database?') % srv) if srv
-                   else _('Which database?'),
-                   [l for _o, l in opts])
+        head = (_('%s — which database?') % srv) if srv else _('Which database?')
+        if state.pick_search:
+            n = len(self._db_filter(self._db_rows(state, group), state.pick_search))
+            head += _('\n_🔍 "%(q)s": %(n)d found_') % {'q': state.pick_search, 'n': n}
+        self._poll(message, head, [l for _o, l in opts])
         return True
 
     # ------------------------------------------------------------------
@@ -1565,6 +1802,10 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         return True
 
     def _show_areas(self, message, state, group):
+        # 📅 A meeting is usually about something already raised: list the
+        # client's open requests for the database just picked first.
+        if state.action_type == 'meeting' and not state.meet_other:
+            return self._meet_requests(message, state, group)
         self._list(message, _TYPE_BY_ID[state.action_type][1],
                    _('Which area is it about?'), _('Choose area'),
                    [{'id': c, 'title': _area_label(c), 'description': ''}
@@ -1853,6 +2094,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
                     # in the write that already follows -- the same route the
                     # provisioning fields take.
                     'client_db_id': db.id if db else False,
+                    'client_server_id': (db.server_id.id if db else state.srv_id.id) or False,
                     'is_common_request': bool(state.db_is_common)}
             if is_disc:
                 post['request_category'] = 'db_disconnect'
@@ -1986,26 +2228,32 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
 
     def _livedb_db_options(self, state, group):
         """One page of databases + ➡️ More / ⬅️ Back, at most 10 options."""
-        rows = self._livedb_rows(state, group)
+        all_rows = self._livedb_rows(state, group)
+        rows = self._db_filter(all_rows, state.pick_search)
         pages = max(1, -(-len(rows) // _LIVEDB_PAGE_ROWS))
         page = min(max(state.livedb_page, 0), pages - 1)
         chunk = rows[page * _LIVEDB_PAGE_ROWS:(page + 1) * _LIVEDB_PAGE_ROWS]
         opts = [(str(r.id), r.poll_label()) for r in chunk]
         if page + 1 < pages:
             opts.append((_LIVEDB_MORE_ID, _('➡️ More (page %d of %d)') % (page + 2, pages)))
-        multi_server = len(self._livedb_server_options(group)) > 1
-        if page > 0 or multi_server:
-            opts.append((_LIVEDB_BACK_ID, _('⬅️ Back')))
+        if page > 0:
+            opts.append((_LIVEDB_BACK_ID, _('⬅️ Previous page')))
+        if state.pick_search:
+            opts.append((_PICK_CLEAR_ID, _('✖️ Clear search')))
+        elif len(all_rows) > _LIVEDB_PAGE_ROWS:
+            opts.append((_PICK_SEARCH_ID, _('🔍 Search a database')))
         return opts
 
     def _livedb_show_dbs(self, message, state, group):
         opts = self._livedb_db_options(state, group)
-        if len(opts) == 1 and opts[0][0] not in (_LIVEDB_MORE_ID, _LIVEDB_BACK_ID):
+        if len(opts) == 1 and opts[0][0] not in (_LIVEDB_MORE_ID, _LIVEDB_BACK_ID,
+                                                 _PICK_CLEAR_ID, _PICK_SEARCH_ID) \
+                and not state.pick_search:
             db = self.env['kpi.client.db'].sudo().browse(int(opts[0][0]))
             self._text(message, self._livedb_details(db))
             state._reset()
             return True
-        rows = self._livedb_rows(state, group)
+        rows = self._db_filter(self._livedb_rows(state, group), state.pick_search)
         pages = max(1, -(-len(rows) // _LIVEDB_PAGE_ROWS))
         page = min(max(state.livedb_page, 0), pages - 1)
         state._touch(step='livedb_db', livedb_page=page,
@@ -2086,16 +2334,9 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         return label if len(label) <= 70 else label[:69] + '…'
 
     def _myreq_options(self, state, group):
-        rows = self._myreq_open(group)
-        pages = max(1, -(-len(rows) // _MYREQ_PAGE_ROWS))
-        page = min(max(state.livedb_page, 0), pages - 1)
-        chunk = rows[page * _MYREQ_PAGE_ROWS:(page + 1) * _MYREQ_PAGE_ROWS]
-        opts = [(str(t.id), self._myreq_label(t)) for t in chunk]
-        if page + 1 < pages:
-            opts.append((_LIVEDB_MORE_ID, _('➡️ More (page %d of %d)') % (page + 2, pages)))
-        if page > 0:
-            opts.append((_LIVEDB_BACK_ID, _('⬅️ Back')))
-        return opts
+        open_ = self._myreq_open(group)
+        return self._pick_options(self._pick_filter(open_, state.pick_search), state,
+                                  with_search=len(open_) > _PICK_PAGE_ROWS)[0]
 
     def _myreq_show(self, message, state, group):
         tasks = self._myreq_tasks(group)
@@ -2112,14 +2353,12 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             state._reset()
             self._text(message, summary + '\n\n' + self._myreq_details(open_))
             return True
-        opts = self._myreq_options(state, group)
-        pages = max(1, -(-len(open_) // _MYREQ_PAGE_ROWS))
-        page = min(max(state.livedb_page, 0), pages - 1)
+        rows = self._pick_filter(open_, state.pick_search)
+        opts, page, pages = self._pick_options(rows, state, with_search=len(open_) > _PICK_PAGE_ROWS)
         state._touch(step='myreq_pick', action_type='myreq', livedb_page=page,
                      menu_csv=','.join(o for o, _l in opts))
-        self._poll(message, summary + _('\n\nWhich one do you want to see?%s') % (
-            (_(' (page %d of %d)') % (page + 1, pages)) if pages > 1 else ''),
-            [l for _o, l in opts])
+        self._poll(message, summary + _('\n\nWhich one do you want to see?')
+                   + self._pick_note(rows, state, page, pages), [l for _o, l in opts])
         return True
 
     # ------------------------------------------------------------------
@@ -2133,7 +2372,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         nothing to pick, so it goes straight to a general question."""
         if not self._myreq_open(group):
             return self._discuss_general(message, state, group)
-        state._touch(step='discuss_kind', action_type='discuss', livedb_page=0,
+        state._touch(step='discuss_kind', action_type='discuss', livedb_page=0, pick_search=False,
                      menu_csv=','.join(c for c, _l in self._DISCUSS_KINDS))
         self._poll(message, _('💬 *Discuss* — what is it about?'), [l for _c, l in self._DISCUSS_KINDS])
         return True
@@ -2144,26 +2383,211 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         return self._discuss_ask_text(message, state, task)
 
     def _discuss_requests(self, message, state, group):
-        """Which request? The same list and paging as 📋 My Requests."""
+        """Which request? The open requests, newest-needing-you first, with
+        🔍 Search when there are more than fit on one page."""
         open_ = self._myreq_open(group)
         if not open_:
             return self._discuss_general(message, state, group)
-        if len(open_) == 1:
+        if len(open_) == 1 and not state.pick_search:
             return self._discuss_ask_text(message, state, open_)
-        opts = self._myreq_options(state, group)
-        pages = max(1, -(-len(open_) // _MYREQ_PAGE_ROWS))
-        page = min(max(state.livedb_page, 0), pages - 1)
+        rows = self._pick_filter(open_, state.pick_search)
+        opts, page, pages = self._pick_options(rows, state, with_search=len(open_) > _PICK_PAGE_ROWS,
+                                               other_label=self._DISCUSS_KINDS[1][1])
         state._touch(step='discuss_pick', action_type='discuss', livedb_page=page,
                      menu_csv=','.join(o for o, _l in opts))
-        self._poll(message, _('💬 *Discuss* — which request is it about?%s') % (
-            (_(' (page %d of %d)') % (page + 1, pages)) if pages > 1 else ''),
-            [l for _o, l in opts])
+        head = _('💬 *Discuss* — which request is it about?')
+        self._poll(message, head + self._pick_note(rows, state, page, pages), [l for _o, l in opts])
+        return True
+
+    def _discuss_options(self, state, group):
+        open_ = self._myreq_open(group)
+        return self._pick_options(self._pick_filter(open_, state.pick_search), state,
+                                  with_search=len(open_) > _PICK_PAGE_ROWS,
+                                  other_label=self._DISCUSS_KINDS[1][1])[0]
+
+    # ------------------------------------------------------------------
+    # ↩️ Back: the previous question
+    # ------------------------------------------------------------------
+    @api.model
+    def _is_back(self, tapped, low, step):
+        if (tapped or '').strip():
+            return _strip_emoji(tapped) == _strip_emoji(_BACK_LABEL)
+        if step in _TEXT_STEPS:
+            return False
+        return low in ('back', 'go back', 'previous', _strip_emoji(_BACK_LABEL))
+
+    def _go_back(self, message, state, group):
+        """Show the question before the current one. Anything it cannot
+        place goes back to the first menu, never to silence."""
+        step, kind = state.step, state.action_type
+        many_servers = len(self._live_dbs(group).mapped('server_id')) > 1
+        has_dbs = bool(self._live_dbs(group))
+        state._touch(pick_search=False, livedb_page=0)
+
+        def to_dbs():
+            if has_dbs and state.srv_id:
+                return self._show_dbs(message, state, group)
+            return to_servers()
+
+        def to_servers():
+            if many_servers:
+                return self._show_servers(message, state, group=group, only_client=True)
+            return self._show_types(message, state, group)
+
+        if step in ('pick_server', 'myreq_pick', 'myreq_search', 'livedb_server',
+                    'pick_disc_db', 'discuss_kind'):
+            return self._show_types(message, state, group)
+        if step in ('type_server', 'ask_db_name'):
+            return self._show_servers(message, state, group=group,
+                                      only_client=kind != 'newdb')
+        if step in ('confirm_db_name', 'ask_db_desc'):
+            state._touch(step='ask_db_name')
+            return self._ask_db_name(message)
+        if step in ('pick_db', 'type_db', 'db_search'):
+            return to_servers()
+        if step == 'livedb_search':
+            return self._livedb_begin(message, state, group)
+        if step in ('meet_pick', 'meet_search'):
+            return to_dbs() if has_dbs else self._show_types(message, state, group)
+        if step == 'pick_area':
+            if kind == 'meeting' and state.meet_other:
+                state._touch(meet_other=False)
+                return self._meet_requests(message, state, group)
+            return to_dbs() if has_dbs else self._show_types(message, state, group)
+        if step == 'ask_text':
+            if kind == 'meeting' and state.db_is_common:
+                return to_dbs()
+            state._touch(step='pick_area')
+            return self._show_areas(message, state, group)
+        if step == 'pick_hour':
+            if state.meet_kpi_id:
+                state._touch(meet_kpi_id=False)
+                return self._meet_requests(message, state, group)
+            if kind == 'meeting' and state.db_is_common:
+                return self._meet_ask_common(message, state)
+            state._touch(step='pick_area')
+            return self._show_areas(message, state, group)
+        if step in ('pick_slot', 'type_slot', 'pick_tz'):
+            return self._show_hours(message, state)
+        if step == 'confirm':
+            if kind == 'meeting':
+                return self._show_hours(message, state)
+            state._touch(step='pick_area')
+            return self._show_areas(message, state, group)
+        if step in ('discuss_pick', 'discuss_search'):
+            return self._discuss_begin(message, state, group)
+        if step in ('discuss_text', 'discuss_confirm'):
+            if step == 'discuss_confirm' and state.discuss_kpi_id:
+                return self._discuss_ask_text(message, state, state.discuss_kpi_id)
+            return self._discuss_begin(message, state, group)
+        if step == 'livedb_db':
+            return self._livedb_begin(message, state, group)
+        if step in ('pick_disc_reason', 'type_disc_reason'):
+            return self._show_disc_dbs(message, state, group)
+        if step == 'confirm_disconnect':
+            return self._show_disc_reasons(message, state)
+        return self._show_types(message, state, group)
+
+    # ------------------------------------------------------------------
+    # Request pickers shared by 📅 meetings and 💬 Discuss
+    # ------------------------------------------------------------------
+    @api.model
+    def _pick_filter(self, tasks, words):
+        """Every typed word must appear in the reference or the title."""
+        terms = [w for w in (words or '').lower().split() if w]
+        if not terms:
+            return tasks
+        return tasks.filtered(lambda t: all(
+            w in ('%s %s' % (t.external_ref or '', t.name or '')).lower() for w in terms))
+
+    def _pick_options(self, rows, state, with_search=True, other_label=None):
+        """([(id, label)], page, pages): one page of `rows`, then More / Back,
+        Search (or Clear search) and Other. Never more than POLL_MAX_OPTIONS."""
+        size = _PICK_PAGE_ROWS - (1 if other_label else 0)
+        pages = max(1, -(-len(rows) // size))
+        page = min(max(state.livedb_page, 0), pages - 1)
+        chunk = rows[page * size:(page + 1) * size]
+        opts = [(str(t.id), self._myreq_label(t)) for t in chunk]
+        if page + 1 < pages:
+            opts.append((_LIVEDB_MORE_ID, _('➡️ More (page %d of %d)') % (page + 2, pages)))
+        if page > 0:
+            opts.append((_LIVEDB_BACK_ID, _('⬅️ Previous page')))
+        if state.pick_search:
+            opts.append((_PICK_CLEAR_ID, _('✖️ Clear search')))
+        elif with_search:
+            opts.append((_PICK_SEARCH_ID, _('🔍 Search (a word or REQ number)')))
+        if other_label:
+            opts.append((_PICK_OTHER_ID, other_label))
+        return opts[:POLL_MAX_OPTIONS], page, pages
+
+    @api.model
+    def _pick_note(self, rows, state, page, pages):
+        bits = []
+        if state.pick_search:
+            bits.append(_('🔍 "%(q)s": %(n)d found') % {'q': state.pick_search, 'n': len(rows)})
+        if pages > 1:
+            bits.append(_('page %d of %d') % (page + 1, pages))
+        return ('\n_%s_' % ' · '.join(bits)) if bits else ''
+
+    def _meet_tasks(self, state, group):
+        """The client's open requests for the database (or server) just picked."""
+        open_ = self._myreq_open(group)
+        if state.client_db_id:
+            return open_.filtered(lambda t: t.client_db_id == state.client_db_id)
+        if state.db_is_common:
+            # Whole server: every request on any of its databases, the
+            # server-wide ones, and the ones not tied to any one database.
+            srv = state.srv_id
+            return open_.filtered(lambda t: t.is_common_request or not t.client_db_id
+                                  or (srv and t.client_db_id.server_id == srv))
+        return open_
+
+    def _meet_options(self, state, group):
+        base = self._meet_tasks(state, group)
+        return self._pick_options(self._pick_filter(base, state.pick_search), state,
+                                  with_search=len(base) > _PICK_PAGE_ROWS,
+                                  other_label=_('➕ Other / a new topic'))[0]
+
+    def _meet_ask_common(self, message, state):
+        state._touch(step='ask_text', meet_other=True, meet_kpi_id=False, work_area=False)
+        scope = self._db_scope_label(state)
+        self._text(message, _(
+            "*📅 Request a Meeting · 🌐 Whole server*%(scope)s\n"
+            "What is the meeting about? Type it in one line.\n\n"
+            "_Or reply CANCEL to stop._") % {
+                'scope': ('\n🗄️ %s' % scope) if scope != '—' else ''})
+        return True
+
+    def _meet_requests(self, message, state, group):
+        """📅 Which request is the meeting about? A specific one goes to its
+        developer first; Other keeps the area list and makes a new ticket."""
+        # 🌐 Whole server: a general topic, not one request. Straight to
+        # typing it (no request list, no area list); it becomes a General
+        # meeting on the client's GEN task.
+        if state.db_is_common:
+            return self._meet_ask_common(message, state)
+        base = self._meet_tasks(state, group)
+        if not base and not state.pick_search:
+            state._touch(step='pick_area', meet_other=True, meet_kpi_id=False)
+            return self._show_areas(message, state, group)
+        rows = self._pick_filter(base, state.pick_search)
+        opts, page, pages = self._pick_options(rows, state, with_search=len(base) > _PICK_PAGE_ROWS,
+                                               other_label=_('➕ Other / a new topic'))
+        state._touch(step='meet_pick', livedb_page=page, menu_csv=','.join(o for o, _l in opts))
+        scope = self._db_scope_label(state)
+        head = _('📅 *Request a Meeting* — which request is it about?%s') % (
+            ('\n🗄️ %s' % scope) if scope != '—' else '')
+        if not rows:
+            head += _('\n\nNothing matches. Clear the search, or pick Other.')
+        self._poll(message, head + self._pick_note(rows, state, page, pages), [l for _o, l in opts])
         return True
 
     def _discuss_ask_text(self, message, state, task):
+        self._discuss_drop_files(state)
         state._touch(step='discuss_text', action_type='discuss', discuss_kpi_id=task.id,
                      discuss_text=False)
-        self._text(message, _('💬 *%(ref)s — %(title)s*\nType your message to the team (one message).'
+        self._text(message, _('💬 *%(ref)s — %(title)s*\nType your message to the team (one message). '
+                              'You can also send a 📷 photo, 🎥 video or 🎤 voice note.'
                               '\n\n_Or reply CANCEL to stop._') % {
             'ref': task._chat_ref(), 'title': task.name or ''})
         return True
@@ -2171,12 +2595,58 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
     def _discuss_confirm(self, message, state, body):
         """Show the message back and ask before it goes."""
         text = (body or '').strip()[:1000]
-        task = state.discuss_kpi_id
         state._touch(step='discuss_confirm', discuss_text=text)
-        self._poll(message, _('💬 *%(ref)s* — your message:\n\n"%(text)s"\n\nSend it to the team?') % {
-            'ref': task._chat_ref(), 'text': text},
+        return self._discuss_ask_send(message, state)
+
+    def _discuss_ask_send(self, message, state):
+        self = self.with_context(kpi_back_ok=False)     # ✏️ Retype is the way back here
+        from .kpi_chat import chat_file_kind, chat_files_label
+        task = state.discuss_kpi_id
+        label = chat_files_label([chat_file_kind(a.name, a.mimetype) for a in self._discuss_atts(state)])
+        said = '\n'.join(x for x in (label, ('"%s"' % state.discuss_text) if state.discuss_text else '') if x)
+        self._poll(message, _('💬 *%(ref)s* — your message:\n\n%(text)s\n\nSend it to the team?') % {
+            'ref': task._chat_ref(), 'text': said},
             [_('✅ Send'), _('✏️ Retype'), _('❌ Cancel')])
         return True
+
+    # 📎 A photo / video / voice note sent at the Discuss step is parked on
+    # this state as an ir.attachment (as the staff update does) until Send;
+    # _reset clears whatever is left.
+    def _discuss_atts(self, state):
+        return self.env['ir.attachment'].sudo().search(
+            [('res_model', '=', state._name), ('res_id', '=', state.id)], order='id')
+
+    def _discuss_drop_files(self, state):
+        self._discuss_atts(state).unlink()
+
+    def _discuss_files(self, state):
+        import base64
+        return [(a.name, base64.b64decode(a.datas or b''), a.mimetype or '')
+                for a in self._discuss_atts(state)]
+
+    def _discuss_media(self, message, state):
+        from .kpi_chat import CHAT_FILES_MAX, chat_check_files
+        try:
+            name, raw, mime = self._wa_media(message)
+            if len(self._discuss_atts(state)) >= CHAT_FILES_MAX:
+                raise ValueError(_('at most %d files in one message') % CHAT_FILES_MAX)
+            chat_check_files([(name, raw, mime)])
+        except Exception as exc:
+            _logger.warning('discuss media for %s failed: %s', state.id, exc)
+            self._text(message, _('⚠ That file could not be added (%s). Send it again, or type your message.')
+                       % str(exc)[:120])
+            return True
+        import base64
+        self.env['ir.attachment'].sudo().create({
+            'name': name, 'datas': base64.b64encode(raw), 'mimetype': mime,
+            'res_model': state._name, 'res_id': state.id})
+        # The caption, when there is one, is the text; "[Image]" is not.
+        caption = (message.message or '').strip()
+        if caption in _DISCUSS_PLACEHOLDERS:
+            caption = ''
+        state._touch(step='discuss_confirm',
+                     discuss_text=(caption[:1000] or state.discuss_text or False))
+        return self._discuss_ask_send(message, state)
 
     @api.model
     def _myreq_details(self, task):
@@ -2339,6 +2809,9 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         # answer is a question that should not have been asked, and the fix
         # belongs at the call site. Kept as a warning so a fourth caller
         # someday is findable instead of silently degrading.
+        if self.env.context.get('kpi_back_ok') and options \
+                and len(options) < POLL_MAX_OPTIONS and _BACK_LABEL not in options:
+            options = list(options) + [_BACK_LABEL]
         n = len(options or [])
         if n < 2 or n > POLL_MAX_OPTIONS:
             # Both ends of the range turn a tappable menu into plain text:
