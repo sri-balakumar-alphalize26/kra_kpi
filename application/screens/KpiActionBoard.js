@@ -23,7 +23,7 @@ import {
   undoTaskStart, fetchTaskDetails,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists, markReviewStarted,
-  CHECKLIST_ITEMS, MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
+  MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
   getWorkdayStatus, startWorkday, endWorkday, pauseWorkday, resumeWorkday, sendHeartbeat,
   selfCreateTask, adminCreateDoneTask, fetchProjects, fetchClientTree, getTodaySummary, getLiveStatus,
   acceptSelfCreated, rejectSelfCreated,
@@ -54,7 +54,8 @@ import {
 import { estimateFromWorked } from '../utils/doneTaskEstimate';
 import DateGridModal from '../components/DateGridModal';
 import { fmtYMD } from '../utils/dateGrid';
-import { completeMissing } from '../utils/completeMissing';
+import { completeMissing, completeExtras } from '../utils/completeMissing';
+import CompleteRules from '../components/CompleteRules';
 import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
 import { noteRequired, pauseReasonText, meetingIds, idleMeetingNote } from '../utils/meetingPick';
 import useBackHandler from '../components/useBackHandler';
@@ -1156,7 +1157,10 @@ export default function KpiActionBoard({
   // When the error is a full Complete's missing-items list, the error box also
   // offers a one-tap switch to Partial Finish (summary only).
   const [finishOfferPartial, setFinishOfferPartial] = useState(false);
-  const [checklist, setChecklist] = useState({});
+  // What this task's type needs to be completed (server rules, loaded when the
+  // popup opens) and what the popup filled in for it.
+  const [finishRules, setFinishRules] = useState([]);
+  const [finishFilled, setFinishFilled] = useState({});
 
   // "You haven't started your workday" — asked on every board entry while locked,
   // so it's a prompt, not a trap: Cancel keeps them browsing read-only.
@@ -1203,7 +1207,7 @@ export default function KpiActionBoard({
   // Admin review of a developer-completed task: Approve (with QA checklist) → client; Reject → same dev.
   const [approveFor, setApproveFor] = useState(null);
   const [mgrChecklist, setMgrChecklist] = useState({});
-  const [empChecklist, setEmpChecklist] = useState(null);   // dev's submitted checklist (read-only)
+  const [empRules, setEmpRules] = useState(null);   // what the task's type needed (read-only)
   const [rejectDoneFor, setRejectDoneFor] = useState(null);
   const [rejectDoneNote, setRejectDoneNote] = useState('');
 
@@ -2564,7 +2568,13 @@ export default function KpiActionBoard({
       setFinishPartial(kind === 'partial');
       setFinishSummary('');
       setFinishErr('');
-      setChecklist({});
+      setFinishRules([]);
+      setFinishFilled({});
+      if (kind === 'complete') {
+        fetchTaskDetails(task.id).then((det) => {
+          if (det?.ok) setFinishRules(det.meta?.completion_rules || []);
+        }).catch(() => {});
+      }
       return;
     }
     // Pending Review — accepting also CATEGORISES the task (its provisional
@@ -2601,10 +2611,10 @@ export default function KpiActionBoard({
     if (kind === 'approveDone') {
       setApproveFor(task);
       setMgrChecklist({});
-      setEmpChecklist(null);
+      setEmpRules(null);
       stampReviewStarted(task);
-      // Pull the developer's submitted checklist so the admin can see what was done.
-      getTaskChecklists(task.id).then((r) => { if (r && r.employee_checklist) setEmpChecklist(r.employee_checklist); }).catch(() => {});
+      // What this task's type needed, and whether it is all in.
+      getTaskChecklists(task.id).then((r) => { if (r && r.completion_rules) setEmpRules(r.completion_rules); }).catch(() => {});
       return;
     }
     if (kind === 'rejectDone') {
@@ -2770,12 +2780,10 @@ export default function KpiActionBoard({
     finally { setBusyId(null); }
   }
 
-  // Finish: Partial needs only a summary; full Complete needs summary + at least
-  // one box ticked — the same rule as the web and the server (/kra_kpi/task/complete
-  // accepts >= 1). The app used to demand all five AND then discard what was
-  // ticked in favour of an all-true map, so a task finished with three of five
-  // done was both refused and, once forced through, recorded as fully done. The
-  // manager approves against this list, so it has to be what the developer said.
+  // Finish: Partial needs only a summary; a full Complete needs what the task's
+  // type needs (server rules — the same list Odoo, the web and the WhatsApp task
+  // page show): a Module the manual + GitHub, a Database task the four database
+  // details, a Bug fix only the summary.
   async function submitFinish() {
     const task = finishFor;
     // Errors show INSIDE the dialog rather than as an OS alert. Both of these
@@ -2790,21 +2798,14 @@ export default function KpiActionBoard({
       return setFinishErr('Describe what you did before finishing — this is what your manager reads.');
     }
     if (!finishPartial) {
-      // A full Complete needs a summary, a user manual, a GitHub link on a
-      // Module / App task and at least one tick (the server refuses each). All
-      // gaps are listed together, so nobody fixes one only to be told about the
-      // next. Asked BEFORE the summary is saved, so a refusal does not leave a
-      // stray progress note behind. A failed lookup leaves manual + GitHub to
-      // the server rather than blocking on a network blip.
+      // All gaps are listed together, so nobody fixes one only to be told about
+      // the next. Asked BEFORE the summary is saved, so a refusal does not leave
+      // a stray progress note behind. Re-read here so what was added elsewhere
+      // since the popup opened counts; a failed lookup leaves the rest to the
+      // server rather than blocking on a network blip.
       const det = await fetchTaskDetails(task.id);
-      const known = !!det?.ok;
-      const missing = completeMissing({
-        hasSummary: !!finishSummary.trim(),
-        hasManual: !known || (det.manuals || []).length > 0,
-        githubRequired: known && !!det.task?.github_required,
-        hasGithub: !known || (det.github || []).length > 0,
-        anyTicked: CHECKLIST_ITEMS.some((c) => checklist[c.key]),
-      });
+      const rules = det?.ok ? (det.meta?.completion_rules || []) : [];
+      const missing = completeMissing(rules, { hasSummary: !!finishSummary.trim(), filled: finishFilled });
       if (missing.length) {
         H.err();
         setFinishOfferPartial(true);
@@ -2815,14 +2816,13 @@ export default function KpiActionBoard({
     setFinishFor(null);
     setBusyId(task.id);
     try {
-      // 1) submit the required progress summary
-      const pr = await createProgress(task.id, finishSummary.trim());
-      if (pr && pr.status === false) { say('Cannot save summary', pr.message || 'Failed', 'warn'); return; }
-      // 2) complete (full) or partial-finish. Send exactly what was ticked.
-      const checklistObj = finishPartial
-        ? {}
-        : CHECKLIST_ITEMS.reduce((o, c) => ({ ...o, [c.key]: !!checklist[c.key] }), {});
-      const res = await completeTask(task.id, checklistObj, finishPartial);
+      // 1) save the progress summary (optional on a Database task)
+      if (finishSummary.trim()) {
+        const pr = await createProgress(task.id, finishSummary.trim());
+        if (pr && pr.status === false) { say('Cannot save summary', pr.message || 'Failed', 'warn'); return; }
+      }
+      // 2) complete (full, with what the type needs) or partial-finish.
+      const res = await completeTask(task.id, finishPartial ? {} : completeExtras(finishFilled), finishPartial);
       if (res && res.status === false) say('Cannot finish', res.message || 'Failed', 'warn');
       await load({ silent: true });
     } catch (e) { say('Error', e.message || 'Failed', 'warn'); }
@@ -4081,7 +4081,7 @@ export default function KpiActionBoard({
         </View>
       </Modal>
 
-      {/* Finish modal — Partial Finish (amber, summary) or Complete (green, checklist) */}
+      {/* Finish modal — Partial Finish (amber, summary) or Complete (green, what the task type needs) */}
       <Modal visible={!!finishFor} transparent animationType="fade" onRequestClose={() => setFinishFor(null)}>
         <View style={s.modalWrap}>
           <View style={s.modalCard}>
@@ -4101,7 +4101,7 @@ export default function KpiActionBoard({
                 {finishPartial ? (
                   <View style={s.bannerYellow}>
                     <Text style={s.bannerYellowTxt}>
-                      ⓘ  This finishes the task <Text style={{ fontWeight: '900' }}>as-is</Text> and sends it for review with just your summary — no full checklist. Use <Text style={{ fontWeight: '900' }}>Complete</Text> for fully-done work.
+                      ⓘ  This finishes the task <Text style={{ fontWeight: '900' }}>as-is</Text> and sends it for review with just your summary. Use <Text style={{ fontWeight: '900' }}>Complete</Text> for fully-done work.
                     </Text>
                   </View>
                 ) : null}
@@ -4129,7 +4129,10 @@ export default function KpiActionBoard({
                   </View>
                 ) : null}
 
-                <Text style={s.fieldLabel}>Progress Summary *</Text>
+                <Text style={s.fieldLabel}>
+                  {finishPartial || !finishRules.some((r) => r.key === 'summary' && !r.required)
+                    ? 'Progress Summary *' : 'Progress Summary (optional)'}
+                </Text>
                 <TextInput
                   style={[s.reasonInput, { minHeight: 100 }, finishErr && !finishSummary.trim() && s.inputErr]}
                   placeholder={finishPartial ? "What was done, what's left, why you're finishing now…" : 'What did you do on this task?'}
@@ -4139,21 +4142,15 @@ export default function KpiActionBoard({
                   multiline
                 />
 
-                {!finishPartial && (
+                {!finishPartial && finishRules.length > 0 && (
                   <>
-                    <Text style={s.fieldLabel}>Checklist — tick everything that applies</Text>
+                    <Text style={s.fieldLabel}>What this task needs</Text>
                     <Text style={s.fieldHint}>
-                      At least one. Your manager sees exactly which you ticked.
+                      The user manual file and the GitHub link are added in KPI Details.
                     </Text>
-                    {CHECKLIST_ITEMS.map((c) => {
-                      const on = !!checklist[c.key];
-                      return (
-                        <TouchableOpacity key={c.key} style={s.checkRow} onPress={() => { H.select(); if (finishErr) setFinishErr(''); setChecklist((p) => ({ ...p, [c.key]: !p[c.key] })); }}>
-                          <Ionicons name={on ? 'checkbox' : 'square-outline'} size={22} color={on ? COLORS.primary : COLORS.faint} />
-                          <Text style={s.checkTxt}>{c.label}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                    <CompleteRules
+                      rules={finishRules} filled={finishFilled} hasSummary={!!finishSummary.trim()}
+                      onChange={(v) => { if (finishErr) setFinishErr(''); setFinishFilled(v); }} />
                   </>
                 )}
               </View>
@@ -4793,18 +4790,10 @@ export default function KpiActionBoard({
                     <Text style={s.descTxt} numberOfLines={6}>{plainText(approveFor.description)}</Text>
                   </View>
                 ) : null}
-                {empChecklist ? (
+                {empRules && empRules.length ? (
                   <>
-                    <Text style={s.fieldLabel}>📝 Developer's checklist (what they submitted)</Text>
-                    {CHECKLIST_ITEMS.map((c) => {
-                      const on = !!empChecklist[c.key];
-                      return (
-                        <View key={c.key} style={s.checkRow}>
-                          <Ionicons name={on ? 'checkmark-circle' : 'close-circle'} size={20} color={on ? COLORS.green : COLORS.faint} />
-                          <Text style={[s.checkTxt, !on && { color: COLORS.faint }]}>{c.label}</Text>
-                        </View>
-                      );
-                    })}
+                    <Text style={s.fieldLabel}>📝 What this task needed</Text>
+                    <CompleteRules rules={empRules} readOnly />
                     <View style={{ height: 1, backgroundColor: '#eef1f5', marginVertical: 12 }} />
                   </>
                 ) : null}

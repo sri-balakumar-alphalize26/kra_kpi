@@ -38,7 +38,7 @@ import AppDialog from '../components/AppDialog';
 import {
   fetchTaskDetails, submitProgressUpdate, addGithubLink, deleteGithubLink,
   deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime, deleteProgressBulk,
-  CHECKLIST_ITEMS, MAX_PROGRESS_BYTES,
+  MAX_PROGRESS_BYTES,
   fetchActivity, updateProgress, deleteProgress, updateTaskMeta, fetchProjects,
   fetchLegacy, saveLegacy, legacyVoiceSource, fetchClientSends, parseServerTs,
   fetchChat, sendChat, sendChatFiles, retryChat, fetchChatFile, chatFileKind, CHAT_MAX_FILES, CHAT_MAX_BYTES,
@@ -50,7 +50,8 @@ import { resolveGithubLink } from '../utils/githubLink';
 import { createLogger } from '../api/logger';
 import useBackHandler from '../components/useBackHandler';
 import { taskDeliverableLabel } from '../utils/deliverableType';
-import { completeMissing } from '../utils/completeMissing';
+import { completeMissing, completeExtras } from '../utils/completeMissing';
+import CompleteRules from '../components/CompleteRules';
 import { sendHeading, sendStatus, fileIcon, sendFileSource, hasClientSends } from '../utils/clientSends';
 
 const log = createLogger('KpiDetail');
@@ -1328,13 +1329,10 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   }
 
   // ---- Complete -----------------------------------------------------------
-  const [checks, setChecks] = useState({});
+  // What this task's type needs (server rules) and what the form filled in for
+  // it — app link, manual link, website URL, database details.
+  const [cmpFilled, setCmpFilled] = useState({});
   const [cmpBusy, setCmpBusy] = useState(false);
-  // At least one, not all five — matching the web and the server, which has
-  // accepted >= 1 since the checklist became "tick what applies" rather than a
-  // gate. Demanding all five here just taught people to tick boxes that weren't
-  // true, which is worse than an honest partial list.
-  const anyChecked = CHECKLIST_ITEMS.some((c) => checks[c.key]);
   // Files a CLIENT attached when raising the task come back as progress / file
   // rows flagged `from_client`. They get their own read-only card and never
   // count as the team's progress summary (the server refuses Complete on them).
@@ -1345,13 +1343,11 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   const teamFiles = (data?.files || []).filter((f) => !f.from_client);
   const clientProgressIds = new Set(clientProgress.map((p) => p.id));
   const hasProgress = teamProgress.length > 0;
-  // A full Complete also needs a user manual on the task (the server refuses
-  // without one); Partial Finish on the board needs none.
-  const hasManual = (data?.manuals?.length || 0) > 0;
-  // A Module / App task also needs a GitHub link before a full Complete (the
-  // server refuses without one); for any other type the link is optional.
-  const githubRequired = !!data?.task?.github_required;
-  const hasGithub = (data?.github?.length || 0) > 0;
+  // What a full Complete needs depends on the task type (server rules): a
+  // Module needs the manual + GitHub, a Database task the four database
+  // details, a Bug fix only the summary. Partial Finish needs only the summary.
+  const cmpRules = data?.meta?.completion_rules || [];
+  const summaryRequired = !cmpRules.length || cmpRules.some((r) => r.key === 'summary' && r.required);
   // The popup on the Complete button: null, { kind: 'missing', items } or
   // { kind: 'confirm' }. The button stays pressable so a tap explains everything
   // still missing at once, instead of sitting greyed-out and silent.
@@ -1359,20 +1355,19 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
 
   function onCompletePress() {
     if (cmpBusy) return;
-    const items = completeMissing({
-      hasSummary: hasProgress, hasManual, githubRequired, hasGithub, anyTicked: anyChecked,
-    });
+    const items = completeMissing(cmpRules, { hasSummary: hasProgress, filled: cmpFilled });
     setCmpDlg(items.length ? { kind: 'missing', items } : { kind: 'confirm' });
   }
 
   // partial=true is the "Send as Partial Finish instead" escape from the
-  // missing-items popup: summary only, no checklist, nothing else required.
+  // missing-items popup: summary only, nothing else required.
   async function onComplete(partial = false) {
     setCmpDlg(null);
     setCmpBusy(true);
-    const res = await completeTask(task.id, partial ? {} : checks, partial);
+    const res = await completeTask(task.id, partial ? {} : completeExtras(cmpFilled), partial);
     setCmpBusy(false);
     if (res?.status === false) { flash('err', res.message || 'Could not complete'); return; }
+    setCmpFilled({});
     flash('ok', partial ? 'Partial finish sent' : 'Sent for approval');
     onChanged && onChanged();
     load(true);
@@ -1859,39 +1854,15 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                   <Text style={[s.cardTitle, { color: COLORS.red }]}>Complete This Task</Text>
                 </View>
 
-                {!hasProgress && (
+                {!hasProgress && summaryRequired && (
                   <View style={s.warnBox}>
                     <Ionicons name="warning-outline" size={15} color="#92400E" />
                     <Text style={s.warnTxt}>Submit a Progress Summary above before you complete this task.</Text>
                   </View>
                 )}
-                {!hasManual && (
-                  <View style={s.warnBox}>
-                    <Ionicons name="book-outline" size={15} color="#92400E" />
-                    <Text style={s.warnTxt}>Upload a User Manual (PDF, DOC or DOCX) above before you complete this task — or use Partial Finish on the board.</Text>
-                  </View>
-                )}
-                {!hasGithub && (githubRequired ? (
-                  <View style={s.warnBox}>
-                    <Ionicons name="logo-github" size={15} color="#92400E" />
-                    <Text style={s.warnTxt}>This is a Module / App task — add the GitHub link (repository + branch) above before completing.</Text>
-                  </View>
-                ) : (
-                  <View style={[s.warnBox, s.warnBoxSoft]}>
-                    <Ionicons name="logo-github" size={15} color="#A16207" />
-                    <Text style={[s.warnTxt, s.warnTxtSoft]}>Optional: add the GitHub link — once it's uploaded, the code is safe.</Text>
-                  </View>
-                ))}
 
-                <Text style={s.cardSub}>Tick everything that applies — at least one is needed to send this for approval. Your manager sees exactly which.</Text>
-                {CHECKLIST_ITEMS.map((c, i) => (
-                  <TouchableOpacity key={c.key} style={s.checkRow} activeOpacity={0.7}
-                    onPress={() => setChecks({ ...checks, [c.key]: !checks[c.key] })}>
-                    <Ionicons name={checks[c.key] ? 'checkbox' : 'square-outline'} size={19}
-                      color={checks[c.key] ? COLORS.green : COLORS.faint} />
-                    <Text style={s.checkTxt}>{i + 1}. {c.label}</Text>
-                  </TouchableOpacity>
-                ))}
+                <Text style={s.cardSub}>What this task needs — the user manual file and the GitHub link are added in their sections above.</Text>
+                <CompleteRules rules={cmpRules} filled={cmpFilled} onChange={setCmpFilled} hasSummary={hasProgress} />
 
                 <TouchableOpacity
                   style={[s.wideBtn, { backgroundColor: COLORS.red }, cmpBusy && s.btnOff]}

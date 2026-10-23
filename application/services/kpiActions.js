@@ -569,15 +569,19 @@ export const revertSignoff = (kpiId, reason) =>
 // never re-derive it here, or the button will offer what the route refuses.
 export const adminDeleteTask = (kpiId, reason) =>
   action('/kra_kpi/task/admin_delete', { kpi_id: kpiId, reason: reason || '' });
-export const completeTask = (kpiId, employeeChecklist = {}, partial = false) =>
-  action('/kra_kpi/task/complete', { kpi_id: kpiId, employee_checklist: employeeChecklist, partial });
+// extra: what the Complete form filled in for this task's type (app link, manual
+// link, website URL, database details — utils/completeMissing completeExtras);
+// the server saves them, then checks the type's rules.
+export const completeTask = (kpiId, extra = {}, partial = false) =>
+  action('/kra_kpi/task/complete', { ...extra, kpi_id: kpiId, partial });
 // Admin reviews a developer-completed task (task_state === 'partially_completed').
 // Approve carries the manager QA checklist; reject sends it back to the SAME dev.
 export const approveTask = (kpiId, managerChecklist = {}) =>
   action('/kra_kpi/task/approve', { kpi_id: kpiId, manager_checklist: managerChecklist });
 export const rejectTask = (kpiId, reason) =>
   action('/kra_kpi/task/reject', { kpi_id: kpiId, reason: reason || '' });
-// Read the developer's + manager's checklist state for a task (shown read-only in the admin Approve modal).
+// What the task's type needed (completion_rules) + the manager's checklist state
+// (shown read-only in the admin Approve modal).
 export const getTaskChecklists = (kpiId) =>
   action('/kra_kpi/task/checklists', { kpi_id: kpiId });
 
@@ -976,15 +980,6 @@ export function legacyVoiceSource(url) {
   if (prog) return { progressId: Number(prog[1]), attachmentId: 0 };
   return null;
 }
-
-// The 5 employee-checklist keys the server expects for a full Complete.
-export const CHECKLIST_ITEMS = [
-  { key: 'verify_github', label: 'Verified GitHub URL' },
-  { key: 'deployed_task', label: 'Deployed the task' },
-  { key: 'user_manual', label: 'User manual uploaded' },
-  { key: 'documentation', label: 'Documentation submitted' },
-  { key: 'tested_code', label: 'Manually tested the code' },
-];
 
 // The manager/admin QA-checklist keys the server expects on Approve
 // (map to approve_task's manager_checklist_* fields).
