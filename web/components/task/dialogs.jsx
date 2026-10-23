@@ -173,7 +173,8 @@ function PauseDialog({ task, extra, busy, onClose, onConfirm, all }) {
    what is already on the task or typed here. */
 function CompleteDialog({ task, busy, onClose, onConfirm }) {
   const [summary, setSummary] = useState("");
-  const [partial, setPartial] = useState(true);
+  /* Completed (what this type needs) or Partially completed (summary only; the client is sent it). */
+  const [partial, setPartial] = useState(false);
   /* null = not loaded yet. A full Complete needs a user manual on the task
      (the server refuses without one); Partial needs none. */
   const [hasManual, setHasManual] = useState(null);
@@ -237,9 +238,13 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
   return (
     <>
     <Modal open onClose={onClose} title={<Title task={task}>Complete</Title>} width={540}
-      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="ok" busy={busy} disabled={busy || (partial && !hasSummary) || (!partial && !rules)} title={partial && !hasSummary ? "Write a progress note first" : !partial && !rules ? "Loading what this task needs…" : undefined} onClick={submit}>{partial ? "Send for review" : "Complete"}</Button></>}>
-      <p className="note" style={{ margin: 0 }}>It goes to an admin for approval{partial ? "" : " (or straight to done when admin acceptance is off)"}.</p>
-      {rules && (
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="ok" busy={busy} disabled={busy || (partial && !hasSummary) || (!partial && !rules)} title={partial && !hasSummary ? "Write a progress note first" : !partial && !rules ? "Loading what this task needs…" : undefined} onClick={submit}>{partial ? "🏁 Send partial finish" : "Complete"}</Button></>}>
+      <div role="radiogroup" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <label className="chk" style={{ flex: "1 1 180px" }}><input type="radio" name="finishMode" checked={!partial} onChange={() => setPartial(false)} style={CHK} /><span><b>✅ Completed</b><br /><span className="mini">Everything this task needs</span></span></label>
+        <label className="chk" style={{ flex: "1 1 180px" }}><input type="radio" name="finishMode" checked={partial} onChange={() => setPartial(true)} style={CHK} /><span><b>🏁 Partially completed</b><br /><span className="mini">Only a summary</span></span></label>
+      </div>
+      {partial && <p className="note" style={{ margin: 0 }}>📝 Only this summary is sent. The client is sent it with the task to check.</p>}
+      {!partial && rules && (
         <div className="cr">
           <div className="cr-head"><b>What this task needs</b><span className="mini">Required done: {reqDone} of {req.length}</span></div>
           <span className="bar" style={{ display: "block" }}><i style={{ width: `${req.length ? (reqDone / req.length) * 100 : 100}%`, background: "var(--brand)" }} /></span>
@@ -259,8 +264,7 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
           ))}
         </div>
       )}
-      <Field label={devCount > 0 || (rules && rows.some((r) => r.key === "summary" && !r.required)) ? "Progress note (optional)" : "Progress note"} required={!(devCount > 0) && !(rules && rows.some((r) => r.key === "summary" && !r.required))}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
-      <label className="chk"><input type="checkbox" checked={!partial} onChange={(e) => setPartial(!e.target.checked)} style={CHK} />Mark fully complete</label>
+      <Field label={partial ? "Progress summary" : devCount > 0 || (rules && rows.some((r) => r.key === "summary" && !r.required)) ? "Progress note (optional)" : "Progress note"} required={partial || (!(devCount > 0) && !(rules && rows.some((r) => r.key === "summary" && !r.required)))}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
       <p className="mini" style={{ margin: 0 }}>Time spent: {fmtHM(spentOf(task))}</p>
     </Modal>
     {ask?.missing && (

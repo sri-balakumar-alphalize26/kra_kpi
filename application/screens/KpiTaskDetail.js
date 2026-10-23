@@ -37,7 +37,7 @@ import AddTimeModal from '../components/AddTimeModal';
 import AppDialog from '../components/AppDialog';
 import {
   fetchTaskDetails, submitProgressUpdate, addGithubLink, deleteGithubLink,
-  deleteManual, completeTask, fetchProgressFile, fetchManualFile, addTaskTime, deleteProgressBulk,
+  deleteManual, completeTask, createProgress, fetchProgressFile, fetchManualFile, addTaskTime, deleteProgressBulk,
   MAX_PROGRESS_BYTES,
   fetchActivity, updateProgress, deleteProgress, updateTaskMeta, fetchProjects,
   fetchLegacy, saveLegacy, legacyVoiceSource, fetchClientSends, parseServerTs,
@@ -52,6 +52,7 @@ import useBackHandler from '../components/useBackHandler';
 import { taskDeliverableLabel } from '../utils/deliverableType';
 import { completeMissing, completeExtras } from '../utils/completeMissing';
 import CompleteRules from '../components/CompleteRules';
+import FinishModeRadio, { PARTIAL_NOTE } from '../components/FinishModeRadio';
 import { sendHeading, sendStatus, fileIcon, sendFileSource, hasClientSends } from '../utils/clientSends';
 
 const log = createLogger('KpiDetail');
@@ -1359,16 +1360,37 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     setCmpDlg(items.length ? { kind: 'missing', items } : { kind: 'confirm' });
   }
 
-  // partial=true is the "Send as Partial Finish instead" escape from the
-  // missing-items popup: summary only, nothing else required.
+  // ✅ Completed / 🏁 Partially completed (FinishModeRadio). Partial sends only
+  // a summary — typed here, or the last update — and the client is sent it.
+  const [cmpPartial, setCmpPartial] = useState(false);
+  const [cmpSummary, setCmpSummary] = useState('');
+
+  function onPartialPress() {
+    if (cmpBusy) return;
+    if (!cmpSummary.trim() && !hasProgress) {
+      flash('err', 'Write a summary of what you did before sending a partial finish.');
+      return;
+    }
+    setCmpDlg({ kind: 'partial' });
+  }
+
   async function onComplete(partial = false) {
     setCmpDlg(null);
     setCmpBusy(true);
+    if (partial && cmpSummary.trim()) {
+      const pr = await createProgress(task.id, cmpSummary.trim());
+      if (pr?.status === false) {
+        setCmpBusy(false);
+        flash('err', pr.message || 'Could not save your summary');
+        return;
+      }
+    }
     const res = await completeTask(task.id, partial ? {} : completeExtras(cmpFilled), partial);
     setCmpBusy(false);
     if (res?.status === false) { flash('err', res.message || 'Could not complete'); return; }
     setCmpFilled({});
-    flash('ok', partial ? 'Partial finish sent' : 'Sent for approval');
+    setCmpSummary('');
+    flash('ok', partial ? 'Partial finish sent — the client is sent your summary' : 'Sent for approval');
     onChanged && onChanged();
     load(true);
   }
@@ -1854,23 +1876,49 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                   <Text style={[s.cardTitle, { color: COLORS.red }]}>Complete This Task</Text>
                 </View>
 
-                {!hasProgress && summaryRequired && (
-                  <View style={s.warnBox}>
-                    <Ionicons name="warning-outline" size={15} color="#92400E" />
-                    <Text style={s.warnTxt}>Submit a Progress Summary above before you complete this task.</Text>
-                  </View>
+                <FinishModeRadio partial={cmpPartial} onChange={setCmpPartial} />
+
+                {cmpPartial ? (
+                  <>
+                    <Text style={s.cardSub}>Progress summary *</Text>
+                    <TextInput
+                      style={[s.oldInput, { minHeight: 90, textAlignVertical: 'top', paddingTop: 9 }]} multiline
+                      value={cmpSummary} onChangeText={setCmpSummary}
+                      placeholder={hasProgress ? 'Leave empty to use your last update' : "What was done, what's left, why you're finishing now…"}
+                      placeholderTextColor={COLORS.faint}
+                    />
+                    <View style={[s.warnBox, { backgroundColor: '#EEF2FF' }]}>
+                      <Text style={[s.warnTxt, { color: COLORS.navy }]}>{PARTIAL_NOTE}</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={[s.wideBtn, { backgroundColor: COLORS.amber }, cmpBusy && s.btnOff]}
+                      onPress={onPartialPress} disabled={cmpBusy}>
+                      {cmpBusy ? <ActivityIndicator color="#fff" size="small" /> : (
+                        <><Ionicons name="flag-outline" size={16} color="#fff" /><Text style={s.wideBtnTxt}>🏁 Send partial finish</Text></>
+                      )}
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    {!hasProgress && summaryRequired && (
+                      <View style={s.warnBox}>
+                        <Ionicons name="warning-outline" size={15} color="#92400E" />
+                        <Text style={s.warnTxt}>Submit a Progress Summary above before you complete this task.</Text>
+                      </View>
+                    )}
+
+                    <Text style={s.cardSub}>What this task needs — the user manual file and the GitHub link are added in their sections above.</Text>
+                    <CompleteRules rules={cmpRules} filled={cmpFilled} onChange={setCmpFilled} hasSummary={hasProgress} />
+
+                    <TouchableOpacity
+                      style={[s.wideBtn, { backgroundColor: COLORS.red }, cmpBusy && s.btnOff]}
+                      onPress={onCompletePress} disabled={cmpBusy}>
+                      {cmpBusy ? <ActivityIndicator color="#fff" size="small" /> : (
+                        <><Ionicons name="flag" size={16} color="#fff" /><Text style={s.wideBtnTxt}>Complete &amp; Send for Approval</Text></>
+                      )}
+                    </TouchableOpacity>
+                  </>
                 )}
-
-                <Text style={s.cardSub}>What this task needs — the user manual file and the GitHub link are added in their sections above.</Text>
-                <CompleteRules rules={cmpRules} filled={cmpFilled} onChange={setCmpFilled} hasSummary={hasProgress} />
-
-                <TouchableOpacity
-                  style={[s.wideBtn, { backgroundColor: COLORS.red }, cmpBusy && s.btnOff]}
-                  onPress={onCompletePress} disabled={cmpBusy}>
-                  {cmpBusy ? <ActivityIndicator color="#fff" size="small" /> : (
-                    <><Ionicons name="flag" size={16} color="#fff" /><Text style={s.wideBtnTxt}>Complete &amp; Send for Approval</Text></>
-                  )}
-                </TouchableOpacity>
               </View>
             )}
 
@@ -2925,8 +2973,17 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
           title="Before completing, you still need:"
           message={(cmpDlg?.items || []).map((m) => `• ${m}`).join('\n')}
           cancelLabel="OK, I'll add them"
-          confirmLabel={hasProgress ? 'Send as Partial Finish instead' : "OK, I'll add them"}
-          onConfirm={hasProgress ? () => onComplete(true) : undefined}
+          confirmLabel="Partially completed instead"
+          onConfirm={() => { setCmpDlg(null); setCmpPartial(true); }}
+          onClose={() => setCmpDlg(null)}
+        />
+        <AppDialog
+          visible={cmpDlg?.kind === 'partial'}
+          tone="warn"
+          title={`Send ${meta.external_ref || t?.name || 'this task'} as a partial finish?`}
+          message={`The client is sent this summary:\n\n${cmpSummary.trim() || 'Your last update.'}`}
+          confirmLabel="Yes, send"
+          onConfirm={() => onComplete(true)}
           onClose={() => setCmpDlg(null)}
         />
         <AppDialog
