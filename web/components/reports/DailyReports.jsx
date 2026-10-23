@@ -15,7 +15,9 @@ const monthLabel = (ymd) => { const d = new Date(`${ymd}T00:00:00`); return Numb
 export default function DailyReports() {
   const sp = useSearchParams();
   const flags = useFlags();
-  const list = useResource(R.DAILY_PATH, { limit: 90 }, { ttl: 60000 });
+  /* Odoo lists them all; the route takes a limit, so "Load older" asks for 90 more. */
+  const [limit, setLimit] = useState(90);
+  const list = useResource(R.DAILY_PATH, { limit }, { ttl: 60000 });
   /* {status:false, message} is a refusal, not data. */
   const listData = list.data?.status === false ? null : list.data;
   const listErr = list.error || (list.data?.status === false ? new Error(list.data.message || "Could not load the daily reports.") : null);
@@ -75,6 +77,7 @@ export default function DailyReports() {
                 </tbody>
               </table>
             )}
+            {reports.length >= limit && !day && <div style={{ padding: 12, textAlign: "center" }}><Button size="sm" kind="ghost" busy={list.loading} onClick={() => setLimit((n) => n + 90)}>Load older</Button></div>}
           </div>
           {open && (
             <div className="cardbox" style={{ padding: 0, overflow: "hidden", minHeight: 520 }}>

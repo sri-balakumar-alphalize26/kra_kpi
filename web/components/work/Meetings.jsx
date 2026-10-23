@@ -18,12 +18,27 @@ import { local, m2o } from "@/lib/services/sysadmin";
 import * as M from "@/lib/services/meetings";
 
 const when = (ts) => local(ts, { date: true });
+/* Odoo's "Group by" on the list: [[label, rows]] in first-seen order. */
+const groupRows = (rows, by) => {
+  if (!by) return [["", rows]];
+  const keyOf = (m) => (by === "client" ? m2o(m.client_kra_id) || "None" : by === "who" ? m2o(m.organizer_id) || "Nobody yet" : (M.STATES[m.state] || [null, m.state])[1]);
+  const out = new Map();
+  for (const m of rows) { const k = keyOf(m); if (!out.has(k)) out.set(k, []); out.get(k).push(m); }
+  return [...out.entries()];
+};
 const TA = { border: 0, background: "none", outline: 0, resize: "vertical", width: "100%", font: "inherit", color: "inherit" };
 
 export default function Meetings() {
   const { me } = useMe();
   const [filter, setFilter] = useState("requested");
   const [mine, setMine] = useState(false);
+  /* Odoo search view: Upcoming, No time set, words in subject / client / who
+     joins, and Group by Client / Who Joins / Status. */
+  const [upcoming, setUpcoming] = useState(false);
+  const [noTime, setNoTime] = useState(false);
+  const [q, setQ] = useState("");
+  const [qDraft, setQDraft] = useState("");
+  const [groupBy, setGroupBy] = useState("");
   const [rows, setRows] = useState(null);
   const [counts, setCounts] = useState({});
   const [err, setErr] = useState(null);
@@ -34,8 +49,12 @@ export default function Meetings() {
   const domainFor = useCallback((key) => {
     const d = [...(M.FILTERS.find((f) => f.key === key)?.domain || [])];
     if (mine) d.push(["organizer_id", "=", me.uid]);
+    if (upcoming) { const t = new Date(); d.push(["scheduled_start", ">=", `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`]); }
+    if (noTime) d.push(["scheduled_start", "=", false]);
+    const w = q.trim();
+    if (w) d.push("|", "|", ["name", "ilike", w], ["client_kra_id", "ilike", w], ["organizer_id", "ilike", w]);
     return d;
-  }, [mine, me.uid]);
+  }, [mine, me.uid, upcoming, noTime, q]);
 
   const load = useCallback(async () => {
     try {
@@ -59,6 +78,11 @@ export default function Meetings() {
       <div className="page">
         <div className="toolbar">
           <label className="row mini" style={{ cursor: "pointer" }}><input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} /> Only meetings I join</label>
+          <button type="button" className={`pill ${upcoming ? "on" : ""}`} aria-pressed={upcoming} onClick={() => setUpcoming((v) => !v)}>Upcoming</button>
+          <button type="button" className={`pill ${noTime ? "on" : ""}`} aria-pressed={noTime} onClick={() => setNoTime((v) => !v)}>No time set</button>
+          <Input icon="search" type="search" value={qDraft} placeholder="Subject, client, who joins…" aria-label="Search" style={{ width: 230 }}
+            onChange={(e) => setQDraft(e.target.value)} onBlur={() => setQ(qDraft)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); setQ(qDraft); } }} />
+          <span className="input" style={{ width: 150 }}><Select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} aria-label="Group by" style={{ border: 0, background: "none", width: "100%" }}><option value="">Group by…</option><option value="client">Client</option><option value="who">Who Joins</option><option value="state">Status</option></Select></span>
           <span className="right"><Button size="sm" kind="ghost" onClick={load}>Refresh</Button></span>
         </div>
         {err && !rows && <ErrorState error={err} onRetry={load} />}
@@ -72,7 +96,9 @@ export default function Meetings() {
             <table className="table">
               <thead><tr><th>Starts</th><th>Subject</th><th>Client</th><th>Who joins</th><th>Asked by</th><th>Status</th><th className="num">Ran for</th></tr></thead>
               <tbody>
-                {rows.map((m) => {
+                {groupRows(rows, groupBy).map(([gKey, gRows]) => [
+                  groupBy && <tr key={`g${gKey}`}><td colSpan={7} style={{ background: "var(--hover)", fontWeight: 700 }}>{gKey} <span className="mini">({gRows.length})</span></td></tr>,
+                  ...gRows.map((m) => {
                   const [tone, label] = M.STATES[m.state] || ["todo", m.state];
                   return (
                     <tr key={m.id} onClick={() => setOpenId(m.id)} style={{ cursor: "pointer" }}>
@@ -85,7 +111,7 @@ export default function Meetings() {
                       <td className="num">{m.actual_minutes ? `${m.actual_minutes} min` : "—"}</td>
                     </tr>
                   );
-                })}
+                })])}
               </tbody>
             </table>
           </div>

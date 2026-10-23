@@ -47,6 +47,15 @@ export default function TaskPanel({ id, onClose }) {
     return S.fetchTaskDetails(id).then((r) => { if (r.ok) { setD(r); setErr(""); } else setErr(r.message); }).catch((e) => setErr(e.message));
   };
   useEffect(() => { setD(null); setInfo(null); setTab("overview"); load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* Files › "📝 View note": open Updates and bring that progress note into view. */
+  useEffect(() => {
+    const on = (e) => {
+      setTab("updates");
+      setTimeout(() => { const el = document.getElementById(`pg-${e.detail}`); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1600); } }, 80);
+    };
+    window.addEventListener("kpi:view-note", on);
+    return () => window.removeEventListener("kpi:view-note", on);
+  }, []);
   /* A client waiting for a reply: open straight on the Chat, once per task
      (only if nobody picked a section yet). */
   const [chatOpened, setChatOpened] = useState(null);
@@ -207,7 +216,7 @@ export default function TaskPanel({ id, onClose }) {
                         {meta.points != null && <><dt>Points</dt><dd>{meta.points}</dd></>}
                       </dl>
                     )}
-                    {info && <ExtraDetails info={info} />}
+                    {info && <ExtraDetails info={info} kpiId={id} />}
                   </>
                 )}
                 {tab === "updates" && (
@@ -250,7 +259,11 @@ export default function TaskPanel({ id, onClose }) {
    links, and the low-signal fields folded under "More details" (only when
    one of them has a value). */
 const FLAGS = [["is_mandatory", "Mandatory", "danger"], ["service_kpi", "Service KPI", "review"], ["manager_review", "Coordinator review", "progress"], ["customer_review", "Customer review", "neutral"], ["auto_assign", "Auto-assign", "done"], ["auto_estimated", "Auto-estimated", "done"], ["is_permanent", "Permanent", "todo"], ["is_meeting", "Meeting", "paused"]];
-function ExtraDetails({ info }) {
+function ExtraDetails({ info, kpiId }) {
+  /* The task's own file through the web's /web/content/<model>/<id>/<field>/<name>
+     proxy (Odoo hands out the ?model= form, which that proxy cannot route).
+     View opens it in the file viewer; Download saves it, as on the Odoo board. */
+  const fileBase = info.file_url && kpiId ? `/web/content/kra.kpi/${kpiId}/uploaded_file/${encodeURIComponent(info.file_name || "file")}` : "";
   const flags = FLAGS.filter(([k]) => info[k]);
   const links = S.parseLinks(info.related_links);
   const rem = info.reminder_days ? info.reminder_days + " day" + (info.reminder_days === 1 ? "" : "s") : "";
@@ -259,7 +272,10 @@ function ExtraDetails({ info }) {
   return (
     <div className="sec" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {flags.length > 0 && <div className="pillset">{flags.map(([k, l, tone]) => <Lozenge key={k} tone={tone} style={{ textTransform: "none" }}>{l}</Lozenge>)}</div>}
-      {info.file_url && <a className="btn" style={{ alignSelf: "flex-start" }} href={info.file_url} download={info.file_name || "file"}><Icon n="download" size={15} /> Download task file</a>}
+      {fileBase && <span className="pillset" style={{ alignSelf: "flex-start" }}>
+        <a className="btn" href={fileBase} target="_blank" rel="noreferrer" title="View"><Icon n="eye" size={15} /> View task file</a>
+        <a className="btn" href={`${fileBase}?download=true`} download={info.file_name || "file"}><Icon n="download" size={15} /> Download task file</a>
+      </span>}
       {links.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 2 }}><b style={{ fontSize: 12.5 }}>Related links</b>{links.map((l, i) => <a key={i} href={l} target="_blank" rel="noreferrer" className="mini" style={{ color: "var(--brand)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><Icon n="link" size={12} /> {l}</a>)}</div>}
       {rows.length > 0 && (
         <details>

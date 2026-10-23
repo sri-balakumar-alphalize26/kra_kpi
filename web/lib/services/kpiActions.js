@@ -234,14 +234,6 @@ export async function fetchHistory(kpiId) {
   return res;
 }
 
-/* 💬 General questions: a client's chats that are not about one task (the
-   hidden GEN task per client), the ones this person may open, waiting first. */
-export async function fetchGeneralChats() {
-  const res = await rpc("/kpi_action/chat/general_list", {});
-  if (!res?.status) return { status: false, rows: [], waiting: 0, message: res?.message || "Could not load the chats" };
-  return res;
-}
-
 export async function chatAct(kpiId, msgId, action, { emoji, text } = {}) {
   const params = { kpi_id: kpiId, msg_id: msgId, action };
   if (emoji !== undefined) params.emoji = emoji;
@@ -328,7 +320,6 @@ export const completeTask = (kpiId, employeeChecklist = {}, partial = false, ext
   action("/kra_kpi/task/complete", { kpi_id: kpiId, employee_checklist: employeeChecklist, partial, ...extra });
 export const approveTask = (kpiId, managerChecklist = {}) => action("/kra_kpi/task/approve", { kpi_id: kpiId, manager_checklist: managerChecklist });
 export const rejectTask = (kpiId, reason) => action("/kra_kpi/task/reject", { kpi_id: kpiId, reason: reason || "" });
-export const getTaskChecklists = (kpiId) => action("/kra_kpi/task/checklists", { kpi_id: kpiId });
 export const markReviewStarted = (kpiId) => rpc("/kpi_review/mark_started", { kpi_id: kpiId }).catch(() => ({ status: false }));
 export const acceptSelfCreated = (kpiId, docType = "requirement", priority) =>
   action("/kra_kpi/task/accept_self_created", { kpi_id: kpiId, doc_type: docType, priority });
@@ -467,13 +458,6 @@ export function alertDue(t, uid, nowMs = Date.now()) {
 }
 
 /* ---- constants (shared with the mobile app) ---------------------------------- */
-export const CHECKLIST_ITEMS = [
-  { key: "verify_github", label: "Verified GitHub URL" },
-  { key: "deployed_task", label: "Deployed the task" },
-  { key: "user_manual", label: "User manual uploaded" },
-  { key: "documentation", label: "Documentation submitted" },
-  { key: "tested_code", label: "Manually tested the code" },
-];
 export const MGR_CHECKLIST_ITEMS = [
   { key: "task_reviewed", label: "Task reviewed" },
   { key: "github_verified", label: "GitHub verified" },
@@ -516,17 +500,6 @@ export const DELIVERABLE_OTHER_PLACEHOLDER = "What is it? e.g. Plugin, Website";
 export const DELIVERABLE_OTHER_REQUIRED = "Type what the Other type is (e.g. Plugin, Website).";
 /* `t` is the comma-joined codes or an array of them. */
 export const hasOtherDeliverable = (t) => (Array.isArray(t) ? t : String(t || "").split(",")).includes("other");
-/* A Module / App task needs a GitHub link before a full Complete (server rule). */
-export const needsGithub = (t) => (Array.isArray(t) ? t : String(t || "").split(",")).some((c) => c === "module" || c === "app");
-/* What a full Complete still lacks, in the "What did we miss?" popup's words. */
-export function completeMissing({ hasSummary, hasManual, githubRequired, hasGithub, anyTicked } = {}) {
-  const miss = [];
-  if (!hasSummary) miss.push("A progress summary");
-  if (!hasManual) miss.push("The user manual (PDF, DOC or DOCX)");
-  if (githubRequired && !hasGithub) miss.push("The GitHub link + branch (this is a Module / App task)");
-  if (!anyTicked) miss.push("At least one ticked checkbox");
-  return miss;
-}
 /* The text to send: blank unless Other is picked. */
 export const deliverableOtherValue = (t, other) => (hasOtherDeliverable(t) ? String(other || "").trim().slice(0, DELIVERABLE_OTHER_MAX) : "");
 export const IDLE_REASONS = [

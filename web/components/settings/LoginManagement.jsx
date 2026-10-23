@@ -24,7 +24,9 @@ export default function LoginManagement() {
   /* {status:false, message} (not authorized) is a failure, not an empty list. */
   const refused = access.data?.status === false ? { message: access.data.message || access.data.error || "Could not load the users." } : null;
   const a = refused ? null : access.data;
-  const users = a?.users || [];
+  /* Odoo: "All roles" or one role (Admin / Coordinator / User / Client). */
+  const [roleFilter, setRoleFilter] = useState("all");
+  const users = (a?.users || []).filter((u) => roleFilter === "all" || (u.role || "developer") === roleFilter);
   const [tpl, setTpl] = useState(null);
   const [wa, setWa] = useState(null); /* status payload */
   const [busy, setBusy] = useState("");
@@ -68,12 +70,18 @@ export default function LoginManagement() {
         <div className="cardbox table-scroll" style={{ padding: 0 }}>
           {(refused || (access.error && !a)) && <div style={{ padding: 16 }}><ErrorState error={refused || access.error} onRetry={access.refresh} /></div>}
           {!a ? (refused || access.error ? null : <div style={{ padding: 16 }}><Skeleton rows={6} /></div>) : (
+            <>
+            <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 12px 0" }}>
+              <span className="input" style={{ width: 170, height: 30 }}><Select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} aria-label="Role" style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit", width: "100%" }}>
+                <option value="all">All roles</option>{S.ROLES.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+              </Select></span>
+            </div>
             <table className="table">
               <thead><tr><th>User</th><th>Role</th><th>Mobile</th><th>Country</th><th>App login</th><th>Last sign-in</th><th></th></tr></thead>
               <tbody>
                 {users.map((u) => { const rc = rowCountry(u, a); return (
                   <tr key={u.id}>
-                    <td><Avatar name={u.name} uid={u.id} size={24} /> <b>{u.name}</b>{u.active === false && <> <Lozenge tone="todo">Archived</Lozenge></>}</td>
+                    <td><Avatar name={u.name} uid={u.id} size={24} /> <b>{u.name}</b>{u.active === false && <> <Lozenge tone="todo">Archived</Lozenge></>}{u.login && <div className="mini" style={{ marginLeft: 30 }}>{u.login}</div>}</td>
                     <td><span className="input" style={{ height: 28 }}><Select value={u.role || "developer"} disabled={u.is_system} onChange={(e) => run(`r${u.id}`, () => S.setUserRole(u.id, e.target.value), "Role changed.")} style={{ border: 0, background: "none", outline: 0, font: "inherit", color: "inherit" }}>{S.ROLES.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}</Select></span></td>
                     <td><MobileCell key={`${u.id}-${rc.iso}-${u.mobile || ""}`} u={u} iso={rc.iso} countryName={rc.name} autoFocus={focusRow === u.id}
                       onSave={(m) => run(`m${u.id}`, () => S.setUserMobile(u.id, m), m ? "Mobile saved." : "Mobile cleared.")} /></td>
@@ -96,6 +104,7 @@ export default function LoginManagement() {
                 ); })}
               </tbody>
             </table>
+            </>
           )}
           <div className="empty" style={{ padding: 12 }}>New users sign in with password <b>1111</b> and must change it on first login · 5 wrong attempts lock the number for 15 min.</div>
         </div>

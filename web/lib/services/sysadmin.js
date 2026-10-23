@@ -41,7 +41,8 @@ export const revertWorkday = (userId, reason) => rpc("/kpi_workday/revert", { us
 
 /* ---- Settings › Backup & restore (kpi.backup) — never read backup_file in lists ---- */
 export const INCLUDES = [["include_kra", "KRAs"], ["include_kpi", "KPIs / tasks"], ["include_progress", "Progress"], ["include_manuals", "User manuals"], ["include_github", "GitHub links"], ["include_reassignments", "Reassignments"], ["include_reports", "Reports"], ["include_attachments", "Attachments"]];
-export const BACKUP_FIELDS = ["name", "backup_date", "backup_type", "backup_size", "backup_filename", "kra_count", "kpi_count", "attachment_count", "links_count", "state", "is_restored", "restored_date", "restored_by", "error_log", "notes"];
+export const BACKUP_FIELDS = ["name", "backup_date", "backup_type", "backup_size", "backup_filename", "kra_count", "kpi_count", "attachment_count", "links_count", "state", "is_restored", "restored_date", "restored_by", "error_log", "notes",
+  "reference_date", "last_full_backup_id", "last_full_backup_date"];
 export const listBackups = () => kw("kpi.backup", "search_read", [[]], { fields: BACKUP_FIELDS, limit: 100, order: "create_date desc" });
 export const createBackupRecord = (vals) => kw("kpi.backup", "create", [[vals]]);
 export const runBackup = (id) => kw("kpi.backup", "action_create_backup", [[id]], {}, LONG);

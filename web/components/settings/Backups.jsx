@@ -76,10 +76,13 @@ function BackupList() {
                     <tr key={b.id}>
                       <td style={{ whiteSpace: "normal" }}><b>{b.name}</b>{b.error_log && <div className="mini" style={{ color: "var(--danger)" }}>{String(b.error_log).slice(0, 140)}</div>}</td>
                       <td>{X.local(b.backup_date, { date: true })}</td>
-                      <td style={{ textTransform: "capitalize" }}>{b.backup_type}</td>
+                      <td><span style={{ textTransform: "capitalize" }}>{b.backup_type}</span>
+                        {b.backup_type === "incremental" && (b.reference_date || b.last_full_backup_id) && <div className="mini" title="Records modified after the reference date are included">
+                          {b.reference_date && <>Since {X.local(b.reference_date, { date: true })}</>}{b.last_full_backup_id && <> · full: {X.m2o(b.last_full_backup_id)}{b.last_full_backup_date ? ` (${X.local(b.last_full_backup_date, { date: true })})` : ""}</>}
+                        </div>}</td>
                       <td className="num">{b.backup_size ? `${Number(b.backup_size).toFixed(2)} MB` : "—"}</td>
                       <td className="num">{b.kra_count || 0}</td><td className="num">{b.kpi_count || 0}</td><td className="num">{b.attachment_count || 0}</td><td className="num">{b.links_count || 0}</td>
-                      <td><Lozenge tone={tone}>{label}</Lozenge>{b.is_restored && <div className="mini">Restored {X.local(b.restored_date, { date: true })}</div>}</td>
+                      <td><Lozenge tone={tone}>{label}</Lozenge>{b.is_restored && <div className="mini">Restored {X.local(b.restored_date, { date: true })}{b.restored_by ? ` by ${X.m2o(b.restored_by)}` : ""}</div>}</td>
                       <td><span style={{ display: "inline-flex", gap: 6 }}>
                         {b.state === "completed" && b.backup_filename && <a className="btn" style={{ height: 28, fontSize: 12.5 }} href={X.backupDownloadUrl(b)}>Download</a>}
                         {b.state === "completed" && <Button size="sm" kind="ghost" busy={busy === `restore-${b.id}`} onClick={() => restore(b)}>Restore</Button>}

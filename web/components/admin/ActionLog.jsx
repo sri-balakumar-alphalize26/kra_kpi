@@ -26,6 +26,9 @@ export default function ActionLog() {
   const [limit, setLimit] = useState("500");
   const [q, setQ] = useState("");
   const [onlyFailed, setOnlyFailed] = useState(false);
+  /* Odoo search filters: source channel (Web / WhatsApp / Cron / System) and Successful. */
+  const [sources, setSources] = useState([]);
+  const [onlyOk, setOnlyOk] = useState(false);
   const [open, setOpen] = useState(() => new Set());
   const [groupBy, setGroupBy] = useState(""); /* "" | event | source | task (Odoo list view group-bys) */
   useEffect(() => { A.getIntakeUsers().then(setUsers).catch(() => {}); }, []);
@@ -36,8 +39,8 @@ export default function ActionLog() {
   const entries = log.data?.entries || [];
   const shown = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return entries.filter((e) => (!onlyFailed || !e.success) && (!s || [e.event, e.task_ref, e.task_name, e.actor, e.source_label].some((v) => (v || "").toLowerCase().includes(s))));
-  }, [entries, q, onlyFailed]);
+    return entries.filter((e) => (!onlyFailed || !e.success) && (!onlyOk || e.success) && (!sources.length || sources.includes(e.source)) && (!s || [e.event, e.task_ref, e.task_name, e.actor, e.source_label].some((v) => (v || "").toLowerCase().includes(s))));
+  }, [entries, q, onlyFailed, onlyOk, sources]);
   /* Groups keep the newest-first order of their first entry. */
   const groups = useMemo(() => {
     if (!groupBy) return [{ key: "", label: "", rows: shown }];
@@ -70,6 +73,13 @@ export default function ActionLog() {
           <Field label="Show up to"><span className="input" style={{ width: 110 }}><Select value={limit} onChange={(e) => setLimit(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="200">200</option><option value="500">500</option><option value="2000">2000</option></Select></span></Field>
           <Field label="Search"><Input icon="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Event, task, person…" /></Field>
           <Field label="Group by"><span className="input" style={{ width: 130 }}><Select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} style={{ border: 0, background: "none", outline: 0, width: "100%", font: "inherit", color: "inherit" }}><option value="">None</option><option value="event">Event</option><option value="source">Source</option><option value="task">Task</option></Select></span></Field>
+          <span className="pillset" style={{ paddingBottom: 4 }}>
+            {[["web", "Web"], ["whatsapp", "WhatsApp"], ["cron", "Cron"], ["system", "System"]].map(([k, l]) => {
+              const on = sources.includes(k);
+              return <button key={k} type="button" className={`pill ${on ? "on" : ""}`} aria-pressed={on} onClick={() => setSources((x) => (on ? x.filter((y) => y !== k) : [...x, k]))}>{l}</button>;
+            })}
+            <button type="button" className={`pill ${onlyOk ? "on" : ""}`} aria-pressed={onlyOk} onClick={() => { setOnlyOk((v) => !v); setOnlyFailed(false); }}>Successful</button>
+          </span>
           <label className="mini" style={{ display: "inline-flex", alignItems: "center", gap: 6, paddingBottom: 8, cursor: "pointer" }}><input type="checkbox" checked={onlyFailed} onChange={(e) => setOnlyFailed(e.target.checked)} style={{ accentColor: "var(--brand)" }} />Failed only{failed ? ` (${failed})` : ""}</label>
           {sp.get("task") && <Lozenge tone="review" style={{ textTransform: "none", marginBottom: 8 }}>Task #{sp.get("task")} only</Lozenge>}
         </div>
@@ -85,7 +95,7 @@ export default function ActionLog() {
                   <Fragment key={`g${g.key}`}>
                     {groupBy && <tr className="group"><td colSpan={8}>{g.label} · {g.rows.length} entr{g.rows.length === 1 ? "y" : "ies"}{g.rows.some((e) => !e.success) ? ` · ${g.rows.filter((e) => !e.success).length} failed` : ""}</td></tr>}
                     {g.rows.map((e) => {
-                  const has = e.payload && Object.keys(e.payload).length > 0;
+                  const has = (e.payload && Object.keys(e.payload).length > 0) || !!e.user_agent || !!e.contact;
                   const isOpen = open.has(e.id);
                   return (
                     <Fragment key={e.id}>
@@ -101,6 +111,7 @@ export default function ActionLog() {
                       </tr>
                       {isOpen && (
                         <tr className="sel"><td></td><td colSpan={7} style={{ whiteSpace: "normal" }}>
+                          {(e.contact || e.user_agent) && <div className="mini" style={{ marginBottom: 6 }}>{e.contact && <>Contact: <b>{e.contact}</b>{e.user_agent ? " · " : ""}</>}{e.user_agent && <>User agent: {e.user_agent}</>}</div>}
                           <pre style={{ margin: 0, fontSize: 12, lineHeight: "17px", whiteSpace: "pre-wrap", wordBreak: "break-word", color: "var(--subtle)" }}>{JSON.stringify(e.payload, null, 2)}</pre>
                         </td></tr>
                       )}

@@ -35,6 +35,11 @@ export default function Approvals() {
   const [busyId, setBusyId] = useState(null);
   const [decide, setDecide] = useState(null);   /* { row, decision, context, title } */
   const [reply, setReply] = useState(null);     /* { doubt, mode: answer|release|reject } */
+  /* Odoo search view: words in what is waiting / its ref / client / who asked,
+     "Waiting over a week", and Group by What it is / Client / Asked on. */
+  const [q, setQ] = useState("");
+  const [week, setWeek] = useState(false);
+  const [groupBy, setGroupBy] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -51,7 +56,20 @@ export default function Approvals() {
   useEffect(() => { if (tab === "questions") loadDoubts(); }, [tab, loadDoubts]);
   const refresh = () => { load(); if (tab === "questions") loadDoubts(); window.dispatchEvent(new CustomEvent("kpi:approvals")); };
 
-  const shown = useMemo(() => (tab === "all" ? rows || [] : (rows || []).filter((r) => r.kind === tab)), [rows, tab]);
+  const shown = useMemo(() => {
+    const words = q.trim().toLowerCase();
+    const weekAgo = Date.now() - 7 * 864e5;
+    return (rows || []).filter((r) => (tab === "all" || r.kind === tab)
+      && (!words || [r.name, r.reference, m2o(r.client_kra_id), r.requested_by].some((v) => String(v || "").toLowerCase().includes(words)))
+      && (!week || (r.requested_on && new Date(String(r.requested_on).replace(" ", "T") + "Z").getTime() < weekAgo)));
+  }, [rows, tab, q, week]);
+  const grouped = useMemo(() => {
+    if (!groupBy) return [{ key: "", rows: shown }];
+    const keyOf = (r) => (groupBy === "kind" ? P.kindLabel(r.kind) : groupBy === "client" ? m2o(r.client_kra_id) || "None" : local(r.requested_on) ? String(r.requested_on).slice(0, 10) : "None");
+    const out = new Map();
+    for (const r of shown) { const k = keyOf(r); if (!out.has(k)) out.set(k, []); out.get(k).push(r); }
+    return [...out.entries()].map(([key, rs]) => ({ key, rows: rs }));
+  }, [shown, groupBy]);
 
   /* Approve / Refuse: a decision that needs nothing more is done at once;
      anything else opens the dialog with what the module asks for. */
@@ -90,6 +108,13 @@ export default function Approvals() {
         <div className="tabs" style={{ marginBottom: 12, flexWrap: "wrap" }}>
           {tabs.map((t) => <span key={t.key} className={tab === t.key ? "on" : ""} onClick={() => setTab(t.key)} style={{ cursor: "pointer" }}>{t.label}{t.count ? <em>{t.count}</em> : null}</span>)}
         </div>
+        {tab !== "questions" && (
+          <div className="toolbar" style={{ flexWrap: "wrap", gap: 8 }}>
+            <Input icon="search" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="What is waiting, ref, client, who asked…" aria-label="Search" style={{ width: 280 }} />
+            <button type="button" className={`pill${week ? " on" : ""}`} aria-pressed={week} onClick={() => setWeek((v) => !v)}>Waiting over a week</button>
+            <span className="input" style={{ width: 170 }}><Select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} style={FIELD} aria-label="Group by"><option value="">Group by…</option><option value="kind">What it is</option><option value="client">Client</option><option value="day">Asked on</option></Select></span>
+          </div>
+        )}
         {err && !rows && <ErrorState error={err} onRetry={load} />}
         {tab === "questions"
           ? <Questions doubts={doubts} all={allDoubts} setAll={setAllDoubts} onReply={setReply} onMeeting={async (d) => {
@@ -114,7 +139,9 @@ export default function Approvals() {
                 <table className="table">
                   <thead><tr><th>Ref</th><th>What is waiting</th><th style={{ width: "28%" }}>About</th><th>Client</th><th>Asked by</th><th>Asked on</th><th className="num">Days</th><th></th></tr></thead>
                   <tbody>
-                    {shown.map((r) => (
+                    {grouped.map((g) => [
+                      groupBy && <tr key={`g${g.key}`}><td colSpan={8} style={{ background: "var(--hover)", fontWeight: 700 }}>{g.key} <span className="mini">({g.rows.length})</span></td></tr>,
+                      ...g.rows.map((r) => (
                       <tr key={r.id}>
                         <td>{r.reference ? <span className="ref">{r.reference}</span> : <span className="mini">—</span>}</td>
                         <td><Lozenge tone={r.kind === "qa" ? "review" : r.kind === "disconnect" ? "danger" : r.kind === "meeting" ? "progress" : "todo"} style={{ textTransform: "none" }}>{P.kindLabel(r.kind)}</Lozenge></td>
@@ -128,11 +155,12 @@ export default function Approvals() {
                             <Button size="sm" kind="ok" icon="check" title={r.approve_label} busy={busyId === `${r.id}:approve`} onClick={() => act(r, "approve")}>Approve</Button>
                             <Button size="sm" kind="danger" icon="x" title={r.reject_label} busy={busyId === `${r.id}:reject`} onClick={() => act(r, "reject")}>Refuse</Button>
                             {r.res_model === "kra.kpi" && <a className="btn btn-ghost" style={{ height: 28, fontSize: 12.5 }} href={`/browse/${r.res_id}`}>Open</a>}
-                            {r.res_model === "kpi.meeting" && <a className="btn btn-ghost" style={{ height: 28, fontSize: 12.5 }} href="/meetings">Open</a>}
+                            {r.res_model === "kpi.meeting" && <a className="btn btn-ghost" style={{ height: 28, fontSize: 12.5 }} href={`/meetings?id=${r.res_id}`}>Open</a>}
+                            {r.res_model === "kpi.client.db" && <a className="btn btn-ghost" style={{ height: 28, fontSize: 12.5 }} href={`/settings/setup/databases?id=${r.res_id}`}>Open</a>}
                           </span>
                         </td>
                       </tr>
-                    ))}
+                    ))])}
                   </tbody>
                 </table>
               )}

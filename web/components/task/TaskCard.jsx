@@ -7,6 +7,7 @@ import { deadlinePassed, estimateSeconds, fmtHM, isFreshTask, laneForTask, PAUSE
 import { liveFromAnchor, fmtClock, secsSince, gateLabel, useNow } from "@/lib/liveTime";
 import LiveTick from "./LiveTick";
 import { OldDbBadge } from "./Legacy";
+import { FinishBox, SendBackHistory } from "./TaskExtras";
 
 const SETTLED = ["completed", "awaiting_client", "partially_completed"];
 
@@ -103,6 +104,14 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
         }} />
         {t.user_name ? <Avatar name={t.user_name} uid={t.user_id} size={24} /> : <span className="avatar" style={{ width: 24, height: 24, background: "var(--border)", color: "var(--subtlest)", fontSize: 10 }} title="Unassigned">—</span>}
       </div>
+      {/* Odoo card: every client send-back (closed until tapped), then the
+          Full Complete prompt / the bill / Bill now. */}
+      <SendBackHistory task={t} compact />
+      {(t.full_complete_pending || t.full_complete_at) && (
+        <div onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} style={{ fontSize: 12.5 }}>
+          <FinishBox task={t} isAdmin={admin} canFinish={admin || (me && t.user_id === me.uid)} onChanged={() => window.dispatchEvent(new CustomEvent("kpi:refresh"))} />
+        </div>
+      )}
       {actions?.length > 0 && (
         /* The main buttons, inline like the Odoo board. They swallow the click
            and the pointer-down so the card neither opens nor starts dragging. */
