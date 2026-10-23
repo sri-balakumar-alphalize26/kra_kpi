@@ -61,6 +61,9 @@ function Screen({ config: c, embedded }) {
   const [archived, setArchived] = useState(false);
   const [edit, setEdit] = useState(null);     /* the record in the form ({} = new) */
   const [opts, setOpts] = useState({});       /* many2one choices per relation */
+  /* c.suggest: a text field filled from another one, e.g. the databases a
+     picked server lists ({ db_name: { dep, model, method } }). */
+  const [sugg, setSugg] = useState({});
   const [busy, setBusy] = useState("");
   const [wizard, setWizard] = useState(null); /* {act, rec, ctx} */
   const [records, setRecords] = useState(null); /* {act, title, rows} */
@@ -122,6 +125,18 @@ function Screen({ config: c, embedded }) {
     rels.filter((rel) => !opts[rel]).forEach((rel) => callKw(rel, "name_search", [], { name: "", limit: 300, ...(rel === "res.users" ? { domain: [["share", "=", false]] } : {}) })
       .then((r) => setOpts((o) => ({ ...o, [rel]: r || [] }))).catch(() => setOpts((o) => ({ ...o, [rel]: [] }))));
   }, [meta, edit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const suggDeps = Object.entries(c.suggest || {}).map(([, s]) => String(idOf(edit?.[s.dep]) || "")).join(",");
+  useEffect(() => {
+    if (!edit || !c.suggest) return;
+    Object.entries(c.suggest).forEach(([f, s]) => {
+      const id = idOf(edit[s.dep]);
+      if (!id) { setSugg((o) => ({ ...o, [f]: null })); return; }
+      setSugg((o) => ({ ...o, [f]: { names: [], loading: true } }));
+      callKw(s.model, s.method, [id]).then((r) => setSugg((o) => ({ ...o, [f]: { names: r?.names || [], error: r?.error || "" } })))
+        .catch(() => setSugg((o) => ({ ...o, [f]: { names: [], error: "Could not read the server." } })));
+    });
+  }, [suggDeps, !!edit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ro = (f) => c.readonly || !!meta?.[f]?.readonly || !!(edit && c.readonlyIf?.[f]?.(edit));
   const hidden = (f) => !!(edit && c.hideIf?.[f]?.(edit));
@@ -325,7 +340,7 @@ function Screen({ config: c, embedded }) {
           ))}
           <div className="rs-form">
             {(c.form || []).map((f, i) => typeof f === "string"
-              ? (meta[f] && !hidden(f) && <FieldInput key={f} name={f} m={needed(f) ? { ...meta[f], required: true } : meta[f]} value={edit[f]} readOnly={ro(f) || (!!edit.id && c.lockOnEdit?.includes(f))} secret={c.secret?.includes(f)} options={opts[meta[f].relation]} show={show}
+              ? (meta[f] && !hidden(f) && <FieldInput key={f} name={f} m={needed(f) ? { ...meta[f], required: true } : meta[f]} value={edit[f]} readOnly={ro(f) || (!!edit.id && c.lockOnEdit?.includes(f))} secret={c.secret?.includes(f)} options={opts[meta[f].relation]} show={show} suggest={sugg[f]}
                   onChange={(v) => setEdit((e) => ({ ...e, [f]: v }))} />)
               : (!f.hideIf?.(edit) && <h3 key={`s${i}`} className="rs-section">{f.section}</h3>))}
           </div>
@@ -363,7 +378,7 @@ function Screen({ config: c, embedded }) {
   );
 }
 
-export function FieldInput({ name, m, value, readOnly, secret, options, show, onChange }) {
+export function FieldInput({ name, m, value, readOnly, secret, options, show, suggest, onChange }) {
   const [reveal, setReveal] = useState(false);
   const plain = { border: 0, background: "none", outline: 0, font: "inherit", color: "inherit", width: "100%" };
   const wide = m.type === "text" || m.type === "html";
@@ -392,6 +407,17 @@ export function FieldInput({ name, m, value, readOnly, secret, options, show, on
   }
   if (m.type === "many2one") return <Field label={m.string} required={m.required}><span className="input"><Select value={String(idOf(value) || "")} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : false)} placeholder={options ? "—" : "Loading…"} style={plain}><option value="">—</option>{(options || []).map(([id, n]) => <option key={id} value={String(id)}>{n}</option>)}</Select></span></Field>;
   const type = m.type === "integer" || m.type === "float" ? "number" : m.type === "date" ? "date" : secret && !reveal ? "password" : "text";
+  if (suggest && m.type === "char") {
+    /* Pick from the list (e.g. the server's databases) or type a new one. */
+    const listId = `sg-${name}`;
+    return (
+      <Field label={m.string} required={m.required}
+        hint={suggest.loading ? "Loading the server databases…" : suggest.error || (suggest.names.length ? `${suggest.names.length} on this server: pick or type` : undefined)}>
+        <Input type="text" list={listId} autoComplete="off" value={value || ""} onChange={(e) => onChange(e.target.value)} placeholder={suggest.names.length ? "Pick or type a database" : ""} />
+        <datalist id={listId}>{suggest.names.map((n) => <option key={n} value={n} />)}</datalist>
+      </Field>
+    );
+  }
   return (
     <Field label={m.string} required={m.required} hint={m.type === "char" ? undefined : m.help}>
       <Input type={type} value={value === false || value == null ? "" : value} autoComplete={secret ? "off" : undefined} onChange={(e) => onChange(e.target.value)}
