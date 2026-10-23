@@ -252,14 +252,14 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
             <div key={r.key} className="cr-row">
               <span className={`cr-dot ${r.done ? "ok" : r.required ? "miss" : ""}`} aria-hidden="true">{r.done ? "✓" : r.required ? "!" : "–"}</span>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <b>{r.label}</b>{r.required ? <span className="cr-req"> ✱</span> : <span className="mini"> optional</span>}
+                <b>{r.label}</b>{r.required ? <span className="cr-req"> ✱</span> : <span className="mini"> {r.warn ? "recommended" : "optional"}</span>}
                 {r.key === "manual" && <p className="mini" style={{ margin: "2px 0 4px" }}>Upload a PDF / DOC on the task, or paste a link:</p>}
                 {r.key === "manual" && <Input value={form.user_manual_url || ""} onChange={setF("user_manual_url")} placeholder="https:// (Google Doc, Drive…)" />}
                 {r.key === "github" && !r.done && <p className="mini" style={{ margin: "2px 0 0" }}>Add it on the task's Files tab.</p>}
                 {LINK[r.key] && <Input type={r.key === "db_password" ? "password" : "text"} value={form[LINK[r.key]] || ""} onChange={setF(LINK[r.key])}
                   placeholder={r.key === "app_link" ? "Play Store / App Store / APK link" : r.key === "website_url" || r.key === "db_url" ? "https://" : ""} autoComplete="off" />}
               </div>
-              <span className={`chip-sm cr-st ${r.done ? "ok" : r.required ? "miss" : ""}`}>{r.done ? "Done" : r.required ? "Missing" : "Optional"}</span>
+              <span className={`chip-sm cr-st ${r.done ? "ok" : r.required ? "miss" : ""}`}>{r.done ? "Done" : r.required ? "Missing" : r.warn ? "⚠ Not added" : "Optional"}</span>
             </div>
           ))}
         </div>
@@ -281,7 +281,8 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
         <p className="note" style={{ margin: "0 0 8px" }}>{task.name}</p>
         {rules && <>
           <p style={{ margin: 0 }}><b style={{ color: "var(--ok, #15803d)" }}>✓ Provided</b><br /><span className="mini">{rows.filter((r) => r.done).map((r) => r.label).join(" · ") || "—"}</span></p>
-          {rows.some((r) => !r.done && !r.required) && <p style={{ margin: "8px 0 0" }}><b>— Left empty (optional)</b><br /><span className="mini">{rows.filter((r) => !r.done && !r.required).map((r) => r.label).join(" · ")}</span></p>}
+          {rows.some((r) => !r.done && r.warn) && <p className="callout" style={{ margin: "8px 0 0", background: "#FEF3C7", color: "#92400E", padding: "8px 10px", borderRadius: 8 }}><b>⚠️ Not added — you can still complete:</b>{rows.filter((r) => !r.done && r.warn).map((r) => <span key={r.key} style={{ display: "block" }}>• {r.label} — needed</span>)}</p>}
+          {rows.some((r) => !r.done && !r.required && !r.warn) && <p style={{ margin: "8px 0 0" }}><b>— Left empty (optional)</b><br /><span className="mini">{rows.filter((r) => !r.done && !r.required && !r.warn).map((r) => r.label).join(" · ")}</span></p>}
         </>}
       </Modal>
     )}

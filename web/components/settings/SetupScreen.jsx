@@ -57,6 +57,8 @@ const CLIENT_DB = {
   ],
   groupBy: [{ key: "client", label: "Client", field: "client_kra_id" }, { key: "server", label: "Server", field: "server_id" }, { key: "state", label: "Status", field: "state" }, { key: "term", label: "Term", field: "term_id" }],
   bulk: true,
+  /* Database name: the databases the picked server lists (kpi.server.databases_for_pick). */
+  suggest: { db_name: { dep: "server_id", model: "kpi.server", method: "databases_for_pick" } },
   /* The form's rules: Term only when tracked, the "Disconnect request" block only when there is one. */
   hideIf: {
     term_id: (r) => !r.track_term, expires_on: (r) => !r.track_term, days_left: (r) => !r.track_term,
@@ -87,12 +89,12 @@ export const SCREENS = {
     archive: true, create: true, del: true, order: "sequence, name", secret: ["pg_password"],
     list: ["name", "label", "fetch_method", "url", "host", "db_count", "fetch_enabled", "last_fetch_at"],
     form: [{ section: "Server" }, "name", "label", "sequence", "db_count", "last_fetch_at", "last_fetch_error",
-      { section: "Fetching databases" }, "fetch_method", "fetch_enabled", "url", "url_verify_ssl",
+      { section: "Fetching databases" }, "fetch_method", "fetch_enabled", "url", "url_verify_ssl", "db_preview",
       { section: "PostgreSQL (fetch method: postgres)" }, "host", "port", "pg_maintenance_db", "pg_user", "pg_password", "pg_sslmode",
       { section: "Notes" }, "notes"],
     actions: [
       { method: "action_test_connection", label: "Test Connection", list: true },
-      { method: "action_fetch_databases", label: "Fetch Databases", done: "Databases fetched." },
+      { method: "action_fetch_databases", label: "🔄 Refresh list", done: "Database list read." },
     ],
   },
   "decline-reasons": {
