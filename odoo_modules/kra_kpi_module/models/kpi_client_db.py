@@ -809,6 +809,11 @@ class KraKpiClientDb(models.Model):
         string='Server-wide', index=True,
         help='The client said this is about the whole server rather than one '
              'database. Filed against the client, not a sub-client.')
+    # Which server the client picked in WhatsApp (also for a 🌐 Common /
+    # whole-server request, which has no database).
+    client_server_id = fields.Many2one(
+        'kpi.server', string='Server', index=True, ondelete='set null',
+        help='The server the client said this is about.')
 
     # 'db_disconnect' joins the orthogonal category rather than becoming a doc
     # type, for the reasons spelled out at the top of kpi_provisioning.py.

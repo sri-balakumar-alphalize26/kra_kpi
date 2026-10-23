@@ -300,13 +300,14 @@ class KpiWaStaffRouter(models.AbstractModel):
                    or user.has_group('kra_kpi_module.group_kra_owner'))
         return user, allowed
 
-    def _my_tasks(self, user):
-        """What this person could act on, newest first."""
+    def _my_tasks(self, user, limit=MAX_TASK_ROWS):
+        """What this person could act on, newest first. limit=None: all of
+        them, for a list that pages (kpi_wa_staff_task._pick_list)."""
         return self.env['kra.kpi'].sudo().search([
             ('user_id', '=', user.id),
             ('active', '=', True),
             ('task_state', 'not in', ('completed', 'awaiting_client')),
-        ], order='id desc', limit=MAX_TASK_ROWS)
+        ], order='id desc', limit=limit)
 
     # ------------------------------------------------------------------
     def _handle_staff(self, message, state, group):
@@ -320,6 +321,10 @@ class KpiWaStaffRouter(models.AbstractModel):
                                          kpi_wa_owner_name=who.name or '',
                                          kpi_wa_owner_mark=who._kpi_wa_color()[0])._handle_staff(
                     message, state, group)
+        # 💬 A vote on a developer's "can you reply now?" poll (kpi_doubt
+        # _ask_the_developer): only that task's developer counts.
+        if message.message_type == 'poll_vote' and self.env['kpi.doubt']._dev_poll_vote(message, state, group, self):
+            return True
         # Everybody in a group sees every poll. A vote on SOMEONE ELSE'S poll is
         # not acted on -- it would otherwise run as the voter's own choice.
         voted_on = (message.quoted_wa_message_id or '').strip() \
@@ -349,7 +354,7 @@ class KpiWaStaffRouter(models.AbstractModel):
         # while they are typing into a step.
         typing = step == 'staff_text' or (step == 'staff_flow' and self._fd(state).get('at') in (
             'collect', 'branch', 'entry_text', 'time', 'pause_note', 'meet_note', 'resume_reason',
-            'mt_search', 'switch_search', 'client_reply'))
+            'mt_search', 'switch_search', 'client_reply', 'lp_search'))
         if low in ('cancel', 'exit') or (low == 'stop' and typing):
             if step == 'idle' or not allowed:
                 return False
@@ -726,7 +731,7 @@ class KpiWaStaffRouter(models.AbstractModel):
         if action == 'mytasks':
             # The web board: PLAN / DO / CHECK → lane → task (kpi_wa_staff_task).
             return self._mytasks_begin(message, state, user)
-        tasks = self._my_tasks(user)
+        tasks = self._my_tasks(user, limit=None)
         if not tasks:
             state._reset()
             self._text(message, _(
@@ -748,12 +753,10 @@ class KpiWaStaffRouter(models.AbstractModel):
         # visible text, so "Printer not working" alone could not say which
         # task was meant if two had similar names. The state is shown too,
         # so a developer can see what is running before they pick.
-        labels = dict(tasks._fields['task_state'].selection)
-        opts = [self._task_line(t, True) for t in tasks]
-        state._touch(step='staff_pick_task',
-                     menu_csv=','.join(str(t.id) for t in tasks))
-        self._poll(message, _('Which one? (%s)') % STAFF_BY_ID.get(action, ''), opts)
-        return True
+        # Paged, with 🔍 Search and ↩️ Back: a poll holds 10 rows, and a
+        # developer with more open tasks than that could not reach the rest.
+        return self._pick_list(message, state, user, {'kind': 'task', 'ctx': action,
+                                                      'all': tasks.ids})
 
     def _staff_pick_task(self, message, state, user, tapped, low):
         ids = [int(i) for i in (state.menu_csv or '').split(',')
