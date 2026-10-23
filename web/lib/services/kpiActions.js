@@ -200,14 +200,72 @@ export async function fetchActivity(kpiId, kind = "all") {
 
 /* 💬 Chat with the client (models/kpi_chat.py). Messages are oldest first;
    `at` is UTC "YYYY-MM-DD HH:MM:SS". */
-export async function fetchChat(kpiId) {
-  const res = await rpc("/kpi_action/chat", { kpi_id: kpiId });
+export async function fetchChat(kpiId, { markSeen = false, active = false } = {}) {
+  /* markSeen: the chat is open and on screen, so the client's messages count
+     as seen (blue ✓✓ on their page). The tab's count-only poll leaves it off.
+     active: also touched in the last minute = we are online, so the client's
+     messages make no WhatsApp alert. */
+  const res = await rpc("/kpi_action/chat", { kpi_id: kpiId, mark_seen: !!markSeen, active: !!active });
   if (!res?.status) return { status: false, message: res?.message || "Could not load the chat" };
   return res;
 }
 
-export async function sendChat(kpiId, text) {
-  const res = await rpc("/kpi_action/chat/send", { kpi_id: kpiId, text, source: "web" });
+/* ⚠ on a bubble: the WhatsApp note failed; send it again. Answers like fetchChat. */
+export async function retryChat(kpiId, messageId) {
+  const res = await rpc("/kpi_action/chat/retry", { kpi_id: kpiId, message_id: messageId });
+  if (!res?.status) return { status: false, message: res?.message || "Could not retry" };
+  return res;
+}
+
+export async function sendChat(kpiId, text, replyTo) {
+  const res = await rpc("/kpi_action/chat/send", { kpi_id: kpiId, text, source: "web", reply_to: replyTo || false });
+  if (!res?.status) return { status: false, message: res?.message || "Could not send" };
+  return res;
+}
+
+/* The long-press card on a bubble: 'react' (the same emoji again takes it off,
+   another one replaces it), 'edit' (new text) or 'delete' (for everyone).
+   Answers with the whole chat payload, like fetchChat. */
+/* Everything on one task in one list (Odoo KPI Details › History): client chat,
+   questions, progress, meetings, GitHub, manuals and activity. Times are UTC. */
+export async function fetchHistory(kpiId) {
+  const res = await rpc("/kpi_action/history", { kpi_id: kpiId });
+  if (!res?.status) return { status: false, items: [], message: res?.message || "Could not load the history" };
+  return res;
+}
+
+/* 💬 General questions: a client's chats that are not about one task (the
+   hidden GEN task per client), the ones this person may open, waiting first. */
+export async function fetchGeneralChats() {
+  const res = await rpc("/kpi_action/chat/general_list", {});
+  if (!res?.status) return { status: false, rows: [], waiting: 0, message: res?.message || "Could not load the chats" };
+  return res;
+}
+
+export async function chatAct(kpiId, msgId, action, { emoji, text } = {}) {
+  const params = { kpi_id: kpiId, msg_id: msgId, action };
+  if (emoji !== undefined) params.emoji = emoji;
+  if (text !== undefined) params.text = text;
+  const res = await rpc("/kpi_action/chat/act", params);
+  if (!res?.status) return { status: false, message: res?.message || "Could not update the message" };
+  return res;
+}
+
+/* Photos, videos and voice notes: ONE multipart post (`files` repeated), the
+   text as the caption. A type='http' route, so the answer is plain JSON with
+   the same payload as sendChat. Limits mirror the server's. */
+export const CHAT_MAX_FILES = 10;
+export const CHAT_MAX_BYTES = 50 * 1024 * 1024;
+export async function sendChatFiles(kpiId, { text, replyTo, files } = {}, { onProgress, signal } = {}) {
+  const picked = files || [];
+  const fd = new FormData();
+  fd.append("kpi_id", String(kpiId));
+  fd.append("text", text || "");
+  fd.append("source", "web");
+  fd.append("reply_to", replyTo ? String(replyTo) : "");
+  for (const f of picked) fd.append("files", f, f.name);
+  log.info("chat upload →", { kpiId, files: picked.length });
+  const res = await upload("/kpi_action/chat/send_files", fd, { timeout: 300000, onProgress, signal });
   if (!res?.status) return { status: false, message: res?.message || "Could not send" };
   return res;
 }
@@ -264,8 +322,10 @@ export const switchTask = (kpiId, fromKpiId, note) =>
 export const reassignTask = (kpiId, userId, reason) => action("/kra_kpi/task/reassign", { kpi_id: kpiId, user_id: userId, reason: reason || "" });
 export const revertSignoff = (kpiId, reason) => action("/kra_kpi/task/revert_signoff", { kpi_id: kpiId, reason: reason || "" });
 export const adminDeleteTask = (kpiId, reason) => action("/kra_kpi/task/admin_delete", { kpi_id: kpiId, reason: reason || "" });
-export const completeTask = (kpiId, employeeChecklist = {}, partial = false) =>
-  action("/kra_kpi/task/complete", { kpi_id: kpiId, employee_checklist: employeeChecklist, partial });
+/* extra: what the Complete form brings for this task's type (app_link,
+   user_manual_url, website_url, provision_url / _db_name / _username / _password). */
+export const completeTask = (kpiId, employeeChecklist = {}, partial = false, extra = {}) =>
+  action("/kra_kpi/task/complete", { kpi_id: kpiId, employee_checklist: employeeChecklist, partial, ...extra });
 export const approveTask = (kpiId, managerChecklist = {}) => action("/kra_kpi/task/approve", { kpi_id: kpiId, manager_checklist: managerChecklist });
 export const rejectTask = (kpiId, reason) => action("/kra_kpi/task/reject", { kpi_id: kpiId, reason: reason || "" });
 export const getTaskChecklists = (kpiId) => action("/kra_kpi/task/checklists", { kpi_id: kpiId });
@@ -447,7 +507,8 @@ export const PRIORITIES = [
   { code: "regular", label: "Regular" }, { code: "important", label: "Important" }, { code: "urgent", label: "Urgent" },
 ];
 export const DELIVERABLES = [
-  { code: "module", label: "Module" }, { code: "app", label: "App" }, { code: "exe", label: "EXE" }, { code: "other", label: "Other" },
+  { code: "module", label: "Module" }, { code: "app", label: "App" }, { code: "exe", label: "EXE" },
+  { code: "website", label: "Website" }, { code: "database", label: "Database" }, { code: "other", label: "Other" },
 ];
 /* "Other" carries a short typed name (deliverable_other), required while Other is picked. */
 export const DELIVERABLE_OTHER_MAX = 40;
@@ -554,3 +615,19 @@ export function fmtHM(sec) {
 /* REQ-012 → "REQ"; TASK-014 → "TASK"; BUG001-REQ-012 (a bug raised under a requirement) → "BUG". */
 export function refPrefix(ref) { return (String(ref || "").match(/^\s*([A-Za-z]+)/) || ["", ""])[1].toUpperCase(); }
 export const TYPE_TILE = { REQ: ["R", "#2563EB"], UPT: ["U", "#16A34A"], BUG: ["B", "#DC2626"], TASK: ["T", "#6B7280"] };
+
+/* ---- After the client's check (models/kpi_finish.py, kpi_billing.py) ----
+   🏁 Full Complete closes a task once the manual (and the GitHub link for a
+   module / app) is on it; the bill is then made from the price list. When no
+   price matched, 🧾 Bill now retries. Both answer {status, message}; a refused
+   Full Complete also lists what is `missing`. */
+export async function fullComplete(kpiId) {
+  const res = await rpc("/kra_kpi/task/full_complete", { kpi_id: kpiId });
+  if (!res?.status) return { status: false, message: res?.message || "Could not complete it", missing: res?.missing || [] };
+  return res;
+}
+export async function billNow(kpiId) {
+  const res = await rpc("/kpi_billing/bill_now", { kpi_id: kpiId });
+  if (!res?.status) return { status: false, message: res?.message || "Could not make the bill" };
+  return res;
+}

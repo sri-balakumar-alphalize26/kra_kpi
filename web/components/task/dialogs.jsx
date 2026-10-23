@@ -184,6 +184,10 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
   /* Team-written updates only: what the client attached when raising the task
      (from_client rows) is not the progress summary (server rule too). */
   const [devCount, setDevCount] = useState(typeof task.dev_progress_count === "number" ? task.dev_progress_count : task.progress_count || 0);
+  /* What this task's type needs (server: kpi_workflow._completion_rules) and the
+     form's own fields (links, database details). null until loaded. */
+  const [rules, setRules] = useState(null);
+  const [form, setForm] = useState({});
   useEffect(() => {
     let live = true;
     S.fetchTaskDetails(task.id, { fresh: true }).then((r) => {
@@ -199,6 +203,12 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
       if ((r.files || []).some((f) => !f.from_client)) { pre.user_manual = true; pre.documentation = true; }
       setInferred(Object.keys(pre));
       setChecks((c) => ({ ...pre, ...c }));
+      const m = r.meta || {};
+      if (Array.isArray(m.completion_rules)) setRules(m.completion_rules);
+      const dbd = m.db_details || {};
+      setForm({ app_link: m.app_link || "", user_manual_url: m.user_manual_url || "", website_url: m.website_url || "",
+                provision_url: dbd.url || "", provision_db_name: dbd.db_name || "", provision_username: dbd.username || "",
+                provision_password: dbd.password || "" });
     }).catch(() => {});
     return () => { live = false; };
   }, [task.id]);
@@ -206,29 +216,60 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
   const anyDone = S.CHECKLIST_ITEMS.some((c) => checks[c.key]);
   const hasSummary = !!summary.trim() || devCount > 0;
   const ref = task.external_ref || `#${task.id}`;
-  const send = (p) => { if (busy) return; setAsk(null); onConfirm({ employeeChecklist: checks, partial: p, summary: summary.trim() }); };
+  /* The rows this type needs, ticked from what is on the task or typed here. */
+  const LINK = { app_link: "app_link", website_url: "website_url", db_url: "provision_url", db_name: "provision_db_name",
+                 db_user: "provision_username", db_password: "provision_password" };
+  const rows = (rules || []).map((r) => {
+    let done = !!r.done;
+    if (r.key === "summary") done = hasSummary;
+    else if (r.key === "github") done = done || hasGithub === true;
+    else if (r.key === "manual") done = done || hasManual === true || !!(form.user_manual_url || "").trim();
+    else if (LINK[r.key]) done = !!(form[LINK[r.key]] || "").trim();
+    return { ...r, done };
+  });
+  const req = rows.filter((r) => r.required);
+  const reqDone = req.filter((r) => r.done).length;
+  const extra = {};
+  for (const r of rows) {
+    if (r.key === "manual") extra.user_manual_url = form.user_manual_url || "";
+    else if (LINK[r.key]) extra[LINK[r.key]] = form[LINK[r.key]] || "";
+  }
+  const send = (p) => { if (busy) return; setAsk(null); onConfirm({ employeeChecklist: checks, partial: p, summary: summary.trim(), extra: p ? {} : extra }); };
   /* Full Complete never silently disables: what's missing is reported in one popup. */
   const submit = () => {
     if (busy) return;
     if (partial) { send(true); return; }
-    const missing = S.completeMissing({ hasSummary, hasManual: hasManual === true, githubRequired, hasGithub: hasGithub === true, anyTicked: anyDone });
+    const missing = rules ? req.filter((r) => !r.done).map((r) => r.label)
+      : S.completeMissing({ hasSummary, hasManual: hasManual === true, githubRequired, hasGithub: hasGithub === true, anyTicked: true });
     setAsk(missing.length ? { missing } : { confirm: true });
   };
+  const setF = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   return (
     <>
     <Modal open onClose={onClose} title={<Title task={task}>Complete</Title>} width={540}
       footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="ok" busy={busy} disabled={busy || (partial && !hasSummary)} title={partial && !hasSummary ? "Write a progress note first" : undefined} onClick={submit}>{partial ? "Send for review" : "Complete"}</Button></>}>
-      <p className="note" style={{ margin: 0 }}>Tick what you did. It goes to an admin for approval{partial ? "" : " (or straight to done when admin acceptance is off)"}.</p>
-      <div>
-        {S.CHECKLIST_ITEMS.map((c) => (
-          <label key={c.key} className="chk"><input type="checkbox" checked={!!checks[c.key]} onChange={(e) => setChecks((s) => ({ ...s, [c.key]: e.target.checked }))} style={CHK} />{c.label}{inferred.includes(c.key) && <span className="mini"> (ticked from what's attached)</span>}</label>
-        ))}
-      </div>
-      <Field label={devCount > 0 ? "Progress note (optional — the task already has updates)" : "Progress note"} required={!(devCount > 0)}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
-      {hasManual === false && <p className="note" style={{ margin: 0 }}>📘 Upload a user manual (PDF, DOC or DOCX) on the task before marking it fully complete. Without one you can still send it for review as a partial finish.</p>}
-      {hasGithub === false && (githubRequired
-        ? <Box tone="warn">This is a Module / App task — add the GitHub link (repository + branch) on the task before completing.</Box>
-        : <Box tone="warn">Optional: add the GitHub link — once it's uploaded, the code is safe.</Box>)}
+      <p className="note" style={{ margin: 0 }}>It goes to an admin for approval{partial ? "" : " (or straight to done when admin acceptance is off)"}.</p>
+      {rules && (
+        <div className="cr">
+          <div className="cr-head"><b>What this task needs</b><span className="mini">Required done: {reqDone} of {req.length}</span></div>
+          <span className="bar" style={{ display: "block" }}><i style={{ width: `${req.length ? (reqDone / req.length) * 100 : 100}%`, background: "var(--brand)" }} /></span>
+          {rows.filter((r) => r.key !== "summary").map((r) => (
+            <div key={r.key} className="cr-row">
+              <span className={`cr-dot ${r.done ? "ok" : r.required ? "miss" : ""}`} aria-hidden="true">{r.done ? "✓" : r.required ? "!" : "–"}</span>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <b>{r.label}</b>{r.required ? <span className="cr-req"> ✱</span> : <span className="mini"> optional</span>}
+                {r.key === "manual" && <p className="mini" style={{ margin: "2px 0 4px" }}>Upload a PDF / DOC on the task, or paste a link:</p>}
+                {r.key === "manual" && <Input value={form.user_manual_url || ""} onChange={setF("user_manual_url")} placeholder="https:// (Google Doc, Drive…)" />}
+                {r.key === "github" && !r.done && <p className="mini" style={{ margin: "2px 0 0" }}>Add it on the task's Files tab.</p>}
+                {LINK[r.key] && <Input type={r.key === "db_password" ? "password" : "text"} value={form[LINK[r.key]] || ""} onChange={setF(LINK[r.key])}
+                  placeholder={r.key === "app_link" ? "Play Store / App Store / APK link" : r.key === "website_url" || r.key === "db_url" ? "https://" : ""} autoComplete="off" />}
+              </div>
+              <span className={`chip-sm cr-st ${r.done ? "ok" : r.required ? "miss" : ""}`}>{r.done ? "Done" : r.required ? "Missing" : "Optional"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <Field label={devCount > 0 || (rules && rows.some((r) => r.key === "summary" && !r.required)) ? "Progress note (optional)" : "Progress note"} required={!(devCount > 0) && !(rules && rows.some((r) => r.key === "summary" && !r.required))}><span className="input ta"><textarea value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="What was done" style={TA} /></span></Field>
       <label className="chk"><input type="checkbox" checked={!partial} onChange={(e) => setPartial(!e.target.checked)} style={CHK} />Mark fully complete</label>
       <p className="mini" style={{ margin: 0 }}>Time spent: {fmtHM(spentOf(task))}</p>
     </Modal>
@@ -241,9 +282,13 @@ function CompleteDialog({ task, busy, onClose, onConfirm }) {
       </Modal>
     )}
     {ask?.confirm && (
-      <Modal open onClose={() => setAsk(null)} title={`Submit ${ref} for approval?`} width={420}
-        footer={<><Button kind="ghost" onClick={() => setAsk(null)}>Cancel</Button><Button kind="ok" busy={busy} disabled={busy} onClick={() => send(false)} autoFocus>Yes</Button></>}>
-        <p className="note" style={{ margin: 0 }}>{task.name}</p>
+      <Modal open onClose={() => setAsk(null)} title={`Before Complete · ${ref}`} width={440}
+        footer={<><Button kind="ghost" onClick={() => setAsk(null)}>Go back</Button><Button kind="ok" busy={busy} disabled={busy} onClick={() => send(false)} autoFocus>Complete</Button></>}>
+        <p className="note" style={{ margin: "0 0 8px" }}>{task.name}</p>
+        {rules && <>
+          <p style={{ margin: 0 }}><b style={{ color: "var(--ok, #15803d)" }}>✓ Provided</b><br /><span className="mini">{rows.filter((r) => r.done).map((r) => r.label).join(" · ") || "—"}</span></p>
+          {rows.some((r) => !r.done && !r.required) && <p style={{ margin: "8px 0 0" }}><b>— Left empty (optional)</b><br /><span className="mini">{rows.filter((r) => !r.done && !r.required).map((r) => r.label).join(" · ")}</span></p>}
+        </>}
       </Modal>
     )}
     </>
