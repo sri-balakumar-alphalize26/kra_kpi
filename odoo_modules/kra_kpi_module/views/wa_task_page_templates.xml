@@ -263,6 +263,43 @@
                     </t>
                     <div t-else="" class="warn">⚠️ This task hasn't been started yet, so updates, files, links and manuals
                         can't be added or edited. Start it in WhatsApp (▶️ Take it), then come back to this page.</div>
+                    <!-- Every time the client sent it back, newest first, with the photos,
+                         videos and voice notes that show what is wrong. -->
+                    <div t-if="sendbacks" class="act" id="sendback" style="padding:12px 14px; border-color:#fecaca;">
+                        <b style="color:#b91c1c;">↩ The client sent it back <t t-esc="len(sendbacks)"/>×</b>
+                        <t t-foreach="sendbacks" t-as="sb">
+                            <div style="margin-top:10px; padding:8px 10px; background:#fff5f5; border-radius:8px;">
+                                <div style="font-size:12px; color:#6b7280;">Round <t t-esc="sb['round']"/><t t-if="sb['by']"> · <t t-esc="sb['by']"/></t> · <t t-esc="sb['when']"/></div>
+                                <div style="white-space:pre-wrap;" t-esc="sb['reason']"/>
+                                <t t-foreach="sb['files']" t-as="f">
+                                    <div style="margin-top:6px;">
+                                        <a t-if="f['kind'] == 'image'" t-att-href="f['url']" target="_blank">
+                                            <img t-att-src="f['url']" t-att-alt="f['name']" loading="lazy" style="max-width:100%; max-height:260px; border-radius:6px;"/>
+                                        </a>
+                                        <video t-elif="f['kind'] == 'video'" t-att-src="f['url']" controls="controls" preload="metadata" style="max-width:100%; max-height:260px; border-radius:6px;"/>
+                                        <audio t-else="" t-att-src="f['url']" controls="controls" preload="metadata" style="width:100%;"/>
+                                    </div>
+                                </t>
+                            </div>
+                        </t>
+                    </div>
+                    <!-- The client said finished (or the review timed out): Full Complete
+                         once the manual and the GitHub link are on it; then it is billed. -->
+                    <div t-if="finish['pending']" class="act" id="fullCompleteBox" style="padding:12px 14px;">
+                        <b>👍 The client said it's finished: 🏁 Full Complete is next</b>
+                        <t t-if="finish['missing']">
+                            <div class="warn" style="margin-top:8px;">Still needed (add it above, then come back here):
+                                <ul style="margin:4px 0 0; padding-left:18px;">
+                                    <li t-foreach="finish['missing']" t-as="need" t-esc="need"/>
+                                </ul>
+                            </div>
+                        </t>
+                        <form t-if="finish['can'] and not finish['missing']" method="post"
+                              t-att-action="'/kpi/wa/task/%s/full_complete' % token" style="margin-top:10px;">
+                            <button type="submit" class="btn primary">🏁 Full Complete</button>
+                        </form>
+                    </div>
+                    <div t-if="finish['done']" class="have">🏁 Fully complete on <t t-esc="finish['done']"/>. It has gone to billing.</div>
                     <details t-if="can_complete" class="act" id="completeBox">
                         <summary>✅ Completed</summary>
                         <form class="in js-send" method="post" enctype="multipart/form-data" data-kind="complete"
@@ -649,23 +686,167 @@
                     .chat-send { width: 46px; height: 46px; border-radius: 50%; border: 0; background: #00a884; color: #fff; font-size: 20px; cursor: pointer; }
                     .chat-send:disabled { opacity: .5; }
                     .chat-info { background: #f0f2f5; color: #54656f; padding: 10px 14px; font-size: 13px; }
+                    .chat-row { align-items: center; gap: 4px; border-radius: 8px; transition: background .4s; }
+                    .chat-row.flash { background: rgba(0,168,132,.18); }
+                    .pv-shade { position:fixed; inset:0; background:rgba(11,20,26,.94); z-index:4000; display:flex; align-items:center; justify-content:center; }
+                    .pv-shade img { max-width:96vw; max-height:86vh; object-fit:contain; border-radius:4px; }
+                    .pv-bar { position:absolute; top:0; left:0; right:0; display:flex; align-items:center; gap:14px; padding:12px 16px; color:#fff; }
+                    .pv-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; }
+                    .pv-x, .pv-dl { background:none; border:0; color:#fff; font-size:24px; cursor:pointer; text-decoration:none; line-height:1; }
+                    .pv-name b, .pv-name small { display:block; overflow:hidden; text-overflow:ellipsis; } .pv-name small { opacity:.75; font-size:12px; } .pv-cap { position:absolute; left:0; right:0; bottom:0; padding:16px 20px 22px; background:linear-gradient(transparent, rgba(0,0,0,.75)); color:#fff; text-align:center; white-space:pre-wrap; word-break:break-word; max-height:30vh; overflow:auto; font-size:15px; }
+                    .chat-file img { cursor: zoom-in; }
+                    .chat-caret { position:absolute; top:2px; right:2px; border:0; width:26px; height:22px; padding:0; border-radius:0 8px 0 10px;
+                      font-size:16px; line-height:14px; color:#667781; cursor:pointer; opacity:0; transition:opacity .15s;
+                      background:radial-gradient(circle at 70% 30%, var(--chat-bg) 55%, transparent 80%); }
+                    @media (hover: hover) { .chat-bub:hover .chat-caret { opacity:1; } }
+                    @media (hover: none) { .chat-caret { display:none; } }
+                    .chat-lday { display:flex; align-items:center; gap:8px; width:100%; border:0; background:#f0f2f5; border-radius:8px; padding:8px 10px;
+                      font:inherit; font-size:14px; font-weight:600; color:#111b21; cursor:pointer; text-align:left; margin-top:6px; }
+                    .chat-larrow { width:14px; color:#54656f; }
+                    .chat-lcount { margin-left:auto; font-weight:400; font-size:12px; color:#667781; }
+                    .chat-lrows { padding:4px 4px 2px 26px; }
+                    .chat-lrow { display:flex; gap:8px; padding:4px 0; font-size:13.5px; border-bottom:1px solid #f0f2f5; }
+                    .chat-lrow.seen { color:#2E90FA; }
+                    .chat-lmark { width:22px; letter-spacing:-2px; }
+                    .chat-lwhat { flex:1; }
+                    .chat-ltime { color:#667781; }
+                    .chat-lrow.seen .chat-ltime { color:#2E90FA; }
+                    .chat-lnot { margin-top:8px; font-size:12.5px; color:#667781; }
+                    .chat-bub { position:relative; --chat-bg:#ffffff; }
+                    .chat-row.out .chat-bub { --chat-bg:#d9fdd3; }
+                    .chat-bl { display:flex; align-items:center; gap:4px; max-width:100%; }
+                    .chat-bl.r { flex-direction:row-reverse; }
+                    .chat-bl &gt; ..chat-bub { min-width:0; }
+                    .chat-quick { display:flex; gap:2px; opacity:0; transition:opacity .15s; flex:0 0 auto; }
+                    .chat-quick button { width:28px; height:28px; border:0; border-radius:50%; padding:0; color:#54656f; background:rgba(255,255,255,.85);
+                      display:flex; align-items:center; justify-content:center; cursor:pointer; }
+                    .chat-quick button:hover { background:#fff; color:#111b21; }
+                    @media (hover: hover) { .chat-bl:hover .chat-quick { opacity:1; } }
+                    @media (hover: none) { .chat-quick { display:none; } }
+                    .chat-tail-r { border-top-right-radius:0 !important; }
+                    .chat-tail-l { border-top-left-radius:0 !important; }
+                    .chat-tail-r::after, .chat-tail-l::after { content:''; position:absolute; top:0; width:0; height:0; border-top:8px solid var(----chat-bg); }
+                    .chat-tail-r::after { right:-7px; border-right:8px solid transparent; }
+                    .chat-tail-l::after { left:-7px; border-left:8px solid transparent; }
+                    .chat-caret svg { margin-top:-2px; }
+                    .chat-icon { width:42px !important; height:42px !important; min-height:42px !important; border:0 !important; border-radius:50% !important;
+                      background:transparent !important; color:#54656f !important; display:flex !important; align-items:center; justify-content:center;
+                      padding:0 !important; cursor:pointer; flex:0 0 auto; }
+                    .chat-icon:hover { background:rgba(11,20,26,.06) !important; }
+                    .chat-emojibox { position:relative; flex:0 0 auto; }
+                    .chat-emojis { position:absolute; bottom:48px; left:0; width:300px; max-width:86vw; background:#fff; border-radius:12px;
+                      box-shadow:0 4px 18px rgba(0,0,0,.18); padding:8px; display:grid; grid-template-columns:repeat(8, 1fr); gap:2px; z-index:8; }
+                    .chat-emojis button { border:0; background:none; font-size:22px; line-height:34px; height:34px; cursor:pointer; border-radius:6px; padding:0; }
+                    .chat-emojis button:hover { background:#f0f2f5; }
+                    .chat-irow { display:flex; gap:8px; padding:6px 0; font-size:14px; border-bottom:1px solid #f0f2f5; }
+                    .chat-irow.seen { color:#2E90FA; }
+                    .chat-imark { width:22px; letter-spacing:-2px; }
+                    .chat-iwhat { flex:1; }
+                    .chat-itime { color:#667781; white-space:nowrap; }
+                    .chat-irow.seen .chat-itime { color:#2E90FA; }
+                    .chat-recording &gt; *:not(.chat-rec) { display:none !important; }
+                    .chat-rec { flex:1; display:flex; align-items:center; gap:10px; min-height:46px; }
+                    .chat-rec button { width:42px; height:42px; border:0; border-radius:50%; background:transparent; font-size:20px; cursor:pointer;
+                      display:flex; align-items:center; justify-content:center; padding:0; color:#54656f; flex:0 0 auto; }
+                    .chat-rec .chat-rsend { background:#00a884; color:#fff; margin-left:auto; }
+                    .chat-rdot { width:10px; height:10px; border-radius:50%; background:#e53935; animation:chat-blink 1s infinite; flex:0 0 auto; }
+                    .chat-rdot.off { animation:none; background:#9aa5ab; }
+                    @keyframes chat-blink { 50% { opacity:.25; } }
+                    .chat-rtime { font-variant-numeric:tabular-nums; color:#111b21; min-width:42px; }
+                    .chat-raudio { height:36px; flex:1; min-width:0; max-width:320px; }
+                    .chat-col { display: flex; flex-direction: column; align-items: flex-start; max-width: 80%; }
+                    .chat-col.out { align-items: flex-end; }
+                    .chat-col .chat-bub { max-width: 100%; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+                    .chat-bub.gone { opacity: .8; }
+                    .chat-deleted { font-style: italic; color: #667781; }
+                    .chat-react { display: flex; flex-wrap: wrap; gap: 4px; margin: -6px 6px 2px; }
+                    .chat-rchip { border: 1px solid #d1d7db; background: #fff; border-radius: 12px; padding: 1px 7px; font-size: 13px; cursor: pointer; box-shadow: 0 1px .5px rgba(11,20,26,.13); }
+                    .chat-rchip.mine { border-color: #00a884; background: #e7fbf4; }
+                    .chat-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 3100; }
+                    .chat-card { background: #fff; border-radius: 14px; min-width: 260px; max-width: 92vw; box-shadow: 0 8px 32px rgba(0,0,0,.3); padding: 8px 0; color: #111b21; }
+                    .chat-strip { display: flex; gap: 4px; padding: 6px 10px 8px; border-bottom: 1px solid #eef0f2; overflow-x: auto; }
+                    .chat-remoji { border: 0; background: #f0f2f5; border-radius: 50%; width: 40px; height: 40px; font-size: 22px; cursor: pointer; flex: 0 0 auto; line-height: 1; }
+                    .chat-ghead { display: flex; align-items: center; gap: 6px; padding: 4px 10px; color: #54656f; font-size: 13px; }
+                    .chat-grid { display: grid; grid-template-columns: repeat(8, 40px); gap: 4px; padding: 6px 10px 10px; }
+                    .chat-acts { display: flex; flex-direction: column; padding-top: 4px; }
+                    .chat-act { display: flex; align-items: center; gap: 12px; border: 0; background: none; text-align: left; padding: 11px 18px; font: inherit; font-size: 15px; color: #111b21; cursor: pointer; }
+                    .chat-act:hover { background: #f0f2f5; }
+                    .chat-act.danger { color: #c0392b; }
+                    .chat-aicon { width: 22px; text-align: center; color: #54656f; }
+                    .chat-minfo { padding: 10px 18px 6px; font-size: 14px; display: flex; flex-direction: column; gap: 6px; }
+                    .chat-minfo b { font-size: 15px; margin-bottom: 4px; }
+                    .chat-minfo .seen { color: #2E90FA; }
+                    .chat-minfo .chat-act { align-self: flex-end; color: #008069; padding: 8px 4px 2px; }
+                    .chat-quote { background: rgba(11,20,26,.06); border-left: 3px solid #d4572e; border-radius: 6px; padding: 3px 8px; margin: 2px 0 4px; font-size: 12.5px; cursor: pointer; }
+                    .chat-quote.out { border-left-color: #027eb5; }
+                    .chat-quote b { display: block; color: #d4572e; } .chat-quote.out b { color: #027eb5; }
+                    .chat-quote span { display: block; color: #54656f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+                    .chat-file { margin: 2px 0 4px; }
+                    .chat-file img, .chat-file video { display: block; max-width: min(260px, 100%); max-height: 260px; border-radius: 6px; }
+                    .chat-file audio { display: block; width: 240px; max-width: 100%; }
+                    .chat-fname { font-size: 11px; color: #667781; }
+                    .chat-pinbox { position: relative; }
+                    .chat-pin { width: 46px; height: 46px; border-radius: 50%; border: 0; background: #fff; font-size: 20px; cursor: pointer; }
+                    .chat-menu { position: absolute; bottom: 54px; left: 0; min-width: 200px; background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18); padding: 4px 0; z-index: 5; }
+                    .chat-menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 11px 14px; font: inherit; color: #111b21; cursor: pointer; }
+                    .chat-file-in { display: none; }
+                    .chat-extra { background: #f0f2f5; padding: 6px 10px 0; }
+                    .chat-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+                    .chat-chip { background: #fff; border: 1px solid #d1d7db; border-radius: 12px; padding: 2px 10px; font-size: 12.5px; }
+                    .chat-cx { border: 0; background: none; color: #c0392b; cursor: pointer; font-size: 14px; }
+                    .chat-reply { display: flex; align-items: center; gap: 8px; background: #fff; border-left: 4px solid #00a884; border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; }
+                    .chat-rtext { flex: 1; min-width: 0; font-size: 12.5px; }
+                    .chat-rtext b { display: block; color: #008069; }
+                    .chat-rtext span { display: block; color: #667781; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                    .chat-prog { font-size: 12px; color: #667781; margin-top: 4px; }
+                    .chat-prog div { height: 6px; background: #00a884; border-radius: 3px; width: 0; transition: width .2s; }
                 </style>
                 <div id="chat-ov" class="chat-ov" t-att-data-url="'/kpi/wa/task/%s/chat' % token">
                     <div class="chat-top"><b>💬 Chat with the client<small>They see team messages as “Reply from our team”</small></b>
                         <button type="button" class="chat-x" id="chat-x" aria-label="Close">×</button></div>
                     <div class="chat-list" id="chat-list"></div>
                     <div class="chat-info" id="chat-info" style="display:none"></div>
+                    <div class="chat-extra">
+                        <div class="chat-reply" id="chat-reply" style="display:none"></div>
+                        <div class="chat-chips" id="chat-chips" style="display:none"></div>
+                        <div class="chat-prog" id="chat-prog" style="display:none"><div></div><span></span></div>
+                    </div>
                     <div class="chat-bar" id="chat-bar">
-                        <textarea class="chat-in" id="chat-in" rows="1" placeholder="Type a message"></textarea>
+                        <div class="chat-pinbox">
+                            <button type="button" class="chat-pin" id="chat-pin" title="Attach a photo, video or audio">📎</button>
+                            <div class="chat-menu" id="chat-menu" style="display:none">
+                                <button type="button" data-pick="camera">📷 Camera</button>
+                                <button type="button" data-pick="media">🖼 Photos &amp; videos</button>
+                                <button type="button" data-pick="audio">🎵 Audio</button>
+                                <button type="button" data-pick="doc">📄 Document</button>
+                            </div>
+                            <input type="file" id="chat-in-camera" class="chat-file-in" accept="image/*,video/*" capture="environment"/>
+                            <input type="file" id="chat-in-media" class="chat-file-in" accept="image/*,video/*" multiple="multiple"/>
+                            <input type="file" id="chat-in-audio" class="chat-file-in" accept="audio/*" multiple="multiple"/>
+                            <input type="file" id="chat-in-doc" class="chat-file-in" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.csv,.zip,.rar,.7z" multiple="multiple"/>
+                        </div>
+                        <textarea class="chat-in" id="chat-in" rows="1" placeholder="Type a message or a caption"></textarea>
                         <button type="button" class="chat-send" id="chat-send" title="Send">➤</button>
                     </div>
+                    <!-- The action card lives outside the list: a refresh wipes the list, not this. -->
+                    <div class="chat-scrim" id="chat-scrim" style="display:none"><div class="chat-card" id="chat-card"></div></div>
                 </div>
                 <script>
                     (function () {
                         var ov = document.getElementById('chat-ov'), list = document.getElementById('chat-list');
                         var input = document.getElementById('chat-in'), sendBtn = document.getElementById('chat-send');
                         var bar = document.getElementById('chat-bar'), info = document.getElementById('chat-info');
-                        var url = ov.getAttribute('data-url'), timer = null, shown = -1;
+                        var pin = document.getElementById('chat-pin'), menu = document.getElementById('chat-menu');
+                        var chips = document.getElementById('chat-chips'), replyBar = document.getElementById('chat-reply');
+                        var prog = document.getElementById('chat-prog');
+                        var scrim = document.getElementById('chat-scrim'), card = document.getElementById('chat-card');
+                        var url = ov.getAttribute('data-url'), timer = null, shown = '';
+                        var MAX_FILES = 10, MAX_BYTES = 50 * 1024 * 1024;
+                        var QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+                        var ALL = ['👍', '👎', '❤️', '🔥', '🎉', '👏', '🙏', '💯', '😂', '🤣', '😅', '😊', '😍', '😎', '🤔', '😐',
+                                   '😮', '😢', '😭', '😡', '🥳', '🤝', '💪', '✅', '❌', '⚠️', '👀', '🚀', '⭐', '💡', '⏰', '📌'];
+                        var picked = [], replyTo = null, editing = null, sending = false, rowsNow = [], canAct = false, canSend = false;
+                        var ICON = { image: '📷', video: '🎥', audio: '🎵', document: '📄' };
                         function el(tag, cls, text) { var e = document.createElement(tag); if (cls) { e.className = cls; } if (text) { e.textContent = text; } return e; }
                         function when(at) { return at ? new Date(at.replace(' ', 'T') + 'Z') : null; }
                         function dayOf(d) {
@@ -674,46 +855,643 @@
                             if (k === new Date(Date.now() - 86400000).toDateString()) { return 'Yesterday'; }
                             return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
                         }
+                        function clock(d) { return d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''; }
+                        function stamp(at) { var d = when(at); return d ? (dayOf(d) === 'Today' ? '' : dayOf(d) + ' ') + clock(d) : 'not yet'; }
+                        function size(n) {
+                            n = n || 0;
+                            if (n &lt; 1024) { return n + ' B'; }
+                            if (n &lt; 1048576) { return (n / 1024).toFixed(0) + ' KB'; }
+                            return (n / 1048576).toFixed(1) + ' MB';
+                        }
+                        function kindOf(f) {
+                            var t = (f.type || '').toLowerCase(), n = (f.name || '').toLowerCase();
+                            if (t.indexOf('audio/') === 0) { return 'audio'; }
+                            if (t.indexOf('image/') === 0) { return 'image'; }
+                            if (t.indexOf('video/') === 0) { return 'video'; }
+                            if (/\.(jpe?g|png|gif|webp|bmp|heic|heif)$/.test(n)) { return 'image'; }
+                            if (/\.(mp4|mov|mkv|avi|m4v)$/.test(n)) { return 'video'; }
+                            if (/\.(webm|ogg|opus|mp3|wav|m4a|aac|amr|3gp)$/.test(n)) { return 'audio'; }
+                            if (/\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z)$/.test(n)) { return 'document'; }
+                            return '';
+                        }
+                        function filesLabel(files) {
+                            var out = [];
+                            [['image', 'photo', 'photos'], ['video', 'video', 'videos'], ['audio', 'audio', 'audios'], ['document', 'document', 'documents']].forEach(function (k) {
+                                var n = (files || []).filter(function (f) { return f.kind === k[0]; }).length;
+                                if (n) { out.push(ICON[k[0]] + ' ' + n + ' ' + (n === 1 ? k[1] : k[2])); }
+                            });
+                            return out.join(' · ');
+                        }
+                        function whoOf(m) { return m.side === 'team' ? m.who : m.who + ' · client'; }
+                        function say(msg) { if (window.kpiAlert) { window.kpiAlert(msg); } else { alert(msg); } }
+                        function media(f, r) {
+                            var box = el('div', 'chat-file'), m;
+                        if (f.kind === 'document') {
+                            m = el('a'); m.href = f.url; m.target = '_blank'; m.rel = 'noopener';
+                            m.style.cssText = 'display:flex;gap:8px;align-items:center;padding:10px 12px;background:rgba(0,0,0,.05);border-radius:6px;color:inherit;text-decoration:none;word-break:break-all;min-width:200px';
+                            m.appendChild(el('span', '', '📄')); m.appendChild(el('b', '', f.name));
+                            box.appendChild(m); box.appendChild(el('div', 'chat-fname', size(f.size)));
+                            return box;
+                        }
+                            if (f.kind === 'image') {
+                                m = el('img'); m.src = f.url; m.alt = f.name; m.loading = 'lazy';
+                                m.addEventListener('click', function () { viewPhoto(f, r); });
+                                box.appendChild(m);
+                            } else {
+                                m = el(f.kind === 'video' ? 'video' : 'audio');
+                                m.src = f.url; m.controls = true; m.preload = 'metadata';
+                                box.appendChild(m);
+                            }
+                            box.appendChild(el('div', 'chat-fname', f.name + ' · ' + size(f.size)));
+                            return box;
+                        }
+                        // Tap a photo: full screen over the chat, as in WhatsApp. ✕, a tap
+                        // outside the photo or Esc closes it.
+                        // r: the message it came in. Who sent it and when on top; its words under
+                        // the photo, as in WhatsApp.
+                        function pvHead(f, r) {
+                            var h = el('span', 'pv-name'), t = r ? when(r.at) : null;
+                            h.appendChild(el('b', '', (r ? r.who : '') || f.name));
+                            if (t) { h.appendChild(el('small', '', (dayOf(t) === 'Today' ? 'Today' : dayOf(t)) + ' at ' + clock(t))); }
+                            return h;
+                        }
+                        function viewPhoto(f, r) {
+                            var v = el('div', 'pv-shade'), img = el('img'), bar = el('div', 'pv-bar'), x = el('button', 'pv-x', '✕');
+                            var dl = el('a', 'pv-dl', '⤓'); dl.href = f.url; dl.target = '_blank'; dl.title = 'Open / download';
+                            x.type = 'button'; x.title = 'Close';
+                            bar.appendChild(pvHead(f, r)); bar.appendChild(dl); bar.appendChild(x);
+                            img.src = f.url; img.alt = f.name;
+                            v.appendChild(bar); v.appendChild(img);
+                            if (r ? r.body : '') { v.appendChild(el('div', 'pv-cap', r.body)); }
+                            function shut() { document.removeEventListener('keydown', key); if (v.parentNode) { v.parentNode.removeChild(v); } }
+                            function key(e) { if (e.key === 'Escape') { shut(); } }
+                            x.addEventListener('click', shut);
+                            v.addEventListener('click', function (e) { if (e.target === v) { shut(); } });
+                            document.addEventListener('keydown', key);
+                            document.body.appendChild(v);
+                        }
+                        function jump(id) {
+                            var t = document.getElementById('chat-m' + id);
+                            if (!t) { return; }
+                            t.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                            t.classList.add('flash');
+                            setTimeout(function () { t.classList.remove('flash'); }, 1400);
+                        }
+                        // Hold a bubble (or right-click) to open its actions, as in WhatsApp.
+                        function holdable(node, id) {
+                            var timer = null, sx = 0, sy = 0, fired = false, firedAt = 0;
+                            function clear() { if (timer) { clearTimeout(timer); timer = null; } }
+                            function start(x, y) { sx = x; sy = y; fired = false; clear(); timer = setTimeout(function () { timer = null; fired = true; firedAt = Date.now(); openCard(id); }, 450); }
+                            function moved(x, y) { if (timer &amp;&amp; (Math.abs(x - sx) &gt; 8 || Math.abs(y - sy) &gt; 8)) { clear(); } }
+                            // Touch first: a phone may cancel pointer events mid-press, touch events it keeps.
+                            node.addEventListener('touchstart', function (e) { var t = e.touches[0]; if (t) { start(t.clientX, t.clientY); } }, { passive: true });
+                            node.addEventListener('touchmove', function (e) { var t = e.touches[0]; if (t) { moved(t.clientX, t.clientY); } }, { passive: true });
+                            node.addEventListener('touchend', function (e) { clear(); if (fired) { e.preventDefault(); } });
+                            node.addEventListener('touchcancel', clear);
+                            node.addEventListener('mousedown', function (e) { if (e.button === 0 &amp;&amp; !('ontouchstart' in window)) { start(e.clientX, e.clientY); } });
+                            node.addEventListener('mousemove', function (e) { moved(e.clientX, e.clientY); });
+                            ['mouseup', 'mouseleave'].forEach(function (n) { node.addEventListener(n, clear); });
+                            // A phone's own long-press menu comes right after our hold: ignore that one.
+                            node.addEventListener('contextmenu', function (e) { e.preventDefault(); clear(); if (Date.now() - firedAt &gt; 800) { openCard(id); } });
+                        }
+                        function reactionChips(m) {
+                            if (!m.reactions || !m.reactions.length) { return null; }
+                            var row = el('div', 'chat-react');
+                            m.reactions.forEach(function (x) {
+                                var c = el('button', 'chat-rchip' + (x.mine ? ' mine' : ''), x.emoji + (x.count &gt; 1 ? ' ' + x.count : ''));
+                                c.type = 'button'; c.title = x.mine ? 'You reacted — tap to remove' : 'Tap to react';
+                                c.addEventListener('click', function () { if (canAct) { act(m.id, 'react', { emoji: x.emoji }); } });
+                                row.appendChild(c);
+                            });
+                            return row;
+                        }
+                        // 🔔 A message from the other side while this tab is in the background (or
+                        // the window is not focused): a soft pop and "(N) New message" in the tab
+                        // title, cleared when the person comes back. Looking at the chat: silent.
+                        var notify = (function () {
+                            var ctx = null, unread = 0, base = document.title;
+                            function unlock() {
+                                if (!ctx) { try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ctx = null; } }
+                                if (ctx &amp;&amp; ctx.state === 'suspended') { ctx.resume(); }
+                            }
+                            ['pointerdown', 'keydown', 'touchstart'].forEach(function (n) { document.addEventListener(n, unlock, { passive: true }); });
+                            function pop() {
+                                if (!ctx) { return; }
+                                var t = ctx.currentTime;
+                                [[880, 0], [1320, 0.08]].forEach(function (p) {
+                                    var o = ctx.createOscillator(), g = ctx.createGain();
+                                    o.type = 'sine'; o.frequency.value = p[0];
+                                    g.gain.setValueAtTime(0.0001, t + p[1]);
+                                    g.gain.exponentialRampToValueAtTime(0.12, t + p[1] + 0.012);
+                                    g.gain.exponentialRampToValueAtTime(0.0001, t + p[1] + 0.1);
+                                    o.connect(g); g.connect(ctx.destination);
+                                    o.start(t + p[1]); o.stop(t + p[1] + 0.12);
+                                });
+                            }
+                            function away() { return document.hidden || !document.hasFocus(); }
+                            function back() { if (!away() &amp;&amp; unread) { unread = 0; document.title = base; } }
+                            document.addEventListener('visibilitychange', back);
+                            window.addEventListener('focus', back);
+                            return function (n) {
+                                if (!n || !away()) { return; }
+                                unread += n;
+                                document.title = '(' + unread + ') New message · ' + base;
+                                pop();
+                            };
+                        })();
+                        var lastOther = null;   // newest message id from the other side already shown
+                        function heard(rows, other) {
+                            var newest = 0, fresh = 0;
+                            rows.forEach(function (x) {
+                                if (x.side !== other || typeof x.id !== 'number') { return; }
+                                if (x.id &gt; newest) { newest = x.id; }
+                                if (lastOther !== null &amp;&amp; x.id &gt; lastOther) { fresh++; }
+                            });
+                            if (lastOther !== null &amp;&amp; fresh) { notify(fresh); }
+                            lastOther = Math.max(lastOther || 0, newest);
+                        }
+var ICONS = {
+                            reply: '&lt;svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"&gt;&lt;path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/&gt;&lt;/svg&gt;',
+                            smile: '&lt;svg viewBox="0 0 24 24" width="SZ" height="SZ" fill="currentColor"&gt;&lt;path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/&gt;&lt;/svg&gt;',
+                            down: '&lt;svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"&gt;&lt;path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/&gt;&lt;/svg&gt;',
+                            clip: '&lt;svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" style="transform:rotate(45deg)"&gt;&lt;path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/&gt;&lt;/svg&gt;',
+                            send: '&lt;svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"&gt;&lt;path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/&gt;&lt;/svg&gt;'
+                        };
+                        var EMOJI = ['😀', '😂', '😊', '😍', '😘', '🤔', '😅', '😉', '🙂', '😎', '😢', '😭', '😡', '👍', '👎', '🙏',
+                                     '👏', '💪', '🤝', '👌', '✌️', '🙌', '❤️', '🔥', '🎉', '✅', '❌', '⚠️', '⭐', '💯', '👀', '🚀',
+                                     '💡', '📌', '⏰', '📷', '📎', '📝', '💬', '📞'];
+                        // WhatsApp Web: on hover, reply at once or react, beside the bubble.
+                        function quick(x, canReply) {
+                            var q = el('div', 'chat-quick');
+                            if (canReply) {
+                                var r = el('button'); r.type = 'button'; r.title = 'Reply'; r.innerHTML = ICONS.reply;
+                                r.addEventListener('click', function () { setReply(x); });
+                                q.appendChild(r);
+                            }
+                            var e = el('button'); e.type = 'button'; e.title = 'React'; e.innerHTML = ICONS.smile.replace(/SZ/g, '18');
+                            e.addEventListener('click', function () { openCard(x.id); });
+                            q.appendChild(e);
+                            return q;
+                        }
+                        // The type bar as in WhatsApp: 😊 emoji panel, 📎 paperclip, round send arrow.
+                        (function () {
+                            var row = pin.parentNode.parentNode, box = el('div', 'chat-emojibox');
+                            var b = el('button', 'chat-icon'); b.type = 'button'; b.title = 'Emoji'; b.innerHTML = ICONS.smile.replace(/SZ/g, '24');
+                            var panel = el('div', 'chat-emojis'); panel.style.display = 'none';
+                            EMOJI.forEach(function (e) {
+                                var x = el('button', '', e); x.type = 'button';
+                                x.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+                                x.addEventListener('click', function () {
+                                    var a = input.selectionStart != null ? input.selectionStart : input.value.length, z = input.selectionEnd != null ? input.selectionEnd : a;
+                                    input.value = input.value.slice(0, a) + e + input.value.slice(z);
+                                    input.focus(); input.selectionStart = input.selectionEnd = a + e.length;
+                                    input.dispatchEvent(new Event('input'));
+                                });
+                                panel.appendChild(x);
+                            });
+                            b.addEventListener('click', function () { panel.style.display = panel.style.display === 'none' ? '' : 'none'; });
+                            document.addEventListener('click', function (ev) { if (panel.style.display !== 'none' &amp;&amp; !box.contains(ev.target)) { panel.style.display = 'none'; } });
+                            box.appendChild(b); box.appendChild(panel);
+                            row.insertBefore(box, pin.parentNode);
+                            pin.innerHTML = ICONS.clip; pin.classList.add('chat-icon');
+                            sendBtn.innerHTML = ICONS.send;
+                        })();
                         function draw(r) {
                             var msgs = r.messages || [];
+                            rowsNow = msgs; canAct = !!r.can_act; canSend = !!r.can_send;
+                            heard(msgs, 'client');
                             if (r.locked) { info.textContent = '🔒 ' + r.locked; info.style.display = ''; bar.style.display = 'none'; }
                             else if (!r.can_send) { info.textContent = 'This client has no WhatsApp group linked, so messages can’t be sent.'; info.style.display = ''; bar.style.display = 'none'; }
                             else { info.style.display = 'none'; bar.style.display = ''; }
-                            if (msgs.length === shown) { return; }
-                            shown = msgs.length;
+                            // Redraw only when something changed (a message, a tick, an edit, a
+                            // reaction), so a playing video is not cut.
+                            var sig = msgs.map(function (m) { return m.id + (m.status || '') + '|' + (m.v || ''); }).join(',');
+                            if (sig === shown) { return; }
+                            shown = sig;
                             list.textContent = '';
                             if (!msgs.length) { list.appendChild(el('div', 'chat-note', 'No messages yet. When the client sends 💬 Discuss from their WhatsApp group, it shows here.')); return; }
-                            var lastDay = '';
+                            var lastDay = '', prevSide = '';
                             msgs.forEach(function (m) {
                                 var d = when(m.at), day = d ? dayOf(d) : '';
-                                if (day !== lastDay) { var dv = el('div', 'chat-day'); dv.appendChild(el('span', '', day)); list.appendChild(dv); lastDay = day; }
-                                var row = el('div', 'chat-row ' + (m.side === 'team' ? 'out' : 'in')), b = el('div', 'chat-bub');
-                                b.appendChild(el('div', 'chat-who', m.side === 'team' ? m.who : m.who + ' · client'));
-                                b.appendChild(el('div', 'chat-txt', m.body));
-                                b.appendChild(el('div', 'chat-time', d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''));
-                                row.appendChild(b); list.appendChild(row);
+                                if (day !== lastDay) { var dv = el('div', 'chat-day'); dv.appendChild(el('span', '', day)); list.appendChild(dv); lastDay = day; prevSide = ''; }
+                                var row = el('div', 'chat-row ' + (m.side === 'team' ? 'out' : 'in'));
+                                var col = el('div', 'chat-col ' + (m.side === 'team' ? 'out' : 'in'));
+                                var b = el('div', 'chat-bub' + (m.deleted ? ' gone' : '')
+                                           + (m.side !== prevSide ? (m.side === 'team' ? ' chat-tail-r' : ' chat-tail-l') : ''));
+                                prevSide = m.side;
+                                row.id = 'chat-m' + m.id;
+                                b.appendChild(el('div', 'chat-who', whoOf(m)));
+                                if (m.reply) {
+                                    var q = el('div', 'chat-quote ' + (m.reply.side === 'team' ? 'out' : 'in'));
+                                    q.appendChild(el('b', '', whoOf(m.reply)));
+                                    q.appendChild(el('span', '', m.reply.text));
+                                    q.addEventListener('click', function () { jump(m.reply.id); });
+                                    b.appendChild(q);
+                                }
+                                if (m.deleted) {
+                                    b.appendChild(el('div', 'chat-deleted', '⊘ This message was deleted'));
+                                } else {
+                                    (m.files || []).forEach(function (f) { b.appendChild(media(f, m)); });
+                                    if (m.body) { b.appendChild(el('div', 'chat-txt', m.body)); }
+                                }
+                                var meta = el('div', 'chat-time', (m.edited ? 'edited · ' : '') + clock(d));
+                                if (m.side === 'team' &amp;&amp; m.status &amp;&amp; !m.deleted) { meta.appendChild(tick(m)); }
+                                b.appendChild(meta);
+                                if (!m.deleted) { holdable(b, m.id); caret(b, m.id); }
+                                var bl = el('div', 'chat-bl' + (m.side === 'team' ? ' r' : ''));
+                                bl.appendChild(b);
+                                if (!m.deleted &amp;&amp; canAct) { bl.appendChild(quick(m, canSend)); }
+                                col.appendChild(bl);
+                                var rc = reactionChips(m);
+                                if (rc) { col.appendChild(rc); }
+                                row.appendChild(col);
+                                list.appendChild(row);
                             });
                             list.scrollTop = list.scrollHeight;
                         }
-                        function load() {
-                            fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(draw).catch(function () {});
+                        // ✓ saved · ✓✓ reached the client's group · blue ✓✓ the client opened
+                        // the chat · ⚠ WhatsApp refused it (tap to retry): on our own bubbles.
+                        function tick(m) {
+                            var t = el('span', 'chat-tick', m.status === 'failed' ? ' ⚠' : (m.status === 'pending' ? ' ✓' : ' ✓✓'));
+                            t.style.color = m.status === 'seen' ? '#53bdeb' : (m.status === 'failed' ? '#d4572e' : '#667781');
+                            t.style.letterSpacing = '-2px';
+                            t.title = m.status === 'failed' ? ((m.error || 'Not delivered.') + ' Tap to retry.')
+                                : m.status === 'seen' ? 'Seen by the client' : m.status === 'sent' ? "Delivered to the client's WhatsApp group" : 'Sending…';
+                            if (m.status === 'failed') {
+                                t.style.cursor = 'pointer';
+                                t.addEventListener('click', function () {
+                                    var fd = new FormData(); fd.append('message_id', m.id);
+                                    fetch(url + '/retry', { method: 'POST', body: fd, credentials: 'same-origin' })
+                                        .then(function (r) { return r.json(); })
+                                        .then(function (r) { if (!r.ok) { say(r.message || 'Could not retry.'); } shown = ''; draw(r); })
+                                        .catch(function () { say('Network problem — try again.'); });
+                                });
+                            }
+                            return t;
                         }
-                        function open() { ov.classList.add('on'); shown = -1; load(); clearInterval(timer); timer = setInterval(load, 10000); }
-                        function close() { ov.classList.remove('on'); clearInterval(timer); }
+                        // A text message shows at once with a single ✓ and the box clears;
+                        // the server's rows replace it a moment later.
+                        function tempRow(text) {
+                            var row = el('div', 'chat-row out'), b = el('div', 'chat-bub');
+                            b.appendChild(el('div', 'chat-who', 'You'));
+                            b.appendChild(el('div', 'chat-txt', text));
+                            var meta = el('div', 'chat-time', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                            meta.appendChild(tick({ status: 'pending' }));
+                            b.appendChild(meta); row.appendChild(b); list.appendChild(row);
+                            list.scrollTop = list.scrollHeight;
+                            return row;
+                        }
+                        function unsend(row, text) {
+                            if (row &amp;&amp; row.parentNode) { row.parentNode.removeChild(row); }
+                            input.value = text;
+                        }
+
+                        // ---- the action card (long-press): reactions, reply, edit, info, copy, delete
+                        function rowById(id) {
+                            for (var i = 0; i &lt; rowsNow.length; i++) { if (rowsNow[i].id === id) { return rowsNow[i]; } }
+                            return null;
+                        }
+                        function closeCard() { scrim.style.display = 'none'; card.textContent = ''; }
+                        function act(id, action, extra) {
+                            var fd = new FormData(); fd.append('msg_id', id); fd.append('action', action);
+                            if (extra &amp;&amp; extra.emoji) { fd.append('emoji', extra.emoji); }
+                            if (extra &amp;&amp; extra.text != null) { fd.append('text', extra.text); }
+                            return fetch(url + '/act', { method: 'POST', body: fd, credentials: 'same-origin' })
+                                .then(function (r) { return r.json(); })
+                                .then(function (r) { if (!r.ok) { say(r.message || 'That did not work.'); } shown = ''; draw(r); return !!r.ok; })
+                                .catch(function () { say('Network problem — try again.'); return false; });
+                        }
+                        function emojiButton(id, e) {
+                            var b = el('button', 'chat-remoji', e); b.type = 'button';
+                            b.addEventListener('click', function () { closeCard(); act(id, 'react', { emoji: e }); });
+                            return b;
+                        }
+                        function actionRow(icon, label, fn, danger) {
+                            var b = el('button', 'chat-act' + (danger ? ' danger' : ''));
+                            b.type = 'button';
+                            b.appendChild(el('span', 'chat-aicon', icon));
+                            b.appendChild(el('span', '', label));
+                            b.addEventListener('click', function () { closeCard(); fn(); });
+                            return b;
+                        }
+                        function copyText(text) {
+                            function fallback() {
+                                var ta = el('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                                document.body.appendChild(ta); ta.select();
+                                try { document.execCommand('copy'); } catch (e) { /* nothing to do */ }
+                                document.body.removeChild(ta);
+                            }
+                            if (navigator.clipboard &amp;&amp; navigator.clipboard.writeText) { navigator.clipboard.writeText(text).catch(fallback); } else { fallback(); }
+                        }
+                        // ⌄ on a bubble when the mouse is over it (as WhatsApp Web): opens the actions.
+                        function caret(b, id) {
+                            var c = el('button', 'chat-caret'); c.innerHTML = ICONS.down;
+                            c.type = 'button'; c.title = 'Message options';
+                            c.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+                            c.addEventListener('touchstart', function (e) { e.stopPropagation(); }, { passive: true });
+                            c.addEventListener('click', function (e) { e.stopPropagation(); openCard(id); });
+                            b.appendChild(c);
+                        }
+                        // Info: when it was sent, reached the other side and was seen. Plain times.
+                        function infoList(box, events) {
+                            events.forEach(function (ev) {
+                                var d = ev[2] ? new Date(ev[2].replace(' ', 'T') + 'Z') : null;
+                                var when = 'not yet';
+                                if (d &amp;&amp; !isNaN(d)) {
+                                    when = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                    if (d.toDateString() !== new Date().toDateString()) {
+                                        when = d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ', ' + when;
+                                    }
+                                }
+                                var row = el('div', 'chat-irow' + (ev[3] ? ' ' + ev[3] : ''));
+                                row.appendChild(el('span', 'chat-imark', ev[0]));
+                                row.appendChild(el('span', 'chat-iwhat', ev[1]));
+                                row.appendChild(el('span', 'chat-itime', when));
+                                box.appendChild(row);
+                            });
+                        }
+                        function showInfo(m) {
+                            card.textContent = '';
+                            var box = el('div', 'chat-minfo');
+                            box.appendChild(el('b', '', 'Message info'));
+                            infoList(box, [['✓', 'Sent', m.at], ['✓✓', "Delivered to the client's group", m.info &amp;&amp; m.info.delivered_at],
+                                          ['✓✓', 'Seen by the client', m.info &amp;&amp; m.info.seen_at, 'seen']]);
+                            var x = el('button', 'chat-act', 'Close'); x.type = 'button';
+                            x.addEventListener('click', closeCard);
+                            box.appendChild(x);
+                            card.appendChild(box);
+                            scrim.style.display = '';
+                        }
+                        function openCard(id) {
+                            var m = rowById(id);
+                            if (!m || m.deleted) { return; }
+                            card.textContent = '';
+                            if (canAct) {
+                                var strip = el('div', 'chat-strip');
+                                QUICK.forEach(function (e) { strip.appendChild(emojiButton(id, e)); });
+                                var more = el('button', 'chat-remoji', '+'); more.type = 'button'; more.title = 'More reactions';
+                                more.addEventListener('click', function () {
+                                    card.textContent = '';
+                                    var head = el('div', 'chat-ghead');
+                                    var back = el('button', 'chat-act', '← Back'); back.type = 'button';
+                                    back.addEventListener('click', function () { openCard(id); });
+                                    head.appendChild(back); head.appendChild(el('span', '', 'Pick a reaction'));
+                                    card.appendChild(head);
+                                    var grid = el('div', 'chat-grid');
+                                    ALL.forEach(function (e) { grid.appendChild(emojiButton(id, e)); });
+                                    card.appendChild(grid);
+                                });
+                                strip.appendChild(more);
+                                card.appendChild(strip);
+                            }
+                            var acts = el('div', 'chat-acts');
+                            if (canAct &amp;&amp; canSend) { acts.appendChild(actionRow('↩', 'Reply', function () { setReply(m); })); }
+                            if (canAct &amp;&amp; m.can_edit) { acts.appendChild(actionRow('✎', 'Edit', function () { setEdit(m); })); }
+                            if (m.info) { acts.appendChild(actionRow('ⓘ', 'Info', function () { showInfo(m); })); }
+                            if (m.body) { acts.appendChild(actionRow('⎘', 'Copy', function () { copyText(m.body); })); }
+                            if (canAct &amp;&amp; m.can_delete) {
+                                acts.appendChild(actionRow('🗑', 'Delete', function () {
+                                    if (window.confirm('Delete this message for everyone?')) { act(id, 'delete'); }
+                                }, true));
+                            }
+                            if (!acts.childNodes.length &amp;&amp; !canAct) { return; }
+                            card.appendChild(acts);
+                            scrim.style.display = '';
+                        }
+                        scrim.addEventListener('click', function (e) { if (e.target === scrim) { closeCard(); } });
+                        document.addEventListener('keydown', function (e) { if (e.key === 'Escape' &amp;&amp; scrim.style.display !== 'none') { closeCard(); } });
+
+                        // ---- ↩ reply / ✎ edit: the bar above the box
+                        function setReply(m) {
+                            replyTo = m ? m.id : null;
+                            editing = null;
+                            replyBar.textContent = '';
+                            replyBar.style.display = m ? '' : 'none';
+                            if (!m) { return; }
+                            var t = el('div', 'chat-rtext');
+                            t.appendChild(el('b', '', '↩ Replying to ' + whoOf(m)));
+                            t.appendChild(el('span', '', (m.body || '').replace(/\s+/g, ' ').slice(0, 120) || filesLabel(m.files)));
+                            var x = el('button', 'chat-cx', '✕'); x.type = 'button'; x.title = 'Cancel reply';
+                            x.addEventListener('click', function () { setReply(null); });
+                            replyBar.appendChild(t); replyBar.appendChild(x);
+                            input.focus();
+                        }
+                        function setEdit(m) {
+                            setReply(null);
+                            editing = m.id;
+                            replyBar.style.display = '';
+                            var t = el('div', 'chat-rtext');
+                            t.appendChild(el('b', '', '✎ Editing message'));
+                            t.appendChild(el('span', '', (m.body || '').replace(/\s+/g, ' ').slice(0, 120)));
+                            var x = el('button', 'chat-cx', '✕'); x.type = 'button'; x.title = 'Cancel edit';
+                            x.addEventListener('click', function () { input.value = ''; setReply(null); });
+                            replyBar.appendChild(t); replyBar.appendChild(x);
+                            input.value = m.body || '';
+                            input.focus();
+                        }
+                        function drawChips() {
+                            chips.textContent = '';
+                            chips.style.display = picked.length ? '' : 'none';
+                            picked.forEach(function (p, i) {
+                                var c = el('span', 'chat-chip', ICON[p.kind] + ' ' + p.file.name + ' · ' + size(p.file.size) + ' ');
+                                if (!sending) {
+                                    var x = el('button', 'chat-cx', '✕'); x.type = 'button'; x.title = 'Remove';
+                                    x.addEventListener('click', function () { picked.splice(i, 1); drawChips(); });
+                                    c.appendChild(x);
+                                }
+                                chips.appendChild(c);
+                            });
+                        }
+                        pin.addEventListener('click', function () { menu.style.display = menu.style.display === 'none' ? '' : 'none'; });
+                        ov.addEventListener('click', function (e) {
+                            if (menu.style.display !== 'none' &amp;&amp; e.target !== pin &amp;&amp; !menu.contains(e.target)) { menu.style.display = 'none'; }
+                        });
+                        Array.prototype.forEach.call(menu.querySelectorAll('[data-pick]'), function (a) {
+                            a.addEventListener('click', function () {
+                                menu.style.display = 'none';
+                                var inp = document.getElementById('chat-in-' + a.getAttribute('data-pick'));
+                                inp.value = ''; inp.click();
+                            });
+                        });
+                        Array.prototype.forEach.call(ov.querySelectorAll('.chat-file-in'), function (inp) {
+                            inp.addEventListener('change', function () {
+                                Array.prototype.forEach.call(inp.files || [], function (f) {
+                                    var k = kindOf(f);
+                                    if (!k) { say('"' + f.name + '" can not be sent: photos, videos, audio and documents only.'); }
+                                    else if (f.size &gt; MAX_BYTES) { say('"' + f.name + '" is ' + size(f.size) + '. The limit is 50 MB.'); }
+                                    else if (picked.length &gt;= MAX_FILES) { say('At most ' + MAX_FILES + ' files in one message.'); }
+                                    else { picked.push({ file: f, kind: k }); }
+                                });
+                                inp.value = '';
+                                drawChips();
+                            });
+                        });
+// Online = on screen and touched in the last minute; the server tells
+                        // the other side's WhatsApp to stay quiet while we are online.
+                        var lastTouch = Date.now();
+                        ['pointerdown', 'keydown', 'touchstart', 'scroll', 'wheel', 'mousemove'].forEach(function (n) {
+                            document.addEventListener(n, function () { lastTouch = Date.now(); }, { passive: true, capture: true });
+                        });
+                        function isActive() { return document.visibilityState === 'visible' &amp;&amp; Date.now() - lastTouch &lt; 60000; }
+                        function load() {
+                            if (sending) { return; }
+                            // visible=1: the overlay is on screen, so the client's messages count as seen.
+                            var q = document.visibilityState === 'visible' ? (url.indexOf('?') &gt; -1 ? '&amp;' : '?') + 'visible=1' + (isActive() ? '&amp;active=1' : '') : '';
+                            fetch(url + q, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(draw).catch(function () {});
+                        }
+                        function open() { ov.classList.add('on'); shown = ''; load(); clearInterval(timer); timer = setInterval(load, 3000); }
+                        function close() { ov.classList.remove('on'); clearInterval(timer); closeCard(); }
+                        function finish(r) {
+                            sending = false; sendBtn.disabled = false; prog.style.display = 'none';
+                            if (r.ok) { input.value = ''; picked = []; setReply(null); } else { say(r.message || 'Could not send.'); }
+                            drawChips();
+                            shown = ''; draw(r);
+                        }
+                        function failed() {
+                            sending = false; sendBtn.disabled = false; prog.style.display = 'none';
+                            drawChips(); say('Network problem — nothing was sent.');
+                        }
                         function send() {
                             var text = input.value.trim();
-                            if (!text) { return; }
-                            sendBtn.disabled = true;
-                            var data = new FormData(); data.append('text', text);
-                            fetch(url, { method: 'POST', body: data, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-                                .then(function (r) { return r.json(); })
-                                .then(function (r) {
-                                    if (r.ok) { input.value = ''; } else if (window.kpiAlert) { window.kpiAlert(r.message || 'Could not send.'); } else { alert(r.message || 'Could not send.'); }
-                                    shown = -1; draw(r);
-                                })
-                                .catch(function () { if (window.kpiAlert) { window.kpiAlert('Network problem — nothing was sent.'); } })
-                                .then(function () { sendBtn.disabled = false; });
+                            if (sending) { return; }
+                            if (editing) {
+                                if (!text) { return; }
+                                var id = editing;
+                                sending = true; sendBtn.disabled = true;
+                                act(id, 'edit', { text: text }).then(function (ok) {
+                                    sending = false; sendBtn.disabled = false;
+                                    if (ok) { input.value = ''; setReply(null); }
+                                });
+                                return;
+                            }
+                            if (!text &amp;&amp; !picked.length) { return; }
+                            sending = true; sendBtn.disabled = true; drawChips();
+                            var data = new FormData(); data.append('text', text); data.append('reply_to', replyTo || '');
+                            picked.forEach(function (p) { data.append('files', p.file, p.file.name); });
+                            var temp = null;
+                            if (!picked.length) { temp = tempRow(text); input.value = ''; setReply(null); }
+                            // XHR, not fetch: it reports upload progress for big videos.
+                            var xhr = new XMLHttpRequest();
+                            xhr.open('POST', url, true);
+                            xhr.withCredentials = true;
+                            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+                            if (picked.length) { prog.style.display = ''; prog.firstElementChild.style.width = '0%'; prog.lastElementChild.textContent = ''; }
+                            xhr.upload.onprogress = function (e) {
+                                if (!e.lengthComputable || !picked.length) { return; }
+                                var pc = Math.min(100, Math.round(e.loaded / e.total * 100));
+                                prog.firstElementChild.style.width = pc + '%';
+                                prog.lastElementChild.textContent = pc + '% · ' + size(e.loaded) + ' of ' + size(e.total);
+                            };
+                            xhr.onload = function () {
+                                if (xhr.status === 413) { finish({ ok: false, message: 'Too large for the server (max 50 MB).' }); return; }
+                                var r = null;
+                                try { r = JSON.parse(xhr.responseText); } catch (e) { r = null; }
+                                if (r) { if (!r.ok) { unsend(temp, text); } finish(r); } else { unsend(temp, text); failed(); }
+                            };
+                            xhr.onerror = function () { unsend(temp, text); failed(); };
+                            xhr.send(data);
                         }
+                        // 🎤 Voice note, as in WhatsApp: with an empty box the send button is a
+                        // mic. Tap it: recording starts. ⏸ pauses (▶ plays what is recorded so far),
+                        // 🎙 carries on the same note, 🗑 throws it away, ➤ sends it. Nothing goes
+                        // out before ➤.
+                        var MIC_SVG = '&lt;svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"&gt;&lt;path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/&gt;&lt;/svg&gt;';
+                        function voiceRecorder(row, txt, sendBtn, hasFiles, sendVoice, say) {
+                            var can = !!(navigator.mediaDevices &amp;&amp; navigator.mediaDevices.getUserMedia &amp;&amp; window.MediaRecorder);
+                            var mode = 'send', sendHtml = sendBtn.innerHTML;
+                            var rec = null, chunks = [], stream = null, mime = '', started = 0, acc = 0, timer = null, bar = null;
+                            var tEl, dotEl, pauseBtn, audioEl;
+                            function wantMic() { return can &amp;&amp; !bar &amp;&amp; !sendBtn.disabled &amp;&amp; !txt.value.trim() &amp;&amp; !hasFiles(); }
+                            function refresh() {
+                                if (bar) { return; }
+                                var m = wantMic() ? 'mic' : 'send';
+                                // Which icon shows now: the browser rewrites SVG markup, so look for the
+                                // mic's own path rather than comparing the whole string.
+                                var isMic = sendBtn.innerHTML.indexOf('M12 14c1.66') &gt; -1;
+                                if (m === 'mic' &amp;&amp; !isMic) { sendHtml = sendBtn.innerHTML; sendBtn.innerHTML = MIC_SVG; sendBtn.title = 'Record a voice note'; }
+                                if (m === 'send' &amp;&amp; isMic) { sendBtn.innerHTML = sendHtml; sendBtn.title = 'Send'; }
+                                mode = m;
+                            }
+                            txt.addEventListener('input', refresh);
+                            setInterval(refresh, 400);
+                            row.addEventListener('click', function (e) {
+                                if (mode === 'mic' &amp;&amp; !bar &amp;&amp; sendBtn.contains(e.target)) { e.preventDefault(); e.stopPropagation(); start(); }
+                            }, true);
+                            function pickMime() {
+                                var c = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'];
+                                for (var i = 0; i &lt; c.length; i++) { if (MediaRecorder.isTypeSupported &amp;&amp; MediaRecorder.isTypeSupported(c[i])) { return c[i]; } }
+                                return '';
+                            }
+                            function fmt(ms) { var s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
+                            function elapsed() { return acc + (rec &amp;&amp; rec.state === 'recording' ? Date.now() - started : 0); }
+                            function btn(cls, title, html) { var b = el('button', cls); b.type = 'button'; b.title = title; b.innerHTML = html; return b; }
+                            function start() {
+                                navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+                                    stream = s; mime = pickMime(); chunks = []; acc = 0;
+                                    try { rec = mime ? new MediaRecorder(s, { mimeType: mime }) : new MediaRecorder(s); } catch (e) { rec = new MediaRecorder(s); }
+                                    rec.ondataavailable = function (ev) { if (ev.data &amp;&amp; ev.data.size) { chunks.push(ev.data); } };
+                                    rec.start(250); started = Date.now();
+                                    build();
+                                    timer = setInterval(function () {
+                                        if (!bar) { return; }
+                                        tEl.textContent = fmt(elapsed());
+                                        if (elapsed() &gt;= 900000 &amp;&amp; rec.state === 'recording') { pause(); }
+                                    }, 250);
+                                }).catch(function () { say('Microphone not available — allow it in the browser to record.'); });
+                            }
+                            function build() {
+                                bar = el('div', 'chat-rec');
+                                var del = btn('chat-rbin', 'Delete', '🗑');
+                                dotEl = el('span', 'chat-rdot'); tEl = el('span', 'chat-rtime', '0:00');
+                                pauseBtn = btn('chat-rpause', 'Pause', '⏸');
+                                audioEl = el('audio'); audioEl.controls = true; audioEl.className = 'chat-raudio'; audioEl.style.display = 'none';
+                                var go = btn('chat-rsend', 'Send', ICONS.send);
+                                del.addEventListener('click', function () { finish(false); });
+                                pauseBtn.addEventListener('click', function () { if (rec.state === 'recording') { pause(); } else { resume(); } });
+                                go.addEventListener('click', function () { finish(true); });
+                                bar.appendChild(del); bar.appendChild(dotEl); bar.appendChild(tEl); bar.appendChild(audioEl);
+                                bar.appendChild(pauseBtn); bar.appendChild(go);
+                                row.classList.add('chat-recording'); row.appendChild(bar);
+                            }
+                            function pause() {
+                                if (!rec || rec.state !== 'recording') { return; }
+                                rec.pause(); acc += Date.now() - started;
+                                dotEl.classList.add('off'); pauseBtn.innerHTML = '🎙'; pauseBtn.title = 'Continue recording';
+                                try { rec.requestData(); } catch (e) { /* older browsers: the chunks so far are enough */ }
+                                setTimeout(function () {
+                                    if (!bar) { return; }
+                                    audioEl.src = URL.createObjectURL(new Blob(chunks, { type: (rec.mimeType || mime || 'audio/webm').split(';')[0] }));
+                                    audioEl.style.display = ''; tEl.style.display = 'none';
+                                }, 200);
+                            }
+                            function resume() {
+                                if (!rec || rec.state !== 'paused') { return; }
+                                audioEl.pause(); audioEl.style.display = 'none'; tEl.style.display = '';
+                                rec.resume(); started = Date.now();
+                                dotEl.classList.remove('off'); pauseBtn.innerHTML = '⏸'; pauseBtn.title = 'Pause';
+                            }
+                            function finish(send) {
+                                if (!rec) { return; }
+                                var r = rec;
+                                r.onstop = function () {
+                                    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); }
+                                    clearInterval(timer);
+                                    var type = (r.mimeType || mime || 'audio/webm').split(';')[0];
+                                    var ext = type.indexOf('ogg') &gt; -1 ? 'ogg' : (type.indexOf('mp4') &gt; -1 ? 'm4a' : 'webm');
+                                    var blob = new Blob(chunks, { type: type });
+                                    if (bar &amp;&amp; bar.parentNode) { bar.parentNode.removeChild(bar); }
+                                    bar = null; rec = null; row.classList.remove('chat-recording'); mode = 'send'; refresh();
+                                    if (send &amp;&amp; blob.size) {
+                                        var n = new Date(), p = function (x) { return ('0' + x).slice(-2); };
+                                        var name = 'voice-' + n.getFullYear() + p(n.getMonth() + 1) + p(n.getDate()) + '-' + p(n.getHours()) + p(n.getMinutes()) + p(n.getSeconds()) + '.' + ext;
+                                        sendVoice(new File([blob], name, { type: type }));
+                                    }
+                                };
+                                if (r.state === 'inactive') { r.onstop(); } else { r.stop(); }
+                            }
+                        }
+                        voiceRecorder(bar, input, sendBtn, function () { return picked.length &gt; 0; },
+                            function (f) { picked = [{ file: f, kind: 'audio' }]; drawChips(); send(); }, say);
                         document.getElementById('chat-open').addEventListener('click', open);
                         document.getElementById('chat-x').addEventListener('click', close);
                         sendBtn.addEventListener('click', send);

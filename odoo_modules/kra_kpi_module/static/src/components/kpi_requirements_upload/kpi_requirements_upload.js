@@ -707,7 +707,8 @@ class _BaseUpload extends Component {
     _uploadManual(att, onPct) {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/kpi/manual/upload', true);
+            // Photos / video only, with the reason; not a user manual.
+            xhr.open('POST', '/kpi_requirements/attach_media', true);
             xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.upload.onprogress = (e) => {
                 // e.total is the BASE64 body (~+33% of the file) — use it, or the
@@ -731,7 +732,6 @@ class _BaseUpload extends Component {
                     file_data: att.data,
                     file_name: att.name,
                     description: att.reason,
-                    related_links: '',
                 },
             }));
         });

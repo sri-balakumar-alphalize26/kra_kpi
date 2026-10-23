@@ -199,7 +199,9 @@ class KraKpiFinish(models.Model):
         """What Full Complete still needs, as plain sentences (empty = ready)."""
         self.ensure_one()
         out = []
-        if not self.env['kpi.user.manual'].sudo().search_count([('kpi_id', '=', self.id)]):
+        # A photo / video from Upload Requirements is not a user manual.
+        if not self.env['kpi.user.manual'].sudo().search_count([('kpi_id', '=', self.id),
+                                                                ('is_intake_media', '=', False)]):
             out.append(_('Upload the user manual (PDF, DOC or DOCX).'))
         if self._github_required() and not self.env['kpi.github.link'].sudo().search_count(
                 [('kpi_id', '=', self.id)]):
@@ -309,6 +311,15 @@ class KraKpiFinish(models.Model):
         for rec in self:
             if rec.task_state != 'completed' or not rec.full_complete_pending:
                 continue
+            # The client hears that it is closing, once, whichever way it closed.
+            ref = rec._finish_ref()
+            if rec.review_close_reason == 'timeout':
+                rec._finish_client_group(_('⏰ We closed *%(ref)s* — %(name)s after %(days)d days without a reply. '
+                                           'If something is still wrong, raise it as a new request.') % {
+                    'ref': ref, 'name': rec.name or '', 'days': rec._review_days()})
+            else:
+                rec._finish_client_group(_('👍 Thanks — we\'re closing *%(ref)s* — %(name)s.') % {
+                    'ref': ref, 'name': rec.name or ''})
             if not rec._full_complete_missing():
                 try:
                     rec.full_complete(user=rec.user_id, source='system', auto=True)
@@ -330,10 +341,13 @@ class KraKpiFinish(models.Model):
 
     def _finish_after_full(self):
         for rec in self:
-            # kpi_billing.py makes the bill and tells everyone (or says why not).
+            # Both groups hear only that it is complete -- never the bill. The
+            # bill goes to the client's invoice group when that is switched on
+            # (kpi_billing.py _bill_tell).
+            text = _('✅ *%(ref)s* — %(name)s is complete.') % {'ref': rec._finish_ref(), 'name': rec.name or ''}
+            rec._finish_alpha(text)
+            rec._finish_client_group(text)
             try:
                 rec._auto_bill()
             except Exception as exc:
                 _logger.warning('auto bill for %s failed: %s', rec.id, exc)
-                rec._finish_alpha(_('🏁 *%s* is fully complete — the bill could not be made: %s')
-                                  % (rec._finish_ref(), exc))

@@ -21,10 +21,12 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from odoo import fields, http
+from odoo.exceptions import UserError
 from odoo.http import request
 
 from .kpi_wa_approval import _render
 from .kra_api import serve_file, _guess_mime
+from .kpi_client_chat import chat_file_response, chat_upload_files
 from ..models.kpi_legacy import is_audio
 from ..models.kpi_wa_staff_menu import STARTED_STATES
 
@@ -197,7 +199,20 @@ class KpiWaTaskPage(http.Controller):
                 'project': ' › '.join(path), 'deadline': task.deadline.strftime('%d %b %Y') if task.deadline else '—',
                 'estimate': '%02d:%02d' % (task.estimate_hours, task.estimate_minutes),
                 'spent': '%dh %02dm' % (m // 60, m % 60), 'description': task.description or '',
-                'paused_reason': task.paused_reason if task.task_state == 'paused' else '',
+                # Rework too: that is where the client's "send back" reason sits.
+                'paused_reason': task.paused_reason if task.task_state in ('paused', 'rework') else '',
+            },
+            # ↩ Every time the client sent it back, with the proof; files open
+            # through this page's token (the phone is not logged in).
+            'sendbacks': [dict(s, when=when(fields.Datetime.to_datetime(s['at'])) if s['at'] else '')
+                          for s in task.sendback_rows(file_url='/kpi/wa/task/%s/sendback/file/%%d' % token)],
+            # 👍 The client said finished (or the review timed out): 🏁 Full Complete
+            # once the manual / GitHub link are on it (models/kpi_finish.py).
+            'finish': {
+                'pending': bool(task.full_complete_pending),
+                'missing': task._full_complete_missing() if task.full_complete_pending else [],
+                'can': bool(task.full_complete_pending) and not task._may_full_complete(user),
+                'done': when(task.full_complete_at) if task.full_complete_at else '',
             },
             'updates': updates, 'client_updates': client_updates,
             'legacy': legacy, 'sends': sends,
@@ -243,22 +258,60 @@ class KpiWaTaskPage(http.Controller):
 
     # 💬 Chat with the client (models/kpi_chat.py): the page's chat window
     # loads and sends here, in the background, as JSON.
-    def _chat_json(self, task, user, ok=True, message=''):
+    def _chat_json(self, task, user, ok=True, message='', token=''):
         Report = request.env['kpi.wa.group.report'].sudo()
+        url = '/kpi/wa/task/%s/chat/file/%%d' % token
+        locked = task._details_locked_for(user)
+        admin = request.env['kra.kpi']._user_is_kpi_admin(user)
         return request.make_json_response({
             'ok': ok, 'message': message,
-            'messages': task.chat_rows(viewer=user), 'waiting': task.chat_waiting(),
+            'messages': task.chat_rows(viewer=user, file_url=url, admin=admin), 'waiting': task.chat_waiting(),
             'can_send': bool(Report._group_for_kpi(task)),
-            'locked': task._details_locked_for(user),
+            'locked': locked, 'can_act': not locked,
             'client': task.client_kra_id.name or task.kra_id.name or ''})
 
-    @http.route('/kpi/wa/task/<string:token>/chat', type='http', auth='public',
-                methods=['GET'], csrf=False, website=False)
-    def chat_list(self, token, **kw):
+    @http.route('/kpi/wa/task/<string:token>/chat/act', type='http', auth='public',
+                methods=['POST'], csrf=False, website=False)
+    def chat_act(self, token, **post):
+        """Long-press on a bubble: react / edit / delete."""
         st, user, task = self._resolve(token)
         if not task:
             return request.make_json_response({'ok': False, 'message': 'This link has expired.'})
-        return self._chat_json(task, user)
+        locked = task._details_locked_for(user)
+        if locked:
+            return self._chat_json(task, user, ok=False, message=locked, token=token)
+        try:
+            task.chat_act(post.get('msg_id'), post.get('action') or '', 'u:%d' % user.id,
+                          emoji=post.get('emoji'), text=post.get('text'),
+                          admin=request.env['kra.kpi']._user_is_kpi_admin(user))
+        except Exception as exc:
+            return self._chat_json(task, user, ok=False, message=str(exc).strip()[:300], token=token)
+        return self._chat_json(task, user, token=token)
+
+    @http.route('/kpi/wa/task/<string:token>/chat', type='http', auth='public',
+                methods=['GET'], csrf=False, website=False)
+    def chat_list(self, token, visible=None, active=None, **kw):
+        st, user, task = self._resolve(token)
+        if not task:
+            return request.make_json_response({'ok': False, 'message': 'This link has expired.'})
+        # ?visible=1: the chat overlay is open and on screen, so the client's
+        # messages are now seen (blue ✓✓ on their page).
+        # active=1: also touched in the last minute = online.
+        if visible:
+            task.chat_mark_seen('team', active=bool(active))
+        return self._chat_json(task, user, token=token)
+
+    @http.route('/kpi/wa/task/<string:token>/chat/retry', type='http', auth='public',
+                methods=['POST'], csrf=False, website=False)
+    def chat_retry(self, token, **post):
+        st, user, task = self._resolve(token)
+        if not task:
+            return request.make_json_response({'ok': False, 'message': 'This link has expired.'})
+        try:
+            task.chat_retry(post.get('message_id'))
+        except Exception as exc:
+            return self._chat_json(task, user, ok=False, message=str(exc).strip()[:300], token=token)
+        return self._chat_json(task, user, token=token)
 
     @http.route('/kpi/wa/task/<string:token>/chat', type='http', auth='public',
                 methods=['POST'], csrf=False, website=False)
@@ -268,12 +321,22 @@ class KpiWaTaskPage(http.Controller):
             return request.make_json_response({'ok': False, 'message': 'This link has expired.'})
         locked = task._details_locked_for(user)
         if locked:
-            return self._chat_json(task, user, ok=False, message=locked)
+            return self._chat_json(task, user, ok=False, message=locked, token=token)
         try:
-            task.chat_post_team(post.get('text') or '', user, source='wa_page')
+            # 📎 photos / videos / audio come in the same form, as `files`.
+            task.chat_post_team(post.get('text') or '', user, source='wa_page', files=chat_upload_files(),
+                                reply_to=post.get('reply_to'))
         except Exception as exc:
-            return self._chat_json(task, user, ok=False, message=str(exc).strip()[:300])
-        return self._chat_json(task, user, message='Sent to the client.')
+            return self._chat_json(task, user, ok=False, message=str(exc).strip()[:300], token=token)
+        return self._chat_json(task, user, message='Sent to the client.', token=token)
+
+    @http.route('/kpi/wa/task/<string:token>/chat/file/<int:att_id>', type='http', auth='public',
+                methods=['GET'], csrf=False, website=False)
+    def chat_file(self, token, att_id, **kw):
+        st, user, task = self._resolve(token)
+        if not task:
+            return request.not_found()
+        return chat_file_response(task, att_id)
 
     @http.route('/kpi/wa/task/<string:token>/update', type='http', auth='public',
                 methods=['POST'], csrf=False, website=False)
@@ -368,6 +431,20 @@ class KpiWaTaskPage(http.Controller):
                                     if partial else '✅ %s finished %s. It is with a manager to check.')
                          % (user.name, task.external_ref or task.id))
         return self._back(token, ok=msg if ok else '', err='' if ok else msg)
+
+    @http.route('/kpi/wa/task/<string:token>/full_complete', type='http', auth='public',
+                methods=['POST'], csrf=False, website=False)
+    def full_complete(self, token, **post):
+        """🏁 Full Complete from the page the developer's WhatsApp message opens."""
+        st, user, task = self._resolve(token)
+        if not task:
+            return self._expired()
+        try:
+            task.full_complete(user=user, source='wa_page')
+        except UserError as exc:
+            return self._back(token, err=str(exc))
+        return self._back(token, ok='🏁 %s is fully complete — it moves to billing.'
+                          % (task.external_ref or task.id))
 
     # ------------------------------------------------- 📂 My work (projects & documents)
     def _my_ctx(self, token, user):

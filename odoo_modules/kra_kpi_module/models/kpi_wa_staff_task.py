@@ -46,7 +46,7 @@ import pytz
 from odoo import _, fields, models
 
 from .kpi_wa_group_intake import _strip_emoji
-from .kpi_wa_staff_menu import (ESTIMATE_LOCKED_STATES, STAFF_CREATE_LABEL, STARTED_STATES,
+from .kpi_wa_staff_menu import (ESTIMATE_LOCKED_STATES, STAFF_BY_ID, STAFF_CREATE_LABEL, STARTED_STATES,
                                 _kpi_actions_for, _switch_targets)
 
 _logger = logging.getLogger(__name__)
@@ -310,6 +310,8 @@ class KpiWaStaffTask(models.AbstractModel):
             'switch_pick': self._fl_switch_pick, 'switch_search': self._fl_switch_search,
             'pause_which': self._fl_pause_which, 'switch_from_which': self._fl_switch_from_which,
             'day_pick': self._fl_day_pick,
+            # A long list of tasks / clients / projects, paged (_pick_list).
+            'lp': self._fl_lp, 'lp_search': self._fl_lp_search,
             # Smart typing's ✅ Yes / ❌ No and "what next" polls (kpi_wa_smart).
             'smart_pick': self._fl_smart_pick,
             # 💬 Reply to client (kpi_chat.py).
@@ -320,7 +322,7 @@ class KpiWaStaffTask(models.AbstractModel):
             return False
         task = state.staff_kpi_id
         needs_task = not (at in ('meet_menu', 'meet_client', 'day_pausemenu', 'pause_which', 'day_pick',
-                                 'smart_pick')
+                                 'smart_pick', 'lp', 'lp_search')
                           or (at or '').startswith('mt_')
                           or (at in ('pause_code', 'pause_note', 'pause_meet') and d.get('all'))
                           or (at in ('meet_who', 'meet_note') and d.get('purpose') in ('nontask', 'pauseall')))
@@ -1470,7 +1472,7 @@ class KpiWaStaffTask(models.AbstractModel):
             when = self._when_short(user, fields.Datetime.to_datetime(r['at']))
             who = r['who'] if r['side'] == 'client' else '%s (%s)' % (_('Team'), r['who'])
             lines.append('%s %s, %s:\n   %s' % ('🧑‍💼' if r['side'] == 'client' else '👥', who, when,
-                                              ' '.join(r['body'].split())[:300]))
+                                              ' '.join(r['text'].split())[:300]))
         if not rows:
             lines.append(_('No messages yet — yours will be the first.'))
         lines += ['', _('Type your message to the client. It reaches their group as "Reply from our team". '
@@ -2167,13 +2169,13 @@ class KpiWaStaffTask(models.AbstractModel):
         for t in tasks:
             if t.kra_id:
                 count[t.kra_id] = count.get(t.kra_id, 0) + 1
-        projects = sorted(count, key=lambda k: (-count[k], k.display_name or ''))[:8]
+        projects = sorted(count, key=lambda k: (-count[k], k.display_name or ''))
         if not projects:
             self._text(message, _('None of your tasks has a project yet.'))
             return self._mt_filter_menu(message, state, user)
-        opts = [('%s (%d)' % (p.display_name or p.name or '', count[p]))[:99] for p in projects] + [BACK]
-        return self._fask(message, state, {'at': 'mt_proj', 'ids': [p.id for p in projects]},
-                          _('📁 Which project?'), opts)
+        return self._pick_list(message, state, user, {
+            'kind': 'project', 'all': [p.id for p in projects],
+            'count': {str(p.id): count[p] for p in projects}})
 
     def _fl_mt_proj(self, message, state, user, d, task, tapped, low, body):
         i = self._fchoice(d, tapped, low)
@@ -2238,16 +2240,136 @@ class KpiWaStaffTask(models.AbstractModel):
                   'approvals', 'awaiting_client', 'completed'):
             seen += [i for i in lanes.get(k, []) if i not in seen]
         for t in self.env['kra.kpi'].sudo().browse(seen).exists():
-            ref = self._norm(t.external_ref)
-            rm = re.match(r'^([a-z]+)0*(\d+)$', ref)
-            hit = bool(qn) and (
-                (m and rm and rm.group(1).startswith(m.group(1)) and rm.group(2) == m.group(2))
-                or (qn.isdigit() and rm and rm.group(2) == (qn.lstrip('0') or '0'))
-                or (not m and ref.startswith(qn))
-                or q.lower() in (t.name or '').lower())
-            if hit:
+            if self._task_hit(t, q):
                 out.append(t.id)
         return out
+
+    def _task_hit(self, t, query):
+        """A ref typed any way (REQ-014, req14, req 14, REQ), or part of the name."""
+        q = (query or '').strip()
+        qn = self._norm(q)
+        m = re.match(r'^([a-z]+)0*(\d+)$', qn)
+        ref = self._norm(t.external_ref)
+        rm = re.match(r'^([a-z]+)0*(\d+)$', ref)
+        return bool(qn) and bool(
+            (m and rm and rm.group(1).startswith(m.group(1)) and rm.group(2) == m.group(2))
+            or (qn.isdigit() and rm and rm.group(2) == (qn.lstrip('0') or '0'))
+            or (not m and ref.startswith(qn))
+            or q.lower() in (t.name or '').lower())
+
+    # ================================================================== #
+    # A long list, paged: tasks ("Which one?"), clients, projects          #
+    # ================================================================== #
+    # d: kind ('task' / 'client' / 'project'), all (every id, in order),
+    # ctx (for a task: the action it is picked for), page, query.
+    LIST_PAGE = 6            # with More · Search · Back · 🏠 Main menu = 10
+
+    def _lp_rows(self, user, d):
+        """(records, label of one) for this list, search applied."""
+        kind, q = d.get('kind'), d.get('query')
+        if kind == 'task':
+            rows = self.env['kra.kpi'].sudo().browse(d.get('all') or []).exists()
+            if q:
+                rows = rows.filtered(lambda r: self._task_hit(r, q))
+            return rows, lambda r: self._task_line(r, True)
+        rows = self.env['kra.master'].sudo().browse(d.get('all') or []).exists()
+        if q:
+            rows = rows.filtered(lambda r: q.lower() in (r.display_name or r.name or '').lower())
+        if kind == 'project':
+            count = d.get('count') or {}
+            return rows, lambda r: ('%s (%s)' % (r.display_name or r.name or '', count.get(str(r.id), 0)))[:99]
+        return rows, lambda r: ('🏢 %s' % (r.name or ''))[:99]
+
+    def _pick_list(self, message, state, user, d, note=''):
+        """One page: up to 6 rows (7 when it all fits), then ➡️ More and
+        🔍 Search when there is more than one page, then ↩️ Back."""
+        d = dict(d, at='lp', page=d.get('page') or 0)
+        rows, label = self._lp_rows(user, d)
+        if d.get('query') and not rows:
+            note = _('🔍 Nothing matches "%s".') % d['query']
+            d['query'] = None
+            rows, label = self._lp_rows(user, d)
+        many = len(rows) > self.LIST_PAGE + 1
+        per = self.LIST_PAGE if many else self.LIST_PAGE + 1
+        pages = max(1, (len(rows) + per - 1) // per)
+        d['page'] = d['page'] % pages
+        chunk = rows[d['page'] * per:(d['page'] + 1) * per]
+        d['ids'] = chunk.ids
+        opts = [label(r) for r in chunk]
+        if pages > 1:
+            opts.append(_('➡️ More (page %(p)d of %(n)d)') % {'p': d['page'] + 1, 'n': pages})
+        if many or d.get('query'):
+            opts.append(self.SEARCH)
+        opts.append(BACK)
+        if d.get('kind') == 'task':
+            title = (_('Which task is the client meeting about?') if d.get('ctx') == 'meet_client'
+                     else _('Which one? (%s)') % STAFF_BY_ID.get(d.get('ctx'), ''))
+        else:
+            title = _('📁 Which project?') if d.get('kind') == 'project' else _('🤝 Which client?')
+        if d.get('query'):
+            title += '\n' + _('🔍 "%(q)s": %(n)d found') % {'q': d['query'], 'n': len(rows)}
+        return self._fask(message, state, d, ((note + '\n\n') if note else '') + title, opts)
+
+    def _fl_lp(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            # Typed instead of tapped: a search.
+            if (body or '').strip() and not low.strip().isdigit():
+                return self._pick_list(message, state, user, dict(d, query=body.strip(), page=0))
+            return False
+        ids = d.get('ids') or []
+        label = d['opts'][i]
+        if i < len(ids):
+            return self._lp_open(message, state, user, d, ids[i])
+        if label.startswith('➡️'):
+            return self._pick_list(message, state, user, dict(d, page=d.get('page', 0) + 1))
+        if label == self.SEARCH:
+            self._fsave(state, dict(d, at='lp_search'))
+            what = {'client': _('part of the client name'), 'project': _('part of the project name')}.get(
+                d.get('kind'), _('the task number or part of its name — e.g. REQ-014, req14'))
+            self._text(message, _('🔍 Type %s. (Type cancel to stop.)') % what)
+            return True
+        if d.get('query'):                        # Back from results → the whole list
+            return self._pick_list(message, state, user, dict(d, query=None, page=0))
+        return self._lp_back(message, state, user, d)
+
+    def _fl_lp_search(self, message, state, user, d, task, tapped, low, body):
+        q = (body or '').strip()
+        if not q:
+            return False
+        return self._pick_list(message, state, user, dict(d, query=q, page=0))
+
+    def _lp_open(self, message, state, user, d, rec_id):
+        kind = d.get('kind')
+        if kind == 'client':
+            client = self.env['kra.master'].sudo().browse(rec_id)
+            tasks = self._client_tasks(user).get(client) or self.env['kra.kpi']
+            if not tasks:
+                state._reset()
+                self._text(message, _('You have no open task for %s.') % (client.name or ''))
+                return True
+            return self._meet_client_tasks(message, state, user, tasks)
+        if kind == 'project':
+            return self._mt_tasks(message, state, user, 'filter', 'f_p%d' % rec_id, 0)
+        picked = self.env['kra.kpi'].sudo().browse(rec_id).exists()
+        if not picked:
+            return self._pick_list(message, state, user, d, note=_('That task is no longer there.'))
+        action = d.get('ctx') or 'mytasks'
+        state._touch(staff_kpi_id=picked.id, staff_action=action, staff_draft=False)
+        if action == 'mytasks':
+            return self._staff_offer_actions(message, state, picked)
+        return self._staff_begin(message, state, user, picked, action)
+
+    def _lp_back(self, message, state, user, d):
+        kind, ctx = d.get('kind'), d.get('ctx')
+        if kind == 'project':
+            return self._mt_filter_menu(message, state, user)
+        if kind == 'client' or ctx == 'meet_admin':
+            return self._meeting_menu(message, state, user)
+        if ctx == 'meet_client':
+            return self._meet_client_pick(message, state, user)
+        state._reset()
+        return self._show_staff_menu(message, state, user)
 
     def _fl_mt_task(self, message, state, user, d, task, tapped, low, body):
         i = self._fchoice(d, tapped, low)
@@ -2868,7 +2990,7 @@ class KpiWaStaffTask(models.AbstractModel):
         always ABOUT a task (kpi.doubt needs one), so the clients offered are
         the ones they have work for."""
         out = {}
-        for t in self._my_tasks(user):
+        for t in self._my_tasks(user, limit=None):
             c = t.client_kra_id
             if not c:
                 c = t.kra_id
@@ -2886,12 +3008,10 @@ class KpiWaStaffTask(models.AbstractModel):
             self._text(message, _('You have no open task for any client, so there is nothing to '
                                   'meet a client about yet.'))
             return True
-        clients = sorted(groups, key=lambda c: (c.name or '').lower())[:9]
+        clients = sorted(groups, key=lambda c: (c.name or '').lower())
         if len(clients) == 1:
             return self._meet_client_tasks(message, state, user, groups[clients[0]])
-        d = {'at': 'meet_client', 'ids': [c.id for c in clients]}
-        return self._fask(message, state, d, _('🤝 Which client?'),
-                          ['🏢 %s' % (c.name or '')[:80] for c in clients] + [BACK])
+        return self._pick_list(message, state, user, {'kind': 'client', 'all': [c.id for c in clients]})
 
     def _fl_meet_client(self, message, state, user, d, task, tapped, low, body):
         i = self._fchoice(d, tapped, low)
@@ -2914,12 +3034,8 @@ class KpiWaStaffTask(models.AbstractModel):
         if len(tasks) == 1:
             state._touch(staff_action='meet_client', staff_draft=False)
             return self._staff_begin(message, state, user, tasks[0], 'meet_client')
-        labels = dict(tasks._fields['task_state'].selection)
-        opts = [self._task_line(t, True) for t in tasks[:10]]
-        state._touch(step='staff_pick_task', staff_action='meet_client', staff_draft=False,
-                     menu_csv=','.join(str(t.id) for t in tasks[:10]))
-        self._poll(message, _('Which task is the client meeting about?'), opts)
-        return True
+        state._touch(staff_action='meet_client')
+        return self._pick_list(message, state, user, {'kind': 'task', 'ctx': 'meet_client', 'all': tasks.ids})
 
     # ================================================================== #
     # Meeting: who it is with, and what about                             #

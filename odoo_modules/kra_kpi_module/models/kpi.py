@@ -423,10 +423,11 @@ class KpiMaster(models.Model):
         compute='_compute_user_manual_count'
     )
 
-    @api.depends('user_manual_ids')
+    @api.depends('user_manual_ids', 'user_manual_ids.is_intake_media')
     def _compute_user_manual_count(self):
+        # Photos / videos from Upload Requirements are not user manuals.
         for rec in self:
-            rec.user_manual_count = len(rec.user_manual_ids)
+            rec.user_manual_count = len(rec.user_manual_ids.filtered(lambda m: not m.is_intake_media))
 
     active = fields.Boolean(string='Active', default=True)
 
