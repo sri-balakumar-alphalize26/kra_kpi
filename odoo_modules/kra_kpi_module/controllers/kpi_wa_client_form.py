@@ -273,7 +273,9 @@ class KpiWaClientForm(http.Controller):
         st = _state_for(token)
         if not st:
             return {'ok': False, 'expired': True}
-        return {'ok': True, 'dbs': [{'id': d.id, 'name': d.db_name, 'label': d.poll_label()}
+        # url: the server's address, which prefills the Destroy form's Database URL.
+        return {'ok': True, 'dbs': [{'id': d.id, 'name': d.db_name, 'label': d.poll_label(),
+                                     'url': d.server_id.url or ''}
                                     for d in self._dbs(st, server_id)]}
 
     @http.route('/kpi/wa/client/<string:token>/tasks', type='json', auth='public',
@@ -470,6 +472,8 @@ class KpiWaClientForm(http.Controller):
             password = (post.get('password') or '')[:128]
             if not url:
                 return None, 'Type the database URL.', ''
+            if not re.match(r'^https?://\S+$', url, re.I):
+                return None, 'The database URL must start with http:// or https://', ''
             if not username:
                 return None, 'Type the user ID.', ''
             if not password:

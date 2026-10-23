@@ -60,6 +60,7 @@
                 var o = document.createElement('option');
                 o.value = d.id; o.textContent = d.label && d.label !== d.name ? d.name + ' — ' + d.label : d.name;
                 o.setAttribute('data-name', d.name);
+                o.setAttribute('data-url', d.url || '');
                 db.appendChild(o);
             });
             db.disabled = !list.length;
@@ -69,7 +70,18 @@
         });
     }
 
+    // 💥 Destroy: the Database URL starts as the picked database's server
+    // address. Still editable; a value the client typed is never replaced.
+    var urlAuto = '';
+    function fillDbUrl() {
+        var box = $('kfDbUrl');
+        if (!box || !db) { return; }
+        var opt = db.options[db.selectedIndex];
+        var url = (opt && opt.getAttribute('data-url')) || '';
+        if (!box.value.trim() || box.value.trim() === urlAuto) { box.value = url; urlAuto = url; }
+    }
     function onDb(keepParent) {
+        fillDbUrl();
         preview();
         if (!reqs) { return Promise.resolve(); }
         loadKids(null);                  // another database: its own requirements
