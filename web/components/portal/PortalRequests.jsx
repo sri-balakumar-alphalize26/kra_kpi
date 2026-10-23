@@ -17,7 +17,9 @@ import { BulkSignOff, CertificatePreview, SignatureCard, SignatureFields, useSig
    Two different "approvals" — keep them apart:
    - pre-approval (go-ahead on the developer/estimate) → /kpi_pre_approval/list
    - sign-off (accept finished work)                   → dashboard pending_approvals */
-const TABS = [{ key: "all", label: "All" }, { key: "approval", label: "Approval needed" }, { key: "in_progress", label: "In progress" }, { key: "queued", label: "Queued" }, { key: "completed", label: "Completed" }];
+const TABS = [{ key: "all", label: "All" }, { key: "approval", label: "Approval needed" }, { key: "in_progress", label: "In progress" }, { key: "queued", label: "Queued" }, { key: "partial", label: "🏁 Partly completed" }, { key: "completed", label: "Completed" }];
+/* 🏁 Sent as a Partial Finish and not completed yet (server: finish_partial). */
+const inTab = (tab, k) => (tab === "partial" ? !!k.finish_partial : (GROUP[tab] || []).includes(k.task_state));
 const GROUP = { in_progress: ["in_progress", "paused", "hold", "rework", "partially_completed"], queued: ["assigned", "pre_approval_pending", "pre_approval_partial", "pre_approval_approved", "regular", "important", "urgent"], completed: ["completed"] };
 const label = (s) => ({ in_progress: ["progress", "In progress"], paused: ["paused", "Paused"], hold: ["paused", "On hold"], rework: ["danger", "Rework"], partially_completed: ["review", "Being reviewed"], awaiting_client: ["review", "Your sign-off needed"], completed: ["done", "Certified"], assigned: ["todo", "Scheduled"], pre_approval_pending: ["review", "Approve estimate"], pre_approval_partial: ["review", "Approve estimate"], pre_approval_approved: ["todo", "Approved · scheduled"] }[s] || ["todo", s || "—"]);
 
@@ -63,7 +65,7 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
     if (q && !`${k.external_ref} ${k.name} ${k.project_name}`.toLowerCase().includes(q.toLowerCase())) return false;
     if (tab === "all") return true;
     if (tab === "approval") return needsMe(k);
-    return (GROUP[tab] || []).includes(k.task_state);
+    return inTab(tab, k);
   }), [scoped, tab, q, signIds, preById]); // eslint-disable-line react-hooks/exhaustive-deps
   const signableShown = rows.filter((k) => signIds.has(k.id));
   const pickedTasks = kpis.filter((k) => picked.has(k.id) && signIds.has(k.id));
@@ -100,7 +102,7 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
             ))}
           </div>
         )}
-        <Tabs items={TABS.map((t) => ({ ...t, count: d ? (t.key === "all" ? scoped.length : t.key === "approval" ? scoped.filter(needsMe).length : scoped.filter((k) => (GROUP[t.key] || []).includes(k.task_state)).length) : undefined }))} value={tab} onChange={setTab} />
+        <Tabs items={TABS.map((t) => ({ ...t, count: d ? (t.key === "all" ? scoped.length : t.key === "approval" ? scoped.filter(needsMe).length : scoped.filter((k) => inTab(t.key, k)).length) : undefined }))} value={tab} onChange={setTab} />
         {dash.error && !d && <ErrorState error={dash.error} onRetry={dash.refresh} />}
         {d?.authorized === false && <div className="cardbox"><b style={{ color: "var(--navy)" }}>Your account isn&apos;t linked to a client yet</b><span className="mini">{d.message}</span></div>}
         {signIds.size > 0 && (
@@ -128,7 +130,7 @@ export default function PortalRequests({ initialTab, title = "My requests", sign
                   return (
                     <tr key={k.id} className={focusId === k.id ? "sel" : ""} style={{ cursor: "pointer" }} onClick={() => open(k)}>
                       <td onClick={(e) => e.stopPropagation()}>{isSign && <input type="checkbox" aria-label={`Select ${k.external_ref || k.name}`} checked={picked.has(k.id)} onChange={() => togglePick(k.id)} />}</td>
-                      <td><span className="ref">{k.external_ref || `#${k.id}`}</span><OldDbBadge t={k} style={{ marginLeft: 6 }} /></td>
+                      <td><span className="ref">{k.external_ref || `#${k.id}`}</span><OldDbBadge t={k} style={{ marginLeft: 6 }} />{k.finish_partial && <span className="mini" title="Partly completed" style={{ marginLeft: 6 }}>🏁</span>}</td>
                       <td><b>{k.name}</b></td><td>{k.project_name || "—"}</td>
                       <td><Lozenge tone={tone}>{lbl}</Lozenge></td>
                       <td><span className="prog"><i style={{ width: `${pct}%`, background: k.task_state === "completed" ? "var(--pri-regular)" : isSign ? "var(--tint-violet)" : "var(--brand)" }} /></span></td>
@@ -176,6 +178,12 @@ function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
         <div className="row"><span className="ref" style={{ fontSize: 13 }}>{k.external_ref || `#${k.id}`}</span><Lozenge tone={tone}>{lbl}</Lozenge><OldDbBadge t={k} /><IconButton icon="x" label="Close" style={{ marginLeft: "auto" }} onClick={onClose} /></div>
         <h2>{k.name}</h2>
         {k.description && <p style={{ margin: 0, fontSize: 13.5, lineHeight: "20px", whiteSpace: "pre-wrap" }}>{k.description}</p>}
+        {k.finish_partial && (
+          <div style={{ background: "#fff8e6", border: "1px solid #ffe08a", borderRadius: 10, padding: "10px 12px", fontSize: 13.5, whiteSpace: "pre-wrap" }}>
+            <b style={{ color: "#8a5300", display: "block", marginBottom: 4 }}>🏁 Partly completed — what we did so far</b>
+            {k.partial_summary || "The team sent this as a partial finish."}
+          </div>
+        )}
         <dl className="details">
           <dt>Project</dt><dd>{k.project_name || "—"}{k.delivery_version ? ` · ${k.delivery_version}` : ""}</dd>
           <dt>Type</dt><dd>{(k.kind || "").toString().replace(/^\w/, (c) => c.toUpperCase()) || "Request"}</dd>

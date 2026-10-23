@@ -56,6 +56,7 @@ import DateGridModal from '../components/DateGridModal';
 import { fmtYMD } from '../utils/dateGrid';
 import { completeMissing, completeExtras } from '../utils/completeMissing';
 import CompleteRules from '../components/CompleteRules';
+import FinishModeRadio, { PARTIAL_NOTE } from '../components/FinishModeRadio';
 import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
 import { noteRequired, pauseReasonText, meetingIds, idleMeetingNote } from '../utils/meetingPick';
 import useBackHandler from '../components/useBackHandler';
@@ -2570,11 +2571,10 @@ export default function KpiActionBoard({
       setFinishErr('');
       setFinishRules([]);
       setFinishFilled({});
-      if (kind === 'complete') {
-        fetchTaskDetails(task.id).then((det) => {
-          if (det?.ok) setFinishRules(det.meta?.completion_rules || []);
-        }).catch(() => {});
-      }
+      // Loaded either way: the popup's radio can switch to Completed.
+      fetchTaskDetails(task.id).then((det) => {
+        if (det?.ok) setFinishRules(det.meta?.completion_rules || []);
+      }).catch(() => {});
       return;
     }
     // Pending Review — accepting also CATEGORISES the task (its provisional
@@ -4098,11 +4098,14 @@ export default function KpiActionBoard({
               <View style={s.modalPad}>
                 <Text style={s.kv}>Task: <Text style={s.kvStrong}>{finishFor?.name}</Text></Text>
 
+                <View style={{ marginTop: 10 }}>
+                  <FinishModeRadio partial={finishPartial}
+                    onChange={(p) => { H.select(); setFinishPartial(p); setFinishErr(''); setFinishOfferPartial(false); }} />
+                </View>
+
                 {finishPartial ? (
                   <View style={s.bannerYellow}>
-                    <Text style={s.bannerYellowTxt}>
-                      ⓘ  This finishes the task <Text style={{ fontWeight: '900' }}>as-is</Text> and sends it for review with just your summary. Use <Text style={{ fontWeight: '900' }}>Complete</Text> for fully-done work.
-                    </Text>
+                    <Text style={s.bannerYellowTxt}>{PARTIAL_NOTE}</Text>
                   </View>
                 ) : null}
 
@@ -4121,7 +4124,7 @@ export default function KpiActionBoard({
                           style={{ marginTop: 8 }}
                         >
                           <Text style={[s.inlineErrTxt, { flex: 0, fontWeight: '800', textDecorationLine: 'underline' }]}>
-                            Switch to Partial Finish (summary only) →
+                            Switch to Partially completed (summary only) →
                           </Text>
                         </TouchableOpacity>
                       ) : null}
@@ -4159,7 +4162,7 @@ export default function KpiActionBoard({
             <View style={s.modalFoot}>
               <TouchableOpacity style={s.footCancel} onPress={() => setFinishFor(null)}><Text style={s.footCancelTxt}>Cancel</Text></TouchableOpacity>
               <TouchableOpacity style={[s.footConfirm, !finishPartial && { backgroundColor: COLORS.green }]} onPress={submitFinish}>
-                <Text style={s.footConfirmTxt}>{finishPartial ? '🏁  Finish & Send for Review' : '✓  Complete'}</Text>
+                <Text style={s.footConfirmTxt}>{finishPartial ? '🏁  Send partial finish' : '✓  Complete'}</Text>
               </TouchableOpacity>
             </View>
           </View>
