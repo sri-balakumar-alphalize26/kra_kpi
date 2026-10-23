@@ -3112,6 +3112,11 @@ class KpiReportsAPI(http.Controller):
                     'project_id': project.id if project else (k.kra_id.id if k.kra_id else 0),
                     'project_name': project.name if project else '',
                     'task_state': k.task_state or '',
+                    # 🏁 Sent as a Partial Finish: the client's "Partly completed" tab,
+                    # with the team's summary (kpi_finish).
+                    'finish_partial': bool(k.finish_partial) and k.task_state != 'completed',
+                    'partial_summary': (k._finish_partial_summary()
+                                        if k.finish_partial and k.task_state != 'completed' else ''),
                     'priority': k.priority or '',
                     'delivery_version': k.delivery_version or '',
                     'estimate_hours': round(((k.estimate_hours or 0) + (k.estimate_minutes or 0) / 60.0), 2),

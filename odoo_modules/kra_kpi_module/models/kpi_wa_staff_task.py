@@ -294,6 +294,7 @@ class KpiWaStaffTask(models.AbstractModel):
         handler = {
             'collect': self._fl_collect, 'branch': self._fl_branch,
             'dupfile': self._fl_dupfile, 'done_pick': self._fl_done_pick,
+            'done_mode': self._fl_done_mode,
             'check': self._fl_check, 'mine': self._fl_mine,
             'entry': self._fl_entry, 'entry_text': self._fl_entry_text,
             'entry_file': self._fl_entry_file, 'entry_link': self._fl_entry_link,
@@ -843,13 +844,17 @@ class KpiWaStaffTask(models.AbstractModel):
         return links, ''
 
     def page_save(self, user, task, kind, summary='', raw_links='', gh_url='', gh_branch='',
-                  files=None, replace_same=False):
+                  files=None, replace_same=False, finishing=False):
         """Add an update ('progress') or a user manual ('manual') from the page.
-        Returns (ok, message)."""
+        Returns (ok, message).
+
+        `finishing`: saved as part of ✅ Completed / Partial finish (page_complete),
+        which has already checked the state -- a task sent back (rework) or on
+        hold is finished from there too, so it is not refused here."""
         locked = task._details_locked_for(user)
         if locked:
             return False, locked
-        if task.task_state not in STARTED_STATES:
+        if not finishing and task.task_state not in STARTED_STATES:
             return False, ('Start %s first — updates, files, manuals and GitHub links are added once '
                            'a task has been started.' % self._ref(task))
         summary = (summary or '').strip()
@@ -1096,11 +1101,12 @@ class KpiWaStaffTask(models.AbstractModel):
                 if vals:
                     task.sudo().write(vals)
                 if summary:
-                    ok, msg = self.page_save(user, task, 'progress', summary, raw_links, gh_url, gh_branch)
+                    ok, msg = self.page_save(user, task, 'progress', summary, raw_links, gh_url, gh_branch,
+                                             finishing=True)
                     if not ok:
                         raise _Refused(msg)
                 if files:
-                    ok, msg = self.page_save(user, task, 'manual', '', '', files=files)
+                    ok, msg = self.page_save(user, task, 'manual', '', '', files=files, finishing=True)
                     if not ok:
                         raise _Refused(msg)
                 if not partial:
@@ -1110,12 +1116,13 @@ class KpiWaStaffTask(models.AbstractModel):
                     done = {r['key'] for r in task._completion_rules() if r['done']}
                     checklist.update(user_manual=checklist.get('user_manual') or 'manual' in done,
                                      verify_github=checklist.get('verify_github') or 'github' in done)
-                task.with_user(user).sudo().complete_task(employee_checklist=checklist)
+                task.with_user(user).sudo().with_context(
+                    kpi_partial_finish=partial, kpi_finish_source='whatsapp').complete_task(employee_checklist=checklist)
         except _Refused as exc:
             return False, str(exc)
         except Exception as exc:
             return False, str(exc).strip()[:300]
-        return True, ('Finished as a partial finish — sent for review with the summary.' if partial
+        return True, ('Finished as a partial finish — the client is sent your summary.' if partial
                       else 'Finished — it is with a manager to check.')
 
     def log_rows(self, task, user, key):
@@ -1154,23 +1161,48 @@ class KpiWaStaffTask(models.AbstractModel):
     # ================================================================== #
     # Completed                                                           #
     # ================================================================== #
-    def _done_begin(self, message, state, user, task):
-        """✅ Completed: finishing happens on the task page, not in the chat.
+    DONE_FULL = '✅ Completed'
+    DONE_PARTIAL = '🏁 Partial finish — summary only'
 
-        The page asks for what the web's Complete does -- a summary, a user
-        manual (unless one is already on the task), at least one checkbox --
-        and keeps the form filled on a mistake, which a poll cannot. The group
-        is told plainly that the task is NOT finished yet."""
+    def _done_begin(self, message, state, user, task):
+        """✅ Completed: first Completed or Partial finish, then the task page.
+
+        Finishing happens on the page, not in the chat: it asks for what this
+        task's type needs (Completed) or only the summary (Partial finish), and
+        keeps the form filled on a mistake, which a poll cannot. The page opens
+        with the choice already picked."""
         if task.task_state not in STARTED_STATES:
             return self._back_to_task(message, state, task, _(
                 'Resume %s first — a task has to be started before it can be finished.')
                 % self._ref(task))
-        state._reset()
         needed = ', '.join(r['label'] for r in task._completion_rules() if r['required']) \
             or _('nothing more')
-        self._send_page_link(message, state, user, task, group_note=_(
+        q = _('✅ Finish %(ref)s — %(name)s\n\n%(full)s — everything this task needs (%(needed)s).\n'
+              '%(partial)s — only a summary; the client is sent it.') % {
+            'ref': self._ref(task), 'name': task.name or '', 'full': self.DONE_FULL,
+            'needed': needed, 'partial': self.DONE_PARTIAL}
+        return self._fask(message, state, {'at': 'done_mode'}, q,
+                          [self.DONE_FULL, self.DONE_PARTIAL, CANCEL])
+
+    def _fl_done_mode(self, message, state, user, d, task, tapped, low, body):
+        i = self._fchoice(d, tapped, low)
+        if i is None:
+            return False
+        if i == 2:
+            return self._back_to_task(message, state, task)
+        state._reset()
+        ref, who = self._ref(task), user.name or ''
+        if i == 1:
+            self._send_page_link(message, state, user, task, anchor='partial', group_note=_(
+                '⏳ %(ref)s is not finished yet, %(who)s. Open the link in your private chat, write the '
+                'summary, then tap *Send partial finish*.') % {'ref': ref, 'who': who})
+            return True
+        needed = ', '.join(r['label'] for r in task._completion_rules() if r['required']) \
+            or _('nothing more')
+        self._send_page_link(message, state, user, task, anchor='complete', group_note=_(
             '⏳ %(ref)s is not completed yet, %(who)s. Open the link in your private chat, fill in '
-            'what this task needs (%(needed)s), then tap *Submit for approval*.') % {'ref': self._ref(task), 'who': user.name or '', 'needed': needed})
+            'what this task needs (%(needed)s), then tap *Submit for approval*.') % {
+            'ref': ref, 'who': who, 'needed': needed})
         return True
 
     # The in-chat finish below is no longer started (✅ Completed sends the page

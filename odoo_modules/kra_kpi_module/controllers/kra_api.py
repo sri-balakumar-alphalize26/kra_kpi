@@ -980,7 +980,7 @@ class KraKpiAPI(http.Controller):
                                       user_manual=employee_checklist.get('user_manual') or 'manual' in done,
                                       verify_github=employee_checklist.get('verify_github') or 'github' in done)
 
-        rec.complete_task(employee_checklist)
+        rec.with_context(kpi_partial_finish=is_partial).complete_task(employee_checklist)
 
         return {
             'status': True,
@@ -3849,6 +3849,7 @@ class KraKpiAPI(http.Controller):
         'client_chat_forwarded': 'Client question sent to the developer',
         'client_chat_edited': 'Chat message edited',
         'client_chat_deleted': 'Chat message deleted',
+        'partial_finish': '🏁 Partial finish',
     }
 
     def _activity_log(self, kpi, kind='all'):
@@ -4003,8 +4004,17 @@ class KraKpiAPI(http.Controller):
             Log = env['kpi.action.log'].sudo()
             for e in Log.search([('kpi_id', '=', kpi.id), ('event', 'not in', self._HISTORY_SKIP_EVENTS)],
                                 order='id desc', limit=150):
-                add('activity', e.create_date,
-                    self.ACTIVITY_LABELS.get(e.event) or (e.event or '').replace('_', ' ').strip().capitalize(),
+                title, body = (self.ACTIVITY_LABELS.get(e.event)
+                               or (e.event or '').replace('_', ' ').strip().capitalize()), ''
+                if e.event == 'partial_finish':
+                    # Each Partial Finish with its number and the summary the client got.
+                    try:
+                        p = json.loads(e.payload_json or '{}')
+                    except ValueError:
+                        p = {}
+                    title = '🏁 Partial finish #%s' % (p.get('n') or '?')
+                    body = p.get('summary') or ''
+                add('activity', e.create_date, title, body,
                     who=e.actor_label or (e.actor_user_id.name if e.actor_user_id else ''), key='a%d' % e.id)
             out.sort(key=lambda r: r['at'], reverse=True)
             return {'status': True, 'items': out}

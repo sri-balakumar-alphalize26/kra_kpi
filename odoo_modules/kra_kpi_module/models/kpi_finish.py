@@ -51,6 +51,13 @@ class KraKpiFinish(models.Model):
     full_complete_at = fields.Datetime(string='Full Complete On', copy=False, readonly=True, index=True)
     full_complete_by_id = fields.Many2one('res.users', string='Full Complete By', copy=False,
                                           readonly=True, ondelete='set null')
+    finish_partial = fields.Boolean(
+        string='Finished as Partial', copy=False, readonly=True,
+        help='The last finish was a Partial Finish (summary only): the client is sent that summary.')
+    partial_finish_count = fields.Integer(
+        string='Partial Finishes', copy=False, readonly=True,
+        help='How many times this task was sent as a Partial Finish. Each one is in the '
+             'activity log (partial_finish) with its summary.')
 
     # ------------------------------------------------------------------ #
     @api.model
@@ -76,6 +83,19 @@ class KraKpiFinish(models.Model):
     # Developer finishes -> the client                                     #
     # ------------------------------------------------------------------ #
     def complete_task(self, employee_checklist=None):
+        # Partial Finish (context kpi_partial_finish, set by every finish path):
+        # remembered so the client's "finished" message carries the summary.
+        # Each Partial Finish is counted and logged with its summary.
+        partial = bool(self.env.context.get('kpi_partial_finish'))
+        for rec in self:
+            vals = {'finish_partial': partial}
+            if partial:
+                vals['partial_finish_count'] = rec.partial_finish_count + 1
+            rec.sudo().write(vals)
+            if partial:
+                rec._log_action('partial_finish', source=self.env.context.get('kpi_finish_source') or 'web',
+                                actor_user_id=self.env.user.id,
+                                payload={'n': rec.partial_finish_count, 'summary': rec._latest_team_summary()})
         if not self._skip_admin_qa():
             return super().complete_task(employee_checklist=employee_checklist)
         recs = self.with_context(kpi_finish_skip_qa=True)
@@ -268,6 +288,20 @@ class KraKpiFinish(models.Model):
             _logger.warning('dm for %s failed: %s', self.id, exc)
             return False
 
+    def _finish_partial_summary(self):
+        """A Partial Finish's summary for the client. Empty for a full Complete."""
+        self.ensure_one()
+        return self._latest_team_summary() if self.finish_partial else ''
+
+    def _latest_team_summary(self):
+        """The team's latest progress note (never the client's own attachments)."""
+        self.ensure_one()
+        note = self.env['kpi.progress'].sudo().search(
+            [('kpi_id', '=', self.id), ('from_client', '=', False), ('summary', '!=', False)],
+            order='create_date desc, id desc', limit=1)
+        text = (note.summary or '').strip()
+        return text if len(text) <= 1500 else text[:1499] + '…'
+
     def _finish_tell_review(self):
         Report = self.env['kpi.wa.group.report'].sudo()
         Intake = self.env['kpi.wa.group.intake'].sudo()
@@ -279,6 +313,9 @@ class KraKpiFinish(models.Model):
             link = Intake._approval_link(rec) if hasattr(Intake, '_approval_link') else ''
             text = _('✅ *%(ref)s* — %(name)s\n\nOur team has finished this. Please check it on your side.\n') % {
                 'ref': ref, 'name': rec.name or ''}
+            summary = rec._finish_partial_summary()
+            if summary:
+                text += _('\n📝 What we did:\n%s\n\n') % summary
             if link:
                 text += _('👉 Tap to say it is finished, or send it back with what is wrong:\n%s\n') % link
             text += _('\nIf we don\'t hear back in %d days, we\'ll close it.') % days

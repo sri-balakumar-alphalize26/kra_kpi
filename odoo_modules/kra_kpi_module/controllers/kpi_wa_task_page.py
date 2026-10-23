@@ -441,11 +441,21 @@ class KpiWaTaskPage(http.Controller):
             # Partial finish needs no manual; files chosen there are not sent.
             files=[] if partial else self._uploads(),
             extra={} if partial else {f: post.get(f) for f in self.COMPLETE_EXTRA if f in post})
-        if ok:
-            self._notify(st, user, ('🏁 %s finished %s as a partial finish — sent for review with the summary.'
-                                    if partial else '✅ %s finished %s. It is with a manager to check.')
-                         % (user.name, task.external_ref or task.id))
-        return self._back(token, ok=msg if ok else '', err='' if ok else msg)
+        if not ok:
+            return self._back(token, err=msg)
+        self._notify(st, user, ('🏁 %s finished %s as a partial finish — the client is sent the summary.'
+                                if partial else '✅ %s finished %s. It is with a manager to check.')
+                     % (user.name, task.external_ref or task.id))
+        # Finished: the link is spent (reloading it says it has expired) and the
+        # page shows a final Done, like the client's request form.
+        st.sudo().write({'staff_page_token': False, 'staff_page_expires': False})
+        done = _render('kra_kpi_module.wa_task_page_done', {
+            'partial': partial, 'message': msg, 'ref': task.external_ref or '#%s' % task.id,
+            'name': task.name or ''})
+        if request.httprequest.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return request.make_json_response({'ok': True, 'message': msg,
+                                               'done_html': done.get_data(as_text=True)})
+        return done
 
     @http.route('/kpi/wa/task/<string:token>/full_complete', type='http', auth='public',
                 methods=['POST'], csrf=False, website=False)

@@ -72,8 +72,8 @@ class KraKpiClientUpdates(models.Model):
             values = {
                 'client': (self.client_kra_id or self.kra_id).name or '',
                 'ref': self.external_ref or '#%s' % self.id,
-                'server': (self.provision_server_id.name if event == 'new_database'
-                           else db.server_id.name) or self.provision_server_other or '—',
+                'server': (self.provision_server_id.short_name() if event == 'new_database'
+                           else db.server_id.short_name()) or self.provision_server_other or '—',
                 'db': (self.provision_db_name if event == 'new_database' else db.db_name) or '—',
                 'notes': self.provision_modules or '—',
                 'reason': (db.disconnect_reason_text if db else '') or '—',

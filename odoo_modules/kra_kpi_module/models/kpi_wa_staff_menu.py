@@ -939,7 +939,8 @@ class KpiWaStaffRouter(models.AbstractModel):
             else:
                 # The checklist the developer ticked, saved on the task for
                 # the manager to review -- the same flags the board stores.
-                rec.complete_task(employee_checklist=checklist or {})
+                rec.with_context(kpi_partial_finish=partial, kpi_finish_source='whatsapp').complete_task(
+                    employee_checklist=checklist or {})
                 msg = (_('🏁 %(who)s finished %(ref)s as a partial finish — '
                          'sent for review with the summary.')
                        if partial else

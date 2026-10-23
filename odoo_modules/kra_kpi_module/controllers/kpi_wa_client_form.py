@@ -442,7 +442,7 @@ class KpiWaClientForm(http.Controller):
             children = client.child_ids.filtered('active')
             target = children[0] if len(children) == 1 else client
             kpi = Kpi.browse(Kpi.with_context(kpi_no_admin_arm=True).create_kpi({
-                'name': '[New DB] New DB %s on %s' % (clean, server.name),
+                'name': '[New DB] New DB %s on %s' % (clean, server.short_name()),
                 'kra_id': target.id, 'doc_type': 'requirement',
                 'description': ('— New database —\nServer: %s\nDatabase name: %s\n'
                                 'Login: %s\nPassword: set on the request (Login / '
@@ -469,7 +469,7 @@ class KpiWaClientForm(http.Controller):
         if ferr:
             return None, ferr, ''
         target = db.target_kra() or client
-        scope = '%s (%s)' % (db.db_name, db.server_id.name)
+        scope = '%s (%s)' % (db.db_name, db.server_id.short_name())
 
         if kind == 'dbdisconnect':
             # The team needs the way in to do the deletion: URL and login.
@@ -485,7 +485,7 @@ class KpiWaClientForm(http.Controller):
             if not password:
                 return None, 'Type the password.', ''
             kpi = Kpi.browse(Kpi.with_context(kpi_no_admin_arm=True).create_kpi({
-                'name': '[Destroy] Destroy %s on %s' % (db.db_name, db.server_id.name),
+                'name': '[Destroy] Destroy %s on %s' % (db.db_name, db.server_id.short_name()),
                 'kra_id': target.id, 'doc_type': 'requirement',
                 'description': ('— Destroy request —\nDatabase: %s\nServer: %s\nURL: %s\n'
                                 'User ID: %s\nPassword: on the request (staff only)\n'
@@ -660,7 +660,7 @@ class KpiWaClientForm(http.Controller):
         footer = '\n\n— Sent again from the WhatsApp form by %s after a decline.' % who
         old_ref = kpi.external_ref or ''
         vals = {
-            'name': '[New DB] New DB %s on %s' % (clean, server.poll_label() or server.name),
+            'name': '[New DB] New DB %s on %s' % (clean, server.short_name()),
             'description': ('— New database —\nServer: %s\nDatabase name: %s\n'
                             'Login: %s\nPassword: set on the request (Login / '
                             'Password fields)\nModules / notes: %s%s') % (
@@ -712,7 +712,7 @@ class KpiWaClientForm(http.Controller):
             return None, cerr, ''
         who = st.participant_name or st.participant_key
         footer = '\n\n— Sent again from the WhatsApp form by %s after a decline.' % who
-        scope = '%s (%s)' % (db.db_name, db.server_id.name)
+        scope = '%s (%s)' % (db.db_name, db.server_id.short_name())
         old_ref, old_kind = kpi.external_ref or '', kpi._kind_now()
         vals = dict(common, client_db_id=db.id)
 
@@ -829,7 +829,7 @@ class KpiWaClientForm(http.Controller):
             return ('🗄️ *New Database* — *%s*\nDatabase: *%s*\nServer: %s\nLogin: %s\n'
                     'Notes: %s') % (
                 ref, kpi.provision_db_name or '',
-                kpi.provision_server_id.name or '', post.get('username') or '',
+                kpi.provision_server_id.short_name(), post.get('username') or '',
                 kpi.provision_modules or '—')
         db = kpi.client_db_id
         emoji, title = _TITLES.get(kind, ('', ''))
@@ -839,7 +839,7 @@ class KpiWaClientForm(http.Controller):
         elif kpi.related_req_ref:
             lines.append('About: %s' % kpi.related_req_ref)
         if db:
-            lines.append('🗄️ %s (%s)' % (db.db_name, db.server_id.name))
+            lines.append('🗄️ %s (%s)' % (db.db_name, db.server_id.short_name()))
         if who:
             lines.append('Sent by %s' % who)
         return '\n'.join(lines)

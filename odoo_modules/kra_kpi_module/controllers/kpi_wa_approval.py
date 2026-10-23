@@ -77,6 +77,40 @@ def _lookup_task(token):
     return candidates
 
 
+def _media_kind(name):
+    """'image' / 'video' / 'audio' / 'doc' from the file name."""
+    from .kra_api import _guess_mime
+    mime = _guess_mime(name or '', '') or ''
+    for k in ('image', 'video', 'audio'):
+        if mime.startswith(k + '/'):
+            return k
+    return 'doc'
+
+
+def _team_files(task, token):
+    """The team's files on the task -- progress updates (never the client's own
+    attachments) and user manuals -- for the client's finishing page, each with
+    a link that works only through this page's token (/kpi/wa/<token>/media)."""
+    out = []
+
+    def add(kind, entry, att, name):
+        if name:
+            out.append({'name': name, 'kind': _media_kind(name),
+                        'url': '/kpi/wa/%s/media?kind=%s&entry=%s&att=%s' % (token, kind, entry.id, att)})
+
+    Att = request.env['kpi.file.attachment'].sudo()
+    for p in request.env['kpi.progress'].sudo().search(
+            [('kpi_id', '=', task.id), ('from_client', '=', False)], order='create_date desc'):
+        add('progress', p, 0, p.file_name)
+        for a in Att.search([('progress_id', '=', p.id)], order='sequence, id'):
+            add('progress', p, a.id, a.file_name)
+    for m in request.env['kpi.user.manual'].sudo().search([('kpi_id', '=', task.id)], order='id desc'):
+        add('manual', m, 0, m.file_name)
+        for a in Att.search([('manual_id', '=', m.id)], order='sequence, id'):
+            add('manual', m, a.id, a.file_name)
+    return out[:40]
+
+
 class KpiWaApproval(http.Controller):
 
     # ------------------------------------------------------------------ #
@@ -109,12 +143,38 @@ class KpiWaApproval(http.Controller):
         # set to Approve / Reject / Clarify (no Hold) and labels the heading
         # accordingly.  The QWeb template reads `stage` to swap copy.
         stage = 'final' if task.task_state == 'awaiting_client' else 'pre'
+        # A Partial Finish: the page says so and shows the team's summary.
+        partial = stage == 'final' and bool(task.sudo().finish_partial)
         return _render('kra_kpi_module.wa_approval_page', {
             'task':   task,
             'token':  task.approval_token,
             'colors': _ACTION_COLORS,
             'stage':  stage,
+            'partial': partial,
+            'partial_summary': task.sudo()._finish_partial_summary() if partial else '',
+            'partial_n': task.sudo().partial_finish_count if partial else 0,
+            # The team's photos, videos and documents, viewable like KPI Details.
+            'team_files': _team_files(task, token) if stage == 'final' else [],
         })
+
+    # ------------------------------------------------------------------ #
+    # GET /kpi/wa/<token>/media -- one of the team's files, for the       #
+    # finishing page (only while the sign-off link is valid).             #
+    # ------------------------------------------------------------------ #
+    @http.route('/kpi/wa/<string:token>/media', type='http', auth='public',
+                methods=['GET'], csrf=False, website=False)
+    def media(self, token, kind='', entry='0', att='0', **kw):
+        task = _lookup_task(token)
+        if not task or task.task_state != 'awaiting_client':
+            return request.not_found()
+        if task.approval_token_expires and task.approval_token_expires < fields.Datetime.now():
+            return request.not_found()
+        if kind == 'progress':
+            p = request.env['kpi.progress'].sudo().browse(int(entry or 0)).exists()
+            if not p or p.from_client:
+                return request.not_found()
+        from .kpi_wa_task_page import KpiWaTaskPage
+        return KpiWaTaskPage()._send_file(kind, entry, att, [task.id], download=kw.get('download'))
 
     # ------------------------------------------------------------------ #
     # POST /kpi/wa/<token>/decide                                         #
