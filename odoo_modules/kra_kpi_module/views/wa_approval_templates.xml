@@ -66,6 +66,38 @@
                             color: #fff; text-align: center; font-size: 18px; font-weight: 700;
                         }
                         .wa-sub  { font-weight: 500; font-size: 14px; opacity: 0.92; margin-top: 6px; }
+                        .wa-lbl  { display: block; font-size: 13px; font-weight: 700; color: #495057; margin: 14px 0 -2px; }
+                        .wa-sec  { border-top: 1px solid #e9ecef; margin-top: 18px; padding-top: 4px; }
+                        .wa-part {
+                            background: #fff8e6; border: 1px solid #ffe08a; border-radius: 12px;
+                            padding: 12px 14px; margin: 14px 0 4px;
+                        }
+                        .wa-part b.h { display: block; color: #8a5300; font-size: 15px; margin-bottom: 4px; }
+                        .wa-part .txt { white-space: pre-wrap; font-size: 14px; color: #212529; }
+                        .wa-part .mini { font-size: 12.5px; color: #8a6d3b; margin-top: 6px; }
+                        .wa-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 8px; }
+                        .wa-thumb {
+                            position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden;
+                            background: #e9ecef; cursor: pointer; border: 1px solid #dee2e6;
+                        }
+                        .wa-thumb img, .wa-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+                        .wa-thumb .play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                                          font-size: 30px; color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.6); pointer-events: none; }
+                        .wa-thumb .x { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%;
+                                       background: rgba(0,0,0,.6); color: #fff; border: 0; font-size: 14px; cursor: pointer; }
+                        .wa-thumb .nm { position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 6px; font-size: 11px;
+                                        color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.65));
+                                        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                        .wa-audio { display: flex; align-items: center; gap: 8px; margin-top: 8px; background: #f1f3f5;
+                                    border-radius: 10px; padding: 6px 8px; }
+                        .wa-audio audio { flex: 1; height: 36px; min-width: 0; }
+                        .wa-audio button { border: 0; background: none; color: #dc3545; font-size: 16px; cursor: pointer; }
+                        .wa-view { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.92); display: none;
+                                   align-items: center; justify-content: center; padding: 16px; }
+                        .wa-view.on { display: flex; }
+                        .wa-view img, .wa-view video { max-width: 100%; max-height: 100%; border-radius: 8px; }
+                        .wa-view .close { position: absolute; top: 12px; right: 14px; width: 40px; height: 40px; border-radius: 50%;
+                                          border: 0; background: rgba(255,255,255,.15); color: #fff; font-size: 20px; cursor: pointer; }
                         .wa-footer { text-align: center; color: #adb5bd; font-size: 12px; margin-top: 18px; }
                     </style>
                 </head>
@@ -93,7 +125,9 @@
                     Project <b t-esc="task.kra_id.name or '—'"/>
                 </div>
                 <div>
-                    <span t-if="is_final" class="wa-badge"
+                    <span t-if="is_final and partial" class="wa-badge"
+                          style="background:#fff3cd; color:#8a5300;">🏁 PARTIALLY COMPLETED</span>
+                    <span t-elif="is_final" class="wa-badge"
                           style="background:#d1e7dd; color:#0f5132;">FINAL SIGN-OFF</span>
                     <span t-if="not is_final" class="wa-badge">Pre-Approval</span>
                     <span class="wa-badge">Priority: <t t-esc="(task.priority or 'regular').title()"/></span>
@@ -103,24 +137,63 @@
                     </span>
                 </div>
                 <p t-if="is_final" class="wa-meta" style="margin-top:12px;">
-                    Our team has finished this. Please check it on your side, then tap
+                    <t t-if="partial">Our team has finished part of this — what was done is below.</t>
+                    <t t-else="">Our team has finished this.</t>
+                    Please check it on your side, then tap
                     Finished, or send it back and write what is still wrong.
                     <t t-if="task.review_due_at">If we don't hear back by
                         <t t-esc="task.review_due_at.strftime('%d %b')"/>, we'll close it.</t>
                 </p>
+                <!-- 🏁 Partial finish: the team's summary (kpi_finish._finish_partial_summary). -->
+                <div t-if="partial" class="wa-part">
+                    <b class="h">🏁 Partially completed<t t-if="partial_n &gt; 1"> · round <t t-esc="partial_n"/></t></b>
+                    <div class="txt" t-esc="partial_summary or 'The team sent this as a partial finish.'"/>
+                    <div class="mini">Only this part is ready to check. The rest is still with our team.</div>
+                </div>
                 <div t-if="task.description" class="wa-desc">
                     <t t-esc="task.description[:280]"/>
                     <t t-if="len(task.description or '') &gt; 280">…</t>
                 </div>
+                <!-- 📎 The team's photos, videos and documents (controllers/kpi_wa_approval.py
+                     _team_files): a tap opens a photo or video full screen, as in KPI Details. -->
+                <div t-if="team_files" class="wa-sec">
+                    <span class="wa-lbl">📎 From our team (<t t-esc="len(team_files)"/>)</span>
+                    <t t-set="media" t-value="[f for f in team_files if f['kind'] in ('image', 'video')]"/>
+                    <div t-if="media" class="wa-thumbs">
+                        <t t-foreach="media" t-as="f">
+                            <div class="wa-thumb" t-att-data-view="f['url']" t-att-data-kind="f['kind']" t-att-title="f['name']">
+                                <img t-if="f['kind'] == 'image'" t-att-src="f['url']" t-att-alt="f['name']" loading="lazy"/>
+                                <t t-else="">
+                                    <video t-att-src="f['url'] + '#t=0.1'" preload="metadata" muted="muted" playsinline="playsinline"/>
+                                    <div class="play">▶</div>
+                                </t>
+                                <div class="nm" t-esc="f['name']"/>
+                            </div>
+                        </t>
+                    </div>
+                    <t t-foreach="[f for f in team_files if f['kind'] == 'audio']" t-as="f">
+                        <div class="wa-audio"><audio controls="controls" preload="none" t-att-src="f['url']"/>
+                            <span class="wa-meta" style="margin:0;" t-esc="f['name']"/></div>
+                    </t>
+                    <div t-foreach="[f for f in team_files if f['kind'] == 'doc']" t-as="f" style="margin-top:8px;">
+                        <a t-att-href="f['url']" target="_blank" rel="noopener" class="wa-badge" style="text-decoration:none;">📄 <t t-esc="f['name']"/></a>
+                    </div>
+                </div>
 
                 <form id="wa-decide-form" method="POST" enctype="multipart/form-data" t-attf-action="/kpi/wa/{{token}}/decide">
-                    <input class="wa-field" type="text" name="partner_name"
+                    <div class="wa-sec">
+                    <label class="wa-lbl" for="wa-name">Your name</label>
+                    <input id="wa-name" class="wa-field" type="text" name="partner_name"
                            placeholder="Your name" required="required" maxlength="120"/>
-                    <textarea class="wa-field" name="feedback" rows="2"
-                              t-att-placeholder="'What is still wrong? (needed to send it back)' if is_final else 'Comment (optional — required for Reject / Clarify)'"></textarea>
+                    <label class="wa-lbl" for="wa-fb"><t t-if="is_final">What is still wrong?</t><t t-else="">Comment</t></label>
+                    <textarea id="wa-fb" class="wa-field" name="feedback" rows="3"
+                              t-att-placeholder="'Needed to send it back or to ask a question' if is_final else 'Optional — required for Reject / Clarify'"></textarea>
+                    </div>
                     <!-- Send back with proof: photos, videos and a voice note that show
-                         what is still wrong (models/kpi_client_sendback.py). Only sent with Send back. -->
+                         what is still wrong (models/kpi_client_sendback.py). Only sent with Send back.
+                         Picked photos and videos show as thumbnails; a tap opens them full screen. -->
                     <div t-if="is_final" id="wa-proof" style="margin:4px 0 12px;">
+                        <span class="wa-lbl" style="margin-bottom:8px;">Show the problem (optional)</span>
                         <div style="display:flex; gap:8px; flex-wrap:wrap;">
                             <label class="wa-btn" style="background:#6c757d; flex:1; min-width:140px; text-align:center; cursor:pointer;">
                                 📷 Photo / video
@@ -129,12 +202,16 @@
                             <button type="button" id="wa-mic" class="wa-btn" style="background:#6c757d; flex:1; min-width:140px;">🎤 Voice note</button>
                         </div>
                         <input type="file" id="wa-files" name="files" multiple="multiple" style="display:none;"/>
-                        <div id="wa-chips" class="wa-meta" style="margin-top:6px;"></div>
+                        <div id="wa-chips"></div>
                         <div id="wa-proof-err" class="wa-meta" style="display:none; color:#dc3545;"></div>
-                        <div class="wa-meta" style="margin-top:4px;">Optional: show the problem with photos, a screen video or a voice note (up to 10 files, 50 MB each). They go with <b>Send back</b> only.</div>
+                        <div class="wa-meta" style="margin-top:6px;">Up to 10 files, 50 MB each. They go with <b>Send back</b> only.</div>
+                    </div>
+                    <div id="wa-view" class="wa-view" role="dialog" aria-modal="true">
+                        <button type="button" class="close" aria-label="Close">✕</button>
+                        <div class="body"></div>
                     </div>
 
-                    <div class="wa-grid">
+                    <div class="wa-grid wa-sec" style="padding-top:14px;">
                         <button class="wa-btn" type="submit" name="action" value="approve"
                                 t-attf-style="background: {{colors['approve']}}">
                             <t t-if="is_final">✓  Finished</t>
@@ -187,17 +264,74 @@
                             if (proof.length &gt;= MAX_FILES) { say('At most ' + MAX_FILES + ' files.'); return; }
                             proof.push(file);
                         }
+                        // Photos and videos as thumbnails (tap = full screen), voice notes
+                        // with a player. Object URLs are freed on every redraw.
+                        var urls = [];
+                        var view = document.getElementById('wa-view');
+                        function open(file, url, isVideo) {
+                            if (!view) { return; }
+                            var body = view.querySelector('.body');
+                            body.textContent = '';
+                            var el = document.createElement((file ? kind(file) === '🎥' : isVideo) ? 'video' : 'img');
+                            el.src = url;
+                            if (el.tagName === 'VIDEO') { el.controls = true; el.autoplay = true; el.playsInline = true; }
+                            body.appendChild(el);
+                            view.classList.add('on');
+                        }
+                        function shut() {
+                            if (!view) { return; }
+                            var v = view.querySelector('video'); if (v) { v.pause(); }
+                            view.classList.remove('on'); view.querySelector('.body').textContent = '';
+                        }
+                        // 📎 The team's photos and videos: the same full-screen viewer.
+                        document.querySelectorAll('[data-view]').forEach(function (t) {
+                            t.addEventListener('click', function () {
+                                open(null, t.getAttribute('data-view'), t.getAttribute('data-kind') === 'video');
+                            });
+                        });
+                        if (view) {
+                            view.querySelector('.close').addEventListener('click', shut);
+                            view.addEventListener('click', function (e) { if (e.target === view) { shut(); } });
+                            document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { shut(); } });
+                        }
                         function draw() {
                             if (!chips) { return; }
+                            urls.forEach(function (u) { URL.revokeObjectURL(u); }); urls = [];
                             chips.textContent = '';
+                            var grid = document.createElement('div'); grid.className = 'wa-thumbs';
                             proof.forEach(function (file, i) {
-                                var c = document.createElement('span');
-                                c.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:#f1f3f5;border-radius:12px;padding:2px 10px;margin:2px 4px 2px 0;';
-                                c.textContent = kind(file) + ' ' + file.name + ' · ' + size(file.size) + ' ';
-                                var x = document.createElement('a'); x.href = '#'; x.textContent = '✕'; x.style.color = '#dc3545';
-                                x.addEventListener('click', function (e) { e.preventDefault(); proof.splice(i, 1); draw(); });
-                                c.appendChild(x); chips.appendChild(c);
+                                var url = URL.createObjectURL(file); urls.push(url);
+                                var drop = function (e) { e.preventDefault(); e.stopPropagation(); proof.splice(i, 1); draw(); };
+                                if (kind(file) === '🎵') {
+                                    var a = document.createElement('div'); a.className = 'wa-audio';
+                                    var au = document.createElement('audio'); au.controls = true; au.src = url; au.preload = 'metadata';
+                                    var nm = document.createElement('span'); nm.className = 'wa-meta'; nm.style.margin = '0';
+                                    nm.textContent = size(file.size);
+                                    var bx = document.createElement('button'); bx.type = 'button'; bx.textContent = '✕';
+                                    bx.setAttribute('aria-label', 'Remove ' + file.name); bx.addEventListener('click', drop);
+                                    a.appendChild(au); a.appendChild(nm); a.appendChild(bx); chips.appendChild(a);
+                                    return;
+                                }
+                                var t = document.createElement('div'); t.className = 'wa-thumb';
+                                t.title = file.name + ' · ' + size(file.size);
+                                var media;
+                                if (kind(file) === '🎥') {
+                                    media = document.createElement('video'); media.src = url + '#t=0.1';
+                                    media.muted = true; media.preload = 'metadata'; media.playsInline = true;
+                                    var pl = document.createElement('div'); pl.className = 'play'; pl.textContent = '▶';
+                                    t.appendChild(media); t.appendChild(pl);
+                                } else {
+                                    media = document.createElement('img'); media.src = url; media.alt = file.name;
+                                    t.appendChild(media);
+                                }
+                                var cap = document.createElement('div'); cap.className = 'nm'; cap.textContent = file.name;
+                                var x = document.createElement('button'); x.type = 'button'; x.className = 'x'; x.textContent = '✕';
+                                x.setAttribute('aria-label', 'Remove ' + file.name); x.addEventListener('click', drop);
+                                t.appendChild(cap); t.appendChild(x);
+                                t.addEventListener('click', function () { open(file, url); });
+                                grid.appendChild(t);
                             });
+                            if (grid.childNodes.length) { chips.insertBefore(grid, chips.firstChild); }
                         }
                         if (pick) {
                             pick.addEventListener('change', function () {

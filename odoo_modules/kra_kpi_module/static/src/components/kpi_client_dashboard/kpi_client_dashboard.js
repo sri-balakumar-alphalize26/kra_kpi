@@ -473,6 +473,12 @@ export class KpiClientDashboard extends Component {
                                          style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;"
                                          t-att-title="k.description"
                                          t-esc="k.description"/>
+                                    <!-- 🏁 A Partial Finish: what the team did so far. -->
+                                    <div t-if="k.finish_partial" class="mt-1 small fw-normal rounded px-2 py-1"
+                                         style="background:#fff8e6; border:1px solid #ffe08a; white-space:pre-wrap;">
+                                        <b style="color:#8a5300;">🏁 Partly completed</b>
+                                        <div t-if="k.partial_summary" t-esc="k.partial_summary"/>
+                                    </div>
                                 </td>
                                 <td t-esc="k.project_name"/>
                                 <td>
@@ -648,15 +654,20 @@ export class KpiClientDashboard extends Component {
                 'queue_waiting', 'pre_approval_pending', 'pre_approval_approved', 'pre_approval_partial'] },
             { key: 'in_progress', label: 'In Progress', states: ['in_progress', 'paused', 'hold', 'rework',
                 'partially_completed', 'awaiting_client'] },
+            // 🏁 Sent as a Partial Finish and not completed yet (server: finish_partial).
+            { key: 'partial', label: '🏁 Partly completed', match: (k) => !!k.finish_partial },
             { key: 'completed', label: 'Completed', states: ['completed'] },
         ];
+    }
+    _inTab(tab, k) {
+        return tab.match ? tab.match(k) : tab.states.includes(k.task_state);
     }
     // Counts must honour the Project / User filters, exactly like `filteredKpis` does —
     // otherwise the tile and the "Showing N task(s)" line below it disagree.
     tabCount(key) {
         const c = this.statusChips.find(x => x.key === key);
         const list = this._applyFilters((this.state.dashboard && this.state.dashboard.kpis) || []);
-        return c ? list.filter(k => c.states.includes(k.task_state)).length : 0;
+        return c ? list.filter(k => this._inTab(c, k)).length : 0;
     }
     stateBadge(state) {
         const map = {
@@ -704,7 +715,7 @@ export class KpiClientDashboard extends Component {
     get filteredKpis() {
         const tab = this.statusChips.find(c => c.key === this.state.tab) || this.statusChips[0];
         const base = this._applyFilters((this.state.dashboard && this.state.dashboard.kpis) || []);
-        return base.filter(k => tab.states.includes(k.task_state));
+        return base.filter(k => this._inTab(tab, k));
     }
     get filterSummary() {
         const active = !!this.state.projectFilter;

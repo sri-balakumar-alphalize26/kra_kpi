@@ -152,6 +152,13 @@
                     .warn { font-size:12.5px; padding:8px 10px; border-radius:var(--r); background:#FEF3C7; color:#92400E; font-weight:700; }
                     .have { font-size:12.5px; padding:8px 10px; border-radius:var(--r); background:var(--ok-bg); color:var(--ok); font-weight:700; }
                     .req { color:var(--danger); }
+                    .modes { display:flex; gap:8px; flex-wrap:wrap; }
+                    .modes label { flex:1 1 140px; display:flex; gap:8px; align-items:flex-start; padding:10px 12px; border:1px solid var(--border); border-radius:var(--r); cursor:pointer; }
+                    .modes label:has(input:checked) { border-color:var(--primary, #0C66E4); background:var(--input); }
+                    .modes b { display:block; font-size:13.5px; }
+                    .modes small { color:var(--subtlest); font-size:12px; }
+                    .contents { display:contents; }
+                    form.is-partial .full-only, form:not(.is-partial) .part-only { display:none; }
                     .tools { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; margin-top:8px; }
                     .tools details.act { flex:1 1 260px; margin-bottom:0; }
                     .tools details.act > summary { padding:6px 12px; font-size:12.5px; }
@@ -310,12 +317,25 @@
                               t-att-data-has-update="'1' if has_update else ''"
                               t-att-data-need="need_keys"
                               t-att-data-ref="t['ref']" t-att-action="'/kpi/wa/task/%s/complete' % token">
-                            <div class="have" t-if="not need_keys">✅ Everything this task needs is in — add a summary if you like, then send it.</div>
-                            <div class="warn" t-else="">This task still needs: <t t-esc="', '.join(r['label'] for r in rules if r['required'] and not r['done'])"/></div>
+                            <!-- Completed: everything this task type needs. Partially completed:
+                                 the summary only, and the client is sent it. -->
+                            <div class="modes" role="radiogroup">
+                                <label><input type="radio" name="finish_mode" value="full" checked="checked"/>
+                                    <span><b>✅ Completed</b><small>Everything this task needs</small></span></label>
+                                <label><input type="radio" name="finish_mode" value="partial"/>
+                                    <span><b>🏁 Partially completed</b><small>Only a summary</small></span></label>
+                            </div>
+                            <div class="full-only">
+                                <div class="have" t-if="not need_keys">✅ Everything this task needs is in — add a summary if you like, then send it.</div>
+                                <div class="warn" t-else="">This task still needs: <t t-esc="', '.join(r['label'] for r in rules if r['required'] and not r['done'])"/></div>
+                            </div>
                             <div class="field"><span class="lbl">Summary — what did you do?
-                                    <span t-if="'summary' in need_keys" class="req">*</span>
-                                    <t t-elif="is_db_task">(optional)</t></span>
+                                    <span t-if="'summary' in need_keys" class="req full-only">*</span>
+                                    <t t-elif="is_db_task"><span class="full-only">(optional)</span></t>
+                                    <span class="req part-only">*</span></span>
                                 <textarea name="summary" t-att-placeholder="('Leave empty to use your last update: “%s”' % last_update[:120]) if has_update else 'This is what your manager reads.'"/></div>
+                            <div class="part-only warn" style="background:var(--input); color:var(--subtle);">📝 Only this summary is sent. The client is sent it with the task to check.</div>
+                            <div class="full-only contents">
                             <t t-if="is_db_task">
                                 <div class="grid2">
                                     <div class="field"><span class="lbl">Database URL <span t-if="'db_url' in need_keys" class="req">*</span></span>
@@ -354,13 +374,40 @@
                                 <div class="field"><span class="lbl">Branch</span>
                                     <input class="input" name="gh_branch" placeholder="main"/></div>
                             </div>
-                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                                <button type="submit" name="mode" value="full" class="btn primary">Submit for approval</button>
-                                <button type="submit" name="mode" value="partial" class="btn ghost">🏁 Partial finish — summary only</button>
                             </div>
-                            <span class="hint">Partial finish sends the task for review with just the summary.</span>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button type="submit" name="mode" value="full" class="btn primary js-finish-btn">Submit for approval</button>
+                            </div>
                         </form>
                     </details>
+                    <!-- The Completed / Partially completed radio: shows what that choice needs and
+                         names the button. A link ending #complete or #partial (WhatsApp ✅ Completed)
+                         opens this box with that choice picked. -->
+                    <script t-if="can_complete">
+                        (function () {
+                            var box = document.getElementById('completeBox');
+                            var f = box ? box.querySelector('form') : null;
+                            if (!f) { return; }
+                            var btn = f.querySelector('.js-finish-btn');
+                            function apply() {
+                                var picked = f.querySelector('input[name=finish_mode]:checked');
+                                var partial = picked ? picked.value === 'partial' : false;
+                                f.classList.toggle('is-partial', partial);
+                                btn.value = partial ? 'partial' : 'full';
+                                btn.textContent = partial ? '🏁 Send partial finish' : 'Submit for approval';
+                            }
+                            Array.prototype.forEach.call(f.querySelectorAll('input[name=finish_mode]'), function (r) {
+                                r.addEventListener('change', apply);
+                            });
+                            var h = location.hash;
+                            if (h === '#partial' || h === '#complete') {
+                                f.querySelector('input[name=finish_mode][value=' + (h === '#partial' ? 'partial' : 'full') + ']').checked = true;
+                                box.open = true;
+                                setTimeout(function () { box.scrollIntoView({behavior: 'smooth', block: 'start'}); }, 50);
+                            }
+                            apply();
+                        })();
+                    </script>
                 </div>
 
                 <!-- Every time the client sent this request: what became of each send. -->
@@ -602,7 +649,7 @@
                             if (kind === 'update') { return 'Save this update?\n\n' + what; }
                             if (kind === 'manual') { return 'Save this user manual?\n\n' + what; }
                             var ref = f.getAttribute('data-ref') || 'this task';
-                            if (mode === 'partial') { return 'Send ' + ref + ' for review as a partial finish?\n\n' + (what || 'Your last update is used as the summary.'); }
+                            if (mode === 'partial') { return 'Send ' + ref + ' as a partial finish? The client is sent this summary.\n\n' + (val(f, 'summary') || 'Your last update is used as the summary.'); }
                             if (val(f, 'provision_url')) { bits.push('database ' + (val(f, 'provision_db_name') || val(f, 'provision_url'))); }
                             if (val(f, 'user_manual_url')) { bits.push('manual link'); }
                             if (val(f, 'app_link')) { bits.push('app link'); }
@@ -677,6 +724,13 @@
                                     done();
                                     if (!res) { flash(f, 'err', 'This link has expired. Tap 📋 KPI details in WhatsApp for a fresh one — what you filled in is still here.'); return; }
                                     if (!res.ok) { flash(f, 'err', res.message || 'Could not save that.'); return; }
+                                    if (res.done_html) {
+                                        // Finished: the link is spent. Show the final Done page, and
+                                        // drop the page from history so Back does not reopen the form.
+                                        history.replaceState(null, '', window.location.pathname);
+                                        document.open(); document.write(res.done_html); document.close();
+                                        return;
+                                    }
                                     flash(f, 'ok', res.message || 'Saved.');
                                     window.location.href = window.location.pathname + '?ok=' + encodeURIComponent(res.message || 'Saved.');
                                 };
@@ -1528,6 +1582,22 @@ var ICONS = {
                         if (location.hash === '#chat') { open(); }
                     })();
                 </script>
+            </t>
+        </template>
+
+        <!-- After ✅ Completed or 🏁 Partial finish from the task page: the link is
+             spent (controllers/kpi_wa_task_page.py complete), like the client's
+             request form. -->
+        <template id="wa_task_page_done" name="WA Task Finished">
+            <t t-call="kra_kpi_module.wa_task_layout">
+                <t t-set="page_title" t-value="'Done'"/>
+                <div class="done">
+                    <div class="big"><t t-esc="'🏁' if partial else '✅'"/></div>
+                    <div style="font-size:18px; font-weight:800;">Done — <t t-esc="'sent as a partial finish' if partial else 'completed'"/></div>
+                    <span class="ref"><t t-esc="ref"/> — <t t-esc="name"/></span>
+                    <p style="margin-top:16px; font-weight:700;"><t t-esc="message"/></p>
+                    <p class="mini">Go back to WhatsApp. This link no longer works.</p>
+                </div>
             </t>
         </template>
     </data>

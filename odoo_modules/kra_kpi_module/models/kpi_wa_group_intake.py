@@ -1543,9 +1543,17 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             domain.append(('server_id', '=', state.srv_id.id))
         return Db.search(domain, order='db_name')
 
+    # WhatsApp formatting and punctuation around a typed search word: a reference
+    # copied from one of our messages arrives as *REQ-003* (bold) or "REQ-003".
+    _SEARCH_TRIM = '*_~`"\'“”‘’.,:;!?()[]{}<>'
+
+    @api.model
+    def _search_terms(self, words):
+        return [t for t in (w.strip(self._SEARCH_TRIM) for w in (words or '').lower().split()) if t]
+
     @api.model
     def _db_filter(self, rows, words):
-        terms = [w for w in (words or '').lower().split() if w]
+        terms = self._search_terms(words)
         if not terms:
             return rows
         return rows.filtered(lambda r: all(
@@ -1595,7 +1603,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         database we do not know about, and "the whole server" is not a thing
         a client gets to switch off from a chat message."""
         rows = self._live_dbs(group)[:POLL_MAX_DB_ROWS]
-        return [(str(r.id), '%s (%s)' % (r.poll_label(), r.server_id.name or '?'))
+        return [(str(r.id), '%s (%s)' % (r.poll_label(), r.server_id.short_name() or '?'))
                 for r in rows]
 
     def _show_disc_dbs(self, message, state, group):
@@ -1649,7 +1657,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
         state._touch(step='confirm_disconnect',
                      draft_title=_('Disconnect %(db)s on %(srv)s') % {
                          'db': db.db_name or '?',
-                         'srv': db.server_id.name or '?'})
+                         'srv': db.server_id.short_name() or '?'})
         self._poll(message, _(
             '⚠️ *Switch off a database*\n\n'
             '🗄️ %(db)s\n'
@@ -1657,7 +1665,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             '📝 %(reason)s\n\n'
             'Is that right?') % {
                 'db': db.db_name or '',
-                'srv': db.server_id.name or '—',
+                'srv': db.server_id.short_name() or '—',
                 'reason': reason},
             [_('✅ Yes — request it'), _('❌ No — cancel')])
         return True
@@ -2305,6 +2313,9 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
 
     @api.model
     def _client_status(self, task):
+        # 🏁 A Partial Finish, still open: say so (kpi_finish.finish_partial).
+        if task.finish_partial and task.task_state != 'completed':
+            return '🏁 Partly completed' + (' — your check needed' if task.task_state == 'awaiting_client' else '')
         return _CLIENT_STATUS.get(task.task_state, '⏳ Not started yet')
 
     @api.model
@@ -2494,7 +2505,7 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
     @api.model
     def _pick_filter(self, tasks, words):
         """Every typed word must appear in the reference or the title."""
-        terms = [w for w in (words or '').lower().split() if w]
+        terms = self._search_terms(words)
         if not terms:
             return tasks
         return tasks.filtered(lambda t: all(
@@ -2666,6 +2677,9 @@ class KpiWaGroupIntakeRouter(models.AbstractModel):
             lines.append(_('🔗 About: %s') % task.related_req_ref)
         if task.completion_date:
             lines.append(_('🏁 Finished: %s') % d(task.completion_date))
+        partial = task.sudo()._finish_partial_summary() if task.task_state != 'completed' else ''
+        if partial:
+            lines.append(_('📝 What we did so far:\n%s') % partial)
         lines.append(_('🕒 Last update: %s') % d(task.write_date))
         if self._needs_client(task):
             link = self._approval_link(task)

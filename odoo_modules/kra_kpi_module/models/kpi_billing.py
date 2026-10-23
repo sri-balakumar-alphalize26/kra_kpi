@@ -14,6 +14,7 @@ the admins are told; 🧾 Bill now retries it.
 """
 
 import json
+import re
 import logging
 from datetime import date
 
@@ -333,10 +334,26 @@ class KraKpiBilling(models.Model):
             return False
         ref = self.external_ref or '#%s' % self.id
         money = self._money(inv.total_amount, inv.currency_id)
+        # No web address in the text: WhatsApp turns one into a big preview card.
+        name = re.sub(r'\s*\bon\s*$', '', re.sub(r'https?://\S+', '', self.name or '')).strip()
         text = _('🧾 *%(inv)s*\nClient: %(client)s\nTask: %(ref)s — %(name)s\nAmount: *%(money)s*') % {
             'inv': inv.name, 'client': inv.client_kra_id.name or '', 'ref': ref,
-            'name': self.name or '', 'money': money}
-        return self.env['kpi.wa.group.report'].sudo()._post(text, jid=jid)
+            'name': name, 'money': money}
+        Report = self.env['kpi.wa.group.report'].sudo()
+        # The invoice itself: the same PDF as the Odoo / web / app download
+        # (kpi_client_invoice.get_pdf_data + KpiReportsAPI._build_invoice_pdf),
+        # with the text as its caption. Plain text when it can't be sent.
+        try:
+            from ..controllers.kpi_reports_api import KpiReportsAPI
+            pdf = KpiReportsAPI()._build_invoice_pdf(inv.sudo().get_pdf_data())
+            session = Report._session()
+            if pdf and session:
+                session.send_document(jid, pdf, '%s.pdf' % (inv.name or 'invoice').replace('/', '_'),
+                                      caption=text)
+                return True
+        except Exception as exc:
+            _logger.warning('invoice %s PDF not sent, sending the text instead: %s', inv.name, exc)
+        return Report._post(text, jid=jid)
 
     def action_bill_now(self):
         """🧾 Bill now: retry a fully complete task that had no rate."""

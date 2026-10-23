@@ -1537,10 +1537,37 @@ export class KpiAction extends Component {
                                 <!-- What THIS task's type needs (server: kpi_workflow._completion_rules).
                                      Each row ticks itself from what is on the task or typed here. -->
                                 <t t-set="cr" t-value="completeRows()"/>
+                                <t t-set="isPartial" t-value="state.completeForm.mode === 'partial'"/>
                                 <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
                                     <h4 class="fw-bold mb-0 text-danger"><i class="fa fa-check-circle"></i> Complete This Task</h4>
-                                    <span class="ms-auto text-muted">Required done: <b class="text-dark"><t t-esc="cr.done"/> of <t t-esc="cr.total"/></b></span>
+                                    <span t-if="!isPartial" class="ms-auto text-muted">Required done: <b class="text-dark"><t t-esc="cr.done"/> of <t t-esc="cr.total"/></b></span>
                                 </div>
+                                <!-- Completed: everything this task type needs. Partially completed:
+                                     the summary only, and the client is sent it. -->
+                                <div class="d-flex flex-wrap gap-2 mb-3" role="radiogroup">
+                                    <label t-att-class="'border rounded px-3 py-2 d-flex gap-2 align-items-start flex-grow-1' + (!isPartial ? ' border-primary bg-light' : '')" style="cursor:pointer;">
+                                        <input class="form-check-input mt-1" type="radio" name="kpiFinishMode" value="full"
+                                               t-att-checked="!isPartial" t-on-change="() => { this.state.completeForm.mode = 'full'; }"/>
+                                        <span><b>✅ Completed</b><div class="small text-muted">Everything this task needs</div></span>
+                                    </label>
+                                    <label t-att-class="'border rounded px-3 py-2 d-flex gap-2 align-items-start flex-grow-1' + (isPartial ? ' border-primary bg-light' : '')" style="cursor:pointer;">
+                                        <input class="form-check-input mt-1" type="radio" name="kpiFinishMode" value="partial"
+                                               t-att-checked="isPartial" t-on-change="() => { this.state.completeForm.mode = 'partial'; }"/>
+                                        <span><b>🏁 Partially completed</b><div class="small text-muted">Only a summary</div></span>
+                                    </label>
+                                </div>
+                                <t t-if="isPartial">
+                                    <label class="form-label fw-bold">Progress Summary <span class="text-danger">*</span></label>
+                                    <textarea class="form-control mb-2" rows="4" t-model="state.completeForm.partial_summary"
+                                              placeholder="What was done, what's left, why you're finishing now..."/>
+                                    <div class="alert alert-light border py-2 small mb-3">📝 Only this summary is sent. The client is sent it with the task to check.</div>
+                                    <button class="btn btn-warning" t-att-disabled="state.completeSubmitting"
+                                            t-on-click="() => this.sendPartialFromDetail()">
+                                        <t t-if="state.completeSubmitting"><i class="fa fa-spinner fa-spin"></i> Sending...</t>
+                                        <t t-else=""><i class="fa fa-flag-checkered"></i> Send partial finish</t>
+                                    </button>
+                                </t>
+                                <t t-else="">
                                 <div class="progress mb-2" style="height:8px;">
                                     <div class="progress-bar" t-att-style="'width:' + cr.pct + '%; background:#017e84;'"/>
                                 </div>
@@ -1599,6 +1626,7 @@ export class KpiAction extends Component {
                                     <t t-if="state.completeSubmitting"><i class="fa fa-spinner fa-spin"></i> Submitting...</t>
                                     <t t-else=""><i class="fa fa-paper-plane"></i> Complete &amp; Send for Approval</t>
                                 </button>
+                                </t>
                             </div>
                         </t>
 
@@ -4621,8 +4649,8 @@ export class KpiAction extends Component {
                             <p class="mb-2"><strong>Task:</strong> ${safeName}</p>
                             <div class="alert alert-warning py-2 mb-3">
                                 <i class="fa fa-info-circle"></i>
-                                This finishes the task <strong>as-is</strong> and sends it for review with just your
-                                summary — no full checklist. Use <strong>Complete</strong> for fully-done work.
+                                This finishes the task <strong>as-is</strong> with just your summary, and the
+                                client is sent it. Use <strong>Complete</strong> for fully-done work.
                             </div>
                             <label class="form-label fw-bold">Progress Summary <span class="text-danger">*</span></label>
                             <textarea id="partialSummary" class="form-control" rows="4"
@@ -4653,8 +4681,29 @@ export class KpiAction extends Component {
             return; // keep the modal open so they can add a summary
         }
         const task = this.state.selectedKpi;
-        const kpi_id = task.id;
         this.closeModal();
+        await this._sendPartial(task.id, summary);
+    }
+
+    // KPI Details › Complete panel, "Partially completed" picked: the summary only.
+    async sendPartialFromDetail() {
+        if (this.state.completeSubmitting) return;
+        const summary = (this.state.completeForm.partial_summary || "").trim();
+        if (!summary) {
+            this._toast("Write a short summary before sending a partial finish.", "warning");
+            return;
+        }
+        this.state.completeSubmitting = true;
+        try {
+            if (await this._sendPartial(this.state.detailKpiId, summary)) this.backToList();
+        } finally {
+            this.state.completeSubmitting = false;
+        }
+    }
+
+    // Partial Finish: save the summary, then finish as partial. The client is
+    // sent this summary (kpi_finish._finish_tell_review). True when it went.
+    async _sendPartial(kpi_id, summary) {
         try {
             const pr = await rpc('/kpi/progress/create', {
                 kpi_id: kpi_id,
@@ -4663,7 +4712,7 @@ export class KpiAction extends Component {
             });
             if (!pr.status) {
                 this._showAlert(pr.message || "Could not save your summary.", "Partial Finish failed", "danger");
-                return;
+                return false;
             }
             const result = await rpc('/kra_kpi/task/complete', {
                 kpi_id: kpi_id,
@@ -4672,14 +4721,15 @@ export class KpiAction extends Component {
             });
             if (result.status) {
                 await this.refresh();
-                this._showAlert("Task finished and sent for review. Your summary was recorded.", "Partial Finish ✓", "success");
-            } else {
-                this._showAlert(result.message || "Could not finish the task.", "Partial Finish failed", "danger");
+                this._showAlert("Task finished as partial. The client is sent your summary.", "Partial Finish ✓", "success");
+                return true;
             }
+            this._showAlert(result.message || "Could not finish the task.", "Partial Finish failed", "danger");
         } catch (error) {
             console.error("Partial finish error:", error);
             this._showAlert(error?.data?.message || error?.message || "Something went wrong. Please try again.", "Partial Finish failed", "danger");
         }
+        return false;
     }
 
     // In-detail Complete is allowed only with a submitted summary + all 5 items ticked.
@@ -4759,9 +4809,9 @@ export class KpiAction extends Component {
             });
             const pBtn = document.getElementById("partialInsteadBtn");
             if (pBtn) pBtn.addEventListener("click", () => {
+                // Switch the panel's radio to "Partially completed".
                 this.closeModal();
-                const d = this.state.detailData || {};
-                this.openPartialFinishModal({ ...d, id: this.state.detailKpiId, name: d.name });
+                this.state.completeForm.mode = 'partial';
             });
             return;
         }
@@ -7935,6 +7985,7 @@ export class KpiAction extends Component {
                     website_url: result.website_url || '', provision_url: dbd.url || '',
                     provision_db_name: dbd.db_name || '', provision_username: dbd.username || '',
                     provision_password: dbd.password || '',
+                    mode: 'full', partial_summary: '',
                 };
                 this.state.showDbPassword = false;
                 this.state.detailError = null;

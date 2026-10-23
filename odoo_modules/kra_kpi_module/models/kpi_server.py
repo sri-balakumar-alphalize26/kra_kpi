@@ -130,6 +130,20 @@ class KpiServer(models.Model):
         self.ensure_one()
         return (self.label or self.name or '').strip()
 
+    def short_name(self):
+        """The server as a WhatsApp text shows it: its label, else the first
+        part of its host ("https://nexgennpos2.alphalizedns.com" ->
+        "nexgennpos2"). Never a web address: WhatsApp turns one into a link
+        with a big preview card on top of the message."""
+        if not self:
+            return ''
+        self.ensure_one()
+        if (self.label or '').strip():
+            return self.label.strip()
+        host = re.sub(r'^[a-z][a-z0-9+.-]*://', '', (self.name or '').strip(), flags=re.I)
+        host = host.split('/')[0].split(':')[0]
+        return host.split('.')[0] if '.' in host else host
+
     @api.model
     def poll_options(self):
         """[(id, label)] for the WhatsApp picker, capped so nothing is lost.

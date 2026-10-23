@@ -181,7 +181,7 @@ class KpiClientDb(models.Model):
     # ------------------------------------------------------------------
     # computes
     # ------------------------------------------------------------------
-    @api.depends('db_name', 'server_id.name')
+    @api.depends('db_name', 'server_id.name', 'server_id.label')
     def _compute_display_name(self):
         """'aoc @ nexgennpos2' -- a bare database name is ambiguous across
         servers, and this record is picked in m2o widgets where only the label
@@ -192,7 +192,7 @@ class KpiClientDb(models.Model):
         last time it was tried in this module.
         """
         for rec in self:
-            srv = rec.server_id.name or ''
+            srv = rec.server_id.short_name()
             rec.display_name = ('%s @ %s' % (rec.db_name or '?', srv)
                                 if srv else (rec.db_name or '?'))
 
@@ -523,7 +523,7 @@ class KpiClientDb(models.Model):
                 "%(note)s\n\n"
                 "_%(db)s is still live. Reply here if this is wrong._") % {
                     'db': rec.db_name or '',
-                    'srv': rec.server_id.name or '—',
+                    'srv': rec.server_id.short_name() or '—',
                     'note': note})
         return True
 
@@ -572,7 +572,7 @@ class KpiClientDb(models.Model):
                 'ref': (' — %s' % kpi.external_ref) if (kpi and kpi.external_ref)
                        else '',
                 'db': self.db_name or '',
-                'srv': self.server_id.name or '—',
+                'srv': self.server_id.short_name() or '—',
                 'reason': shown,
                 'who': by_name or _('a group member'),
                 'num': (' (+%s)' % by_number) if by_number else '',
@@ -638,7 +638,7 @@ class KpiClientDb(models.Model):
             "_Keep this message. It is the record of what was switched off, "
             "who asked, and when._") % {
                 'db': self.db_name or '',
-                'srv': self.server_id.name or '—',
+                'srv': self.server_id.short_name() or '—',
                 'now': self.env['kpi.tz'].fmt_now(),
                 'asked': asked,
                 'note': ('\n\n%s' % note) if note else '',
@@ -721,7 +721,7 @@ class KpiClientDb(models.Model):
                 users |= grp.all_user_ids
         body = _('%(db)s on %(srv)s for %(client)s %(when)s (%(date)s).') % {
             'db': self.db_name or '',
-            'srv': self.server_id.name or '—',
+            'srv': self.server_id.short_name() or '—',
             'client': self.client_kra_id.name or '—',
             'when': when,
             'date': fields.Date.to_string(self.expires_on)}
