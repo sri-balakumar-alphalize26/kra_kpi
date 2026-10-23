@@ -12,3 +12,6 @@ from . import kpi_legacy_api
 from . import kpi_client_chat
 from . import kpi_finish_api
 from . import kpi_billing_api
+from . import kpi_sendback_api
+from . import kpi_client_links
+from . import kpi_talks_api
