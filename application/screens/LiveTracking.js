@@ -4,11 +4,17 @@
 // Idle / Not started) and today's attendance (Present · Late came HH:MM · Absent ·
 // Yet to start). Polls /kpi_owner/live_tracking every 15s; ticks the elapsed every
 // second in between so it feels live. Admin-only (route is gated server-side too).
+//
+// Tapping someone opens the employee popup (EmployeePopup.js) — the web/Odoo
+// dashboard's four tabs (Overview / Today / Workload / History), Reset PIN,
+// Nudge, ⏪ Reduce yesterday. It replaced the old one-day sheet; that day is
+// still there, as the popup's Today tab. Break / lunch timers turn amber then
+// red past the usual limits, and an idle person's paused task shows its reason.
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
-  RefreshControl, StatusBar as RNStatusBar, Modal, TextInput, ScrollView,
+  RefreshControl, StatusBar as RNStatusBar, Modal, TextInput,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -16,8 +22,8 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import PulseDot from '../components/PulseDot';
-import { fetchLiveTracking, revertWorkday, fetchEmployeeDay } from '../services/liveTracking';
-import WorkdaySummaryBody from '../components/WorkdaySummaryBody';
+import { fetchLiveTracking, revertWorkday } from '../services/liveTracking';
+import EmployeePopup, { timerLevel, LEVEL_COLOR, clock } from './EmployeePopup';
 import { publishLiveTrackingState } from '../utils/liveTrackingWidget';
 import * as H from '../utils/haptics';
 import { createLogger } from '../api/logger';
@@ -25,9 +31,6 @@ import { createLogger } from '../api/logger';
 const log = createLogger('LiveTracking');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
 const POLL_MS = 15000;
-// The open day view refreshes less often than the board: it is a whole day's
-// summary, and the running piece already ticks on screen in between.
-const DAY_POLL_MS = 30000;
 
 // Per activity: pill colours + icon (mirrors the web screen's hues).
 const ACT = {
@@ -117,6 +120,15 @@ function Row({ row, nowMs, fetchedAt, frozen = false, onReopen, onOpen, highligh
   const multiCount = row.active_task_count || running?.length || 0;
   const tick = (secs) => fmtElapsed((secs || 0) + since);
 
+  // Over the usual break / lunch time: amber, then red (the web's limits).
+  const level = timerLevel(row, since);
+  const lv = LEVEL_COLOR[level];
+  const pillBg = lv ? lv.bg : meta.bg;
+  const pillFg = lv ? lv.fg : meta.fg;
+  // The task they paused, with why and when — the half of "Idle" / "Break"
+  // that says whether anyone needs to chase it.
+  const pt = !running && row.paused_task ? row.paused_task : null;
+
   let text;
   if (kind === 'task') text = `${row.activity_label || 'Task'} · ${fmtElapsed(live)}`;
   else if (kind === 'break') text = `Break · ${fmtElapsed(live)}`;
@@ -129,7 +141,7 @@ function Row({ row, nowMs, fetchedAt, frozen = false, onReopen, onOpen, highligh
   return (
     // highlight: this is the person a home-screen widget tap asked for. A border
     // for a couple of seconds, so the eye lands on them in a list of many.
-    // The whole card opens their day (WorkdaySummaryBody). The Reopen button
+    // The whole card opens the employee popup (EmployeePopup). The Reopen button
     // inside keeps its own press: the inner touchable wins.
     <TouchableOpacity style={[s.card, highlight && s.cardFlash]} activeOpacity={0.85} onPress={() => onOpen(row)}>
       <View style={s.cardTop}>
@@ -163,11 +175,11 @@ function Row({ row, nowMs, fetchedAt, frozen = false, onReopen, onOpen, highligh
             ))}
           </View>
         ) : (
-          <View style={[s.pill, { backgroundColor: meta.bg }]}>
+          <View style={[s.pill, { backgroundColor: pillBg }]}>
             {kind !== 'idle' && kind !== 'offline' ? (
-              <MaterialCommunityIcons name={meta.icon} size={14} color={meta.fg} style={{ marginRight: 5 }} />
+              <MaterialCommunityIcons name={meta.icon} size={14} color={pillFg} style={{ marginRight: 5 }} />
             ) : null}
-            <Text style={[s.pillTxt, { color: meta.fg }]} numberOfLines={1}>{text}</Text>
+            <Text style={[s.pillTxt, { color: pillFg }]} numberOfLines={1}>{text}</Text>
           </View>
         )}
       </View>
@@ -178,6 +190,12 @@ function Row({ row, nowMs, fetchedAt, frozen = false, onReopen, onOpen, highligh
           is the only reason this field exists. The web renders it whole too. */}
       {row.activity_note ? (
         <Text style={s.actNote}>{row.activity_note}</Text>
+      ) : null}
+      {pt ? (
+        <Text style={s.pausedNote}>
+          ⏸ Paused {pt.ref || pt.name}{pt.at ? ` at ${clock(pt.at)}` : ''}
+          {pt.reason && pt.reason !== row.activity_note ? ` — ${pt.reason}` : ''}
+        </Text>
       ) : null}
       {/* Reopened by an admin — shown on the same screen as the Reopen button. */}
       {row.reopened_reason ? (
@@ -226,12 +244,9 @@ export default function LiveTracking({ onBack, focusUserId, onFocusHandled }) {
   const [reopenReason, setReopenReason] = useState('');
   const [reopenErr, setReopenErr] = useState('');
   const [reopenBusy, setReopenBusy] = useState(false);
-  // The day view: who was tapped, and their day as the server last answered it.
-  const [dayFor, setDayFor] = useState(null);
-  const [day, setDay] = useState(null);
-  const [dayErr, setDayErr] = useState('');
-  const [dayBusy, setDayBusy] = useState(false);
-  const daySeq = useRef(0);
+  // The employee popup: WHO was tapped (by id, so the popup follows each poll's
+  // fresh row rather than a copy frozen at the tap).
+  const [popupId, setPopupId] = useState(null);
 
   // A failed poll must NOT take the board away.
   //
@@ -297,42 +312,10 @@ export default function LiveTracking({ onBack, focusUserId, onFocusHandled }) {
     return () => clearInterval(id);
   }, []);
 
-  const loadDay = useCallback(async (row, silent) => {
-    const seq = ++daySeq.current;
-    if (!silent) setDayBusy(true);
-    try {
-      const res = await fetchEmployeeDay(row.user_id);
-      if (seq !== daySeq.current) return;
-      if (res && res.status === false) {
-        // A failed refresh keeps the day already on screen.
-        if (!silent) setDayErr(res.message || 'Could not load that day.');
-        return;
-      }
-      setDay(res);
-      setDayErr('');
-    } catch (e) {
-      if (seq !== daySeq.current) return;
-      log.warn('day load failed', e?.message);
-      if (!silent) setDayErr(e?.message || 'Could not load that day.');
-    } finally {
-      if (seq === daySeq.current) setDayBusy(false);
-    }
-  }, []);
-
   const openDay = useCallback((row) => {
     H.tap();
-    setDay(null);
-    setDayErr('');
-    setDayFor(row);
+    setPopupId(row.user_id);
   }, []);
-
-  // Load on open, then keep it live while it stays open.
-  useEffect(() => {
-    if (!dayFor) return undefined;
-    loadDay(dayFor, false);
-    const id = setInterval(() => loadDay(dayFor, true), DAY_POLL_MS);
-    return () => { clearInterval(id); daySeq.current += 1; };
-  }, [dayFor, loadDay]);
 
   const onRefresh = useCallback(async () => { setRefreshing(true); await load(false); setRefreshing(false); }, [load]);
 
@@ -372,6 +355,7 @@ export default function LiveTracking({ onBack, focusUserId, onFocusHandled }) {
 
   const rows = data?.rows || [];
   hasRowsRef.current = rows.length > 0;
+  const popupRow = popupId != null ? (rows.find((r) => r.user_id === popupId) || null) : null;
 
   // Bring the person a widget tap asked for into view and flash their card, once
   // the list has loaded. Handled once — the id is cleared upstream first — so a
@@ -486,58 +470,15 @@ export default function LiveTracking({ onBack, focusUserId, onFocusHandled }) {
         />
       )}
 
-      {/* One person's day: the End Workday summary, read by an admin, live. */}
-      <Modal visible={!!dayFor} animationType="slide" onRequestClose={() => setDayFor(null)}>
-        <View style={s.dayRoot}>
-          <View style={s.dayHead}>
-            <TouchableOpacity onPress={() => setDayFor(null)} style={s.iconBtn}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Ionicons name="chevron-down" size={24} color={COLORS.navy} />
-            </TouchableOpacity>
-            <View style={{ flex: 1, marginHorizontal: 10 }}>
-              <Text style={s.dayTitle} numberOfLines={1}>{dayFor?.name}</Text>
-              <Text style={s.daySub} numberOfLines={1}>
-                {day?.started === false ? 'No workday today'
-                  : day?.logout_at ? 'Day ended' : 'Today so far'}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => dayFor && loadDay(dayFor, false)} style={s.iconBtn}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              {dayBusy ? <ActivityIndicator size="small" color={COLORS.navy} />
-                : <Ionicons name="refresh" size={20} color={COLORS.navy} />}
-            </TouchableOpacity>
-          </View>
-          {dayFor ? (
-            <View style={s.dayStatus}>
-              <Attendance row={dayFor} />
-              <PulseDot active={!!dayFor.active} />
-              <Text style={s.dayStatusTxt} numberOfLines={1}>
-                {dayFor.active ? 'At work now' : 'Not active right now'}
-              </Text>
-            </View>
-          ) : null}
-          {dayErr && !day ? (
-            <View style={s.center}>
-              <Ionicons name="alert-circle-outline" size={38} color={COLORS.red} />
-              <Text style={s.errTxt}>{dayErr}</Text>
-              <TouchableOpacity onPress={() => loadDay(dayFor, false)} style={s.retry}>
-                <Text style={s.retryTxt}>Retry</Text>
-              </TouchableOpacity>
-            </View>
-          ) : !day ? (
-            <View style={s.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>
-          ) : day.started === false ? (
-            <View style={s.center}>
-              <MaterialCommunityIcons name="calendar-blank-outline" size={44} color={COLORS.faint} />
-              <Text style={s.empty}>{dayFor?.name} has not started a workday today.</Text>
-            </View>
-          ) : (
-            <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
-              <WorkdaySummaryBody summary={day} viewer="admin" now={nowMs} />
-            </ScrollView>
-          )}
-        </View>
-      </Modal>
+      {/* One person, the web dashboard's way: status, actions, four tabs. */}
+      <EmployeePopup
+        visible={popupRow != null}
+        person={popupRow}
+        nowMs={nowMs} fetchedAt={fetchedAtRef.current} frozen={stale}
+        onClose={() => setPopupId(null)}
+        // Two stacked modals fight on Android; close this one, then ask.
+        onReopen={(row) => { setPopupId(null); openReopen(row); }}
+      />
 
       {/* Reopen an ended workday. Everything it can honestly undo it undoes; the
           rest it declares — which is why the reason is required and why the copy
@@ -626,6 +567,7 @@ const s = StyleSheet.create({
   actRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
   // Own line, not inside actRow — that row has no flexWrap and a note of any length
   // would push the elapsed time off a 360dp screen.
+  pausedNote: { fontSize: 12, color: '#B45309', marginTop: 5, marginLeft: 2, lineHeight: 17, fontWeight: '600' },
   actNote: { fontSize: 12, color: COLORS.muted, marginTop: 6, marginLeft: 2, lineHeight: 17 },
   reopenNote: { fontSize: 12, color: COLORS.amber, fontWeight: '700', marginTop: 4, marginLeft: 2, lineHeight: 17 },
   dot: { width: 9, height: 9, borderRadius: 5 },
