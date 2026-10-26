@@ -2,8 +2,10 @@
 // (kpi_configuration.js). All sections auto-save:
 //   1. Timers — admin accept, client approval, queue/urgent nudge, standard day
 //   2. Daily Task Report & Retention
-//   3. Developers — Multi-task toggle + per-dev WhatsApp number
-//   4. WhatsApp Group Reports — which updates get posted, and in what words
+//   3. Developers — Multi-task toggle; the WhatsApp number shown read-only
+//      (it follows the login mobile, which is changed in Login Management)
+//   4. 🏁 Finish & client review, 🧾 Billing (link), Approval chain
+//   5. WhatsApp Group Reports — which updates get posted, and in what words
 // Admin-only (opened from a Home Quick Action tile).
 //
 // The destination GROUP is deliberately not chosen here — that stays on the web.
@@ -22,12 +24,21 @@ import GradientBackground from '../components/GradientBackground';
 import GradientButton, { GRAD_SEND } from '../components/GradientButton';
 import { renderWaTemplate, splitBold } from '../utils/waPreview';
 import { createLogger } from '../api/logger';
+// setDevWa is gone on purpose: /kpi_multitask/set_wa is retired (kra_api.py) and
+// always answers "The WhatsApp number follows the login mobile". setUserCountry
+// went with the per-developer country picker: changing the country clears the
+// login mobile server-side, which is Login Management's business, not this card's.
 import {
-  fetchConfig, setUrgentNudge, setUserCountry, setMultitask, setDevWa,
+  fetchConfig, setUrgentNudge, setMultitask,
   setClientApproval, setQueueNudge, setStandardHours, setAdminAccept, setBreakAlerts,
   setSnapshotRetention, setReportRetention, setDailyReport, setAttendanceInApp,
 } from '../services/config';
 import { fetchGroupEvents, setGroupEvent, testGroupEvent } from '../services/waGroup';
+import {
+  fetchCeoNumbers, setCeoNumbers, fetchFinishConfig, setFinishConfig,
+  fetchApprovalChain, writeTier, createTier, deleteTier,
+} from '../services/adminExtras';
+import useAppDialog from '../components/useAppDialog';
 
 const log = createLogger('ConfigurationScreen');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -63,8 +74,16 @@ function Card({ color, icon, iconLib, title, children }) {
   );
 }
 
-export default function ConfigurationScreen({ onBack }) {
+// onOpen (optional): App.js's navigator — the read-only WhatsApp number links to
+// Login Management, and the Billing card to Settings › Billing.
+export default function ConfigurationScreen({ onBack, onOpen }) {
   const [loading, setLoading] = useState(true);
+  // CEO daily summary: comma-separated WhatsApp numbers (empty = off).
+  const [ceoNumbers, setCeoNumbersVal] = useState('');
+  // 🏁 Finish & client review. null = not loaded (the card is then left out,
+  // like the web, rather than showing defaults that look saved).
+  const [fin, setFin] = useState(null);
+  const [reviewDays, setReviewDays] = useState('');
   const [isMock, setIsMock] = useState(false);
   const [clientApproval, setClientApprovalVal] = useState('5');
   const [queueNudge, setQueueNudgeVal] = useState('30');
@@ -80,7 +99,6 @@ export default function ConfigurationScreen({ onBack }) {
   const [mobileLength, setMobileLength] = useState(10);
   const [countries, setCountries] = useState([]);
   const [developers, setDevelopers] = useState([]);
-  const [pickCountryForDev, setPickCountryForDev] = useState(null); // developer whose country is being picked
   const [savedFlash, setSavedFlash] = useState('');
   // Daily task report schedule + snapshot/report retention.
   const [snapNum, setSnapNum] = useState('3');
@@ -185,6 +203,15 @@ export default function ConfigurationScreen({ onBack }) {
       } catch (e) {
         log.warn('fetchGroupEvents', e?.message);
       }
+      // CEO numbers and the Finish card, each on its own for the same reason.
+      try {
+        const ceo = await fetchCeoNumbers();
+        if (ceo?.status) setCeoNumbersVal(String(ceo.numbers || '').split(',').filter(Boolean).join(', '));
+      } catch (e) { log.warn('fetchCeoNumbers', e?.message); }
+      try {
+        const f = await fetchFinishConfig();
+        if (f?.status) { setFin(f); setReviewDays(String(f.review_days ?? '')); }
+      } catch (e) { log.warn('fetchFinishConfig', e?.message); }
     } catch (e) {
       log.warn('load failed', e?.message);
       setLoadError('Could not load settings — the values below are defaults, not what is saved.');
@@ -277,39 +304,36 @@ export default function ConfigurationScreen({ onBack }) {
     setDailyMM(String(Math.round((hour - H) * 60)).padStart(2, '0'));
     await saveGuard('daily', () => setDailyReport({ enabled, hour, coverage }));
   };
-  // Set ONE developer's country (dial + local length). Empty co (id false) clears
-  // it back to the company default. The backend re-keys their stored WhatsApp
-  // number and may clear it if the old number can't fit the new length.
-  const chooseDevCountry = async (dev, co) => {
-    setPickCountryForDev(null);
-    const cid = co && co.id ? co.id : false;
-    setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, country_id: cid } : d)));
-    try {
-      const res = await setUserCountry(dev.id, cid);
-      if (res?.status) {
-        const nd = String(res.dial || dial || '91');
-        const nl = Number(res.mobile_length) || mobileLength || 10;
-        const wa = res.wa_number != null ? res.wa_number : dev.wa_number;
-        setDevelopers((list) => list.map((d) => (d.id === dev.id ? {
-          ...d, country_id: res.country_id || false, dial: nd, mobile_length: nl,
-          wa_number: wa, _wa: toLocal(wa, nd, nl), _saved: true,
-        } : d)));
-        setTimeout(() => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _saved: false } : d))), 1400);
-        // Changing the country wipes the stored WhatsApp number AND the
-        // app-login mobile server-side (kra_api.py:1808-1818). Silently losing
-        // someone's login number is not something to leave the admin to discover.
-        if (!wa && dev.wa_number) {
-          setWaMsg(`${dev.name}'s WhatsApp number was cleared by the country change — re-enter it. `
-            + 'Their app-login mobile was cleared too.');
-        }
-      } else if (res && res.status === false) {
-        setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, country_id: dev.country_id } : d)));
-        setWaMsg(res.message || 'Not allowed to change that.');
+  // CEO daily summary numbers. The server cleans each one (adds the company dial
+  // code to a bare local number) and refuses one that is not a number at all —
+  // the box then shows what it actually stored.
+  const saveCeoNumbers = async () => {
+    await saveGuard('ceo', async () => {
+      const res = await setCeoNumbers(ceoNumbers);
+      if (res && res.status !== false && res.numbers != null) {
+        setCeoNumbersVal(String(res.numbers).split(',').filter(Boolean).join(', '));
       }
-    } catch (e) {
-      setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, country_id: dev.country_id } : d)));
-      log.warn('setDevCountry', e?.message);
+      return res;
+    });
+  };
+  // 🏁 Finish & client review. The route answers the SAVED values; those win.
+  const saveFinish = async (key, vals) => {
+    await saveGuard(key, async () => {
+      const res = await setFinishConfig(vals);
+      if (res && res.status !== false) { setFin(res); setReviewDays(String(res.review_days ?? '')); }
+      return res;
+    });
+  };
+  const saveReviewDays = async () => {
+    const n = parseInt(reviewDays, 10);
+    // 1-60, the server's own range; out of range puts the stored value back.
+    if (!isFinite(n) || n < 1 || n > 60) {
+      setReviewDays(String(fin?.review_days ?? ''));
+      setSaveErr({ key: 'reviewDays', message: 'Pick between 1 and 60 days.' });
+      return;
     }
+    if (n === fin?.review_days) return;
+    await saveFinish('reviewDays', { review_days: n });
   };
 
   // ── WhatsApp group reports ────────────────────────────────────────────────
@@ -379,35 +403,6 @@ export default function ConfigurationScreen({ onBack }) {
       log.warn('toggleDev', e?.message);
     }
   };
-  const saveDevWa = async (dev, text) => {
-    const dd = dev.dial || dial, dl = dev.mobile_length || mobileLength;
-    const local = toLocal(text, dd, dl);
-    // A short number saves happily but never resolves to a real WhatsApp
-    // account, so the group report silently falls back to a plain name instead
-    // of tagging anyone. Say so rather than letting it look fine.
-    const invalid = local.length > 0 && local.length < dl;
-    setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _wa: local, _invalid: invalid } : d)));
-    try {
-      const res = await setDevWa(dev.id, local);
-      // Roll a refused write back to what is actually stored, the way the
-      // multitask toggle does. Leaving the typed number in the box with a green
-      // tick beside it was the worst of both: nothing saved, and every reason to
-      // believe otherwise until the next reload.
-      if (res && res.status === false) {
-        setDevelopers((list) => list.map((d) => (d.id === dev.id
-          ? { ...d, _wa: toLocal(dev.wa_number, dd, dl), _invalid: false } : d)));
-        setWaMsg(res.message || 'Not allowed to change that.');
-        return;
-      }
-      const stored = res?.wa_number != null ? res.wa_number : (local ? dd + local : '');
-      setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, wa_number: stored, _saved: true } : d)));
-      setTimeout(() => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _saved: false } : d))), 1400);
-    } catch (e) {
-      setDevelopers((list) => list.map((d) => (d.id === dev.id
-        ? { ...d, _wa: toLocal(dev.wa_number, dd, dl), _invalid: false } : d)));
-      log.warn('saveDevWa', e?.message);
-    }
-  };
 
   // The new value is passed in, not read from state: RN state has not flushed
   // when a Switch fires (same reason as saveDaily). The server echoes what it
@@ -430,10 +425,10 @@ export default function ConfigurationScreen({ onBack }) {
     return null;
   };
 
-  // Country label for a developer's picker button (their own, or the default).
-  const devCountryLabel = (dev) => {
+  // A developer's own dial code (from /kpi_multitask/list), else the company's.
+  const devDial = (dev) => {
     const c = countries.find((x) => x.id === dev.country_id);
-    return c ? `+${c.phone_code}` : `+${dial}`;
+    return String(dev.dial || (c && c.phone_code) || dial || '91').replace(/\D/g, '');
   };
 
   return (
@@ -605,6 +600,20 @@ export default function ConfigurationScreen({ onBack }) {
               <Text style={{ fontWeight: '800' }}> Presence</Text> (login → logout): at or over reads
               green, under reads red. Presence is wall-clock, so it counts breaks and meetings too —
               the summary shows Productive next to it.</Text>
+
+            <Text style={[s.label, { marginTop: 16 }]}>CEO daily summary (WhatsApp)</Text>
+            <View style={s.inlineRow}>
+              <TextInput
+                style={[s.input, { flex: 1 }]} keyboardType="phone-pad" autoCorrect={false}
+                placeholder="9876543210, 971501234567" placeholderTextColor={COLORS.faint}
+                value={ceoNumbers} onChangeText={setCeoNumbersVal}
+                onEndEditing={saveCeoNumbers}
+              />
+              {<SaveMark k="ceo" />}
+            </View>
+            <Text style={s.hint}>When anyone ends their workday, their Workday Snapshot image with the
+              summary ("What did you work on today?") goes to these WhatsApp numbers only.
+              Separate several with commas. <Text style={{ fontWeight: '800' }}>Empty = off.</Text></Text>
           </Card>
 
           {/* 3. Daily Task Report & Retention */}
@@ -704,7 +713,8 @@ export default function ConfigurationScreen({ onBack }) {
           {/* 4. Developers */}
           <Card color="#6366f1" iconLib="mc" icon="account-group" title="Developers — Multi-task & WhatsApp">
             <Text style={s.hint}>Multi-task ON lets a developer run more than one task at once (default OFF).
-              The WhatsApp number identifies them in Urgent / auto-away messages.</Text>
+              The WhatsApp number identifies them in Urgent / auto-away messages. It follows the
+              login mobile — <Text style={{ fontWeight: '800' }}>change it in Login Management</Text>.</Text>
             {developers.length === 0 ? (
               <Text style={[s.hint, { marginTop: 10 }]}>No developers found.</Text>
             ) : developers.map((dev) => (
@@ -724,30 +734,82 @@ export default function ConfigurationScreen({ onBack }) {
                     />
                   </View>
                 </View>
-                {/* Line 2: tap the +code to set this developer's country, then the number */}
-                <View style={s.devWaRow}>
-                  <TouchableOpacity style={s.dialBadgeSm} onPress={() => setPickCountryForDev(dev)} activeOpacity={0.7}>
-                    <Text style={s.dialBadgeSmTxt}>{devCountryLabel(dev)}</Text>
-                    <Ionicons name="chevron-down" size={12} color={COLORS.muted} style={{ marginLeft: 2 }} />
-                  </TouchableOpacity>
-                  <TextInput
-                    style={s.devWaInput} keyboardType="phone-pad" maxLength={dev.mobile_length || mobileLength}
-                    placeholder={`WhatsApp — ${dev.mobile_length || mobileLength} digits`} placeholderTextColor={COLORS.faint}
-                    value={dev._wa != null ? dev._wa : toLocal(dev.wa_number, dev.dial || dial, dev.mobile_length || mobileLength)}
-                    onChangeText={(t) => setDevelopers((list) => list.map((d) => (d.id === dev.id ? { ...d, _wa: toLocal(t, d.dial || dial, d.mobile_length || mobileLength) } : d)))}
-                    onEndEditing={(e) => saveDevWa(dev, e.nativeEvent.text)}
-                  />
-                  {dev._saved && <Text style={s.devSavedInline}>✓</Text>}
-                </View>
-                {dev._invalid && (
-                  <Text style={s.devInvalid}>
-                    Enter {dev.mobile_length || mobileLength} digits — a short number cannot be
-                    tagged in the group.
-                  </Text>
-                )}
+                {/* Line 2: the WhatsApp number, READ-ONLY. It always equals the
+                    login mobile (Odoo keeps them the same), and the old editor's
+                    route /kpi_multitask/set_wa is retired — it refused every save
+                    with "change it in Login Management". So the row says that,
+                    and taps through to Login Management when it can. */}
+                {(() => {
+                  const dd = devDial(dev);
+                  const shown = toLocal(dev.wa_number, dd, dev.mobile_length || mobileLength);
+                  return (
+                    <TouchableOpacity
+                      style={s.devWaRow} activeOpacity={onOpen ? 0.7 : 1} disabled={!onOpen}
+                      onPress={() => onOpen && onOpen('loginmgmt')}
+                    >
+                      <View style={s.dialBadgeSm}><Text style={s.dialBadgeSmTxt}>+{dd}</Text></View>
+                      <View style={[s.devWaInput, s.devWaRead]}>
+                        <Text style={[s.devWaReadTxt, !shown && { color: COLORS.faint }]} numberOfLines={1}>
+                          {shown || 'no login mobile'}
+                        </Text>
+                      </View>
+                      {onOpen ? <Text style={s.devWaEdit}>edit ›</Text> : null}
+                    </TouchableOpacity>
+                  );
+                })()}
+                <Text style={s.devWaHint}>The WhatsApp number follows the login mobile. Change it in Login Management.</Text>
               </View>
             ))}
           </Card>
+
+          {/* 🏁 Finish & client review (models/kpi_finish.py). Left out until it
+              loads, as on the web — defaults here would look like saved values. */}
+          {fin && (
+            <Card color="#16A34A" iconLib="mc" icon="flag-checkered" title="Finish & client review">
+              <Text style={s.label}>Client review (days)</Text>
+              <View style={s.inlineRow}>
+                <TextInput
+                  style={[s.input, { width: 90 }]} keyboardType="number-pad" maxLength={2}
+                  value={reviewDays} onChangeText={setReviewDays}
+                  onEndEditing={saveReviewDays}
+                />
+                <Text style={s.unit}>days</Text>
+                {<SaveMark k="reviewDays" />}
+              </View>
+              <Text style={s.hint}>Days the client has to check finished work (1-60). No answer in time: it
+                closes on its own, the developer is told and 🏁 Full Complete unlocks for them.</Text>
+
+              <View style={[s.switchRow, { marginTop: 16 }]}>
+                <Text style={[s.label, { marginBottom: 0, flex: 1 }]}>Admin check first</Text>
+                {/* The setting is skip_admin; the switch reads the way people
+                    think about it ("an admin checks it"), so it is inverted. */}
+                <Switch
+                  value={!fin.skip_admin}
+                  onValueChange={(v) => saveFinish('skipAdmin', { skip_admin: !v })}
+                  trackColor={{ true: COLORS.primary }}
+                />
+                {<SaveMark k="skipAdmin" />}
+              </View>
+              <Text style={s.hint}>An admin checks finished work before the client. Off: the developer's
+                Partial Complete goes straight to the client.</Text>
+            </Card>
+          )}
+
+          {/* Billing has its own screen (Settings › Billing), as on the web. */}
+          <Card color="#CA8A04" iconLib="mc" icon="receipt" title="Billing">
+            <Text style={[s.hint, { marginTop: 0 }]}>The price list a bill is made from (per client and work
+              type), and each client's invoice WhatsApp group, are in <Text style={{ fontWeight: '800' }}>Settings ›
+              Billing</Text>.</Text>
+            {onOpen ? (
+              <TouchableOpacity style={s.linkBtn} onPress={() => onOpen('billing')} activeOpacity={0.85}>
+                <MaterialCommunityIcons name="receipt" size={15} color={COLORS.primary} />
+                <Text style={s.linkBtnTxt}>Open billing</Text>
+              </TouchableOpacity>
+            ) : null}
+          </Card>
+
+          {/* Who decides a new client request, in order (kpi.escalation.tier). */}
+          <ApprovalChainCard />
 
           {/* 4. WhatsApp Group Reports — which updates get posted and in what
               words. The destination group is NOT chosen here: picking the wrong
@@ -893,36 +955,6 @@ export default function ConfigurationScreen({ onBack }) {
             </View>
           </View>
         </BlurView>
-      </Modal>
-
-      {/* Per-developer country picker */}
-      <Modal visible={!!pickCountryForDev} transparent animationType="fade" onRequestClose={() => setPickCountryForDev(null)}>
-        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setPickCountryForDev(null)}>
-          <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
-            <View style={s.modalHead}>
-              <Text style={s.modalTitle} numberOfLines={1}>Country — {pickCountryForDev?.name || ''}</Text>
-              <TouchableOpacity onPress={() => setPickCountryForDev(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Text style={s.modalClose}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={[{ id: false, name: `Default (+${dial})`, phone_code: dial, _default: true }, ...countries]}
-              keyExtractor={(c) => String(c.id)}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item }) => {
-                const cur = pickCountryForDev ? (pickCountryForDev.country_id || false) : false;
-                const on = (item.id || false) === cur;
-                return (
-                  <TouchableOpacity style={[s.ccRow, on && s.ccRowOn]} onPress={() => chooseDevCountry(pickCountryForDev, item)} activeOpacity={0.8}>
-                    <Text style={s.ccRowName}>{item.name}</Text>
-                    {!item._default && <Text style={s.ccRowMeta}>+{item.phone_code}</Text>}
-                    {on && <Text style={s.ccRowTick}>✓</Text>}
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          </TouchableOpacity>
-        </TouchableOpacity>
       </Modal>
 
       {/* Generic option picker (retention unit / report coverage) */}
@@ -1085,4 +1117,266 @@ const s = StyleSheet.create({
   ccRowName: { flex: 1, fontSize: 15, color: COLORS.ink, fontWeight: '600' },
   ccRowMeta: { fontSize: 13, color: COLORS.muted, marginRight: 8 },
   ccRowTick: { color: COLORS.primary, fontSize: 15, fontWeight: '900' },
+
+  // Developers: the read-only WhatsApp number
+  devWaRead: { justifyContent: 'center', backgroundColor: '#F7F9FC' },
+  devWaReadTxt: { fontSize: 15, color: COLORS.ink, fontWeight: '600' },
+  devWaEdit: { fontSize: 12.5, color: COLORS.primary, fontWeight: '800', marginLeft: 8 },
+  devWaHint: { fontSize: 11.5, color: COLORS.muted, marginTop: 5 },
+
+  linkBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 12,
+    paddingHorizontal: 12, height: 38, borderRadius: 10, borderWidth: 1.5, borderColor: '#C7D8F7', backgroundColor: '#F0F5FF',
+  },
+  linkBtnTxt: { fontSize: 13.5, fontWeight: '800', color: COLORS.primary },
+
+  // Approval chain
+  acHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  acAdd: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, height: 34, borderRadius: 9, backgroundColor: COLORS.primary },
+  acAddTxt: { color: '#fff', fontWeight: '800', fontSize: 12.5 },
+  acWarn: { backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FCA5A5', borderRadius: 10, padding: 10, marginTop: 10 },
+  acWarnTxt: { color: '#B91C1C', fontSize: 12.5, fontWeight: '700', lineHeight: 17 },
+  acTier: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 12, padding: 10, marginTop: 12, backgroundColor: '#FBFCFE' },
+  acTierDup: { borderColor: '#F87171' },
+  acTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  acNum: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#E0ECFF', alignItems: 'center', justifyContent: 'center' },
+  acNumTxt: { fontSize: 12.5, fontWeight: '900', color: COLORS.primary },
+  acIcon: { width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: COLORS.line },
+  acRow2: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  acDupTxt: { fontSize: 11.5, color: '#B91C1C', fontWeight: '700', marginTop: 4 },
+  acPeople: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
+  acPerson: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, borderWidth: 1, borderColor: COLORS.line, borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5, backgroundColor: '#fff', maxWidth: '100%' },
+  acPersonDup: { borderColor: '#F87171', backgroundColor: '#FEE2E2' },
+  acPersonName: { fontSize: 13, fontWeight: '800', color: COLORS.ink },
+  acPersonNum: { fontSize: 11.5, color: COLORS.muted },
+  acMgr: { borderWidth: 1, borderStyle: 'dashed', borderColor: COLORS.line, borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5 },
+  acMgrTxt: { fontSize: 11.5, color: COLORS.muted, lineHeight: 16 },
+  acAddPerson: { borderWidth: 1.5, borderColor: '#C7D8F7', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7, backgroundColor: '#F0F5FF', alignSelf: 'center' },
+  acAddPersonTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary },
 });
+
+// ── Approval chain (kpi.escalation.tier) ────────────────────────────────────
+// Who decides a new client request, in order — edited in place: step name,
+// minutes, "task's manager", the people on the step (with the WhatsApp number
+// their link goes to), order, add / delete. Same reads and writes as the web
+// card (web/components/settings/ApprovalChainCard.jsx) and the Odoo
+// Configuration card. Every write reloads, so what is shown is what is stored.
+function ApprovalChainCard() {
+  const { dialog, confirm, showError } = useAppDialog();
+  const [tiers, setTiers] = useState(null);     // null = loading
+  const [staff, setStaff] = useState([]);
+  const [err, setErr] = useState('');
+  const [saved, setSaved] = useState(0);        // tier id that just saved
+  const [addFor, setAddFor] = useState(null);   // tier whose person picker is open
+  const [busy, setBusy] = useState(false);
+  // Local edits of the name / minutes boxes, keyed by tier id, saved on blur.
+  const [draft, setDraft] = useState({});
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetchApprovalChain();
+      setTiers(r.tiers || []);
+      setStaff(r.staff || []);
+      setDraft({});
+      setErr('');
+    } catch (e) {
+      log.warn('approval chain load', e?.message);
+      setErr(e?.message || 'Could not load the approval chain.');
+      setTiers((t) => t || []);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const run = async (fn, savedId) => {
+    setBusy(true);
+    try {
+      await fn();
+      if (savedId) { setSaved(savedId); setTimeout(() => setSaved((v) => (v === savedId ? 0 : v)), 1500); }
+      await load();
+    } catch (e) {
+      showError("Couldn't save", e?.message || 'Please try again.');
+      await load();
+    } finally { setBusy(false); }
+  };
+  const write = (id, vals) => run(() => writeTier(id, vals), id);
+  const move = (i, dir) => {
+    const list = [...tiers]; const j = i + dir;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    run(() => Promise.all(list.map((t, k) => writeTier(t.id, { sequence: (k + 1) * 10 }))));
+  };
+  const add = () => {
+    const last = tiers?.[tiers.length - 1];
+    run(() => createTier({ name: 'New step', minutes: 5, sequence: (last?.sequence || 0) + 10 }));
+  };
+  const del = (t) => confirm({
+    title: 'Delete this step?', message: `"${t.name}" is removed from the approval chain.`,
+    confirmLabel: 'Delete', destructive: true, tone: 'danger',
+    // Not returned: the dialog closes at once, so an error from run() is not
+    // wiped by the dialog closing on settle (useAppDialog).
+    onConfirm: () => { run(() => deleteTier(t.id)); },
+  });
+  const removePerson = (t, u) => confirm({
+    title: 'Remove this person?', message: `${u.name} will no longer be asked at step "${t.name}".`,
+    confirmLabel: 'Remove', destructive: true, tone: 'danger',
+    onConfirm: () => { write(t.id, { user_ids: [[3, u.id]] }); },
+  });
+
+  const person = (id) => staff.find((u) => u.id === id) || { id, name: `#${id}`, number: '', canDecide: false };
+  // ⚠ The same person (or the task's manager) on two steps asks the same person
+  // twice: the later step adds nothing. Shown in red, not blocked — as the web.
+  const list = tiers || [];
+  const label = (j) => `step ${j + 1} · ${list[j].name}`;
+  const personDup = (i, id) => { const j = list.findIndex((t, k) => k !== i && (t.user_ids || []).includes(id)); return j < 0 ? '' : label(j); };
+  const mgrDup = (i) => { if (!list[i].use_task_manager) return ''; const j = list.findIndex((t, k) => k < i && t.use_task_manager); return j < 0 ? '' : label(j); };
+  const nameDup = (i) => { const n = (list[i].name || '').trim().toLowerCase(); const j = list.findIndex((t, k) => k !== i && (t.name || '').trim().toLowerCase() === n); return j < 0 ? '' : label(j); };
+  const anyDup = list.some((t, i) => mgrDup(i) || nameDup(i) || (t.user_ids || []).some((id) => personDup(i, id)));
+  const addIdx = addFor ? list.findIndex((t) => t.id === addFor.id) : -1;
+
+  return (
+    <View style={[s.card, { borderLeftColor: '#7C3AED' }]}>
+      <View style={s.cardHead}>
+        <MaterialCommunityIcons name="account-arrow-right" size={18} color="#7C3AED" />
+        <Text style={[s.cardTitle, { flex: 1 }]}>Approval chain</Text>
+        {busy ? <ActivityIndicator size="small" color={COLORS.primary} /> : null}
+        <TouchableOpacity style={s.acAdd} onPress={add} disabled={busy || tiers === null} activeOpacity={0.85}>
+          <Ionicons name="add" size={16} color="#fff" />
+          <Text style={s.acAddTxt}>Add step</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={s.cardBody}>
+        <Text style={[s.hint, { marginTop: 0 }]}>A new client request goes to step 1. If nobody there decides
+          within its minutes, the next step is asked, and so on. After the last step it keeps waiting and
+          the last step is reminded every 30 minutes. <Text style={{ fontWeight: '800' }}>Nothing is accepted
+          automatically.</Text> Each person gets a private WhatsApp link on the number under their name.</Text>
+
+        {tiers === null && <ActivityIndicator style={{ marginTop: 12 }} color={COLORS.primary} />}
+        {!!err && <Text style={[s.devInvalid, { marginTop: 10 }]}>{err}</Text>}
+        {tiers && !tiers.length && !err && <Text style={[s.hint, { marginTop: 10 }]}>No steps — every manager is asked at once.</Text>}
+        {anyDup && (
+          <View style={s.acWarn}>
+            <Text style={s.acWarnTxt}>⚠ Some people are used on more than one step (marked in red). The same
+              person asked twice adds nothing — put someone else on the later step.</Text>
+          </View>
+        )}
+
+        {list.map((t, i) => {
+          const d = draft[t.id] || {};
+          const nameVal = d.name != null ? d.name : (t.name || '');
+          const minVal = d.minutes != null ? d.minutes : String(t.minutes ?? '');
+          return (
+            <View key={t.id} style={[s.acTier, (mgrDup(i) || nameDup(i)) && s.acTierDup]}>
+              <View style={s.acTop}>
+                <View style={s.acNum}><Text style={s.acNumTxt}>{i + 1}</Text></View>
+                <TextInput
+                  style={[s.input, { flex: 1, height: 40, fontWeight: '800' }]} value={nameVal}
+                  onChangeText={(v) => setDraft((x) => ({ ...x, [t.id]: { ...x[t.id], name: v } }))}
+                  onEndEditing={() => { const v = nameVal.trim(); if (v && v !== t.name) write(t.id, { name: v }); }}
+                />
+                <TouchableOpacity style={s.acIcon} disabled={i === 0 || busy} onPress={() => move(i, -1)}>
+                  <Ionicons name="arrow-up" size={16} color={i === 0 ? COLORS.faint : COLORS.navy} />
+                </TouchableOpacity>
+                <TouchableOpacity style={s.acIcon} disabled={i === list.length - 1 || busy} onPress={() => move(i, 1)}>
+                  <Ionicons name="arrow-down" size={16} color={i === list.length - 1 ? COLORS.faint : COLORS.navy} />
+                </TouchableOpacity>
+                <TouchableOpacity style={s.acIcon} disabled={busy} onPress={() => del(t)}>
+                  <Ionicons name="trash-outline" size={16} color={COLORS.red} />
+                </TouchableOpacity>
+              </View>
+              {!!nameDup(i) && <Text style={s.acDupTxt}>⚠ Name already used for {nameDup(i)}</Text>}
+
+              <View style={s.acRow2}>
+                <TextInput
+                  style={[s.input, { width: 70, height: 40 }]} keyboardType="number-pad" value={minVal}
+                  onChangeText={(v) => setDraft((x) => ({ ...x, [t.id]: { ...x[t.id], minutes: v.replace(/[^0-9]/g, '') } }))}
+                  onEndEditing={() => { const v = Math.max(1, parseInt(minVal, 10) || 1); if (v !== t.minutes) write(t.id, { minutes: v }); else setDraft((x) => ({ ...x, [t.id]: { ...x[t.id], minutes: undefined } })); }}
+                />
+                <Text style={s.unit}>min</Text>
+                <View style={{ flex: 1 }} />
+                <Text style={[s.devSmall, { marginRight: 4 }]}>Task's manager</Text>
+                <Switch
+                  value={!!t.use_task_manager}
+                  onValueChange={(v) => write(t.id, { use_task_manager: v })}
+                  trackColor={{ true: COLORS.primary }}
+                />
+                {saved === t.id && <Text style={s.savedTick}>✓</Text>}
+              </View>
+
+              <View style={s.acPeople}>
+                {(t.user_ids || []).map((id) => {
+                  const u = person(id);
+                  const dup = personDup(i, id);
+                  return (
+                    <View key={id} style={[s.acPerson, dup && s.acPersonDup]}>
+                      <View style={{ flexShrink: 1 }}>
+                        <Text style={s.acPersonName} numberOfLines={1}>{u.name}</Text>
+                        <Text style={s.acPersonNum}>{u.number || 'no WhatsApp number'}</Text>
+                        {!!dup && <Text style={s.acDupTxt}>⚠ Already used for {dup}</Text>}
+                      </View>
+                      <TouchableOpacity onPress={() => removePerson(t, u)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="close" size={15} color={COLORS.muted} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+                {(t.use_task_manager || !(t.user_ids || []).length) && (
+                  <View style={[s.acMgr, mgrDup(i) && s.acPersonDup]}>
+                    <Text style={s.acMgrTxt}>
+                      {t.use_task_manager ? "the task's manager\nfrom the task"
+                        : "Nobody yet — add a person\nuntil then it asks the task's manager"}
+                    </Text>
+                    {!!mgrDup(i) && <Text style={s.acDupTxt}>⚠ Already used for {mgrDup(i)}</Text>}
+                  </View>
+                )}
+                <TouchableOpacity style={s.acAddPerson} onPress={() => setAddFor(t)} disabled={busy} activeOpacity={0.85}>
+                  <Text style={s.acAddPersonTxt}>+ Add person</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      {/* Person picker for one step. Only admins / coordinators can decide, so
+          they are listed first; anyone already on another step is marked. */}
+      <Modal visible={!!addFor} transparent animationType="fade" onRequestClose={() => setAddFor(null)}>
+        <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setAddFor(null)}>
+          <TouchableOpacity style={s.modalSheet} activeOpacity={1}>
+            <View style={s.modalHead}>
+              <Text style={s.modalTitle} numberOfLines={1}>Add to “{addFor?.name || ''}”</Text>
+              <TouchableOpacity onPress={() => setAddFor(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={s.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={staff
+                .filter((u) => addFor && !(addFor.user_ids || []).includes(u.id))
+                .sort((a, b) => (b.canDecide - a.canDecide) || a.name.localeCompare(b.name))}
+              keyExtractor={(u) => String(u.id)}
+              keyboardShouldPersistTaps="handled"
+              ListEmptyComponent={<Text style={[s.hint, { padding: 20 }]}>Everyone is already on this step.</Text>}
+              renderItem={({ item: u }) => {
+                const dup = addIdx >= 0 ? personDup(addIdx, u.id) : '';
+                return (
+                  <TouchableOpacity
+                    style={s.ccRow} activeOpacity={0.8}
+                    onPress={() => { const t = addFor; setAddFor(null); write(t.id, { user_ids: [[4, u.id]] }); }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.ccRowName, dup && { color: '#DC2626' }]}>{u.name}</Text>
+                      <Text style={s.ccRowMeta}>
+                        {u.number || 'no WhatsApp number'}{u.canDecide ? '' : ' · cannot decide'}
+                        {dup ? ` — ⚠ already used for ${dup}` : ''}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+      {dialog}
+    </View>
+  );
+}
