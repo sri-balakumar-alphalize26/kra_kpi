@@ -5,7 +5,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   View, Text, Image, ScrollView, TouchableOpacity, StyleSheet, Dimensions,
   Modal, ActivityIndicator, Animated, Easing, StatusBar as RNStatusBar,
-  TextInput, KeyboardAvoidingView, Platform, Switch,
+  TextInput, KeyboardAvoidingView, Platform, Switch, AppState,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -21,6 +21,7 @@ import { hapticsEnabled, setHapticsEnabled } from '../utils/haptics';
 import { getConnection, saveSession, getQuickActions, saveQuickActions, getMenuOrder, saveMenuOrder, getAvatar, saveAvatar, clearAvatar, getHomeCardTask, saveHomeCardTask } from '../api/session';
 import ReorderableMenu from '../components/ReorderableMenu';
 import { jsonRpc } from '../api/odooApi';
+import { fetchRoleInfo, cachedKpiRole, ROLE_RETRY_MS } from '../services/roleInfo';
 import { fetchUnreadCount } from '../services/notifications';
 // Lazy, like App.js: a module-scope import of expo-notifications hung the
 // standalone build. Only used to hear a push arrive while Home is open.
@@ -30,7 +31,7 @@ import { fetchTasks, groupIntoLanes } from '../services/kpiActions';
 // The running-task card. pauseAllTasks takes NO task id -- the server scopes it
 // to the caller's running tasks -- so Home can pause without knowing anything
 // about the board's state, and multitasking is handled for free.
-import { getLiveStatus, pauseTask, pauseAllTasks, resumeTask, startTask, undoTaskStart, PAUSE_REASONS } from '../services/kpiActions';
+import { getLiveStatus, pauseTask, pauseAllTasks, resumeTask, startTask, undoTaskStart, undoStartInfo, PAUSE_REASONS } from '../services/kpiActions';
 import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
 import { workdayButtonState } from '../utils/workdayState';
 import { liveFromAnchor, secsSince, fmtClock, fmtHMS } from '../utils/liveTime';
@@ -126,6 +127,12 @@ const QUICK = [
   { label: 'Upload Updates',     lib: 'mc',  name: 'cloud-upload',     dest: 'upload:update',      adminOnly: true,  section: 'main',     bg: '#FFEDD5', fg: '#EA580C' },
   { label: 'Upload Bug Reports', lib: 'mc',  name: 'bug',              dest: 'upload:bug',         adminOnly: true,  section: 'main',     bg: '#FEE2E2', fg: '#DC2626' },
   { label: 'Client Task Queue',  lib: 'mc',  name: 'inbox-arrow-down', dest: 'taskqueue',          adminOnly: true,  section: 'main',     bg: '#FEF3C7', fg: '#D97706' },
+  // Client messages waiting for a manager's answer, with 👨‍💻 Ask a developer
+  // (the web Approvals desk's Questions tab).
+  { label: 'Client Messages',    lib: 'mc',  name: 'message-reply-text-outline', dest: 'clientmsgs', adminOnly: true,  section: 'main',     bg: '#E0F2FE', fg: '#0369A1' },
+  // Discussions / Meetings / Questions with clients, grouped by date and session.
+  { label: 'Client Talks',       lib: 'mc',  name: 'forum-outline',    dest: 'talks',              adminOnly: true,  section: 'main',     bg: '#EDE9FE', fg: '#7C3AED' },
+  { label: 'Meetings',           lib: 'mc',  name: 'video-outline',    dest: 'meetings',           adminOnly: true,  section: 'main',     bg: '#DCFCE7', fg: '#15803D' },
   // Old-DB bugs / updates waiting for their Request ID (same list as the web and Odoo).
   { label: 'Needs Linking',      lib: 'mc',  name: 'link-variant',     dest: 'needslinking',       adminOnly: true,  section: 'main',     bg: '#FFF7ED', fg: '#C2410C' },
   { label: 'Generate Client Files', lib: 'mc', name: 'folder-zip',     dest: 'clientfiles',        adminOnly: true,  section: 'main',     bg: '#E0F2FE', fg: '#0284C7' },
@@ -144,6 +151,8 @@ const QUICK = [
   { label: 'Invoices',           lib: 'mc',  name: 'receipt-text-outline', dest: 'myinvoices',      adminOnly: true,  section: 'reports',  bg: '#FEF9C3', fg: '#CA8A04' },
   { label: 'Company Branding',   lib: 'mc',  name: 'palette',          dest: 'companybranding',    adminOnly: true,  section: 'settings', bg: '#FCE7F3', fg: '#DB2777' },
   { label: 'Configuration',      lib: 'mc',  name: 'cog',              dest: 'config',             adminOnly: true,  section: 'settings', bg: '#E2E8F0', fg: '#475569' },
+  // Settings › Billing: rates, per-client prices, invoice group, Send invoices.
+  { label: 'Billing',            lib: 'mc',  name: 'cash-multiple',    dest: 'billing',            adminOnly: true,  section: 'settings', bg: '#FEF9C3', fg: '#A16207' },
   { label: 'Requests',           lib: 'mc',  name: 'clipboard-list-outline', dest: 'mytasks',      adminOnly: true,  section: 'main',     bg: '#DCFCE7', fg: '#16A34A' },
   // Every role sees this (adminOnly:false → developers; whitelisted → clients;
   // not excluded → admins). Role-tagged manuals are filtered server-side.
@@ -893,33 +902,56 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
   // Coarse role for the stats-strip card set: 'admin' | 'client' | 'developer'.
   const [role, setRole] = useState(null); // null = still resolving
 
+  // One failed lookup used to make this screen 'developer' for the rest of the
+  // session: an admin whose phone was offline for a moment at launch lost every
+  // admin tile until an app restart. Now: seed from the last role the server
+  // gave (cached per uid, shared with App.js's gate), retry with a short
+  // backoff, re-check whenever the app comes back to the foreground, and never
+  // downgrade a role the server already confirmed because of a network error.
   useEffect(() => {
-    (async () => {
-      try {
-        const { serverUrl } = await getConnection();
-        if (!serverUrl) { setIsAdmin(true); setRole('admin'); return; } // offline demo → show all
-        const info = await jsonRpc(serverUrl, '/kpi_user/info', {});
-        // The KRA/KPI role (kpi_role: admin|client|user) is the single source of
-        // truth — the same value Login Management's dropdown sets. 'user' is this
-        // screen's 'developer'. Falls back to the flags on an older server.
-        const kpiRole = (info && info.kpi_role) || '';
-        const admin = kpiRole ? kpiRole === 'admin'
-          : !!(info && (info.is_system || info.is_owner || info.is_admin));
-        const r = kpiRole
-          ? (kpiRole === 'admin' ? 'admin' : kpiRole === 'client' ? 'client' : 'developer')
-          : (admin ? 'admin' : (info && info.is_client ? 'client' : 'developer'));
-        log.info('home role', { kpi_role: kpiRole, admin, role: r, login: info?.login });
+    let alive = true;
+    let timer = null;
+    let tries = 0;
+    const apply = (kpiRole) => {
+      const r = kpiRole === 'admin' ? 'admin' : kpiRole === 'client' ? 'client' : 'developer';
+      setIsAdmin(r === 'admin');
+      setRole(r);
+    };
+    const check = async () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      const res = await fetchRoleInfo(uid);
+      if (!alive) return;
+      if (res.offlineDemo) { setIsAdmin(true); setRole('admin'); return; } // offline demo → show all
+      if (res.fromServer) {
+        // kpi_role (admin|client|developer) is the single source of truth — the
+        // value Login Management's dropdown sets; a coordinator reports 'admin'.
+        log.info('home role', { kpi_role: res.kpiRole, login: res.info?.login });
         roleFromServer.current = true;
-        setIsAdmin(admin);
-        setRole(r);
-      } catch (e) {
-        log.warn('role check failed, defaulting to non-admin', e?.message);
-        roleFromServer.current = false;
-        setIsAdmin(false);
-        setRole('developer');
+        tries = 0;
+        apply(res.kpiRole);
+        return;
       }
+      // Failed. A role already confirmed this session stays as it is. Otherwise
+      // use the cached answer, and only with none at all fall back to the
+      // non-admin set so the screen can draw — then keep trying.
+      if (!roleFromServer.current) {
+        if (res.kpiRole) apply(res.kpiRole);
+        else { setIsAdmin((v) => (v === null ? false : v)); setRole((v) => v || 'developer'); }
+        const gap = ROLE_RETRY_MS[Math.min(tries, ROLE_RETRY_MS.length - 1)];
+        tries += 1;
+        timer = setTimeout(check, gap);
+      }
+    };
+    (async () => {
+      const cached = await cachedKpiRole(uid);
+      if (alive && cached) apply(cached);   // no flash of the wrong tiles while the request runs
+      check();
     })();
-  }, []);
+    // Back to the foreground → ask again (also picks up a role change made on
+    // the web while the app was in the background).
+    const sub = AppState.addEventListener('change', (st) => { if (st === 'active') check(); });
+    return () => { alive = false; if (timer) clearTimeout(timer); sub?.remove?.(); };
+  }, [uid]);
 
   // ---- Live Tracking widget (admin only) -----------------------------------
   // The widget is in every user's picker (App.js keeps the receiver enabled;
@@ -1159,12 +1191,14 @@ function HomeTab({ name, onOpen, uid, workdayLocked, workdayOpen, dayDone, today
   // Undo a Start made by mistake, from the Today card. The dialog closes as soon
   // as it is confirmed and the call runs after, so a refusal can be shown — a
   // pending onConfirm would close whatever dialog replaced it when it settled.
-  const undoStartFromCard = useCallback((task) => {
+  const undoStartFromCard = useCallback(async (task) => {
     if (liveBusy || !task) return;
+    // Same "what is kept" line as the board's confirm; a failed read leaves it off.
+    const info = await undoStartInfo(task.id);
     confirm({
       tone: 'danger',
       destructive: true,
-      ...undoStartConfirm(task, fmtHMS),
+      ...undoStartConfirm(task, fmtHMS, info.keeps),
       onConfirm: () => {
         (async () => {
           setLiveBusy(true);
@@ -1773,6 +1807,12 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar, runningCount =
   const [mustChange, setMustChange] = useState(false);
   useEffect(() => {
     let alive = true;
+    // `developer` is shown as "User", matching _compute_kpi_role's help text.
+    const BADGE = {
+      admin:     { label: 'Admin',  bg: '#EDE9FE', fg: '#6D28D9', icon: 'shield-checkmark' },
+      client:    { label: 'Client', bg: '#CFFAFE', fg: '#0E7490', icon: 'business' },
+      developer: { label: 'User',   bg: '#DBEAFE', fg: '#1D4ED8', icon: 'person' },
+    };
     (async () => {
       try {
         const { serverUrl } = await getConnection();
@@ -1783,12 +1823,6 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar, runningCount =
         // Read the KRA/KPI role straight off the server (res.users.kpi_role:
         // admin | client | developer) — the same single value Login Management's
         // dropdown sets. No re-deriving from group flags: one field, one answer.
-        // `developer` is shown as "User", matching _compute_kpi_role's help text.
-        const BADGE = {
-          admin:     { label: 'Admin',  bg: '#EDE9FE', fg: '#6D28D9', icon: 'shield-checkmark' },
-          client:    { label: 'Client', bg: '#CFFAFE', fg: '#0E7490', icon: 'business' },
-          developer: { label: 'User',   bg: '#DBEAFE', fg: '#1D4ED8', icon: 'person' },
-        };
         // Fallback to the flags only if the server predates kpi_role on this route.
         const key = info.kpi_role
           || ((info.is_system || info.is_owner || info.is_admin) ? 'admin'
@@ -1799,6 +1833,9 @@ function ProfileTab({ user, onLogout, dayDone, avatar, setAvatar, runningCount =
         setKpiRole(BADGE[key] || BADGE.developer);   // never leave the badge blank
       } catch (e) {
         log.warn('profile role failed', e?.message);
+        // Unreachable: show the last role the server gave rather than no badge.
+        const cached = await cachedKpiRole(user?.uid);
+        if (alive && cached && BADGE[cached]) setKpiRole(BADGE[cached]);
       }
     })();
     return () => { alive = false; };

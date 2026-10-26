@@ -23,6 +23,7 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/uploadAmendments';
+import { cachedKpiRole } from '../services/roleInfo';
 
 const log = createLogger('GenClientFiles');
 const TOP = (RNStatusBar.currentHeight || 0) + 12;
@@ -60,7 +61,13 @@ export default function GenerateClientFiles({ onBack }) {
     (async () => {
       setLoading(true);
       try {
-        const info = await svc.getUserInfo().catch((e) => { log.warn('getUserInfo failed', e?.message); return { isMock: false }; });
+        // A failed lookup falls back to the last role the server confirmed
+        // (services/roleInfo) rather than locking an admin out until a restart.
+        const info = await svc.getUserInfo().catch(async (e) => {
+          const r = await cachedKpiRole();
+          log.warn('getUserInfo failed, using cached role', { cached: r || '(none)', err: e?.message });
+          return { isMock: false, is_admin: r === 'admin', is_client: r === 'client' };
+        });
         const allowed = !!(info.isMock || info.is_system || info.is_owner || info.is_admin);
         setCanGenerate(allowed);
         // KRA/KPI role ONLY (Admin / Client / User) — never the Odoo role.
