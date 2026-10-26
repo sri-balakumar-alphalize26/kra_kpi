@@ -90,7 +90,7 @@ export default function AppLoginScreen({ onLogin, onNeedSetup, notice = '' }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(notice || '');
   const [pendingUser, setPendingUser] = useState(null);
-  const [needsSetup, setNeedsSetup] = useState(false);  // password still the default 1111 (not changed yet)
+  const [needsSetup, setNeedsSetup] = useState(false);  // 'default' = PIN still 1111, 'none' = no PIN stored yet, false = fine
   const [resendIn, setResendIn] = useState(0);   // seconds left before "Resend" is allowed
   // Country / mobile format from the Odoo Configuration screen.
   const [dial, setDial] = useState('91');
@@ -178,7 +178,7 @@ export default function AppLoginScreen({ onLogin, onNeedSetup, notice = '' }) {
     log.info('continue mobile', m);
     setBusy(true); setError('');
     try {
-      const { state, name } = await loginCheck(m);
+      const { state, name, hasPassword } = await loginCheck(m);
       log.info('login state', state);
       if (state === 'unknown') return fail('This number is not registered. Please contact your admin to register this number.');
       if (state === 'disabled') return fail('Your login is disabled. Contact your admin.');
@@ -186,7 +186,8 @@ export default function AppLoginScreen({ onLogin, onNeedSetup, notice = '' }) {
       // ready or needs_setup → ask for the password. needs_setup means the app
       // password is still the default 1111 (must-change) → show the red reminder on
       // the password page until they change it (then loginCheck returns 'ready').
-      setNeedsSetup(state === 'needs_setup');
+      // With no PIN stored at all 1111 cannot work, so that case gets its own text.
+      setNeedsSetup(state === 'needs_setup' ? (hasPassword ? 'default' : 'none') : false);
       setStep('password'); setBusy(false);
     } catch (e) { fail('Could not reach the server. Try again.'); }
   }
@@ -405,9 +406,15 @@ export default function AppLoginScreen({ onLogin, onNeedSetup, notice = '' }) {
                       {needsSetup && (
                         <View style={s.pwWarn}>
                           <Ionicons name="alert-circle" size={16} color={COLORS.red} />
-                          <Text style={s.pwWarnTxt}>
-                            Your password is still the default <Text style={{ fontWeight: '800' }}>1111</Text>. Please change it — tap “Forgot password?” below to set your own.
-                          </Text>
+                          {needsSetup === 'none' ? (
+                            <Text style={s.pwWarnTxt}>
+                              You don't have an app password yet. Tap “Forgot password?” below to set one, or ask your admin to reset it in Login Management.
+                            </Text>
+                          ) : (
+                            <Text style={s.pwWarnTxt}>
+                              Your password is still the default <Text style={{ fontWeight: '800' }}>1111</Text>. Please change it — tap “Forgot password?” below to set your own.
+                            </Text>
+                          )}
                         </View>
                       )}
                       <View style={s.field}>

@@ -47,8 +47,9 @@ export async function loginCheck(mobile) {
   const { serverUrl, db, setupUid } = await getConnection();
   if (!serverUrl) return { state: 'unknown' };
   const res = await jsonRpc(serverUrl, '/kpi_app/login_check', { mobile, setup_uid: setupUid || 0 }, undefined, db);
-  log.info('loginCheck ←', { state: res?.state });
-  return { state: res?.state || 'unknown', name: res?.name };
+  log.info('loginCheck ←', { state: res?.state, hasPassword: res?.has_password });
+  // has_password is missing on older servers → assume a PIN exists (old behaviour).
+  return { state: res?.state || 'unknown', name: res?.name, hasPassword: res?.has_password !== false };
 }
 
 // Verify mobile# + password → trusted server-side login. Returns the user object
