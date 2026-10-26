@@ -17,9 +17,11 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import {
-  getClientDashboard, getClientSignature, removeClientSignature, fetchCertificatePdf,
-  getClientLinks, getDbFormLink, getChatLink,
+  getClientDashboard, getClientSignature, removeClientSignature, saveClientSignature, fetchCertificatePdf,
+  getClientLinks, getDbFormLink, getChatLink, getReviewDays,
 } from '../services/clientPortal';
+import SignaturePad from '../components/SignaturePad';
+import { parseServerTs, reviewDueText, signerOptions, signoffReady } from '../utils/clientSignoff';
 import * as WebBrowser from 'expo-web-browser';
 // /legacy: this screen uses StorageAccessFramework, EncodingType,
 // writeAsStringAsync and cacheDirectory, all of which SDK 54 moved off the bare
@@ -52,6 +54,11 @@ const STATE_META = {
   // Requested" reads better than the backend's "Rework Required".
   rework:              { label: 'Changes Requested', bg: '#FFEDD5', fg: '#EA580C' },
   awaiting_client:     { label: 'Awaiting You', bg: '#CFFAFE', fg: '#0891B2' },
+  // Before work starts: the client approves who does it (pre-approval).
+  queue_waiting:          { label: 'In Queue',          bg: '#E2E8F0', fg: '#475569' },
+  pre_approval_pending:   { label: 'Needs Your Approval', bg: '#FEF9C3', fg: '#CA8A04' },
+  pre_approval_partial:   { label: 'Needs Your Approval', bg: '#FEF9C3', fg: '#CA8A04' },
+  pre_approval_approved:  { label: 'Approved · Not Started', bg: '#DCFCE7', fg: '#16A34A' },
   completed:           { label: 'Completed',   bg: '#DCFCE7', fg: '#16A34A' },
 };
 const KIND_META = {
@@ -79,7 +86,22 @@ function useHeartbeat(pulse) {
   return beat.interpolate({ inputRange: [0, 1], outputRange: [0, 0.9] });
 }
 
-function TaskCard({ t, highlight, onPress, pulse, onLayout }) {
+// "Awaiting your sign-off": when the review closes on its own (review_due_at), or
+// the rule when the payload has no date. Re-reads the clock every 30s — the text
+// is in minutes at best, so a 1s tick would only cost renders.
+function ReviewDue({ dueAt, days }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!dueAt) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, [dueAt]);
+  const r = reviewDueText({ dueAt, days, now });
+  if (!r) return null;
+  return <Text style={[s.reviewDue, r.due && s.cdDue]}>{r.text}</Text>;
+}
+
+function TaskCard({ t, highlight, onPress, pulse, onLayout, reviewDays }) {
   const sc = stateChip(t.task_state);
   const kind = KIND_META[t.kind] || null;
   const washOpacity = useHeartbeat(pulse);
@@ -100,7 +122,16 @@ function TaskCard({ t, highlight, onPress, pulse, onLayout }) {
         {t.has_signed_certificate ? (
           <View style={s.certTag}><Ionicons name="ribbon" size={12} color="#16A34A" /><Text style={s.certTxt}>Certificate</Text></View>
         ) : null}
+        {t.finish_partial ? <View style={s.partTag}><Text style={s.partTagTxt}>🏁 Partly completed</Text></View> : null}
       </View>
+      {/* 🏁 Sent as a Partial Finish: the team's summary of what is done so far
+          (server: finish_partial / partial_summary, kpi_finish.py) — the same
+          box the web portal and the WhatsApp sign-off page show. */}
+      {t.finish_partial ? (
+        <View style={s.partBox}>
+          <Text style={s.partTxt} numberOfLines={3}>{t.partial_summary || 'The team sent this as a partial finish.'}</Text>
+        </View>
+      ) : null}
       {/* Client above project. Both go on their own truncating line rather than into
           cardTop/metaRow, neither of which wraps — that is how the tablet-era rows
           overflowed at 360dp. client_name has always been in the dashboard payload.
@@ -110,6 +141,8 @@ function TaskCard({ t, highlight, onPress, pulse, onLayout }) {
       {t.client_name ? <Text style={s.sub} numberOfLines={1}>🏢 {t.client_name}</Text> : null}
       {t.project_name && t.project_name !== t.client_name
         ? <Text style={s.sub} numberOfLines={1}>📁 {t.project_name}</Text> : null}
+      {/* Only on sign-off cards (highlight): everything else is not with the client. */}
+      {highlight ? <ReviewDue dueAt={t.review_due_at} days={reviewDays} /> : null}
     </TouchableOpacity>
   );
 }
@@ -153,14 +186,6 @@ function CollapsibleSection({ icon, label, count, open, onToggle, children }) {
       {open ? children : null}
     </>
   );
-}
-
-// Parse the server's 'YYYY-MM-DD HH:MM:SS' (UTC) into ms. Built explicitly rather
-// than via `new Date(str)` — RN/iOS parses that format inconsistently.
-function parseServerTs(s) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s || '');
-  if (!m) return null;
-  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
 }
 
 // Live countdown to auto-approval. Anchored to the SERVER clock (server_now) so a
@@ -279,11 +304,22 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   const [recOpen, setRecOpen] = useState(false);
   const [Recorder, setRecorder] = useState(null);
   const [toast, setToast] = useState('');
-  const [filter, setFilter] = useState('pending');     // active tab: pending | in_progress | completed
+  const [filter, setFilter] = useState('pending');     // active tab: pending | in_progress | partial | completed
   const [detail, setDetail] = useState(null);          // task tapped → detail popup
+  // Days a finished task waits for the client before the review closes on its own
+  // (/kpi_config/finish/get). 0 = unknown, the cards then say nothing about it.
+  const [reviewDays, setReviewDays] = useState(0);
   // Stage-2 final sign-off (accepting the FINISHED work → signed certificate).
   const [signFor, setSignFor] = useState(null);        // task being signed off
-  const [signName, setSignName] = useState('');        // typed signature
+  // Full Name: a key from signerOptions(), or 'other' with the name typed below.
+  const [signerKey, setSignerKey] = useState('');
+  const [signName, setSignName] = useState('');        // typed name (signerKey 'other')
+  // Signature: 'saved' (the picked person's saved image) | 'auto' (the name
+  // written as a signature) | 'draw' (finger). Same three as the sign-off page.
+  const [sigMode, setSigMode] = useState('auto');
+  const [sigInked, setSigInked] = useState(false);     // something drawn on the pad
+  const [padDrawing, setPadDrawing] = useState(false); // finger down → sheet stops scrolling
+  const padRef = useRef(null);
   // Optional note. Ends up as client_approval_notes and is printed on the
   // invoice line for this task — the one place the client's own words reach
   // the document they are billed with.
@@ -359,6 +395,8 @@ export default function ClientTasks({ onBack, focusTaskId }) {
       ]);
       // Fix / databases / chat buttons — never throws, null hides the row.
       getClientLinks().then(setLinks);
+      // The review window for the sign-off cards — never throws.
+      getReviewDays().then(setReviewDays);
       setData(res);
       setApprovals(appr.kpis || []);
       setSignature(sig);
@@ -451,9 +489,11 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     try {
       const res = await removeClientSignature();
       if (res?.status && !res.hasSignature) {
-        setSignature({ hasSignature: false, imageB64: '' });
+        setSignature((cur) => ({ ...cur, hasSignature: false, imageB64: '' }));
         setSigConfirm(false);
-        flashToast('Signature removed — type your name to sign.');
+        // The sheet may be showing it as the chosen signature right now.
+        setSigMode((m) => (m === 'saved' ? 'auto' : m));
+        flashToast('Signature removed — sign with Auto or Draw.');
       } else {
         flashToast(res?.message || 'Could not remove the signature.');
       }
@@ -594,21 +634,43 @@ export default function ClientTasks({ onBack, focusTaskId }) {
   }, [flashToast]);
 
   // ── Stage-2 final sign-off ───────────────────────────────────────────────
+  // Full Name choices: the task's own list of the client's people when the
+  // payload has one (`signers`, as on the sign-off page), else the signed-in
+  // person — the JSON route signs as them.
+  const signers = signerOptions({ signers: signFor?.signers, userName: signature.userName });
+  const signer = signers.find((p) => p.key === signerKey) || null;
+  const signerName = signerKey === 'other' ? signName.trim() : (signer?.name || '');
+  // The picked person's saved signature: a server signer's own `sig` (data URL),
+  // or this account's saved image for 'me'.
+  const savedSig = signer
+    ? (signer.sig || (signer.key === 'me' && signature.hasSignature
+      ? `data:image/png;base64,${signature.imageB64}` : ''))
+    : '';
+  // A saved signature is shown first; changing the name re-picks, like the page.
+  const pickSigner = useCallback((key, list) => {
+    setSignerKey(key);
+    const p = list.find((x) => x.key === key);
+    const hasSaved = !!(p && (p.sig || (p.key === 'me' && signature.hasSignature)));
+    setSigMode(hasSaved ? 'saved' : 'auto');
+    setSigInked(false);
+  }, [signature.hasSignature]);
+
   const openSignoff = useCallback((t) => {
     setSignName('');
     setSignTicks({ delivered: false, works: false, authorized: false });
     setSignErr('');
     setSignNotes('');
+    setSigConfirm(false);
+    // One name → picked already; several → the client chooses.
+    const list = signerOptions({ signers: t.signers, userName: signature.userName });
+    pickSigner(list.length === 1 ? list[0].key : (list.length ? '' : 'other'), list);
     setSignFor(t);
-  }, []);
+  }, [signature.userName, pickSigner]);
   const toggleTick = (k) => setSignTicks((p) => ({ ...p, [k]: !p[k] }));
   // The server rejects the call unless all three are ticked AND a signature is
-  // present, so gate the button on exactly the same rule (no failed round-trip).
-  // "Signature present" means a typed name OR a saved signature image — the app
-  // only knew about the first, so anyone who had uploaded one was still forced to
-  // type a name on every task.
-  const signReady = signTicks.delivered && signTicks.works && signTicks.authorized
-    && (signature.hasSignature || signName.trim().length > 0);
+  // present, so gate the button on the same rule (no failed round-trip) — plus the
+  // sign-off page's own: a Full Name, and a signature (saved, Auto or drawn).
+  const signReady = signoffReady({ ticks: signTicks, name: signerName, mode: sigMode, inked: sigInked });
 
   const confirmSignoff = useCallback(async () => {
     const t = signFor;
@@ -616,7 +678,30 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     setSignBusy(true);
     setSignErr('');
     try {
-      await submitClientSignoff(t.id, { signatureText: signName, notes: signNotes.trim() });
+      // A new signature (Auto / Draw) by the signed-in person becomes their saved
+      // signature, as the sign-off page keeps it on the signer's contact. Not for
+      // anyone else: that would overwrite THIS account's signature with theirs.
+      // Best effort — the typed Full Name alone satisfies the route.
+      let png = sigMode === 'saved' ? (signature.imageB64 || '') : '';
+      if (sigMode !== 'saved' && padRef.current) {
+        try {
+          png = (await padRef.current.toPng()) || '';
+          if (png && signerKey === 'me') {
+            const r = await saveClientSignature(png);
+            if (r.status && r.hasSignature) setSignature((cur) => ({ ...cur, hasSignature: true, imageB64: png }));
+          }
+        } catch (e) {
+          log.warn('signature save failed, signing with the name only', e?.message);
+        }
+      }
+      // The PNG goes with the sign-off so it lands on the task (and its certificate);
+      // `signer` is the server's key for one of this client's people, if one was picked.
+      await submitClientSignoff(t.id, {
+        signatureText: signerName,
+        notes: signNotes.trim(),
+        signer: signerKey && signerKey !== 'me' && signerKey !== 'other' ? signerKey : '',
+        signaturePng: png,
+      });
       setSignFor(null);
       flashToast('Signed off — thank you! The task is complete.');
       load();
@@ -630,29 +715,35 @@ export default function ClientTasks({ onBack, focusTaskId }) {
     } finally {
       setSignBusy(false);
     }
-  }, [signFor, signReady, signBusy, signName, signNotes, flashToast, load]);
+  }, [signFor, signReady, signBusy, sigMode, signerKey, signerName, signNotes, signature.imageB64, flashToast, load]);
 
   // Tappable status filters. Counts are derived from the SAME list the chips
   // filter, so "In Progress 3" always means exactly the 3 rows you get on tap —
   // server totals could disagree with the rows actually returned.
   const kpis = data.kpis || [];
-  // WhatsApp-style 3 tabs. Each tab is a bucket of task_states:
-  //   Pending      = raised / queued / waiting for approval, not started
-  //   In Progress  = being worked, on hold, verifying, or awaiting your sign-off
-  //   Completed    = done
+  // WhatsApp-style tabs. Each is a bucket of task_states, except Partly completed:
+  //   Pending           = raised / queued / waiting for approval, not started
+  //   In Progress       = being worked, on hold, verifying, or awaiting your sign-off
+  //   Partly completed  = sent as a Partial Finish and not completed yet — the
+  //                       server's finish_partial flag, whatever the state (a task
+  //                       there also sits in In Progress), as on the web portal
+  //   Completed         = done
   const TAB_BUCKETS = {
     pending: ['assigned', 'urgent', 'important', 'regular', 'queue_waiting',
       'pre_approval_pending', 'pre_approval_approved', 'pre_approval_partial'],
     in_progress: ['in_progress', 'paused', 'hold', 'rework', 'partially_completed', 'awaiting_client'],
     completed: ['completed'],
   };
+  const inTab = (key, k) => (key === 'partial'
+    ? !!k.finish_partial
+    : (TAB_BUCKETS[key] || TAB_BUCKETS.pending).includes(k.task_state));
   const TABS = [
     { key: 'pending', label: 'Pending' },
     { key: 'in_progress', label: 'In Progress' },
+    { key: 'partial', label: '🏁 Partly completed' },
     { key: 'completed', label: 'Completed' },
-  ].map((t) => ({ ...t, n: kpis.filter((k) => TAB_BUCKETS[t.key].includes(k.task_state)).length }));
-  const bucket = TAB_BUCKETS[filter] || TAB_BUCKETS.pending;
-  const visible = kpis.filter((t) => bucket.includes(t.task_state));
+  ].map((t) => ({ ...t, n: kpis.filter((k) => inTab(t.key, k)).length }));
+  const visible = kpis.filter((t) => inTab(filter, t));
   const activeLabel = (TABS.find((t) => t.key === filter) || TABS[0]).label;
 
   return (
@@ -716,8 +807,12 @@ export default function ClientTasks({ onBack, focusTaskId }) {
             </View>
           )}
 
-          {/* Three tabs — Pending · In Progress · Completed. Tap to switch. */}
-          <View style={s.tabRow}>
+          {/* Tabs — Pending · In Progress · 🏁 Partly completed · Completed. Four
+              do not fit 360dp at a readable size, so the row scrolls sideways. */}
+          <ScrollView
+            horizontal showsHorizontalScrollIndicator={false}
+            style={s.tabScroll} contentContainerStyle={s.tabRow}
+          >
             {TABS.map((t) => {
               const on = filter === t.key;
               return (
@@ -734,7 +829,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 </TouchableOpacity>
               );
             })}
-          </View>
+          </ScrollView>
 
           {/* Stage 1 — approve the assignment the admin made. The only place
               a client acts; auto-approves if they don't. */}
@@ -763,7 +858,7 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 // to the parent, so measuring the inner card here would report ~0
                 // and scroll to the top of the page instead of to this row.
                 <View key={'pa' + t.id} onLayout={onRowLayout(t.id)}>
-                  <TaskCard t={t} highlight onPress={() => setDetail(t)} />
+                  <TaskCard t={t} highlight onPress={() => setDetail(t)} reviewDays={reviewDays} />
                   {/* The work is finished and checked — accept it (certificate is
                       generated) or send it back. Without the second button the only
                       in-app action was Accept, so anyone unhappy with the work had no
@@ -970,6 +1065,12 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 {detail?.description ? (
                   <DRow label="Details" value={String(detail.description).replace(/<[^>]+>/g, '').trim()} />
                 ) : null}
+                {detail?.finish_partial ? (
+                  <View style={[s.partBox, { marginTop: 10 }]}>
+                    <Text style={s.partHead}>🏁 Partly completed — what we did so far</Text>
+                    <Text style={s.partTxt}>{detail.partial_summary || 'The team sent this as a partial finish.'}</Text>
+                  </View>
+                ) : null}
                 <DRow label="Priority" value={PRIO_LABEL[detail?.priority] || '—'} />
                 {detail?.deadline ? <DRow label="Deadline" value={detail.deadline} /> : null}
                 {/* Raised "from the old system": the requirement lives in the old
@@ -1013,7 +1114,9 @@ export default function ClientTasks({ onBack, focusTaskId }) {
       </Modal>
 
       {/* Final sign-off — accepting the finished work. Ticking all three + a
-          typed name is exactly what /kpi_client_approval/approve requires. */}
+          name is exactly what /kpi_client_approval/approve requires; the Full
+          Name list and the Saved / Auto / Draw signature match the WhatsApp
+          sign-off page (wa_signoff_page). */}
       <Modal visible={!!signFor} transparent animationType="fade" onRequestClose={() => setSignFor(null)}>
         <View style={s.mWrap}>
           <View style={s.signCard}>
@@ -1024,9 +1127,17 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                 <Ionicons name="close" size={22} color="#fff" />
               </TouchableOpacity>
             </View>
-            <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
+            {/* Not scrollable while a finger is on the signature pad: otherwise the
+                sheet scrolls instead of the stroke being drawn. */}
+            <ScrollView style={{ maxHeight: 440 }} keyboardShouldPersistTaps="handled" scrollEnabled={!padDrawing}>
               <View style={s.signPad}>
                 <Text style={s.signTask} numberOfLines={3}>{signFor?.name}</Text>
+                {signFor?.finish_partial ? (
+                  <View style={[s.partBox, { marginTop: 0, marginBottom: 12 }]}>
+                    <Text style={s.partHead}>🏁 Partly completed — what we did so far</Text>
+                    <Text style={s.partTxt} numberOfLines={6}>{signFor.partial_summary || 'The team sent this as a partial finish.'}</Text>
+                  </View>
+                ) : null}
                 <Text style={s.signLead}>Please confirm:</Text>
                 {[
                   ['delivered', 'The work was delivered to me'],
@@ -1042,25 +1153,73 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                     <Text style={s.tickTxt}>{label}</Text>
                   </TouchableOpacity>
                 ))}
-                {signature.hasSignature ? (
+                {/* Full Name — one of this client's people (the sign-off page's
+                    list), or typed for someone who is not on it. */}
+                <Text style={[s.signLead, { marginTop: 14 }]}>Full name</Text>
+                <View style={s.reasonWrap}>
+                  {[...signers, { key: 'other', name: signers.length ? 'Someone else' : 'Type your name' }].map((p) => {
+                    const on = signerKey === p.key;
+                    return (
+                      <TouchableOpacity
+                        key={p.key} style={[s.reason, on && s.nameOn]}
+                        onPress={() => pickSigner(p.key, signers)} activeOpacity={0.85}
+                      >
+                        <Text style={[s.reasonTxt, on && s.nameTxtOn]}>{p.key === 'other' ? '✍ ' : '👤 '}{p.name}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {signerKey === 'other' ? (
+                  <TextInput
+                    style={[s.signInput, { marginTop: 8 }]}
+                    placeholder="Full name"
+                    placeholderTextColor={COLORS.faint}
+                    value={signName}
+                    onChangeText={setSignName}
+                    autoCapitalize="words"
+                    maxLength={120}
+                  />
+                ) : null}
+
+                {/* Signature — the saved one, the name written as a signature
+                    (Auto), or signed with a finger (Draw). */}
+                <Text style={[s.signLead, { marginTop: 14 }]}>Signature</Text>
+                <View style={s.sigTabs}>
+                  {[
+                    ...(savedSig ? [['saved', 'Saved']] : []),
+                    ['auto', 'Auto'],
+                    ['draw', 'Draw'],
+                  ].map(([m, lbl]) => {
+                    const on = sigMode === m;
+                    return (
+                      <TouchableOpacity
+                        key={m} style={[s.sigTab, on && s.sigTabOn]} activeOpacity={0.85}
+                        onPress={() => { setSigMode(m); if (m === 'draw') { setSigInked(false); padRef.current?.clear(); } }}
+                      >
+                        <Text style={[s.sigTabTxt, on && s.sigTabTxtOn]}>{lbl}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {sigMode === 'draw' && sigInked ? (
+                    <TouchableOpacity onPress={() => padRef.current?.clear()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Text style={s.sigClear}>↺ Clear</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                {sigMode === 'saved' && savedSig ? (
                   <>
-                    <Text style={[s.signLead, { marginTop: 14 }]}>Your saved signature</Text>
                     <View style={s.sigBox}>
-                      <Image
-                        source={{ uri: `data:image/png;base64,${signature.imageB64}` }}
-                        style={s.sigImg}
-                        resizeMode="contain"
-                      />
+                      <Image source={{ uri: savedSig }} style={s.sigImg} resizeMode="contain" />
                     </View>
                     {/* Saving the wrong image used to be permanent from the app —
                         it was reused on every future sign-off with no way to
-                        change it. Removing is safe: sign-off falls back to the
-                        typed name. */}
-                    {sigRemoving ? (
+                        change it. Removing is safe: Auto / Draw still sign.
+                        Only this account's own signature can be removed here. */}
+                    {signerKey !== 'me' ? null : sigRemoving ? (
                       <Text style={s.sigRemoveHint}>Removing…</Text>
                     ) : sigConfirm ? (
                       <View style={s.sigConfirmRow}>
-                        <Text style={s.sigRemoveHint}>Remove it? You can type your name instead.</Text>
+                        <Text style={s.sigRemoveHint}>Remove it? You can sign with Auto or Draw instead.</Text>
                         <TouchableOpacity onPress={() => setSigConfirm(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                           <Text style={s.sigKeep}>Keep</Text>
                         </TouchableOpacity>
@@ -1076,15 +1235,13 @@ export default function ClientTasks({ onBack, focusTaskId }) {
                   </>
                 ) : (
                   <>
-                    <Text style={[s.signLead, { marginTop: 14 }]}>Type your name to sign</Text>
-                    <TextInput
-                      style={s.signInput}
-                      placeholder="Your full name"
-                      placeholderTextColor={COLORS.faint}
-                      value={signName}
-                      onChangeText={setSignName}
-                      autoCapitalize="words"
+                    <SignaturePad
+                      ref={padRef} mode={sigMode} name={signerName}
+                      onInk={setSigInked} onDrawing={setPadDrawing}
                     />
+                    {signerKey === 'me' ? (
+                      <Text style={s.sigRemoveHint}>It is kept as your saved signature for next time.</Text>
+                    ) : null}
                   </>
                 )}
                 {/* Optional, and it does not stay here: the server stores it as
@@ -1158,8 +1315,10 @@ const s = StyleSheet.create({
   chipOnTxt: { color: '#fff' },
   totalNum: { fontSize: 18, fontWeight: '900', color: COLORS.navy },
   totalLbl: { fontSize: 10.5, color: COLORS.muted, fontWeight: '600' },
-  // 3-tab switcher (Pending / In Progress / Completed)
-  tabRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  // Tab switcher (Pending / In Progress / 🏁 Partly completed / Completed). A
+  // sideways-scrolling row; the vertical padding keeps the tab shadows unclipped.
+  tabScroll: { flexGrow: 0, marginBottom: 11, marginHorizontal: -2 },
+  tabRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 2, paddingTop: 1, paddingBottom: 3 },
   linkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
   linkBtn: { backgroundColor: '#fff', borderRadius: 10, paddingHorizontal: 11, height: 36, justifyContent: 'center', borderWidth: 1, borderColor: '#DBE4F3', ...SHADOW },
   linkBtnRed: { borderColor: '#FCA5A5' },
@@ -1170,8 +1329,8 @@ const s = StyleSheet.create({
   linkFix: { alignSelf: 'flex-start', marginTop: 8, backgroundColor: COLORS.red, borderRadius: 8, paddingHorizontal: 14, height: 32, justifyContent: 'center' },
   linkFixTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   tab: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: '#fff', borderRadius: 12, paddingVertical: 10,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: '#fff', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 14,
     shadowColor: '#0B2A6B', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
   tabOn: { backgroundColor: COLORS.primary },
@@ -1213,6 +1372,16 @@ const s = StyleSheet.create({
   certTag: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   certTxt: { fontSize: 11, color: '#16A34A', fontWeight: '700' },
   sub: { fontSize: 12, color: COLORS.muted, marginTop: 5 },
+  // 🏁 Partial Finish — the same amber box as the web portal.
+  partTag: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: '#FFF8E6' },
+  partTagTxt: { fontSize: 11, fontWeight: '800', color: '#8A5300' },
+  partBox: {
+    backgroundColor: '#FFF8E6', borderWidth: 1, borderColor: '#FFE08A', borderRadius: 10,
+    paddingHorizontal: 10, paddingVertical: 8, marginTop: 8,
+  },
+  partHead: { fontSize: 12.5, fontWeight: '800', color: '#8A5300', marginBottom: 4 },
+  partTxt: { fontSize: 12.5, color: COLORS.ink, lineHeight: 18 },
+  reviewDue: { fontSize: 12, color: '#CA8A04', fontWeight: '700', marginTop: 7 },
 
   // ── Approval needed ──────────────────────────────────────────────────────
   cardApprove: { borderColor: COLORS.primary, borderWidth: 1.5, backgroundColor: '#F7FAFF' },
@@ -1325,6 +1494,18 @@ const s = StyleSheet.create({
     paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center',
   },
   sigImg: { width: '100%', height: 76 },
+  // Full Name chips reuse the reason chips (s.reason), selected in green here.
+  nameOn: { borderColor: COLORS.green, backgroundColor: COLORS.greenBg },
+  nameTxtOn: { color: COLORS.green },
+  sigTabs: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  sigTab: {
+    paddingHorizontal: 14, height: 32, borderRadius: 9, justifyContent: 'center',
+    borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#fff',
+  },
+  sigTabOn: { borderColor: COLORS.primary, backgroundColor: '#E0ECFF' },
+  sigTabTxt: { fontSize: 12.5, fontWeight: '800', color: COLORS.muted },
+  sigTabTxtOn: { color: COLORS.primary },
+  sigClear: { fontSize: 12.5, fontWeight: '800', color: COLORS.primary, marginLeft: 'auto' },
   signNote: { fontSize: 12, color: COLORS.muted, marginTop: 10, lineHeight: 17 },
   signDo: { backgroundColor: COLORS.green },
   signDoOff: { backgroundColor: '#9DBBA6' },

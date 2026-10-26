@@ -61,11 +61,17 @@ export async function decidePreApproval(kpiId, action, feedback) {
 // Different from the pre-approval above: that one approves WHO does the work,
 // before it starts. This one accepts the FINISHED work after the admin has
 // checked it (task_state 'awaiting_client'), and generates the signed completion
-// certificate. It never auto-approves — it waits for the client.
+// certificate. Silence does close it in the end: after kra_kpi.client_review_days
+// with no reply the server ends the review on its own (kpi_finish.py,
+// review_due_at).
 //
 // The server (/kpi_client_approval/approve) REQUIRES all three confirmations and
 // a signature; it accepts a typed name in place of an uploaded signature image.
-export async function submitClientSignoff(kpiId, { signatureText, notes } = {}) {
+// `signatureText` is the Full Name picked in the sheet. `signaturePng` (a data URL
+// or bare base64) is kept on the task like the WhatsApp sign-off page does, and on
+// `signer`'s contact when that is one of this client's people (_client_signers).
+// Older servers ignore both and keep only the typed name.
+export async function submitClientSignoff(kpiId, { signatureText, notes, signer, signaturePng } = {}) {
   const { serverUrl, db } = await getConnection();
   if (!serverUrl) return { status: true };
   const res = await jsonRpc(
@@ -79,6 +85,8 @@ export async function submitClientSignoff(kpiId, { signatureText, notes } = {}) 
       chk_works: true,
       chk_authorized: true,
       notes: notes || '',
+      signer: signer || '',
+      signature_png: signaturePng || '',
     },
     undefined, db,
   );
