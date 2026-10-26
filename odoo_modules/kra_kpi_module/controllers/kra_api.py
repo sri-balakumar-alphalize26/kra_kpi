@@ -2155,7 +2155,10 @@ class KraKpiAPI(http.Controller):
         locked_to = self._device_lock_owner(user, params)
         if locked_to:
             return {'status': True, 'state': 'wrong_device', 'name': locked_to}
-        return {'status': True, 'state': user._app_login_state(), 'name': user.name}
+        # needs_setup covers both "PIN is still 1111" and "no PIN stored at all";
+        # only the first can log in with 1111, so say which one it is.
+        return {'status': True, 'state': user._app_login_state(), 'name': user.name,
+                'has_password': bool(user.kpi_app_password_hash)}
 
     @http.route('/kpi_app/login', type='json', auth='public', methods=['POST'], csrf=False)
     def app_login(self, **params):
