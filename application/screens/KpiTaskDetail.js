@@ -4,7 +4,15 @@
 //
 //   KPI Details table · User Manual / Documentation (+ upload) · Submit Progress
 //   Update (+ file, links) · Link a GitHub branch · Complete This Task ·
-//   GitHub / Documents / Drive & Links · Progress History · Reassignment History
+//   GitHub / Documents / Drive & Links · Progress History · Reassignment History ·
+//   📅 Meetings · History
+//
+// After the client's check it also carries what the web task panel shows: the
+// Database details of a database task (password masked until tapped), every
+// client send-back with its proof, and the 🏁 Full Complete / bill box. Once the
+// task is fully complete its details are locked for everyone but admins
+// (task.details_locked, kra.kpi._details_locked_for): the add / edit / delete
+// buttons go, since the server refuses them.
 //
 // It is a full screen, not a modal: the web replaces the whole page for this, and
 // there is far too much here to sit politely in a dialog.
@@ -42,7 +50,7 @@ import {
   fetchActivity, updateProgress, deleteProgress, updateTaskMeta, fetchProjects,
   fetchLegacy, saveLegacy, legacyVoiceSource, fetchClientSends, parseServerTs,
   fetchChat, sendChat, sendChatFiles, retryChat, fetchChatFile, chatFileKind, CHAT_MAX_FILES, CHAT_MAX_BYTES,
-  chatAct,
+  chatAct, fullComplete, billNow, fetchTaskHistory, fetchTaskMeetings,
 } from '../services/kpiActions';
 import { uploadManual, humanSize, MAX_MANUAL_BYTES, MANUAL_EXTENSIONS } from '../services/uploadAmendments';
 import { makeRateTracker, fmtSpeed, fmtEta } from '../utils/uploadRate';
@@ -54,6 +62,14 @@ import { completeMissing, completeExtras, completeWarnings, warningText } from '
 import CompleteRules from '../components/CompleteRules';
 import FinishModeRadio, { PARTIAL_NOTE } from '../components/FinishModeRadio';
 import { sendHeading, sendStatus, fileIcon, sendFileSource, hasClientSends } from '../utils/clientSends';
+import FinishBox from '../components/FinishBox';
+import SendBackHistory from '../components/SendBackHistory';
+import ProofMedia from '../components/ProofMedia';
+import { joinMeeting } from '../services/meetings';
+import { finishState, fullCompleteRefusal, sendBackRounds } from '../utils/taskFinish';
+import {
+  HISTORY_FILTERS, HISTORY_ICON, filterHistory, groupHistoryByDay, historyDate,
+} from '../utils/taskHistory';
 
 const log = createLogger('KpiDetail');
 
@@ -343,7 +359,64 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
     setError(null);
     setData(res);
     loadLegacy();
+    loadExtras();
   }, [task.id]);
+
+  // ---- 📅 Meetings + History ------------------------------------------------
+  // Both have their own routes (the web panel's TaskMeetings and TaskTimeline),
+  // re-read with every load so a new update or meeting shows up in them too.
+  const [meetings, setMeetings] = useState(null);   // { count, days } | null
+  const [mtOpen, setMtOpen] = useState({});         // meeting id → open
+  const [mtFull, setMtFull] = useState({});         // meeting id → whole transcript
+  const [history, setHistory] = useState(null);     // items; null while loading
+  const [histFilter, setHistFilter] = useState('all');
+  const [histShown, setHistShown] = useState(30);
+  const [histDays, setHistDays] = useState({});     // day label → open (newest day open until tapped)
+  function loadExtras() {
+    fetchTaskMeetings(task.id).then((r) => setMeetings(r.status ? r : null));
+    fetchTaskHistory(task.id).then((r) => {
+      if (!r.status) log.warn('history not loaded', r.message);
+      setHistory(r.status ? r.items : []);
+    });
+  }
+
+  // ---- 🏁 Full Complete / 🧾 Bill now --------------------------------------
+  const [finBusy, setFinBusy] = useState('');        // 'fc' | 'bn' while in flight
+  const [finDlg, setFinDlg] = useState(null);        // { title, message } — a refusal can be a list
+  async function onFullComplete() {
+    setFinBusy('fc');
+    try {
+      const res = await fullComplete(task.id);
+      if (!res || res.status === false) {
+        setFinDlg({ title: "Can't Full Complete yet", message: fullCompleteRefusal(res) });
+        return;
+      }
+      log.info('full complete ← ok', { kpi_id: task.id });
+      flash('ok', res.message || 'Fully complete — it moves to billing.');
+      load(true);
+      onChanged && onChanged();
+    } catch (e) {
+      flash('err', e?.message || 'Could not complete it');
+    } finally { setFinBusy(''); }
+  }
+  async function onBillNow() {
+    setFinBusy('bn');
+    try {
+      const res = await billNow(task.id);
+      if (!res || res.status === false) {
+        setFinDlg({ title: "Can't make the bill", message: (res && res.message) || 'Could not make the bill' });
+        return;
+      }
+      flash('ok', res.bill && res.bill.name ? `Bill ${res.bill.name} made: ${res.bill.money}` : (res.message || 'Bill made.'));
+      load(true);
+      onChanged && onChanged();
+    } catch (e) {
+      flash('err', e?.message || 'Could not make the bill');
+    } finally { setFinBusy(''); }
+  }
+
+  // 🗄 Database card: the password stays masked until tapped (web + Odoo).
+  const [dbShow, setDbShow] = useState(false);
 
   // ---- 🗄️ From the old system (KPI Details card) --------------------------
   // A bug / update raised about a requirement in the OLD database. Its own
@@ -1417,6 +1490,17 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
   }, [actEffectiveRows]);
   const kind = KIND[meta.kind] || KIND.requirement;
   const pr = PRIORITY[t.priority] || PRIORITY.regular;
+  // Fully complete → its updates, files, manuals and GitHub links are locked for
+  // everyone but admins; the server's reason, or '' (admins, and every task
+  // before Full Complete). Every add / edit / delete below is hidden while set.
+  const locked = (data?.task && data.task.details_locked) || '';
+  const dbd = meta.is_db_task ? meta.db_details : null;
+  const sbRounds = sendBackRounds(t);
+  const showFinish = !!finishState(t, { isAdmin: !!meta.is_manager });
+  const histList = filterHistory(history || [], histFilter);
+  const histGroups = groupHistoryByDay(histList.slice(0, histShown));
+  // Until a day is tapped, the newest one is open — the same as Activity.
+  const histDayOpen = (label, i) => (label in histDays ? histDays[label] : i === 0);
 
   return (
     // GradientBackground renders NO children — it is an absolute-fill backdrop
@@ -1552,6 +1636,69 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
               </View>
             </Section>
 
+            {/* ── 🔒 Fully complete: details locked ───────────────────── */}
+            {!!locked && (
+              <View style={[s.warnBox, s.lockBox]}>
+                <Ionicons name="lock-closed" size={15} color={COLORS.navy} />
+                <Text style={[s.warnTxt, { color: COLORS.navy }]}>{locked}</Text>
+              </View>
+            )}
+
+            {/* ── ↩ Client send-backs, with their proof ─────────────────── */}
+            {/* Every round the client sent it back, newest first: what is still
+                wrong, and the photos / videos / voice notes that show it. */}
+            {sbRounds.length > 0 && (
+              <Section icon="arrow-undo-outline" tint={COLORS.red} title={`↩ Client sent it back ${sbRounds.length}×`}
+                subtitle="What the client said is still wrong, newest first. Tap a photo to open it, or play a voice note.">
+                <SendBackHistory task={t} onError={(msg) => flash('err', msg)} />
+              </Section>
+            )}
+
+            {/* ── 🏁 Full Complete / the bill ─────────────────────────────── */}
+            {showFinish && (
+              <View style={s.finWrap}>
+                {/* canFinish: the developer on the task or an admin (the server's
+                    rule). is_assignee also covers contributors; the server refuses
+                    a contributor who is not the assignee, with its own reason. */}
+                <FinishBox
+                  task={t} isAdmin={!!meta.is_manager}
+                  canFinish={!!(meta.is_manager || meta.is_assignee)}
+                  busy={finBusy} onFullComplete={onFullComplete} onBillNow={onBillNow}
+                />
+              </View>
+            )}
+
+            {/* ── 🗄 Database (a database task) ───────────────────────────── */}
+            {/* The four details the Complete form took. The password is masked
+                until tapped; the server only sends these to the team. */}
+            {!!dbd && (
+              <Section icon="server-outline" title="Database" subtitle="Only the team sees the password.">
+                <View style={s.row}>
+                  <Text style={s.rowLabel}>URL</Text>
+                  {dbd.url ? (
+                    <Text style={[s.rowValue, s.linkTxt, { marginTop: 0 }]} numberOfLines={2}
+                      onPress={() => Linking.openURL(/^https?:\/\//i.test(dbd.url) ? dbd.url : `https://${dbd.url}`)
+                        .catch(() => flash('err', 'Could not open that link'))}>
+                      {dbd.url}
+                    </Text>
+                  ) : <Text style={[s.rowValue, { color: COLORS.red }]}>not added</Text>}
+                </View>
+                <Row label="Database" value={dbd.db_name} />
+                <Row label="Username" value={dbd.username} />
+                <View style={[s.row, { borderBottomWidth: 0 }]}>
+                  <Text style={s.rowLabel}>Password</Text>
+                  {dbd.password ? (
+                    <TouchableOpacity style={s.pwRow} onPress={() => setDbShow((v) => !v)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} activeOpacity={0.7}>
+                      <Text style={[s.rowValue, s.mono]} selectable={dbShow}>{dbShow ? dbd.password : '••••••••'}</Text>
+                      <Ionicons name={dbShow ? 'eye-off-outline' : 'eye-outline'} size={16} color={COLORS.primary} />
+                      <Text style={s.pwToggle}>{dbShow ? 'Hide' : 'Show'}</Text>
+                    </TouchableOpacity>
+                  ) : <Text style={[s.rowValue, { color: COLORS.red }]}>not added</Text>}
+                </View>
+              </Section>
+            )}
+
             {/* ── User Manual / Documentation ─────────────────────────── */}
             <Section icon="book-outline" title="User Manual / Documentation"
               subtitle="Guides, documentation, screenshots or clips attached to this task">
@@ -1625,10 +1772,12 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                               <Ionicons name="download" size={13} color="#fff" />
                               <Text style={s.attBtnTxt}>Download</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={s.attDel}
-                              onPress={() => setConfirmDel({ kind: 'manual', id: m.id, name: m.file_name })}>
-                              <Ionicons name="trash-outline" size={13} color="#fff" />
-                            </TouchableOpacity>
+                            {!locked && (
+                              <TouchableOpacity style={s.attDel}
+                                onPress={() => setConfirmDel({ kind: 'manual', id: m.id, name: m.file_name })}>
+                                <Ionicons name="trash-outline" size={13} color="#fff" />
+                              </TouchableOpacity>
+                            )}
                           </>
                         )}
                       </View>
@@ -1637,7 +1786,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 </>
               )}
 
-              {!manOpen ? (
+              {locked ? null : !manOpen ? (
                 <TouchableOpacity style={s.addBtn} onPress={() => setManOpen(true)}>
                   <Ionicons name="add" size={16} color="#fff" />
                   <Text style={s.addBtnTxt}>Add New Manual</Text>
@@ -1722,7 +1871,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                     </View>
                   )}
                   <View style={s.formBtns}>
-                    <TouchableOpacity style={s.ghostBtn} onPress={() => { setManOpen(false); setManFile(null); setManDesc(''); setManLinks([]); setManLink(''); }} disabled={manBusy}>
+                    <TouchableOpacity style={s.ghostBtn} onPress={() => { setManOpen(false); setManFiles([]); setManDesc(''); setManLinks([]); setManLink(''); }} disabled={manBusy}>
                       <Text style={s.ghostBtnTxt}>Cancel</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[s.primBtn, (!manFiles.length || !manDesc.trim() || manBusy) && s.btnOff]}
@@ -1735,6 +1884,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
             </Section>
 
             {/* ── Submit Progress Update ──────────────────────────────── */}
+            {!locked && (
             <Section icon="create-outline" title="Submit Progress Update">
               <Text style={s.label}>Progress Summary <Text style={s.req}>*</Text></Text>
               <TextInput style={[s.input, s.textarea]} multiline placeholder="Describe the work done, issues found, next steps…"
@@ -1825,8 +1975,10 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 )}
               </TouchableOpacity>
             </Section>
+            )}
 
             {/* ── GitHub ─────────────────────────────────────────────── */}
+            {!locked && (
             <Section icon="logo-github" title="Link a GitHub branch" tint="#111827">
               <Text style={s.label}>Repository URL</Text>
               {/* On blur, not on every keystroke: transforming mid-type would trim
@@ -1867,6 +2019,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 )}
               </TouchableOpacity>
             </Section>
+            )}
 
             {/* ── Complete This Task ─────────────────────────────────── */}
             {!!meta.can_complete && (
@@ -2376,10 +2529,12 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                         <Ionicons name="open-outline" size={13} color="#fff" />
                         <Text style={s.attBtnTxt}>Open GitHub link</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity style={s.attDel}
-                        onPress={() => setConfirmDel({ kind: 'github', id: g.id, name: g.github_url })}>
-                        <Ionicons name="trash-outline" size={13} color="#fff" />
-                      </TouchableOpacity>
+                      {!locked && (
+                        <TouchableOpacity style={s.attDel}
+                          onPress={() => setConfirmDel({ kind: 'github', id: g.id, name: g.github_url })}>
+                          <Ionicons name="trash-outline" size={13} color="#fff" />
+                        </TouchableOpacity>
+                      )}
                     </View>
                   </View>
                 ))
@@ -2464,7 +2619,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                     — the row checkboxes are gated on the server's own can_edit,
                     so a list of other people's updates would give a Select button
                     that selects nothing. */}
-                {teamProgress.some((p) => p.can_edit) ? (
+                {!locked && teamProgress.some((p) => p.can_edit) ? (
                   <View style={s.bulkBar}>
                     {selMode ? (
                       <>
@@ -2553,7 +2708,7 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                           never re-derived here — the record rules are what actually
                           decide, and a button offering what the route refuses is
                           worse than no button. Own entry, or manager/admin. */}
-                      {p.can_edit ? (
+                      {p.can_edit && !locked ? (
                         <View style={s.histActions}>
                           <TouchableOpacity style={s.histAct} onPress={() => openProgressEdit(p)}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -2594,6 +2749,148 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
                 ))}
               </Section>
             )}
+
+            {/* ── 📅 Meetings (only when the task has any) ────────────── */}
+            {/* By date, each closed to one line until tapped: who came, the
+                summary, action items, recording and transcript. */}
+            {!!meetings?.count && (
+              <Section icon="calendar-outline" title={`📅 Meetings (${meetings.count})`}
+                subtitle="Attendance, summary, action items, recording and transcript are kept on each meeting.">
+                {(meetings.days || []).map((day) => (
+                  <View key={`mtd-${day.date || day.label}`}>
+                    <Text style={s.mtDay}>{day.label}{day.upcoming ? ' · upcoming' : ''}</Text>
+                    {(day.meetings || []).map((m) => {
+                      const open = !!mtOpen[m.id];
+                      return (
+                        <View key={`mt-${m.id}`} style={s.histRow}>
+                          <TouchableOpacity style={s.mtHead} activeOpacity={0.7}
+                            onPress={() => setMtOpen((o) => ({ ...o, [m.id]: !open }))}>
+                            <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={15} color={COLORS.muted} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={s.histWho} numberOfLines={2}>{m.title || m.name}</Text>
+                              <Text style={s.fileMeta}>
+                                {[m.when, m.minutes ? `${m.minutes} min` : '', m.state_label, m.internal ? 'Internal' : ''].filter(Boolean).join(' · ')}
+                              </Text>
+                            </View>
+                            {/* Join as ME (room named from Odoo), as the web's 🎥 Join meeting. */}
+                            {m.can_join && (
+                              <TouchableOpacity style={s.mtJoin} activeOpacity={0.8}
+                                onPress={() => joinMeeting(m.id).catch((e) => flash('err', e?.message || 'Could not open the meeting.'))}>
+                                <Text style={s.mtJoinTxt}>🎥 Join</Text>
+                              </TouchableOpacity>
+                            )}
+                          </TouchableOpacity>
+                          {open && (
+                            <View style={{ marginTop: 6 }}>
+                              {[m.local_when, m.organizer ? `Organizer: ${m.organizer}` : 'Organizer: nobody yet',
+                                m.asked_by ? `Asked by ${m.asked_by} (client)` : '',
+                                m.client ? `Client: ${m.client}${m.db ? ` · ${m.db}` : ''}` : '',
+                                m.booked ? `Booked ${m.booked}` : ''].filter(Boolean).map((line) => (
+                                <Text key={line} style={s.fileMeta}>{line}</Text>
+                              ))}
+                              <Text style={s.mtLbl}>👥 Attendance</Text>
+                              {(m.attendance || []).length === 0 ? <Text style={s.fileMeta}>Nobody joined yet.</Text> : (
+                                m.attendance.map((p, i) => (
+                                  <View key={`att-${m.id}-${i}`} style={s.mtAtt}>
+                                    <Text style={[s.body, { flex: 1, fontSize: 12.5 }]} numberOfLines={1}>{p.name}{p.staff ? '' : ' (client)'}</Text>
+                                    <Text style={s.fileMeta}>
+                                      {p.absent ? '❌ absent' : `${p.joined ? `${p.joined} – ${p.left || 'now'} · ` : ''}${p.minutes} min${p.removed ? ' ⚠️' : ''}`}
+                                    </Text>
+                                  </View>
+                                ))
+                              )}
+                              <Text style={s.mtLbl}>📝 Summary</Text>
+                              <Text style={[s.body, !m.summary && s.dim]}>{m.summary || 'No summary yet.'}</Text>
+                              <Text style={s.mtLbl}>✅ Action items</Text>
+                              <Text style={[s.body, !m.action_items && s.dim]}>{m.action_items || 'None written.'}</Text>
+                              {!!m.notes && <Text style={[s.fileMeta, { marginTop: 6 }]}>🔒 {m.notes}</Text>}
+                              <Text style={s.mtLbl}>🎧 Recording</Text>
+                              {(m.recordings || []).length === 0 ? <Text style={s.fileMeta}>No recording.</Text> : (
+                                m.recordings.map((r) => (
+                                  <ProofMedia key={`rec-${r.id}`} onError={(msg) => flash('err', msg)}
+                                    f={{ id: `rec${r.id}`, name: r.name, kind: 'audio', mime: r.mime, size: r.size, url: r.url }} />
+                                ))
+                              )}
+                              <Text style={s.mtLbl}>💬 Transcript</Text>
+                              {!m.transcript ? <Text style={s.fileMeta}>No transcript.</Text> : (
+                                <>
+                                  <Text style={s.body} numberOfLines={mtFull[m.id] ? undefined : 3}>{m.transcript}</Text>
+                                  <TouchableOpacity onPress={() => setMtFull((o) => ({ ...o, [m.id]: !o[m.id] }))}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                    <Text style={s.actLink}>{mtFull[m.id] ? '▴ Show less' : '▸ Show full transcript'}</Text>
+                                  </TouchableOpacity>
+                                </>
+                              )}
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+                ))}
+              </Section>
+            )}
+
+            {/* ── History: everything done on this task ───────────────── */}
+            {/* One list, newest first, by day — questions, progress, meetings,
+                GitHub and manuals, the web's "Everything on this task". All is
+                the WORK only; the activity trail (pauses, renames, pushes) has
+                its own filter, and its own day-by-day popup under Activity. */}
+            <Section icon="list-outline" title="History"
+              right={(
+                <TouchableOpacity onPress={() => { setHistory(null); setHistDays({}); loadExtras(); }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="refresh" size={16} color={COLORS.primary} />
+                </TouchableOpacity>
+              )}>
+              <View style={s.actKindRow}>
+                {HISTORY_FILTERS.map((hf) => {
+                  const on = histFilter === hf.key;
+                  return (
+                    <TouchableOpacity key={hf.key} activeOpacity={0.85}
+                      style={[s.actKindChip, on && s.actKindChipOn]}
+                      onPress={() => { setHistFilter(hf.key); setHistShown(30); setHistDays({}); }}>
+                      <Text style={[s.actKindTxt, on && s.actKindTxtOn]}>
+                        {hf.label} {filterHistory(history || [], hf.key).length}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {history === null ? (
+                <View style={{ paddingVertical: 14 }}><ActivityIndicator color={COLORS.primary} /></View>
+              ) : histGroups.length === 0 ? <Empty text="Nothing here yet." /> : histGroups.map((g, gi) => {
+                const open = histDayOpen(g.label, gi);
+                return (
+                  <View key={`hd-${g.label}`}>
+                    <TouchableOpacity style={s.actDay} activeOpacity={0.8}
+                      onPress={() => setHistDays((o) => ({ ...o, [g.label]: !open }))}>
+                      <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={15} color={COLORS.muted} />
+                      <Text style={s.actDayTxt}>{g.label}</Text>
+                      <View style={s.actDayCount}><Text style={s.actDayCountTxt}>{g.items.length}</Text></View>
+                    </TouchableOpacity>
+                    {open && g.items.map((it) => (
+                      <View key={it.key} style={s.tlRow}>
+                        <Ionicons name={HISTORY_ICON[it.kind] || 'time-outline'} size={15} color={COLORS.primary} style={{ marginTop: 1 }} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.actLabel}>{it.title}</Text>
+                          <Text style={s.actActor}>
+                            {[it.who, chatHhmm(historyDate(it.at))].filter(Boolean).join(' · ')}
+                            {it.badge ? <Text style={it.badge === 'waiting for reply' ? s.tlWait : s.tlBadge}>{`  ${it.badge}`}</Text> : null}
+                          </Text>
+                          {!!it.body && <Text style={s.actDetail}>{it.body}</Text>}
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                );
+              })}
+              {histList.length > histShown && (
+                <TouchableOpacity onPress={() => setHistShown((n) => n + 30)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={[s.actLink, { marginTop: 8 }]}>Load older</Text>
+                </TouchableOpacity>
+              )}
+            </Section>
           </Animated.ScrollView>
           </KeyboardAvoidingView>
         )}
@@ -3000,6 +3297,16 @@ export default function KpiTaskDetail({ task, onBack, onChanged }) {
           onClose={() => setCmpDlg(null)}
         />
 
+        {/* A refused Full Complete lists what is still missing — too long for
+            the banner, so it gets the app's own dialog. */}
+        <AppDialog
+          visible={!!finDlg}
+          tone="warn"
+          title={finDlg?.title}
+          message={finDlg?.message}
+          onClose={() => setFinDlg(null)}
+        />
+
         <AddTimeModal
           visible={addOpen}
           task={data?.task || task}
@@ -3302,6 +3609,22 @@ const s = StyleSheet.create({
   useMainTxt: { fontSize: 11.5, fontWeight: '800', color: COLORS.primary },
 
   metaEditBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  // 🔒 details locked, 🏁 finish box, 🗄 database card
+  lockBox: { backgroundColor: '#EEF2F8', marginTop: 0, marginBottom: 12 },
+  finWrap: { marginTop: -8, marginBottom: 12 },
+  pwRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
+  pwToggle: { fontSize: 12, fontWeight: '800', color: COLORS.primary },
+  // 📅 Meetings
+  mtDay: { fontSize: 11.5, fontWeight: '900', color: COLORS.muted, marginTop: 6, marginBottom: 6 },
+  mtHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  mtJoin: { backgroundColor: COLORS.primary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
+  mtJoinTxt: { color: '#fff', fontSize: 12.5, fontWeight: '700' },
+  mtLbl: { fontSize: 12, fontWeight: '900', color: COLORS.navy, marginTop: 10, marginBottom: 3 },
+  mtAtt: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3, borderTopWidth: 1, borderTopColor: '#EEF2F7' },
+  // History rows
+  tlRow: { flexDirection: 'row', gap: 9, paddingVertical: 6, paddingLeft: 22 },
+  tlBadge: { color: COLORS.muted, fontWeight: '800' },
+  tlWait: { color: COLORS.red, fontWeight: '900' },
   metaEditTxt: { fontSize: 12, fontWeight: '800', color: COLORS.primary },
   typeRow: { flexDirection: 'row', gap: 8, marginTop: 2 },
   typeChip: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10, borderWidth: 1.5, borderColor: COLORS.line, backgroundColor: '#fff' },
