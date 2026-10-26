@@ -492,6 +492,21 @@ export const resumeTask  = (kpiId) => action('/kra_kpi/task/resume', { kpi_id: k
 // today's first Start / Resume and today's time on it is removed. Offered only
 // where the task carries can_undo_start; the server re-checks every rule.
 export const undoTaskStart = (kpiId) => action('/kra_kpi/task/undo_start', { kpi_id: kpiId });
+// What Undo start KEEPS, for its confirmation (kra.kpi._undo_keeps_line):
+// { status, keeps: "Today's 2 updates and 1 link on this task are kept. …" },
+// keeps '' when nothing was added since the start. Read-only. Never throws — a
+// failed read just leaves the line off the confirm, as an older server does.
+export async function undoStartInfo(kpiId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, keeps: '' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kra_kpi/task/undo_start_info', { kpi_id: kpiId });
+    return { status: !!res?.status, keeps: (res && res.keeps) || '' };
+  } catch (e) {
+    log.warn('undoStartInfo failed', e?.message);
+    return { status: false, keeps: '' };
+  }
+}
 // Extend a task's estimate. ADDS to it rather than replacing it, and the reason
 // is required because it is shown on the card next to the overrun — an estimate
 // that grew for no stated reason is worse than one that was simply wrong.
@@ -569,6 +584,60 @@ export const revertSignoff = (kpiId, reason) =>
 // never re-derive it here, or the button will offer what the route refuses.
 export const adminDeleteTask = (kpiId, reason) =>
   action('/kra_kpi/task/admin_delete', { kpi_id: kpiId, reason: reason || '' });
+
+// ── After the client's check (models/kpi_finish.py, kpi_billing.py) ─────────
+// 🏁 Full Complete closes a task once what its type needs is on it (the user
+// manual, the GitHub link for a module / app — the task carries the list as
+// full_complete_missing); billing then makes the bill from the price list. When
+// no price matched, 🧾 Bill now (admins) retries. The server re-checks both.
+// → { status, message } — a refused Full Complete also lists what is `missing`.
+export async function fullComplete(kpiId) {
+  const res = await action('/kra_kpi/task/full_complete', { kpi_id: kpiId });
+  if (!res?.status) return { status: false, message: res?.message || 'Could not complete it', missing: res?.missing || [] };
+  return res;
+}
+// → { status, message, bill: { id, name, money, paid, … } }.
+export async function billNow(kpiId) {
+  const res = await action('/kpi_billing/bill_now', { kpi_id: kpiId });
+  if (!res?.status) return { status: false, message: res?.message || 'Could not make the bill' };
+  return res;
+}
+
+// KPI Details › History: the WORK on one task in one list, newest first —
+// questions to the manager, progress, meetings, GitHub, manuals and the activity
+// trail (client chat stays in the Chat section). Items:
+// { kind: question|progress|meeting|code|document|activity, at (UTC), title, body, who, badge, key }.
+// Never throws.
+export async function fetchTaskHistory(kpiId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, items: [], message: 'No server connection' };
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi_action/history', { kpi_id: kpiId });
+    if (!res?.status) return { status: false, items: [], message: res?.message || 'Could not load the history' };
+    return { status: true, items: res.items || [] };
+  } catch (e) {
+    log.warn('fetchTaskHistory failed', e?.message);
+    return { status: false, items: [], message: 'Could not load the history' };
+  }
+}
+
+// KPI Details › 📅 Meetings: the task's meetings, grouped by date →
+// { status, count, days: [{ date, label, upcoming, meetings: [card] }] }. A card
+// carries when, minutes, state_label, organizer, attendance, summary,
+// action_items, notes, transcript and recordings ([{ id, name, url }]).
+// A developer sees only the meetings they organised or attend. Never throws.
+export async function fetchTaskMeetings(kpiId) {
+  const { serverUrl } = await getConnection();
+  if (!serverUrl) return { status: false, count: 0, days: [] };
+  try {
+    const res = await jsonRpc(serverUrl, '/kpi_action/meetings', { kpi_id: kpiId });
+    if (!res?.status) return { status: false, count: 0, days: [], message: res?.message || 'Could not load the meetings' };
+    return { status: true, count: res.count || 0, days: res.days || [] };
+  } catch (e) {
+    log.warn('fetchTaskMeetings failed', e?.message);
+    return { status: false, count: 0, days: [], message: 'Could not load the meetings' };
+  }
+}
 // extra: what the Complete form filled in for this task's type (app link, manual
 // link, website URL, database details — utils/completeMissing completeExtras);
 // the server saves them, then checks the type's rules.
