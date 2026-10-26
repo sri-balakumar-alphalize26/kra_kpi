@@ -42,6 +42,10 @@ import NeedsLinking from './screens/NeedsLinking';
 import UserManual from './screens/UserManual';
 import Reminders from './screens/Reminders';
 import AttendanceScreen from './screens/AttendanceScreen';
+import BillingSettings from './screens/BillingSettings';
+import ClientTalks from './screens/ClientTalks';
+import MeetingsScreen from './screens/MeetingsScreen';
+import ClientMessages from './screens/ClientMessages';
 
 import AppLoginScreen from './screens/AppLoginScreen';
 import AlarmScreen from './screens/AlarmScreen';
@@ -1003,7 +1007,22 @@ function AppInner() {
         />
       );
     if (appScreen === 'config')
-      return <ConfigurationScreen onBack={goBack} />;
+      // onOpen: the read-only WhatsApp number links to Login Management, and
+      // the Billing card to Settings › Billing.
+      return <ConfigurationScreen onBack={goBack} onOpen={open} />;
+    if (appScreen === 'billing')
+      // Admin: the price list bills are made from, per-client invoice group and
+      // Send invoices switch. /kpi_billing/* refuses anyone else server-side.
+      return <BillingSettings onBack={goBack} />;
+    if (appScreen === 'talks')
+      // Admin: Client Talks — Discussions / Meetings / Questions, by date and session.
+      return <ClientTalks onBack={goBack} onOpenTask={(id) => open('actionboard', id)} />;
+    if (appScreen === 'meetings')
+      // Meetings with join links; the room opens in the browser.
+      return <MeetingsScreen onBack={goBack} />;
+    if (appScreen === 'clientmsgs')
+      // Managers: client messages waiting for an answer, + 👨‍💻 Ask a developer.
+      return <ClientMessages onBack={goBack} />;
     if (appScreen === 'loginmgmt')
       return <LoginManagementScreen onBack={goBack} />;
     if (appScreen === 'users')

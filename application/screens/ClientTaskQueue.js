@@ -25,8 +25,10 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import { fetchQueue, saveQueueTask, publishQueueTask, discardQueueTask } from '../services/pendingQueue';
+import { fetchRefused, restoreRefused } from '../services/adminExtras';
+import { fetchRoleInfo } from '../services/roleInfo';
 // Reuse: same route the web picker uses, and the same priority triple.
-import { getUsers, getUserInfo, PRIORITIES } from '../services/uploadAmendments';
+import { getUsers, PRIORITIES } from '../services/uploadAmendments';
 import {
   DELIVERABLE_TYPES, deliverableLabel, needsOtherText, missingOtherText,
   DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER, DELIVERABLE_OTHER_REQUIRED_MSG,
@@ -62,6 +64,15 @@ export default function ClientTaskQueue({ onBack }) {
   const [discardReason, setDiscardReason] = useState('');
   const [popup, setPopup] = useState(null);      // { ok, title, message }
   const [banner, setBanner] = useState(null);    // { type, text }
+  // The role lookup failed and nothing is cached: say so, don't lock them out.
+  const [roleUnknown, setRoleUnknown] = useState(false);
+  // 🚫 Refused: client requests an admin declined, kept with their reason
+  // (/kpi_pending_queue/refused). ↩️ Restore puts one back in the queue.
+  const [tab, setTab] = useState('pending');     // 'pending' | 'refused'
+  const [refused, setRefused] = useState([]);
+  const [refusedErr, setRefusedErr] = useState('');
+  const [refusedView, setRefusedView] = useState(null);  // row shown in full
+  const [restoreFor, setRestoreFor] = useState(null);    // row awaiting confirm
 
   // Drill-down state
   const [openDates, setOpenDates] = useState(() => new Set());
@@ -70,8 +81,23 @@ export default function ClientTaskQueue({ onBack }) {
 
   const flash = (type, text) => { setBanner({ type, text }); setTimeout(() => setBanner(null), 3500); };
 
+  // The refused list loads beside the queue, on its own: a failure there must
+  // not blank the queue, and its length is the count on the Refused tab.
+  const loadRefused = useCallback(async () => {
+    try {
+      const res = await fetchRefused();
+      if (res && res.status === false) { setRefusedErr(res.message || 'Could not load the refused requests.'); return; }
+      setRefused(res?.refused || []);
+      setRefusedErr('');
+    } catch (e) {
+      log.warn('refused load failed', e?.message);
+      setRefusedErr(e?.message || 'Could not load the refused requests.');
+    }
+  }, []);
+
   const load = useCallback(async () => {
     setError(null);
+    loadRefused();
     try {
       const res = await fetchQueue();
       setRows(res.queue || []);
@@ -84,32 +110,57 @@ export default function ClientTaskQueue({ onBack }) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [loadRefused]);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const info = await getUserInfo().catch(() => ({ isMock: false }));
+  // The role check. It used to be getUserInfo().catch(() => ({})): one failed
+  // request read as "not an admin", so an admin whose server was briefly
+  // unreachable got "Admins only — You're signed in as: User". Now it retries,
+  // then falls back to the last role the server gave (cached per uid), and with
+  // no answer at all says it could not check — with a Retry — rather than
+  // locking anyone out.
+  const checkRole = useCallback(async () => {
+    setLoading(true);
+    setRoleUnknown(false);
+    try {
+      let res = await fetchRoleInfo();
+      for (let i = 0; !res.fromServer && !res.offlineDemo && i < 2; i += 1) {
+        await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+        res = await fetchRoleInfo();
+      }
+      let ok;
+      if (res.offlineDemo) {
+        ok = true;
+      } else if (res.fromServer) {
+        const info = res.info || {};
         // Match the ROUTES: admin | system. Owner is deliberately excluded — the
         // server would reject their save/publish with "Admin only.".
-        const ok = !!(info.isMock || info.is_system || info.is_admin);
-        setAllowed(ok);
+        ok = !!(info.is_system || info.is_admin);
         setRoleName(
           (info.is_system || info.is_owner || info.is_admin) ? 'Admin'
             : info.is_client ? 'Client' : 'User'
         );
-        if (!ok) { setLoading(false); return; }
-        const u = await getUsers().catch(() => ({ users: [] }));
-        setUsers(u.users || []);
-        await load();
-      } catch (e) {
-        log.error('mount failed', e?.message);
-        setError(e.message || 'Failed to load');
+      } else if (res.kpiRole) {
+        // Offline, but we know who this is from the last good answer.
+        ok = res.kpiRole === 'admin';
+        setRoleName(res.kpiRole === 'admin' ? 'Admin' : res.kpiRole === 'client' ? 'Client' : 'User');
+      } else {
+        setRoleUnknown(true);
         setLoading(false);
+        return;
       }
-    })();
+      setAllowed(ok);
+      if (!ok) { setLoading(false); return; }
+      const u = await getUsers().catch(() => ({ users: [] }));
+      setUsers(u.users || []);
+      await load();
+    } catch (e) {
+      log.error('mount failed', e?.message);
+      setError(e.message || 'Failed to load');
+      setLoading(false);
+    }
   }, [load]);
+
+  useEffect(() => { checkRole(); }, [checkRole]);
 
   // Date → Client → tasks. The serial number (#1, #2 …) is assigned over the
   // whole queue in server order, so it stays stable whatever you expand.
@@ -223,6 +274,27 @@ export default function ClientTaskQueue({ onBack }) {
     );
   }
 
+  if (roleUnknown) {
+    // Not "Admins only": we simply could not ask. Nothing is cached either, so
+    // there is no last answer to fall back on — offer the retry.
+    return (
+      <View style={s.root}>
+        <GradientBackground />
+        <StatusBar style="dark" />
+        <Header onBack={onBack} count={null} onRefresh={null} />
+        <View style={[s.center, { flex: 1, padding: 32 }]}>
+          <Ionicons name="cloud-offline-outline" size={44} color={COLORS.faint} />
+          <Text style={s.lockTitle}>Couldn't check your access</Text>
+          <Text style={s.lockMsg}>The server did not answer. Check the connection and try again.</Text>
+          <TouchableOpacity style={s.lockBtn} onPress={checkRole} activeOpacity={0.9}>
+            <Ionicons name="refresh" size={18} color="#fff" />
+            <Text style={s.lockBtnTxt}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   if (!allowed) {
     return (
       <View style={s.root}>
@@ -247,6 +319,27 @@ export default function ClientTaskQueue({ onBack }) {
 
   const pickerRow = picker ? rows.find((r) => r.id === picker.id) : null;
 
+  const onRestore = async () => {
+    const r = restoreFor;
+    setRestoreFor(null);
+    if (!r) return;
+    setBusyId(r.id);
+    try {
+      const res = await restoreRefused(r.id);
+      if (!res || res.status === false) {
+        setPopup({ ok: false, title: "Couldn't restore", message: res?.message || 'Could not restore it.' });
+        return;
+      }
+      flash('ok', res.message || `${r.external_ref || `#${r.id}`} is back in the client queue.`);
+      await load();
+    } catch (e) {
+      log.error('restore failed', e?.message);
+      setPopup({ ok: false, title: "Couldn't restore", message: e.message || 'Please try again.' });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     // Plain View + transparent root, exactly like ClientTasks / Notifications /
     // Configuration. A KeyboardAvoidingView wrapper here was letting a strip of
@@ -264,7 +357,21 @@ export default function ClientTaskQueue({ onBack }) {
         </View>
       )}
 
-      {error ? (
+      {/* Pending (the queue) | 🚫 Refused — the web's "Refused (n)" link, as tabs. */}
+      <View style={s.tabs}>
+        {[['pending', 'Pending', rows.length], ['refused', '🚫 Refused', refused.length]].map(([k, label, n]) => (
+          <TouchableOpacity key={k} style={[s.tab, tab === k && s.tabOn]} onPress={() => setTab(k)} activeOpacity={0.85}>
+            <Text style={[s.tabTxt, tab === k && s.tabTxtOn]}>{label}{n ? ` (${n})` : ''}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {tab === 'refused' ? (
+        <RefusedList
+          rows={refused} error={refusedErr} busyId={busyId}
+          onRetry={loadRefused} onView={setRefusedView} onRestore={setRestoreFor}
+        />
+      ) : error ? (
         <View style={s.center}>
           <Ionicons name="cloud-offline-outline" size={44} color={COLORS.faint} />
           <Text style={s.centerTxt}>{error}</Text>
@@ -390,6 +497,69 @@ export default function ClientTaskQueue({ onBack }) {
               </TouchableOpacity>
               <TouchableOpacity style={[s.mBtn, s.mDo]} onPress={onDiscard} activeOpacity={0.85}>
                 <Text style={s.mDoTxt}>Discard</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* One refused request in full — what the client sent and why it was declined. */}
+      <Modal visible={!!refusedView} transparent animationType="fade" onRequestClose={() => setRefusedView(null)}>
+        <View style={s.mWrap}>
+          <View style={[s.mCard, { alignItems: 'stretch' }]}>
+            <Text style={[s.mTitle, { textAlign: 'left' }]}>
+              {refusedView?.external_ref || `#${refusedView?.id}`} — {refusedView?.name}
+            </Text>
+            <Text style={s.submitted}>
+              {refusedView?.client_name} · received {refusedView?.received_at}
+              {refusedView?.submitted_by ? ` by ${refusedView.submitted_by}` : ''}
+            </Text>
+            <ScrollView style={{ maxHeight: 260, marginTop: 8 }}>
+              <Text style={s.refDesc}>{refusedView?.description || '(no description)'}</Text>
+              {(refusedView?.attachments || []).length > 0 && (
+                <Text style={[s.submitted, { marginTop: 8 }]}>
+                  📎 {refusedView.attachments.map((a) => a.file_name).join(', ')}
+                </Text>
+              )}
+            </ScrollView>
+            <View style={s.rejBox}>
+              <Text style={s.rejReason}>
+                🚫 Refused {refusedView?.declined_at} by {refusedView?.declined_by || '—'} —{' '}
+                <Text style={s.rejReasonB}>{refusedView?.reason || 'no reason'}</Text>
+                {refusedView?.note ? `: ${refusedView.note}` : ''}
+              </Text>
+            </View>
+            <View style={s.mBtns}>
+              <TouchableOpacity style={[s.mBtn, s.mCancel]} onPress={() => setRefusedView(null)} activeOpacity={0.85}>
+                <Text style={s.mCancelTxt}>Close</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.mBtn, { backgroundColor: COLORS.primary }]} activeOpacity={0.85}
+                onPress={() => { const r = refusedView; setRefusedView(null); setRestoreFor(r); }}
+              >
+                <Text style={s.mDoTxt}>↩️ Restore</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Restore confirm — same words as the web. */}
+      <Modal visible={!!restoreFor} transparent animationType="fade" onRequestClose={() => setRestoreFor(null)}>
+        <View style={s.mWrap}>
+          <View style={s.mCard}>
+            <View style={[s.mIcon, { backgroundColor: '#E0ECFF' }]}><Ionicons name="arrow-undo" size={26} color={COLORS.primary} /></View>
+            <Text style={s.mTitle}>Restore {restoreFor?.external_ref || `#${restoreFor?.id}`}?</Text>
+            <Text style={s.mMsg}>
+              It goes back to the client task queue (Pending), where you can publish it or refuse it
+              again. The refusal stays in its history.
+            </Text>
+            <View style={s.mBtns}>
+              <TouchableOpacity style={[s.mBtn, s.mCancel]} onPress={() => setRestoreFor(null)} activeOpacity={0.85}>
+                <Text style={s.mCancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.mBtn, { backgroundColor: COLORS.primary }]} onPress={onRestore} activeOpacity={0.85}>
+                <Text style={s.mDoTxt}>↩️ Restore</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -579,6 +749,101 @@ function TaskForm({ r, users, busy, patch, setPicker, onSave, onPublish, onDisca
   );
 }
 
+// ---- 🚫 Refused -------------------------------------------------------------
+// The client's answer to the refusal (kra.kpi.client_reconfirm_state).
+const ANSWER = {
+  pending:   { label: '⏳ No answer yet',      bg: '#FEF3C7', fg: '#B45309' },
+  accepted:  { label: '✅ Accepted',           bg: '#DCFCE7', fg: '#16A34A' },
+  disputed:  { label: '⚖️ Disagreed',          bg: '#FEE2E2', fg: '#DC2626' },
+  withdrawn: { label: '🗑 Withdrew it',        bg: '#F1F5F9', fg: '#64748B' },
+  corrected: { label: '✏️ Sent a correction', bg: '#EDE9FE', fg: '#6D28D9' },
+};
+
+function RefusedList({ rows, error, busyId, onRetry, onView, onRestore }) {
+  // Grouped by the day it was refused, newest first (the server's order).
+  const groups = useMemo(() => {
+    const m = new Map();
+    rows.forEach((r) => {
+      const k = dayOf(r.declined_at) || '—';
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(r);
+    });
+    return [...m.entries()];
+  }, [rows]);
+
+  if (error && !rows.length) {
+    return (
+      <View style={s.center}>
+        <Ionicons name="cloud-offline-outline" size={44} color={COLORS.faint} />
+        <Text style={s.centerTxt}>{error}</Text>
+        <TouchableOpacity style={s.retry} onPress={onRetry}><Text style={s.retryTxt}>Retry</Text></TouchableOpacity>
+      </View>
+    );
+  }
+  return (
+    <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: BOTTOM_PAD + 20 }} showsVerticalScrollIndicator={false}>
+      <View style={s.info}>
+        <Ionicons name="information-circle" size={17} color={COLORS.primary} style={{ marginTop: 1 }} />
+        <Text style={s.infoTxt}>
+          Client requests that were declined — <Text style={s.infoBold}>kept with their reason</Text>, and
+          they can be brought back with ↩️ Restore.
+        </Text>
+      </View>
+      {!rows.length ? (
+        <View style={[s.center, { paddingVertical: 50 }]}>
+          <MaterialCommunityIcons name="cancel" size={46} color={COLORS.faint} />
+          <Text style={s.centerTxt}>Nothing refused. Requests you decline are kept here with their reason.</Text>
+        </View>
+      ) : groups.map(([day, list]) => (
+        <View key={day} style={s.dateBlock}>
+          <View style={s.dateHead}>
+            <Ionicons name="calendar-outline" size={15} color={COLORS.muted} />
+            <Text style={s.dateTxt}>{day}</Text>
+            <View style={s.cntPill}><Text style={s.cntTxt}>{list.length}</Text></View>
+          </View>
+          {list.map((r) => {
+            const a = ANSWER[r.client_answer] || { label: r.client_answer_label || '—', bg: '#F1F5F9', fg: '#64748B' };
+            return (
+              <View key={r.id} style={s.refRow}>
+                <View style={s.refTop}>
+                  <Text style={s.refRef}>{r.external_ref || `#${r.id}`}</Text>
+                  <Text style={s.refName} numberOfLines={2}>{r.name}</Text>
+                </View>
+                <Text style={s.project} numberOfLines={1}>
+                  {r.client_name}{r.project_name ? ` · ${r.project_name}` : ''}
+                </Text>
+                <Text style={s.rejReason}>
+                  <Text style={s.rejReasonB}>{r.reason || 'No reason'}</Text>
+                  {r.note ? ` — ${r.note}` : ''}
+                </Text>
+                <Text style={s.rejBy}>
+                  Refused {r.declined_at} by {r.declined_by || '—'}
+                  {r.decline_count > 1 ? ` · ${r.decline_count}× refused` : ''}
+                </Text>
+                <View style={s.refActs}>
+                  <View style={[s.ansPill, { backgroundColor: a.bg }]}><Text style={[s.ansTxt, { color: a.fg }]}>{a.label}</Text></View>
+                  <View style={{ flex: 1 }} />
+                  <TouchableOpacity style={s.saveBtn} onPress={() => onView(r)} activeOpacity={0.85}>
+                    <Ionicons name="eye-outline" size={15} color={COLORS.muted} />
+                    <Text style={s.saveTxt}>View</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[s.pubBtn, { backgroundColor: COLORS.primary }, busyId === r.id && { opacity: 0.7 }]}
+                    onPress={() => onRestore(r)} disabled={busyId === r.id} activeOpacity={0.9}
+                  >
+                    {busyId === r.id ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="arrow-undo" size={15} color="#fff" />}
+                    <Text style={s.pubTxt}>Restore</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
 // ---- Pieces ---------------------------------------------------------------
 function Header({ onBack, count, onRefresh, refreshing }) {
   return (
@@ -683,6 +948,21 @@ function PickerSheet({ picker, row, users, onClose, onPick }) {
 }
 
 const s = StyleSheet.create({
+  // Pending | Refused
+  tabs: { flexDirection: 'row', gap: 8, marginHorizontal: 14, marginBottom: 6 },
+  tab: { flex: 1, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E7ECF3' },
+  tabOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  tabTxt: { fontSize: 13.5, fontWeight: '800', color: COLORS.muted },
+  tabTxtOn: { color: '#fff' },
+  // Refused rows
+  refRow: { borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingHorizontal: 12, paddingVertical: 11 },
+  refTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  refRef: { fontSize: 12, fontWeight: '900', color: COLORS.navy, backgroundColor: '#EEF3FF', borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, overflow: 'hidden' },
+  refName: { flex: 1, fontSize: 13.5, fontWeight: '800', color: COLORS.ink },
+  refActs: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' },
+  refDesc: { fontSize: 13.5, color: COLORS.ink, lineHeight: 19 },
+  ansPill: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
+  ansTxt: { fontSize: 11.5, fontWeight: '800' },
   // TRANSPARENT — same as ClientTasks / NotificationsScreen / ConfigurationScreen.
   // A solid colour here is what produced the pale strip down the right edge: it
   // showed through wherever the gradient SVG didn't paint. Transparent lets the
