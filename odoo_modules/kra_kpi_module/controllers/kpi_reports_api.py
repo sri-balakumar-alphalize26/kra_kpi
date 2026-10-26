@@ -3172,7 +3172,17 @@ class KpiReportsAPI(http.Controller):
                 ('task_state', '=', 'awaiting_client'),
                 '&', ('task_state', '=', 'partially_completed'), ('admin_approved', '=', True),
             ], order='completion_date desc')
-            pending = [_kpi_summary(k) for k in pending_kpis]
+            def _pending_summary(k):
+                # Sign-off cards also need when the review closes on its own and
+                # whose names may sign (kpi_finish._client_signers).
+                s = _kpi_summary(k)
+                s['review_due_at'] = fields.Datetime.to_string(k.review_due_at) if k.review_due_at else ''
+                s['signers'] = [{'key': e['key'], 'name': e['name'],
+                                 'sig': (e['sig'].decode() if isinstance(e['sig'], bytes) else (e['sig'] or ''))}
+                                for e in k._client_signers()]
+                return s
+
+            pending = [_pending_summary(k) for k in pending_kpis]
 
             # Totals (across all admin-accepted tasks — un-accepted ones are hidden
             # from the client everywhere, same as the list above).
@@ -7269,6 +7279,17 @@ class KpiReportsAPI(http.Controller):
                 kpi, signature, notes, chk_delivered, chk_works, chk_authorized)
             if not ok:
                 return {'status': False, 'message': msg}
+            # The app's drawn / auto / saved signature, like the WhatsApp page's
+            # /decide: kept on the task (certificate) and, when `signer` is one of
+            # THIS client's people, on that person's contact for next time.
+            png = params.get('signature_png') or ''
+            if png.startswith('data:'):
+                png = png.split(',', 1)[1] if ',' in png else ''
+            if png:
+                key = params.get('signer') or ''
+                if key not in {s['key'] for s in kpi._client_signers()}:
+                    key = ''
+                kpi._save_client_signature(key, png)
             return {'status': True, 'message': msg, 'kpi_id': kpi.id}
         except Exception as e:
             import logging
