@@ -88,17 +88,51 @@ export async function fetchCertificatePdf(kpiId) {
 // Never throws: a signature is an optional convenience, and failing to load it
 // must not stop someone signing off. On any error we report "no signature",
 // which falls back to the normal typed-name flow.
+//
+// `userName` (the account's name, same route) is the default Full Name at
+// sign-off — the JSON route signs as the signed-in person.
 export async function getClientSignature() {
+  const none = { hasSignature: false, imageB64: '', userName: '' };
   try {
     const { serverUrl, db } = await getConnection();
-    if (!serverUrl) return { hasSignature: false, imageB64: '' };
+    if (!serverUrl) return none;
     const res = await jsonRpc(serverUrl, '/kpi_client_portal/get_signature_info', {}, undefined, db);
-    if (!res || res.status === false) return { hasSignature: false, imageB64: '' };
+    if (!res || res.status === false) return none;
     log.info('signature ←', { has: !!res.has_signature });
-    return { hasSignature: !!res.has_signature, imageB64: res.image_b64 || '' };
+    return { hasSignature: !!res.has_signature, imageB64: res.image_b64 || '', userName: res.user_name || '' };
   } catch (e) {
     log.info('signature lookup failed, falling back to typed name', e?.message);
-    return { hasSignature: false, imageB64: '' };
+    return none;
+  }
+}
+
+// Keep a signature drawn (or written Auto) at sign-off as the person's saved
+// signature — what the WhatsApp sign-off page does too (_save_client_signature
+// puts it on the signer's contact "so it is there next time"). The same upload
+// route the web portal uses; `pngB64` is base64 without the data: prefix.
+// Reports the server's own answer, like removeClientSignature below.
+export async function saveClientSignature(pngB64) {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl) return { status: false, message: 'Not connected to a server.' };
+  const res = await jsonRpc(
+    serverUrl, '/kpi_client_portal/upload_signature',
+    { file_data: pngB64 || '', file_name: 'signature.png' }, 30000, db);
+  log.info('signature saved', { has: !!res?.has_signature });
+  return { status: !!res?.status, hasSignature: !!res?.has_signature, message: res?.message || '' };
+}
+
+// How many days a finished task waits for the client before the review closes
+// on its own (kra_kpi.client_review_days). Readable by any signed-in user.
+// Never throws: 0 just hides the rule on the cards.
+export async function getReviewDays() {
+  try {
+    const { serverUrl, db } = await getConnection();
+    if (!serverUrl) return 0;
+    const res = await jsonRpc(serverUrl, '/kpi_config/finish/get', {}, undefined, db);
+    return res && res.status ? Number(res.review_days) || 0 : 0;
+  } catch (e) {
+    log.info('review days lookup failed', e?.message);
+    return 0;
   }
 }
 
@@ -160,6 +194,18 @@ export async function addClientTask({
   }
   log.info('add_task ←', { kpi_id: res.kpi_id, ref: res.ref });
   return res;
+}
+
+// The bugs (or updates) already raised under one requirement, and the ref the
+// next one gets: { parent: 'REQ-012', items: [{ ref, name, status, date }],
+// next_ref: 'BUG003-REQ-012' }. Null when the server has no answer for it.
+export async function getChildRequests(parentId, kind) {
+  const { serverUrl, db } = await getConnection();
+  if (!serverUrl || !parentId) return null;
+  const res = await jsonRpc(serverUrl, '/kpi_client_portal/children',
+    { parent_id: Number(parentId), kind }, undefined, db);
+  if (!res || res.status === false) return null;
+  return { parent: res.parent || '', items: res.items || [], next_ref: res.next_ref || '' };
 }
 
 // The client's requirements a Bug / Update can be about, newest first —

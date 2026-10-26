@@ -34,7 +34,8 @@ import { COLORS, SHADOW } from '../theme';
 import GradientBackground from '../components/GradientBackground';
 import { createLogger } from '../api/logger';
 import * as svc from '../services/uploadAmendments';
-import { getClientProjects, addClientTask, getParentTasks } from '../services/clientPortal';
+import { cachedKpiRole } from '../services/roleInfo';
+import { getClientProjects, addClientTask, getParentTasks, getChildRequests } from '../services/clientPortal';
 import OldDbBox from '../components/OldDbBox';
 import { legacyProblem } from '../utils/legacyReq';
 import {
@@ -180,7 +181,13 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
       log.info('mount: loading form (doc_type=%s)', DOC_TYPE);
       setLoading(true);
       try {
-        const info = await svc.getUserInfo().catch((e) => { log.warn('getUserInfo failed, assuming not client-only', e?.message); return { is_client_only: false, isMock: false }; });
+        // A failed lookup falls back to the last role the server confirmed
+        // (services/roleInfo) rather than locking the screen until a restart.
+        const info = await svc.getUserInfo().catch(async (e) => {
+          const r = await cachedKpiRole();
+          log.warn('getUserInfo failed, using cached role', { cached: r || '(none)', err: e?.message });
+          return { isMock: false, is_admin: r === 'admin', is_client: r === 'client', is_client_only: r === 'client' };
+        });
         setIsClientOnly(!!info.is_client_only);
 
         // Creating kra.kpi records is limited to Manager / Owner / Admin /
@@ -972,6 +979,30 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
                   ) : <View style={s.half} />}
                 </View>
 
+                {/* Earlier bugs / updates under the picked requirement + the next ref. */}
+                {MODE.showLinkedReq && !row.legacy_on && row.related_req_ref && row.kids ? (
+                  <View style={s.kidsBox}>
+                    {row.kids.loading ? (
+                      <Text style={s.kidsMuted}>Checking earlier {DOC_TYPE === 'bug' ? 'bugs' : 'updates'}…</Text>
+                    ) : (
+                      <>
+                        <Text style={s.kidsHead}>
+                          {row.kids.items.length
+                            ? `${DOC_TYPE === 'bug' ? '🐞' : '🔧'} Already raised under ${row.kids.parent}:`
+                            : `No ${DOC_TYPE === 'bug' ? 'bugs' : 'updates'} under ${row.kids.parent} yet.`}
+                        </Text>
+                        {row.kids.items.map((k) => (
+                          <Text key={k.ref} style={s.kidsItem}>
+                            <Text style={s.kidsRef}>{k.ref}  </Text>{k.name}
+                            <Text style={s.kidsMuted}>{`\n${k.status}${k.date ? ` · ${k.date}` : ''}`}</Text>
+                          </Text>
+                        ))}
+                        {row.kids.next_ref ? <Text style={s.kidsHead}>➜ This one will be {row.kids.next_ref}</Text> : null}
+                      </>
+                    )}
+                  </View>
+                ) : null}
+
                 {/* 🗄️ The new database has none of the old requirements — say
                     what it is about instead of linking one. */}
                 {MODE.showLinkedReq && (
@@ -1379,7 +1410,14 @@ export default function UploadAmendments({ onBack, docType = 'update' }) {
         onSelectDefDeliverable={(v) => { setDefDeliverable(v); setPicker(null); }}
         onSelectRowDeliverable={(i, v) => { updateRow(i, { deliverable_type: v, ...(needsOtherText(v) ? {} : { deliverable_other: '' }) }); setPicker(null); }}
         parentReqs={parentReqs}
-        onSelectRowReq={(i, ref) => { updateRow(i, { related_req_ref: ref }); setPicker(null); }}
+        onSelectRowReq={(i, ref, id) => {
+          updateRow(i, { related_req_ref: ref, kids: { loading: true } });
+          setPicker(null);
+          // What is already raised under that requirement, as the web portal shows.
+          getChildRequests(id, DOC_TYPE)
+            .then((r) => updateRow(i, { kids: r }))
+            .catch(() => updateRow(i, { kids: null }));
+        }}
       />
     </KeyboardAvoidingView>
   );
@@ -1487,7 +1525,7 @@ function PickerModal({
     items = parentReqs.map((t) => ({
       key: String(t.id),
       label: `${t.ref} · ${t.name}${t.old ? ' · 🗄️ Old DB' : ''}${t.date ? ` · ${t.date}` : ''}`,
-      onPress: () => onSelectRowReq(i, t.ref),
+      onPress: () => onSelectRowReq(i, t.ref, t.id),
     }));
   }
 
@@ -1599,6 +1637,14 @@ const s = StyleSheet.create({
   oldTagTxt: { fontSize: 13, fontWeight: '800', color: '#92400E' },
   oldToggle: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 9, paddingVertical: 4 },
   oldToggleTxt: { flex: 1, fontSize: 13, fontWeight: '700', color: COLORS.ink },
+  kidsBox: {
+    marginTop: 8, padding: 10, gap: 6, borderRadius: 10,
+    borderWidth: 1, borderColor: COLORS.line || '#E2E8F0', backgroundColor: '#F8FAFC',
+  },
+  kidsHead: { fontSize: 13, fontWeight: '800', color: COLORS.ink },
+  kidsItem: { fontSize: 13, color: COLORS.ink },
+  kidsRef: { fontWeight: '800', color: COLORS.primary },
+  kidsMuted: { fontSize: 12, color: COLORS.muted },
   oldBlock: {
     flexDirection: 'row', gap: 7, paddingHorizontal: 16, paddingVertical: 8,
     backgroundColor: COLORS.redBg, borderTopWidth: 1, borderTopColor: '#FBCACA',
