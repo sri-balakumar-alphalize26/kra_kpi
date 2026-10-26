@@ -12,7 +12,12 @@ export function canOfferUndoStart(task, { readOnly = false } = {}) {
 
 // The confirmation the popup shows. It deletes today's time on the task, which
 // cannot be put back, so it says exactly what goes and where the task lands.
-export function undoStartConfirm(task, fmtHMS) {
+//
+// `keeps` is the server's line on what STAYS (/kra_kpi/task/undo_start_info —
+// today's updates, links, files, manuals and GitHub links are real work and are
+// never removed), shown last as the web's confirm does. Optional: '' or an older
+// server leaves it off, and the rest of the message reads the same.
+export function undoStartConfirm(task, fmtHMS, keeps = '') {
   const label = [task.external_ref, task.name].filter(Boolean).join(' ');
   // today_seconds is the VIEWER's time today — an admin undoing a developer's
   // start has none, so the figure is only quoted when there is one.
@@ -20,12 +25,14 @@ export function undoStartConfirm(task, fmtHMS) {
   const back = task.undo_start_prev_state_label || 'where it was before today';
   const time = secs > 0 ? `the ${fmtHMS(secs)} logged on it today` : 'the time logged on it today';
   const by = task.undo_start_by ? ` (started by ${task.undo_start_by})` : '';
+  const kept = String(keeps || '').trim();
   return {
     title: 'Undo starting this task?',
     message: `${label}${by}\n\n`
       + `It goes back to ${back}, and ${time} is removed. `
       + 'It leaves the Today list, and that time may show as idle on the Workday Map.\n\n'
-      + 'This cannot be undone.',
+      + 'This cannot be undone.'
+      + (kept ? `\n\n✅ ${kept}` : ''),
     confirmLabel: 'Undo start',
   };
 }

@@ -1,16 +1,19 @@
 const {
   DELIVERABLE_TYPES, isDeliverableType, deliverableLabel, hasDeliverable, toggleDeliverable,
-  taskDeliverableLabel, needsOtherText, missingOtherText, DELIVERABLE_OTHER_REQUIRED_MSG,
+  taskDeliverableLabel, needsOtherText, missingOtherText, DELIVERABLE_OTHER_REQUIRED_MSG, DELIVERABLE_NAMES,
 } = require('../deliverableType');
 
 describe('deliverableType', () => {
-  it('offers Module, App, EXE and Other in that order', () => {
-    expect(DELIVERABLE_TYPES.map((t) => t.code)).toEqual(['module', 'app', 'exe', 'other']);
-    expect(DELIVERABLE_TYPES.map((t) => t.label)).toEqual(['Module', 'App', 'EXE', 'Other']);
+  it('offers Module, App, EXE, Website, Database and Other in the server order', () => {
+    expect(DELIVERABLE_TYPES.map((t) => t.code)).toEqual(['module', 'app', 'exe', 'website', 'database', 'other']);
+    expect(DELIVERABLE_TYPES.map((t) => t.label)).toEqual(['Module', 'App', 'EXE', 'Website', 'Database', 'Other']);
+    expect(DELIVERABLE_NAMES).toBe('Module / App / EXE / Website / Database / Other');
   });
 
-  it('knows only those four codes', () => {
+  it('knows only those six codes', () => {
     expect(isDeliverableType('exe')).toBe(true);
+    expect(isDeliverableType('website')).toBe(true);
+    expect(isDeliverableType('database')).toBe(true);
     expect(isDeliverableType('other')).toBe(true);
     expect(isDeliverableType('EXE')).toBe(false);   // the server lowercases; the app sends codes
     expect(isDeliverableType('')).toBe(false);
@@ -26,6 +29,8 @@ describe('deliverableType', () => {
   it('labels several types stored together', () => {
     expect(deliverableLabel('module,app')).toBe('Module + App');
     expect(deliverableLabel('module,app,exe')).toBe('Module + App + EXE');
+    expect(deliverableLabel('website,database')).toBe('Website + Database');
+    expect(deliverableLabel('module,database,other', 'Plugin')).toBe('Module + Database + Plugin');
     expect(deliverableLabel(null)).toBe('');
   });
 
@@ -65,6 +70,10 @@ describe('deliverableType', () => {
     expect(toggleDeliverable(null, 'exe')).toBe('exe');
     expect(toggleDeliverable('other', 'module')).toBe('module,other');
     expect(toggleDeliverable('exe,other', 'app')).toBe('app,exe,other');
+    // Website and Database sit between EXE and Other, as the server stores them.
+    expect(toggleDeliverable('other', 'database')).toBe('database,other');
+    expect(toggleDeliverable('database,other', 'website')).toBe('website,database,other');
+    expect(toggleDeliverable('website', 'exe')).toBe('exe,website');
   });
 
   it('knows which types are ticked', () => {

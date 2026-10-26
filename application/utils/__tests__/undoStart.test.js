@@ -43,6 +43,19 @@ describe('undoStartConfirm', () => {
     expect(c.message).not.toContain(fmtHMS(0));
   });
 
+  it('ends with what is kept, when the server says something is', () => {
+    const keeps = "Today's 2 updates and 1 link on this task are kept. Only the time and status are undone.";
+    const c = undoStartConfirm(TASK, fmtHMS, keeps);
+    expect(c.message).toContain('cannot be undone');
+    expect(c.message.endsWith(`✅ ${keeps}`)).toBe(true);
+  });
+
+  it('says nothing about kept work when there is none (or an older server)', () => {
+    expect(undoStartConfirm(TASK, fmtHMS, '').message).not.toContain('✅');
+    expect(undoStartConfirm(TASK, fmtHMS, '   ').message).not.toContain('✅');
+    expect(undoStartConfirm(TASK, fmtHMS).message.endsWith('This cannot be undone.')).toBe(true);
+  });
+
   it('still reads when the server sent no previous state', () => {
     const c = undoStartConfirm({ ...TASK, undo_start_prev_state_label: '' }, fmtHMS);
     expect(c.message).toContain('where it was before today');

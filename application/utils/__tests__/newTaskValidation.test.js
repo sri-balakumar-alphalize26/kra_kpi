@@ -46,7 +46,7 @@ describe('validateNewTask', () => {
   });
 
   test('Module / App / EXE / Other is required, and checked last', () => {
-    expect(validateNewTask({ ...OK, deliverable_type: '' })).toBe('Pick a type — Module, App, EXE or Other.');
+    expect(validateNewTask({ ...OK, deliverable_type: '' })).toBe('Pick a type — Module, App, EXE, Website, Database or Other.');
     // Everything blank still complains about the name first.
     expect(validateNewTask({})).toBe('Task name is required.');
     expect(validateNewTask({ ...OK, user_id: '', deliverable_type: '' }))

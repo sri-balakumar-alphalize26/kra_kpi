@@ -20,7 +20,7 @@ import AppDialog from '../components/AppDialog';
 import {
   LANES, groupIntoLanes, byRecency, laneForTask, isTodayTask, isWithinFreshWindow, taskMatchesQuery, fetchTasks, fetchTaskById, fetchUsers, fetchPeople,
   startTask, pauseTask, resumeTask, resumeTaskWithReason, completeTask, reassignTask, adminDeleteTask, createProgress,
-  undoTaskStart, fetchTaskDetails,
+  undoTaskStart, undoStartInfo, fetchTaskDetails, fullComplete, billNow,
   switchTask, pauseAllTasks, revertSignoff,
   approveTask, rejectTask, getTaskChecklists, markReviewStarted,
   MGR_CHECKLIST_ITEMS, PAUSE_REASONS, PRIORITIES,
@@ -50,6 +50,7 @@ import WorkdaySummaryBody from '../components/WorkdaySummaryBody';
 import {
   DELIVERABLE_TYPES, deliverableLabel, taskDeliverableLabel, hasDeliverable, toggleDeliverable, needsOtherText, missingOtherText,
   DELIVERABLE_OTHER_MAX, DELIVERABLE_OTHER_PLACEHOLDER, DELIVERABLE_OTHER_REQUIRED_MSG,
+  DELIVERABLE_NAMES, DELIVERABLE_REQUIRED_MSG,
 } from '../utils/deliverableType';
 import { estimateFromWorked } from '../utils/doneTaskEstimate';
 import DateGridModal from '../components/DateGridModal';
@@ -58,6 +59,9 @@ import { completeMissing, completeExtras, completeWarnings, warningText } from '
 import CompleteRules from '../components/CompleteRules';
 import FinishModeRadio, { PARTIAL_NOTE } from '../components/FinishModeRadio';
 import { canOfferUndoStart, undoStartConfirm } from '../utils/undoStart';
+import { canFullComplete, fullCompleteRefusal } from '../utils/taskFinish';
+import FinishBox from '../components/FinishBox';
+import SendBackHistory from '../components/SendBackHistory';
 import { noteRequired, pauseReasonText, meetingIds, idleMeetingNote } from '../utils/meetingPick';
 import useBackHandler from '../components/useBackHandler';
 // Shared with HomeScreen's running-task card. Were local functions here until
@@ -304,18 +308,20 @@ function MetaRow({ icon, lib = 'ion', label, value, valueColor, trailing }) {
 // both views behave identically — same button set, same runAction wiring, same
 // busy spinner. Reassign stays gated behind isAdmin, so role behavior is preserved.
 
-// Module / App / EXE / Other as checkboxes — a task can build more than one.
+// Module / App / EXE / Website / Database / Other as checkboxes — a task can
+// build more than one. Three to a row: six in one line left each box too
+// narrow for "Database" on a phone.
 // `value` is the 'module,app' string the server stores. Ticking Other opens a
 // box for what it is (`other`), required while Other stays ticked. Used by New
 // Task and Done Task.
 function DeliverableChecks({ value, onToggle, other, onOther }) {
   return (
     <>
-      <View style={s.segFull}>
+      <View style={s.checkGrid}>
         {DELIVERABLE_TYPES.map((d) => {
           const on = hasDeliverable(value, d.code);
           return (
-            <TouchableOpacity key={d.code} style={[s.segFullItem, s.checkItem, on && s.segFullItemOn]}
+            <TouchableOpacity key={d.code} style={[s.checkCell, s.checkItem, on && s.segFullItemOn]}
               onPress={() => { H.select(); onToggle(d.code); }} activeOpacity={0.8}>
               <Ionicons name={on ? 'checkbox' : 'square-outline'} size={16} color={on ? '#fff' : COLORS.muted} />
               <Text style={[s.segFullTxt, on && { color: '#fff' }]} numberOfLines={1} adjustsFontSizeToFit>{d.label}</Text>
@@ -537,6 +543,21 @@ function TaskDetailBody({ task, onAction, busyId, nowMs, isAdmin, currentUserId,
           <Text style={s.pausedPillTxt} numberOfLines={2}>Paused: {task.paused_reason}</Text>
         </View>
       ) : null}
+
+      {/* Every client send-back, closed until tapped ("↩ Client sent it back
+          2× · 📷 2 photos"), then the Full Complete prompt / the bill / Bill now —
+          what the web card shows under the same buttons (TaskCard.jsx). The box
+          keeps its status in read-only mode; only its buttons go, like every
+          other button on this card. */}
+      <SendBackHistory task={task} compact onError={(msg) => onAction('proofError', task, msg)} />
+      <FinishBox
+        task={task} compact isAdmin={isAdmin}
+        canFinish={canFullComplete(task, { isAdmin, userId: currentUserId })}
+        busy={busy ? (task.full_complete_pending ? 'fc' : 'bn') : ''}
+        showButtons={!readOnly}
+        onFullComplete={() => onAction('fullComplete', task)}
+        onBillNow={() => onAction('billNow', task)}
+      />
 
       {/* Why Start is dimmed, and when it will un-dim. Without it the button is
           just dead with no explanation, which is what made the workflow feel
@@ -863,7 +884,7 @@ function TaskCardBase({ task, onAction, busyId, nowMs, isAdmin, currentUserId, f
               <Text style={s.refPillTxt} numberOfLines={1}>{task.external_ref}</Text>
             </View>
           )}
-          {/* Module / App / EXE / Other — what is being built. */}
+          {/* Module / App / EXE / Website / Database / Other — what is being built. */}
           {!!taskDeliverableLabel(task) && (
             <View style={s.refPill}>
               <Text style={s.refPillTxt} numberOfLines={1}>{taskDeliverableLabel(task)}</Text>
@@ -2327,7 +2348,7 @@ export default function KpiActionBoard({
   async function submitNewTask() {
     if (!ntName.trim()) return say('Task name required', 'Enter a task name.', 'warn');
     if (!ntProject) return say('Project required', 'Choose a project (KRA).', 'warn');
-    if (!ntDeliverable) return say('Type required', 'Tick at least one — Module, App, EXE or Other.', 'warn');
+    if (!ntDeliverable) return say('Type required', DELIVERABLE_REQUIRED_MSG, 'warn');
     if (missingOtherText(ntDeliverable, ntDeliverableOther)) return say('Type required', DELIVERABLE_OTHER_REQUIRED_MSG, 'warn');
     const h = parseInt(ntHours, 10) || 0;
     const m = parseInt(ntMinutes, 10) || 0;
@@ -2401,7 +2422,7 @@ export default function KpiActionBoard({
     const worked = doneWorkedSecs(d);
     if (!d.name.trim()) return say('Task name required', 'Enter a task name.', 'warn');
     if (!d.project) return say('Project required', 'Choose a project (KRA).', 'warn');
-    if (!d.deliverable) return say('Type required', 'Tick at least one — Module, App, EXE or Other.', 'warn');
+    if (!d.deliverable) return say('Type required', DELIVERABLE_REQUIRED_MSG, 'warn');
     if (missingOtherText(d.deliverable, d.deliverableOther)) return say('Type required', DELIVERABLE_OTHER_REQUIRED_MSG, 'warn');
     if (worked <= 0) return say('Time worked required', 'Enter the hours and/or minutes already spent.', 'warn');
     if ((parseInt(d.workedM, 10) || 0) > 59) return say('Check the time', 'Minutes worked must be 0–59.', 'warn');
@@ -2452,8 +2473,50 @@ export default function KpiActionBoard({
     });
   }
 
-  async function runAction(kind, task) {
+  async function runAction(kind, task, extra) {
     log.info('user action', kind, { id: task.id, name: task.name, state: task.task_state });
+    // A send-back photo / voice note on a card that would not open.
+    if (kind === 'proofError') {
+      say("Couldn't open that file", extra || 'Could not open that file', 'warn');
+      return;
+    }
+    // 🏁 Full Complete — the developer on the task or an admin, once the client
+    // review is over. No confirm, as on the web: it only closes what is already
+    // finished, and a refusal lists what is still missing.
+    if (kind === 'fullComplete') {
+      setBusyId(task.id);
+      try {
+        const res = await fullComplete(task.id);
+        if (!res || res.status === false) {
+          say("Can't Full Complete yet", fullCompleteRefusal(res), 'warn');
+          return;
+        }
+        H.ok();
+        say('Fully complete', res.message || 'Fully complete — it moves to billing.', 'ok');
+        await load({ silent: true });
+      } catch (e) {
+        say('Something went wrong', e.message || 'Failed', 'warn');
+      } finally { setBusyId(null); }
+      return;
+    }
+    // 🧾 Bill now — admins, on a fully complete task that has no bill (no price
+    // matched, or the client's invoices are off). The server re-checks both.
+    if (kind === 'billNow') {
+      setBusyId(task.id);
+      try {
+        const res = await billNow(task.id);
+        if (!res || res.status === false) {
+          say("Can't make the bill", (res && res.message) || 'Failed', 'warn');
+          return;
+        }
+        H.ok();
+        say('Bill made', res.bill && res.bill.name ? `Bill ${res.bill.name} made: ${res.bill.money}` : (res.message || 'Bill made.'), 'ok');
+        await load({ silent: true });
+      } catch (e) {
+        say('Something went wrong', e.message || 'Failed', 'warn');
+      } finally { setBusyId(null); }
+      return;
+    }
     if (kind === 'reminder') {
       log.info('reminder: open picker', { id: task.id, name: task.name, state: task.task_state });
       // Seed the mode toggle + reason from any existing reminder (default 'notify').
@@ -2480,11 +2543,17 @@ export default function KpiActionBoard({
     }
     if (kind === 'undoStart') {
       // Deletes today's time on the task, which cannot be put back — so it asks,
-      // and says what goes and where the task lands.
+      // and says what goes and where the task lands. And what STAYS: the server
+      // counts today's updates, links, files, manuals and GitHub links
+      // (/kra_kpi/task/undo_start_info), which are never removed — without that
+      // line "undo" reads as if the work goes too. A failed read just leaves it off.
+      setBusyId(task.id);
+      const info = await undoStartInfo(task.id);
+      setBusyId(null);
       confirm({
         tone: 'danger',
         destructive: true,
-        ...undoStartConfirm(task, fmtHMS),
+        ...undoStartConfirm(task, fmtHMS, info.keeps),
         onConfirm: async () => {
           setDlg((d) => (d ? { ...d, busy: true } : d));
           setBusyId(task.id);
@@ -2519,15 +2588,14 @@ export default function KpiActionBoard({
           + 'logged against it. The assigned developer and the client who raised it '
           + 'are notified.',
         confirmLabel: 'Delete',
-        // The reason is not paperwork: the developer and the client who raised
-        // the task are both told this task is gone, and without a reason they
-        // are told only that. The service has always accepted one; nothing sent
-        // it. Required, because "deleted, no reason given" is the outcome this
-        // is meant to prevent.
+        // The developer and the client who raised the task are both told it
+        // is gone, and the reason goes with it. Optional, as on the web and the
+        // server (/kra_kpi/task/admin_delete): deleting is admin-only already, and
+        // an obvious duplicate should not need an essay to clear.
         input: {
-          label: 'Why is it being deleted? (required)',
-          placeholder: 'e.g. Raised twice — REQ-041 covers this',
-          required: true,
+          label: 'Reason (optional) — shown to whoever was waiting on this task',
+          placeholder: 'e.g. Raised by mistake / duplicate of REQ-042…',
+          required: false,
         },
         onConfirm: async (reason) => {
           setDlg((d) => (d ? { ...d, busy: true } : d));
@@ -4284,7 +4352,7 @@ export default function KpiActionBoard({
                   </View>
                 </View>
 
-                <Text style={s.fieldLabel}>Type (Module / App / EXE / Other) *</Text>
+                <Text style={s.fieldLabel}>Type ({DELIVERABLE_NAMES}) *</Text>
                 <DeliverableChecks value={ntDeliverable} onToggle={(code) => setNtDeliverable((v) => toggleDeliverable(v, code))}
                   other={ntDeliverableOther} onOther={setNtDeliverableOther} />
                 <Text style={s.fieldHint}>
@@ -4414,7 +4482,7 @@ export default function KpiActionBoard({
                     </View>
                   )}
 
-                  <Text style={s.fieldLabel}>Type (Module / App / EXE / Other) *</Text>
+                  <Text style={s.fieldLabel}>Type ({DELIVERABLE_NAMES}) *</Text>
                   <DeliverableChecks value={doneTask.deliverable}
                     onToggle={(code) => patchDone({ deliverable: toggleDeliverable(doneTask.deliverable, code) })}
                     other={doneTask.deliverableOther} onOther={(v) => patchDone({ deliverableOther: v })} />
@@ -5975,6 +6043,8 @@ const s = StyleSheet.create({
   segFullItem: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   segFullItemOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
   checkItem: { flexDirection: 'row', gap: 4, paddingHorizontal: 4 },
+  checkGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  checkCell: { flexGrow: 1, flexBasis: '30%', height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   segFullTxt: { fontSize: 13.5, fontWeight: '800', color: COLORS.ink },
 
   errorMsg: { fontSize: 14.5, color: COLORS.ink, lineHeight: 21, paddingVertical: 10 },
