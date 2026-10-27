@@ -94,6 +94,18 @@ const EVENT_ICON = {
   meeting_running_long:  { lib: 'mc', name: 'account-group',       color: '#D97706' },
   break_budget_exceeded: { lib: 'mc', name: 'timer-alert-outline', color: '#D97706' },
   workday_overtime:      { lib: 'mc', name: 'clock-end',           color: '#D97706' },
+
+  // Added with module 19.0.8.7 (models/kpi_notify_more.py).
+  approval_your_turn:  { lib: 'mc', name: 'stamper',             color: '#D97706' },
+  approval_moved:      { lib: 'mc', name: 'stairs-up',           color: '#7C3AED' },
+  task_can_start:      { lib: 'mc', name: 'play-circle',         color: '#16A34A' },
+  client_replied:      { lib: 'mc', name: 'message-reply-text',  color: '#D97706' },
+  meeting_soon:        { lib: 'mc', name: 'calendar-clock',      color: '#2563EB' },
+  estimate_80:         { lib: 'mc', name: 'timer-alert-outline', color: '#D97706' },
+  task_running_late:   { lib: 'mc', name: 'weather-night',       color: '#D97706' },
+  review_closing:      { lib: 'mc', name: 'calendar-alert',      color: '#D97706' },
+  database_ready:      { lib: 'mc', name: 'database-check',      color: '#16A34A' },
+  invoice_overdue:     { lib: 'mc', name: 'cash-remove',         color: '#DC2626' },
 };
 
 // Events that mean "someone has to DO something" → the Action needed tab.
@@ -113,6 +125,10 @@ const ACTION_EVENTS = new Set([
   'dev_no_task',           // "the one case that IS the admin's problem"
   'invoice_client_paid',   // the client says they have paid — someone must confirm it
   'client_task_rejected',  // a client sent work back
+  'approval_your_turn',    // a request is waiting at your step of the approval chain
+  'client_replied',        // the client is waiting on an answer
+  'review_closing',        // sign off or ask for changes before the review closes
+  'invoice_overdue',       // chase the payment
 ]);
 
 // "just now" / "5m ago" / "3h ago" / "2d ago" / date. `created` is a server
